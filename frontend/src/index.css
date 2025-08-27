@@ -1,0 +1,25 @@
+/* ТЕМА: импорт строго самым первым! */
+@import "theme.css";
+
+/* Глобальная база/ресет */
+html, body, #root { height: 100%; }
+html { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; }
+body { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; margin: 0; }
+a { color: inherit; text-decoration: none; }
+*, *::before, *::after { box-sizing: border-box; }
+img, video { max-width: 100%; height: auto; }
+
+/* Применяем токены темы */
+body {
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
+/* Утилиты (по желанию) */
+.shadow-card { box-shadow: var(--shadow-card); }
+
+/* Скроллбар (опционально) */
+* { scrollbar-width: thin; scrollbar-color: rgba(100,100,100,.35) transparent; }
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-thumb { background: rgba(100,100,100,.35); border-radius: 8px; }
+*::-webkit-scrollbar-thumb:hover { background: rgba(100,100,100,.55); }

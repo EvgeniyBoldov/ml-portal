@@ -1,0 +1,19 @@
+.wrap { display: flex; flex-direction: column; gap: 16px; }
+.scroll { max-height: 60vh; overflow: auto; padding-right: 6px; display: flex; flex-direction: column; gap: 10px; }
+.bubble {
+    max-width: 75%; padding: 10px 14px; border-radius: var(--radius-lg);
+    box-shadow: 0 1px 2px rgba(16,24,40,.08); font-size: 14px; line-height: 1.5;
+}
+.user { margin-left: auto; background: var(--color-primary); color: #fff; }
+.assistant { margin-right: auto; background: color-mix(in oklab, var(--color-text) 8%, transparent); color: var(--color-text); }
+.row { display: flex; gap: 10px; align-items: center; }
+
+.input {
+    flex: 1; border: 1px solid var(--color-border); border-radius: var(--radius-md);
+    padding: 12px 14px; outline: none; font-size: 14px; color: var(--color-text);
+    background: var(--color-surface);
+    transition: box-shadow .12s ease, border-color .12s ease, background .2s ease;
+}
+.input:focus { border-color: var(--color-primary-weak); box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-primary-weak) 45%, transparent); }
+
+.hint { color: var(--color-muted); font-size: 13px; }

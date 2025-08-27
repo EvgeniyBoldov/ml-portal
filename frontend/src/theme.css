@@ -1,0 +1,73 @@
+/* =========================================================
+   Global Theme Tokens
+   ---------------------------------------------------------
+   - Нет цветового синтаксиса типа color-mix — только HEX/RGBA.
+   - Темы переключаются установкой data-theme на <html>:
+       <html data-theme="light"> или <html data-theme="dark">
+   - Если data-theme не задан, берётся LIGHT как дефолт.
+   ========================================================= */
+
+/* ---------- LIGHT (default) ---------- */
+:root,
+:root[data-theme="light"] {
+    /* Surfaces */
+    --color-bg:            #f9fafb;     /* фон страницы (серый, почти белый) */
+    --color-surface:       #ffffff;     /* карточки/панели */
+    --color-border:        #e4e7ec;     /* границы */
+
+    /* Text */
+    --color-text:          #1d2939;     /* основной текст (neutral-800) */
+    --color-muted:         #667085;     /* вторичный текст (neutral-500) */
+
+    /* Brand (navy) */
+    --color-primary:       #0d1e56;     /* тёмно-синий основной */
+    --color-primary-strong:#09163f;     /* тёмно-синий для hover/active */
+    --color-primary-weak:  #8fb2ff;     /* светлый синий для подсветки/фокуса */
+
+    /* Status (optional) */
+    --color-success:       #16a34a;
+    --color-warning:       #f59e0b;
+    --color-danger:        #ef4444;
+
+    /* Radii */
+    --radius-sm: 10px;
+    --radius-md: 12px;
+    --radius-lg: 16px;
+    --radius-xl: 20px;
+
+    /* Shadows */
+    --shadow-card: 0 1px 2px rgba(16,24,40,0.06), 0 4px 12px rgba(16,24,40,0.06);
+    --shadow-pop:  0 10px 30px rgba(16,24,40,0.15);
+}
+
+/* ---------- DARK ("мокрый асфальт") ---------- */
+:root[data-theme="dark"] {
+    /* Surfaces */
+    --color-bg:            #1b1d21;     /* мокрый асфальт — фон */
+    --color-surface:       #24262b;     /* панели немного светлее фона */
+    --color-border:        rgba(255,255,255,0.08);
+
+    /* Text */
+    --color-text:          #e5e7eb;     /* основной текст светлый */
+    --color-muted:         #a1a1aa;     /* вторичный текст */
+
+    /* Brand (затемнённый navy) */
+    --color-primary:       #0f2a52;     /* основной акцент */
+    --color-primary-strong:#0c1f3d;     /* hover/active глубже */
+    --color-primary-weak:  #375a9e;     /* подсветка/фокус */
+
+    /* Status */
+    --color-success:       #22c55e;
+    --color-warning:       #f59e0b;
+    --color-danger:        #f87171;
+
+    /* Radii — те же, чтобы не прыгали формы */
+    --radius-sm: 10px;
+    --radius-md: 12px;
+    --radius-lg: 16px;
+    --radius-xl: 20px;
+
+    /* Shadows — тёмные, но мягкие */
+    --shadow-card: 0 1px 2px rgba(0,0,0,0.35), 0 6px 18px rgba(0,0,0,0.35);
+    --shadow-pop:  0 10px 30px rgba(0,0,0,0.45);
+}
