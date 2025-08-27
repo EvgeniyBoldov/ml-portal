@@ -1,0 +1,50 @@
+.shell {
+    min-height: 100vh;
+    display: grid;
+    grid-template-columns: 260px 1fr;
+    background: var(--bg);
+}
+
+/* SIDEBAR */
+.aside {
+    background: var(--navy);
+    color: #fff;
+    padding: 20px;
+}
+.brand {
+    font-weight: 800;
+    font-size: 18px;
+    margin: 4px 0 16px;
+}
+.section {
+    margin-top: 16px;
+    margin-bottom: 8px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    color: rgba(255,255,255,.65);
+}
+.navItem {
+    display: block;
+    padding: 8px 12px;
+    border-radius: 10px;
+    color: rgba(255,255,255,.92);
+    transition: background .12s ease;
+}
+.navItem:hover { background: rgba(255,255,255,.10); }
+.active { background: rgba(255,255,255,.17); }
+
+/* MAIN */
+.main { padding: 24px; }
+.header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 16px;
+}
+.role { color: var(--muted); font-size: 13px; }
+.panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 24px;
+    box-shadow: 0 1px 2px rgba(16,24,40,.06), 0 4px 12px rgba(16,24,40,.06);
+}
