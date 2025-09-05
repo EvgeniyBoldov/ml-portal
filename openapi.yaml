@@ -1,0 +1,672 @@
+openapi: 3.0.3
+info:
+  title: LLM+RAG Pilot API
+  version: 0.3.0
+  description: >
+    Упрощённое API пилота LLM+RAG (без вендорного медиатайпа и без версионирования пути).
+    Базовый префикс: /api. Авторизация — Bearer JWT (access) или PAT.
+servers:
+  - url: /api
+security:
+  - bearerAuth: []
+paths:
+  /auth/login:
+    post:
+      summary: Login with username/password
+      operationId: login
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Login success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '401':
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security: []  # no auth
+  /auth/refresh:
+    post:
+      summary: Refresh access token
+      operationId: refresh
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshRequest'
+      responses:
+        '200':
+          description: New tokens
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RefreshResponse'
+        '401':
+          description: Invalid or revoked refresh
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security: []  # no auth
+  /auth/logout:
+    post:
+      summary: Revoke refresh token
+      operationId: logout
+      tags: [Auth]
+      requestBody:
+        required: false
+      responses:
+        '204':
+          description: Revoked
+  /auth/me:
+    get:
+      summary: Get current user profile
+      operationId: me
+      tags: [Auth]
+      responses:
+        '200':
+          description: Profile
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string, format: uuid }
+                  fio: { type: string }
+                  login: { type: string }
+                  role: { type: string }
+  /healthz:
+    get:
+      summary: Liveness/Readiness check
+      operationId: healthz
+      tags: [Meta]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+  /metrics:
+    get:
+      summary: Prometheus metrics
+      operationId: metrics
+      tags: [Meta]
+      responses:
+        '200':
+          description: Prometheus text exposition
+          content:
+            text/plain:
+              schema:
+                type: string
+  /chats:
+    get:
+      summary: List chats
+      operationId: listChats
+      tags: [Chats]
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, default: 20, minimum: 1, maximum: 200 }
+        - name: cursor
+          in: query
+          schema: { type: string, nullable: true }
+        - name: q
+          in: query
+          schema: { type: string, nullable: true }
+      responses:
+        '200':
+          description: Chats page
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string, format: uuid }
+                        name: { type: string }
+                        owner_id: { type: string, format: uuid }
+                        created_at: { type: string, format: date-time }
+                        updated_at: { type: string, format: date-time }
+                        last_message_at: { type: string, format: date-time, nullable: true }
+                  next_cursor: { type: string, nullable: true }
+    post:
+      summary: Create chat
+      operationId: createChat
+      tags: [Chats]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+      responses:
+        '201':
+          description: Created chat
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  chat_id: { type: string, format: uuid }
+  /chats/{chat_id}/messages:
+    get:
+      summary: List messages of a chat
+      operationId: listChatMessages
+      tags: [Chats]
+      parameters:
+        - name: chat_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50 }
+        - name: cursor
+          in: query
+          schema: { type: string, nullable: true }
+      responses:
+        '200':
+          description: Messages page
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ChatMessage'
+                  next_cursor: { type: string, nullable: true }
+    post:
+      summary: Post a message and get assistant reply
+      operationId: postChatMessage
+      tags: [Chats]
+      parameters:
+        - name: chat_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatTurnRequest'
+      responses:
+        '200':
+          description: Assistant answer
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatTurnResponse'
+  /chats/{chat_id}:
+    delete:
+      summary: Archive chat
+      operationId: deleteChat
+      tags: [Chats]
+      parameters:
+        - name: chat_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '204':
+          description: Archived
+  /rag:
+    get:
+      summary: List RAG documents
+      operationId: listRagDocs
+      tags: [RAG]
+      parameters:
+        - name: status
+          in: query
+          schema: { type: string }
+        - name: tags
+          in: query
+          schema: { type: string, description: 'comma-separated' }
+        - name: q
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: Documents page
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/RagDocument'
+                  next_cursor: { type: string, nullable: true }
+  /rag/{id}:
+    get:
+      summary: Get RAG document
+      operationId: getRagDoc
+      tags: [RAG]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Document
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RagDocument'
+    patch:
+      summary: Replace document (archive old, reprocess new)
+      operationId: patchRagDoc
+      tags: [RAG]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+          application/json:
+            schema:
+              type: object
+              properties:
+                url: { type: string }
+                name: { type: string }
+      responses:
+        '202':
+          description: Accepted for reprocessing
+    post:
+      summary: Actions on RAG document (reindex, download_source)
+      operationId: postRagDocAction
+      tags: [RAG]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                action:
+                  type: string
+                  enum: [reindex, download_source]
+                embedding_model:
+                  type: string
+      responses:
+        '202':
+          description: Accepted
+    delete:
+      summary: Delete/Archive RAG document
+      operationId: deleteRagDoc
+      tags: [RAG]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: hard
+          in: query
+          schema: { type: boolean, default: false }
+      responses:
+        '204':
+          description: Deleted/Archived
+  /rag/upload:
+    post:
+      summary: Upload new document
+      operationId: uploadRagDoc
+      tags: [RAG]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                name: { type: string }
+                tags:
+                  type: array
+                  items: { type: string }
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RagUploadRequest'
+      responses:
+        '202':
+          description: Accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RagDocument'
+  /rag/search:
+    post:
+      summary: Debug search in RAG
+      operationId: ragSearch
+      tags: [RAG]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RagSearchRequest'
+      responses:
+        '200':
+          description: Search results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        document_id: { type: string, format: uuid }
+                        chunk_id: { type: string, format: uuid }
+                        score: { type: number }
+                        snippet: { type: string }
+  /analyze:
+    get:
+      summary: List analysis tasks
+      operationId: listAnalyze
+      tags: [Analyze]
+      responses:
+        '200':
+          description: Tasks page
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AnalyzeResult'
+                  next_cursor: { type: string, nullable: true }
+    post:
+      summary: Create analysis task
+      operationId: postAnalyze
+      tags: [Analyze]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AnalyzeRequest'
+      responses:
+        '202':
+          description: Accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string, format: uuid }
+                  status: { type: string }
+  /analyze/{id}:
+    get:
+      summary: Get analysis task status/result
+      operationId: getAnalyze
+      tags: [Analyze]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalyzeResult'
+    delete:
+      summary: Cancel/Delete analysis task
+      operationId: deleteAnalyze
+      tags: [Analyze]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '204':
+          description: Deleted/Cancelled
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          properties:
+            code: { type: string }
+            message: { type: string }
+            details: { type: object }
+        request_id: { type: string }
+    ChatMessage:
+      type: object
+      required: [role, content]
+      properties:
+        role: { type: string, enum: [system, user, assistant, tool] }
+        content: { type: string }
+        created_at: { type: string, format: date-time, nullable: true }
+    ChatTurnRequest:
+      type: object
+      properties:
+        response_stream: { type: boolean, default: true }
+        use_rag: { type: boolean, default: true }
+        rag_params:
+          type: object
+          properties:
+            top_k: { type: integer, default: 5 }
+            min_score: { type: number, default: 0.2 }
+        messages:
+          type: array
+          items: { $ref: '#/components/schemas/ChatMessage' }
+        temperature: { type: number, default: 0.7 }
+        max_tokens: { type: integer, default: 512 }
+        idempotency_key: { type: string }
+    ChatTurnResponse:
+      type: object
+      properties:
+        chat_id: { type: string, format: uuid }
+        message_id: { type: string, format: uuid }
+        created_at: { type: string, format: date-time }
+        assistant_message: { $ref: '#/components/schemas/ChatMessage' }
+        usage:
+          type: object
+          properties:
+            prompt_tokens: { type: integer }
+            completion_tokens: { type: integer }
+            total_tokens: { type: integer }
+        rag:
+          type: object
+          properties:
+            used: { type: boolean }
+            top_k: { type: integer }
+            references:
+              type: array
+              items:
+                type: object
+                properties:
+                  document_id: { type: string, format: uuid }
+                  chunk_id: { type: string, format: uuid }
+                  score: { type: number }
+                  snippet: { type: string }
+    RagDocument:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        status: { type: string }
+        date_upload: { type: string, format: date-time }
+        url_file: { type: string }
+        url_canonical_file: { type: string }
+        tags:
+          type: array
+          items: { type: string }
+        progress: { type: number }
+    RagUploadRequest:
+      type: object
+      properties:
+        url: { type: string }
+        name: { type: string }
+        tags:
+          type: array
+          items: { type: string }
+    RagSearchRequest:
+      type: object
+      properties:
+        query: { type: string }
+        top_k: { type: integer, default: 5 }
+        filters:
+          type: object
+          properties:
+            tags:
+              type: array
+              items: { type: string }
+            min_score: { type: number, default: 0.25 }
+        with_snippets: { type: boolean, default: true }
+    AnalyzeRequest:
+      type: object
+      properties:
+        source:
+          type: object
+          properties:
+            url: { type: string }
+            name: { type: string }
+        pipeline:
+          type: object
+          properties:
+            normalize: { type: boolean, default: true }
+            chunk:
+              type: object
+              properties:
+                strategy: { type: string, enum: [by_semantics, by_headings, by_size], default: by_semantics }
+                max_chars: { type: integer, default: 1200 }
+                overlap: { type: integer, default: 100 }
+            extract:
+              type: object
+              properties:
+                entities:
+                  type: array
+                  items: { type: string }
+                summary: { type: boolean, default: true }
+                qa:
+                  type: array
+                  items: { type: string }
+        language: { type: string, default: ru }
+        priority: { type: string, enum: [low, normal, high], default: normal }
+        idempotency_key: { type: string }
+    AnalyzeResult:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        status: { type: string }
+        progress: { type: number }
+        result:
+          type: object
+          properties:
+            summary: { type: string }
+            entities:
+              type: array
+              items:
+                type: object
+                properties:
+                  type: { type: string }
+                  text: { type: string }
+            qa:
+              type: array
+              items:
+                type: object
+                properties:
+                  q: { type: string }
+                  a: { type: string }
+            metrics:
+              type: object
+              properties:
+                pages: { type: integer }
+                chunks: { type: integer }
+                model: { type: string }
+        artifacts:
+          type: object
+          properties:
+            canonical: { type: string }
+            preview_pdf: { type: string }
+    LoginRequest:
+      type: object
+      required: [login, password]
+      properties:
+        login: { type: string }
+        password: { type: string }
+    LoginResponse:
+      type: object
+      properties:
+        access_token: { type: string }
+        refresh_token: { type: string }
+        token_type: { type: string, example: bearer }
+        expires_in: { type: integer }
+        user:
+          type: object
+          properties:
+            id: { type: string, format: uuid }
+            fio: { type: string }
+            login: { type: string }
+            role: { type: string }
+    RefreshRequest:
+      type: object
+      properties:
+        refresh_token: { type: string }
+    RefreshResponse:
+      type: object
+      properties:
+        access_token: { type: string }
+        refresh_token: { type: string, nullable: true }
+        token_type: { type: string, example: bearer }
+        expires_in: { type: integer }

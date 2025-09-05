@@ -1,5 +1,11 @@
 version: "3.9"
 
+networks:
+  public:
+    driver: overlay
+  internal:
+    driver: overlay
+
 services:
   postgres:
     image: postgres:16
@@ -9,19 +15,19 @@ services:
       POSTGRES_PASSWORD: postgres
     volumes:
       - pg_data:/var/lib/postgresql/data
-    ports: ["5432:5432"]
+    networks: [internal]
 
   redis:
     image: redis:7-alpine
     volumes:
       - redis_data:/data
-    ports: ["6379:6379"]
+    networks: [internal]
 
   qdrant:
     image: qdrant/qdrant:latest
     volumes:
       - qdrant_data:/qdrant/storage
-    ports: ["6333:6333"]
+    networks: [internal]
 
   minio:
     image: minio/minio:latest
@@ -31,11 +37,10 @@ services:
       MINIO_ROOT_PASSWORD: miniopassword
     volumes:
       - minio_data:/data
-    ports:
-      - "9000:9000"
-      - "9001:9001"
+    networks: [internal]
 
   api:
+    image: ${IMAGE_API:-llm_api}:${TAG:-dev}
     build:
       context: .
       dockerfile: docker/api/Dockerfile
@@ -49,11 +54,19 @@ services:
       S3_BUCKET_CANONICAL: "canonical"
       S3_BUCKET_PREVIEW: "preview"
       JWT_SECRET: "${JWT_SECRET:-please_change_me}"
-      HEALTH_DEEP: "${HEALTH_DEEP:-0}"
+    deploy:
+      replicas: 1
+      restart_policy: {condition: on-failure}
+    ports:
+      - target: 8000
+        published: 8000
+        protocol: tcp
+        mode: ingress
+    networks: [public, internal]
     depends_on: [postgres, redis, qdrant, minio]
-    ports: ["8000:8000"]
 
   worker:
+    image: ${IMAGE_WORKER:-llm_worker}:${TAG:-dev}
     build:
       context: .
       dockerfile: docker/api/Dockerfile
@@ -69,9 +82,13 @@ services:
       S3_BUCKET_CANONICAL: "canonical"
       S3_BUCKET_PREVIEW: "preview"
     command: ["bash","-lc","celery -A app.celery_app:app worker -l info -Q normalize,chunk,embed,index,analyze"]
-    depends_on: [redis, qdrant, minio, postgres]
+    deploy:
+      replicas: 1
+      restart_policy: {condition: on-failure}
+    networks: [internal]
 
   beat:
+    image: ${IMAGE_WORKER:-llm_worker}:${TAG:-dev}
     build:
       context: .
       dockerfile: docker/api/Dockerfile
@@ -79,7 +96,10 @@ services:
       CELERY_BROKER_URL: "redis://redis:6379/0"
       CELERY_RESULT_BACKEND: "redis://redis:6379/1"
     command: ["bash","-lc","celery -A app.celery_app:app beat -l info"]
-    depends_on: [redis]
+    deploy:
+      replicas: 1
+      restart_policy: {condition: on-failure}
+    networks: [internal]
 
 volumes:
   qdrant_data: {}

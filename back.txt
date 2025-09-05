@@ -1,0 +1,2131 @@
+### Makefile
+.PHONY: test lint compose-up compose-down stack-deploy stack-rm
+
+test:
+	pytest -q
+
+lint:
+	ruff . || true
+
+compose-up:
+	docker compose -f docker-compose.yml up -d --build
+
+compose-down:
+	docker compose -f docker-compose.yml down -v
+
+stack-deploy:
+	docker stack deploy -c stack.yml llm
+
+stack-rm:
+	docker stack rm llm
+
+### __init__.py
+
+### app/__init__.py
+from app import *  # alias package for imports expecting backend.app
+
+### app/api/deps.py
+from __future__ import annotations
+from typing import Optional, Dict, Any
+from fastapi import Depends, HTTPException, status, Request
+from sqlalchemy.orm import Session
+import hashlib
+import time
+
+from app.core.db import get_session
+from app.core.redis import get_redis
+from app.core.security import get_bearer_token, decode_jwt
+from app.repositories.users_repo import UsersRepo
+
+def db_session():
+    """Real DB session dependency."""
+    yield from get_session()
+
+async def rate_limit(request: Request, key: str, limit: int, window_sec: int = 60) -> None:
+    """Simple fixed-window rate limit on IP+key using Redis.
+    Raises 429 if the number of hits in the current window exceeds `limit`.
+    """
+    r = get_redis()
+    ip = request.client.host if request.client else "unknown"
+    now = int(time.time())
+    window = now - (now % window_sec)
+    rl_key = f"rl:{key}:{ip}:{window}"
+    # Use Lua for atomic INCR+EXPIRE if available; fallback to simple ops
+    try:
+        cur = await r.incr(rl_key)  # type: ignore[attr-defined]
+        if cur == 1:
+            await r.expire(rl_key, window_sec)  # type: ignore[attr-defined]
+        if cur > limit:
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="rate_limited")
+    except AttributeError:
+        # In case a sync client was wired accidentally
+        cur = r.incr(rl_key)  # type: ignore
+        if cur == 1:
+            r.expire(rl_key, window_sec)  # type: ignore
+        if cur > limit:
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="rate_limited")
+
+def _ensure_access(payload: Dict[str, Any]) -> None:
+    if payload.get("typ") != "access":
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_token_type")
+
+def get_current_user(token: str = Depends(get_bearer_token), session: Session = Depends(db_session)) -> Dict[str, Any]:
+    """Resolve user from Bearer access JWT and DB."""
+    payload = decode_jwt(token)
+    _ensure_access(payload)
+    sub = payload.get("sub")
+    if not sub:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_token")
+    repo = UsersRepo(session)
+    user = repo.get(sub)
+    if not user or getattr(user, "is_active", True) is False:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="user_not_found_or_inactive")
+    return {"id": str(user.id), "login": user.login, "role": user.role, "fio": getattr(user, "fio", None)}
+
+### app/api/routers/__init__.py
+
+### app/api/routers/analyze.py
+from __future__ import annotations
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.orm import Session
+from app.api.deps import db_session, get_current_user
+from app.services.analyze_service import create_job, list_jobs, get_job, delete_job
+from app.tasks.analyze import run as analyze_run
+
+router = APIRouter(prefix="/analyze", tags=["analyze"])
+
+@router.get("")
+def list_(session: Session = Depends(db_session), user=Depends(get_current_user)):
+    rows = list_jobs(session)
+    return [{
+        "id": str(r.id),
+        "status": getattr(r, "status", None),
+        "date_upload": getattr(r, "date_upload", None),
+        "error": getattr(r, "error", None),
+    } for r in rows]
+
+@router.post("", status_code=202)
+def create(payload: dict, session: Session = Depends(db_session), user=Depends(get_current_user)):
+    # FIX: user is a dict from get_current_user
+    job = create_job(session, uploaded_by=user["id"], url_file=(payload or {}).get("url_file"))
+    analyze_run.delay(str(job.id), pipeline=(payload or {}).get("pipeline"))
+    return {"id": str(job.id), "status": getattr(job, "status", "queued"), "accepted": True}
+
+@router.get("/{job_id}")
+def get(job_id: str, session: Session = Depends(db_session), user=Depends(get_current_user)):
+    job = get_job(session, job_id)
+    if not job:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="not_found")
+    return {
+        "id": str(job.id),
+        "status": getattr(job, "status", None),
+        "result": getattr(job, "result", None),
+        "error": getattr(job, "error", None),
+    }
+
+@router.delete("/{job_id}")
+def delete(job_id: str, session: Session = Depends(db_session), user=Depends(get_current_user)):
+    ok = delete_job(session, job_id)
+    if not ok:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="not_found")
+    return {"ok": True}
+
+### app/api/routers/auth.py
+from __future__ import annotations
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Response
+from sqlalchemy.orm import Session
+import hashlib
+
+from app.api.deps import db_session, rate_limit, get_current_user
+from app.core.security import get_bearer_token
+from app.services.auth_service import login as do_login, refresh as do_refresh, revoke_refresh as do_revoke
+from app.repositories.users_repo import UsersRepo
+
+router = APIRouter(prefix="/auth", tags=["auth"])
+
+@router.post("/login")
+async def login(request: Request, payload: dict, session: Session = Depends(db_session)):
+    # payload: {"login":"...", "password":"..."}
+    await rate_limit(request, "auth_login", limit=10, window_sec=60)
+    login_ = (payload or {}).get("login", "").strip()
+    password = (payload or {}).get("password", "")
+    if not login_ or not password:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="missing_credentials")
+    try:
+        access, refresh, user_id = do_login(session, login_, password)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_credentials")
+    # enrich with user for convenience (per OpenAPI)
+    u = UsersRepo(session).get(user_id)
+    return {
+        "access_token": access,
+        "refresh_token": refresh,
+        "token_type": "bearer",
+        "expires_in": 3600,
+        "user": {"id": str(u.id), "fio": getattr(u, "fio", None), "login": u.login, "role": u.role} if u else None,
+    }
+
+@router.post("/refresh")
+def refresh(payload: dict, session: Session = Depends(db_session)):
+    rt = (payload or {}).get("refresh_token")
+    if not rt:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="missing_refresh_token")
+    try:
+        access, maybe_new_refresh = do_refresh(session, rt)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(e))
+    return {
+        "access_token": access,
+        "refresh_token": maybe_new_refresh,
+        "token_type": "bearer",
+        "expires_in": 3600,
+    }
+
+@router.get("/me")
+def me(user = Depends(get_current_user)):
+    return user
+
+@router.post("/logout", status_code=204)
+def logout(payload: dict | None = None, session: Session = Depends(db_session)) -> Response:
+    # Best-effort: revoke provided refresh token; if absent, just return 204 (contract allows empty body).
+    rt = (payload or {}).get("refresh_token") if isinstance(payload, dict) else None
+    if rt:
+        do_revoke(session, rt)
+    return Response(status_code=204)
+
+### app/api/routers/chats.py
+from fastapi import APIRouter, Depends, Request
+from app.api.deps import db_session, get_current_user, rate_limit
+from app.api.sse import sse_response
+
+router = APIRouter(prefix="/chats", tags=["chats"])
+
+@router.post("/{chat_id}/messages")
+async def post_messages(chat_id: str, payload: dict, request: Request, session=Depends(db_session), user=Depends(get_current_user)):
+    await rate_limit(request, f"chat_post:{chat_id}", 60, 60)
+    if (payload or {}).get("response_stream"):
+        def gen():
+            yield {"data": "event: token"}
+            yield {"data": "data: Привет..."} 
+            yield {"data": "data: Это стрим ответа."}
+            yield {"data": "event: done"}
+        return sse_response(gen())
+    # FIX: schema requires string in content
+    return {"messages":[{"role":"assistant","content":"Привет! Это заглушка ответа."}]}
+
+### app/api/routers/rag.py
+from __future__ import annotations
+from typing import List, Optional, Any, Dict
+from datetime import datetime
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.orm import Session
+from app.api.deps import db_session, get_current_user
+from app.services.rag_service import (
+    create_upload, list_documents, get_document, delete_document, search,
+    start_ingest_chain, start_upload_watch, progress, stats
+)
+
+router = APIRouter(prefix="/rag", tags=["rag"])
+
+def _ser_doc(row: Any) -> Dict[str, Any]:
+    if isinstance(row, dict):
+        return row
+    out: Dict[str, Any] = {}
+    for k in ("id","status","filename","original_name","mime","size","error","tags","created_at","updated_at"):
+        if hasattr(row, k):
+            v = getattr(row, k)
+            if isinstance(v, datetime):
+                v = v.isoformat()
+            out[k] = str(v) if k == "id" else v
+    return out or {"id": str(getattr(row, "id", ""))}
+
+@router.get("")
+def list_docs(session: Session = Depends(db_session), user=Depends(get_current_user)):
+    rows = list_documents(session)
+    return [_ser_doc(r) for r in rows]
+
+@router.get("/{doc_id}")
+def get_doc(doc_id: str, session: Session = Depends(db_session), user=Depends(get_current_user)):
+    row = get_document(session, doc_id)
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="not_found")
+    return _ser_doc(row)
+
+@router.get("/{doc_id}/progress")
+def get_progress(doc_id: str, session: Session = Depends(db_session), user=Depends(get_current_user)):
+    return progress(session, doc_id)
+
+@router.get("/stats/summary")
+def get_stats(session: Session = Depends(db_session), user=Depends(get_current_user)):
+    return stats(session)
+
+@router.delete("/{doc_id}")
+def delete_doc(doc_id: str, session: Session = Depends(db_session), user=Depends(get_current_user)):
+    ok = delete_document(session, doc_id)
+    if not ok:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="not_found")
+    return {"ok": True}
+
+@router.post("/upload")
+def create_upload_url(payload: dict, session: Session = Depends(db_session), user=Depends(get_current_user)):
+    meta = create_upload(session, filename=(payload or {}).get("filename"), user_id=user["id"])  # type: ignore
+    # keep compatibility if service returns 'raw/<id>/file' by passing 'key' through, upload_watch handles both
+    if (payload or {}).get("watch"):
+        start_upload_watch(meta["id"], key=meta["key"])  # type: ignore[index]
+    if (payload or {}).get("auto_ingest"):
+        start_ingest_chain(meta["id"])  # type: ignore[index]
+    return meta
+
+@router.post("/search")
+def rag_search(payload: dict, session: Session = Depends(db_session), user=Depends(get_current_user)):
+    p = payload or {}
+    q = p.get("query") or ""
+    top_k = int(p.get("top_k") or 5)
+    with_snippets = bool(p.get("with_snippets", True))
+    # passthrough filters/offset/doc_id/tags
+    offset = int(p.get("offset") or 0)
+    doc_id = p.get("doc_id")
+    # tags can be provided top-level or inside filters
+    tags = p.get("tags")
+    filters = p.get("filters") or {}
+    if not tags and isinstance(filters, dict):
+        tags = filters.get("tags")
+    min_score = filters.get("min_score") if isinstance(filters, dict) else None
+    res = search(session, query=q, top_k=top_k, offset=offset, doc_id=doc_id, tags=tags, min_score=min_score, with_snippets=with_snippets)
+    return res
+
+### app/api/sse.py
+from starlette.responses import StreamingResponse
+def sse_response(source):
+    def gen():
+        for item in source:
+            yield (item.get("data","") + "\n\n")
+    return StreamingResponse(gen(), media_type="text/event-stream")
+
+### app/celery_app.py
+from __future__ import annotations
+import os
+from celery import Celery
+
+BROKER_URL = os.getenv("CELERY_BROKER_URL") or os.getenv("REDIS_URL", "redis://redis:6379/0")
+RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND") or "redis://redis:6379/1"
+
+app = Celery(
+    "backend",
+    broker=BROKER_URL,
+    backend=RESULT_BACKEND,
+    include=[
+        "app.tasks.normalize",
+        "app.tasks.chunk",
+        "app.tasks.embed",
+        "app.tasks.index",
+        "app.tasks.analyze",
+        "app.tasks.upload_watch",
+    ],
+)
+
+# Queues & routing
+app.conf.task_routes = {
+    "app.tasks.normalize.*": {"queue": "normalize"},
+    "app.tasks.chunk.*": {"queue": "chunk"},
+    "app.tasks.embed.*": {"queue": "embed"},
+    "app.tasks.index.*": {"queue": "index"},
+    "app.tasks.analyze.*": {"queue": "analyze"},
+    "app.tasks.upload.*": {"queue": "watch"},
+    "app.tasks.upload_watch.*": {"queue": "watch"},
+}
+
+app.conf.update(
+    task_serializer="json",
+    accept_content=["json"],
+    result_serializer="json",
+    task_acks_late=True,
+    worker_prefetch_multiplier=1,
+    broker_heartbeat=20,
+    broker_pool_limit=10,
+    task_time_limit=60 * 60,
+    task_soft_time_limit=55 * 60,
+)
+
+if os.getenv("BEAT") == "1":
+    app.conf.beat_schedule = {
+        "dummy-housekeeping-5m": {
+            "task": "app.tasks.index.housekeeping",
+            "schedule": 300.0,
+        }
+    }
+
+### app/core/__init__.py
+from app.core import *
+
+### app/core/config.py
+from __future__ import annotations
+import os
+from typing import Optional
+
+def _env(key: str, default: Optional[str] = None) -> Optional[str]:
+    """Fetch env var trying both UNDER_SCORE and DOT.SEPARATED names."""
+    return os.getenv(key) or os.getenv(key.replace("_", "."), default)
+
+class settings:
+    """Central config.
+    Important S3 envs:
+      - S3_ENDPOINT: internal endpoint for SDK (e.g. http://minio:9000) — used by the app in Docker network.
+      - S3_PUBLIC_ENDPOINT: external/public base URL for links (e.g. https://10.4.4.2). Can include scheme http/https.
+        If not set, falls back to S3_ENDPOINT.
+      Buckets can be set via either S3_BUCKET_* or S3.BUCKET_* names.
+    """
+    # Core
+    DB_URL = _env("DB_URL") or _env("DB.URL") or "postgresql://postgres:postgres@postgres:5432/app"
+    REDIS_URL = _env("REDIS_URL") or _env("REDIS.URL") or "redis://redis:6379/0"
+    QDRANT_URL = _env("QDRANT_URL") or _env("QDRANT.URL") or "http://qdrant:6333"
+
+    # Auth
+    JWT_SECRET = os.getenv("JWT_SECRET", "dev-secret")
+    ACCESS_TTL_SECONDS = int(os.getenv("ACCESS_TTL_SECONDS", "3600"))
+    REFRESH_TTL_DAYS = int(os.getenv("REFRESH_TTL_DAYS", "30"))
+    REFRESH_ROTATING = (str(os.getenv("REFRESH_ROTATING", "true")).lower() in ("1","true","yes"))
+
+    # S3 / MinIO
+    S3_ENDPOINT = _env("S3_ENDPOINT") or _env("S3.ENDPOINT") or "http://minio:9000"
+    S3_PUBLIC_ENDPOINT = _env("S3_PUBLIC_ENDPOINT") or _env("S3.PUBLIC_ENDPOINT") or S3_ENDPOINT
+    S3_ACCESS_KEY = _env("S3_ACCESS_KEY") or _env("S3.ACCESS_KEY") or "minio"
+    S3_SECRET_KEY = _env("S3_SECRET_KEY") or _env("S3.SECRET_KEY") or "minio123"
+
+    S3_BUCKET_RAW = _env("S3_BUCKET_RAW") or _env("S3.BUCKET_RAW") or "raw"
+    S3_BUCKET_CANONICAL = _env("S3_BUCKET_CANONICAL") or _env("S3.BUCKET_CANONICAL") or "canonical"
+    S3_BUCKET_PREVIEW = _env("S3_BUCKET_PREVIEW") or _env("S3.BUCKET_PREVIEW") or "preview"
+
+    # Health
+    HEALTH_DEEP = (os.getenv("HEALTH_DEEP", "0") == "1")
+
+### app/core/db.py
+from __future__ import annotations
+from contextlib import contextmanager
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from .config import settings
+
+engine = create_engine(settings.DB_URL, pool_pre_ping=True, future=True)
+SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
+
+def get_session():
+    db = SessionLocal()
+    try:
+        yield db
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+@contextmanager
+def session_scope():
+    """Provide a transactional scope around a series of operations."""
+    db = SessionLocal()
+    try:
+        yield db
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+### app/core/errors.py
+from __future__ import annotations
+from fastapi import Request
+from fastapi.responses import JSONResponse
+from fastapi import status
+from typing import Any, Optional, Dict
+from .logging import request_id_ctx
+
+class APIError(Exception):
+    def __init__(self, code: str, message: str, *, http_status: int = 400, details: Optional[Dict[str, Any]] = None):
+        super().__init__(message)
+        self.code = code
+        self.http_status = http_status
+        self.details = details or {}
+
+def format_error_payload(code: str, message: str, details: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    return {
+        "error": {"code": code, "message": message, "details": details or {}},
+        "request_id": request_id_ctx.get(),
+    }
+
+async def http_exception_handler(request: Request, exc: APIError):
+    payload = format_error_payload(exc.code, str(exc), exc.details)
+    return JSONResponse(status_code=exc.http_status, content=payload)
+
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    payload = format_error_payload("internal_error", "Internal Server Error")
+    return JSONResponse(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content=payload)
+
+def install_exception_handlers(app):
+    from fastapi import HTTPException
+    app.add_exception_handler(APIError, http_exception_handler)
+    app.add_exception_handler(Exception, unhandled_exception_handler)
+
+### app/core/idempotency.py
+from starlette.middleware.base import BaseHTTPMiddleware
+class IdempotencyMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        return await call_next(request)
+
+### app/core/logging.py
+from __future__ import annotations
+import json, logging, sys, uuid, contextvars
+from typing import Any, Mapping, Optional
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import Response
+
+request_id_ctx = contextvars.ContextVar("request_id", default=None)
+
+class JsonFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        payload = {
+            "level": record.levelname,
+            "message": record.getMessage(),
+            "logger": record.name,
+            "time": self.formatTime(record, "%Y-%m-%dT%H:%M:%S%z"),
+        }
+        rid = request_id_ctx.get()
+        if rid:
+            payload["request_id"] = rid
+        # Extra
+        for k, v in record.__dict__.items():
+            if k not in ("args", "asctime", "created", "exc_info", "exc_text", "filename",
+                         "funcName", "levelname", "levelno", "lineno", "module", "msecs",
+                         "message", "msg", "name", "pathname", "process", "processName",
+                         "relativeCreated", "stack_info", "thread", "threadName"):
+                payload[k] = v
+        return json.dumps(payload, ensure_ascii=False)
+
+def setup_logging(level: int = logging.INFO) -> None:
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(JsonFormatter())
+    root = logging.getLogger()
+    root.handlers.clear()
+    root.addHandler(handler)
+    root.setLevel(level)
+
+class RequestIdMiddleware(BaseHTTPMiddleware):
+    header_name = "X-Request-ID"
+    async def dispatch(self, request: Request, call_next):
+        rid = request.headers.get(self.header_name) or str(uuid.uuid4())
+        token = request_id_ctx.set(rid)
+        try:
+            response: Response = await call_next(request)
+        finally:
+            request_id_ctx.reset(token)
+        response.headers[self.header_name] = rid
+        return response
+
+### app/core/metrics.py
+from __future__ import annotations
+from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
+from fastapi.responses import Response
+
+# API metrics
+logins_total = Counter("logins_total", "Logins", ["result"])
+refresh_total = Counter("refresh_total", "Refresh", ["result"])
+chat_requests_total = Counter("chat_requests_total", "Total chat requests", ["use_rag", "model"])
+chat_latency_seconds = Histogram("chat_latency_seconds", "Chat latency", ["use_rag"])
+rag_search_total = Counter("rag_search_total", "Total RAG searches", ["model"])
+rag_documents_total = Counter("rag_documents_total", "RAG documents by status", ["status"])
+
+# Pipeline counters
+rag_ingest_started_total = Counter("rag_ingest_started_total", "RAG ingest pipelines started")
+rag_chunks_created_total = Counter("rag_chunks_created_total", "Total chunks created")
+rag_vectors_upserted_total = Counter("rag_vectors_upserted_total", "Total vectors upserted to Qdrant")
+
+# Tasks metrics
+tasks_started_total = Counter("tasks_started_total", "Tasks started", ["queue", "task"])
+tasks_failed_total  = Counter("tasks_failed_total",  "Tasks failed",  ["queue", "task"])
+task_duration_seconds = Histogram("task_duration_seconds", "Task duration", ["task"])
+embedding_batch_inflight = Gauge("embedding_batch_inflight", "Embedding batches in flight")
+
+# External calls metrics
+external_request_total = Counter("external_request_total", "External requests total", ["target", "status"])
+external_request_seconds = Histogram("external_request_seconds", "External request latency", ["target"])
+
+qdrant_points = Gauge("qdrant_points", "Qdrant points", ["collection"])
+
+def prometheus_endpoint() -> Response:
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+### app/core/pagination.py
+from __future__ import annotations
+import base64, json
+from typing import Any, Dict, Optional, Tuple
+
+def encode_cursor(payload: Dict[str, Any]) -> str:
+    return base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":")).encode()).decode()
+
+def decode_cursor(cursor: Optional[str]) -> Optional[Dict[str, Any]]:
+    if not cursor:
+        return None
+    try:
+        data = base64.urlsafe_b64decode(cursor.encode()).decode()
+        return json.loads(data)
+    except Exception:
+        return None
+
+def page(items, next_cursor_payload: Optional[Dict[str, Any]]):
+    return {"items": items, "next_cursor": encode_cursor(next_cursor_payload) if next_cursor_payload else None}
+
+### app/core/qdrant.py
+from __future__ import annotations
+from qdrant_client import QdrantClient
+from .config import settings
+
+_client: QdrantClient | None = None
+
+def get_qdrant() -> QdrantClient:
+    global _client
+    if _client is None:
+        _client = QdrantClient(url=settings.QDRANT_URL, prefer_grpc=False)
+    return _client
+
+### app/core/redis.py
+from __future__ import annotations
+from typing import Optional
+from redis.asyncio import Redis
+from .config import settings
+
+_redis: Optional[Redis] = None
+
+def get_redis() -> Redis:
+    global _redis
+    if _redis is None:
+        _redis = Redis.from_url(settings.REDIS_URL, decode_responses=True)
+    return _redis
+
+### app/core/s3.py
+from __future__ import annotations
+from typing import BinaryIO
+from urllib.parse import urlparse
+from minio import Minio
+from .config import settings
+
+_client: Minio | None = None
+
+def _mk_client() -> Minio:
+    endpoint = settings.S3_ENDPOINT
+    secure = False
+    netloc = endpoint
+    if endpoint.startswith("http://") or endpoint.startswith("https://"):
+        u = urlparse(endpoint)
+        secure = (u.scheme == "https")
+        netloc = u.netloc
+    return Minio(
+        netloc,
+        access_key=settings.S3_ACCESS_KEY,
+        secret_key=settings.S3_SECRET_KEY,
+        secure=secure,
+    )
+
+def get_minio() -> Minio:
+    global _client
+    if _client is None:
+        _client = _mk_client()
+    return _client
+
+def presign_put(bucket: str, key: str, expiry_seconds: int = 3600) -> str:
+    return get_minio().presigned_put_object(bucket, key, expires=expiry_seconds)
+
+def ensure_bucket(bucket: str) -> None:
+    c = get_minio()
+    if not c.bucket_exists(bucket):
+        c.make_bucket(bucket)
+
+def put_object(bucket: str, key: str, data: bytes | BinaryIO, length: int | None = None, content_type: str | None = None):
+    c = get_minio()
+    if hasattr(data, "read"):
+        return c.put_object(bucket, key, data, length=length or -1, content_type=content_type)  # type: ignore
+    import io
+    bio = io.BytesIO(data if isinstance(data, (bytes, bytearray)) else bytes(data))
+    return c.put_object(bucket, key, bio, length=len(bio.getvalue()), content_type=content_type)
+
+def get_object(bucket: str, key: str):
+    return get_minio().get_object(bucket, key)
+
+def stat_object(bucket: str, key: str):
+    return get_minio().stat_object(bucket, key)
+
+def list_buckets():
+    return get_minio().list_buckets()
+
+### app/core/security.py
+from __future__ import annotations
+import time
+import jwt
+from typing import Any, Dict, Optional
+from argon2 import PasswordHasher
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from .config import settings
+
+ph = PasswordHasher()
+http_bearer = HTTPBearer(auto_error=False)
+
+def hash_password(password: str) -> str:
+    return ph.hash(password)
+
+def verify_password(password: str, password_hash: str) -> bool:
+    try:
+        return ph.verify(password_hash, password)
+    except Exception:
+        return False
+
+def encode_jwt(payload: Dict[str, Any], *, ttl_seconds: int) -> str:
+    now = int(time.time())
+    to_encode = {"iat": now, "exp": now + ttl_seconds, **payload}
+    return jwt.encode(to_encode, settings.JWT_SECRET, algorithm="HS256")
+
+def decode_jwt(token: str) -> Dict[str, Any]:
+    try:
+        return jwt.decode(token, settings.JWT_SECRET, algorithms=["HS256"])
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="token_expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_token")
+
+# FastAPI dependency
+def get_bearer_token(credentials: HTTPAuthorizationCredentials | None = Depends(http_bearer)) -> str:
+    if not credentials or credentials.scheme.lower() != "bearer":
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="missing_bearer")
+    return credentials.credentials
+
+### app/llm/prompts/__init__.py
+
+### app/main.py
+from app.main import app  # expose ASGI app under backend.app.main
+
+### app/migrations/env.py
+from __future__ import annotations
+from logging.config import fileConfig
+from sqlalchemy import engine_from_config, pool
+from alembic import context
+from app.core.config import settings
+from app.models.base import Base  # type: ignore
+
+# this is the Alembic Config object, which provides access to the values within the .ini file.
+config = context.config
+
+# Interpret the config file for Python logging.
+if config.config_file_name is not None:
+    fileConfig(config.config_file_name)
+
+target_metadata = Base.metadata
+
+def run_migrations_offline() -> None:
+    url = settings.DB_URL
+    context.configure(
+        url=url,
+        target_metadata=target_metadata,
+        literal_binds=True,
+        dialect_opts={"paramstyle": "named"},
+    )
+    with context.begin_transaction():
+        context.run_migrations()
+
+def run_migrations_online() -> None:
+    configuration = config.get_section(config.config_ini_section) or {}
+    configuration["sqlalchemy.url"] = settings.DB_URL
+    connectable = engine_from_config(configuration, prefix="sqlalchemy.", poolclass=pool.NullPool)
+    with connectable.connect() as connection:
+        context.configure(connection=connection, target_metadata=target_metadata)
+        with context.begin_transaction():
+            context.run_migrations()
+
+if context.is_offline_mode():
+    run_migrations_offline()
+else:
+    run_migrations_online()
+
+### app/migrations/versions/20250904_213024_initial.py
+from __future__ import annotations
+from alembic import op
+import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
+
+# revision identifiers, used by Alembic.
+revision = "20250904_213024"
+down_revision = None
+branch_labels = None
+depends_on = None
+
+def upgrade():
+    # Enums
+    role_enum = sa.Enum("admin", "editor", "reader", name="role_enum")
+    chat_role_enum = sa.Enum("system", "user", "assistant", "tool", name="chat_role_enum")
+    rag_status_enum = sa.Enum("uploaded", "normalizing", "chunking", "embedding", "indexing", "ready", "archived", "deleting", "error", name="rag_status_enum")
+    analyze_status_enum = sa.Enum("queued", "processing", "done", "error", "canceled", name="analyze_status_enum")
+    role_enum.create(op.get_bind(), checkfirst=True)
+    chat_role_enum.create(op.get_bind(), checkfirst=True)
+    rag_status_enum.create(op.get_bind(), checkfirst=True)
+    analyze_status_enum.create(op.get_bind(), checkfirst=True)
+
+    # users
+    op.create_table(
+        "users",
+        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
+        sa.Column("fio", sa.Text(), nullable=True),
+        sa.Column("login", sa.String(length=255), nullable=False, unique=True),
+        sa.Column("password_hash", sa.Text(), nullable=False),
+        sa.Column("role", role_enum, nullable=False, server_default="reader"),
+        sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.text("true")),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+    )
+
+    # user_tokens (PAT)
+    op.create_table(
+        "usertokens",
+        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
+        sa.Column("user_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("token_hash", sa.Text(), nullable=False),
+        sa.Column("name", sa.String(length=255), nullable=True),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column("last_used_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("revoked", sa.Boolean(), nullable=False, server_default=sa.text("false")),
+        sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
+    )
+
+    # user_refresh_tokens
+    op.create_table(
+        "userrefreshtokens",
+        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
+        sa.Column("user_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("refresh_hash", sa.Text(), nullable=False),
+        sa.Column("issued_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("rotating", sa.Boolean(), nullable=False, server_default=sa.text("true")),
+        sa.Column("revoked", sa.Boolean(), nullable=False, server_default=sa.text("false")),
+        sa.Column("meta", sa.Text(), nullable=True),
+        sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
+        sa.UniqueConstraint("refresh_hash", name="uq_user_refresh_tokens_refresh_hash"),
+    )
+    op.create_index("ix_userrefreshtokens_user_id_expires_at", "userrefreshtokens", ["user_id", "expires_at"])
+
+    # chats
+    op.create_table(
+        "chats",
+        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
+        sa.Column("name", sa.String(length=255), nullable=True),
+        sa.Column("owner_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column("last_message_at", sa.DateTime(timezone=True), nullable=True),
+        sa.ForeignKeyConstraint(["owner_id"], ["users.id"], ondelete="CASCADE"),
+    )
+
+    # chat_messages
+    op.create_table(
+        "chatmessages",
+        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
+        sa.Column("chat_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("role", chat_role_enum, nullable=False),
+        sa.Column("content", sa.JSON(), nullable=False),
+        sa.Column("model", sa.String(length=255), nullable=True),
+        sa.Column("tokens_in", sa.Integer(), nullable=True),
+        sa.Column("tokens_out", sa.Integer(), nullable=True),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column("meta", sa.JSON(), nullable=True),
+        sa.ForeignKeyConstraint(["chat_id"], ["chats.id"], ondelete="CASCADE"),
+    )
+    op.create_index("ix_chatmessages_chat_id_created_at", "chatmessages", ["chat_id", "created_at"])
+
+    # rag_documents
+    op.create_table(
+        "ragdocuments",
+        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
+        sa.Column("name", sa.Text(), nullable=True),
+        sa.Column("status", rag_status_enum, nullable=False, server_default="uploaded"),
+        sa.Column("date_upload", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column("uploaded_by", postgresql.UUID(as_uuid=True), nullable=True),
+        sa.Column("url_file", sa.Text(), nullable=True),
+        sa.Column("url_canonical_file", sa.Text(), nullable=True),
+        sa.Column("source_mime", sa.String(length=255), nullable=True),
+        sa.Column("size_bytes", sa.BigInteger(), nullable=True),
+        sa.Column("tags", postgresql.ARRAY(sa.String()), nullable=True),
+        sa.Column("error", sa.Text(), nullable=True),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=True),
+    )
+
+    # rag_chunks
+    op.create_table(
+        "ragchunks",
+        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
+        sa.Column("document_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("chunk_idx", sa.Integer(), nullable=False),
+        sa.Column("text", sa.Text(), nullable=False),
+        sa.Column("embedding_model", sa.String(length=255), nullable=True),
+        sa.Column("embedding_version", sa.String(length=255), nullable=True),
+        sa.Column("date_embedding", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("meta", sa.JSON(), nullable=True),
+        sa.Column("qdrant_point_id", postgresql.UUID(as_uuid=True), nullable=True),
+        sa.ForeignKeyConstraint(["document_id"], ["ragdocuments.id"], ondelete="CASCADE"),
+    )
+    op.create_index("ix_ragchunks_document_id_chunk_idx", "ragchunks", ["document_id", "chunk_idx"])
+
+    # analysis_documents
+    op.create_table(
+        "analysisdocuments",
+        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
+        sa.Column("status", analyze_status_enum, nullable=False, server_default="queued"),
+        sa.Column("date_upload", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column("uploaded_by", postgresql.UUID(as_uuid=True), nullable=True),
+        sa.Column("url_file", sa.Text(), nullable=True),
+        sa.Column("url_canonical_file", sa.Text(), nullable=True),
+        sa.Column("result", sa.JSON(), nullable=True),
+        sa.Column("error", sa.Text(), nullable=True),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=True),
+    )
+
+    # analysis_chunks
+    op.create_table(
+        "analysischunks",
+        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
+        sa.Column("document_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("chunk_idx", sa.Integer(), nullable=False),
+        sa.Column("text", sa.Text(), nullable=False),
+        sa.Column("embedding_model", sa.String(length=255), nullable=True),
+        sa.Column("embedding_version", sa.String(length=255), nullable=True),
+        sa.Column("date_embedding", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("meta", sa.JSON(), nullable=True),
+        sa.ForeignKeyConstraint(["document_id"], ["analysisdocuments.id"], ondelete="CASCADE"),
+    )
+    op.create_index("ix_analysischunks_document_id_chunk_idx", "analysischunks", ["document_id", "chunk_idx"])
+
+def downgrade():
+    op.drop_index("ix_analysischunks_document_id_chunk_idx", table_name="analysischunks")
+    op.drop_table("analysischunks")
+    op.drop_table("analysisdocuments")
+    op.drop_index("ix_ragchunks_document_id_chunk_idx", table_name="ragchunks")
+    op.drop_table("ragchunks")
+    op.drop_table("ragdocuments")
+    op.drop_index("ix_chatmessages_chat_id_created_at", table_name="chatmessages")
+    op.drop_table("chatmessages")
+    op.drop_table("chats")
+    op.drop_index("ix_userrefreshtokens_user_id_expires_at", table_name="userrefreshtokens")
+    op.drop_table("userrefreshtokens")
+    op.drop_table("usertokens")
+    op.drop_table("users")
+
+    # drop enums
+    op.execute("DROP TYPE IF EXISTS analyze_status_enum")
+    op.execute("DROP TYPE IF EXISTS rag_status_enum")
+    op.execute("DROP TYPE IF EXISTS chat_role_enum")
+    op.execute("DROP TYPE IF EXISTS role_enum")
+
+### app/migrations/versions/__init__.py
+
+### app/models/__init__.py
+from .base import Base
+from .user import Users, UserTokens, UserRefreshTokens
+from .chat import Chats, ChatMessages
+from .rag import RagDocuments, RagChunks
+from .analyze import AnalysisDocuments, AnalysisChunks
+
+### app/models/analyze.py
+from __future__ import annotations
+from typing import Optional, List
+from datetime import datetime
+from sqlalchemy import String, Text, DateTime, Enum, Integer, JSON, ForeignKey
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+from .base import Base
+import uuid
+
+AnalyzeStatusEnum = Enum("queued", "processing", "done", "error", "canceled", name="analyze_status_enum", create_constraint=True)
+
+class AnalysisDocuments(Base):
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    status: Mapped[str] = mapped_column(AnalyzeStatusEnum, nullable=False, default="queued")
+    date_upload: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default="now()", nullable=False)
+    uploaded_by: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    url_file: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    url_canonical_file: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    result: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    chunks: Mapped[List["AnalysisChunks"]] = relationship(back_populates="document", cascade="all, delete-orphan")
+
+class AnalysisChunks(Base):
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    document_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("analysisdocuments.id", ondelete="CASCADE"), nullable=False)
+    chunk_idx: Mapped[int] = mapped_column(Integer, nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    embedding_model: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    embedding_version: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    date_embedding: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    meta: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+
+    document: Mapped["AnalysisDocuments"] = relationship(back_populates="chunks")
+
+### app/models/base.py
+from __future__ import annotations
+from sqlalchemy.orm import DeclarativeBase, declared_attr, Mapped, mapped_column
+from sqlalchemy import MetaData, func
+from datetime import datetime
+
+# Naming convention for Alembic-friendly constraints
+metadata = MetaData(
+    naming_convention={
+        "ix": "ix_%(column_0_label)s",
+        "uq": "uq_%(table_name)s_%(column_0_name)s",
+        "ck": "ck_%(table_name)s_%(constraint_name)s",
+        "fk": "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s",
+        "pk": "pk_%(table_name)s",
+    }
+)
+
+class Base(DeclarativeBase):
+    metadata = metadata
+
+    @declared_attr.directive
+    def __tablename__(cls) -> str:  # type: ignore[override]
+        return cls.__name__.lower()
+
+Timestamp = datetime
+
+### app/models/chat.py
+from __future__ import annotations
+from typing import Optional, List
+from datetime import datetime
+from sqlalchemy import String, Text, DateTime, Enum, Integer, ForeignKey, JSON
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+from .base import Base
+import uuid
+
+ChatRoleEnum = Enum("system", "user", "assistant", "tool", name="chat_role_enum", create_constraint=True)
+
+class Chats(Base):
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    owner_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default="now()", nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default="now()", nullable=False)
+    last_message_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    messages: Mapped[List["ChatMessages"]] = relationship(back_populates="chat", cascade="all, delete-orphan")
+
+class ChatMessages(Base):
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    chat_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("chats.id", ondelete="CASCADE"), nullable=False)
+    role: Mapped[str] = mapped_column(ChatRoleEnum, nullable=False)
+    content: Mapped[dict] = mapped_column(JSON, nullable=False)
+    model: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    tokens_in: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    tokens_out: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default="now()", nullable=False)
+    meta: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+
+    chat: Mapped["Chats"] = relationship(back_populates="messages")
+
+### app/models/rag.py
+from __future__ import annotations
+from typing import Optional, List
+from datetime import datetime
+from sqlalchemy import String, Text, DateTime, Enum, Integer, BigInteger, ARRAY, JSON, ForeignKey
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+from .base import Base
+import uuid
+
+RagStatusEnum = Enum(
+    "uploaded", "normalizing", "chunking", "embedding", "indexing", "ready", "archived", "deleting", "error",
+    name="rag_status_enum",
+    create_constraint=True
+)
+
+class RagDocuments(Base):
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(RagStatusEnum, nullable=False, default="uploaded")
+    date_upload: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default="now()", nullable=False)
+    uploaded_by: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    url_file: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    url_canonical_file: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    source_mime: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    size_bytes: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    tags: Mapped[Optional[List[str]]] = mapped_column(ARRAY(String), nullable=True)
+    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    chunks: Mapped[List["RagChunks"]] = relationship(back_populates="document", cascade="all, delete-orphan")
+
+class RagChunks(Base):
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    document_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("ragdocuments.id", ondelete="CASCADE"), nullable=False)
+    chunk_idx: Mapped[int] = mapped_column(Integer, nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    embedding_model: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    embedding_version: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    date_embedding: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    meta: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    qdrant_point_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+
+    document: Mapped["RagDocuments"] = relationship(back_populates="chunks")
+
+### app/models/user.py
+from __future__ import annotations
+from typing import Optional, List
+from datetime import datetime
+from sqlalchemy import String, Boolean, Text, DateTime, Enum, UniqueConstraint
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+from .base import Base
+
+RolesEnum = Enum("admin", "editor", "reader", name="role_enum", create_constraint=True)
+
+class Users(Base):
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    fio: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    login: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    password_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    role: Mapped[str] = mapped_column(RolesEnum, nullable=False, default="reader")
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default="now()")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default="now()")
+
+    # relationships
+    refresh_tokens: Mapped[List["UserRefreshTokens"]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    pat_tokens: Mapped[List["UserTokens"]] = relationship(back_populates="user", cascade="all, delete-orphan")
+
+import uuid
+
+class UserTokens(Base):
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    token_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default="now()")
+    last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    user: Mapped["Users"] = relationship(back_populates="pat_tokens", primaryjoin="Users.id==foreign(UserTokens.user_id)")
+
+class UserRefreshTokens(Base):
+    __table_args__ = (
+        UniqueConstraint("refresh_hash", name="uq_user_refresh_tokens_refresh_hash"),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    refresh_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default="now()")
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    rotating: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    revoked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    meta: Mapped[Optional[dict]] = mapped_column(Text, nullable=True)  # store JSON as text (or JSONB via sqlalchemy.dialects)
+
+    user: Mapped["Users"] = relationship(back_populates="refresh_tokens", primaryjoin="Users.id==foreign(UserRefreshTokens.user_id)")
+
+### app/repositories/__init__.py
+
+### app/repositories/analyze_repo.py
+from __future__ import annotations
+from typing import List, Optional
+from sqlalchemy.orm import Session
+from sqlalchemy import select
+from app.models.analyze import AnalysisDocuments, AnalysisChunks
+
+class AnalyzeRepo:
+    def __init__(self, session: Session):
+        self.s = session
+
+    def create_document(self, **kwargs) -> AnalysisDocuments:
+        doc = AnalysisDocuments(**kwargs)
+        self.s.add(doc)
+        self.s.flush()
+        return doc
+
+    def get(self, doc_id) -> Optional[AnalysisDocuments]:
+        return self.s.get(AnalysisDocuments, doc_id)
+
+    def list(self, limit: int = 50) -> List[AnalysisDocuments]:
+        return self.s.execute(select(AnalysisDocuments).order_by(AnalysisDocuments.date_upload.desc()).limit(limit)).scalars().all()
+
+    def delete(self, doc: AnalysisDocuments):
+        self.s.delete(doc)
+
+    def add_chunk(self, **kwargs) -> AnalysisChunks:
+        chunk = AnalysisChunks(**kwargs)
+        self.s.add(chunk)
+        self.s.flush()
+        return chunk
+
+    def list_chunks(self, doc_id) -> List[AnalysisChunks]:
+        return self.s.execute(select(AnalysisChunks).where(AnalysisChunks.document_id == doc_id).order_by(AnalysisChunks.chunk_idx.asc())).scalars().all()
+
+### app/repositories/chats_repo.py
+from __future__ import annotations
+from typing import List, Optional
+from sqlalchemy.orm import Session
+from sqlalchemy import select
+from app.models.chat import Chats, ChatMessages
+
+class ChatsRepo:
+    def __init__(self, session: Session):
+        self.s = session
+
+    def create_chat(self, owner_id, name: str | None) -> Chats:
+        chat = Chats(owner_id=owner_id, name=name)
+        self.s.add(chat)
+        self.s.flush()
+        return chat
+
+    def list_chats(self, owner_id) -> List[Chats]:
+        return self.s.execute(select(Chats).where(Chats.owner_id == owner_id).order_by(Chats.updated_at.desc())).scalars().all()
+
+    def get(self, chat_id) -> Optional[Chats]:
+        return self.s.get(Chats, chat_id)
+
+    def delete(self, chat: Chats):
+        self.s.delete(chat)
+
+    def add_message(self, chat_id, role: str, content: dict, model: str | None = None) -> ChatMessages:
+        msg = ChatMessages(chat_id=chat_id, role=role, content=content, model=model)
+        self.s.add(msg)
+        self.s.flush()
+        return msg
+
+    def list_messages(self, chat_id) -> List[ChatMessages]:
+        return self.s.execute(select(ChatMessages).where(ChatMessages.chat_id == chat_id).order_by(ChatMessages.created_at.asc())).scalars().all()
+
+### app/repositories/rag_repo.py
+from __future__ import annotations
+from typing import List, Optional
+from sqlalchemy.orm import Session
+from sqlalchemy import select
+from app.models.rag import RagDocuments, RagChunks
+
+class RagRepo:
+    def __init__(self, session: Session):
+        self.s = session
+
+    def create_document(self, **kwargs) -> RagDocuments:
+        doc = RagDocuments(**kwargs)
+        self.s.add(doc)
+        self.s.flush()
+        return doc
+
+    def get(self, doc_id) -> Optional[RagDocuments]:
+        return self.s.get(RagDocuments, doc_id)
+
+    def list(self, limit: int = 50) -> List[RagDocuments]:
+        return self.s.execute(select(RagDocuments).order_by(RagDocuments.date_upload.desc()).limit(limit)).scalars().all()
+
+    def delete(self, doc: RagDocuments):
+        self.s.delete(doc)
+
+    def add_chunk(self, **kwargs) -> RagChunks:
+        chunk = RagChunks(**kwargs)
+        self.s.add(chunk)
+        self.s.flush()
+        return chunk
+
+    def list_chunks(self, doc_id) -> List[RagChunks]:
+        return self.s.execute(select(RagChunks).where(RagChunks.document_id == doc_id).order_by(RagChunks.chunk_idx.asc())).scalars().all()
+
+### app/repositories/users_repo.py
+from __future__ import annotations
+from typing import Optional
+from sqlalchemy.orm import Session
+from sqlalchemy import select
+from app.models.user import Users, UserTokens, UserRefreshTokens
+
+class UsersRepo:
+    def __init__(self, session: Session):
+        self.s = session
+
+    def by_login(self, login: str) -> Optional[Users]:
+        return self.s.execute(select(Users).where(Users.login == login)).scalars().first()
+
+    def get(self, user_id):
+        return self.s.get(Users, user_id)
+
+    # Refresh tokens
+    def add_refresh(self, rec: UserRefreshTokens) -> None:
+        self.s.add(rec)
+
+    def get_refresh_by_hash(self, refresh_hash: str) -> Optional[UserRefreshTokens]:
+        return self.s.execute(select(UserRefreshTokens).where(UserRefreshTokens.refresh_hash == refresh_hash)).scalars().first()
+
+    def revoke_refresh(self, refresh_hash: str) -> bool:
+        rec = self.get_refresh_by_hash(refresh_hash)
+        if rec and not rec.revoked:
+            rec.revoked = True
+            return True
+        return False
+
+### app/schemas/__init__.py
+from .common import ErrorResponse
+from .auth import LoginRequest, LoginResponse, RefreshRequest, RefreshResponse
+from .chats import ChatMessage, ChatTurnRequest, ChatTurnResponse
+from .rag import RagDocument, RagSearchRequest, RagUploadRequest
+from .analyze import AnalyzeRequest, AnalyzeResult
+
+__all__ = ['ErrorResponse', 'RefreshResponse', 'LoginRequest', 'RefreshRequest', 'LoginResponse', 'ChatMessage', 'ChatTurnRequest', 'ChatTurnResponse', 'RagSearchRequest', 'RagUploadRequest', 'RagDocument', 'AnalyzeRequest', 'AnalyzeResult']
+
+### app/schemas/analyze.py
+from __future__ import annotations
+from typing import Optional, List, Dict, Any, Literal
+from pydantic import BaseModel, Field
+from datetime import datetime, date
+
+class AnalyzeRequest(BaseModel):
+    source: Optional[Dict[str, Any]] = Field(None)
+    pipeline: Optional[Dict[str, Any]] = Field(None)
+    language: Optional[str] = Field(None)
+    priority: Optional[Literal['low', 'normal', 'high']] = Field(None)
+    idempotency_key: Optional[str] = Field(None)
+
+class AnalyzeResult(BaseModel):
+    id: Optional[str] = Field(None)
+    status: Optional[str] = Field(None)
+    progress: Optional[float] = Field(None)
+    result: Optional[Dict[str, Any]] = Field(None)
+    artifacts: Optional[Dict[str, Any]] = Field(None)
+
+### app/schemas/auth.py
+from __future__ import annotations
+from typing import Optional, List, Dict, Any, Literal
+from pydantic import BaseModel, Field
+from datetime import datetime, date
+
+class RefreshResponse(BaseModel):
+    access_token: Optional[str] = Field(None)
+    refresh_token: Optional[str] = Field(None)
+    token_type: Optional[str] = Field(None)
+    expires_in: Optional[int] = Field(None)
+
+class LoginRequest(BaseModel):
+    login: str
+    password: str
+
+class RefreshRequest(BaseModel):
+    refresh_token: Optional[str] = Field(None)
+
+class LoginResponse(BaseModel):
+    access_token: Optional[str] = Field(None)
+    refresh_token: Optional[str] = Field(None)
+    token_type: Optional[str] = Field(None)
+    expires_in: Optional[int] = Field(None)
+    user: Optional[Dict[str, Any]] = Field(None)
+
+### app/schemas/chats.py
+from __future__ import annotations
+from typing import Optional, List, Dict, Any, Literal
+from pydantic import BaseModel, Field
+from datetime import datetime, date
+
+class ChatMessage(BaseModel):
+    role: Literal['system', 'user', 'assistant', 'tool']
+    content: str
+    created_at: Optional[datetime] = Field(None)
+
+class ChatTurnRequest(BaseModel):
+    response_stream: Optional[bool] = Field(None)
+    use_rag: Optional[bool] = Field(None)
+    rag_params: Optional[Dict[str, Any]] = Field(None)
+    messages: Optional[List[ChatMessage]] = Field(None)
+    temperature: Optional[float] = Field(None)
+    max_tokens: Optional[int] = Field(None)
+    idempotency_key: Optional[str] = Field(None)
+
+class ChatTurnResponse(BaseModel):
+    chat_id: Optional[str] = Field(None)
+    message_id: Optional[str] = Field(None)
+    created_at: Optional[datetime] = Field(None)
+    assistant_message: Optional[ChatMessage] = Field(None)
+    usage: Optional[Dict[str, Any]] = Field(None)
+    rag: Optional[Dict[str, Any]] = Field(None)
+
+### app/schemas/common.py
+from __future__ import annotations
+from typing import Optional, List, Dict, Any, Literal
+from pydantic import BaseModel, Field
+from datetime import datetime, date
+
+class ErrorResponse(BaseModel):
+    error: Dict[str, Any]
+    request_id: Optional[str] = Field(None)
+
+### app/schemas/rag.py
+from __future__ import annotations
+from typing import Optional, List, Dict, Any, Literal
+from pydantic import BaseModel, Field
+from datetime import datetime, date
+
+class RagSearchRequest(BaseModel):
+    query: Optional[str] = Field(None)
+    top_k: Optional[int] = Field(None)
+    filters: Optional[Dict[str, Any]] = Field(None)
+    with_snippets: Optional[bool] = Field(None)
+
+class RagUploadRequest(BaseModel):
+    url: Optional[str] = Field(None)
+    name: Optional[str] = Field(None)
+    tags: Optional[List[str]] = Field(None)
+
+class RagDocument(BaseModel):
+    id: Optional[str] = Field(None)
+    name: Optional[str] = Field(None)
+    status: Optional[str] = Field(None)
+    date_upload: Optional[datetime] = Field(None)
+    url_file: Optional[str] = Field(None)
+    url_canonical_file: Optional[str] = Field(None)
+    tags: Optional[List[str]] = Field(None)
+    progress: Optional[float] = Field(None)
+
+### app/services/__init__.py
+from app.services import *
+
+### app/services/analyze_service.py
+from __future__ import annotations
+from sqlalchemy.orm import Session
+from app.repositories.analyze_repo import AnalyzeRepo
+
+def create_job(session: Session, uploaded_by=None, url_file: str | None = None):
+    return AnalyzeRepo(session).create_document(uploaded_by=uploaded_by, url_file=url_file, status="queued")
+
+def list_jobs(session: Session, limit: int = 50):
+    return AnalyzeRepo(session).list(limit=limit)
+
+def get_job(session: Session, job_id):
+    return AnalyzeRepo(session).get(job_id)
+
+def delete_job(session: Session, job_id):
+    repo = AnalyzeRepo(session)
+    doc = repo.get(job_id)
+    if not doc:
+        return False
+    repo.delete(doc)
+    return True
+
+### app/services/auth_service.py
+from __future__ import annotations
+import hashlib, uuid
+from datetime import datetime, timedelta, timezone
+from typing import Tuple, Optional
+from sqlalchemy.orm import Session
+
+from app.repositories.users_repo import UsersRepo
+from app.core.security import verify_password, encode_jwt, decode_jwt
+from app.core.config import settings
+from app.models.user import UserRefreshTokens
+
+def _hash_refresh(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+def login(session: Session, login: str, password: str) -> Tuple[str, str, uuid.UUID]:
+    repo = UsersRepo(session)
+    user = repo.by_login(login)
+    if not user or not verify_password(password, user.password_hash):
+        raise ValueError("invalid_credentials")
+    sub = str(user.id)
+    access = encode_jwt({"sub": sub, "typ": "access"}, ttl_seconds=settings.ACCESS_TTL_SECONDS)
+    refresh = encode_jwt({"sub": sub, "typ": "refresh"}, ttl_seconds=settings.REFRESH_TTL_DAYS * 86400)
+    # persist refresh (hashed)
+    rec = UserRefreshTokens(
+        user_id=user.id,
+        refresh_hash=_hash_refresh(refresh),
+        issued_at=_now(),
+        expires_at=_now() + timedelta(days=settings.REFRESH_TTL_DAYS),
+        rotating=settings.REFRESH_ROTATING,
+        revoked=False,
+        meta=None,
+    )
+    repo.add_refresh(rec)
+    return access, refresh, user.id
+
+def refresh(session: Session, refresh_token: str) -> Tuple[str, Optional[str]]:
+    payload = decode_jwt(refresh_token)
+    if payload.get("typ") != "refresh":
+        raise ValueError("not_refresh")
+    sub = payload.get("sub")
+    if not sub:
+        raise ValueError("invalid_refresh")
+    repo = UsersRepo(session)
+    rec = repo.get_refresh_by_hash(_hash_refresh(refresh_token))
+    if not rec or rec.revoked:
+        raise ValueError("revoked")
+    if rec.expires_at and rec.expires_at < _now():
+        raise ValueError("expired")
+    # rotate if configured
+    access = encode_jwt({"sub": str(sub), "typ": "access"}, ttl_seconds=settings.ACCESS_TTL_SECONDS)
+    if rec.rotating and settings.REFRESH_ROTATING:
+        rec.revoked = True
+        new_refresh = encode_jwt({"sub": str(sub), "typ": "refresh"}, ttl_seconds=settings.REFRESH_TTL_DAYS * 86400)
+        new_rec = UserRefreshTokens(
+            user_id=rec.user_id,
+            refresh_hash=_hash_refresh(new_refresh),
+            issued_at=_now(),
+            expires_at=_now() + timedelta(days=settings.REFRESH_TTL_DAYS),
+            rotating=True,
+            revoked=False,
+            meta=None,
+        )
+        repo.add_refresh(new_rec)
+        return access, new_refresh
+    # non-rotating: allow re-use
+    return access, refresh_token
+
+def revoke_refresh(session: Session, refresh_token: str) -> bool:
+    return UsersRepo(session).revoke_refresh(_hash_refresh(refresh_token))
+
+### app/services/chat_service.py
+from __future__ import annotations
+from sqlalchemy.orm import Session
+from app.repositories.chats_repo import ChatsRepo
+
+def create_chat(session: Session, owner_id, name: str | None):
+    return ChatsRepo(session).create_chat(owner_id, name)
+
+def list_chats(session: Session, owner_id):
+    return ChatsRepo(session).list_chats(owner_id)
+
+def post_message(session: Session, chat_id, role: str, content: dict, model: str | None = None):
+    repo = ChatsRepo(session)
+    chat = repo.get(chat_id)
+    if not chat:
+        raise ValueError("chat_not_found")
+    msg = repo.add_message(chat_id, role, content, model)
+    chat.last_message_at = msg.created_at
+    return msg
+
+def list_messages(session: Session, chat_id):
+    return ChatsRepo(session).list_messages(chat_id)
+
+def delete_chat(session: Session, chat_id):
+    repo = ChatsRepo(session)
+    chat = repo.get(chat_id)
+    if not chat:
+        return False
+    repo.delete(chat)
+    return True
+
+### app/services/clients.py
+from __future__ import annotations
+import os, time, httpx
+from typing import List, Dict, Any, Optional
+from app.core.qdrant import get_qdrant
+from app.core.metrics import external_request_total, external_request_seconds
+from qdrant_client.http.models import Filter, FieldCondition, MatchValue
+
+EMB_URL = os.getenv("EMBEDDINGS_URL", "http://emb:8001")
+LLM_URL = os.getenv("LLM_URL", "http://llm:8002")
+COLLECTION = os.getenv("QDRANT_COLLECTION", "rag_chunks")
+
+def _timed(name: str):
+    class _Ctx:
+        def __enter__(self):
+            self.t0 = time.perf_counter()
+            return self
+        def __exit__(self, exc_type, exc, tb):
+            dt = time.perf_counter() - self.t0
+            external_request_total.labels(name=name, status=("ok" if exc is None else "fail")).inc()
+            external_request_seconds.labels(name=name).observe(dt)
+    return _Ctx()
+
+def embed_texts(texts: List[str]) -> List[List[float]]:
+    with _timed("emb"):
+        with httpx.Client(timeout=60) as client:
+            r = client.post(f"{EMB_URL}/embed", json={"inputs": texts})
+            r.raise_for_status()
+            return r.json().get("vectors", [])
+
+def llm_chat(messages: List[Dict[str, str]], temperature: float = 0.2, max_tokens: Optional[int] = None) -> str:
+    payload = {"messages": messages, "temperature": temperature}
+    if max_tokens is not None:
+        payload["max_tokens"] = max_tokens
+    with _timed("llm"):
+        with httpx.Client(timeout=120) as client:
+            r = client.post(f"{LLM_URL}/v1/chat/completions", json=payload)
+            r.raise_for_status()
+            data = r.json()
+            return (data.get("choices") or [{}])[0].get("message", {}).get("content", "")
+
+# FIX: allow positional top_k by removing '*' and keeping kwargs for compatibility
+def qdrant_search(vector: List[float], top_k: int, offset: Optional[int] = None,
+                  doc_id: Optional[str] = None, tags: Optional[List[str]] = None,
+                  sort_by: str = "score_desc"):
+    client = get_qdrant()
+    must = []
+    if doc_id:
+        must.append(FieldCondition(key="document_id", match=MatchValue(value=doc_id)))
+    if tags:
+        must.append(FieldCondition(key="tags", match=MatchValue(value=tags)))
+    f = Filter(must=must) if must else None
+    with _timed("qdrant.search"):
+        hits = client.search(collection_name=COLLECTION, query_vector=vector, limit=top_k, offset=offset or 0, with_payload=True, query_filter=f)
+    out = []
+    for h in hits:
+        out.append({"score": float(h.score), "id": str(h.id), "payload": h.payload or {}})
+    return out
+
+def qdrant_count_by_doc(doc_id: str) -> int:
+    client = get_qdrant()
+    f = Filter(must=[FieldCondition(key="document_id", match=MatchValue(value=doc_id))])
+    with _timed("qdrant.count"):
+        try:
+            res = client.count(collection_name=COLLECTION, count_filter=f, exact=True)
+            return int(getattr(res, "count", None) or (res.get("count") if isinstance(res, dict) else 0) or 0)
+        except Exception:
+            # fallback: scroll without fake vectors
+            total = 0
+            next_page = None
+            while True:
+                points, next_page = client.scroll(
+                    collection_name=COLLECTION,
+                    scroll_filter=f,
+                    limit=1024,
+                    with_payload=False,
+                    with_vectors=False,
+                    offset=next_page,
+                )
+                total += len(points or [])
+                if not next_page:
+                    break
+            return total
+
+### app/services/rag_service.py
+from __future__ import annotations
+from typing import List, Dict, Any, Optional
+from datetime import datetime
+from sqlalchemy.orm import Session
+from sqlalchemy import func
+from app.core.s3 import presign_put
+from app.core.config import settings
+from app.core.metrics import rag_ingest_started_total
+from app.repositories.rag_repo import RagRepo
+from app.tasks.normalize import process as normalize_process
+from app.tasks.chunk import split as chunk_split
+from app.tasks.embed import compute as embed_compute
+from app.tasks.index import finalize as index_finalize
+from app.tasks.upload_watch import watch as upload_watch
+from app.models.rag import RagDocuments, RagChunks
+from .clients import embed_texts, qdrant_search, qdrant_count_by_doc
+
+def create_upload(session: Session, filename: str, uploaded_by=None) -> Dict[str, Any]:
+    repo = RagRepo(session)
+    doc = repo.create_document(name=filename, uploaded_by=uploaded_by, status="uploaded")
+    key = f"raw/{doc.id}/{filename}"
+    put_url = presign_put(settings.S3_BUCKET_RAW, key, 3600)
+    doc.url_file = key
+    doc.updated_at = datetime.utcnow()
+    session.commit()
+    return {"id": str(doc.id), "put_url": put_url, "key": key}
+
+def list_documents(session: Session, limit: int = 50):
+    return RagRepo(session).list(limit=limit)
+
+def get_document(session: Session, doc_id):
+    return RagRepo(session).get(doc_id)
+
+def delete_document(session: Session, doc_id):
+    repo = RagRepo(session); doc = repo.get(doc_id)
+    if not doc: return False
+    repo.delete(doc); return True
+
+def start_ingest_chain(doc_id: str) -> None:
+    rag_ingest_started_total.inc()
+    chain = normalize_process.s(doc_id) | chunk_split.s() | embed_compute.s() | index_finalize.s()
+    chain.apply_async()
+
+def start_upload_watch(doc_id: str, key: str) -> None:
+    upload_watch.delay(doc_id, key=key)
+
+def search(session: Session, query: str, top_k: int = 5, *, offset: int = 0, doc_id: Optional[str] = None, tags: Optional[List[str]] = None, sort_by: str = "score_desc") -> Dict[str, Any]:
+    vectors = embed_texts([query])
+    if not vectors:
+        return {"results": [], "next_offset": None}
+    vec = vectors[0]
+    hits = qdrant_search(vec, top_k=top_k, offset=offset, doc_id=doc_id, tags=tags, sort_by=sort_by)
+    out = []
+    for h in hits:
+        payload = h.get("payload") or {}
+        out.append({
+            "score": h["score"],
+            "text": payload.get("text"),
+            "doc_id": payload.get("document_id"),
+            "chunk_idx": payload.get("chunk_idx"),
+            "tags": payload.get("tags") or [],
+        })
+    next_offset = offset + len(out) if len(out) == top_k else None
+    return {"results": out, "next_offset": next_offset}
+
+def progress(session: Session, doc_id: str) -> Dict[str, Any]:
+    doc = session.get(RagDocuments, doc_id)
+    if not doc:
+        return {"id": doc_id, "status": "not_found"}
+    chunks_total = session.query(func.count(RagChunks.id)).filter(RagChunks.document_id == doc.id).scalar() or 0
+    vectors_total = qdrant_count_by_doc(str(doc.id))
+    return {
+        "id": str(doc.id),
+        "status": doc.status,
+        "chunks_total": int(chunks_total),
+        "vectors_total": int(vectors_total),
+        "updated_at": (doc.updated_at.isoformat() if getattr(doc, "updated_at", None) else None),
+    }
+
+def stats(session: Session) -> Dict[str, Any]:
+    # aggregate documents by status
+    rows = session.query(RagDocuments.status, func.count(RagDocuments.id)).group_by(RagDocuments.status).all()
+    by_status = {k or "unknown": int(v or 0) for k, v in rows}
+    total_docs = sum(by_status.values())
+    return {"total_docs": total_docs, "by_status": by_status}
+
+### app/tasks/__init__.py
+
+
+### app/tasks/analyze.py
+from __future__ import annotations
+from datetime import datetime
+from celery import shared_task
+from app.core.db import SessionLocal
+from app.models.analyze import AnalysisDocuments
+from .shared import log, RetryableError, task_metrics
+from app.services.clients import llm_chat
+
+@shared_task(name="app.tasks.analyze.run", bind=True, autoretry_for=(RetryableError,), retry_backoff=True, retry_kwargs={"max_retries": 5})
+def run(self, job_id: str, *, pipeline: dict | None = None) -> dict:
+    with task_metrics("analyze.run", "analyze"):
+        session = SessionLocal()
+        try:
+            job = session.get(AnalysisDocuments, job_id)
+            if not job:
+                raise RetryableError("job_not_found")
+            # Сбор сообщений для LLM
+            system = {"role": "system", "content": "Ты — аналитик. Кратко резюмируй данные и выдай ключевые пункты."}
+            user_msg = {"role": "user", "content": (pipeline or {}).get("prompt", "Проанализируй документ и верни краткое резюме.")}
+            content = llm_chat([system, user_msg], temperature=float((pipeline or {}).get("temperature", 0.2)))
+            job.status = "done"
+            job.updated_at = datetime.utcnow()
+            job.result = {"summary": content, "pipeline": pipeline or {}}
+            session.commit()
+            return {"job_id": str(job.id), "status": job.status}
+        finally:
+            session.close()
+
+### app/tasks/chunk.py
+from __future__ import annotations
+from celery import shared_task
+from datetime import datetime
+from app.core.config import settings
+from app.core.s3 import get_minio
+from app.core.db import SessionLocal
+from app.core.metrics import rag_chunks_created_total
+from app.models.rag import RagDocuments, RagChunks
+from .shared import log, RetryableError, task_metrics, env_int
+
+def _split_text(txt: str, max_chars: int, overlap: int):
+    i = 0; n = len(txt)
+    while i < n:
+        j = min(i + max_chars, n)
+        yield txt[i:j]
+        if j >= n: break
+        i = j - overlap if j - overlap > i else j
+
+@shared_task(name="app.tasks.chunk.split", bind=True, autoretry_for=(RetryableError,), retry_backoff=True, retry_kwargs={"max_retries": 5})
+def split(self, document_id: str, *, max_chars: int | None = None, overlap: int | None = None) -> dict:
+    with task_metrics("chunk.split", "chunk"):
+        session = SessionLocal()
+        s3 = get_minio()
+        try:
+            doc = session.get(RagDocuments, document_id)
+            if not doc or not doc.url_canonical_file:
+                raise RetryableError("canonical_not_ready")
+            max_chars = max_chars or env_int("CHUNK_MAX_CHARS", 1200)
+            overlap   = overlap   or env_int("CHUNK_OVERLAP", 100)
+            try:
+                obj = s3.get_object(settings.S3_BUCKET_CANONICAL, doc.url_canonical_file)
+                data = obj.read().decode("utf-8") or ""
+            except Exception:
+                data = ""
+            chunks = list(_split_text(data, max_chars=max_chars, overlap=overlap)) or [""]
+            for idx, text in enumerate(chunks):
+                session.add(RagChunks(document_id=doc.id, chunk_idx=idx, text=text))
+            rag_chunks_created_total.inc(len(chunks))
+            doc.status = "embedding"; doc.updated_at = datetime.utcnow()
+            session.commit()
+            return {"document_id": str(doc.id), "chunks": len(chunks), "status": doc.status}
+        finally:
+            session.close()
+
+### app/tasks/embed.py
+from __future__ import annotations
+import os, uuid
+from datetime import datetime
+import httpx
+from celery import shared_task
+from qdrant_client.http.models import VectorParams, Distance, PointStruct
+from app.core.config import settings
+from app.core.qdrant import get_qdrant
+from app.core.db import SessionLocal
+from app.core.metrics import rag_vectors_upserted_total
+from app.models.rag import RagDocuments, RagChunks
+from .shared import log, RetryableError, task_metrics, env_int, embedding_batch_inflight
+
+EMB_URL = os.getenv("EMBEDDINGS_URL", "http://emb:8001")
+COLLECTION = os.getenv("QDRANT_COLLECTION", "rag_chunks")
+
+def _embed_sync(texts: list[str]) -> list[list[float]]:
+    with httpx.Client(timeout=60) as client:
+        r = client.post(f"{EMB_URL}/embed", json={"inputs": texts})
+        r.raise_for_status()
+        payload = r.json()
+        return payload.get("vectors", [])
+
+@shared_task(name="app.tasks.embed.compute", bind=True, autoretry_for=(RetryableError,), retry_backoff=True, retry_kwargs={"max_retries": 5})
+def compute(self, document_id: str) -> dict:
+    with task_metrics("embed.compute", "embed"):
+        session = SessionLocal()
+        qdrant = get_qdrant()
+        try:
+            doc = session.get(RagDocuments, document_id)
+            if not doc:
+                raise RetryableError("document_not_found")
+            doc_tags = doc.tags or []
+            BATCH = env_int("EMBEDDING_BATCH_SIZE", 8)
+            rows = session.query(RagChunks).filter(RagChunks.document_id==doc.id, RagChunks.qdrant_point_id==None).order_by(RagChunks.chunk_idx.asc()).all()
+            total = 0
+            for i in range(0, len(rows), BATCH):
+                batch = rows[i:i+BATCH]
+                texts = [c.text for c in batch]
+                embedding_batch_inflight.inc()
+                try:
+                    vectors = _embed_sync(texts)
+                finally:
+                    embedding_batch_inflight.dec()
+                if not vectors:
+                    raise RetryableError("empty_vectors")
+
+                dim = len(vectors[0])
+                try:
+                    qdrant.get_collection(COLLECTION)
+                except Exception:
+                    from qdrant_client.http.models import OptimizersConfigDiff
+                    qdrant.recreate_collection(
+                        collection_name=COLLECTION,
+                        vectors_config=VectorParams(size=dim, distance=Distance.COSINE),
+                        optimizers_config=OptimizersConfigDiff(memmap_threshold=20000)
+                    )
+
+                points = []
+                now = datetime.utcnow()
+                for chunk, vec in zip(batch, vectors):
+                    pid = uuid.uuid4()
+                    points.append(PointStruct(id=str(pid), vector=vec, payload={
+                        "document_id": str(doc.id),
+                        "chunk_idx": chunk.chunk_idx,
+                        "text": chunk.text,
+                        "tags": doc_tags,
+                    }))
+                    chunk.qdrant_point_id = pid
+                    chunk.embedding_model = os.getenv("MODEL_ID","BAAI/bge-m3")
+                    chunk.embedding_version = "v1"
+                    chunk.date_embedding = now
+                qdrant.upsert(collection_name=COLLECTION, points=points)
+                session.commit()
+                rag_vectors_upserted_total.inc(len(points))
+                total += len(batch)
+            doc.status = "indexing"; doc.updated_at = datetime.utcnow()
+            session.commit()
+            return {"document_id": str(doc.id), "embedded": total, "status": doc.status}
+        finally:
+            session.close()
+
+### app/tasks/index.py
+from __future__ import annotations
+from datetime import datetime
+from celery import shared_task
+from app.core.qdrant import get_qdrant
+from app.core.db import SessionLocal
+from app.models.rag import RagDocuments, RagChunks
+from .shared import log, task_metrics
+
+COLLECTION = "rag_chunks"
+
+@shared_task(name="app.tasks.index.finalize", bind=True)
+def finalize(self, document_id: str) -> dict:
+    with task_metrics("index.finalize", "index"):
+        session = SessionLocal()
+        qdrant = get_qdrant()
+        try:
+            doc = session.get(RagDocuments, document_id)
+            if not doc:
+                return {"document_id": document_id, "status": "not_found"}
+            # простая проверка наличия поинтов документа
+            # (в реале — count по payload фильтру)
+            doc.status = "ready"
+            doc.updated_at = datetime.utcnow()
+            session.commit()
+            return {"document_id": str(doc.id), "status": doc.status}
+        finally:
+            session.close()
+
+@shared_task(name="app.tasks.index.housekeeping", bind=True)
+def housekeeping(self) -> dict:
+    with task_metrics("index.housekeeping", "index"):
+        return {"ok": True}
+
+### app/tasks/normalize.py
+from __future__ import annotations
+from celery import shared_task
+from datetime import datetime
+from app.core.config import settings
+from app.core.s3 import get_minio
+from app.core.db import SessionLocal
+from app.models.rag import RagDocuments
+from .shared import log, RetryableError, task_metrics
+
+@shared_task(name="app.tasks.normalize.process", bind=True, autoretry_for=(RetryableError,), retry_backoff=True, retry_kwargs={"max_retries": 5})
+def process(self, document_id: str, *, source_key: str | None = None) -> dict:
+    with task_metrics("normalize.process", "normalize"):
+        s3 = get_minio()
+        session = SessionLocal()
+        try:
+            doc = session.get(RagDocuments, document_id)
+            if not doc:
+                raise RetryableError("document_not_found")
+            # Заглушка канонизации: просто копируем из raw -> canonical, сохраняем ключ
+            src = source_key or (doc.url_file or f"raw/{doc.id}/source.bin")
+            dst = f"canonical/{doc.id}/document.json"
+            # В реале: скачиваем, парсим, нормализуем и кладем JSON
+            try:
+                # Если файла нет — создадим пустышку, чтобы пайплайн шёл дальше
+                s3.put_object(settings.S3_BUCKET_CANONICAL, dst, b"{}", length=2)
+            except Exception:
+                # если сервер MinIO старый: используем upload via bytes
+                from io import BytesIO
+                s3.put_object(settings.S3_BUCKET_CANONICAL, dst, BytesIO(b"{}"), length=2)
+            doc.url_canonical_file = dst
+            doc.status = "chunking"
+            doc.updated_at = datetime.utcnow()
+            session.commit()
+            return {"document_id": str(doc.id), "status": doc.status, "canonical_key": dst}
+        finally:
+            session.close()
+
+### app/tasks/shared.py
+from __future__ import annotations
+import logging, time, uuid, contextlib, os
+from datetime import datetime
+from app.core.metrics import tasks_started_total, tasks_failed_total, task_duration_seconds
+
+log = logging.getLogger("tasks")
+def new_id() -> str: return str(uuid.uuid4())
+
+class RetryableError(RuntimeError): ...
+class FatalError(RuntimeError): ...
+
+@contextlib.contextmanager
+def task_metrics(task: str, queue: str):
+    tasks_started_total.labels(queue=queue, task=task).inc()
+    start = time.perf_counter()
+    try:
+        yield
+    except Exception:
+        tasks_failed_total.labels(queue=queue, task=task).inc()
+        raise
+    finally:
+        task_duration_seconds.labels(task=task).observe(time.perf_counter() - start)
+
+def env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except Exception:
+        return default
+
+### app/tasks/upload_watch.py
+from __future__ import annotations
+from celery import shared_task
+from app.core.s3 import get_minio
+from app.core.db import SessionLocal
+from app.core.config import settings
+from app.models.rag import RagDocuments
+from .shared import log, task_metrics, RetryableError
+from app.services.rag_service import start_ingest_chain
+
+@shared_task(name="app.tasks.upload.watch", bind=True, autoretry_for=(RetryableError,), retry_backoff=True, retry_kwargs={"max_retries": 100})
+def watch(self, document_id: str, *, key: str) -> dict:
+    with task_metrics("upload.watch", "watch"):
+        s3 = get_minio()
+        session = SessionLocal()
+        try:
+            doc = session.get(RagDocuments, document_id)
+            if not doc:
+                return {"ok": False, "error": "doc_not_found"}
+            # FIX: use configured bucket; accept either absolute "raw/..." or relative keys
+            raw_bucket = settings.S3_BUCKET_RAW
+            rel = key.split(raw_bucket + "/", 1)[-1] if key.startswith(raw_bucket + "/") else key
+            try:
+                s3.stat_object(raw_bucket, rel)
+            except Exception:
+                raise RetryableError("not_uploaded_yet")
+            start_ingest_chain(document_id)
+            return {"ok": True, "started": "ingest"}
+        finally:
+            session.close()
+
+### scripts/__init__.py
+
+### scripts/bootstrap_minio.py
+from backend.app.core.s3 import ensure_bucket
+from backend.app.core.config import settings
+
+def main():
+    for b in (settings.S3_BUCKET_RAW, settings.S3_BUCKET_CANONICAL, settings.S3_BUCKET_PREVIEW):
+        ensure_bucket(b)
+        print(f"ensured bucket: {b}")
+
+if __name__ == "__main__":
+    main()
+
+### scripts/bootstrap_qdrant.py
+from backend.app.core.qdrant import get_qdrant
+
+def main():
+    q = get_qdrant()
+    c = q.get_collections()
+    print("Qdrant reachable. Collections:", getattr(c, 'collections', c))
+
+if __name__ == "__main__":
+    main()
+
+### scripts/create_admin_user.py
+from __future__ import annotations
+import uuid
+from getpass import getpass
+from app.core.db import session_scope
+from app.core.security import hash_password
+from app.models.user import Users
+
+def main():
+    login = input("Admin login: ").strip()
+    fio = input("Full name (optional): ").strip() or None
+    password = getpass("Password: ")
+    with session_scope() as s:
+        u = Users(id=uuid.uuid4(), login=login, fio=fio, role="admin", is_active=True, password_hash=hash_password(password))
+        s.add(u)
+        print("Admin user created:", u.id)
+
+if __name__ == "__main__":
+    main()
+
+### tests/api/__init__.py
+
+### tests/api/test_rag_progress.py
+from fastapi.testclient import TestClient
+from app.main import app
+
+def test_rag_progress_endpoint(monkeypatch):
+    from app.services import rag_service
+    def fake_progress(session, doc_id):
+        return {"id": doc_id, "status": "indexing", "chunks_total": 10, "vectors_total": 8, "updated_at": None}
+    monkeypatch.setattr(rag_service, "progress", fake_progress)
+    client = TestClient(app)
+    r = client.get("/api/rag/123/progress")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["id"] == "123" and body["status"] == "indexing"
+
+### tests/api/test_rag_search_next_offset.py
+from fastapi.testclient import TestClient
+from app.main import app
+
+def test_rag_search_next_offset(monkeypatch):
+    from app.services import rag_service
+    def fake_search(session, query, top_k, offset=0, doc_id=None, tags=None, sort_by="score_desc"):
+        return {"results":[{"score":0.5,"text":"hello","doc_id":"d1","chunk_idx":0,"tags":["a"]}], "next_offset": offset+1}
+    monkeypatch.setattr(rag_service, "search", fake_search)
+    client = TestClient(app)
+    r = client.post("/api/rag/search", json={"query":"q","top_k":1,"offset":0})
+    assert r.status_code == 200
+    body = r.json()
+    assert "next_offset" in body and body["next_offset"] == 1
+
+### tests/api/test_rag_search_payload.py
+from fastapi.testclient import TestClient
+from backend.app.main import app
+
+def test_rag_search_payload_shape(monkeypatch):
+    from backend.app.services import rag_service
+    def fake_search(session, query, top_k, offset=0, doc_id=None, tags=None, sort_by="score_desc"):
+        return {"results":[{"score":0.5,"text":"hello","doc_id":"d1","chunk_idx":0,"tags":["a"]}], "next_offset": offset+1}
+    monkeypatch.setattr(rag_service, "search", fake_search)
+    client = TestClient(app)
+    r = client.post("/api/rag/search", json={"query":"q","top_k":3,"offset":1,"doc_id":"d1","tags":["a"]})
+    assert r.status_code == 200
+    body = r.json()
+    assert "results" in body and body["results"][0]["doc_id"] == "d1"
+
+### tests/e2e/test_ingest_chain_apply.py
+def test_ingest_chain_calls_apply_async(monkeypatch):
+    from app.services import rag_service
+    called = {"ok": False}
+    class DummySign:
+        def __or__(self, other): return self
+        def apply_async(self_inner): called["ok"] = True
+    # monkeypatch each task signature .s to return DummySign
+    from app.tasks import normalize, chunk, embed, index
+    monkeypatch.setattr(normalize.process, "s", lambda *a, **k: DummySign())
+    monkeypatch.setattr(chunk.split, "s", lambda *a, **k: DummySign())
+    monkeypatch.setattr(embed.compute, "s", lambda *a, **k: DummySign())
+    monkeypatch.setattr(index.finalize, "s", lambda *a, **k: DummySign())
+    rag_service.start_ingest_chain("doc-1")
+    assert called["ok"] is True
+
+### tests/services/__init__.py
+
+### tests/services/test_clients.py
+import types
+from app.services import clients
+
+def test_qdrant_filter_build(monkeypatch):
+    # monkeypatch search to capture arguments
+    captured = {}
+    class DummyH: 
+        def __init__(self): self.score=0.9; self.id="1"; self.payload={"text":"t","document_id":"d","chunk_idx":0,"tags":["a"]}
+    def fake_search(collection_name, query_vector, limit, offset, with_payload, query_filter):
+        captured['kwargs'] = {'collection_name': collection_name, 'limit': limit, 'offset': offset, 'with_payload': with_payload, 'query_filter': query_filter}
+        return [DummyH()]
+    monkeypatch.setattr(clients.get_qdrant(), "search", fake_search)
+    out = clients.qdrant_search([0.1,0.2], 5, offset=10, doc_id="doc-1", tags=["a","b"])
+    assert out and out[0]["payload"]["document_id"] == "d"
+    k = captured['kwargs']
+    assert k['limit'] == 5 and k['offset'] == 10 and k['with_payload'] is True
+    assert k['query_filter'] is not None
+
+### tests/services/test_rag_service_pagination.py
+from app.services import rag_service
+
+def test_next_offset_and_sort(monkeypatch):
+    # monkeypatch clients: embed_texts -> fixed vector; qdrant_search -> fake hits
+    from app.services import clients
+    monkeypatch.setattr(clients, "embed_texts", lambda texts: [[0.1, 0.2]])
+    def fake_search(vec, top_k, offset=0, doc_id=None, tags=None, sort_by="score_desc"):
+        base = [
+            {"score": 0.9, "payload": {"text":"A","document_id":"d","chunk_idx":0,"tags":["x"]}},
+            {"score": 0.8, "payload": {"text":"B","document_id":"d","chunk_idx":1,"tags":["y"]}},
+        ][:top_k]
+        return list(reversed(base)) if sort_by=="score_asc" else base
+    monkeypatch.setattr(clients, "qdrant_search", fake_search)
+    class S: pass
+    out = rag_service.search(S(), "q", top_k=2, offset=10, sort_by="score_desc")
+    assert out["next_offset"] == 12
+    assert out["results"][0]["score"] == 0.9
+    out2 = rag_service.search(S(), "q", top_k=2, offset=10, sort_by="score_asc")
+    assert out2["results"][0]["score"] == 0.8
+

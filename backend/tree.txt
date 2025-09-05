@@ -1,0 +1,71 @@
+.
+├─ app/
+│  ├─ main.py                     # вход для FastAPI (/api), регистрация роутов, метрик, middleware
+│  ├─ core/
+│  │  ├─ config.py                # Pydantic Settings: AUTH.MODE, DB.URL, S3.*, QDRANT.URL, RAG.*, METRICS_* и т.д.
+│  │  ├─ logging.py               # JSON-логирование + request_id
+│  │  ├─ security.py              # JWT HS256, пароли Argon2id, роли admin|editor|reader
+│  │  ├─ db.py                    # SQLAlchemy engine/session, Alembic helpers
+│  │  ├─ redis.py                 # Redis клиент (broker/кэш)
+│  │  ├─ s3.py                    # MinIO клиент + presigned URL, buckets raw/canonical/preview
+│  │  ├─ qdrant.py                # Qdrant клиент, bootstrap коллекций
+│  │  ├─ metrics.py               # Prometheus: counters/histograms/gauges из манифеста
+│  │  ├─ pagination.py            # курсорная пагинация для списков
+│  │  ├─ errors.py                # единый формат ошибок + коды + request_id
+│  │  └─ idempotency.py           # обработка Idempotency-Key для важных POST
+│  ├─ api/
+│  │  ├─ deps.py                  # зависимости FastAPI (auth, db session, rate limits)
+│  │  ├─ routers/
+│  │  │  ├─ auth.py               # /auth/login|refresh|logout|me (operationId: login, refresh, logout, me)
+│  │  │  ├─ meta.py               # /healthz, /metrics
+│  │  │  ├─ chats.py              # /chats, /chats/{id}/messages (SSE streaming)
+│  │  │  ├─ rag.py                # /rag, /rag/{id}, /rag/upload, /rag/search, actions
+│  │  │  └─ analyze.py            # /analyze, /analyze/{id}
+│  │  └─ sse.py                   # генераторы/утилиты для response_stream
+│  ├─ models/                     # SQLAlchemy модели (см. раздел 5 манифеста)
+│  │  ├─ user.py                  # users, user_tokens, user_refresh_tokens
+│  │  ├─ chat.py                  # chats, chat_messages
+│  │  ├─ rag.py                   # rag_documents, rag_chunks
+│  │  └─ analyze.py               # analysis_documents, analysis_chunks
+│  ├─ schemas/                    # Pydantic схемы (соответствуют OpenAPI компонентам)
+│  │  ├─ auth.py                  # LoginRequest/Response, RefreshRequest/Response
+│  │  ├─ chats.py                 # ChatMessage, ChatTurnRequest/Response
+│  │  ├─ rag.py                   # RagDocument, RagUploadRequest, RagSearchRequest
+│  │  └─ analyze.py               # AnalyzeRequest, AnalyzeResult
+│  ├─ repositories/               # слой доступа к данным (Postgres/S3/Qdrant)
+│  │  ├─ users_repo.py
+│  │  ├─ chats_repo.py
+│  │  ├─ rag_repo.py
+│  │  └─ analyze_repo.py
+│  ├─ services/                   # бизнес-логика (оркестрация, валидация, статусы/прогресс)
+│  │  ├─ auth_service.py
+│  │  ├─ chat_service.py
+│  │  ├─ rag_service.py
+│  │  └─ analyze_service.py
+│  ├─ celery_app.py               # Celery app + маршрутизация очередей и retry policy
+│  ├─ tasks/                      # Celery задачи и пайплайны (раздел 8 манифеста)
+│  │  ├─ normalize.py             # queue=normalize → MinIO canonical/
+│  │  ├─ chunk.py                 # queue=chunk     → разбиение, запись в БД
+│  │  ├─ embed.py                 # queue=embed     → эмбеддинги батчами → Qdrant
+│  │  ├─ index.py                 # queue=index     → финализация документа (ready)
+│  │  └─ analyze.py               # queue=analyze   → экстракция/резюме/QA
+│  ├─ llm/                        # вызовы LLM, промпты, политики токенов
+│  │  ├─ prompts/
+│  │  └─ clients.py
+│  ├─ migrations/                 # Alembic (DDL из манифеста + эволюция)
+│  │  ├─ env.py
+│  │  └─ versions/
+│  └─ utils/                      # мелкие хелперы (time, uuids, hashing, mime, presign)
+├─ tests/
+│  ├─ api/                        # контрактные тесты по OpenAPI путям
+│  ├─ services/
+│  └─ tasks/
+├─ scripts/
+│  ├─ bootstrap_minio.py          # создать buckets raw/canonical/preview
+│  ├─ bootstrap_qdrant.py         # создать/проверить коллекции
+│  └─ create_admin_user.py
+├─ openapi.yaml                   # артефакт контракта (не генерируем путь-версии)
+├─ docker-compose.yml             # сервисы api/workers/beat/redis/postgres/qdrant/minio
+├─ .env                           # параметры окружения (см. ENV ниже)
+├─ pyproject.toml                 # зависимости (fastapi, uvicorn, celery, qdrant-client, minio, psycopg, alembic, prometheus_client, pydantic-settings, argon2-cffi, etc.)
+└─ alembic.ini
