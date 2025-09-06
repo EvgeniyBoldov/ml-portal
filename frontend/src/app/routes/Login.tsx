@@ -1,42 +1,40 @@
-import { FormEvent, useState } from "react";
-import { login, me } from "../lib/api.ts";
-import { useAuth } from "../store/auth.ts";
-import { useNavigate, useLocation } from "react-router-dom";
-import Button from "../components/Button.tsx";
-import s from "./Login.module.css";
+import React, { useState } from 'react'
+import { useAuth } from '@app/store/auth'
+import { useNavigate } from 'react-router-dom'
+import Button from '@shared/ui/Button'
+import Input from '@shared/ui/Input'
+import Card from '@shared/ui/Card'
+import styles from './Login.module.css'
 
 export default function Login() {
-    const [u, setU] = useState("");
-    const [p, setP] = useState("");
-    const [err, setErr] = useState("");
-    const setAuth = useAuth(s => s.setAuth);
-    const nav = useNavigate();
-    const loc = useLocation();
+  const nav = useNavigate()
+  const { login, loading } = useAuth()
+  const [form, setForm] = useState({ login: '', password: '' })
+  const [error, setError] = useState<string | null>(null)
 
-    async function onSubmit(e: FormEvent) {
-        e.preventDefault(); setErr("");
-        try {
-            const { access_token } = await login(u, p);
-            const { role } = await me(access_token);
-            setAuth(access_token, role);
-            nav((loc.state as any)?.from?.pathname || "/gpt", { replace: true });
-        } catch (e:any) { setErr(e.message || "Ошибка входа"); }
+  async function onSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    setError(null)
+    try {
+      await login(form.login, form.password)
+      nav('/gpt/chat')
+    } catch (e: any) {
+      setError(e.message || 'Login failed')
     }
-
-    return (
-        <div className={s.wrap}>
-            <form onSubmit={onSubmit} className={s.card}>
-                <h1 className={s.title}>Вход</h1>
-                <div className={s.row}>
-                    <input className={s.field} placeholder="username" value={u} onChange={e=>setU(e.target.value)} />
-                </div>
-                <div className={s.row}>
-                    <input className={s.field} type="password" placeholder="password" value={p} onChange={e=>setP(e.target.value)} />
-                </div>
-                {err && <div className={s.error}>{err}</div>}
-                <Button className="mt-3" block>Войти</Button>
-                <div className={s.hint}>demo: admin/admin или user/user</div>
-            </form>
-        </div>
-    );
+  }
+  return (
+    <div className={styles.wrap}>
+      <Card className={styles.card}>
+        <h1>Sign in</h1>
+        <form className="stack" onSubmit={onSubmit}>
+          <label>Login</label>
+          <Input placeholder="user" value={form.login} onChange={e=>setForm(f=>({...f, login:e.target.value}))} />
+          <label>Password</label>
+          <Input type="password" placeholder="••••••••" value={form.password} onChange={e=>setForm(f=>({...f, password:e.target.value}))} />
+          {error && <div className={styles.error}>{error}</div>}
+          <Button type="submit" disabled={loading}>{loading ? '...' : 'Sign in'}</Button>
+        </form>
+      </Card>
+    </div>
+  )
 }

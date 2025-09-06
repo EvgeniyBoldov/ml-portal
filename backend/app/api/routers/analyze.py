@@ -19,7 +19,6 @@ def list_(session: Session = Depends(db_session), user=Depends(get_current_user)
 
 @router.post("", status_code=202)
 def create(payload: dict, session: Session = Depends(db_session), user=Depends(get_current_user)):
-    # FIX: user is a dict from get_current_user
     job = create_job(session, uploaded_by=user["id"], url_file=(payload or {}).get("url_file"))
     analyze_run.delay(str(job.id), pipeline=(payload or {}).get("pipeline"))
     return {"id": str(job.id), "status": getattr(job, "status", "queued"), "accepted": True}

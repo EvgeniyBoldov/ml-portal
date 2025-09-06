@@ -11,6 +11,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends build-essential
 COPY backend/requirements/worker.txt /tmp/requirements.txt
 RUN pip install --upgrade pip && pip install -r /tmp/requirements.txt
 
-COPY backend /app/backend
+# copy FULL backend code into /app/
+COPY backend/ /app/
 
-CMD ["bash","-lc","celery -A backend.app.celery_app:app worker -Q ${QUEUES:-normalize,chunk,embed,index,analyze,watch} -n worker@%h --loglevel=INFO"]
+# change celery app path from backend.app.celery_app:app -> app.celery_app:app
+CMD ["bash","-lc","celery -A app.celery_app:app worker -Q ${QUEUES:-normalize,chunk,embed,index,analyze,watch} -n worker@%h --loglevel=INFO"]

@@ -10,9 +10,8 @@ async def post_messages(chat_id: str, payload: dict, request: Request, session=D
     if (payload or {}).get("response_stream"):
         def gen():
             yield {"data": "event: token"}
-            yield {"data": "data: Привет..."} 
+            yield {"data": "data: Привет..."}
             yield {"data": "data: Это стрим ответа."}
             yield {"data": "event: done"}
         return sse_response(gen())
-    # FIX: schema requires string in content
     return {"messages":[{"role":"assistant","content":"Привет! Это заглушка ответа."}]}

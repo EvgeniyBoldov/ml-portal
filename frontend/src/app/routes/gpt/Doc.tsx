@@ -1,12 +1,11 @@
-import React from "react";
+import React from 'react'
+import Card from '@shared/ui/Card'
 
 export default function Doc() {
-    return (
-        <div className="space-y-3">
-            <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100">Анализ документа (заглушка)</h2>
-            <p className="text-gray-700 dark:text-gray-300">
-                Здесь будет форма загрузки файла и прогресс обработки. Позже подключим API.
-            </p>
-        </div>
-    );
+  return (
+    <Card>
+      <h2>RAG Documents</h2>
+      <p>Здесь позже появится список / загрузка / поиск.</p>
+    </Card>
+  )
 }

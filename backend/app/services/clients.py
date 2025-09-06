@@ -16,8 +16,8 @@ def _timed(name: str):
             return self
         def __exit__(self, exc_type, exc, tb):
             dt = time.perf_counter() - self.t0
-            external_request_total.labels(name=name, status=("ok" if exc is None else "fail")).inc()
-            external_request_seconds.labels(name=name).observe(dt)
+            external_request_total.labels(target=name, status=("ok" if exc is None else "fail")).inc()
+            external_request_seconds.labels(target=name).observe(dt)
     return _Ctx()
 
 def embed_texts(texts: List[str]) -> List[List[float]]:
@@ -38,7 +38,6 @@ def llm_chat(messages: List[Dict[str, str]], temperature: float = 0.2, max_token
             data = r.json()
             return (data.get("choices") or [{}])[0].get("message", {}).get("content", "")
 
-# FIX: allow positional top_k by removing '*' and keeping kwargs for compatibility
 def qdrant_search(vector: List[float], top_k: int, offset: Optional[int] = None,
                   doc_id: Optional[str] = None, tags: Optional[List[str]] = None,
                   sort_by: str = "score_desc"):
@@ -64,7 +63,6 @@ def qdrant_count_by_doc(doc_id: str) -> int:
             res = client.count(collection_name=COLLECTION, count_filter=f, exact=True)
             return int(getattr(res, "count", None) or (res.get("count") if isinstance(res, dict) else 0) or 0)
         except Exception:
-            # fallback: scroll without fake vectors
             total = 0
             next_page = None
             while True:

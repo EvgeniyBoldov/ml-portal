@@ -1,0 +1,3 @@
+.shell { display: grid; grid-template-columns: 280px 1fr; gap: 12px; align-items: start; }
+.main { min-height: calc(100vh - 130px); display: grid; }
+@media (max-width: 980px) { .shell { grid-template-columns: 1fr; } }

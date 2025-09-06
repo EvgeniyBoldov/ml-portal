@@ -16,15 +16,11 @@ def process(self, document_id: str, *, source_key: str | None = None) -> dict:
             doc = session.get(RagDocuments, document_id)
             if not doc:
                 raise RetryableError("document_not_found")
-            # Заглушка канонизации: просто копируем из raw -> canonical, сохраняем ключ
-            src = source_key or (doc.url_file or f"raw/{doc.id}/source.bin")
-            dst = f"canonical/{doc.id}/document.json"
-            # В реале: скачиваем, парсим, нормализуем и кладем JSON
+            src = source_key or (doc.url_file or f"{doc.id}/source.bin")
+            dst = f"{doc.id}/document.json"
             try:
-                # Если файла нет — создадим пустышку, чтобы пайплайн шёл дальше
                 s3.put_object(settings.S3_BUCKET_CANONICAL, dst, b"{}", length=2)
             except Exception:
-                # если сервер MinIO старый: используем upload via bytes
                 from io import BytesIO
                 s3.put_object(settings.S3_BUCKET_CANONICAL, dst, BytesIO(b"{}"), length=2)
             doc.url_canonical_file = dst

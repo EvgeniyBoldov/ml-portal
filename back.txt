@@ -1,28 +1,50 @@
-### Makefile
-.PHONY: test lint compose-up compose-down stack-deploy stack-rm
+### .env
+# ===== Auth =====
+AUTH.MODE=login
+JWT_SECRET=please_change_me
+ACCESS_TTL_SECONDS=3600
+REFRESH_TTL_DAYS=30
+REFRESH_ROTATING=true
 
-test:
-	pytest -q
+# ===== Core =====
+DB.URL=postgresql+psycopg://postgres:postgres@postgres:5432/app
+REDIS.URL=redis://redis:6379/0
+QDRANT.URL=http://qdrant:6333
 
-lint:
-	ruff . || true
+# ===== S3 / MinIO =====
+# S3_ENDPOINT is used by services inside the Docker network (internal).
+# S3_PUBLIC_ENDPOINT is what we return in links for users (external, e.g. https://10.4.4.2).
+S3.ENDPOINT=http://minio:9000
+S3.PUBLIC_ENDPOINT=https://10.4.4.2
+S3.ACCESS_KEY=miniouser
+S3.SECRET_KEY=miniopassword
+S3.BUCKET_RAW=raw
+S3.BUCKET_CANONICAL=canonical
+S3.BUCKET_PREVIEW=preview
+MINIO_REGION=us-east-1
 
-compose-up:
-	docker compose -f docker-compose.yml up -d --build
+# ===== Pipelines =====
+EMBEDDING.MODEL=bge-m3@1.0
+EMBEDDING.BATCH_SIZE=8
+EMBEDDING.MAX_CONCURRENCY=2
+RAG.TOP_K=5
+RAG.MIN_SCORE=0.2
 
-compose-down:
-	docker compose -f docker-compose.yml down -v
+# ===== API / Workers =====
+API_WORKERS=4
+LLM_CONCURRENCY=8
+EMBED_CONCURRENCY=4
+OMP_NUM_THREADS=6
+MKL_NUM_THREADS=6
 
-stack-deploy:
-	docker stack deploy -c stack.yml llm
-
-stack-rm:
-	docker stack rm llm
+# ===== Features =====
+METRICS_ENABLED=true
+HEALTH_DEEP=false
 
 ### __init__.py
 
 ### app/__init__.py
-from app import *  # alias package for imports expecting backend.app
+# app package init
 
 ### app/api/deps.py
 from __future__ import annotations
@@ -106,7 +128,6 @@ def list_(session: Session = Depends(db_session), user=Depends(get_current_user)
 
 @router.post("", status_code=202)
 def create(payload: dict, session: Session = Depends(db_session), user=Depends(get_current_user)):
-    # FIX: user is a dict from get_current_user
     job = create_job(session, uploaded_by=user["id"], url_file=(payload or {}).get("url_file"))
     analyze_run.delay(str(job.id), pipeline=(payload or {}).get("pipeline"))
     return {"id": str(job.id), "status": getattr(job, "status", "queued"), "accepted": True}
@@ -206,16 +227,15 @@ async def post_messages(chat_id: str, payload: dict, request: Request, session=D
     if (payload or {}).get("response_stream"):
         def gen():
             yield {"data": "event: token"}
-            yield {"data": "data: Привет..."} 
+            yield {"data": "data: Привет..."}
             yield {"data": "data: Это стрим ответа."}
             yield {"data": "event: done"}
         return sse_response(gen())
-    # FIX: schema requires string in content
     return {"messages":[{"role":"assistant","content":"Привет! Это заглушка ответа."}]}
 
 ### app/api/routers/rag.py
 from __future__ import annotations
-from typing import List, Optional, Any, Dict
+from typing import Any, Dict
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
@@ -268,8 +288,7 @@ def delete_doc(doc_id: str, session: Session = Depends(db_session), user=Depends
 
 @router.post("/upload")
 def create_upload_url(payload: dict, session: Session = Depends(db_session), user=Depends(get_current_user)):
-    meta = create_upload(session, filename=(payload or {}).get("filename"), user_id=user["id"])  # type: ignore
-    # keep compatibility if service returns 'raw/<id>/file' by passing 'key' through, upload_watch handles both
+    meta = create_upload(session, filename=(payload or {}).get("filename"), uploaded_by=user["id"])
     if (payload or {}).get("watch"):
         start_upload_watch(meta["id"], key=meta["key"])  # type: ignore[index]
     if (payload or {}).get("auto_ingest"):
@@ -282,10 +301,8 @@ def rag_search(payload: dict, session: Session = Depends(db_session), user=Depen
     q = p.get("query") or ""
     top_k = int(p.get("top_k") or 5)
     with_snippets = bool(p.get("with_snippets", True))
-    # passthrough filters/offset/doc_id/tags
     offset = int(p.get("offset") or 0)
     doc_id = p.get("doc_id")
-    # tags can be provided top-level or inside filters
     tags = p.get("tags")
     filters = p.get("filters") or {}
     if not tags and isinstance(filters, dict):
@@ -356,7 +373,7 @@ if os.getenv("BEAT") == "1":
     }
 
 ### app/core/__init__.py
-from app.core import *
+# core package init
 
 ### app/core/config.py
 from __future__ import annotations
@@ -468,10 +485,106 @@ def install_exception_handlers(app):
     app.add_exception_handler(Exception, unhandled_exception_handler)
 
 ### app/core/idempotency.py
-from starlette.middleware.base import BaseHTTPMiddleware
-class IdempotencyMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request, call_next):
-        return await call_next(request)
+from __future__ import annotations
+import os, json, base64, hashlib
+from typing import List, Tuple, Optional, Dict, Any
+from starlette.types import ASGIApp, Scope, Receive, Send, Message
+from app.core.redis import get_redis
+
+SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+DEFAULT_TTL = int(os.getenv("IDEMPOTENCY_TTL_SECONDS", "86400"))
+ENABLED = os.getenv("IDEMPOTENCY_ENABLED", "1") not in {"0", "false", "False"}
+MAX_CAPTURE_BYTES = int(os.getenv("IDEMPOTENCY_MAX_BYTES", "1048576"))  # 1 MiB
+
+def _get_header(headers: List[Tuple[bytes, bytes]], name: str) -> Optional[bytes]:
+    name_b = name.lower().encode()
+    for k, v in headers:
+        if k.lower() == name_b:
+            return v
+    return None
+
+class IdempotencyMiddleware:
+    def __init__(self, app: ASGIApp):
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send):
+        if not ENABLED or scope.get("type") != "http":
+            return await self.app(scope, receive, send)
+
+        method = scope.get("method") or "GET"
+        if method in SAFE_METHODS:
+            return await self.app(scope, receive, send)
+
+        headers: List[Tuple[bytes, bytes]] = scope.get("headers") or []
+        idem_key_b = _get_header(headers, "idempotency-key")
+        if not idem_key_b:
+            return await self.app(scope, receive, send)
+
+        path = scope.get("path") or "/"
+        auth_b = _get_header(headers, "authorization") or b""
+        user_hash = hashlib.sha256(auth_b).hexdigest()[:16] if auth_b else "anon"
+        raw_key = b"|".join([method.encode(), path.encode(), idem_key_b, user_hash.encode()])
+        key_hash = hashlib.sha256(raw_key).hexdigest()
+        rkey = f"idemp:v1:{key_hash}"
+
+        redis = get_redis()
+        try:
+            cached = await redis.get(rkey)  # type: ignore[attr-defined]
+        except Exception:
+            cached = None
+
+        if cached:
+            try:
+                data = json.loads(cached)
+                body = base64.b64decode(data.get("body_b64", ""))
+                from starlette.responses import Response
+                headers_dict = data.get("headers") or {}
+                headers_dict["content-length"] = str(len(body))
+                resp = Response(content=body, status_code=int(data.get("status", 200)), headers=headers_dict, media_type=None)
+                return await resp(scope, receive, send)
+            except Exception:
+                pass
+
+        started: Dict[str, Any] = {"status": None, "headers": []}
+        chunks: list[bytes] = []
+        total = 0
+        is_streaming = False
+
+        async def send_wrapper(message: Message):
+            nonlocal total, is_streaming
+            if message["type"] == "http.response.start":
+                started["status"] = message["status"]
+                started["headers"] = message.get("headers", [])
+                ctype = _get_header(started["headers"], "content-type") or b""
+                if b"text/event-stream" in ctype or b"stream" in ctype:
+                    is_streaming = True
+                return await send(message)
+            elif message["type"] == "http.response.body":
+                body = message.get("body", b"") or b""
+                if body:
+                    total += len(body)
+                    if total <= MAX_CAPTURE_BYTES:
+                        chunks.append(body)
+                    else:
+                        is_streaming = True
+                return await send(message)
+            else:
+                return await send(message)
+
+        await self.app(scope, receive, send_wrapper)
+
+        if not is_streaming and started["status"] is not None:
+            try:
+                body_bytes = b"".join(chunks)
+                headers_dict = {k.decode().lower(): v.decode() for k, v in (started["headers"] or [])}
+                payload = {
+                    "status": int(started["status"]),
+                    "headers": headers_dict,
+                    "body_b64": base64.b64encode(body_bytes).decode(),
+                }
+                await redis.setex(rkey, DEFAULT_TTL, json.dumps(payload))  # type: ignore[attr-defined]
+            except Exception:
+                pass
 
 ### app/core/logging.py
 from __future__ import annotations
@@ -702,7 +815,65 @@ def get_bearer_token(credentials: HTTPAuthorizationCredentials | None = Depends(
 ### app/llm/prompts/__init__.py
 
 ### app/main.py
-from app.main import app  # expose ASGI app under backend.app.main
+from __future__ import annotations
+import os
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
+from app.core.metrics import prometheus_endpoint
+from app.core.logging import RequestIdMiddleware, setup_logging
+from app.core.errors import install_exception_handlers
+from app.core.config import settings
+from app.core.db import engine
+from app.core.redis import get_redis
+from app.core.qdrant import get_qdrant
+from app.core.s3 import get_minio
+from app.core.idempotency import IdempotencyMiddleware
+from app.api.routers.auth import router as auth_router
+from app.api.routers.chats import router as chats_router
+from app.api.routers.rag import router as rag_router
+
+setup_logging()
+
+app = FastAPI(title="API")
+
+app.add_middleware(RequestIdMiddleware)
+app.add_middleware(IdempotencyMiddleware)
+
+if os.getenv("CORS_ENABLED", "1") not in {"0", "false", "False"}:
+    origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",")]
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=origins if origins != ["*"] else ["*"],
+        allow_credentials=True,
+        allow_methods=[m.strip() for m in os.getenv("CORS_METHODS", "*").split(",")] if os.getenv("CORS_METHODS") else ["*"],
+        allow_headers=[h.strip() for h in os.getenv("CORS_HEADERS", "*").split(",")] if os.getenv("CORS_HEADERS") else ["*"],
+        expose_headers=[h.strip() for h in os.getenv("CORS_EXPOSE_HEADERS", "").split(",")] if os.getenv("CORS_EXPOSE_HEADERS") else [],
+        max_age=int(os.getenv("CORS_MAX_AGE", "600")),
+    )
+
+install_exception_handlers(app)
+
+@app.get("/healthz")
+async def healthz(deep: int | None = None):
+    if settings.HEALTH_DEEP or deep == 1:
+        try:
+            with engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+            await get_redis().ping()
+            get_qdrant().get_collections()
+            get_minio().list_buckets()
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+    return {"ok": True}
+
+@app.get("/metrics")
+def metrics():
+    return prometheus_endpoint()
+
+app.include_router(auth_router, prefix="/api")
+app.include_router(chats_router, prefix="/api")
+app.include_router(rag_router, prefix="/api")
 
 ### app/migrations/env.py
 from __future__ import annotations
@@ -1386,7 +1557,7 @@ class RagDocument(BaseModel):
     progress: Optional[float] = Field(None)
 
 ### app/services/__init__.py
-from app.services import *
+# services package init
 
 ### app/services/analyze_service.py
 from __future__ import annotations
@@ -1534,8 +1705,8 @@ def _timed(name: str):
             return self
         def __exit__(self, exc_type, exc, tb):
             dt = time.perf_counter() - self.t0
-            external_request_total.labels(name=name, status=("ok" if exc is None else "fail")).inc()
-            external_request_seconds.labels(name=name).observe(dt)
+            external_request_total.labels(target=name, status=("ok" if exc is None else "fail")).inc()
+            external_request_seconds.labels(target=name).observe(dt)
     return _Ctx()
 
 def embed_texts(texts: List[str]) -> List[List[float]]:
@@ -1556,7 +1727,6 @@ def llm_chat(messages: List[Dict[str, str]], temperature: float = 0.2, max_token
             data = r.json()
             return (data.get("choices") or [{}])[0].get("message", {}).get("content", "")
 
-# FIX: allow positional top_k by removing '*' and keeping kwargs for compatibility
 def qdrant_search(vector: List[float], top_k: int, offset: Optional[int] = None,
                   doc_id: Optional[str] = None, tags: Optional[List[str]] = None,
                   sort_by: str = "score_desc"):
@@ -1582,7 +1752,6 @@ def qdrant_count_by_doc(doc_id: str) -> int:
             res = client.count(collection_name=COLLECTION, count_filter=f, exact=True)
             return int(getattr(res, "count", None) or (res.get("count") if isinstance(res, dict) else 0) or 0)
         except Exception:
-            # fallback: scroll without fake vectors
             total = 0
             next_page = None
             while True:
@@ -1620,7 +1789,7 @@ from .clients import embed_texts, qdrant_search, qdrant_count_by_doc
 def create_upload(session: Session, filename: str, uploaded_by=None) -> Dict[str, Any]:
     repo = RagRepo(session)
     doc = repo.create_document(name=filename, uploaded_by=uploaded_by, status="uploaded")
-    key = f"raw/{doc.id}/{filename}"
+    key = f"{doc.id}/{filename}"
     put_url = presign_put(settings.S3_BUCKET_RAW, key, 3600)
     doc.url_file = key
     doc.updated_at = datetime.utcnow()
@@ -1680,7 +1849,6 @@ def progress(session: Session, doc_id: str) -> Dict[str, Any]:
     }
 
 def stats(session: Session) -> Dict[str, Any]:
-    # aggregate documents by status
     rows = session.query(RagDocuments.status, func.count(RagDocuments.id)).group_by(RagDocuments.status).all()
     by_status = {k or "unknown": int(v or 0) for k, v in rows}
     total_docs = sum(by_status.values())
@@ -1899,15 +2067,11 @@ def process(self, document_id: str, *, source_key: str | None = None) -> dict:
             doc = session.get(RagDocuments, document_id)
             if not doc:
                 raise RetryableError("document_not_found")
-            # Заглушка канонизации: просто копируем из raw -> canonical, сохраняем ключ
-            src = source_key or (doc.url_file or f"raw/{doc.id}/source.bin")
-            dst = f"canonical/{doc.id}/document.json"
-            # В реале: скачиваем, парсим, нормализуем и кладем JSON
+            src = source_key or (doc.url_file or f"{doc.id}/source.bin")
+            dst = f"{doc.id}/document.json"
             try:
-                # Если файла нет — создадим пустышку, чтобы пайплайн шёл дальше
                 s3.put_object(settings.S3_BUCKET_CANONICAL, dst, b"{}", length=2)
             except Exception:
-                # если сервер MinIO старый: используем upload via bytes
                 from io import BytesIO
                 s3.put_object(settings.S3_BUCKET_CANONICAL, dst, BytesIO(b"{}"), length=2)
             doc.url_canonical_file = dst
@@ -1967,7 +2131,6 @@ def watch(self, document_id: str, *, key: str) -> dict:
             doc = session.get(RagDocuments, document_id)
             if not doc:
                 return {"ok": False, "error": "doc_not_found"}
-            # FIX: use configured bucket; accept either absolute "raw/..." or relative keys
             raw_bucket = settings.S3_BUCKET_RAW
             rel = key.split(raw_bucket + "/", 1)[-1] if key.startswith(raw_bucket + "/") else key
             try:
@@ -1982,8 +2145,8 @@ def watch(self, document_id: str, *, key: str) -> dict:
 ### scripts/__init__.py
 
 ### scripts/bootstrap_minio.py
-from backend.app.core.s3 import ensure_bucket
-from backend.app.core.config import settings
+from app.core.s3 import ensure_bucket
+from app.core.config import settings
 
 def main():
     for b in (settings.S3_BUCKET_RAW, settings.S3_BUCKET_CANONICAL, settings.S3_BUCKET_PREVIEW):
@@ -1994,7 +2157,7 @@ if __name__ == "__main__":
     main()
 
 ### scripts/bootstrap_qdrant.py
-from backend.app.core.qdrant import get_qdrant
+from app.core.qdrant import get_qdrant
 
 def main():
     q = get_qdrant()
@@ -2058,10 +2221,10 @@ def test_rag_search_next_offset(monkeypatch):
 
 ### tests/api/test_rag_search_payload.py
 from fastapi.testclient import TestClient
-from backend.app.main import app
+from app.main import app
 
 def test_rag_search_payload_shape(monkeypatch):
-    from backend.app.services import rag_service
+    from app.services import rag_service
     def fake_search(session, query, top_k, offset=0, doc_id=None, tags=None, sort_by="score_desc"):
         return {"results":[{"score":0.5,"text":"hello","doc_id":"d1","chunk_idx":0,"tags":["a"]}], "next_offset": offset+1}
     monkeypatch.setattr(rag_service, "search", fake_search)

@@ -1,11 +1,23 @@
-import React from "react";
-import { useAuth } from "../store/auth.ts";
-import GPTLayout from "./gpt/GPTLayout.tsx";
-import Login from "./Login.tsx";
+import React, { useEffect, useState } from 'react'
+import { useAuth } from '@app/store/auth'
+import { useNavigate } from 'react-router-dom'
 
-/** Показывает Login если нет токена, иначе — GPTLayout */
-export default function GPTGate() {
-    const { token } = useAuth();
-    if (!token) return <Login />;
-    return <GPTLayout />;
+export default function GPTGate({ children }: { children: React.ReactNode }) {
+  const { user, fetchMe } = useAuth()
+  const [checked, setChecked] = useState(false)
+  const nav = useNavigate()
+
+  useEffect(() => {
+    (async () => {
+      try { await fetchMe() } finally { setChecked(true) }
+    })()
+  }, [])
+
+  useEffect(() => {
+    if (checked && !user) nav('/login')
+  }, [checked, user])
+
+  if (!checked) return null
+  if (!user) return null
+  return <>{children}</>
 }

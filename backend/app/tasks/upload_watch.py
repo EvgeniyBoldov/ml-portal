@@ -16,7 +16,6 @@ def watch(self, document_id: str, *, key: str) -> dict:
             doc = session.get(RagDocuments, document_id)
             if not doc:
                 return {"ok": False, "error": "doc_not_found"}
-            # FIX: use configured bucket; accept either absolute "raw/..." or relative keys
             raw_bucket = settings.S3_BUCKET_RAW
             rel = key.split(raw_bucket + "/", 1)[-1] if key.startswith(raw_bucket + "/") else key
             try:

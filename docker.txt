@@ -12,10 +12,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends build-essential
 COPY backend/requirements/api.txt /tmp/requirements.txt
 RUN pip install --upgrade pip && pip install -r /tmp/requirements.txt
 
-COPY backend /app/backend
+# copy FULL backend code into /app/ (so package root is "app", not "backend.app")
+COPY backend/ /app/
 
 EXPOSE 8000
-CMD ["uvicorn","backend.app.main:app","--host","0.0.0.0","--port","8000"]
+CMD ["uvicorn","app.main:app","--host","0.0.0.0","--port","8000"]
 
 ### api/api.txt
 fastapi==0.111.0
@@ -47,12 +48,14 @@ WORKDIR /app
 COPY backend/requirements/emb.txt /tmp/requirements.txt
 RUN pip install --upgrade pip && pip install -r /tmp/requirements.txt
 
-COPY backend /app/backend
+# copy FULL backend code into /app/
+COPY backend/ /app/
 
 ENV PORT=8001 MODELS_DIR=/models MODEL_ID="BAAI/bge-m3"
 VOLUME ["/models"]
 EXPOSE 8001
-CMD ["uvicorn","backend.apps.emb.main:app","--host","0.0.0.0","--port","8001"]
+# path changes from backend.apps.emb.main -> apps.emb.main
+CMD ["uvicorn","apps.emb.main:app","--host","0.0.0.0","--port","8001"]
 
 ### emb/emb.txt
 fastapi==0.111.0
@@ -71,12 +74,14 @@ WORKDIR /app
 COPY backend/requirements/llm.txt /tmp/requirements.txt
 RUN pip install --upgrade pip && pip install -r /tmp/requirements.txt
 
-COPY backend /app/backend
+# copy FULL backend code into /app/
+COPY backend/ /app/
 
 ENV PORT=8002 LLM_MODEL_PATH=/models/model.gguf
 VOLUME ["/models"]
 EXPOSE 8002
-CMD ["uvicorn","backend.apps.llm.main:app","--host","0.0.0.0","--port","8002"]
+# path changes from backend.apps.llm.main -> apps.llm.main
+CMD ["uvicorn","apps.llm.main:app","--host","0.0.0.0","--port","8002"]
 
 ### llm/llm.txt
 fastapi==0.111.0
@@ -96,9 +101,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends build-essential
 COPY backend/requirements/worker.txt /tmp/requirements.txt
 RUN pip install --upgrade pip && pip install -r /tmp/requirements.txt
 
-COPY backend /app/backend
+# copy FULL backend code into /app/
+COPY backend/ /app/
 
-CMD ["bash","-lc","celery -A backend.app.celery_app:app worker -Q ${QUEUES:-normalize,chunk,embed,index,analyze,watch} -n worker@%h --loglevel=INFO"]
+# change celery app path from backend.app.celery_app:app -> app.celery_app:app
+CMD ["bash","-lc","celery -A app.celery_app:app worker -Q ${QUEUES:-normalize,chunk,embed,index,analyze,watch} -n worker@%h --loglevel=INFO"]
 
 ### worker/worker.txt
 celery[redis]==5.4.0

@@ -1,19 +1,57 @@
-.wrap { display: flex; flex-direction: column; gap: 16px; }
-.scroll { max-height: 60vh; overflow: auto; padding-right: 6px; display: flex; flex-direction: column; gap: 10px; }
-.bubble {
-    max-width: 75%; padding: 10px 14px; border-radius: var(--radius-lg);
-    box-shadow: 0 1px 2px rgba(16,24,40,.08); font-size: 14px; line-height: 1.5;
+.wrap { height: 100%; display: grid; }
+.panel {
+  display: grid;
+  grid-template-rows: 1fr auto;
+  gap: 10px;
+  padding: 12px;
+  background: var(--chat-panel-bg, var(--panel-alt, #f4f6ff));
+  border: 1px solid var(--chat-panel-border, rgba(0,0,0,.08));
+  border-radius: var(--radius);
 }
-.user { margin-left: auto; background: var(--color-primary); color: #fff; }
-.assistant { margin-right: auto; background: color-mix(in oklab, var(--color-text) 8%, transparent); color: var(--color-text); }
-.row { display: flex; gap: 10px; align-items: center; }
+.messages { overflow: auto; padding: 4px; }
+.empty { color: var(--muted); text-align: center; padding: 24px; }
+.user { background: rgba(79,124,255,.12); border: 1px solid rgba(79,124,255,.25); padding: 10px 12px; border-radius: 12px; margin: 8px 0 8px auto; max-width: 75%; }
+.assistant { background: rgba(0,0,0,.04); border: 1px solid rgba(0,0,0,.08); padding: 10px 12px; border-radius: 12px; margin: 8px auto 8px 0; max-width: 75%; white-space: pre-wrap; }
+.typing { opacity: .6; }
 
-.input {
-    flex: 1; border: 1px solid var(--color-border); border-radius: var(--radius-md);
-    padding: 12px 14px; outline: none; font-size: 14px; color: var(--color-text);
-    background: var(--color-surface);
-    transition: box-shadow .12s ease, border-color .12s ease, background .2s ease;
+/* Composer: 2 columns, left input, right controls */
+.composer {
+  display: grid;
+  grid-template-columns: 1fr minmax(140px, 220px);
+  gap: 10px;
+  align-items: stretch;       /* тянем оба столбца на одну высоту */
+  min-height: 120px;          /* заведомо не схлопывается */
+  max-height: 30%;
 }
-.input:focus { border-color: var(--color-primary-weak); box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-primary-weak) 45%, transparent); }
+.inputArea { grid-column: 1 / 2; display: flex; }
+.inputArea textarea {
+  display: block;
+  width: 100%;
+  min-height: 80px;
+  resize: none;
+  overflow: auto;
+  box-sizing: border-box;     /* не вылазим за колонку */
+}
 
-.hint { color: var(--color-muted); font-size: 13px; }
+.controls {
+  grid-column: 2 / 3;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+.actionsBottom {
+  margin-top: auto;           /* увести блок кнопок вниз колонки */
+  display: grid;
+  gap: 8px;
+  justify-items: start;       /* выравнивание по левому краю */
+}
+
+/* тумблер RAG */
+.ragToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.ragToggle input { transform: translateY(1px); }

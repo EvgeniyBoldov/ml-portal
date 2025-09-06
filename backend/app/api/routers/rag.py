@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import List, Optional, Any, Dict
+from typing import Any, Dict
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
@@ -52,8 +52,7 @@ def delete_doc(doc_id: str, session: Session = Depends(db_session), user=Depends
 
 @router.post("/upload")
 def create_upload_url(payload: dict, session: Session = Depends(db_session), user=Depends(get_current_user)):
-    meta = create_upload(session, filename=(payload or {}).get("filename"), user_id=user["id"])  # type: ignore
-    # keep compatibility if service returns 'raw/<id>/file' by passing 'key' through, upload_watch handles both
+    meta = create_upload(session, filename=(payload or {}).get("filename"), uploaded_by=user["id"])
     if (payload or {}).get("watch"):
         start_upload_watch(meta["id"], key=meta["key"])  # type: ignore[index]
     if (payload or {}).get("auto_ingest"):
@@ -66,10 +65,8 @@ def rag_search(payload: dict, session: Session = Depends(db_session), user=Depen
     q = p.get("query") or ""
     top_k = int(p.get("top_k") or 5)
     with_snippets = bool(p.get("with_snippets", True))
-    # passthrough filters/offset/doc_id/tags
     offset = int(p.get("offset") or 0)
     doc_id = p.get("doc_id")
-    # tags can be provided top-level or inside filters
     tags = p.get("tags")
     filters = p.get("filters") or {}
     if not tags and isinstance(filters, dict):

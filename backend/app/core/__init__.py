@@ -1,1 +1,1 @@
-from app.core import *
+# core package init

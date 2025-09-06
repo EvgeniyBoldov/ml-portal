@@ -1,37 +1,26 @@
 {
-  "name": "ml-portal",
+  "name": "llm-rag-frontend",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "./node_modules/.bin/vite",
-    "build": "./node_modules/.bin/tsc -b && vite build",
-    "lint": "./node_modules/.bin/eslint .",
-    "preview": "./node_modules/.bin/vite preview"
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview"
   },
   "dependencies": {
-    "axios": "^1.11.0",
-    "jwt-decode": "^4.0.0",
-    "react": "^19.1.1",
-    "react-dom": "^19.1.1",
-    "react-router-dom": "^7.8.2",
-    "zustand": "^5.0.8"
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^6.26.2",
+    "zustand": "^4.5.2"
   },
   "devDependencies": {
-    "@eslint/js": "^9.33.0",
-    "@tailwindcss/postcss": "^4.1.12",
-    "@types/react": "^19.1.10",
-    "@types/react-dom": "^19.1.7",
-    "@vitejs/plugin-react": "^5.0.0",
-    "autoprefixer": "^10.4.21",
-    "eslint": "^9.33.0",
-    "eslint-plugin-react-hooks": "^5.2.0",
-    "eslint-plugin-react-refresh": "^0.4.20",
-    "globals": "^16.3.0",
-    "postcss": "^8.5.6",
-    "tailwindcss": "^4.1.12",
-    "typescript": "~5.8.3",
-    "typescript-eslint": "^8.39.1",
-    "vite": "^7.1.2"
+    "@types/react": "^18.2.66",
+    "@types/react-dom": "^18.2.22",
+    "typescript": "^5.6.2",
+    "vite": "^5.4.3",
+    "@vitejs/plugin-react": "^4.3.1",
+    "vite-tsconfig-paths": "^4.3.2",
+    "@types/node": "^20.14.12"
   }
 }

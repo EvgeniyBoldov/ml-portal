@@ -1,4 +1,4 @@
-from backend.app.core.qdrant import get_qdrant
+from app.core.qdrant import get_qdrant
 
 def main():
     q = get_qdrant()

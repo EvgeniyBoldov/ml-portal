@@ -1,69 +1,45 @@
-# React + TypeScript + Vite
+# Frontend (pure)
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Чистый фронт на React + Vite + TS. Без Docker и без обратного прокси в этой директории.
 
-Currently, two official plugins are available:
-
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default tseslint.config([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      ...tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      ...tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      ...tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+## Быстрый старт (локально)
+```bash
+npm i
+cp .env.example .env
+# при необходимости поменяйте VITE_API_BASE (по умолчанию /api)
+npm run dev
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+## Структура
+- `src/theme.css` — глобальная тема (CSS-переменные).
+- `src/shared/ui/*` — переиспользуемые компоненты (CSS Modules).
+- `src/shared/api/*` — слой API (вынесен из компонентов).
+- `src/shared/lib/*` — утилиты (SSE, хранилище).
+- `src/app/routes/*` — страницы/лейауты (Login, GPTGate, GPTLayout, Chat).
+- `src/app/store/*` — zustand store (auth).
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+## Примечания
+- Авторизация: login → me, хранение токенов в localStorage, авто-refresh.
+- Чат: создание чата, отправка сообщения со стримом (SSE/чанки).
+- Idempotency-Key: для POST сообщений (генерируется через crypto.randomUUID()).
 
-export default tseslint.config([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+## Моки (без бэкенда)
+Включить моки: в `.env` установите `VITE_USE_MOCKS=true` (по умолчанию уже так в `.env.example`).  
+Моки реализованы внутри `src/mocks/mockFetch.ts` и перехватываются на уровне `apiFetch()`.
+Поддержано:
+- `POST /auth/login` (`admin` / `admin`), `GET /auth/me`, `POST /auth/refresh`, `POST /auth/logout`
+- `POST /chats` создание чата
+- `POST /chats/:id/messages` со стримингом **SSE** (моковый ответ печатается по символам)
+- `GET /chats/:id/messages`, `GET /chats`
+- `GET /rag`, `POST /rag/upload`, `POST /rag/search`
+
+Чтобы перейти на реальный бэкенд — поставьте `VITE_USE_MOCKS=false` и настройте `VITE_API_BASE`.
+
+
+⚙️ При запуске с `VITE_USE_MOCKS=true` глобально переопределяется `window.fetch` (см. `src/mocks/enableMocks.ts`), чтобы ни один запрос не улетел в реальный бэкенд.
+
+## Навигация по чатам
+В разделе **Chat** добавлена боковая панель со списком чатов и кнопкой **New**.
+- Маршруты: `/gpt/chat/:chatId`
+- Создание нового чата автоматически перенаправляет к нему.
+- Сообщения чата подгружаются при переключении.
