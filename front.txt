@@ -58,7 +58,7 @@ npm run dev
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>LLM + RAG</title>
+    <title>Почемучка</title>
   </head>
   <body>
     <div id="root"></div>
@@ -2026,25 +2026,42 @@ export default function Analyze() {
 
 ### src/app/routes/gpt/AnalyzePage.module.css
 .wrap { display: grid; gap: 12px; }
-.up { padding: 12px; display: grid; gap: 12px; }
-.drop { border: 1px dashed rgba(255,255,255,.18); border-radius: 12px; padding: 24px; text-align: center; }
+.card { display: grid; gap: 10px; }
+.header { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 12px; }
+.title { font-weight: 700; letter-spacing: .2px; }
+.controls { display: inline-flex; gap: 8px; align-items: center; }
+.search { width: 260px; }
+.tableWrap { overflow: auto; margin-top: -6px; }
+.clickable { cursor: pointer; user-select: none; display: inline-flex; gap: 6px; align-items: center; }
+.more { padding: 8px; display: flex; justify-content: center; }
 
 ### src/app/routes/gpt/AnalyzePage.tsx
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import Card from '@shared/ui/Card'
 import Input from '@shared/ui/Input'
 import Button from '@shared/ui/Button'
 import Badge from '@shared/ui/Badge'
+import Modal from '@shared/ui/Modal'
+import Popover from '@shared/ui/Popover'
+import { FilterIcon } from '@shared/ui/Icon'
+import Select from '@shared/ui/Select'
+import FilePicker from '@shared/ui/FilePicker'
 import * as analyze from '@shared/api/analyze'
 import styles from './AnalyzePage.module.css'
 
 type Task = { id: string; source?: string; status: string; result?: string; created_at?: string }
+type ColKey = keyof Pick<Task, 'source'|'status'|'result'|'created_at'>
 
 export default function AnalyzePage() {
   const [items, setItems] = useState<Task[]>([])
   const [busy, setBusy] = useState(false)
-  const [url, setUrl] = useState('')
-  const fileRef = useRef<HTMLInputElement>(null)
+
+  const [q, setQ] = useState('')
+  const [filters, setFilters] = useState<Partial<Record<ColKey, string>>>({})
+  const [pop, setPop] = useState<{ open: boolean, col?: ColKey, anchor?: {x:number,y:number} }>({ open: false })
+
+  const [openAdd, setOpenAdd] = useState(false)
+  const [file, setFile] = useState<File | null>(null)
 
   async function refresh() {
     const res = await analyze.listAnalyze()
@@ -2052,63 +2069,109 @@ export default function AnalyzePage() {
   }
   useEffect(() => { refresh(); const t=setInterval(refresh,1500); return ()=>clearInterval(t) }, [])
 
-  async function submitUrl() {
-    if (!url.trim()) return
-    setBusy(true)
-    try {
-      await analyze.createAnalyze({ url })
-      setUrl('')
-      await refresh()
-    } finally { setBusy(false) }
-  }
+  const rows = useMemo(() => {
+    return (items||[]).filter(t => {
+      const text = ((t.source||'') + ' ' + (t.result||'') + ' ' + (t.created_at||'') + ' ' + t.status).toLowerCase()
+      if (q.trim() && !text.includes(q.toLowerCase())) return false
+      if (filters.source && !(t.source||'').toLowerCase().includes((filters.source||'').toLowerCase())) return false
+      if (filters.status && t.status !== filters.status) return false
+      if (filters.result && !(t.result||'').toLowerCase().includes((filters.result||'').toLowerCase())) return false
+      if (filters.created_at && !(t.created_at||'').toLowerCase().includes((filters.created_at||'').toLowerCase())) return false
+      return true
+    })
+  }, [items, q, filters])
 
-  async function submitFile(file: File) {
+  function openFilter(col: ColKey, el: HTMLElement) {
+    const r = el.getBoundingClientRect()
+    setPop({ open: true, col, anchor: { x: r.left, y: r.bottom + 6 } })
+  }
+  function clearAll() { setFilters({}); setPop({ open:false }) }
+
+  async function doUpload() {
+    if (!file) return
     setBusy(true)
     try {
       await analyze.createAnalyze({ file })
+      setOpenAdd(false)
+      setFile(null)
       await refresh()
     } finally { setBusy(false) }
   }
 
-  function onDrop(e: React.DragEvent) {
-    e.preventDefault()
-    const f = e.dataTransfer.files?.[0]
-    if (f) submitFile(f)
-  }
+  const hasAnyFilter = Object.values(filters).some(Boolean)
 
   return (
     <div className={styles.wrap}>
-      <Card className={styles.up}>
-        <div className="controls">
-          <Input placeholder="Вставьте URL для анализа…" value={url} onChange={e=>setUrl(e.target.value)} className="w-100" />
-          <Button onClick={submitUrl} disabled={busy || !url.trim()}>Запустить</Button>
-        </div>
-        <div className={styles.drop} onDragOver={e=>e.preventDefault()} onDrop={onDrop}>
-          <div className="muted">или перетащите файл сюда</div>
-          <div>
-            <input ref={fileRef} type="file" hidden onChange={e=>{ const f=e.target.files?.[0]; if (f) submitFile(f) }} />
-            <Button onClick={()=>fileRef.current?.click()} variant="ghost">Выбрать файл</Button>
+      <Card className={styles.card}>
+        <div className={styles.header}>
+          <div className={styles.title}>Анализ документов — задачи</div>
+          <div className={styles.controls}>
+            {hasAnyFilter && <Button size="sm" variant="ghost" onClick={clearAll}>Reset filters</Button>}
+            <Input className={styles.search} placeholder="🔎 Search…" value={q} onChange={e=>setQ(e.target.value)} />
+            <Button onClick={()=>setOpenAdd(true)}>Add</Button>
           </div>
+        </div>
+
+        <div className={styles.tableWrap}>
+          <table className="table">
+            <thead>
+              <tr>
+                <th><span className="clickable" onClick={(e)=>openFilter('source', e.currentTarget as any)}>Source <FilterIcon active={!!filters.source} /></span></th>
+                <th><span className="clickable" onClick={(e)=>openFilter('status', e.currentTarget as any)}>Status <FilterIcon active={!!filters.status} /></span></th>
+                <th><span className="clickable" onClick={(e)=>openFilter('result', e.currentTarget as any)}>Result <FilterIcon active={!!filters.result} /></span></th>
+                <th><span className="clickable" onClick={(e)=>openFilter('created_at', e.currentTarget as any)}>Created <FilterIcon active={!!filters.created_at} /></span></th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(t => (
+                <tr key={t.id}>
+                  <td className="muted">{t.source || '—'}</td>
+                  <td><Badge tone={t.status==='done'?'success':t.status==='error'?'danger':t.status==='processing'?'warn':'neutral'}>{t.status}</Badge></td>
+                  <td>{t.result ? <pre style={{whiteSpace:'pre-wrap', margin:0}}>{t.result}</pre> : <span className="muted">—</span>}</td>
+                  <td className="muted">{t.created_at || '—'}</td>
+                </tr>
+              ))}
+              {rows.length===0 && <tr><td colSpan={4} className="muted">Задач пока нет</td></tr>}
+            </tbody>
+          </table>
         </div>
       </Card>
 
-      <Card>
-        <table className="table">
-          <thead><tr><th>ID</th><th>Источник</th><th>Статус</th><th>Результат</th><th>Создано</th></tr></thead>
-          <tbody>
-            {items.map(t => (
-              <tr key={t.id}>
-                <td>{t.id}</td>
-                <td className="muted">{t.source || '—'}</td>
-                <td><Badge tone={t.status==='done'?'success':t.status==='error'?'danger':t.status==='processing'?'warn':'neutral'}>{t.status}</Badge></td>
-                <td>{t.result ? <pre style={{whiteSpace:'pre-wrap'}}>{t.result}</pre> : <span className="muted">—</span>}</td>
-                <td className="muted">{t.created_at || '—'}</td>
-              </tr>
-            ))}
-            {items.length===0 && <tr><td colSpan={5} className="muted">Задач пока нет</td></tr>}
-          </tbody>
-        </table>
-      </Card>
+      <Modal open={openAdd} onClose={()=>{setOpenAdd(false); setFile(null)}} title="Upload for analyze" size="half"
+        footer={<>
+          <Button variant="ghost" onClick={()=>{setOpenAdd(false); setFile(null)}}>Cancel</Button>
+          <Button onClick={doUpload} disabled={!file || busy}>Upload</Button>
+        </>}>
+        <div className="stack">
+          <FilePicker onFileSelected={setFile} />
+          <div className="muted">{file ? `Selected: ${file.name}` : 'Choose a file to upload'}</div>
+        </div>
+      </Modal>
+
+      <Popover open={pop.open} anchor={pop.anchor || null} onClose={()=>setPop({open:false})} title="Filter">
+        {pop.col === 'source' && (
+          <Input autoFocus placeholder="contains…" value={filters.source||''} onChange={e=>setFilters(f=>({...f, source: e.target.value||undefined}))} />
+        )}
+        {pop.col === 'status' && (
+          <Select value={filters.status||''} onChange={e=>setFilters(f=>({...f, status: (e.target as HTMLSelectElement).value || undefined}))}>
+            <option value="">all</option>
+            <option value="queued">queued</option>
+            <option value="processing">processing</option>
+            <option value="done">done</option>
+            <option value="error">error</option>
+          </Select>
+        )}
+        {pop.col === 'result' && (
+          <Input placeholder="contains…" value={filters.result||''} onChange={e=>setFilters(f=>({...f, result: e.target.value||undefined}))} />
+        )}
+        {pop.col === 'created_at' && (
+          <Input placeholder="YYYY-MM…" value={filters.created_at||''} onChange={e=>setFilters(f=>({...f, created_at: e.target.value||undefined}))} />
+        )}
+        <div style={{display:'flex', justifyContent:'end', gap:8, marginTop:8}}>
+          <Button size="sm" variant="ghost" onClick={()=>{ if(pop.col) setFilters(f=>({...f, [pop.col!]: undefined})); }}>Clear</Button>
+          <Button size="sm" onClick={()=>setPop({open:false})}>Apply</Button>
+        </div>
+      </Popover>
     </div>
   )
 }
@@ -2123,6 +2186,7 @@ export default function AnalyzePage() {
   background: var(--chat-panel-bg, var(--panel-alt, #f4f6ff));
   border: 1px solid var(--chat-panel-border, rgba(0,0,0,.08));
   border-radius: var(--radius);
+  margin-top: 0; /* выравнивание с карточкой списка чатов */
 }
 .messages { overflow: auto; padding: 4px; }
 .empty { color: var(--muted); text-align: center; padding: 24px; }
@@ -2130,13 +2194,12 @@ export default function AnalyzePage() {
 .assistant { background: rgba(0,0,0,.04); border: 1px solid rgba(0,0,0,.08); padding: 10px 12px; border-radius: 12px; margin: 8px auto 8px 0; max-width: 75%; white-space: pre-wrap; }
 .typing { opacity: .6; }
 
-/* Composer: 2 columns, left input, right controls */
 .composer {
   display: grid;
-  grid-template-columns: 1fr minmax(140px, 220px);
+  grid-template-columns: 1fr max-content;
   gap: 10px;
-  align-items: stretch;       /* тянем оба столбца на одну высоту */
-  min-height: 120px;          /* заведомо не схлопывается */
+  align-items: stretch;
+  min-height: 120px;
   max-height: 30%;
 }
 .inputArea { grid-column: 1 / 2; display: flex; }
@@ -2146,30 +2209,11 @@ export default function AnalyzePage() {
   min-height: 80px;
   resize: none;
   overflow: auto;
-  box-sizing: border-box;     /* не вылазим за колонку */
+  box-sizing: border-box;
 }
-
-.controls {
-  grid-column: 2 / 3;
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-}
-.actionsBottom {
-  margin-top: auto;           /* увести блок кнопок вниз колонки */
-  display: grid;
-  gap: 8px;
-  justify-items: start;       /* выравнивание по левому краю */
-}
-
-/* тумблер RAG */
-.ragToggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  color: var(--muted);
-}
+.controls { grid-column: 2 / 3; width: max-content; display: grid; grid-template-rows: 1fr auto; height: 100%; }
+.actionsBottom { margin-top: auto; display: grid; gap: 8px; justify-items: start; align-content: end; }
+.ragToggle { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
 .ragToggle input { transform: translateY(1px); }
 
 ### src/app/routes/gpt/Chat.tsx
@@ -2190,7 +2234,7 @@ export default function Chat() {
   const [items, setItems] = useState<Msg[]>([])
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
-  const [useRag, setUseRag] = useState(true)
+  const [useRag, setUseRag] = useState(false)   // default: unchecked
   const boxRef = useRef<HTMLDivElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
   const composerRef = useRef<HTMLDivElement>(null)
@@ -2228,11 +2272,10 @@ export default function Chat() {
     const ta = taRef.current
     if (!panel || !composer || !ta) return
     const maxComposer = Math.floor(panel.clientHeight * 0.30)
-    composer.style.minHeight = '120px'          // не схлопываемся
+    composer.style.minHeight = '120px'
     composer.style.maxHeight = maxComposer + 'px'
     ta.style.height = 'auto'
-    const taMax = Math.max(80, maxComposer - 24)
-    const newH = Math.min(ta.scrollHeight, taMax)
+    const newH = Math.min(ta.scrollHeight, Math.max(80, maxComposer - 24))
     ta.style.height = newH + 'px'
   }
   useLayoutEffect(() => { resizeTA() }, [])
@@ -2267,6 +2310,7 @@ export default function Chat() {
       setItems(prev => [...prev, { role:'assistant', content: '⚠️ ' + (e.message||'Error') }])
     } finally {
       setBusy(false)
+      setUseRag(false)  // auto-uncheck after sending
       resizeTA()
     }
   }
@@ -2297,11 +2341,11 @@ export default function Chat() {
           <div className={styles.controls}>
             <div />
             <div className={styles.actionsBottom}>
+              <Button onClick={onSend} disabled={busy || !text.trim()}>Send</Button>
               <label className={styles.ragToggle} title="Использовать базу знаний (RAG) при ответе">
                 <input type="checkbox" checked={useRag} onChange={e=>setUseRag(e.target.checked)} />
                 Use RAG
               </label>
-              <Button onClick={onSend} disabled={busy || !text.trim()}>Send</Button>
             </div>
           </div>
         </div>
@@ -2464,32 +2508,34 @@ export default function Doc() {
 }
 
 ### src/app/routes/gpt/GPTLayout.module.css
-.shell { display: grid; grid-template-rows: auto 1fr; height: 100%; }
-.header { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; padding: 12px 16px; position: sticky; top: 0; z-index: 10; background: var(--bg); }
-.logo { font-weight: 800; letter-spacing: .3px; }
-.nav { display: flex; gap: 10px; justify-content: center; align-items: center; }
-.right { display: flex; gap: 12px; justify-content: end; align-items: center; }
-.user { color: var(--muted); }
-.main { padding: 12px 16px; }
+.shell { display: grid; grid-template-rows: auto 1fr auto; height: 100%; }
+.header { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 12px; padding: 10px 16px; position: sticky; top: 0; z-index: 10; background: var(--bg); border-bottom: 1px solid rgba(255,255,255,.08); }
+.brand { display: inline-flex; align-items: center; gap: 10px; min-width: 0; }
+.brand img { height: 28px; width: auto; display: block; }
+.brandName { font-weight: 900; letter-spacing: .2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-/* Segmented nav */
-.seg { display: inline-flex; gap: 0; background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.14); border-radius: 12px; padding: 2px; }
-.segBtn { padding: 6px 12px; border-radius: 10px; color: var(--text); text-decoration: none; font-weight: 600; }
+.nav { display: flex; justify-content: center; }
+.segWrap { width: min(720px, 50vw); display: flex; justify-content: center; }
+.seg { display: inline-flex; gap: 0; background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.14); border-radius: 12px; padding: 2px; width: 100%; justify-content: center; }
+.segBtn { padding: 6px 12px; border-radius: 10px; color: var(--text); text-decoration: none; font-weight: 600; flex: 1 0 auto; text-align: center; }
 .segBtn:hover { background: rgba(255,255,255,.06); }
 .active { background: var(--primary); color: white; }
 
-.headerRightCluster { display: inline-flex; gap: 10px; align-items: center; margin-left: 8px; }
-
-/* Small header badge for mocks */
+.right { display: inline-flex; align-items: center; gap: 12px; }
+.user { color: var(--muted); white-space: nowrap; }
 .mocks { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: rgba(79,124,255,.18); border: 1px solid rgba(79,124,255,.45); }
+
+.main { padding: 12px 16px; }
+
+.footer { height: 44px; border-top: 1px solid rgba(255,255,255,.08); display: grid; place-items: center; color: var(--muted); font-size: 12px; }
 
 ### src/app/routes/gpt/GPTLayout.tsx
 import React from 'react'
 import { Outlet, NavLink, useNavigate } from 'react-router-dom'
-import Button from '../../../shared/ui/Button'
+import Button from '@shared/ui/Button'
 import styles from './GPTLayout.module.css'
-import { useAuth } from '../../store/auth'
-import ThemeSwitch from '../../../shared/ui/ThemeSwitch'
+import { useAuth } from '@app/store/auth'
+import ThemeSwitch from '@shared/ui/ThemeSwitch'
 
 const USE_MOCKS = import.meta.env.VITE_USE_MOCKS === 'true'
 
@@ -2501,25 +2547,31 @@ export default function GPTLayout() {
   return (
     <div className={styles.shell}>
       <header className={styles.header}>
-        <div className={styles.logo}>LLM+RAG</div>
+        {/* Left: logo + brand */}
+        <div className={styles.brand}>
+          {/* Положи файл в frontend/public/logo.svg */}
+          <img src="/logo.png" alt="Почемучка logo" onError={(e)=>{ (e.target as HTMLImageElement).style.display='none' }} />
+          <div className={styles.brandName}>Почемучка</div>
+        </div>
 
+        {/* Center: segmented nav (50% header width) */}
         <nav className={styles.nav}>
-          <div className={styles.seg}>
-            <NavLink to="/gpt/chat" className={({isActive}) => [styles.segBtn, isActive ? styles.active : ''].join(' ')}>Chat</NavLink>
-            <NavLink to="/gpt/analyze" className={({isActive}) => [styles.segBtn, isActive ? styles.active : ''].join(' ')}>Analyze</NavLink>
-            {isAdmin && (
-              <NavLink to="/gpt/rag" className={({isActive}) => [styles.segBtn, isActive ? styles.active : ''].join(' ')}>RAG</NavLink>
-            )}
-          </div>
-
-          <div className={styles.headerRightCluster}>
-            <ThemeSwitch />
-            {USE_MOCKS && <span className={styles.mocks}>Mocks ON</span>}
+          <div className={styles.segWrap}>
+            <div className={styles.seg}>
+              <NavLink to="/gpt/chat" className={({isActive}) => [styles.segBtn, isActive ? styles.active : ''].join(' ')}>Chat</NavLink>
+              <NavLink to="/gpt/analyze" className={({isActive}) => [styles.segBtn, isActive ? styles.active : ''].join(' ')}>Analyze</NavLink>
+              {isAdmin && (
+                <NavLink to="/gpt/rag" className={({isActive}) => [styles.segBtn, isActive ? styles.active : ''].join(' ')}>RAG</NavLink>
+              )}
+            </div>
           </div>
         </nav>
 
+        {/* Right: mocks -> role -> theme -> logout */}
         <div className={styles.right}>
-          <span className={styles.user}>{user?.fio || user?.login}</span>
+          {USE_MOCKS && <span className={styles.mocks}>Mocks ON</span>}
+          <span className={styles.user}>{user?.role || ''}</span>
+          <ThemeSwitch />
           <Button variant="ghost" onClick={async () => { await logout(); nav('/login') }}>Logout</Button>
         </div>
       </header>
@@ -2527,6 +2579,8 @@ export default function GPTLayout() {
       <main className={styles.main}>
         <Outlet />
       </main>
+
+      <footer className={styles.footer}>{/* пустой подвал, заполним позже */}</footer>
     </div>
   )
 }
@@ -2546,110 +2600,207 @@ export default function Rag() {
 
 ### src/app/routes/gpt/RagPage.module.css
 .wrap { display: grid; gap: 12px; }
-.controls { padding: 12px; }
-.grid { display: grid; grid-template-columns: 360px 1fr; gap: 12px; }
-.uploader { display: grid; place-items: center; min-height: 180px; text-align: center; }
-.tableWrap { overflow: auto; }
+.card { display: grid; gap: 10px; }
+.header { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 12px; }
+.title { font-weight: 700; letter-spacing: .2px; }
+.controls { display: inline-flex; gap: 8px; align-items: center; }
+.search { width: 260px; }
+.tableWrap { overflow: auto; margin-top: -6px; } /* визуально объединяем с хедером карточки */
+.clickable { cursor: pointer; user-select: none; display: inline-flex; gap: 6px; align-items: center; }
+.filterHint { color: var(--muted); font-size: 12px; }
 .more { padding: 8px; display: flex; justify-content: center; }
-@media (max-width: 980px) { .grid { grid-template-columns: 1fr; } }
 
 ### src/app/routes/gpt/RagPage.tsx
-import React, { useEffect, useState, useRef } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import Card from '@shared/ui/Card'
 import Input from '@shared/ui/Input'
 import Button from '@shared/ui/Button'
 import Badge from '@shared/ui/Badge'
+import Modal from '@shared/ui/Modal'
+import Popover from '@shared/ui/Popover'
+import { FilterIcon } from '@shared/ui/Icon'
+import Select from '@shared/ui/Select'
+import FilePicker from '@shared/ui/FilePicker'
 import * as rag from '@shared/api/rag'
 import styles from './RagPage.module.css'
 
 type Doc = { id: string; name: string; status: string; tags?: string[]; created_at?: string }
+type ColKey = keyof Pick<Doc, 'name'|'status'|'tags'|'created_at'>
 
 export default function RagPage() {
-  const [q, setQ] = useState('')
-  const [status, setStatus] = useState<string>('')
   const [items, setItems] = useState<Doc[]>([])
   const [cursor, setCursor] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  const fileRef = useRef<HTMLInputElement>(null)
+
+  const [q, setQ] = useState('')
+  const [filters, setFilters] = useState<Partial<Record<ColKey, string>>>({})
+  const [pop, setPop] = useState<{ open: boolean, col?: ColKey, anchor?: {x:number,y:number} }>({ open: false })
+
+  const [openAdd, setOpenAdd] = useState(false)
+  const [file, setFile] = useState<File | null>(null)
 
   async function load(reset=false) {
     setBusy(true)
     try {
-      const { items, next_cursor } = await rag.listDocs({ q, status, cursor: reset ? undefined : cursor || undefined })
+      const { items, next_cursor } = await rag.listDocs({ cursor: reset? undefined : cursor || undefined })
       setItems(prev => reset ? items : [...prev, ...items])
       setCursor(next_cursor || null)
     } finally { setBusy(false) }
   }
+  useEffect(() => { load(true) }, [])
 
-  useEffect(() => { load(true) }, [q, status])
+  const rows = useMemo(() => {
+    return items.filter(d => {
+      const text = (d.name + ' ' + (d.tags || []).join(' ') + ' ' + (d.created_at || '') + ' ' + d.status).toLowerCase()
+      if (q.trim() && !text.includes(q.toLowerCase())) return false
+      if (filters.name && !d.name.toLowerCase().includes(filters.name.toLowerCase())) return false
+      if (filters.status && d.status !== filters.status) return false
+      if (filters.tags && !(d.tags || []).join(',').toLowerCase().includes(filters.tags.toLowerCase())) return false
+      if (filters.created_at && !(d.created_at || '').toLowerCase().includes(filters.created_at.toLowerCase())) return false
+      return true
+    })
+  }, [items, q, filters])
 
-  async function onUpload(file: File) {
+  function openFilter(col: ColKey, el: HTMLElement) {
+    const r = el.getBoundingClientRect()
+    setPop({ open: true, col, anchor: { x: r.left, y: r.bottom + 6 } })
+  }
+  function clearAll() { setFilters({}); setPop({ open:false }) }
+
+  async function doUpload() {
+    if (!file) return
     setBusy(true)
     try {
       await rag.uploadFile(file, file.name)
+      setOpenAdd(false)
+      setFile(null)
       await load(true)
     } finally { setBusy(false) }
   }
 
-  function onDrop(e: React.DragEvent) {
-    e.preventDefault()
-    const f = e.dataTransfer.files?.[0]
-    if (f) onUpload(f)
-  }
+  const hasAnyFilter = Object.values(filters).some(Boolean)
 
   return (
     <div className={styles.wrap}>
-      <Card className={styles.controls}>
-        <div className="controls">
-          <Input placeholder="Search…" value={q} onChange={e=>setQ(e.target.value)} />
-          <select value={status} onChange={e=>setStatus(e.target.value)}>
-            <option value="">All statuses</option>
-            <option value="ready">ready</option>
-            <option value="processing">processing</option>
-            <option value="uploaded">uploaded</option>
-            <option value="error">error</option>
-          </select>
-          <Button onClick={()=>load(true)} disabled={busy}>Refresh</Button>
-        </div>
-      </Card>
-
-      <div className={styles.grid}>
-        <Card className={styles.uploader} onDragOver={e=>e.preventDefault()} onDrop={onDrop}>
-          <div className="stack">
-            <div className="muted">Drag & drop файл сюда</div>
-            <div>или</div>
-            <div>
-              <input ref={fileRef} type="file" hidden onChange={e=>{ const f=e.target.files?.[0]; if (f) onUpload(f) }} />
-              <Button onClick={()=>fileRef.current?.click()}>Выбрать файл</Button>
-            </div>
+      <Card className={styles.card}>
+        <div className={styles.header}>
+          <div className={styles.title}>База знаний — документы</div>
+          <div className={styles.controls}>
+            {hasAnyFilter && <Button size="sm" variant="ghost" onClick={clearAll}>Reset filters</Button>}
+            <Input className={styles.search} placeholder="🔎 Search…" value={q} onChange={e=>setQ(e.target.value)} />
+            <Button onClick={()=>setOpenAdd(true)}>Add</Button>
           </div>
-        </Card>
+        </div>
 
-        <Card className={styles.tableWrap}>
+        <div className={styles.tableWrap}>
           <table className="table">
             <thead>
-              <tr><th>Name</th><th>Status</th><th>Tags</th><th>Created</th></tr>
+              <tr>
+                <th><span className="clickable" onClick={(e)=>openFilter('name', e.currentTarget as any)}>Name <FilterIcon active={!!filters.name} /></span></th>
+                <th><span className="clickable" onClick={(e)=>openFilter('status', e.currentTarget as any)}>Status <FilterIcon active={!!filters.status} /></span></th>
+                <th><span className="clickable" onClick={(e)=>openFilter('tags', e.currentTarget as any)}>Tags <FilterIcon active={!!filters.tags} /></span></th>
+                <th><span className="clickable" onClick={(e)=>openFilter('created_at', e.currentTarget as any)}>Created <FilterIcon active={!!filters.created_at} /></span></th>
+              </tr>
             </thead>
             <tbody>
-              {items.map(doc => (
+              {rows.map(doc => (
                 <tr key={doc.id}>
                   <td>{doc.name}</td>
-                  <td>
-                    <Badge tone={doc.status==='ready'?'success':doc.status==='processing'?'warn':doc.status==='error'?'danger':'neutral'}>{doc.status}</Badge>
-                  </td>
+                  <td><Badge tone={doc.status==='ready'?'success':doc.status==='processing'?'warn':doc.status==='error'?'danger':'neutral'}>{doc.status}</Badge></td>
                   <td>{(doc.tags || []).join(', ')}</td>
                   <td className="muted">{doc.created_at || '—'}</td>
                 </tr>
               ))}
-              {items.length === 0 && !busy && <tr><td colSpan={4} className="muted">Нет документов</td></tr>}
+              {rows.length===0 && !busy && <tr><td colSpan={4} className="muted">Нет документов</td></tr>}
             </tbody>
           </table>
-          {cursor && <div className={styles.more}><Button variant="ghost" onClick={()=>load(false)} disabled={busy}>Load more</Button></div>}
-        </Card>
-      </div>
+        </div>
+      </Card>
+
+      <Modal open={openAdd} onClose={()=>{setOpenAdd(false); setFile(null)}} title="Upload document" size="half"
+        footer={<>
+          <Button variant="ghost" onClick={()=>{setOpenAdd(false); setFile(null)}}>Cancel</Button>
+          <Button onClick={doUpload} disabled={!file || busy}>Upload</Button>
+        </>}>
+        <div className="stack">
+          <FilePicker onFileSelected={setFile} />
+          <div className="muted">{file ? `Selected: ${file.name}` : 'Choose a file to upload'}</div>
+        </div>
+      </Modal>
+
+      <Popover open={pop.open} anchor={pop.anchor || null} onClose={()=>setPop({open:false})} title="Filter">
+        {pop.col === 'name' && (
+          <Input autoFocus placeholder="contains…" value={filters.name||''} onChange={e=>setFilters(f=>({...f, name: e.target.value||undefined}))} />
+        )}
+        {pop.col === 'status' && (
+          <Select value={filters.status||''} onChange={e=>setFilters(f=>({...f, status: (e.target as HTMLSelectElement).value || undefined}))}>
+            <option value="">all</option>
+            <option value="ready">ready</option>
+            <option value="processing">processing</option>
+            <option value="uploaded">uploaded</option>
+            <option value="error">error</option>
+          </Select>
+        )}
+        {pop.col === 'tags' && (
+          <Input placeholder="contains…" value={filters.tags||''} onChange={e=>setFilters(f=>({...f, tags: e.target.value||undefined}))} />
+        )}
+        {pop.col === 'created_at' && (
+          <Input placeholder="YYYY-MM…" value={filters.created_at||''} onChange={e=>setFilters(f=>({...f, created_at: e.target.value||undefined}))} />
+        )}
+        <div style={{display:'flex', justifyContent:'end', gap:8, marginTop:8}}>
+          <Button size="sm" variant="ghost" onClick={()=>{ if(pop.col) setFilters(f=>({...f, [pop.col!]: undefined})); }}>Clear</Button>
+          <Button size="sm" onClick={()=>setPop({open:false})}>Apply</Button>
+        </div>
+      </Popover>
     </div>
   )
 }
+
+### src/app/store/auth.ts
+import { create } from 'zustand'
+import * as api from '@shared/api/auth'
+
+export type User = { id: string; login: string; fio?: string; role?: string }
+
+type State = {
+  user: User | null
+  loading: boolean
+  login: (login: string, password: string) => Promise<void>
+  fetchMe: () => Promise<void>
+  logout: () => Promise<void>
+}
+
+export const useAuth = create<State>((set, get) => ({
+  user: null,
+  loading: false,
+
+  async login(login, password) {
+    set({ loading: true })
+    try {
+      await api.login(login, password)
+      const me = await api.me()
+      set({ user: me })
+    } finally {
+      set({ loading: false })
+    }
+  },
+
+  async fetchMe() {
+    set({ loading: true })
+    try {
+      const me = await api.me()
+      set({ user: me })
+    } catch {
+      set({ user: null })
+    } finally {
+      set({ loading: false })
+    }
+  },
+
+  async logout() {
+    try { await api.logout() } finally { set({ user: null }) }
+  }
+}))
 
 ### src/main.tsx
 import React from 'react'
@@ -3259,6 +3410,53 @@ export default function Card({ className='', ...rest }: React.HTMLAttributes<HTM
   return <div {...rest} className={[styles.card, className].join(' ')} />
 }
 
+### src/shared/ui/FilePicker.module.css
+.wrap { display: inline-flex; align-items: center; gap: 10px; }
+.name { color: var(--muted); font-size: 13px; }
+.inputHidden { display: none; }
+
+### src/shared/ui/FilePicker.tsx
+import React, { useRef } from 'react'
+import Button from './Button'
+import styles from './FilePicker.module.css'
+
+type Props = {
+  onFileSelected: (file: File | null) => void
+  accept?: string
+  disabled?: boolean
+  label?: string
+}
+
+export default function FilePicker({ onFileSelected, accept, disabled, label='Choose file' }: Props) {
+  const ref = useRef<HTMLInputElement>(null)
+  return (
+    <div className={styles.wrap}>
+      <input
+        ref={ref}
+        type="file"
+        className={styles.inputHidden}
+        accept={accept}
+        onChange={e => onFileSelected(e.target.files?.[0] || null)}
+        disabled={disabled}
+      />
+      <Button onClick={() => ref.current?.click()} disabled={disabled}>{label}</Button>
+    </div>
+  )
+}
+
+### src/shared/ui/Icon.tsx
+import React from 'react'
+
+export function FilterIcon({ active=false, size=14 }: { active?: boolean, size?: number }) {
+  const stroke = active ? 'var(--primary)' : 'currentColor'
+  const fill = active ? 'var(--primary)' : 'none'
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true" style={{ verticalAlign: 'middle' }}>
+      <path d="M3 5h18l-7 8v5l-4 2v-7L3 5z" fill={fill} stroke={stroke} strokeWidth="1.5"/>
+    </svg>
+  )
+}
+
 ### src/shared/ui/Input.module.css
 .input {
   background: var(--panel);
@@ -3289,10 +3487,16 @@ export default function Input(props: Props) {
 .body { padding: 12px; }
 .foot { padding: 10px 12px; border-top: 1px solid rgba(255,255,255,.08); display: flex; gap: 8px; justify-content: end; }
 
+/* половина экрана */
+.half { max-width: 50vw; width: 50vw; }
+@media (max-width: 980px) { .half { max-width: 90vw; width: 90vw; } }
+
 ### src/shared/ui/Modal.tsx
 import React from 'react'
 import styles from './Modal.module.css'
 import Button from './Button'
+
+type Size = 'md' | 'half'
 
 type Props = {
   open: boolean
@@ -3300,13 +3504,14 @@ type Props = {
   onClose: () => void
   footer?: React.ReactNode
   children?: React.ReactNode
+  size?: Size
 }
 
-export default function Modal({ open, title, onClose, children, footer }: Props) {
+export default function Modal({ open, title, onClose, children, footer, size='md' }: Props) {
   if (!open) return null
   return (
     <div className={styles.backdrop} onClick={onClose}>
-      <div className={styles.modal} onClick={e=>e.stopPropagation()}>
+      <div className={[styles.modal, size==='half' ? styles.half : ''].join(' ')} onClick={e=>e.stopPropagation()}>
         <div className={styles.head}>
           <div className={styles.title}>{title}</div>
           <Button size="sm" variant="ghost" onClick={onClose}>✕</Button>
@@ -3317,6 +3522,108 @@ export default function Modal({ open, title, onClose, children, footer }: Props)
     </div>
   )
 }
+
+### src/shared/ui/Popover.module.css
+.root { position: fixed; z-index: 1100; min-width: 220px; background: var(--panel); border: 1px solid rgba(255,255,255,.14); border-radius: 12px; box-shadow: var(--shadow); padding: 10px; }
+.head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.title { font-weight: 600; font-size: 13px; }
+.actions { display: flex; gap: 6px; }
+.body { display: grid; gap: 8px; }
+.footer { display: flex; justify-content: end; gap: 8px; margin-top: 8px; }
+
+### src/shared/ui/Popover.tsx
+import React, { useEffect } from 'react'
+import { createPortal } from 'react-dom'
+import styles from './Popover.module.css'
+import Button from './Button'
+
+type Props = {
+  open: boolean
+  title?: string
+  anchor: { x: number, y: number } | null
+  onClose: () => void
+  children: React.ReactNode
+  footer?: React.ReactNode
+}
+
+export default function Popover({ open, title, anchor, onClose, children, footer }: Props) {
+  useEffect(() => {
+    function onEsc(e: KeyboardEvent) { if (e.key === 'Escape') onClose() }
+    function onClick(e: MouseEvent) {
+      const el = document.getElementById('__popover__')
+      if (!el) return
+      if (!el.contains(e.target as Node)) onClose()
+    }
+    if (open) {
+      document.addEventListener('keydown', onEsc)
+      document.addEventListener('mousedown', onClick)
+    }
+    return () => {
+      document.removeEventListener('keydown', onEsc)
+      document.removeEventListener('mousedown', onClick)
+    }
+  }, [open, onClose])
+
+  if (!open || !anchor) return null
+  const style: React.CSSProperties = { left: Math.round(anchor.x), top: Math.round(anchor.y) }
+  return createPortal(
+    <div id="__popover__" className={styles.root} style={style}>
+      {title && <div className={styles.head}><div className={styles.title}>{title}</div><Button size="sm" variant="ghost" onClick={onClose}>✕</Button></div>}
+      <div className={styles.body}>{children}</div>
+      {footer && <div className={styles.footer}>{footer}</div>}
+    </div>,
+    document.body
+  )
+}
+
+### src/shared/ui/Select.module.css
+.root { position: relative; display: inline-block; }
+.select {
+  -webkit-appearance: none;
+  appearance: none;
+  background: var(--input-bg, rgba(255,255,255,.06));
+  border: 1px solid var(--input-border, rgba(255,255,255,.14));
+  color: var(--text);
+  border-radius: 10px;
+  padding: 8px 30px 8px 10px;
+  font: inherit;
+  line-height: 1.2;
+  outline: none;
+  min-width: 160px;
+}
+.select:focus {
+  box-shadow: 0 0 0 3px rgba(79,124,255,.25);
+  border-color: var(--primary, #4f7cff);
+}
+.arrow {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+  opacity: .8;
+}
+
+### src/shared/ui/Select.tsx
+import React from 'react'
+import styles from './Select.module.css'
+
+type Props = React.SelectHTMLAttributes<HTMLSelectElement> & { containerClassName?: string }
+
+const Select = React.forwardRef<HTMLSelectElement, Props>(({ containerClassName, className, children, ...rest }, ref) => {
+  return (
+    <span className={[styles.root, containerClassName||''].join(' ')}>
+      <select ref={ref} className={[styles.select, className||''].join(' ')} {...rest}>
+        {children}
+      </select>
+      <svg className={styles.arrow} width="16" height="16" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M7 10l5 5 5-5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    </span>
+  )
+})
+Select.displayName = 'Select'
+export default Select
 
 ### src/shared/ui/Textarea.module.css
 .textarea {

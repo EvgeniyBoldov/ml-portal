@@ -7,6 +7,7 @@
   background: var(--chat-panel-bg, var(--panel-alt, #f4f6ff));
   border: 1px solid var(--chat-panel-border, rgba(0,0,0,.08));
   border-radius: var(--radius);
+  margin-top: 0; /* выравнивание с карточкой списка чатов */
 }
 .messages { overflow: auto; padding: 4px; }
 .empty { color: var(--muted); text-align: center; padding: 24px; }
@@ -14,10 +15,9 @@
 .assistant { background: rgba(0,0,0,.04); border: 1px solid rgba(0,0,0,.08); padding: 10px 12px; border-radius: 12px; margin: 8px auto 8px 0; max-width: 75%; white-space: pre-wrap; }
 .typing { opacity: .6; }
 
-/* Composer: left text area grows; right column sized by widest child */
 .composer {
   display: grid;
-  grid-template-columns: 1fr max-content; /* width per widest element */
+  grid-template-columns: 1fr max-content;
   gap: 10px;
   align-items: stretch;
   min-height: 120px;
@@ -32,28 +32,7 @@
   overflow: auto;
   box-sizing: border-box;
 }
-
-.controls {
-  grid-column: 2 / 3;
-  width: max-content;   /* column width = content width */
-  display: grid;
-  grid-template-rows: 1fr auto; /* bottom area sticks to bottom */
-  height: 100%;
-}
-.actionsBottom {
-  margin-top: auto;
-  display: grid;
-  gap: 8px;
-  justify-items: start; /* left-aligned buttons */
-  align-content: end;
-}
-
-/* RAG toggle under Send */
-.ragToggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  color: var(--muted);
-}
+.controls { grid-column: 2 / 3; width: max-content; display: grid; grid-template-rows: 1fr auto; height: 100%; }
+.actionsBottom { margin-top: auto; display: grid; gap: 8px; justify-items: start; align-content: end; }
+.ragToggle { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
 .ragToggle input { transform: translateY(1px); }

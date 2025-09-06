@@ -1,7 +1,10 @@
 .wrap { display: grid; gap: 12px; }
-.controls { padding: 12px; }
-.grid { display: grid; grid-template-columns: 360px 1fr; gap: 12px; }
-.uploader { display: grid; place-items: center; min-height: 180px; text-align: center; }
-.tableWrap { overflow: auto; }
+.card { display: grid; gap: 10px; }
+.header { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 12px; }
+.title { font-weight: 700; letter-spacing: .2px; }
+.controls { display: inline-flex; gap: 8px; align-items: center; }
+.search { width: 260px; }
+.tableWrap { overflow: auto; margin-top: -6px; } /* визуально объединяем с хедером карточки */
+.clickable { cursor: pointer; user-select: none; display: inline-flex; gap: 6px; align-items: center; }
+.filterHint { color: var(--muted); font-size: 12px; }
 .more { padding: 8px; display: flex; justify-content: center; }
-@media (max-width: 980px) { .grid { grid-template-columns: 1fr; } }

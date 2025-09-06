@@ -1,18 +1,20 @@
-.shell { display: grid; grid-template-rows: auto 1fr; height: 100%; }
-.header { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; padding: 12px 16px; position: sticky; top: 0; z-index: 10; background: var(--bg); }
-.logo { font-weight: 800; letter-spacing: .3px; }
-.nav { display: flex; gap: 10px; justify-content: center; align-items: center; }
-.right { display: flex; gap: 12px; justify-content: end; align-items: center; }
-.user { color: var(--muted); }
-.main { padding: 12px 16px; }
+.shell { display: grid; grid-template-rows: auto 1fr auto; height: 100%; }
+.header { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 12px; padding: 10px 16px; position: sticky; top: 0; z-index: 10; background: var(--bg); border-bottom: 1px solid rgba(255,255,255,.08); }
+.brand { display: inline-flex; align-items: center; gap: 10px; min-width: 0; }
+.brand img { height: 28px; width: auto; display: block; }
+.brandName { font-weight: 900; letter-spacing: .2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-/* Segmented nav */
-.seg { display: inline-flex; gap: 0; background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.14); border-radius: 12px; padding: 2px; }
-.segBtn { padding: 6px 12px; border-radius: 10px; color: var(--text); text-decoration: none; font-weight: 600; }
+.nav { display: flex; justify-content: center; }
+.segWrap { width: min(720px, 50vw); display: flex; justify-content: center; }
+.seg { display: inline-flex; gap: 0; background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.14); border-radius: 12px; padding: 2px; width: 100%; justify-content: center; }
+.segBtn { padding: 6px 12px; border-radius: 10px; color: var(--text); text-decoration: none; font-weight: 600; flex: 1 0 auto; text-align: center; }
 .segBtn:hover { background: rgba(255,255,255,.06); }
 .active { background: var(--primary); color: white; }
 
-.headerRightCluster { display: inline-flex; gap: 10px; align-items: center; margin-left: 8px; }
-
-/* Small header badge for mocks */
+.right { display: inline-flex; align-items: center; gap: 12px; }
+.user { color: var(--muted); white-space: nowrap; }
 .mocks { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: rgba(79,124,255,.18); border: 1px solid rgba(79,124,255,.45); }
+
+.main { padding: 12px 16px; }
+
+.footer { height: 44px; border-top: 1px solid rgba(255,255,255,.08); display: grid; place-items: center; color: var(--muted); font-size: 12px; }
