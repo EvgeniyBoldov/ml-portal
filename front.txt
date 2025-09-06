@@ -2034,7 +2034,6 @@ export default function Analyze() {
 .tableWrap { overflow: auto; margin-top: -6px; }
 .clickable { cursor: pointer; user-select: none; display: inline-flex; gap: 6px; align-items: center; }
 .more { padding: 8px; display: flex; justify-content: center; }
-
 ### src/app/routes/gpt/AnalyzePage.tsx
 import React, { useEffect, useMemo, useState } from 'react'
 import Card from '@shared/ui/Card'
@@ -2358,7 +2357,6 @@ export default function Chat() {
 .shell { display: grid; grid-template-columns: 280px 1fr; gap: 12px; align-items: start; }
 .main { min-height: calc(100vh - 130px); display: grid; }
 @media (max-width: 980px) { .shell { grid-template-columns: 1fr; } }
-
 ### src/app/routes/gpt/ChatPage.tsx
 import React from 'react'
 import styles from './ChatPage.module.css'
@@ -2377,21 +2375,30 @@ export default function ChatPage() {
 }
 
 ### src/app/routes/gpt/ChatSidebar.module.css
-.sidebar { width: 260px; background: var(--panel); border: 1px solid rgba(255,255,255,.08); border-radius: var(--radius); padding: 12px; height: calc(100vh - 130px); position: sticky; top: 76px; overflow: auto; }
+/* Sidebar without hardcoded viewport math: just fill the grid row and scroll inside */
+.sidebar { 
+  width: 260px; 
+  background: var(--panel); 
+  border: 1px solid rgba(255,255,255, .08); 
+  border-radius: var(--radius); 
+  padding: 12px; 
+  height: 100%;          /* << replaces calc(100vh - 130px) */
+  overflow: auto;        /* internal scroll */
+}
+
+/* Other existing rules kept as-is from your version */
 .head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
 .title { font-weight: 600; }
 .list { display: grid; gap: 4px; }
 .row { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 4px; border-radius: 10px; }
-.row:hover { background: rgba(255,255,255,.04); }
-.active { background: rgba(79,124,255,.14); border: 1px solid rgba(79,124,255,.3); }
+.row:hover { background: rgba(255,255,255, .04); }
+.active { background: rgba(79,124,255, .14); border: 1px solid rgba(79,124,255, .3); }
 .item { text-align: left; padding: 8px 10px; border-radius: 10px; border: 1px solid transparent; background: transparent; color: var(--text); cursor: pointer; display: flex; align-items: center; gap: 8px; width: 100%; }
 .empty { color: var(--muted); padding: 10px; text-align: center; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--primary); display: inline-block; }
 .plus { width: 18px; height: 18px; border-radius: 50%; border: 1px dashed var(--muted); display: inline-flex; align-items: center; justify-content: center; font-weight: 700; font-size: 12px; }
 .actions { display: flex; gap: 6px; padding-right: 6px; }
 .icon { background: transparent; border: 0; cursor: pointer; color: var(--muted); }
-.icon:hover { color: var(--text); }
-.name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 ### src/app/routes/gpt/ChatSidebar.tsx
 import React, { useEffect, useState } from 'react'
@@ -2508,8 +2515,28 @@ export default function Doc() {
 }
 
 ### src/app/routes/gpt/GPTLayout.module.css
-.shell { display: grid; grid-template-rows: auto 1fr auto; height: 100%; }
-.header { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 12px; padding: 10px 16px; position: sticky; top: 0; z-index: 10; background: var(--bg); border-bottom: 1px solid rgba(255,255,255,.08); }
+/* === Patch: make the app fill the viewport and prevent nested scrollbugs === */
+.shell { 
+  display: grid; 
+  grid-template-rows: auto 1fr auto; 
+  /* use dvh for mobile address bar; fall back to 100vh */
+  min-height: 100dvh; 
+  min-height: 100vh;
+}
+
+.header { 
+  display: grid; 
+  grid-template-columns: auto 1fr auto; 
+  align-items: center; 
+  gap: 12px; 
+  padding: 10px 16px; 
+  position: sticky; 
+  top: 0; 
+  z-index: 10; 
+  background: var(--bg); 
+  border-bottom: 1px solid rgba(255,255,255,.08); 
+}
+
 .brand { display: inline-flex; align-items: center; gap: 10px; min-width: 0; }
 .brand img { height: 28px; width: auto; display: block; }
 .brandName { font-weight: 900; letter-spacing: .2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -2525,7 +2552,8 @@ export default function Doc() {
 .user { color: var(--muted); white-space: nowrap; }
 .mocks { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: rgba(79,124,255,.18); border: 1px solid rgba(79,124,255,.45); }
 
-.main { padding: 12px 16px; }
+/* Hide overflow at layout-level so inner columns can scroll independently */
+.main { padding: 12px 16px; overflow: hidden; }
 
 .footer { height: 44px; border-top: 1px solid rgba(255,255,255,.08); display: grid; place-items: center; color: var(--muted); font-size: 12px; }
 
@@ -2758,47 +2786,56 @@ export default function RagPage() {
 
 ### src/app/store/auth.ts
 import { create } from 'zustand'
-import * as api from '@shared/api/auth'
+import * as auth from '@shared/api/auth'
 
-export type User = { id: string; login: string; fio?: string; role?: string }
+export type User = { id: string; login?: string; fio?: string; role?: string }
 
 type State = {
   user: User | null
   loading: boolean
+  error?: string | null
+}
+
+type Actions = {
   login: (login: string, password: string) => Promise<void>
-  fetchMe: () => Promise<void>
+  fetchMe: () => Promise<User | null>
   logout: () => Promise<void>
 }
 
-export const useAuth = create<State>((set, get) => ({
+export const useAuth = create<State & Actions>((set, get) => ({
   user: null,
   loading: false,
+  error: null,
 
   async login(login, password) {
-    set({ loading: true })
+    set({ loading: true, error: null })
     try {
-      await api.login(login, password)
-      const me = await api.me()
-      set({ user: me })
+      await auth.login(login, password)
+      await get().fetchMe()
+    } catch (e: any) {
+      set({ error: e?.message || 'Login failed' })
+      throw e
     } finally {
       set({ loading: false })
     }
   },
 
   async fetchMe() {
-    set({ loading: true })
+    set({ loading: true, error: null })
     try {
-      const me = await api.me()
-      set({ user: me })
+      const me = await auth.me()
+      set({ user: me || null })
+      return me || null
     } catch {
       set({ user: null })
+      return null
     } finally {
       set({ loading: false })
     }
   },
 
   async logout() {
-    try { await api.logout() } finally { set({ user: null }) }
+    try { await auth.logout() } finally { set({ user: null }) }
   }
 }))
 
@@ -3806,9 +3843,17 @@ a { color: inherit; }
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tsconfigPaths from 'vite-tsconfig-paths'
+import path from 'node:path'
 
+// Aliases unified across Vite and TS: @app -> src/app, @shared -> src/shared
 export default defineConfig({
   plugins: [react(), tsconfigPaths()],
+  resolve: {
+    alias: {
+      '@app': path.resolve(__dirname, 'src/app'),
+      '@shared': path.resolve(__dirname, 'src/shared'),
+    }
+  },
   server: { port: 5173, strictPort: true },
   preview: { port: 4173, strictPort: true }
 })

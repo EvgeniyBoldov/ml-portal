@@ -1,15 +1,22 @@
-.sidebar { width: 260px; background: var(--panel); border: 1px solid rgba(255,255,255,.08); border-radius: var(--radius); padding: 12px; height: calc(100vh - 130px); position: sticky; top: 76px; overflow: auto; }
+/* Sidebar fills the grid track and scrolls internally */
+.sidebar { 
+  width: 260px; 
+  background: var(--panel); 
+  border: 1px solid rgba(255,255,255, .08); 
+  border-radius: var(--radius); 
+  padding: 12px;
+  overflow: auto;        
+}
+
 .head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
 .title { font-weight: 600; }
 .list { display: grid; gap: 4px; }
 .row { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 4px; border-radius: 10px; }
-.row:hover { background: rgba(255,255,255,.04); }
-.active { background: rgba(79,124,255,.14); border: 1px solid rgba(79,124,255,.3); }
+.row:hover { background: rgba(255,255,255, .04); }
+.active { background: rgba(79,124,255, .14); border: 1px solid rgba(79,124,255, .3); }
 .item { text-align: left; padding: 8px 10px; border-radius: 10px; border: 1px solid transparent; background: transparent; color: var(--text); cursor: pointer; display: flex; align-items: center; gap: 8px; width: 100%; }
 .empty { color: var(--muted); padding: 10px; text-align: center; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--primary); display: inline-block; }
 .plus { width: 18px; height: 18px; border-radius: 50%; border: 1px dashed var(--muted); display: inline-flex; align-items: center; justify-content: center; font-weight: 700; font-size: 12px; }
 .actions { display: flex; gap: 6px; padding-right: 6px; }
 .icon { background: transparent; border: 0; cursor: pointer; color: var(--muted); }
-.icon:hover { color: var(--text); }
-.name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
