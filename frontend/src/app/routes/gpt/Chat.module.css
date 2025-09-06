@@ -14,13 +14,13 @@
 .assistant { background: rgba(0,0,0,.04); border: 1px solid rgba(0,0,0,.08); padding: 10px 12px; border-radius: 12px; margin: 8px auto 8px 0; max-width: 75%; white-space: pre-wrap; }
 .typing { opacity: .6; }
 
-/* Composer: 2 columns, left input, right controls */
+/* Composer: left text area grows; right column sized by widest child */
 .composer {
   display: grid;
-  grid-template-columns: 1fr minmax(140px, 220px);
+  grid-template-columns: 1fr max-content; /* width per widest element */
   gap: 10px;
-  align-items: stretch;       /* тянем оба столбца на одну высоту */
-  min-height: 120px;          /* заведомо не схлопывается */
+  align-items: stretch;
+  min-height: 120px;
   max-height: 30%;
 }
 .inputArea { grid-column: 1 / 2; display: flex; }
@@ -30,23 +30,25 @@
   min-height: 80px;
   resize: none;
   overflow: auto;
-  box-sizing: border-box;     /* не вылазим за колонку */
+  box-sizing: border-box;
 }
 
 .controls {
   grid-column: 2 / 3;
-  display: flex;
-  flex-direction: column;
+  width: max-content;   /* column width = content width */
+  display: grid;
+  grid-template-rows: 1fr auto; /* bottom area sticks to bottom */
   height: 100%;
 }
 .actionsBottom {
-  margin-top: auto;           /* увести блок кнопок вниз колонки */
+  margin-top: auto;
   display: grid;
   gap: 8px;
-  justify-items: start;       /* выравнивание по левому краю */
+  justify-items: start; /* left-aligned buttons */
+  align-content: end;
 }
 
-/* тумблер RAG */
+/* RAG toggle under Send */
 .ragToggle {
   display: inline-flex;
   align-items: center;

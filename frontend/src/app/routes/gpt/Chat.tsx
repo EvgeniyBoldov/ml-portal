@@ -15,7 +15,7 @@ export default function Chat() {
   const [items, setItems] = useState<Msg[]>([])
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
-  const [useRag, setUseRag] = useState(true)
+  const [useRag, setUseRag] = useState(false)   // default: unchecked
   const boxRef = useRef<HTMLDivElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
   const composerRef = useRef<HTMLDivElement>(null)
@@ -53,11 +53,10 @@ export default function Chat() {
     const ta = taRef.current
     if (!panel || !composer || !ta) return
     const maxComposer = Math.floor(panel.clientHeight * 0.30)
-    composer.style.minHeight = '120px'          // не схлопываемся
+    composer.style.minHeight = '120px'
     composer.style.maxHeight = maxComposer + 'px'
     ta.style.height = 'auto'
-    const taMax = Math.max(80, maxComposer - 24)
-    const newH = Math.min(ta.scrollHeight, taMax)
+    const newH = Math.min(ta.scrollHeight, Math.max(80, maxComposer - 24))
     ta.style.height = newH + 'px'
   }
   useLayoutEffect(() => { resizeTA() }, [])
@@ -92,6 +91,7 @@ export default function Chat() {
       setItems(prev => [...prev, { role:'assistant', content: '⚠️ ' + (e.message||'Error') }])
     } finally {
       setBusy(false)
+      setUseRag(false)  // auto-uncheck after sending
       resizeTA()
     }
   }
@@ -122,11 +122,11 @@ export default function Chat() {
           <div className={styles.controls}>
             <div />
             <div className={styles.actionsBottom}>
+              <Button onClick={onSend} disabled={busy || !text.trim()}>Send</Button>
               <label className={styles.ragToggle} title="Использовать базу знаний (RAG) при ответе">
                 <input type="checkbox" checked={useRag} onChange={e=>setUseRag(e.target.checked)} />
                 Use RAG
               </label>
-              <Button onClick={onSend} disabled={busy || !text.trim()}>Send</Button>
             </div>
           </div>
         </div>
