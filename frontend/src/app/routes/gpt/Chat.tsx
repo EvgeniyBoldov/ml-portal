@@ -1,4 +1,4 @@
-import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import styles from './Chat.module.css'
 import Card from '@shared/ui/Card'
 import Button from '@shared/ui/Button'
@@ -15,10 +15,8 @@ export default function Chat() {
   const [items, setItems] = useState<Msg[]>([])
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
-  const [useRag, setUseRag] = useState(false)   // default: unchecked
+  const [useRag, setUseRag] = useState(false)
   const boxRef = useRef<HTMLDivElement>(null)
-  const panelRef = useRef<HTMLDivElement>(null)
-  const composerRef = useRef<HTMLDivElement>(null)
   const taRef = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => {
@@ -47,68 +45,30 @@ export default function Chat() {
     boxRef.current?.scrollTo({ top: boxRef.current.scrollHeight, behavior: 'smooth' })
   }, [items.length])
 
-  const resizeTA = () => {
-    const panel = panelRef.current
-    const composer = composerRef.current
-    const ta = taRef.current
-    if (!panel || !composer || !ta) return
-    const maxComposer = Math.floor(panel.clientHeight * 0.30)
-    composer.style.minHeight = '120px'
-    composer.style.maxHeight = maxComposer + 'px'
-    ta.style.height = 'auto'
-    const newH = Math.min(ta.scrollHeight, Math.max(80, maxComposer - 24))
-    ta.style.height = newH + 'px'
-  }
-  useLayoutEffect(() => { resizeTA() }, [])
-  useEffect(() => { resizeTA() }, [text])
-  useEffect(() => {
-    const onResize = () => resizeTA()
-    window.addEventListener('resize', onResize)
-    return () => window.removeEventListener('resize', onResize)
-  }, [])
-
   async function onSend() {
-    const id = currentId
-    if (!id || !text.trim()) return
-    const question = text.trim()
-    setText('')
-    setItems(prev => [...prev, { role: 'user', content: question }, { role: 'assistant', content: '' }])
+    const content = text.trim()
+    if (!content || !currentId) return
     setBusy(true)
+    setItems(prev => [...prev, { role: 'user', content }])
+    setText('')
     try {
-      let acc = ''
-      for await (const chunk of chats.sendMessageStream(id, {
-        messages: [{ role:'user', content: question }],
-        use_rag: useRag
-      })) {
-        acc += chunk
-        setItems(prev => {
-          const next = [...prev]
-          next[next.length-1] = { role: 'assistant', content: acc }
-          return next
-        })
-      }
-    } catch (e:any) {
-      setItems(prev => [...prev, { role:'assistant', content: '⚠️ ' + (e.message||'Error') }])
-    } finally {
-      setBusy(false)
-      setUseRag(false)  // auto-uncheck after sending
-      resizeTA()
-    }
+      const res = await chats.chat(currentId, { content, use_rag: useRag })
+      setItems(prev => [...prev, { role: 'assistant', content: res.answer || '' }])
+    } finally { setBusy(false) }
+    taRef.current?.focus()
   }
 
   return (
     <div className={styles.wrap}>
-      <Card className={styles.panel} ref={panelRef}>
-        <div className={styles.messages} ref={boxRef}>
-          {items.length === 0 && <div className={styles.empty}>Начните диалог…</div>}
+      <Card className={styles.panel} ref={boxRef as any}>
+        <div className={styles.messages}>
+          {items.length === 0 && <div className={styles.empty}>Пока нет сообщений</div>}
           {items.map((m, i) => (
-            <div key={i} className={m.role === 'user' ? styles.user : styles.assistant}>
-              {m.content || <span className={styles.typing}>печатает…</span>}
-            </div>
+            <div key={i} className={m.role === 'user' ? styles.user : styles.assistant}>{m.content}</div>
           ))}
+          {busy && <div className={[styles.assistant, styles.typing].join(' ')}>…</div>}
         </div>
-
-        <div className={styles.composer} ref={composerRef}>
+        <div className={styles.composer}>
           <div className={styles.inputArea}>
             <Textarea
               ref={taRef}
@@ -122,10 +82,10 @@ export default function Chat() {
           <div className={styles.controls}>
             <div />
             <div className={styles.actionsBottom}>
-              <Button onClick={onSend} disabled={busy || !text.trim()}>Send</Button>
+              <Button onClick={onSend} disabled={busy || !text.trim()}>Отправить</Button>
               <label className={styles.ragToggle} title="Использовать базу знаний (RAG) при ответе">
                 <input type="checkbox" checked={useRag} onChange={e=>setUseRag(e.target.checked)} />
-                Use RAG
+                RAG из БЗ
               </label>
             </div>
           </div>

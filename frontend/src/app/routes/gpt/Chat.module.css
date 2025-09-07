@@ -5,14 +5,14 @@
   gap: 10px;
   padding: 12px;
   background: var(--chat-panel-bg, var(--panel-alt, #f4f6ff));
-  border: 1px solid var(--chat-panel-border, rgba(0,0,0,.08));
+  border: 1px solid var(--chat-panel-border, rgba(0,0,0,0.08));
   border-radius: var(--radius);
   margin-top: 0; /* выравнивание с карточкой списка чатов */
 }
 .messages { overflow: auto; padding: 4px; }
 .empty { color: var(--muted); text-align: center; padding: 24px; }
-.user { background: rgba(79,124,255,.12); border: 1px solid rgba(79,124,255,.25); padding: 10px 12px; border-radius: 12px; margin: 8px 0 8px auto; max-width: 75%; }
-.assistant { background: rgba(0,0,0,.04); border: 1px solid rgba(0,0,0,.08); padding: 10px 12px; border-radius: 12px; margin: 8px auto 8px 0; max-width: 75%; white-space: pre-wrap; }
+.user { background: rgba(79,124,255,0.12); border: 1px solid rgba(79,124,255,0.25); padding: 10px 12px; border-radius: 12px; margin: 8px 0 8px auto; max-width: 75%; }
+.assistant { background: rgba(0,0,0,0.04); border: 1px solid rgba(0,0,0,0.08); padding: 10px 12px; border-radius: 12px; margin: 8px auto 8px 0; max-width: 75%; white-space: pre-wrap; }
 .typing { opacity: .6; }
 
 .composer {
@@ -21,7 +21,7 @@
   gap: 10px;
   align-items: stretch;
   min-height: 120px;
-  max-height: 30%;
+  max-height: clamp(160px, 32vh, 40dvh);
 }
 .inputArea { grid-column: 1 / 2; display: flex; }
 .inputArea textarea {

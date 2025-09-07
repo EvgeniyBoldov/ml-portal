@@ -1904,35 +1904,39 @@ export default function MockBadge() {
   if (!USE_MOCKS) return null
   const style: React.CSSProperties = {
     position: 'fixed', bottom: 12, right: 12, padding: '6px 10px',
-    background: 'rgba(79,124,255,.15)', border: '1px solid rgba(79,124,255,.35)',
+    background: 'rgba(79,124,255,0.15)', border: '1px solid rgba(79,124,255,0.35)',
     borderRadius: 10, fontSize: 12, color: 'var(--text)', zIndex: 9999
   }
   return <div style={style}>Mocks ON</div>
 }
 
 ### src/app/router.tsx
-import React from 'react'
+import React, { Suspense, lazy } from 'react'
 import { createBrowserRouter, RouterProvider } from 'react-router-dom'
-import GPTGate from './routes/GPTGate'
-import Login from './routes/Login'
-import GPTLayout from './routes/gpt/GPTLayout'
-import ChatPage from './routes/gpt/ChatPage'
-import AnalyzePage from './routes/gpt/AnalyzePage'
-import RagPage from './routes/gpt/RagPage'
+
+const GPTGate = lazy(() => import('./routes/GPTGate'))
+const Login = lazy(() => import('./routes/Login'))
+const GPTLayout = lazy(() => import('./routes/gpt/GPTLayout'))
+const ChatPage = lazy(() => import('./routes/gpt/ChatPage'))
+const AnalyzePage = lazy(() => import('./routes/gpt/AnalyzePage'))
+const RagPage = lazy(() => import('./routes/gpt/RagPage'))
+const NotFound = lazy(() => import('./routes/NotFound'))
+
+const withSuspense = (el: React.ReactNode) => <Suspense fallback={<div />}>{el}</Suspense>
 
 const router = createBrowserRouter([
-  { path: '/login', element: <Login /> },
+  { path: '/login', element: withSuspense(<Login />) },
   {
     path: '/gpt',
-    element: <GPTGate><GPTLayout /></GPTGate>,
+    element: withSuspense(<GPTGate>{withSuspense(<GPTLayout />)}</GPTGate>),
     children: [
-      { path: 'chat', element: <ChatPage /> },
-      { path: 'chat/:chatId', element: <ChatPage /> },
-      { path: 'analyze', element: <AnalyzePage /> },
-      { path: 'rag', element: <RagPage /> }
+      { path: 'chat', element: withSuspense(<ChatPage />) },
+      { path: 'chat/:chatId', element: withSuspense(<ChatPage />) },
+      { path: 'analyze', element: withSuspense(<AnalyzePage />) },
+      { path: 'rag', element: withSuspense(<RagPage />) }
     ]
   },
-  { path: '*', element: <Login /> }
+  { path: '*', element: withSuspense(<NotFound />) }
 ])
 
 export default function AppRouter() {
@@ -1991,21 +1995,37 @@ export default function Login() {
       await login(form.login, form.password)
       nav('/gpt/chat')
     } catch (e: any) {
-      setError(e.message || 'Login failed')
+      setError(e.message || 'Ошибка входа')
     }
   }
   return (
     <div className={styles.wrap}>
       <Card className={styles.card}>
-        <h1>Sign in</h1>
+        <h1>Войти</h1>
         <form className="stack" onSubmit={onSubmit}>
-          <label>Login</label>
-          <Input placeholder="user" value={form.login} onChange={e=>setForm(f=>({...f, login:e.target.value}))} />
-          <label>Password</label>
-          <Input type="password" placeholder="••••••••" value={form.password} onChange={e=>setForm(f=>({...f, password:e.target.value}))} />
+          <label>Логин</label>
+          <Input placeholder="user" value={form.login} onChange={e=>setForm(f=>({ ...f, login:e.target.value }))} />
+          <label>Пароль</label>
+          <Input type="password" placeholder="••••••••" value={form.password} onChange={e=>setForm(f=>({ ...f, password:e.target.value }))} />
           {error && <div className={styles.error}>{error}</div>}
-          <Button type="submit" disabled={loading}>{loading ? '...' : 'Sign in'}</Button>
+          <Button type="submit" disabled={loading}>{loading ? '…' : 'Войти'}</Button>
         </form>
+      </Card>
+    </div>
+  )
+}
+
+### src/app/routes/NotFound.tsx
+import React from 'react'
+import { Link } from 'react-router-dom'
+import Card from '@shared/ui/Card'
+
+export default function NotFound() {
+  return (
+    <div style={{display:'grid', placeItems:'center', minHeight:'60vh', padding:24}}>
+      <Card>
+        <h2>Страница не найдена</h2>
+        <p>Мы не нашли такую страницу. Перейти в <Link to="/gpt/chat">чат</Link> или <Link to="/login">войти</Link>.</p>
       </Card>
     </div>
   )
@@ -2066,7 +2086,21 @@ export default function AnalyzePage() {
     const res = await analyze.listAnalyze()
     setItems(res.items || [])
   }
-  useEffect(() => { refresh(); const t=setInterval(refresh,1500); return ()=>clearInterval(t) }, [])
+
+  // Мягкий пуллинг (экспоненциальный backoff)
+  useEffect(() => {
+    let cancelled = false
+    let delay = 1500
+    const tick = async () => {
+      while (!cancelled) {
+        try { await refresh() } catch {}
+        await new Promise(r => setTimeout(r, delay))
+        delay = Math.min(delay * 2, 10000)
+      }
+    }
+    tick()
+    return () => { cancelled = true }
+  }, [])
 
   const rows = useMemo(() => {
     return (items||[]).filter(t => {
@@ -2105,9 +2139,9 @@ export default function AnalyzePage() {
         <div className={styles.header}>
           <div className={styles.title}>Анализ документов — задачи</div>
           <div className={styles.controls}>
-            {hasAnyFilter && <Button size="sm" variant="ghost" onClick={clearAll}>Reset filters</Button>}
-            <Input className={styles.search} placeholder="🔎 Search…" value={q} onChange={e=>setQ(e.target.value)} />
-            <Button onClick={()=>setOpenAdd(true)}>Add</Button>
+            <Input className={styles.search} placeholder="Поиск…" value={q} onChange={e=>setQ(e.target.value)} />
+            {hasAnyFilter && <Badge onClick={clearAll}>Сбросить фильтры</Badge>}
+            <Button onClick={()=>setOpenAdd(true)}>Добавить</Button>
           </div>
         </div>
 
@@ -2115,60 +2149,58 @@ export default function AnalyzePage() {
           <table className="table">
             <thead>
               <tr>
-                <th><span className="clickable" onClick={(e)=>openFilter('source', e.currentTarget as any)}>Source <FilterIcon active={!!filters.source} /></span></th>
-                <th><span className="clickable" onClick={(e)=>openFilter('status', e.currentTarget as any)}>Status <FilterIcon active={!!filters.status} /></span></th>
-                <th><span className="clickable" onClick={(e)=>openFilter('result', e.currentTarget as any)}>Result <FilterIcon active={!!filters.result} /></span></th>
-                <th><span className="clickable" onClick={(e)=>openFilter('created_at', e.currentTarget as any)}>Created <FilterIcon active={!!filters.created_at} /></span></th>
+                <th>Источник <button className="icon" onClick={(e)=>openFilter('source', e.currentTarget)}><FilterIcon/></button></th>
+                <th>Статус <button className="icon" onClick={(e)=>openFilter('status', e.currentTarget)}><FilterIcon/></button></th>
+                <th>Результат <button className="icon" onClick={(e)=>openFilter('result', e.currentTarget)}><FilterIcon/></button></th>
+                <th>Создано <button className="icon" onClick={(e)=>openFilter('created_at', e.currentTarget)}><FilterIcon/></button></th>
               </tr>
             </thead>
             <tbody>
-              {rows.map(t => (
+              {rows.map((t) => (
                 <tr key={t.id}>
                   <td className="muted">{t.source || '—'}</td>
                   <td><Badge tone={t.status==='done'?'success':t.status==='error'?'danger':t.status==='processing'?'warn':'neutral'}>{t.status}</Badge></td>
-                  <td>{t.result ? <pre style={{whiteSpace:'pre-wrap', margin:0}}>{t.result}</pre> : <span className="muted">—</span>}</td>
+                  <td style={{maxWidth:480, whiteSpace:'nowrap', textOverflow:'ellipsis', overflow:'hidden'}}>{t.result || '—'}</td>
                   <td className="muted">{t.created_at || '—'}</td>
                 </tr>
               ))}
-              {rows.length===0 && <tr><td colSpan={4} className="muted">Задач пока нет</td></tr>}
+              {rows.length === 0 && <tr><td colSpan={4} className="muted">Нет записей</td></tr>}
             </tbody>
           </table>
         </div>
       </Card>
 
-      <Modal open={openAdd} onClose={()=>{setOpenAdd(false); setFile(null)}} title="Upload for analyze" size="half"
-        footer={<>
-          <Button variant="ghost" onClick={()=>{setOpenAdd(false); setFile(null)}}>Cancel</Button>
-          <Button onClick={doUpload} disabled={!file || busy}>Upload</Button>
-        </>}>
-        <div className="stack">
-          <FilePicker onFileSelected={setFile} />
-          <div className="muted">{file ? `Selected: ${file.name}` : 'Choose a file to upload'}</div>
-        </div>
+      <Modal open={openAdd} onClose={()=>setOpenAdd(false)} title="Новый анализ"
+        footer={<><Button variant="ghost" onClick={()=>setOpenAdd(false)}>Отмена</Button><Button onClick={doUpload} disabled={busy || !file}>Запустить</Button></>}>
+        <FilePicker onChange={f=>setFile(f)} />
       </Modal>
 
-      <Popover open={pop.open} anchor={pop.anchor || null} onClose={()=>setPop({open:false})} title="Filter">
-        {pop.col === 'source' && (
-          <Input autoFocus placeholder="contains…" value={filters.source||''} onChange={e=>setFilters(f=>({...f, source: e.target.value||undefined}))} />
-        )}
-        {pop.col === 'status' && (
-          <Select value={filters.status||''} onChange={e=>setFilters(f=>({...f, status: (e.target as HTMLSelectElement).value || undefined}))}>
-            <option value="">all</option>
-            <option value="queued">queued</option>
-            <option value="processing">processing</option>
-            <option value="done">done</option>
-            <option value="error">error</option>
-          </Select>
-        )}
-        {pop.col === 'result' && (
-          <Input placeholder="contains…" value={filters.result||''} onChange={e=>setFilters(f=>({...f, result: e.target.value||undefined}))} />
-        )}
-        {pop.col === 'created_at' && (
-          <Input placeholder="YYYY-MM…" value={filters.created_at||''} onChange={e=>setFilters(f=>({...f, created_at: e.target.value||undefined}))} />
-        )}
-        <div style={{display:'flex', justifyContent:'end', gap:8, marginTop:8}}>
-          <Button size="sm" variant="ghost" onClick={()=>{ if(pop.col) setFilters(f=>({...f, [pop.col!]: undefined})); }}>Clear</Button>
-          <Button size="sm" onClick={()=>setPop({open:false})}>Apply</Button>
+      <Popover open={pop.open} onClose={()=>setPop({open:false})} anchor={pop.anchor}>
+        <div className="stack" style={{minWidth: 260}}>
+          {pop.col === 'status' ? (
+            <Select value={filters.status || ''} onChange={v=>setFilters(f=>({ ...f, status: (v||'') || undefined }))} options={[
+              { value: '', label: 'Любой' },
+              { value: 'queued', label: 'queued' },
+              { value: 'processing', label: 'processing' },
+              { value: 'done', label: 'done' },
+              { value: 'error', label: 'error' },
+            ]} />
+          ) : (
+            <Input
+              autoFocus
+              placeholder="содержит…"
+              value={(filters[pop.col as ColKey] || '') as string}
+              onChange={e=>{
+                const val = e.target.value
+                const col = pop.col as ColKey
+                setFilters(f=>({ ...f, [col]: (val || '').trim() || undefined }))
+              }}
+            />
+          )}
+          <div style={{display:'flex', gap:8, justifyContent:'space-between'}}>
+            <Button size="sm" variant="ghost" onClick={()=>{ const col = pop.col as ColKey; setFilters(f=>({ ...f, [col]: undefined })); }}>Очистить</Button>
+            <Button size="sm" onClick={()=>setPop({open:false})}>Применить</Button>
+          </div>
         </div>
       </Popover>
     </div>
@@ -2183,14 +2215,14 @@ export default function AnalyzePage() {
   gap: 10px;
   padding: 12px;
   background: var(--chat-panel-bg, var(--panel-alt, #f4f6ff));
-  border: 1px solid var(--chat-panel-border, rgba(0,0,0,.08));
+  border: 1px solid var(--chat-panel-border, rgba(0,0,0,0.08));
   border-radius: var(--radius);
   margin-top: 0; /* выравнивание с карточкой списка чатов */
 }
 .messages { overflow: auto; padding: 4px; }
 .empty { color: var(--muted); text-align: center; padding: 24px; }
-.user { background: rgba(79,124,255,.12); border: 1px solid rgba(79,124,255,.25); padding: 10px 12px; border-radius: 12px; margin: 8px 0 8px auto; max-width: 75%; }
-.assistant { background: rgba(0,0,0,.04); border: 1px solid rgba(0,0,0,.08); padding: 10px 12px; border-radius: 12px; margin: 8px auto 8px 0; max-width: 75%; white-space: pre-wrap; }
+.user { background: rgba(79,124,255,0.12); border: 1px solid rgba(79,124,255,0.25); padding: 10px 12px; border-radius: 12px; margin: 8px 0 8px auto; max-width: 75%; }
+.assistant { background: rgba(0,0,0,0.04); border: 1px solid rgba(0,0,0,0.08); padding: 10px 12px; border-radius: 12px; margin: 8px auto 8px 0; max-width: 75%; white-space: pre-wrap; }
 .typing { opacity: .6; }
 
 .composer {
@@ -2199,7 +2231,7 @@ export default function AnalyzePage() {
   gap: 10px;
   align-items: stretch;
   min-height: 120px;
-  max-height: 30%;
+  max-height: clamp(160px, 32vh, 40dvh);
 }
 .inputArea { grid-column: 1 / 2; display: flex; }
 .inputArea textarea {
@@ -2216,7 +2248,7 @@ export default function AnalyzePage() {
 .ragToggle input { transform: translateY(1px); }
 
 ### src/app/routes/gpt/Chat.tsx
-import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import styles from './Chat.module.css'
 import Card from '@shared/ui/Card'
 import Button from '@shared/ui/Button'
@@ -2233,10 +2265,8 @@ export default function Chat() {
   const [items, setItems] = useState<Msg[]>([])
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
-  const [useRag, setUseRag] = useState(false)   // default: unchecked
+  const [useRag, setUseRag] = useState(false)
   const boxRef = useRef<HTMLDivElement>(null)
-  const panelRef = useRef<HTMLDivElement>(null)
-  const composerRef = useRef<HTMLDivElement>(null)
   const taRef = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => {
@@ -2265,68 +2295,30 @@ export default function Chat() {
     boxRef.current?.scrollTo({ top: boxRef.current.scrollHeight, behavior: 'smooth' })
   }, [items.length])
 
-  const resizeTA = () => {
-    const panel = panelRef.current
-    const composer = composerRef.current
-    const ta = taRef.current
-    if (!panel || !composer || !ta) return
-    const maxComposer = Math.floor(panel.clientHeight * 0.30)
-    composer.style.minHeight = '120px'
-    composer.style.maxHeight = maxComposer + 'px'
-    ta.style.height = 'auto'
-    const newH = Math.min(ta.scrollHeight, Math.max(80, maxComposer - 24))
-    ta.style.height = newH + 'px'
-  }
-  useLayoutEffect(() => { resizeTA() }, [])
-  useEffect(() => { resizeTA() }, [text])
-  useEffect(() => {
-    const onResize = () => resizeTA()
-    window.addEventListener('resize', onResize)
-    return () => window.removeEventListener('resize', onResize)
-  }, [])
-
   async function onSend() {
-    const id = currentId
-    if (!id || !text.trim()) return
-    const question = text.trim()
-    setText('')
-    setItems(prev => [...prev, { role: 'user', content: question }, { role: 'assistant', content: '' }])
+    const content = text.trim()
+    if (!content || !currentId) return
     setBusy(true)
+    setItems(prev => [...prev, { role: 'user', content }])
+    setText('')
     try {
-      let acc = ''
-      for await (const chunk of chats.sendMessageStream(id, {
-        messages: [{ role:'user', content: question }],
-        use_rag: useRag
-      })) {
-        acc += chunk
-        setItems(prev => {
-          const next = [...prev]
-          next[next.length-1] = { role: 'assistant', content: acc }
-          return next
-        })
-      }
-    } catch (e:any) {
-      setItems(prev => [...prev, { role:'assistant', content: '⚠️ ' + (e.message||'Error') }])
-    } finally {
-      setBusy(false)
-      setUseRag(false)  // auto-uncheck after sending
-      resizeTA()
-    }
+      const res = await chats.chat(currentId, { content, use_rag: useRag })
+      setItems(prev => [...prev, { role: 'assistant', content: res.answer || '' }])
+    } finally { setBusy(false) }
+    taRef.current?.focus()
   }
 
   return (
     <div className={styles.wrap}>
-      <Card className={styles.panel} ref={panelRef}>
-        <div className={styles.messages} ref={boxRef}>
-          {items.length === 0 && <div className={styles.empty}>Начните диалог…</div>}
+      <Card className={styles.panel} ref={boxRef as any}>
+        <div className={styles.messages}>
+          {items.length === 0 && <div className={styles.empty}>Пока нет сообщений</div>}
           {items.map((m, i) => (
-            <div key={i} className={m.role === 'user' ? styles.user : styles.assistant}>
-              {m.content || <span className={styles.typing}>печатает…</span>}
-            </div>
+            <div key={i} className={m.role === 'user' ? styles.user : styles.assistant}>{m.content}</div>
           ))}
+          {busy && <div className={[styles.assistant, styles.typing].join(' ')}>…</div>}
         </div>
-
-        <div className={styles.composer} ref={composerRef}>
+        <div className={styles.composer}>
           <div className={styles.inputArea}>
             <Textarea
               ref={taRef}
@@ -2340,10 +2332,10 @@ export default function Chat() {
           <div className={styles.controls}>
             <div />
             <div className={styles.actionsBottom}>
-              <Button onClick={onSend} disabled={busy || !text.trim()}>Send</Button>
+              <Button onClick={onSend} disabled={busy || !text.trim()}>Отправить</Button>
               <label className={styles.ragToggle} title="Использовать базу знаний (RAG) при ответе">
                 <input type="checkbox" checked={useRag} onChange={e=>setUseRag(e.target.checked)} />
-                Use RAG
+                RAG из БЗ
               </label>
             </div>
           </div>
@@ -2354,9 +2346,31 @@ export default function Chat() {
 }
 
 ### src/app/routes/gpt/ChatPage.module.css
-.shell { display: grid; grid-template-columns: 280px 1fr; gap: 12px; align-items: start; }
-.main { min-height: calc(100vh - 130px); display: grid; }
-@media (max-width: 980px) { .shell { grid-template-columns: 1fr; } }
+.shell { 
+  display: grid; 
+  grid-template-columns: 280px 1fr; 
+  gap: 12px; 
+  /* stretch both columns to the same height */
+  align-items: stretch; 
+  /* occupy all available vertical space inside <main> */
+  height: 100%;
+  min-height: 100%;
+}
+/* main work area fills the grid track; inner components handle their own scroll */
+.main { 
+  height: 100%; 
+  display: grid; 
+  min-width: 0; /* allow content to shrink within the grid track */
+}
+
+@media (max-width: 980px) { 
+  .shell { 
+    grid-template-columns: 1fr; 
+    height: auto;       /* allow natural height in single-column layout */
+    min-height: 0;
+  } 
+}
+
 ### src/app/routes/gpt/ChatPage.tsx
 import React from 'react'
 import styles from './ChatPage.module.css'
@@ -2375,18 +2389,18 @@ export default function ChatPage() {
 }
 
 ### src/app/routes/gpt/ChatSidebar.module.css
-/* Sidebar without hardcoded viewport math: just fill the grid row and scroll inside */
-.sidebar { 
-  width: 260px; 
-  background: var(--panel); 
-  border: 1px solid rgba(255,255,255, .08); 
-  border-radius: var(--radius); 
-  padding: 12px; 
-  height: 100%;          /* << replaces calc(100vh - 130px) */
-  overflow: auto;        /* internal scroll */
+/* Sidebar fills the grid track and scrolls internally */
+.sidebar {
+  /* keep within the 280px grid track (padding/border won't overflow) */
+  box-sizing: border-box;
+  min-width: 0;
+  background: var(--panel);
+  border: 1px solid rgba(255,255,255, .08);
+  border-radius: var(--radius);
+  padding: 12px;
+  overflow: auto;
 }
 
-/* Other existing rules kept as-is from your version */
 .head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
 .title { font-weight: 600; }
 .list { display: grid; gap: 4px; }
@@ -2519,7 +2533,6 @@ export default function Doc() {
 .shell { 
   display: grid; 
   grid-template-rows: auto 1fr auto; 
-  /* use dvh for mobile address bar; fall back to 100vh */
   min-height: 100dvh; 
   min-height: 100vh;
 }
@@ -2552,10 +2565,11 @@ export default function Doc() {
 .user { color: var(--muted); white-space: nowrap; }
 .mocks { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: rgba(79,124,255,.18); border: 1px solid rgba(79,124,255,.45); }
 
-/* Hide overflow at layout-level so inner columns can scroll independently */
+/* Keep layout-level overflow hidden so inner columns can scroll independently */
 .main { padding: 12px 16px; overflow: hidden; }
 
-.footer { height: 44px; border-top: 1px solid rgba(255,255,255,.08); display: grid; place-items: center; color: var(--muted); font-size: 12px; }
+/* Hide footer for now */
+.footer { display: none; }
 
 ### src/app/routes/gpt/GPTLayout.tsx
 import React from 'react'
@@ -2572,13 +2586,19 @@ export default function GPTLayout() {
   const { logout, user } = useAuth()
   const isAdmin = (user?.role || '').toLowerCase() === 'admin'
 
+  // Logo is served from /public/logo.png to avoid bundler import issues.
+  const logoSrc = '/logo.png'
+
   return (
     <div className={styles.shell}>
       <header className={styles.header}>
         {/* Left: logo + brand */}
         <div className={styles.brand}>
-          {/* Положи файл в frontend/public/logo.svg */}
-          <img src="/logo.png" alt="Почемучка logo" onError={(e)=>{ (e.target as HTMLImageElement).style.display='none' }} />
+          <img
+            src={logoSrc}
+            alt="Почемучка logo"
+            onError={(e)=>{ const el=e.currentTarget as HTMLImageElement; el.style.display='none' }}
+          />
           <div className={styles.brandName}>Почемучка</div>
         </div>
 
@@ -2586,10 +2606,10 @@ export default function GPTLayout() {
         <nav className={styles.nav}>
           <div className={styles.segWrap}>
             <div className={styles.seg}>
-              <NavLink to="/gpt/chat" className={({isActive}) => [styles.segBtn, isActive ? styles.active : ''].join(' ')}>Chat</NavLink>
-              <NavLink to="/gpt/analyze" className={({isActive}) => [styles.segBtn, isActive ? styles.active : ''].join(' ')}>Analyze</NavLink>
+              <NavLink to="/gpt/chat" className={({isActive}) => [styles.segBtn, isActive ? styles.active : ''].join(' ')}>Чат</NavLink>
+              <NavLink to="/gpt/analyze" className={({isActive}) => [styles.segBtn, isActive ? styles.active : ''].join(' ')}>Аналитика</NavLink>
               {isAdmin && (
-                <NavLink to="/gpt/rag" className={({isActive}) => [styles.segBtn, isActive ? styles.active : ''].join(' ')}>RAG</NavLink>
+                <NavLink to="/gpt/rag" className={({isActive}) => [styles.segBtn, isActive ? styles.active : ''].join(' ')}>База знаний</NavLink>
               )}
             </div>
           </div>
@@ -2600,7 +2620,7 @@ export default function GPTLayout() {
           {USE_MOCKS && <span className={styles.mocks}>Mocks ON</span>}
           <span className={styles.user}>{user?.role || ''}</span>
           <ThemeSwitch />
-          <Button variant="ghost" onClick={async () => { await logout(); nav('/login') }}>Logout</Button>
+          <Button variant="ghost" onClick={async () => { await logout(); nav('/login') }}>Выйти</Button>
         </div>
       </header>
 
@@ -2683,8 +2703,8 @@ export default function RagPage() {
       if (q.trim() && !text.includes(q.toLowerCase())) return false
       if (filters.name && !d.name.toLowerCase().includes(filters.name.toLowerCase())) return false
       if (filters.status && d.status !== filters.status) return false
-      if (filters.tags && !(d.tags || []).join(',').toLowerCase().includes(filters.tags.toLowerCase())) return false
-      if (filters.created_at && !(d.created_at || '').toLowerCase().includes(filters.created_at.toLowerCase())) return false
+      if (filters.tags && !(d.tags || []).join(',').toLowerCase().includes((filters.tags||'').toLowerCase())) return false
+      if (filters.created_at && !(d.created_at || '').toLowerCase().includes((filters.created_at||'').toLowerCase())) return false
       return true
     })
   }, [items, q, filters])
@@ -2714,9 +2734,9 @@ export default function RagPage() {
         <div className={styles.header}>
           <div className={styles.title}>База знаний — документы</div>
           <div className={styles.controls}>
-            {hasAnyFilter && <Button size="sm" variant="ghost" onClick={clearAll}>Reset filters</Button>}
-            <Input className={styles.search} placeholder="🔎 Search…" value={q} onChange={e=>setQ(e.target.value)} />
-            <Button onClick={()=>setOpenAdd(true)}>Add</Button>
+            <Input className={styles.search} placeholder="Поиск…" value={q} onChange={e=>setQ(e.target.value)} />
+            {hasAnyFilter && <Badge onClick={clearAll}>Сбросить фильтры</Badge>}
+            <Button onClick={()=>setOpenAdd(true)}>Добавить</Button>
           </div>
         </div>
 
@@ -2724,10 +2744,10 @@ export default function RagPage() {
           <table className="table">
             <thead>
               <tr>
-                <th><span className="clickable" onClick={(e)=>openFilter('name', e.currentTarget as any)}>Name <FilterIcon active={!!filters.name} /></span></th>
-                <th><span className="clickable" onClick={(e)=>openFilter('status', e.currentTarget as any)}>Status <FilterIcon active={!!filters.status} /></span></th>
-                <th><span className="clickable" onClick={(e)=>openFilter('tags', e.currentTarget as any)}>Tags <FilterIcon active={!!filters.tags} /></span></th>
-                <th><span className="clickable" onClick={(e)=>openFilter('created_at', e.currentTarget as any)}>Created <FilterIcon active={!!filters.created_at} /></span></th>
+                <th>Документ <button className="icon" onClick={(e)=>openFilter('name', e.currentTarget)}><FilterIcon/></button></th>
+                <th>Статус <button className="icon" onClick={(e)=>openFilter('status', e.currentTarget)}><FilterIcon/></button></th>
+                <th>Теги <button className="icon" onClick={(e)=>openFilter('tags', e.currentTarget)}><FilterIcon/></button></th>
+                <th>Создано <button className="icon" onClick={(e)=>openFilter('created_at', e.currentTarget)}><FilterIcon/></button></th>
               </tr>
             </thead>
             <tbody>
@@ -2735,7 +2755,7 @@ export default function RagPage() {
                 <tr key={doc.id}>
                   <td>{doc.name}</td>
                   <td><Badge tone={doc.status==='ready'?'success':doc.status==='processing'?'warn':doc.status==='error'?'danger':'neutral'}>{doc.status}</Badge></td>
-                  <td>{(doc.tags || []).join(', ')}</td>
+                  <td>{(doc.tags || []).join(', ') || '—'}</td>
                   <td className="muted">{doc.created_at || '—'}</td>
                 </tr>
               ))}
@@ -2745,39 +2765,45 @@ export default function RagPage() {
         </div>
       </Card>
 
-      <Modal open={openAdd} onClose={()=>{setOpenAdd(false); setFile(null)}} title="Upload document" size="half"
+      <Modal open={openAdd} onClose={()=>{setOpenAdd(false); setFile(null)}} title="Новый документ" size="half"
         footer={<>
-          <Button variant="ghost" onClick={()=>{setOpenAdd(false); setFile(null)}}>Cancel</Button>
-          <Button onClick={doUpload} disabled={!file || busy}>Upload</Button>
+          <Button variant="ghost" onClick={()=>{setOpenAdd(false); setFile(null)}}>Отмена</Button>
+          <Button onClick={doUpload} disabled={!file || busy}>Загрузить</Button>
         </>}>
         <div className="stack">
+          {/* В компоненте FilePicker в проекте используется проп onFileSelected */}
           <FilePicker onFileSelected={setFile} />
-          <div className="muted">{file ? `Selected: ${file.name}` : 'Choose a file to upload'}</div>
+          <div className="muted">{file ? `Выбрано: ${file.name}` : 'Выберите файл для загрузки'}</div>
         </div>
       </Modal>
 
-      <Popover open={pop.open} anchor={pop.anchor || null} onClose={()=>setPop({open:false})} title="Filter">
+      <Popover open={pop.open} anchor={pop.anchor || null} onClose={()=>setPop({open:false})} title="Фильтр">
         {pop.col === 'name' && (
-          <Input autoFocus placeholder="contains…" value={filters.name||''} onChange={e=>setFilters(f=>({...f, name: e.target.value||undefined}))} />
+          <Input autoFocus placeholder="содержит…" value={filters.name||''} onChange={e=>setFilters(f=>({ ...f, name: e.target.value||undefined }))} />
         )}
         {pop.col === 'status' && (
-          <Select value={filters.status||''} onChange={e=>setFilters(f=>({...f, status: (e.target as HTMLSelectElement).value || undefined}))}>
-            <option value="">all</option>
-            <option value="ready">ready</option>
-            <option value="processing">processing</option>
+          <Select value={filters.status||''} onChange={e=>setFilters(f=>({ ...f, status: (e.target as HTMLSelectElement).value || undefined }))}>
+            <option value="">любой</option>
             <option value="uploaded">uploaded</option>
+            <option value="normalizing">normalizing</option>
+            <option value="chunking">chunking</option>
+            <option value="embedding">embedding</option>
+            <option value="indexing">indexing</option>
+            <option value="ready">ready</option>
+            <option value="archived">archived</option>
+            <option value="deleting">deleting</option>
             <option value="error">error</option>
           </Select>
         )}
         {pop.col === 'tags' && (
-          <Input placeholder="contains…" value={filters.tags||''} onChange={e=>setFilters(f=>({...f, tags: e.target.value||undefined}))} />
+          <Input placeholder="содержит…" value={filters.tags||''} onChange={e=>setFilters(f=>({ ...f, tags: e.target.value||undefined }))} />
         )}
         {pop.col === 'created_at' && (
-          <Input placeholder="YYYY-MM…" value={filters.created_at||''} onChange={e=>setFilters(f=>({...f, created_at: e.target.value||undefined}))} />
+          <Input placeholder="YYYY-MM…" value={filters.created_at||''} onChange={e=>setFilters(f=>({ ...f, created_at: e.target.value||undefined }))} />
         )}
         <div style={{display:'flex', justifyContent:'end', gap:8, marginTop:8}}>
-          <Button size="sm" variant="ghost" onClick={()=>{ if(pop.col) setFilters(f=>({...f, [pop.col!]: undefined})); }}>Clear</Button>
-          <Button size="sm" onClick={()=>setPop({open:false})}>Apply</Button>
+          <Button size="sm" variant="ghost" onClick={()=>{ if(pop.col) setFilters(f=>({ ...f, [pop.col!]: undefined })); }}>Очистить</Button>
+          <Button size="sm" onClick={()=>setPop({open:false})}>Применить</Button>
         </div>
       </Popover>
     </div>
@@ -3744,7 +3770,7 @@ export default function ThemeSwitch() {
 
   /* Panels */
   --panel: #11172a;
-  --panel-alt: #0e1424; /* darker shade for main work area */
+  --panel-alt: #0e1424;
   --chat-panel-bg: var(--panel-alt);
   --chat-panel-border: rgba(255,255,255,.08);
 
@@ -3752,6 +3778,9 @@ export default function ThemeSwitch() {
   --radius: 14px;
   --shadow: 0 8px 24px rgba(0,0,0,.25);
 }
+
+/* Predictable sizing */
+*, *::before, *::after { box-sizing: border-box; }
 
 [data-theme="light"] {
   --bg: #ffffff;
@@ -3778,17 +3807,72 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
-a { color: inherit; }
-
-/* Utilities */
+a { color: inherit; text-decoration: none; }
 .table { width: 100%; border-collapse: collapse; }
 .table th, .table td { padding: 10px 12px; border-bottom: 1px solid rgba(255,255,255,.08); }
 .table th { text-align: left; color: var(--muted); font-weight: 600; }
 .table tr:hover td { background: rgba(255,255,255,.03); }
+
 .controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .muted { color: var(--muted); }
 .w-100 { width: 100%; }
 .stack { display: grid; gap: 8px; }
+
+/* === Pretty filter buttons (shared for RAG/Analyze) === */
+.table th .icon,
+.table th button.icon {
+  appearance: none;
+  -webkit-appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin-left: 6px;
+  padding: 0;
+  line-height: 1;
+  border-radius: 8px;
+  border: 1px solid var(--filter-border, rgba(255,255,255,.08));
+  background: var(--filter-bg, rgba(255,255,255,.04));
+  color: var(--muted);
+  cursor: pointer;
+  transition: background .15s ease, border-color .15s ease, color .15s ease, transform .03s ease;
+}
+.table th button.icon svg { width: 14px; height: 14px; pointer-events: none; }
+.table th button.icon:hover {
+  background: rgba(79,124,255,.12);
+  border-color: rgba(79,124,255,.35);
+  color: var(--text);
+}
+.table th button.icon:active { transform: translateY(1px); }
+.table th button.icon:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+/* Light theme adjustments */
+[data-theme="light"] .table th button.icon {
+  border-color: rgba(0,0,0,.08);
+  background: rgba(0,0,0,.04);
+}
+[data-theme="light"] .table th button.icon:hover {
+  background: rgba(79,124,255,.14);
+  border-color: rgba(79,124,255,.40);
+}
+
+### src/theme.css.append.css
+/* === Global tiny icon button used in table headers (filter buttons) === */
+.icon {
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  padding: 4px;
+  border-radius: 8px;
+  cursor: pointer;
+  vertical-align: middle;
+}
+.icon:hover { background: rgba(255,255,255,.06); color: var(--text); }
+.icon:active { transform: translateY(1px); }
 
 ### tsconfig.json
 {
@@ -3843,18 +3927,11 @@ a { color: inherit; }
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tsconfigPaths from 'vite-tsconfig-paths'
-import path from 'node:path'
 
-// Aliases unified across Vite and TS: @app -> src/app, @shared -> src/shared
+// https://vitejs.dev/config/
 export default defineConfig({
   plugins: [react(), tsconfigPaths()],
-  resolve: {
-    alias: {
-      '@app': path.resolve(__dirname, 'src/app'),
-      '@shared': path.resolve(__dirname, 'src/shared'),
-    }
-  },
-  server: { port: 5173, strictPort: true },
-  preview: { port: 4173, strictPort: true }
+  server: { port: 5173 },
+  preview: { port: 5173 }
 })
 

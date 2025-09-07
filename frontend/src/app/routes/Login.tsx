@@ -19,20 +19,20 @@ export default function Login() {
       await login(form.login, form.password)
       nav('/gpt/chat')
     } catch (e: any) {
-      setError(e.message || 'Login failed')
+      setError(e.message || 'Ошибка входа')
     }
   }
   return (
     <div className={styles.wrap}>
       <Card className={styles.card}>
-        <h1>Sign in</h1>
+        <h1>Войти</h1>
         <form className="stack" onSubmit={onSubmit}>
-          <label>Login</label>
-          <Input placeholder="user" value={form.login} onChange={e=>setForm(f=>({...f, login:e.target.value}))} />
-          <label>Password</label>
-          <Input type="password" placeholder="••••••••" value={form.password} onChange={e=>setForm(f=>({...f, password:e.target.value}))} />
+          <label>Логин</label>
+          <Input placeholder="user" value={form.login} onChange={e=>setForm(f=>({ ...f, login:e.target.value }))} />
+          <label>Пароль</label>
+          <Input type="password" placeholder="••••••••" value={form.password} onChange={e=>setForm(f=>({ ...f, password:e.target.value }))} />
           {error && <div className={styles.error}>{error}</div>}
-          <Button type="submit" disabled={loading}>{loading ? '...' : 'Sign in'}</Button>
+          <Button type="submit" disabled={loading}>{loading ? '…' : 'Войти'}</Button>
         </form>
       </Card>
     </div>

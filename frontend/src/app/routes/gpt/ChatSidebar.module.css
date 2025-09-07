@@ -1,11 +1,13 @@
 /* Sidebar fills the grid track and scrolls internally */
-.sidebar { 
-  width: 260px; 
-  background: var(--panel); 
-  border: 1px solid rgba(255,255,255, .08); 
-  border-radius: var(--radius); 
+.sidebar {
+  /* keep within the 280px grid track (padding/border won't overflow) */
+  box-sizing: border-box;
+  min-width: 0;
+  background: var(--panel);
+  border: 1px solid rgba(255,255,255, .08);
+  border-radius: var(--radius);
   padding: 12px;
-  overflow: auto;        
+  overflow: auto;
 }
 
 .head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }

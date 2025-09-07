@@ -12,6 +12,7 @@
 .main { 
   height: 100%; 
   display: grid; 
+  min-width: 0; /* allow content to shrink within the grid track */
 }
 
 @media (max-width: 980px) { 

@@ -42,8 +42,8 @@ export default function RagPage() {
       if (q.trim() && !text.includes(q.toLowerCase())) return false
       if (filters.name && !d.name.toLowerCase().includes(filters.name.toLowerCase())) return false
       if (filters.status && d.status !== filters.status) return false
-      if (filters.tags && !(d.tags || []).join(',').toLowerCase().includes(filters.tags.toLowerCase())) return false
-      if (filters.created_at && !(d.created_at || '').toLowerCase().includes(filters.created_at.toLowerCase())) return false
+      if (filters.tags && !(d.tags || []).join(',').toLowerCase().includes((filters.tags||'').toLowerCase())) return false
+      if (filters.created_at && !(d.created_at || '').toLowerCase().includes((filters.created_at||'').toLowerCase())) return false
       return true
     })
   }, [items, q, filters])
@@ -73,9 +73,9 @@ export default function RagPage() {
         <div className={styles.header}>
           <div className={styles.title}>База знаний — документы</div>
           <div className={styles.controls}>
-            {hasAnyFilter && <Button size="sm" variant="ghost" onClick={clearAll}>Reset filters</Button>}
-            <Input className={styles.search} placeholder="🔎 Search…" value={q} onChange={e=>setQ(e.target.value)} />
-            <Button onClick={()=>setOpenAdd(true)}>Add</Button>
+            <Input className={styles.search} placeholder="Поиск…" value={q} onChange={e=>setQ(e.target.value)} />
+            {hasAnyFilter && <Badge onClick={clearAll}>Сбросить фильтры</Badge>}
+            <Button onClick={()=>setOpenAdd(true)}>Добавить</Button>
           </div>
         </div>
 
@@ -83,10 +83,10 @@ export default function RagPage() {
           <table className="table">
             <thead>
               <tr>
-                <th><span className="clickable" onClick={(e)=>openFilter('name', e.currentTarget as any)}>Name <FilterIcon active={!!filters.name} /></span></th>
-                <th><span className="clickable" onClick={(e)=>openFilter('status', e.currentTarget as any)}>Status <FilterIcon active={!!filters.status} /></span></th>
-                <th><span className="clickable" onClick={(e)=>openFilter('tags', e.currentTarget as any)}>Tags <FilterIcon active={!!filters.tags} /></span></th>
-                <th><span className="clickable" onClick={(e)=>openFilter('created_at', e.currentTarget as any)}>Created <FilterIcon active={!!filters.created_at} /></span></th>
+                <th>Документ <button className="icon" onClick={(e)=>openFilter('name', e.currentTarget)}><FilterIcon/></button></th>
+                <th>Статус <button className="icon" onClick={(e)=>openFilter('status', e.currentTarget)}><FilterIcon/></button></th>
+                <th>Теги <button className="icon" onClick={(e)=>openFilter('tags', e.currentTarget)}><FilterIcon/></button></th>
+                <th>Создано <button className="icon" onClick={(e)=>openFilter('created_at', e.currentTarget)}><FilterIcon/></button></th>
               </tr>
             </thead>
             <tbody>
@@ -94,7 +94,7 @@ export default function RagPage() {
                 <tr key={doc.id}>
                   <td>{doc.name}</td>
                   <td><Badge tone={doc.status==='ready'?'success':doc.status==='processing'?'warn':doc.status==='error'?'danger':'neutral'}>{doc.status}</Badge></td>
-                  <td>{(doc.tags || []).join(', ')}</td>
+                  <td>{(doc.tags || []).join(', ') || '—'}</td>
                   <td className="muted">{doc.created_at || '—'}</td>
                 </tr>
               ))}
@@ -104,39 +104,45 @@ export default function RagPage() {
         </div>
       </Card>
 
-      <Modal open={openAdd} onClose={()=>{setOpenAdd(false); setFile(null)}} title="Upload document" size="half"
+      <Modal open={openAdd} onClose={()=>{setOpenAdd(false); setFile(null)}} title="Новый документ" size="half"
         footer={<>
-          <Button variant="ghost" onClick={()=>{setOpenAdd(false); setFile(null)}}>Cancel</Button>
-          <Button onClick={doUpload} disabled={!file || busy}>Upload</Button>
+          <Button variant="ghost" onClick={()=>{setOpenAdd(false); setFile(null)}}>Отмена</Button>
+          <Button onClick={doUpload} disabled={!file || busy}>Загрузить</Button>
         </>}>
         <div className="stack">
+          {/* В компоненте FilePicker в проекте используется проп onFileSelected */}
           <FilePicker onFileSelected={setFile} />
-          <div className="muted">{file ? `Selected: ${file.name}` : 'Choose a file to upload'}</div>
+          <div className="muted">{file ? `Выбрано: ${file.name}` : 'Выберите файл для загрузки'}</div>
         </div>
       </Modal>
 
-      <Popover open={pop.open} anchor={pop.anchor || null} onClose={()=>setPop({open:false})} title="Filter">
+      <Popover open={pop.open} anchor={pop.anchor || null} onClose={()=>setPop({open:false})} title="Фильтр">
         {pop.col === 'name' && (
-          <Input autoFocus placeholder="contains…" value={filters.name||''} onChange={e=>setFilters(f=>({...f, name: e.target.value||undefined}))} />
+          <Input autoFocus placeholder="содержит…" value={filters.name||''} onChange={e=>setFilters(f=>({ ...f, name: e.target.value||undefined }))} />
         )}
         {pop.col === 'status' && (
-          <Select value={filters.status||''} onChange={e=>setFilters(f=>({...f, status: (e.target as HTMLSelectElement).value || undefined}))}>
-            <option value="">all</option>
-            <option value="ready">ready</option>
-            <option value="processing">processing</option>
+          <Select value={filters.status||''} onChange={e=>setFilters(f=>({ ...f, status: (e.target as HTMLSelectElement).value || undefined }))}>
+            <option value="">любой</option>
             <option value="uploaded">uploaded</option>
+            <option value="normalizing">normalizing</option>
+            <option value="chunking">chunking</option>
+            <option value="embedding">embedding</option>
+            <option value="indexing">indexing</option>
+            <option value="ready">ready</option>
+            <option value="archived">archived</option>
+            <option value="deleting">deleting</option>
             <option value="error">error</option>
           </Select>
         )}
         {pop.col === 'tags' && (
-          <Input placeholder="contains…" value={filters.tags||''} onChange={e=>setFilters(f=>({...f, tags: e.target.value||undefined}))} />
+          <Input placeholder="содержит…" value={filters.tags||''} onChange={e=>setFilters(f=>({ ...f, tags: e.target.value||undefined }))} />
         )}
         {pop.col === 'created_at' && (
-          <Input placeholder="YYYY-MM…" value={filters.created_at||''} onChange={e=>setFilters(f=>({...f, created_at: e.target.value||undefined}))} />
+          <Input placeholder="YYYY-MM…" value={filters.created_at||''} onChange={e=>setFilters(f=>({ ...f, created_at: e.target.value||undefined }))} />
         )}
         <div style={{display:'flex', justifyContent:'end', gap:8, marginTop:8}}>
-          <Button size="sm" variant="ghost" onClick={()=>{ if(pop.col) setFilters(f=>({...f, [pop.col!]: undefined})); }}>Clear</Button>
-          <Button size="sm" onClick={()=>setPop({open:false})}>Apply</Button>
+          <Button size="sm" variant="ghost" onClick={()=>{ if(pop.col) setFilters(f=>({ ...f, [pop.col!]: undefined })); }}>Очистить</Button>
+          <Button size="sm" onClick={()=>setPop({open:false})}>Применить</Button>
         </div>
       </Popover>
     </div>

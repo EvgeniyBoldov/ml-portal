@@ -29,7 +29,21 @@ export default function AnalyzePage() {
     const res = await analyze.listAnalyze()
     setItems(res.items || [])
   }
-  useEffect(() => { refresh(); const t=setInterval(refresh,1500); return ()=>clearInterval(t) }, [])
+
+  // Мягкий пуллинг (экспоненциальный backoff)
+  useEffect(() => {
+    let cancelled = false
+    let delay = 1500
+    const tick = async () => {
+      while (!cancelled) {
+        try { await refresh() } catch {}
+        await new Promise(r => setTimeout(r, delay))
+        delay = Math.min(delay * 2, 10000)
+      }
+    }
+    tick()
+    return () => { cancelled = true }
+  }, [])
 
   const rows = useMemo(() => {
     return (items||[]).filter(t => {
@@ -68,9 +82,9 @@ export default function AnalyzePage() {
         <div className={styles.header}>
           <div className={styles.title}>Анализ документов — задачи</div>
           <div className={styles.controls}>
-            {hasAnyFilter && <Button size="sm" variant="ghost" onClick={clearAll}>Reset filters</Button>}
-            <Input className={styles.search} placeholder="🔎 Search…" value={q} onChange={e=>setQ(e.target.value)} />
-            <Button onClick={()=>setOpenAdd(true)}>Add</Button>
+            <Input className={styles.search} placeholder="Поиск…" value={q} onChange={e=>setQ(e.target.value)} />
+            {hasAnyFilter && <Badge onClick={clearAll}>Сбросить фильтры</Badge>}
+            <Button onClick={()=>setOpenAdd(true)}>Добавить</Button>
           </div>
         </div>
 
@@ -78,60 +92,58 @@ export default function AnalyzePage() {
           <table className="table">
             <thead>
               <tr>
-                <th><span className="clickable" onClick={(e)=>openFilter('source', e.currentTarget as any)}>Source <FilterIcon active={!!filters.source} /></span></th>
-                <th><span className="clickable" onClick={(e)=>openFilter('status', e.currentTarget as any)}>Status <FilterIcon active={!!filters.status} /></span></th>
-                <th><span className="clickable" onClick={(e)=>openFilter('result', e.currentTarget as any)}>Result <FilterIcon active={!!filters.result} /></span></th>
-                <th><span className="clickable" onClick={(e)=>openFilter('created_at', e.currentTarget as any)}>Created <FilterIcon active={!!filters.created_at} /></span></th>
+                <th>Источник <button className="icon" onClick={(e)=>openFilter('source', e.currentTarget)}><FilterIcon/></button></th>
+                <th>Статус <button className="icon" onClick={(e)=>openFilter('status', e.currentTarget)}><FilterIcon/></button></th>
+                <th>Результат <button className="icon" onClick={(e)=>openFilter('result', e.currentTarget)}><FilterIcon/></button></th>
+                <th>Создано <button className="icon" onClick={(e)=>openFilter('created_at', e.currentTarget)}><FilterIcon/></button></th>
               </tr>
             </thead>
             <tbody>
-              {rows.map(t => (
+              {rows.map((t) => (
                 <tr key={t.id}>
                   <td className="muted">{t.source || '—'}</td>
                   <td><Badge tone={t.status==='done'?'success':t.status==='error'?'danger':t.status==='processing'?'warn':'neutral'}>{t.status}</Badge></td>
-                  <td>{t.result ? <pre style={{whiteSpace:'pre-wrap', margin:0}}>{t.result}</pre> : <span className="muted">—</span>}</td>
+                  <td style={{maxWidth:480, whiteSpace:'nowrap', textOverflow:'ellipsis', overflow:'hidden'}}>{t.result || '—'}</td>
                   <td className="muted">{t.created_at || '—'}</td>
                 </tr>
               ))}
-              {rows.length===0 && <tr><td colSpan={4} className="muted">Задач пока нет</td></tr>}
+              {rows.length === 0 && <tr><td colSpan={4} className="muted">Нет записей</td></tr>}
             </tbody>
           </table>
         </div>
       </Card>
 
-      <Modal open={openAdd} onClose={()=>{setOpenAdd(false); setFile(null)}} title="Upload for analyze" size="half"
-        footer={<>
-          <Button variant="ghost" onClick={()=>{setOpenAdd(false); setFile(null)}}>Cancel</Button>
-          <Button onClick={doUpload} disabled={!file || busy}>Upload</Button>
-        </>}>
-        <div className="stack">
-          <FilePicker onFileSelected={setFile} />
-          <div className="muted">{file ? `Selected: ${file.name}` : 'Choose a file to upload'}</div>
-        </div>
+      <Modal open={openAdd} onClose={()=>setOpenAdd(false)} title="Новый анализ"
+        footer={<><Button variant="ghost" onClick={()=>setOpenAdd(false)}>Отмена</Button><Button onClick={doUpload} disabled={busy || !file}>Запустить</Button></>}>
+        <FilePicker onChange={f=>setFile(f)} />
       </Modal>
 
-      <Popover open={pop.open} anchor={pop.anchor || null} onClose={()=>setPop({open:false})} title="Filter">
-        {pop.col === 'source' && (
-          <Input autoFocus placeholder="contains…" value={filters.source||''} onChange={e=>setFilters(f=>({...f, source: e.target.value||undefined}))} />
-        )}
-        {pop.col === 'status' && (
-          <Select value={filters.status||''} onChange={e=>setFilters(f=>({...f, status: (e.target as HTMLSelectElement).value || undefined}))}>
-            <option value="">all</option>
-            <option value="queued">queued</option>
-            <option value="processing">processing</option>
-            <option value="done">done</option>
-            <option value="error">error</option>
-          </Select>
-        )}
-        {pop.col === 'result' && (
-          <Input placeholder="contains…" value={filters.result||''} onChange={e=>setFilters(f=>({...f, result: e.target.value||undefined}))} />
-        )}
-        {pop.col === 'created_at' && (
-          <Input placeholder="YYYY-MM…" value={filters.created_at||''} onChange={e=>setFilters(f=>({...f, created_at: e.target.value||undefined}))} />
-        )}
-        <div style={{display:'flex', justifyContent:'end', gap:8, marginTop:8}}>
-          <Button size="sm" variant="ghost" onClick={()=>{ if(pop.col) setFilters(f=>({...f, [pop.col!]: undefined})); }}>Clear</Button>
-          <Button size="sm" onClick={()=>setPop({open:false})}>Apply</Button>
+      <Popover open={pop.open} onClose={()=>setPop({open:false})} anchor={pop.anchor}>
+        <div className="stack" style={{minWidth: 260}}>
+          {pop.col === 'status' ? (
+            <Select value={filters.status || ''} onChange={v=>setFilters(f=>({ ...f, status: (v||'') || undefined }))} options={[
+              { value: '', label: 'Любой' },
+              { value: 'queued', label: 'queued' },
+              { value: 'processing', label: 'processing' },
+              { value: 'done', label: 'done' },
+              { value: 'error', label: 'error' },
+            ]} />
+          ) : (
+            <Input
+              autoFocus
+              placeholder="содержит…"
+              value={(filters[pop.col as ColKey] || '') as string}
+              onChange={e=>{
+                const val = e.target.value
+                const col = pop.col as ColKey
+                setFilters(f=>({ ...f, [col]: (val || '').trim() || undefined }))
+              }}
+            />
+          )}
+          <div style={{display:'flex', gap:8, justifyContent:'space-between'}}>
+            <Button size="sm" variant="ghost" onClick={()=>{ const col = pop.col as ColKey; setFilters(f=>({ ...f, [col]: undefined })); }}>Очистить</Button>
+            <Button size="sm" onClick={()=>setPop({open:false})}>Применить</Button>
+          </div>
         </div>
       </Popover>
     </div>

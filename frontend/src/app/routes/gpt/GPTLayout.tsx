@@ -12,13 +12,19 @@ export default function GPTLayout() {
   const { logout, user } = useAuth()
   const isAdmin = (user?.role || '').toLowerCase() === 'admin'
 
+  // Logo is served from /public/logo.png to avoid bundler import issues.
+  const logoSrc = '/logo.png'
+
   return (
     <div className={styles.shell}>
       <header className={styles.header}>
         {/* Left: logo + brand */}
         <div className={styles.brand}>
-          {/* Положи файл в frontend/public/logo.svg */}
-          <img src="/logo.png" alt="Почемучка logo" onError={(e)=>{ (e.target as HTMLImageElement).style.display='none' }} />
+          <img
+            src={logoSrc}
+            alt="Почемучка logo"
+            onError={(e)=>{ const el=e.currentTarget as HTMLImageElement; el.style.display='none' }}
+          />
           <div className={styles.brandName}>Почемучка</div>
         </div>
 
@@ -26,10 +32,10 @@ export default function GPTLayout() {
         <nav className={styles.nav}>
           <div className={styles.segWrap}>
             <div className={styles.seg}>
-              <NavLink to="/gpt/chat" className={({isActive}) => [styles.segBtn, isActive ? styles.active : ''].join(' ')}>Chat</NavLink>
-              <NavLink to="/gpt/analyze" className={({isActive}) => [styles.segBtn, isActive ? styles.active : ''].join(' ')}>Analyze</NavLink>
+              <NavLink to="/gpt/chat" className={({isActive}) => [styles.segBtn, isActive ? styles.active : ''].join(' ')}>Чат</NavLink>
+              <NavLink to="/gpt/analyze" className={({isActive}) => [styles.segBtn, isActive ? styles.active : ''].join(' ')}>Аналитика</NavLink>
               {isAdmin && (
-                <NavLink to="/gpt/rag" className={({isActive}) => [styles.segBtn, isActive ? styles.active : ''].join(' ')}>RAG</NavLink>
+                <NavLink to="/gpt/rag" className={({isActive}) => [styles.segBtn, isActive ? styles.active : ''].join(' ')}>База знаний</NavLink>
               )}
             </div>
           </div>
@@ -40,7 +46,7 @@ export default function GPTLayout() {
           {USE_MOCKS && <span className={styles.mocks}>Mocks ON</span>}
           <span className={styles.user}>{user?.role || ''}</span>
           <ThemeSwitch />
-          <Button variant="ghost" onClick={async () => { await logout(); nav('/login') }}>Logout</Button>
+          <Button variant="ghost" onClick={async () => { await logout(); nav('/login') }}>Выйти</Button>
         </div>
       </header>
 
