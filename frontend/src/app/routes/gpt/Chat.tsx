@@ -16,7 +16,7 @@ export default function Chat() {
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
   const [useRag, setUseRag] = useState(false)
-  const boxRef = useRef<HTMLDivElement>(null)
+  const messagesRef = useRef<HTMLDivElement>(null)
   const taRef = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => {
@@ -42,26 +42,56 @@ export default function Chat() {
   }, [currentId])
 
   useEffect(() => {
-    boxRef.current?.scrollTo({ top: boxRef.current.scrollHeight, behavior: 'smooth' })
-  }, [items.length])
+    // автопрокрутка вниз при новых сообщениях
+    messagesRef.current?.scrollTo({ top: messagesRef.current.scrollHeight, behavior: 'smooth' })
+  }, [items.length, busy])
 
   async function onSend() {
     const content = text.trim()
     if (!content || !currentId) return
     setBusy(true)
-    setItems(prev => [...prev, { role: 'user', content }])
+    // добавить сообщение юзера и плейсхолдер ассистента
+    setItems(prev => [...prev, { role: 'user', content }, { role: 'assistant', content: '' }])
     setText('')
     try {
-      const res = await chats.chat(currentId, { content, use_rag: useRag })
-      setItems(prev => [...prev, { role: 'assistant', content: res.answer || '' }])
-    } finally { setBusy(false) }
+      // Пытаемся стримить; если не поддерживается — используем обычный ответ
+      let streamed = false
+      try {
+        for await (const chunk of chats.sendMessageStream(currentId, { content, use_rag: useRag })) {
+          streamed = true
+          setItems(prev => {
+            const copy = prev.slice()
+            const last = copy[copy.length - 1]
+            if (last && last.role === 'assistant') last.content += String(chunk || '')
+            return copy
+          })
+        }
+      } catch {
+        // игнор, попробуем обычный endpoint
+      }
+      if (!streamed) {
+        const res = await chats.sendMessage(currentId, { content, use_rag: useRag })
+        const answer = (res && (res.answer || res.content || res.message || '')) as string
+        setItems(prev => {
+          const copy = prev.slice()
+          if (copy.length && copy[copy.length - 1].role === 'assistant') {
+            copy[copy.length - 1].content = answer
+          } else {
+            copy.push({ role: 'assistant', content: answer })
+          }
+          return copy
+        })
+      }
+    } finally {
+      setBusy(false)
+    }
     taRef.current?.focus()
   }
 
   return (
     <div className={styles.wrap}>
-      <Card className={styles.panel} ref={boxRef as any}>
-        <div className={styles.messages}>
+      <Card className={styles.panel}>
+        <div className={styles.messages} ref={messagesRef}>
           {items.length === 0 && <div className={styles.empty}>Пока нет сообщений</div>}
           {items.map((m, i) => (
             <div key={i} className={m.role === 'user' ? styles.user : styles.assistant}>{m.content}</div>
@@ -72,7 +102,7 @@ export default function Chat() {
           <div className={styles.inputArea}>
             <Textarea
               ref={taRef}
-              placeholder="Спросите что-нибудь… (Enter — новая строка)"
+              placeholder="Спросите что-нибудь… (Ctrl/⌘+Enter — отправить)"
               value={text}
               onChange={e=>setText(e.target.value)}
               onKeyDown={e=>{ if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') onSend() }}

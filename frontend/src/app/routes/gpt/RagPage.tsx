@@ -83,10 +83,10 @@ export default function RagPage() {
           <table className="table">
             <thead>
               <tr>
-                <th>Документ <button className="icon" onClick={(e)=>openFilter('name', e.currentTarget)}><FilterIcon/></button></th>
-                <th>Статус <button className="icon" onClick={(e)=>openFilter('status', e.currentTarget)}><FilterIcon/></button></th>
-                <th>Теги <button className="icon" onClick={(e)=>openFilter('tags', e.currentTarget)}><FilterIcon/></button></th>
-                <th>Создано <button className="icon" onClick={(e)=>openFilter('created_at', e.currentTarget)}><FilterIcon/></button></th>
+                <th>Документ <button className="icon" type="button" aria-label="Фильтр по документу" onClick={(e)=>openFilter('name', e.currentTarget)}><FilterIcon/></button></th>
+                <th>Статус <button className="icon" type="button" aria-label="Фильтр по статусу" onClick={(e)=>openFilter('status', e.currentTarget)}><FilterIcon/></button></th>
+                <th>Теги <button className="icon" type="button" aria-label="Фильтр по тегам" onClick={(e)=>openFilter('tags', e.currentTarget)}><FilterIcon/></button></th>
+                <th>Создано <button className="icon" type="button" aria-label="Фильтр по дате создания" onClick={(e)=>openFilter('created_at', e.currentTarget)}><FilterIcon/></button></th>
               </tr>
             </thead>
             <tbody>
@@ -110,13 +110,12 @@ export default function RagPage() {
           <Button onClick={doUpload} disabled={!file || busy}>Загрузить</Button>
         </>}>
         <div className="stack">
-          {/* В компоненте FilePicker в проекте используется проп onFileSelected */}
           <FilePicker onFileSelected={setFile} />
           <div className="muted">{file ? `Выбрано: ${file.name}` : 'Выберите файл для загрузки'}</div>
         </div>
       </Modal>
 
-      <Popover open={pop.open} anchor={pop.anchor || null} onClose={()=>setPop({open:false})} title="Фильтр">
+      <Popover open={pop.open} anchor={pop.anchor || null} onClose={()=>setPop({open:false})}>
         {pop.col === 'name' && (
           <Input autoFocus placeholder="содержит…" value={filters.name||''} onChange={e=>setFilters(f=>({ ...f, name: e.target.value||undefined }))} />
         )}

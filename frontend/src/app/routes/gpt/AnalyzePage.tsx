@@ -92,10 +92,10 @@ export default function AnalyzePage() {
           <table className="table">
             <thead>
               <tr>
-                <th>Источник <button className="icon" onClick={(e)=>openFilter('source', e.currentTarget)}><FilterIcon/></button></th>
-                <th>Статус <button className="icon" onClick={(e)=>openFilter('status', e.currentTarget)}><FilterIcon/></button></th>
-                <th>Результат <button className="icon" onClick={(e)=>openFilter('result', e.currentTarget)}><FilterIcon/></button></th>
-                <th>Создано <button className="icon" onClick={(e)=>openFilter('created_at', e.currentTarget)}><FilterIcon/></button></th>
+                <th>Источник <button className="icon" type="button" aria-label="Фильтр по источнику" onClick={(e)=>openFilter('source', e.currentTarget)}><FilterIcon/></button></th>
+                <th>Статус <button className="icon" type="button" aria-label="Фильтр по статусу" onClick={(e)=>openFilter('status', e.currentTarget)}><FilterIcon/></button></th>
+                <th>Результат <button className="icon" type="button" aria-label="Фильтр по результату" onClick={(e)=>openFilter('result', e.currentTarget)}><FilterIcon/></button></th>
+                <th>Создано <button className="icon" type="button" aria-label="Фильтр по дате создания" onClick={(e)=>openFilter('created_at', e.currentTarget)}><FilterIcon/></button></th>
               </tr>
             </thead>
             <tbody>
@@ -115,30 +115,28 @@ export default function AnalyzePage() {
 
       <Modal open={openAdd} onClose={()=>setOpenAdd(false)} title="Новый анализ"
         footer={<><Button variant="ghost" onClick={()=>setOpenAdd(false)}>Отмена</Button><Button onClick={doUpload} disabled={busy || !file}>Запустить</Button></>}>
-        <FilePicker onChange={f=>setFile(f)} />
+        <FilePicker onFileSelected={setFile} />
       </Modal>
 
-      <Popover open={pop.open} onClose={()=>setPop({open:false})} anchor={pop.anchor}>
+      <Popover open={pop.open} onClose={()=>setPop({open:false})} anchor={pop.anchor || null}>
         <div className="stack" style={{minWidth: 260}}>
           {pop.col === 'status' ? (
-            <Select value={filters.status || ''} onChange={v=>setFilters(f=>({ ...f, status: (v||'') || undefined }))} options={[
-              { value: '', label: 'Любой' },
-              { value: 'queued', label: 'queued' },
-              { value: 'processing', label: 'processing' },
-              { value: 'done', label: 'done' },
-              { value: 'error', label: 'error' },
-            ]} />
+            <Select
+              value={filters.status || ''}
+              onChange={e=>setFilters(f=>({ ...f, status: (e.target as HTMLSelectElement).value || undefined }))}
+            >
+              <option value="">Любой</option>
+              <option value="queued">queued</option>
+              <option value="processing">processing</option>
+              <option value="done">done</option>
+              <option value="error">error</option>
+            </Select>
           ) : (
-            <Input
-              autoFocus
-              placeholder="содержит…"
-              value={(filters[pop.col as ColKey] || '') as string}
-              onChange={e=>{
-                const val = e.target.value
-                const col = pop.col as ColKey
-                setFilters(f=>({ ...f, [col]: (val || '').trim() || undefined }))
-              }}
-            />
+            <Input placeholder="Фильтр…" value={(filters[pop.col as ColKey] || '') as string} onChange={e=>{
+              const val = e.target.value
+              const col = pop.col as ColKey
+              setFilters(f=>({ ...f, [col]: (val || '').trim() || undefined }))
+            }} />
           )}
           <div style={{display:'flex', gap:8, justifyContent:'space-between'}}>
             <Button size="sm" variant="ghost" onClick={()=>{ const col = pop.col as ColKey; setFilters(f=>({ ...f, [col]: undefined })); }}>Очистить</Button>
