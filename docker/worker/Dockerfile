@@ -1,18 +1,7 @@
 FROM python:3.11-slim
-
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
-
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
 WORKDIR /app
-
 RUN apt-get update && apt-get install -y --no-install-recommends build-essential && rm -rf /var/lib/apt/lists/*
-
-COPY backend/requirements/worker.txt /tmp/requirements.txt
-RUN pip install --upgrade pip && pip install -r /tmp/requirements.txt
-
-# copy FULL backend code into /app/
 COPY backend/ /app/
-
-# change celery app path from backend.app.celery_app:app -> app.celery_app:app
-CMD ["bash","-lc","celery -A app.celery_app:app worker -Q ${QUEUES:-normalize,chunk,embed,index,analyze,watch} -n worker@%h --loglevel=INFO"]
+RUN python -m pip install --upgrade pip &&     if [ -f requirements.txt ]; then         pip install -r requirements.txt;     elif [ -f pyproject.toml ]; then         pip install 'poetry>=1.7.1' && poetry config virtualenvs.create false && poetry install --no-root --no-interaction;     else         pip install 'celery>=5.3' 'redis>=5';     fi
+CMD python -c "import time; print('Worker stub started'); time.sleep(10**9)"

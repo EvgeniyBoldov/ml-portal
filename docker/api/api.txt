@@ -14,3 +14,4 @@ argon2-cffi==23.1.0
 qdrant-client==1.9.1
 minio==7.2.7
 python-multipart==0.0.9
+prometheus-client==0.16.0

@@ -3,9 +3,10 @@ import ReactDOM from 'react-dom/client'
 import AppRouter from './app/router'
 import './theme.css'
 
-const USE_MOCKS = import.meta.env.VITE_USE_MOCKS === 'true'
-if (USE_MOCKS) {
-  await import('./mocks/enableMocks')
+// Load mocks conditionally without top-level await (side-effect import)
+if ((import.meta as any).env?.VITE_USE_MOCKS === 'true') {
+  // fire-and-forget dynamic import; side effects in the module will patch fetch
+  import('./mocks/enableMocks')
 }
 
 ReactDOM.createRoot(document.getElementById('root')!).render(

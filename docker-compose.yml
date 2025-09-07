@@ -7,33 +7,25 @@ services:
       POSTGRES_USER: ${PGUSER:-postgres}
       POSTGRES_PASSWORD: ${PGPASSWORD:-postgres}
       POSTGRES_DB: ${PGDATABASE:-app}
-    volumes:
-      - pg_data:/var/lib/postgresql/data
     ports: ["5432:5432"]
 
   minio:
     image: minio/minio
     command: server /data --console-address ":9001"
     environment:
-      # both pairs for compatibility across MinIO versions
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minio}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minio123}
       MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minio}
       MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minio123}
-    volumes:
-      - minio_data:/data
     ports: ["9000:9000","9001:9001"]
 
   qdrant:
     image: qdrant/qdrant:latest
-    volumes:
-      - qdrant_data:/qdrant/storage
     ports: ["6333:6333"]
 
   redis:
     image: redis:7-alpine
     command: ["redis-server","--appendonly","yes"]
-    volumes: [ "redis_data:/data" ]
     ports: ["6379:6379"]
 
   rabbitmq:
@@ -47,23 +39,18 @@ services:
     environment:
       PORT: "8001"
       MODEL_ID: "BAAI/bge-m3"
-    volumes:
-      - ./models/emb:/models:ro
     ports: ["8001:8001"]
     depends_on: [redis]
 
   llm:
     build:
       context: .
-    # dockerfile remains the same path
       dockerfile: docker/llm/Dockerfile
     environment:
       PORT: "8002"
       LLM_N_THREADS: "8"
       LLM_N_CTX: "4096"
       LLM_N_BATCH: "256"
-    volumes:
-      - ./models/llm:/models:ro
     ports: ["8002:8002"]
 
   api:
@@ -76,15 +63,16 @@ services:
       REDIS_URL: "redis://redis:6379/0"
       QDRANT_URL: "http://qdrant:6333"
       S3_ENDPOINT: "http://minio:9000"
-      # public endpoint is what front-end will see in presigned URLs
       S3_PUBLIC_ENDPOINT: "https://10.4.4.2"
       S3_ACCESS_KEY: "${MINIO_ACCESS_KEY:-minio}"
       S3_SECRET_KEY: "${MINIO_SECRET_KEY:-minio123}"
       EMBEDDINGS_URL: "http://emb:8001"
       LLM_URL: "http://llm:8002"
       HEALTH_DEEP: "1"
+      # If your backend supports it, allow CORS for the frontend origin (below)
+      # CORS_ORIGINS: "http://localhost:8080"
     ports: ["8000:8000"]
-    depends_on: [postgres, minio, redis, rabbitmq, qdrant, emb, llm]
+    depends_on: [postgres, minio, redis, rabbitmq, qdrant, llm, emb]
 
   worker:
     build:
@@ -103,10 +91,30 @@ services:
       EMBEDDINGS_URL: "http://emb:8001"
       LLM_URL: "http://llm:8002"
       CELERY_CONCURRENCY: "2"
-    depends_on: [postgres, minio, rabbitmq, redis, qdrant, emb, llm]
+    depends_on: [postgres, minio, rabbitmq, redis, qdrant, llm, emb]
 
-volumes:
-  qdrant_data: {}
-  redis_data: {}
-  minio_data: {}
-  pg_data: {}
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend/Dockerfile
+      args:
+        VITE_API_URL: ${VITE_API_URL:-http://api:8000}
+    environment:
+      API_BASE: ${VITE_API_URL:-http://api:8000}
+    ports: ["8080:8080"]
+    depends_on: [api]
+
+  # One-shot job to seed users in DB (admin + user)
+  seed:
+    build:
+      context: .
+      dockerfile: docker/api/Dockerfile
+    command: python scripts/seed_users.py
+    environment:
+      DB_URL: "postgresql+psycopg://postgres:postgres@postgres:5432/app"
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@example.com}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin123}
+      USER_EMAIL: ${USER_EMAIL:-user@example.com}
+      USER_PASSWORD: ${USER_PASSWORD:-user123}
+    depends_on: [postgres]
+    restart: "no"

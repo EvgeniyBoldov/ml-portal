@@ -5,59 +5,16 @@ VITE_USE_MOCKS=true
 ### .env.example
 VITE_API_BASE=/api
 
-### README.md
-# Frontend (pure)
-
-Чистый фронт на React + Vite + TS. Без Docker и без обратного прокси в этой директории.
-
-## Быстрый старт (локально)
-```bash
-npm i
-cp .env.example .env
-# при необходимости поменяйте VITE_API_BASE (по умолчанию /api)
-npm run dev
-```
-
-## Структура
-- `src/theme.css` — глобальная тема (CSS-переменные).
-- `src/shared/ui/*` — переиспользуемые компоненты (CSS Modules).
-- `src/shared/api/*` — слой API (вынесен из компонентов).
-- `src/shared/lib/*` — утилиты (SSE, хранилище).
-- `src/app/routes/*` — страницы/лейауты (Login, GPTGate, GPTLayout, Chat).
-- `src/app/store/*` — zustand store (auth).
-
-## Примечания
-- Авторизация: login → me, хранение токенов в localStorage, авто-refresh.
-- Чат: создание чата, отправка сообщения со стримом (SSE/чанки).
-- Idempotency-Key: для POST сообщений (генерируется через crypto.randomUUID()).
-
-## Моки (без бэкенда)
-Включить моки: в `.env` установите `VITE_USE_MOCKS=true` (по умолчанию уже так в `.env.example`).  
-Моки реализованы внутри `src/mocks/mockFetch.ts` и перехватываются на уровне `apiFetch()`.
-Поддержано:
-- `POST /auth/login` (`admin` / `admin`), `GET /auth/me`, `POST /auth/refresh`, `POST /auth/logout`
-- `POST /chats` создание чата
-- `POST /chats/:id/messages` со стримингом **SSE** (моковый ответ печатается по символам)
-- `GET /chats/:id/messages`, `GET /chats`
-- `GET /rag`, `POST /rag/upload`, `POST /rag/search`
-
-Чтобы перейти на реальный бэкенд — поставьте `VITE_USE_MOCKS=false` и настройте `VITE_API_BASE`.
-
-
-⚙️ При запуске с `VITE_USE_MOCKS=true` глобально переопределяется `window.fetch` (см. `src/mocks/enableMocks.ts`), чтобы ни один запрос не улетел в реальный бэкенд.
-
-## Навигация по чатам
-В разделе **Chat** добавлена боковая панель со списком чатов и кнопкой **New**.
-- Маршруты: `/gpt/chat/:chatId`
-- Создание нового чата автоматически перенаправляет к нему.
-- Сообщения чата подгружаются при переключении.
-
 ### index.html
 <!doctype html>
-<html lang="en" data-theme="light">
+<html lang="ru">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="referrer" content="same-origin" />
+    <!-- CSP: включите в проде при необходимости.
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self' http://localhost:* https://*;">
+    -->
     <title>Почемучка</title>
   </head>
   <body>
@@ -2892,6 +2849,59 @@ export const useAuth = create<State & Actions>((set, get) => ({
   }
 }))
 
+### src/entities/auth/model/auth.store.ts
+import { create } from "zustand";
+import { persist } from "zustand/middleware";
+import { apiRequest, setAuthTokens, clearAuthTokens, refreshAccessToken } from "@/shared/api/http";
+import type { User, LoginResponse, AuthTokens } from "@/shared/api/types";
+
+type AuthState = {
+  user: User | null;
+  tokens: AuthTokens | null;
+  isAuthReady: boolean;
+  login: (login: string, password: string) => Promise<void>;
+  logout: () => Promise<void>;
+  hydrate: () => Promise<void>;
+};
+
+export const useAuthStore = create<AuthState>()(
+  persist(
+    (set, get) => ({
+      user: null,
+      tokens: null,
+      isAuthReady: false,
+      async login(login, password) {
+        const data = await apiRequest<LoginResponse>("/auth/login", { method: "POST", body: JSON.stringify({ login, password }) });
+        const tokens = { access_token: data.access_token, refresh_token: data.refresh_token, expires_in: data.expires_in };
+        setAuthTokens(tokens);
+        set({ tokens });
+        set({ user: data.user });
+      },
+      async logout() {
+        try { await apiRequest<void>("/auth/logout", { method: "POST" }); } catch {}
+        clearAuthTokens();
+        set({ tokens: null, user: null });
+      },
+      async hydrate() {
+        try {
+          const me = await apiRequest<User>("/auth/me", { method: "GET" });
+          set({ user: me, isAuthReady: true });
+        } catch {
+          try {
+            await refreshAccessToken();
+            const me = await apiRequest<User>("/auth/me", { method: "GET" });
+            set({ user: me, isAuthReady: true });
+          } catch {
+            clearAuthTokens();
+            set({ user: null, tokens: null, isAuthReady: true });
+          }
+        }
+      },
+    }),
+    { name: "auth-store", partialize: (s) => ({ tokens: s.tokens }) }
+  )
+);
+
 ### src/main.tsx
 import React from 'react'
 import ReactDOM from 'react-dom/client'
@@ -2938,6 +2948,14 @@ if (typeof window !== 'undefined') {
     return mockFetch(url, init as any)
   }
 }
+
+### src/mocks/index.ts
+// Auto-enable mocks when VITE_USE_MOCKS === 'true'
+// No top-level await to keep TS/Vite happy in all setups.
+if (import.meta.env.VITE_USE_MOCKS === 'true') {
+  import('./mockFetch');
+}
+export {};
 
 ### src/mocks/mockFetch.ts
 // Simple in-app fetch mock. Works when VITE_USE_MOCKS=true
@@ -3360,6 +3378,112 @@ export async function deleteChat(chat_id: string) {
   await apiFetch(`/chats/${chat_id}`, { method: 'DELETE' })
 }
 
+### src/shared/api/errors.ts
+export type ErrorEnvelope = {
+  error: { code: string; message: string; details?: unknown };
+  request_id?: string;
+};
+
+export class ApiError extends Error {
+  code: string;
+  requestId?: string;
+  details?: unknown;
+  constructor(message: string, code = "unknown_error", requestId?: string, details?: unknown) {
+    super(message);
+    this.name = "ApiError";
+    this.code = code;
+    this.requestId = requestId;
+    this.details = details;
+  }
+}
+
+export async function toApiError(resp: Response): Promise<ApiError> {
+  let msg = `${resp.status} ${resp.statusText}`;
+  let code = "http_error";
+  let requestId: string | undefined;
+  let details: unknown;
+  try {
+    const data = await resp.json();
+    if (data && typeof data === "object" && "error" in data) {
+      const err = (data as any).error;
+      msg = err?.message || msg;
+      code = err?.code || code;
+      requestId = (data as any).request_id;
+      details = err?.details;
+    }
+  } catch {}
+  return new ApiError(msg, code, requestId, details);
+}
+
+### src/shared/api/http.ts
+import { API_BASE } from "@/shared/config/env";
+import { ApiError, toApiError } from "@/shared/api/errors";
+import { idempotencyKey } from "@/shared/lib/idempotency";
+
+export type RequestOptions = RequestInit & { idempotent?: boolean };
+
+export type AuthTokens = { access_token: string; refresh_token?: string; expires_in?: number };
+let _tokens: AuthTokens | null = null;
+let _refreshPromise: Promise<void> | null = null;
+
+export function setAuthTokens(tokens: AuthTokens | null) { _tokens = tokens; }
+export function clearAuthTokens() { _tokens = null; }
+export function getAccessToken(): string | null { return _tokens?.access_token || null; }
+
+export async function apiRequest<T>(path: string, opts: RequestOptions = {}): Promise<T> {
+  const url = path.startsWith("http") ? path : API_BASE.replace(/\/$/, "") + path;
+  const headers = new Headers(opts.headers || {});
+  if (!headers.has("Content-Type") && !(opts.body instanceof FormData)) headers.set("Content-Type", "application/json");
+  if (!headers.has("Accept")) headers.set("Accept", "application/json");
+  if (_tokens?.access_token && !headers.has("Authorization")) headers.set("Authorization", `Bearer ${_tokens.access_token}`);
+  const method = (opts.method || "GET").toUpperCase();
+  if ((method !== "GET" && method !== "HEAD") || opts.idempotent) {
+    if (!headers.has("Idempotency-Key")) headers.set("Idempotency-Key", idempotencyKey());
+  }
+  const attempt = () => fetch(url, { ...opts, headers });
+  let resp = await attempt();
+  if (resp.status === 401 && _tokens?.refresh_token) {
+    try {
+      await refreshAccessToken();
+      const retryHeaders = new Headers(headers);
+      if (_tokens?.access_token) retryHeaders.set("Authorization", `Bearer ${_tokens.access_token}`);
+      resp = await fetch(url, { ...opts, headers: retryHeaders });
+    } catch {}
+  }
+  if (!resp.ok) throw await toApiError(resp);
+  if (resp.status === 204) return undefined as unknown as T;
+  const ct = resp.headers.get("Content-Type") || "";
+  if (ct.includes("application/json")) return await resp.json() as T;
+  return await resp.text() as unknown as T;
+}
+
+export async function refreshAccessToken(): Promise<void> {
+  if (_refreshPromise) return _refreshPromise;
+  if (!_tokens?.refresh_token) throw new ApiError("No refresh token", "no_refresh_token");
+  _refreshPromise = (async () => {
+    const url = API_BASE.replace(/\/$/, "") + "/auth/refresh";
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ refresh_token: _tokens!.refresh_token })
+    });
+    if (!resp.ok) {
+      _refreshPromise = null; _tokens = null; throw await toApiError(resp);
+    }
+    const data = await resp.json();
+    _tokens = {
+      access_token: data.access_token,
+      refresh_token: data.refresh_token ?? _tokens!.refresh_token,
+      expires_in: data.expires_in
+    };
+    _refreshPromise = null;
+  })();
+  return _refreshPromise;
+}
+
+### src/shared/api/index.ts
+export const API_BASE = (import.meta.env.VITE_API_BASE || '/api') as string
+
 ### src/shared/api/rag.ts
 import { apiFetch } from './base'
 
@@ -3385,6 +3509,154 @@ export async function uploadFile(file: File, name?: string, tags?: string[]) {
 export async function ragSearch(payload: { text?: string; top_k?: number; min_score?: number }) {
   const res = await apiFetch('/rag/search', { method: 'POST', body: JSON.stringify(payload) })
   return res.json() as Promise<{ items: Array<{ document_id: string; chunk_id: string; score: number; snippet: string }> }>
+}
+
+### src/shared/api/types.ts
+// === Auth ===
+export type LoginResponse = {
+  access_token: string;
+  refresh_token: string;
+  token_type?: string;
+  expires_in?: number;
+  user: {
+    id: string;
+    fio?: string;
+    login: string;
+    role?: string;
+  };
+};
+
+export type User = LoginResponse["user"];
+
+export type AuthTokens = {
+  access_token: string;
+  refresh_token?: string;
+  expires_in?: number;
+};
+
+// === Chats ===
+export type Chat = {
+  id: string;
+  name?: string;
+  owner_id?: string;
+  created_at: string;
+  updated_at?: string;
+  last_message_at?: string | null;
+};
+
+export type ChatMessage = {
+  role: "system" | "user" | "assistant" | "tool";
+  content: string;
+  created_at?: string | null;
+};
+
+export type ChatTurnRequest = {
+  response_stream?: boolean; // default true
+  use_rag?: boolean;         // default true
+  rag_params?: {
+    top_k?: number;
+    min_score?: number;
+  };
+  messages?: ChatMessage[];
+  temperature?: number;
+  max_tokens?: number;
+  idempotency_key?: string;
+};
+
+export type ChatTurnResponse = {
+  chat_id: string;
+  message_id: string;
+  created_at: string;
+  assistant_message: ChatMessage;
+};
+
+export type CursorPage<T> = {
+  items: T[];
+  next_cursor?: string | null;
+};
+
+// === RAG ===
+export type RagDocument = {
+  id: string;
+  name: string;
+  status: "pending" | "processing" | "ready" | "error";
+  tags?: string[];
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type RagUploadRequest = {
+  url?: string;
+  name?: string;
+  tags?: string[];
+};
+
+export type RagSearchItem = {
+  document_id: string;
+  chunk_id: string;
+  score: number;
+  snippet: string;
+};
+
+// === Analyze ===
+export type AnalyzeResult = {
+  id: string;
+  status: string;
+  progress?: number;
+  result?: {
+    summary?: string;
+    entities?: { type: string; text: string }[];
+    qa?: { q: string; a: string }[];
+    metrics?: { pages?: number; chunks?: number; model?: string };
+  };
+  artifacts?: { canonical?: string; preview_pdf?: string };
+};
+
+### src/shared/config/env.ts
+export const USE_MOCKS = (import.meta as any).env?.VITE_USE_MOCKS === "true";
+export const API_BASE: string = ((import.meta as any).env?.VITE_API_BASE as string) || "/api";
+
+### src/shared/lib/apiFetch.ts
+import { API_BASE } from '@shared/api'
+import { get, set, del } from './storage'
+import { idempotencyKey } from './idempotency'
+
+type Opts = RequestInit & { auth?: boolean, idempotent?: boolean }
+
+function token() { return get<string>('token') }
+function refreshToken() { return get<string>('refresh_token') }
+
+async function refresh() {
+  const res = await fetch(API_BASE + '/auth/refresh', { method:'POST', headers:{ 'Content-Type': 'application/json' }, body: JSON.stringify({ refresh_token: refreshToken() }) })
+  if (!res.ok) throw new Error('refresh failed')
+  const data = await res.json()
+  set('token', data.access_token); if (data.refresh_token) set('refresh_token', data.refresh_token)
+  return data.access_token
+}
+
+export async function apiFetch(path: string, opts: Opts = {}) {
+  const url = path.startsWith('http') ? path : API_BASE + path
+  const headers: Record<string,string> = { ...(opts.headers||{}) as any }
+  if (opts.auth !== false && token()) headers['Authorization'] = 'Bearer ' + token()
+  if (opts.idempotent) headers['Idempotency-Key'] = idempotencyKey()
+  const doFetch = () => fetch(url, { ...opts, headers })
+  let res = await doFetch()
+  if (res.status === 401 && token()) {
+    try { const t = await refresh(); headers['Authorization'] = 'Bearer ' + t; res = await doFetch() }
+    catch { del('token'); del('refresh_token'); throw new Error('Не авторизован') }
+  }
+  if (!res.ok) {
+    let msg = 'Request failed'
+    try { const j = await res.json(); msg = j.message || j.detail || JSON.stringify(j) } catch {}
+    throw new Error(msg)
+  }
+  return res
+}
+
+### src/shared/lib/idempotency.ts
+export function idempotencyKey(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) return (crypto as any).randomUUID();
+  return "idem_" + Math.random().toString(36).slice(2) + Date.now().toString(36);
 }
 
 ### src/shared/lib/sse.ts
@@ -3498,6 +3770,28 @@ import styles from './Card.module.css'
 
 export default function Card({ className='', ...rest }: React.HTMLAttributes<HTMLDivElement>) {
   return <div {...rest} className={[styles.card, className].join(' ')} />
+}
+
+### src/shared/ui/ErrorBoundary.tsx
+import React from 'react'
+
+type State = { hasError: boolean, error?: any }
+export default class ErrorBoundary extends React.Component<React.PropsWithChildren, State> {
+  state: State = { hasError: false }
+  static getDerivedStateFromError(error: any) { return { hasError: true, error } }
+  componentDidCatch(error: any, errorInfo: any) { console.error('UI error:', error, errorInfo) }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{padding:24}}>
+          <h2>Что-то пошло не так</h2>
+          <div style={{opacity:.7, fontSize:14}}>{String(this.state.error || '')}</div>
+          <button onClick={()=>this.setState({hasError:false, error: undefined})} style={{marginTop:12}}>Перезагрузить вид</button>
+        </div>
+      )
+    }
+    return this.props.children
+  }
 }
 
 ### src/shared/ui/FilePicker.module.css
@@ -3905,16 +4199,36 @@ a { color: inherit; text-decoration: none; }
 .icon:hover { background: rgba(255,255,255,.06); color: var(--text); }
 .icon:active { transform: translateY(1px); }
 
-### tsconfig.json
+### src/vite-env.d.ts
+/// <reference types="vite/client" />
+
+declare module '*.module.css' {
+  const classes: { readonly [key: string]: string }
+  export default classes
+}
+
+### tsconfig.base.json
 {
   "compilerOptions": {
     "target": "ES2020",
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "react-jsx",
+    "skipLibCheck": true,
+    "strict": false
+  }
+}
+
+### tsconfig.json
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "target": "ES2020",
     "useDefineForClassFields": true,
-    "lib": [
-      "ES2020",
-      "DOM",
-      "DOM.Iterable"
-    ],
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "skipLibCheck": true,
     "moduleResolution": "bundler",
@@ -3922,26 +4236,17 @@ a { color: inherit; text-decoration: none; }
     "isolatedModules": true,
     "noEmit": true,
     "jsx": "react-jsx",
-    "strict": true,
     "baseUrl": "./src",
     "paths": {
-      "@app/*": [
-        "app/*"
-      ],
-      "@shared/*": [
-        "shared/*"
-      ]
-    }
+      "@/*": ["*"],
+      "@shared/*": ["shared/*"],
+      "@app/*": ["app/*"]
+    },
+    "types": ["vite/client"]
   },
-  "include": [
-    "src"
-  ],
-  "references": [
-    {
-      "path": "./tsconfig.node.json"
-    }
-  ]
+  "include": ["src", "vite-env.d.ts"]
 }
+
 ### tsconfig.node.json
 {
   "compilerOptions": {
@@ -3958,11 +4263,40 @@ a { color: inherit; text-decoration: none; }
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tsconfigPaths from 'vite-tsconfig-paths'
+import path from 'node:path'
 
-// https://vitejs.dev/config/
 export default defineConfig({
   plugins: [react(), tsconfigPaths()],
-  server: { port: 5173 },
-  preview: { port: 5173 }
+  resolve: {
+    alias: {
+      '@': path.resolve(__dirname, 'src'),
+      '@shared': path.resolve(__dirname, 'src/shared'),
+      '@app': path.resolve(__dirname, 'src/app'),
+    },
+  },
+  server: {
+    port: 5173,
+    strictPort: false
+  },
+  preview: {
+    port: 4173,
+    strictPort: false
+  },
+  build: {
+    sourcemap: false
+  }
 })
+
+### vite.proxy.example.ts
+// Пример dev-прокси. Подключается вручную: импортируй объект в vite.config.ts
+// и передай как server.proxy. Например:
+// import proxy from './vite.proxy.example'
+// export default defineConfig({ server: { proxy } })
+export default {
+  '/api': {
+    target: 'http://localhost:8000',
+    changeOrigin: true,
+    secure: false
+  }
+}
 
