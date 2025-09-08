@@ -43,6 +43,66 @@ HEALTH_DEEP=false
 
 ### __init__.py
 
+### adapters/emb_proxy.py
+import os
+from typing import List, Union
+import httpx
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+
+REAL_URL = os.getenv("REAL_EMBEDDINGS_URL", "").rstrip("/")
+
+app = FastAPI(title="Embeddings Proxy")
+
+class EmbedRequest(BaseModel):
+    input: Union[str, List[str]]
+
+@app.get("/healthz")
+def healthz():
+    return {"status": "ok", "mode": "proxy", "target": REAL_URL}
+
+@app.post("/embed")
+async def embed(req: EmbedRequest):
+    if not REAL_URL:
+        raise HTTPException(500, "REAL_EMBEDDINGS_URL is not set")
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            r = await client.post(f"{REAL_URL}/embed", json=req.model_dump())
+            r.raise_for_status()
+            return r.json()
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"Upstream error: {e}")
+
+### adapters/llm_proxy.py
+import os
+from typing import List, Dict, Any
+import httpx
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+
+REAL_URL = os.getenv("REAL_LLM_URL", "").rstrip("/")
+
+app = FastAPI(title="LLM Proxy")
+
+class ChatRequest(BaseModel):
+    messages: List[Dict[str, Any]]
+
+@app.get("/healthz")
+def healthz():
+    return {"status": "ok", "mode": "proxy", "target": REAL_URL}
+
+@app.post("/chat")
+async def chat(req: ChatRequest):
+    if not REAL_URL:
+        raise HTTPException(500, "REAL_LLM_URL is not set")
+    try:
+        async with httpx.AsyncClient(timeout=120) as client:
+            r = await client.post(f"{REAL_URL}/chat", json=req.model_dump())
+            r.raise_for_status()
+            return r.json()
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"Upstream error: {e}")
+
 ### app/__init__.py
 # app package init
 
@@ -108,7 +168,7 @@ def get_current_user(token: str = Depends(get_bearer_token), session: Session = 
 
 ### app/api/routers/analyze.py
 from __future__ import annotations
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
 from sqlalchemy.orm import Session
 from app.api.deps import db_session, get_current_user
 from app.services.analyze_service import create_job, list_jobs, get_job, delete_job
@@ -118,38 +178,54 @@ router = APIRouter(prefix="/analyze", tags=["analyze"])
 
 @router.get("")
 def list_(session: Session = Depends(db_session), user=Depends(get_current_user)):
-    rows = list_jobs(session)
-    return [{
-        "id": str(r.id),
-        "status": getattr(r, "status", None),
-        "date_upload": getattr(r, "date_upload", None),
-        "error": getattr(r, "error", None),
-    } for r in rows]
+	rows = list_jobs(session)
+	return [{
+		"id": str(r.id),
+		"status": getattr(r, "status", None),
+		"date_upload": getattr(r, "date_upload", None),
+		"error": getattr(r, "error", None),
+	} for r in rows]
 
 @router.post("", status_code=202)
-def create(payload: dict, session: Session = Depends(db_session), user=Depends(get_current_user)):
-    job = create_job(session, uploaded_by=user["id"], url_file=(payload or {}).get("url_file"))
-    analyze_run.delay(str(job.id), pipeline=(payload or {}).get("pipeline"))
-    return {"id": str(job.id), "status": getattr(job, "status", "queued"), "accepted": True}
+def create(
+	payload: dict | None = None,
+	file: UploadFile | None = File(None),
+	url: str | None = Form(None),
+	session: Session = Depends(db_session),
+	user=Depends(get_current_user)
+):
+	if file is not None:
+		job = create_job(session, uploaded_by=user["id"], url_file=file.filename)
+		analyze_run.delay(str(job.id), pipeline=None)
+		return {"id": str(job.id), "status": getattr(job, "status", "queued"), "accepted": True}
+	if payload and payload.get("url"):
+		job = create_job(session, uploaded_by=user["id"], url_file=payload.get("url"))
+		analyze_run.delay(str(job.id), pipeline=None)
+		return {"id": str(job.id), "status": getattr(job, "status", "queued"), "accepted": True}
+	if url:
+		job = create_job(session, uploaded_by=user["id"], url_file=url)
+		analyze_run.delay(str(job.id), pipeline=None)
+		return {"id": str(job.id), "status": getattr(job, "status", "queued"), "accepted": True}
+	raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="missing_file_or_url")
 
 @router.get("/{job_id}")
 def get(job_id: str, session: Session = Depends(db_session), user=Depends(get_current_user)):
-    job = get_job(session, job_id)
-    if not job:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="not_found")
-    return {
-        "id": str(job.id),
-        "status": getattr(job, "status", None),
-        "result": getattr(job, "result", None),
-        "error": getattr(job, "error", None),
-    }
+	job = get_job(session, job_id)
+	if not job:
+		raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="not_found")
+	return {
+		"id": str(job.id),
+		"status": getattr(job, "status", None),
+		"result": getattr(job, "result", None),
+		"error": getattr(job, "error", None),
+	}
 
 @router.delete("/{job_id}")
 def delete(job_id: str, session: Session = Depends(db_session), user=Depends(get_current_user)):
-    ok = delete_job(session, job_id)
-    if not ok:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="not_found")
-    return {"ok": True}
+	ok = delete_job(session, job_id)
+	if not ok:
+		raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="not_found")
+	return {"ok": True}
 
 ### app/api/routers/auth.py
 from __future__ import annotations
@@ -221,95 +297,138 @@ from app.api.sse import sse_response
 
 router = APIRouter(prefix="/chats", tags=["chats"])
 
+# Simple in-memory store for stubs
+_CHATS: dict[str, dict] = {}
+_MESSAGES: dict[str, list[dict]] = {}
+
+@router.get("")
+async def list_chats(limit: int = 50, cursor: str | None = None, q: str | None = None, session=Depends(db_session), user=Depends(get_current_user)):
+	items = [{"id": cid, "name": data.get("name") or f"Chat {cid}"} for cid, data in list(_CHATS.items())[:limit]]
+	return {"items": items, "next_cursor": None}
+
+@router.post("")
+async def create_chat(payload: dict | None = None, session=Depends(db_session), user=Depends(get_current_user)):
+	import uuid
+	cid = str(uuid.uuid4())
+	_CHATS[cid] = {"id": cid, "name": (payload or {}).get("name")}
+	_MESSAGES[cid] = []
+	return {"chat_id": cid}
+
+@router.get("/{chat_id}/messages")
+async def get_messages(chat_id: str, limit: int = 50, cursor: str | None = None, session=Depends(db_session), user=Depends(get_current_user)):
+	msgs = _MESSAGES.get(chat_id, [])
+	return {"items": msgs[:limit], "next_cursor": None}
+
 @router.post("/{chat_id}/messages")
 async def post_messages(chat_id: str, payload: dict, request: Request, session=Depends(db_session), user=Depends(get_current_user)):
-    await rate_limit(request, f"chat_post:{chat_id}", 60, 60)
-    if (payload or {}).get("response_stream"):
-        def gen():
-            yield {"data": "event: token"}
-            yield {"data": "data: Привет..."}
-            yield {"data": "data: Это стрим ответа."}
-            yield {"data": "event: done"}
-        return sse_response(gen())
-    return {"messages":[{"role":"assistant","content":"Привет! Это заглушка ответа."}]}
+	await rate_limit(request, f"chat_post:{chat_id}", 60, 60)
+	if (payload or {}).get("response_stream"):
+		def gen():
+			yield {"data": "event: token"}
+			yield {"data": "data: Привет..."}
+			yield {"data": "data: Это стрим ответа."}
+			yield {"data": "event: done"}
+		return sse_response(gen())
+	msg = {"role": "user", "content": (payload or {}).get("content", "")}
+	_MESSAGES.setdefault(chat_id, []).append(msg)
+	resp = {"role": "assistant", "content": "Привет! Это заглушка ответа."}
+	_MESSAGES[chat_id].append(resp)
+	return {"messages":[resp]}
+
+@router.patch("/{chat_id}")
+async def rename_chat(chat_id: str, payload: dict, session=Depends(db_session), user=Depends(get_current_user)):
+	if chat_id not in _CHATS:
+		_CHATS[chat_id] = {"id": chat_id}
+	_CHATS[chat_id]["name"] = (payload or {}).get("name")
+	return {"ok": True}
+
+@router.delete("/{chat_id}")
+async def delete_chat(chat_id: str, session=Depends(db_session), user=Depends(get_current_user)):
+	_CHATS.pop(chat_id, None)
+	_MESSAGES.pop(chat_id, None)
+	return {"ok": True}
 
 ### app/api/routers/rag.py
 from __future__ import annotations
 from typing import Any, Dict
 from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
 from sqlalchemy.orm import Session
-from app.api.deps import db_session, get_current_user
-from app.services.rag_service import (
-    create_upload, list_documents, get_document, delete_document, search,
-    start_ingest_chain, start_upload_watch, progress, stats
-)
+from app.api.deps import db_session
+from app.services import rag_service
 
 router = APIRouter(prefix="/rag", tags=["rag"])
 
+
 def _ser_doc(row: Any) -> Dict[str, Any]:
-    if isinstance(row, dict):
-        return row
-    out: Dict[str, Any] = {}
-    for k in ("id","status","filename","original_name","mime","size","error","tags","created_at","updated_at"):
-        if hasattr(row, k):
-            v = getattr(row, k)
-            if isinstance(v, datetime):
-                v = v.isoformat()
-            out[k] = str(v) if k == "id" else v
-    return out or {"id": str(getattr(row, "id", ""))}
+	if isinstance(row, dict):
+		return row
+	out: Dict[str, Any] = {}
+	for k in ("id","status","filename","original_name","mime","size","error","tags","created_at","updated_at"):
+		if hasattr(row, k):
+			v = getattr(row, k)
+			if isinstance(v, datetime):
+				v = v.isoformat()
+			out[k] = str(v) if k == "id" else v
+	return out or {"id": str(getattr(row, "id", ""))}
 
 @router.get("")
-def list_docs(session: Session = Depends(db_session), user=Depends(get_current_user)):
-    rows = list_documents(session)
-    return [_ser_doc(r) for r in rows]
+def list_docs(session: Session = Depends(db_session)):
+	rows = rag_service.list_documents(session)
+	items = [_ser_doc(r) for r in rows]
+	return {"items": items, "next_cursor": None}
 
 @router.get("/{doc_id}")
-def get_doc(doc_id: str, session: Session = Depends(db_session), user=Depends(get_current_user)):
-    row = get_document(session, doc_id)
-    if not row:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="not_found")
-    return _ser_doc(row)
+def get_doc(doc_id: str, session: Session = Depends(db_session)):
+	row = rag_service.get_document(session, doc_id)
+	if not row:
+		raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="not_found")
+	return _ser_doc(row)
 
 @router.get("/{doc_id}/progress")
-def get_progress(doc_id: str, session: Session = Depends(db_session), user=Depends(get_current_user)):
-    return progress(session, doc_id)
+def get_progress(doc_id: str, session: Session = Depends(db_session)):
+	return rag_service.progress(session, doc_id)
 
 @router.get("/stats/summary")
-def get_stats(session: Session = Depends(db_session), user=Depends(get_current_user)):
-    return stats(session)
+def get_stats(session: Session = Depends(db_session)):
+	return rag_service.stats(session)
 
 @router.delete("/{doc_id}")
-def delete_doc(doc_id: str, session: Session = Depends(db_session), user=Depends(get_current_user)):
-    ok = delete_document(session, doc_id)
-    if not ok:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="not_found")
-    return {"ok": True}
+def delete_doc(doc_id: str, session: Session = Depends(db_session)):
+	ok = rag_service.delete_document(session, doc_id)
+	if not ok:
+		raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="not_found")
+	return {"ok": True}
 
+# Multipart upload path (frontend uses)
 @router.post("/upload")
-def create_upload_url(payload: dict, session: Session = Depends(db_session), user=Depends(get_current_user)):
-    meta = create_upload(session, filename=(payload or {}).get("filename"), uploaded_by=user["id"])
-    if (payload or {}).get("watch"):
-        start_upload_watch(meta["id"], key=meta["key"])  # type: ignore[index]
-    if (payload or {}).get("auto_ingest"):
-        start_ingest_chain(meta["id"])  # type: ignore[index]
-    return meta
+async def upload_file(
+	file: UploadFile = File(...),
+	name: str | None = Form(None),
+	session: Session = Depends(db_session),
+):
+	# For now, just create upload entry and return meta; optional: store file to S3
+	meta = rag_service.create_upload(session, filename=name or file.filename)
+	return meta
 
 @router.post("/search")
-def rag_search(payload: dict, session: Session = Depends(db_session), user=Depends(get_current_user)):
-    p = payload or {}
-    q = p.get("query") or ""
-    top_k = int(p.get("top_k") or 5)
-    with_snippets = bool(p.get("with_snippets", True))
-    offset = int(p.get("offset") or 0)
-    doc_id = p.get("doc_id")
-    tags = p.get("tags")
-    filters = p.get("filters") or {}
-    if not tags and isinstance(filters, dict):
-        tags = filters.get("tags")
-    min_score = filters.get("min_score") if isinstance(filters, dict) else None
-    res = search(session, query=q, top_k=top_k, offset=offset, doc_id=doc_id, tags=tags, min_score=min_score, with_snippets=with_snippets)
-    return res
+def rag_search(payload: dict, session: Session = Depends(db_session)):
+	p = payload or {}
+	# Frontend sends { text?, top_k?, min_score? }
+	q = p.get("text") or p.get("query") or ""
+	top_k = int(p.get("top_k") or 5)
+	offset = int(p.get("offset") or 0)
+	doc_id = p.get("doc_id")
+	tags = p.get("tags")
+	res = rag_service.search(session, query=q, top_k=top_k, offset=offset, doc_id=doc_id, tags=tags)
+	# Map to frontend shape { items: [{ document_id, chunk_id, score, snippet }], next_cursor? }
+	items = [{
+		"document_id": r.get("doc_id"),
+		"chunk_id": r.get("chunk_idx"),
+		"score": r.get("score"),
+		"snippet": r.get("text"),
+	} for r in res.get("results", [])]
+	return {"items": items, "next_cursor": res.get("next_offset")}
 
 ### app/api/sse.py
 from starlette.responses import StreamingResponse
@@ -393,7 +512,8 @@ class settings:
       Buckets can be set via either S3_BUCKET_* or S3.BUCKET_* names.
     """
     # Core
-    DB_URL = _env("DB_URL") or _env("DB.URL") or "postgresql://postgres:postgres@postgres:5432/app"
+    # Use psycopg3 driver by default to match dependencies
+    DB_URL = _env("DB_URL") or _env("DB.URL") or "postgresql+psycopg://postgres:postgres@postgres:5432/app"
     REDIS_URL = _env("REDIS_URL") or _env("REDIS.URL") or "redis://redis:6379/0"
     QDRANT_URL = _env("QDRANT_URL") or _env("QDRANT.URL") or "http://qdrant:6333"
 
@@ -1783,7 +1903,7 @@ from app.tasks.embed import compute as embed_compute
 from app.tasks.index import finalize as index_finalize
 from app.tasks.upload_watch import watch as upload_watch
 from app.models.rag import RagDocuments, RagChunks
-from .clients import embed_texts, qdrant_search, qdrant_count_by_doc
+from . import clients
 
 def create_upload(session: Session, filename: str, uploaded_by=None) -> Dict[str, Any]:
     repo = RagRepo(session)
@@ -1815,11 +1935,11 @@ def start_upload_watch(doc_id: str, key: str) -> None:
     upload_watch.delay(doc_id, key=key)
 
 def search(session: Session, query: str, top_k: int = 5, *, offset: int = 0, doc_id: Optional[str] = None, tags: Optional[List[str]] = None, sort_by: str = "score_desc") -> Dict[str, Any]:
-    vectors = embed_texts([query])
+    vectors = clients.embed_texts([query])
     if not vectors:
         return {"results": [], "next_offset": None}
     vec = vectors[0]
-    hits = qdrant_search(vec, top_k=top_k, offset=offset, doc_id=doc_id, tags=tags, sort_by=sort_by)
+    hits = clients.qdrant_search(vec, top_k=top_k, offset=offset, doc_id=doc_id, tags=tags, sort_by=sort_by)
     out = []
     for h in hits:
         payload = h.get("payload") or {}
@@ -1838,7 +1958,7 @@ def progress(session: Session, doc_id: str) -> Dict[str, Any]:
     if not doc:
         return {"id": doc_id, "status": "not_found"}
     chunks_total = session.query(func.count(RagChunks.id)).filter(RagChunks.document_id == doc.id).scalar() or 0
-    vectors_total = qdrant_count_by_doc(str(doc.id))
+    vectors_total = clients.qdrant_count_by_doc(str(doc.id))
     return {
         "id": str(doc.id),
         "status": doc.status,
@@ -1942,7 +2062,8 @@ from app.core.qdrant import get_qdrant
 from app.core.db import SessionLocal
 from app.core.metrics import rag_vectors_upserted_total
 from app.models.rag import RagDocuments, RagChunks
-from .shared import log, RetryableError, task_metrics, env_int, embedding_batch_inflight
+from .shared import log, RetryableError, task_metrics, env_int
+from app.core.metrics import embedding_batch_inflight
 
 EMB_URL = os.getenv("EMBEDDINGS_URL", "http://emb:8001")
 COLLECTION = os.getenv("QDRANT_COLLECTION", "rag_chunks")
@@ -2119,7 +2240,7 @@ from app.core.db import SessionLocal
 from app.core.config import settings
 from app.models.rag import RagDocuments
 from .shared import log, task_metrics, RetryableError
-from app.services.rag_service import start_ingest_chain
+# Avoid circular import by importing inside the task function
 
 @shared_task(name="app.tasks.upload.watch", bind=True, autoretry_for=(RetryableError,), retry_backoff=True, retry_kwargs={"max_retries": 100})
 def watch(self, document_id: str, *, key: str) -> dict:
@@ -2136,6 +2257,7 @@ def watch(self, document_id: str, *, key: str) -> dict:
                 s3.stat_object(raw_bucket, rel)
             except Exception:
                 raise RetryableError("not_uploaded_yet")
+            from app.services.rag_service import start_ingest_chain
             start_ingest_chain(document_id)
             return {"ok": True, "started": "ingest"}
         finally:
@@ -2192,12 +2314,16 @@ import sys
 from datetime import datetime, timezone
 
 from sqlalchemy import create_engine, MetaData, select, insert, update
+from app.models.base import Base
+# Ensure models are registered in metadata before create_all
+from app.models import user as _user  # noqa: F401
 from sqlalchemy.exc import SQLAlchemyError
 
 DB_URL = os.environ.get("DB_URL")
-ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "admin@example.com")
+# Support both email- and login-based schemas. Our app uses `login`.
+ADMIN_LOGIN = os.environ.get("ADMIN_LOGIN", "admin")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")
-USER_EMAIL = os.environ.get("USER_EMAIL", "user@example.com")
+USER_LOGIN = os.environ.get("USER_LOGIN", "user")
 USER_PASSWORD = os.environ.get("USER_PASSWORD", "user123")
 
 if not DB_URL:
@@ -2216,6 +2342,8 @@ engine = create_engine(DB_URL, future=True, pool_pre_ping=True)
 md = MetaData()
 
 with engine.begin() as conn:
+    # Ensure all tables exist before seeding (idempotent)
+    Base.metadata.create_all(bind=conn)
     md.reflect(conn)
     if "users" not in md.tables:
         print("seed_users.py: 'users' table not found; skipping.", file=sys.stderr)
@@ -2224,19 +2352,33 @@ with engine.begin() as conn:
     users = md.tables["users"]
     cols = users.c
 
-    email_col = getattr(cols, "email", None) or getattr(cols, "username", None)
-    pwd_col = getattr(cols, "hashed_password", None) or getattr(cols, "password_hash", None) or getattr(cols, "password", None)
-    is_active_col = getattr(cols, "is_active", None)
-    is_super_col = getattr(cols, "is_superuser", None) or getattr(cols, "is_admin", None) or getattr(cols, "is_staff", None)
-    full_name_col = getattr(cols, "full_name", None) or getattr(cols, "name", None)
+    def pick(*names):
+        for n in names:
+            col = getattr(cols, n, None)
+            if col is not None:
+                return col
+        return None
 
-    if not email_col or not pwd_col:
-        print("seed_users.py: Cannot identify email/password columns.", file=sys.stderr)
+    email_col = pick("email", "username")
+    login_col = pick("login")
+    pwd_col = pick("hashed_password", "password_hash", "password")
+    is_active_col = pick("is_active")
+    is_super_col = pick("is_superuser", "is_admin", "is_staff")
+    full_name_col = pick("full_name", "name")
+
+    if (email_col is None and login_col is None) or pwd_col is None:
+        print("seed_users.py: Cannot identify login/email or password columns.", file=sys.stderr)
         sys.exit(1)
 
-    def upsert(email: str, password: str, is_admin: bool):
-        row = conn.execute(select(users).where(email_col == email)).fetchone()
-        fields = {email_col.key: email, pwd_col.key: hash_pw(password)}
+    def upsert(login_or_email: str, password: str, is_admin: bool):
+        if login_col is not None:
+            where = (login_col == login_or_email)
+            fields = {login_col.key: login_or_email, pwd_col.key: hash_pw(password)}
+        else:
+            assert email_col is not None
+            where = (email_col == login_or_email)
+            fields = {email_col.key: login_or_email, pwd_col.key: hash_pw(password)}
+        row = conn.execute(select(users).where(where)).fetchone()
         if is_active_col is not None:
             fields[is_active_col.key] = True
         if is_super_col is not None:
@@ -2245,15 +2387,58 @@ with engine.begin() as conn:
             fields[full_name_col.key] = "Admin" if is_admin else "User"
         if row is None:
             conn.execute(insert(users).values(**fields))
-            print(f"Created {'admin' if is_admin else 'user'}: {email}")
+            print(f"Created {'admin' if is_admin else 'user'}: {login_or_email}")
         else:
-            conn.execute(update(users).where(email_col == email).values(**fields))
-            print(f"Updated {'admin' if is_admin else 'user'}: {email}")
+            conn.execute(update(users).where(where).values(**fields))
+            print(f"Updated {'admin' if is_admin else 'user'}: {login_or_email}")
 
-    upsert(ADMIN_EMAIL, ADMIN_PASSWORD, True)
-    upsert(USER_EMAIL, USER_PASSWORD, False)
+    upsert(ADMIN_LOGIN, ADMIN_PASSWORD, True)
+    upsert(USER_LOGIN, USER_PASSWORD, False)
 
 print("seed_users.py: done")
+
+### stubs/emb_server.py
+from typing import List
+from fastapi import FastAPI
+from pydantic import BaseModel
+
+app = FastAPI(title="Embeddings Stub (in-backend)")
+
+class EmbedRequest(BaseModel):
+    # Match app.services.clients.embed_texts contract
+    inputs: List[str]
+
+@app.get("/healthz")
+def healthz():
+    return {"status": "ok"}
+
+@app.post("/embed")
+def embed(req: EmbedRequest):
+    def vec_for(_: str):
+        # 8-dim demo vector; replace with real model later
+        return [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]
+    return {"vectors": [vec_for(x) for x in req.inputs]}
+
+### stubs/llm_server.py
+from fastapi import FastAPI
+from pydantic import BaseModel
+from typing import List, Dict, Any, Optional
+
+app = FastAPI(title="LLM Stub (in-backend)")
+
+class ChatRequest(BaseModel):
+    messages: List[Dict[str, Any]]
+    temperature: Optional[float] = 0.2
+    max_tokens: Optional[int] = None
+
+@app.get("/healthz")
+def healthz():
+    return {"status": "ok"}
+
+@app.post("/v1/chat/completions")
+def chat(req: ChatRequest):
+    last_user = next((m.get("content","") for m in reversed(req.messages) if m.get("role") == "user"), "")
+    return {"choices":[{"message":{"role":"assistant","content":f"(stub) You said: {last_user}"}}]}
 
 ### tests/api/__init__.py
 

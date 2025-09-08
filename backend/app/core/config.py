@@ -15,7 +15,8 @@ class settings:
       Buckets can be set via either S3_BUCKET_* or S3.BUCKET_* names.
     """
     # Core
-    DB_URL = _env("DB_URL") or _env("DB.URL") or "postgresql://postgres:postgres@postgres:5432/app"
+    # Use psycopg3 driver by default to match dependencies
+    DB_URL = _env("DB_URL") or _env("DB.URL") or "postgresql+psycopg://postgres:postgres@postgres:5432/app"
     REDIS_URL = _env("REDIS_URL") or _env("REDIS.URL") or "redis://redis:6379/0"
     QDRANT_URL = _env("QDRANT_URL") or _env("QDRANT.URL") or "http://qdrant:6333"
 

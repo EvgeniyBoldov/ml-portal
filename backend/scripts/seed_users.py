@@ -1,30 +1,33 @@
-import os
-import sys
-from datetime import datetime, timezone
-
+#!/usr/bin/env python3
+import os, sys, uuid
 from sqlalchemy import create_engine, MetaData, select, insert, update
-from sqlalchemy.exc import SQLAlchemyError
+
+# hash like the app (argon2)
+try:
+    from app.core.security import hash_password  # Argon2
+except Exception:
+    def hash_password(pw: str) -> str:
+        return pw
 
 DB_URL = os.environ.get("DB_URL")
-ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "admin@example.com")
+ADMIN_LOGIN = os.environ.get("ADMIN_LOGIN", "admin")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")
-USER_EMAIL = os.environ.get("USER_EMAIL", "user@example.com")
+USER_LOGIN = os.environ.get("USER_LOGIN", "user")
 USER_PASSWORD = os.environ.get("USER_PASSWORD", "user123")
 
 if not DB_URL:
     print("seed_users.py: DB_URL is required", file=sys.stderr)
     sys.exit(2)
 
-try:
-    from passlib.hash import bcrypt
-    def hash_pw(pw: str) -> str:
-        return bcrypt.hash(pw)
-except Exception:
-    def hash_pw(pw: str) -> str:
-        return pw  # plaintext fallback
-
 engine = create_engine(DB_URL, future=True, pool_pre_ping=True)
 md = MetaData()
+
+def _pick(cols, *names):
+    for n in names:
+        c = getattr(cols, n, None)
+        if c is not None:
+            return c
+    return None
 
 with engine.begin() as conn:
     md.reflect(conn)
@@ -34,34 +37,37 @@ with engine.begin() as conn:
 
     users = md.tables["users"]
     cols = users.c
+    id_col = _pick(cols, "id")
+    login_col = _pick(cols, "login", "email", "username")
+    pwd_col = _pick(cols, "password_hash", "hashed_password", "password")
+    is_active_col = _pick(cols, "is_active")
+    role_col = _pick(cols, "role")
 
-    email_col = getattr(cols, "email", None) or getattr(cols, "username", None)
-    pwd_col = getattr(cols, "hashed_password", None) or getattr(cols, "password_hash", None) or getattr(cols, "password", None)
-    is_active_col = getattr(cols, "is_active", None)
-    is_super_col = getattr(cols, "is_superuser", None) or getattr(cols, "is_admin", None) or getattr(cols, "is_staff", None)
-    full_name_col = getattr(cols, "full_name", None) or getattr(cols, "name", None)
-
-    if not email_col or not pwd_col:
-        print("seed_users.py: Cannot identify email/password columns.", file=sys.stderr)
+    if login_col is None or pwd_col is None:
+        print("seed_users.py: Cannot identify login and password columns.", file=sys.stderr)
         sys.exit(1)
 
-    def upsert(email: str, password: str, is_admin: bool):
-        row = conn.execute(select(users).where(email_col == email)).fetchone()
-        fields = {email_col.key: email, pwd_col.key: hash_pw(password)}
+    def upsert(login_value: str, password_value: str, is_admin: bool):
+        where = (login_col == login_value)
+        row = conn.execute(select(users).where(where)).fetchone()
+
+        fields = {login_col.key: login_value, pwd_col.key: hash_password(password_value)}
         if is_active_col is not None:
             fields[is_active_col.key] = True
-        if is_super_col is not None:
-            fields[is_super_col.key] = bool(is_admin)
-        if full_name_col is not None and row is None:
-            fields[full_name_col.key] = "Admin" if is_admin else "User"
+        if role_col is not None and row is None:
+            fields[role_col.key] = "admin" if is_admin else "reader"
+
+        if row is None and id_col is not None:
+            fields[id_col.key] = uuid.uuid4()
+
         if row is None:
             conn.execute(insert(users).values(**fields))
-            print(f"Created {'admin' if is_admin else 'user'}: {email}")
+            print(f"Created {'admin' if is_admin else 'user'}: {login_value}")
         else:
-            conn.execute(update(users).where(email_col == email).values(**fields))
-            print(f"Updated {'admin' if is_admin else 'user'}: {email}")
+            conn.execute(update(users).where(where).values(**fields))
+            print(f"Updated {'admin' if is_admin else 'user'}: {login_value}")
 
-    upsert(ADMIN_EMAIL, ADMIN_PASSWORD, True)
-    upsert(USER_EMAIL, USER_PASSWORD, False)
+    upsert(ADMIN_LOGIN, ADMIN_PASSWORD, True)
+    upsert(USER_LOGIN, USER_PASSWORD, False)
 
 print("seed_users.py: done")

@@ -13,7 +13,7 @@ from app.tasks.embed import compute as embed_compute
 from app.tasks.index import finalize as index_finalize
 from app.tasks.upload_watch import watch as upload_watch
 from app.models.rag import RagDocuments, RagChunks
-from .clients import embed_texts, qdrant_search, qdrant_count_by_doc
+from . import clients
 
 def create_upload(session: Session, filename: str, uploaded_by=None) -> Dict[str, Any]:
     repo = RagRepo(session)
@@ -45,11 +45,11 @@ def start_upload_watch(doc_id: str, key: str) -> None:
     upload_watch.delay(doc_id, key=key)
 
 def search(session: Session, query: str, top_k: int = 5, *, offset: int = 0, doc_id: Optional[str] = None, tags: Optional[List[str]] = None, sort_by: str = "score_desc") -> Dict[str, Any]:
-    vectors = embed_texts([query])
+    vectors = clients.embed_texts([query])
     if not vectors:
         return {"results": [], "next_offset": None}
     vec = vectors[0]
-    hits = qdrant_search(vec, top_k=top_k, offset=offset, doc_id=doc_id, tags=tags, sort_by=sort_by)
+    hits = clients.qdrant_search(vec, top_k=top_k, offset=offset, doc_id=doc_id, tags=tags, sort_by=sort_by)
     out = []
     for h in hits:
         payload = h.get("payload") or {}
@@ -68,7 +68,7 @@ def progress(session: Session, doc_id: str) -> Dict[str, Any]:
     if not doc:
         return {"id": doc_id, "status": "not_found"}
     chunks_total = session.query(func.count(RagChunks.id)).filter(RagChunks.document_id == doc.id).scalar() or 0
-    vectors_total = qdrant_count_by_doc(str(doc.id))
+    vectors_total = clients.qdrant_count_by_doc(str(doc.id))
     return {
         "id": str(doc.id),
         "status": doc.status,

@@ -7,16 +7,21 @@ services:
       POSTGRES_USER: ${PGUSER:-postgres}
       POSTGRES_PASSWORD: ${PGPASSWORD:-postgres}
       POSTGRES_DB: ${PGDATABASE:-app}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PGUSER:-postgres}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
     ports: ["5432:5432"]
 
   minio:
     image: minio/minio
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minio}
-      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minio123}
-      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minio}
-      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minio123}
+      MINIO_ACCESS_KEY: ${S3_ACCESS_KEY:-minio}
+      MINIO_SECRET_KEY: ${S3_SECRET_KEY:-minio123}
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-minio}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-minio123}
     ports: ["9000:9000","9001:9001"]
 
   qdrant:
@@ -37,20 +42,19 @@ services:
       context: .
       dockerfile: docker/emb/Dockerfile
     environment:
+      TEST_MODE: ${TEST_MODE:-true}
       PORT: "8001"
-      MODEL_ID: "BAAI/bge-m3"
+      REAL_EMBEDDINGS_URL: ${REAL_EMBEDDINGS_URL:-}
     ports: ["8001:8001"]
-    depends_on: [redis]
 
   llm:
     build:
       context: .
       dockerfile: docker/llm/Dockerfile
     environment:
+      TEST_MODE: ${TEST_MODE:-true}
       PORT: "8002"
-      LLM_N_THREADS: "8"
-      LLM_N_CTX: "4096"
-      LLM_N_BATCH: "256"
+      REAL_LLM_URL: ${REAL_LLM_URL:-}
     ports: ["8002:8002"]
 
   api:
@@ -58,21 +62,48 @@ services:
       context: .
       dockerfile: docker/api/Dockerfile
     environment:
-      PORT: "8000"
-      DB_URL: "postgresql+psycopg://postgres:postgres@postgres:5432/app"
-      REDIS_URL: "redis://redis:6379/0"
-      QDRANT_URL: "http://qdrant:6333"
-      S3_ENDPOINT: "http://minio:9000"
-      S3_PUBLIC_ENDPOINT: "https://10.4.4.2"
-      S3_ACCESS_KEY: "${MINIO_ACCESS_KEY:-minio}"
-      S3_SECRET_KEY: "${MINIO_SECRET_KEY:-minio123}"
-      EMBEDDINGS_URL: "http://emb:8001"
-      LLM_URL: "http://llm:8002"
-      HEALTH_DEEP: "1"
-      # If your backend supports it, allow CORS for the frontend origin (below)
-      # CORS_ORIGINS: "http://localhost:8080"
+      PORT: "${PORT:-8000}"
+      DB_URL: "${DB_URL}"
+      REDIS_URL: "${REDIS_URL}"
+      QDRANT_URL: "${QDRANT_URL}"
+      S3_ENDPOINT: "${S3_ENDPOINT}"
+      S3_PUBLIC_ENDPOINT: "${S3_PUBLIC_ENDPOINT}"
+      S3_ACCESS_KEY: "${S3_ACCESS_KEY}"
+      S3_SECRET_KEY: "${S3_SECRET_KEY}"
+      EMBEDDINGS_URL: "${EMBEDDINGS_URL}"
+      LLM_URL: "${LLM_URL}"
+      HEALTH_DEEP: "${HEALTH_DEEP:-0}"
     ports: ["8000:8000"]
-    depends_on: [postgres, minio, redis, rabbitmq, qdrant, llm, emb]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_started
+      redis:
+        condition: service_started
+      rabbitmq:
+        condition: service_started
+      qdrant:
+        condition: service_started
+      emb:
+        condition: service_started
+      llm:
+        condition: service_started
+
+  # Ensure DB schema is created before seeding
+  migrate:
+    build:
+      context: .
+      dockerfile: docker/api/Dockerfile
+    command: bash -lc "alembic -c alembic.ini upgrade head"
+    working_dir: /app
+    environment:
+      PYTHONPATH: "/app"
+      DB_URL: "${DB_URL}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
 
   worker:
     build:
@@ -81,40 +112,57 @@ services:
     environment:
       CELERY_BROKER_URL: "amqp://guest:guest@rabbitmq:5672//"
       CELERY_RESULT_BACKEND: "redis://redis:6379/1"
-      DB_URL: "postgresql+psycopg://postgres:postgres@postgres:5432/app"
-      QDRANT_URL: "http://qdrant:6333"
-      REDIS_URL: "redis://redis:6379/0"
-      S3_ENDPOINT: "http://minio:9000"
-      S3_PUBLIC_ENDPOINT: "https://10.4.4.2"
-      S3_ACCESS_KEY: "${MINIO_ACCESS_KEY:-minio}"
-      S3_SECRET_KEY: "${MINIO_SECRET_KEY:-minio123}"
-      EMBEDDINGS_URL: "http://emb:8001"
-      LLM_URL: "http://llm:8002"
+      DB_URL: "${DB_URL}"
+      QDRANT_URL: "${QDRANT_URL}"
+      REDIS_URL: "${REDIS_URL}"
+      S3_ENDPOINT: "${S3_ENDPOINT}"
+      S3_PUBLIC_ENDPOINT: "${S3_PUBLIC_ENDPOINT}"
+      S3_ACCESS_KEY: "${S3_ACCESS_KEY}"
+      S3_SECRET_KEY: "${S3_SECRET_KEY}"
+      EMBEDDINGS_URL: "${EMBEDDINGS_URL}"
+      LLM_URL: "${LLM_URL}"
       CELERY_CONCURRENCY: "2"
-    depends_on: [postgres, minio, rabbitmq, redis, qdrant, llm, emb]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_started
+      redis:
+        condition: service_started
+      qdrant:
+        condition: service_started
+      emb:
+        condition: service_started
+      llm:
+        condition: service_started
 
   frontend:
     build:
       context: .
       dockerfile: docker/frontend/Dockerfile
       args:
-        VITE_API_URL: ${VITE_API_URL:-http://api:8000}
-    environment:
-      API_BASE: ${VITE_API_URL:-http://api:8000}
+        VITE_API_BASE: ${VITE_API_BASE:-http://localhost:8000/api}
+        VITE_USE_MOCKS: ${VITE_USE_MOCKS:-false}
     ports: ["8080:8080"]
-    depends_on: [api]
+    depends_on:
+      api:
+        condition: service_started
 
-  # One-shot job to seed users in DB (admin + user)
   seed:
     build:
       context: .
       dockerfile: docker/api/Dockerfile
     command: python scripts/seed_users.py
     environment:
-      DB_URL: "postgresql+psycopg://postgres:postgres@postgres:5432/app"
-      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@example.com}
+      PYTHONPATH: "/app"
+      DB_URL: "${DB_URL}"
+      ADMIN_LOGIN: ${ADMIN_LOGIN:-admin}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin123}
-      USER_EMAIL: ${USER_EMAIL:-user@example.com}
+      USER_LOGIN: ${USER_LOGIN:-user}
       USER_PASSWORD: ${USER_PASSWORD:-user123}
-    depends_on: [postgres]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     restart: "no"

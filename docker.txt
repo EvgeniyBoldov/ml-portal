@@ -2,24 +2,20 @@
 FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
-
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
  && rm -rf /var/lib/apt/lists/*
 
-# 1) Install dependencies strictly from requirements.txt that sits NEXT TO this Dockerfile
-COPY docker/api/requirements.txt ./
+COPY docker/api/requirements.txt ./requirements.txt
 RUN python -m pip install --upgrade pip && pip install -r requirements.txt
 
-# 2) Copy application sources that sit NEXT TO this Dockerfile
-COPY backend/ .
+COPY backend/ ./
 
 EXPOSE 8000
 ENV PORT=8000
 
-# Adjust the module path if your entrypoint differs
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
 
 ### api/requirements.txt
@@ -29,7 +25,7 @@ pydantic==2.8.2
 pydantic-settings==2.4.0
 SQLAlchemy==2.0.32
 alembic==1.13.2
-psycopg[binary]==3.2.1
+psycopg[binary]==3.2.10
 celery[redis]==5.4.0
 redis==5.0.7
 httpx==0.27.0
@@ -39,51 +35,53 @@ argon2-cffi==23.1.0
 qdrant-client==1.9.1
 minio==7.2.7
 python-multipart==0.0.9
+
 ### emb/Dockerfile
 FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
 WORKDIR /srv
 
-# Install deps from local requirements.txt placed NEXT TO this Dockerfile
-COPY docker/emb/requirements.txt ./
+COPY docker/emb/requirements.txt ./requirements.txt
 RUN python -m pip install --upgrade pip && pip install -r requirements.txt
 
-# Copy service code
-COPY backend/ .
+COPY backend/ ./
+COPY docker/emb/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 EXPOSE 8001
 ENV PORT=8001
-# Adjust the module if different (e.g., "emb.app:app")
-CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8001"]
+
+ENTRYPOINT ["/entrypoint.sh"]
+CMD []
+
+### emb/entrypoint.sh
+#!/bin/sh
+set -e
+
+is_true () {
+  case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes|on) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+PORT="${PORT:-8001}"
+export PYTHONPATH=/srv
+
+if is_true "${TEST_MODE}"; then
+  echo "[emb] TEST_MODE=ON -> starting stub at :${PORT}"
+  exec uvicorn stubs.emb_server:app --host 0.0.0.0 --port "${PORT}" --app-dir /srv
+else
+  echo "[emb] TEST_MODE=OFF -> starting proxy to REAL_EMBEDDINGS_URL=${REAL_EMBEDDINGS_URL:-<unset>} at :${PORT}"
+  exec uvicorn adapters.emb_proxy:app --host 0.0.0.0 --port "${PORT}" --app-dir /srv
+fi
 
 ### emb/requirements.txt
 fastapi==0.111.0
 uvicorn[standard]==0.30.1
-numpy==2.0.1
-
-### emb/server.py
-from typing import List, Union
-from fastapi import FastAPI
-from pydantic import BaseModel
-
-app = FastAPI(title="Embeddings Stub")
-
-class EmbedRequest(BaseModel):
-    input: Union[str, List[str]]
-
-@app.get("/healthz")
-def healthz():
-    return {"status": "ok"}
-
-@app.post("/embed")
-def embed(req: EmbedRequest):
-    def vec_for(_: str):
-        return [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]
-    if isinstance(req.input, list):
-        return {"data": [vec_for(x) for x in req.input]}
-    else:
-        return {"data": vec_for(req.input)}
+httpx==0.27.0
+pydantic==2.8.2
 
 ### frontend/Dockerfile
 # --- Build stage ---
@@ -111,72 +109,52 @@ COPY --from=build /app/dist/ /srv/dist/
 EXPOSE 8080
 CMD ["serve", "-s", "dist", "-l", "8080"]
 
-### frontend/nginx.conf
-server {
-    listen 80;
-    server_name _;
-
-    # Serve built static files
-    root /usr/share/nginx/html;
-    index index.html;
-
-    # Try files, then fallback to index.html for SPA routing
-    location / {
-        try_files $uri $uri/ /index.html;
-    }
-
-    # Static assets caching (tweak as needed)
-    location ~* \.(?:js|css|woff2?|ttf|otf|eot)$ {
-        add_header Cache-Control "public, max-age=31536000, immutable";
-        try_files $uri =404;
-    }
-
-    # Basic security headers
-    add_header X-Content-Type-Options nosniff;
-    add_header X-Frame-Options SAMEORIGIN;
-    add_header Referrer-Policy no-referrer-when-downgrade;
-}
-
 ### llm/Dockerfile
 FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
 WORKDIR /srv
 
-# Install deps from local requirements.txt placed NEXT TO this Dockerfile
-COPY docker/llm/requirements.txt ./
+COPY docker/llm/requirements.txt ./requirements.txt
 RUN python -m pip install --upgrade pip && pip install -r requirements.txt
 
-# Copy service code
-COPY backend/ .
+COPY backend/ ./
+COPY docker/llm/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 EXPOSE 8002
 ENV PORT=8002
-# Adjust the module if different (e.g., "llm.app:app")
-CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8002"]
+
+ENTRYPOINT ["/entrypoint.sh"]
+CMD []
+
+### llm/entrypoint.sh
+#!/bin/sh
+set -e
+
+is_true () {
+  case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes|on) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+PORT="${PORT:-8002}"
+export PYTHONPATH=/srv
+
+if is_true "${TEST_MODE}"; then
+  echo "[llm] TEST_MODE=ON -> starting stub at :${PORT}"
+  exec uvicorn stubs.llm_server:app --host 0.0.0.0 --port "${PORT}" --app-dir /srv
+else
+  echo "[llm] TEST_MODE=OFF -> starting proxy to REAL_LLM_URL=${REAL_LLM_URL:-<unset>} at :${PORT}"
+  exec uvicorn adapters.llm_proxy:app --host 0.0.0.0 --port "${PORT}" --app-dir /srv
+fi
 
 ### llm/requirements.txt
 fastapi==0.111.0
 uvicorn[standard]==0.30.1
-
-### llm/server.py
-from fastapi import FastAPI
-from pydantic import BaseModel
-from typing import List, Dict, Any
-
-app = FastAPI(title="LLM Stub")
-
-class ChatRequest(BaseModel):
-    messages: List[Dict[str, Any]]
-
-@app.get("/healthz")
-def healthz():
-    return {"status": "ok"}
-
-@app.post("/chat")
-def chat(req: ChatRequest):
-    last_user = next((m["content"] for m in reversed(req.messages) if m.get("role") == "user"), "")
-    return {"choices":[{"message":{"role":"assistant","content":f"(stub) You said: {last_user}"}}]}
+httpx==0.27.0
+pydantic==2.8.2
 
 ### worker/Dockerfile
 FROM python:3.11-slim
@@ -188,15 +166,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
  && rm -rf /var/lib/apt/lists/*
 
-# Install deps from local requirements.txt placed NEXT TO this Dockerfile
-COPY docker/worker/requirements.txt ./
+COPY docker/worker/requirements.txt ./requirements.txt
 RUN python -m pip install --upgrade pip && pip install -r requirements.txt
 
-# Copy worker sources
-COPY backend/ .
+COPY backend/ ./
 
-# Tip: override the CMD in docker-compose to run celery if you have it
-# e.g. command: celery -A app.celery_app worker --loglevel=INFO
 CMD ["python", "-c", "import time; print('Worker ready'); time.sleep(10**9)"]
 
 ### worker/requirements.txt

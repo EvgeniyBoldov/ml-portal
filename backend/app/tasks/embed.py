@@ -9,7 +9,8 @@ from app.core.qdrant import get_qdrant
 from app.core.db import SessionLocal
 from app.core.metrics import rag_vectors_upserted_total
 from app.models.rag import RagDocuments, RagChunks
-from .shared import log, RetryableError, task_metrics, env_int, embedding_batch_inflight
+from .shared import log, RetryableError, task_metrics, env_int
+from app.core.metrics import embedding_batch_inflight
 
 EMB_URL = os.getenv("EMBEDDINGS_URL", "http://emb:8001")
 COLLECTION = os.getenv("QDRANT_COLLECTION", "rag_chunks")
