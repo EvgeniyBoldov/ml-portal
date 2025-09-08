@@ -8,12 +8,5 @@ type Props = React.HTMLAttributes<HTMLSpanElement> & {
 }
 
 export default function Badge({ tone='neutral', className='', children, ...rest }: Props) {
-  return (
-    <span
-      {...rest}
-      className={[styles.badge, styles[tone], className].join(' ')}
-    >
-      {children}
-    </span>
-  )
+  return <span {...rest} className={[styles.badge, styles[tone], className].join(' ')}>{children}</span>
 }

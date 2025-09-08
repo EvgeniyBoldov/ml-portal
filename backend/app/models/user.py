@@ -5,6 +5,7 @@ from sqlalchemy import String, Boolean, Text, DateTime, Enum, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .base import Base
+import uuid
 
 RolesEnum = Enum("admin", "editor", "reader", name="role_enum", create_constraint=True)
 
@@ -21,8 +22,6 @@ class Users(Base):
     # relationships
     refresh_tokens: Mapped[List["UserRefreshTokens"]] = relationship(back_populates="user", cascade="all, delete-orphan")
     pat_tokens: Mapped[List["UserTokens"]] = relationship(back_populates="user", cascade="all, delete-orphan")
-
-import uuid
 
 class UserTokens(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

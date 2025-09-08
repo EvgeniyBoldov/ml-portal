@@ -1,24 +1,28 @@
 ### api/Dockerfile
 FROM python:3.11-slim
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y --no-install-recommends build-essential && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+ && rm -rf /var/lib/apt/lists/*
 
-COPY backend/requirements/api.txt /tmp/requirements.txt
-RUN pip install --upgrade pip && pip install -r /tmp/requirements.txt
+# 1) Install dependencies strictly from requirements.txt that sits NEXT TO this Dockerfile
+COPY docker/api/requirements.txt ./
+RUN python -m pip install --upgrade pip && pip install -r requirements.txt
 
-# copy FULL backend code into /app/ (so package root is "app", not "backend.app")
-COPY backend/ /app/
+# 2) Copy application sources that sit NEXT TO this Dockerfile
+COPY backend/ .
 
 EXPOSE 8000
-CMD ["uvicorn","app.main:app","--host","0.0.0.0","--port","8000"]
+ENV PORT=8000
 
-### api/api.txt
+# Adjust the module path if your entrypoint differs
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+### api/requirements.txt
 fastapi==0.111.0
 uvicorn[standard]==0.30.1
 pydantic==2.8.2
@@ -35,79 +39,167 @@ argon2-cffi==23.1.0
 qdrant-client==1.9.1
 minio==7.2.7
 python-multipart==0.0.9
-
 ### emb/Dockerfile
 FROM python:3.11-slim
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
+WORKDIR /srv
 
-WORKDIR /app
+# Install deps from local requirements.txt placed NEXT TO this Dockerfile
+COPY docker/emb/requirements.txt ./
+RUN python -m pip install --upgrade pip && pip install -r requirements.txt
 
-COPY backend/requirements/emb.txt /tmp/requirements.txt
-RUN pip install --upgrade pip && pip install -r /tmp/requirements.txt
+# Copy service code
+COPY backend/ .
 
-# copy FULL backend code into /app/
-COPY backend/ /app/
-
-ENV PORT=8001 MODELS_DIR=/models MODEL_ID="BAAI/bge-m3"
-VOLUME ["/models"]
 EXPOSE 8001
-# path changes from backend.apps.emb.main -> apps.emb.main
-CMD ["uvicorn","apps.emb.main:app","--host","0.0.0.0","--port","8001"]
+ENV PORT=8001
+# Adjust the module if different (e.g., "emb.app:app")
+CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8001"]
 
-### emb/emb.txt
+### emb/requirements.txt
 fastapi==0.111.0
 uvicorn[standard]==0.30.1
 numpy==2.0.1
 
+### emb/server.py
+from typing import List, Union
+from fastapi import FastAPI
+from pydantic import BaseModel
+
+app = FastAPI(title="Embeddings Stub")
+
+class EmbedRequest(BaseModel):
+    input: Union[str, List[str]]
+
+@app.get("/healthz")
+def healthz():
+    return {"status": "ok"}
+
+@app.post("/embed")
+def embed(req: EmbedRequest):
+    def vec_for(_: str):
+        return [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]
+    if isinstance(req.input, list):
+        return {"data": [vec_for(x) for x in req.input]}
+    else:
+        return {"data": vec_for(req.input)}
+
+### frontend/Dockerfile
+# --- Build stage ---
+FROM node:20-alpine AS build
+WORKDIR /app
+
+COPY frontend/package*.json ./
+RUN if [ -f package-lock.json ]; then npm ci --no-audit --no-fund; else npm install --no-audit --no-fund; fi
+
+COPY frontend/ /app/
+
+# Build-time configuration (no .env usage)
+ARG VITE_API_BASE=http://api:8000
+ARG VITE_USE_MOCKS=false
+ENV VITE_API_BASE=${VITE_API_BASE}
+ENV VITE_USE_MOCKS=${VITE_USE_MOCKS}
+
+RUN npm run build
+
+# --- Run stage ---
+FROM node:20-alpine AS run
+WORKDIR /srv
+RUN npm i -g serve
+COPY --from=build /app/dist/ /srv/dist/
+EXPOSE 8080
+CMD ["serve", "-s", "dist", "-l", "8080"]
+
+### frontend/nginx.conf
+server {
+    listen 80;
+    server_name _;
+
+    # Serve built static files
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # Try files, then fallback to index.html for SPA routing
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # Static assets caching (tweak as needed)
+    location ~* \.(?:js|css|woff2?|ttf|otf|eot)$ {
+        add_header Cache-Control "public, max-age=31536000, immutable";
+        try_files $uri =404;
+    }
+
+    # Basic security headers
+    add_header X-Content-Type-Options nosniff;
+    add_header X-Frame-Options SAMEORIGIN;
+    add_header Referrer-Policy no-referrer-when-downgrade;
+}
+
 ### llm/Dockerfile
 FROM python:3.11-slim
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
+WORKDIR /srv
 
-WORKDIR /app
+# Install deps from local requirements.txt placed NEXT TO this Dockerfile
+COPY docker/llm/requirements.txt ./
+RUN python -m pip install --upgrade pip && pip install -r requirements.txt
 
-COPY backend/requirements/llm.txt /tmp/requirements.txt
-RUN pip install --upgrade pip && pip install -r /tmp/requirements.txt
+# Copy service code
+COPY backend/ .
 
-# copy FULL backend code into /app/
-COPY backend/ /app/
-
-ENV PORT=8002 LLM_MODEL_PATH=/models/model.gguf
-VOLUME ["/models"]
 EXPOSE 8002
-# path changes from backend.apps.llm.main -> apps.llm.main
-CMD ["uvicorn","apps.llm.main:app","--host","0.0.0.0","--port","8002"]
+ENV PORT=8002
+# Adjust the module if different (e.g., "llm.app:app")
+CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8002"]
 
-### llm/llm.txt
+### llm/requirements.txt
 fastapi==0.111.0
 uvicorn[standard]==0.30.1
+
+### llm/server.py
+from fastapi import FastAPI
+from pydantic import BaseModel
+from typing import List, Dict, Any
+
+app = FastAPI(title="LLM Stub")
+
+class ChatRequest(BaseModel):
+    messages: List[Dict[str, Any]]
+
+@app.get("/healthz")
+def healthz():
+    return {"status": "ok"}
+
+@app.post("/chat")
+def chat(req: ChatRequest):
+    last_user = next((m["content"] for m in reversed(req.messages) if m.get("role") == "user"), "")
+    return {"choices":[{"message":{"role":"assistant","content":f"(stub) You said: {last_user}"}}]}
 
 ### worker/Dockerfile
 FROM python:3.11-slim
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
-
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y --no-install-recommends build-essential && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+ && rm -rf /var/lib/apt/lists/*
 
-COPY backend/requirements/worker.txt /tmp/requirements.txt
-RUN pip install --upgrade pip && pip install -r /tmp/requirements.txt
+# Install deps from local requirements.txt placed NEXT TO this Dockerfile
+COPY docker/worker/requirements.txt ./
+RUN python -m pip install --upgrade pip && pip install -r requirements.txt
 
-# copy FULL backend code into /app/
-COPY backend/ /app/
+# Copy worker sources
+COPY backend/ .
 
-# change celery app path from backend.app.celery_app:app -> app.celery_app:app
-CMD ["bash","-lc","celery -A app.celery_app:app worker -Q ${QUEUES:-normalize,chunk,embed,index,analyze,watch} -n worker@%h --loglevel=INFO"]
+# Tip: override the CMD in docker-compose to run celery if you have it
+# e.g. command: celery -A app.celery_app worker --loglevel=INFO
+CMD ["python", "-c", "import time; print('Worker ready'); time.sleep(10**9)"]
 
-### worker/worker.txt
+### worker/requirements.txt
 celery[redis]==5.4.0
 redis==5.0.7
 httpx==0.27.0
