@@ -1,56 +1,42 @@
-from fastapi import APIRouter, Depends, Request
-from app.api.deps import db_session, get_current_user, rate_limit
-from app.api.sse import sse_response
+# app/api/routers/chats.py
+from __future__ import annotations
+from typing import Optional, Dict, Any
+
+from fastapi import APIRouter, Depends
+from sqlalchemy.orm import Session
+
+from app.api.deps import db_session, get_current_user
+from app.repositories.chats_repo import ChatsRepo
 
 router = APIRouter(prefix="/chats", tags=["chats"])
 
-# Simple in-memory store for stubs
-_CHATS: dict[str, dict] = {}
-_MESSAGES: dict[str, list[dict]] = {}
+# ---- serializers to match frontend expectations ----
+def _ser_chat(c) -> Dict[str, Any]:
+    # Chats model: id, name, owner_id, created_at, updated_at, last_message_at (optional)
+    return {
+        "id": str(c.id),
+        "name": c.name or f"Chat {str(c.id)[:8]}",
+    }
 
 @router.get("")
-async def list_chats(limit: int = 50, cursor: str | None = None, q: str | None = None, session=Depends(db_session), user=Depends(get_current_user)):
-	items = [{"id": cid, "name": data.get("name") or f"Chat {cid}"} for cid, data in list(_CHATS.items())[:limit]]
-	return {"items": items, "next_cursor": None}
+def list_chats(
+    limit: int = 50,
+    cursor: Optional[str] = None,
+    session: Session = Depends(db_session),
+    user: Dict[str, Any] = Depends(get_current_user),
+):
+    repo = ChatsRepo(session)
+    # get_current_user returns a dict, so we must index by 'id'
+    items = repo.list_chats(user["id"])[:limit]
+    return {"items": [_ser_chat(c) for c in items], "next_cursor": None}
 
 @router.post("")
-async def create_chat(payload: dict | None = None, session=Depends(db_session), user=Depends(get_current_user)):
-	import uuid
-	cid = str(uuid.uuid4())
-	_CHATS[cid] = {"id": cid, "name": (payload or {}).get("name")}
-	_MESSAGES[cid] = []
-	return {"chat_id": cid}
-
-@router.get("/{chat_id}/messages")
-async def get_messages(chat_id: str, limit: int = 50, cursor: str | None = None, session=Depends(db_session), user=Depends(get_current_user)):
-	msgs = _MESSAGES.get(chat_id, [])
-	return {"items": msgs[:limit], "next_cursor": None}
-
-@router.post("/{chat_id}/messages")
-async def post_messages(chat_id: str, payload: dict, request: Request, session=Depends(db_session), user=Depends(get_current_user)):
-	await rate_limit(request, f"chat_post:{chat_id}", 60, 60)
-	if (payload or {}).get("response_stream"):
-		def gen():
-			yield {"data": "event: token"}
-			yield {"data": "data: Привет..."}
-			yield {"data": "data: Это стрим ответа."}
-			yield {"data": "event: done"}
-		return sse_response(gen())
-	msg = {"role": "user", "content": (payload or {}).get("content", "")}
-	_MESSAGES.setdefault(chat_id, []).append(msg)
-	resp = {"role": "assistant", "content": "Привет! Это заглушка ответа."}
-	_MESSAGES[chat_id].append(resp)
-	return {"messages":[resp]}
-
-@router.patch("/{chat_id}")
-async def rename_chat(chat_id: str, payload: dict, session=Depends(db_session), user=Depends(get_current_user)):
-	if chat_id not in _CHATS:
-		_CHATS[chat_id] = {"id": chat_id}
-	_CHATS[chat_id]["name"] = (payload or {}).get("name")
-	return {"ok": True}
-
-@router.delete("/{chat_id}")
-async def delete_chat(chat_id: str, session=Depends(db_session), user=Depends(get_current_user)):
-	_CHATS.pop(chat_id, None)
-	_MESSAGES.pop(chat_id, None)
-	return {"ok": True}
+def create_chat(
+    payload: Dict[str, Any] | None = None,
+    session: Session = Depends(db_session),
+    user: Dict[str, Any] = Depends(get_current_user),
+):
+    repo = ChatsRepo(session)
+    name = (payload or {}).get("name")
+    chat = repo.create_chat(owner_id=user["id"], name=name)
+    return {"chat_id": str(chat.id)}

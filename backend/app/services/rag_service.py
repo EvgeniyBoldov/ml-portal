@@ -16,6 +16,13 @@ from app.models.rag import RagDocuments, RagChunks
 from . import clients
 
 def create_upload(session: Session, filename: str, uploaded_by=None) -> Dict[str, Any]:
+    # Проверяем расширение файла
+    allowed_extensions = {'.txt', '.pdf', '.doc', '.docx', '.md', '.rtf', '.odt'}
+    if filename:
+        file_ext = '.' + filename.split('.')[-1].lower() if '.' in filename else ''
+        if file_ext not in allowed_extensions:
+            raise ValueError(f"Unsupported file type: {file_ext}. Allowed: {', '.join(allowed_extensions)}")
+    
     repo = RagRepo(session)
     doc = repo.create_document(name=filename, uploaded_by=uploaded_by, status="uploaded")
     key = f"{doc.id}/{filename}"
@@ -23,6 +30,10 @@ def create_upload(session: Session, filename: str, uploaded_by=None) -> Dict[str
     doc.url_file = key
     doc.updated_at = datetime.utcnow()
     session.commit()
+    
+    # Запускаем задачу отслеживания загрузки
+    start_upload_watch(str(doc.id), key)
+    
     return {"id": str(doc.id), "put_url": put_url, "key": key}
 
 def list_documents(session: Session, limit: int = 50):

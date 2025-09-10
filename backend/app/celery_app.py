@@ -2,7 +2,7 @@ from __future__ import annotations
 import os
 from celery import Celery
 
-BROKER_URL = os.getenv("CELERY_BROKER_URL") or os.getenv("REDIS_URL", "redis://redis:6379/0")
+BROKER_URL = os.getenv("CELERY_BROKER_URL") or "redis://redis:6379/0"
 RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND") or "redis://redis:6379/1"
 
 app = Celery(

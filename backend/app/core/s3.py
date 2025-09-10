@@ -27,8 +27,22 @@ def get_minio() -> Minio:
         _client = _mk_client()
     return _client
 
+def reset_client():
+    global _client
+    _client = None
+
 def presign_put(bucket: str, key: str, expiry_seconds: int = 3600) -> str:
-    return get_minio().presigned_put_object(bucket, key, expires=expiry_seconds)
+    from datetime import timedelta
+    url = get_minio().presigned_put_object(bucket, key, expires=timedelta(seconds=expiry_seconds))
+    
+    # Replace internal endpoint with public endpoint if different
+    if settings.S3_PUBLIC_ENDPOINT != settings.S3_ENDPOINT:
+        # Simple string replacement approach to avoid connection issues
+        internal_base = settings.S3_ENDPOINT.rstrip('/')
+        public_base = settings.S3_PUBLIC_ENDPOINT.rstrip('/')
+        url = url.replace(internal_base, public_base)
+    
+    return url
 
 def ensure_bucket(bucket: str) -> None:
     c = get_minio()

@@ -10,9 +10,11 @@ import uuid
 ChatRoleEnum = Enum("system", "user", "assistant", "tool", name="chat_role_enum", create_constraint=True)
 
 class Chats(Base):
+    __tablename__ = "chats"
+    
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    owner_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    owner_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default="now()", nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default="now()", nullable=False)
     last_message_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -20,6 +22,8 @@ class Chats(Base):
     messages: Mapped[List["ChatMessages"]] = relationship(back_populates="chat", cascade="all, delete-orphan")
 
 class ChatMessages(Base):
+    __tablename__ = "chatmessages"
+    
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     chat_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("chats.id", ondelete="CASCADE"), nullable=False)
     role: Mapped[str] = mapped_column(ChatRoleEnum, nullable=False)

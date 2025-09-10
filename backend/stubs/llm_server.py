@@ -1,3 +1,4 @@
+import asyncio
 from fastapi import FastAPI
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
@@ -14,6 +15,9 @@ def healthz():
     return {"status": "ok"}
 
 @app.post("/v1/chat/completions")
-def chat(req: ChatRequest):
+async def chat(req: ChatRequest):
+    # Добавляем задержку 5 секунд
+    await asyncio.sleep(5)
+    
     last_user = next((m.get("content","") for m in reversed(req.messages) if m.get("role") == "user"), "")
     return {"choices":[{"message":{"role":"assistant","content":f"(stub) You said: {last_user}"}}]}

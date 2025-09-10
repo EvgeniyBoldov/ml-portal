@@ -29,8 +29,13 @@ def split(self, document_id: str, *, max_chars: int | None = None, overlap: int 
             overlap   = overlap   or env_int("CHUNK_OVERLAP", 100)
             try:
                 obj = s3.get_object(settings.S3_BUCKET_CANONICAL, doc.url_canonical_file)
-                data = obj.read().decode("utf-8") or ""
-            except Exception:
+                json_data = obj.read().decode("utf-8") or "{}"
+                import json
+                parsed_data = json.loads(json_data)
+                # Извлекаем текст из нормализованного JSON
+                data = parsed_data.get("text", "") if isinstance(parsed_data, dict) else ""
+            except Exception as e:
+                log.error(f"Error reading canonical file: {e}")
                 data = ""
             chunks = list(_split_text(data, max_chars=max_chars, overlap=overlap)) or [""]
             for idx, text in enumerate(chunks):

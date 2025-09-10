@@ -16,13 +16,38 @@ def process(self, document_id: str, *, source_key: str | None = None) -> dict:
             doc = session.get(RagDocuments, document_id)
             if not doc:
                 raise RetryableError("document_not_found")
+            
+            # Заглушка нормализации - просто копируем файл как есть
             src = source_key or (doc.url_file or f"{doc.id}/source.bin")
             dst = f"{doc.id}/document.json"
+            
             try:
-                s3.put_object(settings.S3_BUCKET_CANONICAL, dst, b"{}", length=2)
-            except Exception:
+                # Получаем исходный файл
+                obj = s3.get_object(settings.S3_BUCKET_RAW, src)
+                content = obj.read()
+                
+                # Простая заглушка - если это текстовый файл, читаем как текст
+                try:
+                    text_content = content.decode('utf-8')
+                    # Создаем JSON с текстом
+                    import json
+                    normalized_data = {"text": text_content, "type": "text", "original_filename": doc.name}
+                    json_content = json.dumps(normalized_data, ensure_ascii=False).encode('utf-8')
+                except UnicodeDecodeError:
+                    # Если не текстовый файл, сохраняем как бинарный
+                    import json
+                    normalized_data = {"type": "binary", "original_filename": doc.name, "size": len(content)}
+                    json_content = json.dumps(normalized_data, ensure_ascii=False).encode('utf-8')
+                
+                # Сохраняем нормализованный файл
+                s3.put_object(settings.S3_BUCKET_CANONICAL, dst, json_content, length=len(json_content))
+                
+            except Exception as e:
+                log.error(f"Error processing file {src}: {e}")
+                # Создаем пустой файл в случае ошибки
                 from io import BytesIO
-                s3.put_object(settings.S3_BUCKET_CANONICAL, dst, BytesIO(b"{}"), length=2)
+                s3.put_object(settings.S3_BUCKET_CANONICAL, dst, BytesIO(b'{"text": "", "type": "error"}'), length=2)
+            
             doc.url_canonical_file = dst
             doc.status = "chunking"
             doc.updated_at = datetime.utcnow()

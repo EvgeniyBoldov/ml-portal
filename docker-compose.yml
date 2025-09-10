@@ -66,12 +66,13 @@ services:
       DB_URL: "${DB_URL}"
       REDIS_URL: "${REDIS_URL}"
       QDRANT_URL: "${QDRANT_URL}"
-      S3_ENDPOINT: "${S3_ENDPOINT}"
-      S3_PUBLIC_ENDPOINT: "${S3_PUBLIC_ENDPOINT}"
+      S3_ENDPOINT: "${S3_ENDPOINT:-http://minio:9000}"
+      S3_PUBLIC_ENDPOINT: "${S3_PUBLIC_ENDPOINT:-http://localhost:9000}"
       S3_ACCESS_KEY: "${S3_ACCESS_KEY}"
       S3_SECRET_KEY: "${S3_SECRET_KEY}"
       EMBEDDINGS_URL: "${EMBEDDINGS_URL}"
       LLM_URL: "${LLM_URL}"
+      CELERY_BROKER_URL: "amqp://guest:guest@rabbitmq:5672//"
       HEALTH_DEEP: "${HEALTH_DEEP:-0}"
     ports: ["8000:8000"]
     depends_on:
@@ -148,21 +149,21 @@ services:
       api:
         condition: service_started
 
-  seed:
-    build:
-      context: .
-      dockerfile: docker/api/Dockerfile
-    command: python scripts/seed_users.py
-    environment:
-      PYTHONPATH: "/app"
-      DB_URL: "${DB_URL}"
-      ADMIN_LOGIN: ${ADMIN_LOGIN:-admin}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin123}
-      USER_LOGIN: ${USER_LOGIN:-user}
-      USER_PASSWORD: ${USER_PASSWORD:-user123}
-    depends_on:
-      postgres:
-        condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
-    restart: "no"
+  # seed:
+  #   build:
+  #     context: .
+  #     dockerfile: docker/api/Dockerfile
+  #   command: python scripts/seed_users.py
+  #   environment:
+  #     PYTHONPATH: "/app"
+  #     DB_URL: "${DB_URL}"
+  #     ADMIN_LOGIN: ${ADMIN_LOGIN:-admin}
+  #     ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin123}
+  #     USER_LOGIN: ${USER_LOGIN:-user}
+  #     USER_PASSWORD: ${USER_PASSWORD:-user123}
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+  #     migrate:
+  #       condition: service_completed_successfully
+  #   restart: "no"

@@ -103,6 +103,43 @@ async def chat(req: ChatRequest):
     except httpx.HTTPError as e:
         raise HTTPException(502, f"Upstream error: {e}")
 
+### alembic.ini
+[alembic]
+script_location = app/migrations
+sqlalchemy.url = 
+
+[loggers]
+keys = root,sqlalchemy,alembic
+
+[handlers]
+keys = console
+
+[formatters]
+keys = generic
+
+[logger_root]
+level = WARN
+handlers = console
+
+[logger_sqlalchemy]
+level = WARN
+handlers = console
+qualname = sqlalchemy.engine
+
+[logger_alembic]
+level = INFO
+handlers = console
+qualname = alembic
+
+[handler_console]
+class = StreamHandler
+args = (sys.stderr,)
+level = NOTSET
+formatter = generic
+
+[formatter_generic]
+format = %(levelname)-5.5s [%(name)s] %(message)s
+
 ### app/__init__.py
 # app package init
 
@@ -291,62 +328,48 @@ def logout(payload: dict | None = None, session: Session = Depends(db_session)) 
     return Response(status_code=204)
 
 ### app/api/routers/chats.py
-from fastapi import APIRouter, Depends, Request
-from app.api.deps import db_session, get_current_user, rate_limit
-from app.api.sse import sse_response
+# app/api/routers/chats.py
+from __future__ import annotations
+from typing import Optional, Dict, Any
+
+from fastapi import APIRouter, Depends
+from sqlalchemy.orm import Session
+
+from app.api.deps import db_session, get_current_user
+from app.repositories.chats_repo import ChatsRepo
 
 router = APIRouter(prefix="/chats", tags=["chats"])
 
-# Simple in-memory store for stubs
-_CHATS: dict[str, dict] = {}
-_MESSAGES: dict[str, list[dict]] = {}
+# ---- serializers to match frontend expectations ----
+def _ser_chat(c) -> Dict[str, Any]:
+    # Chats model: id, name, owner_id, created_at, updated_at, last_message_at (optional)
+    return {
+        "id": str(c.id),
+        "name": c.name or f"Chat {str(c.id)[:8]}",
+    }
 
 @router.get("")
-async def list_chats(limit: int = 50, cursor: str | None = None, q: str | None = None, session=Depends(db_session), user=Depends(get_current_user)):
-	items = [{"id": cid, "name": data.get("name") or f"Chat {cid}"} for cid, data in list(_CHATS.items())[:limit]]
-	return {"items": items, "next_cursor": None}
+def list_chats(
+    limit: int = 50,
+    cursor: Optional[str] = None,
+    session: Session = Depends(db_session),
+    user: Dict[str, Any] = Depends(get_current_user),
+):
+    repo = ChatsRepo(session)
+    # get_current_user returns a dict, so we must index by 'id'
+    items = repo.list_chats(user["id"])[:limit]
+    return {"items": [_ser_chat(c) for c in items], "next_cursor": None}
 
 @router.post("")
-async def create_chat(payload: dict | None = None, session=Depends(db_session), user=Depends(get_current_user)):
-	import uuid
-	cid = str(uuid.uuid4())
-	_CHATS[cid] = {"id": cid, "name": (payload or {}).get("name")}
-	_MESSAGES[cid] = []
-	return {"chat_id": cid}
-
-@router.get("/{chat_id}/messages")
-async def get_messages(chat_id: str, limit: int = 50, cursor: str | None = None, session=Depends(db_session), user=Depends(get_current_user)):
-	msgs = _MESSAGES.get(chat_id, [])
-	return {"items": msgs[:limit], "next_cursor": None}
-
-@router.post("/{chat_id}/messages")
-async def post_messages(chat_id: str, payload: dict, request: Request, session=Depends(db_session), user=Depends(get_current_user)):
-	await rate_limit(request, f"chat_post:{chat_id}", 60, 60)
-	if (payload or {}).get("response_stream"):
-		def gen():
-			yield {"data": "event: token"}
-			yield {"data": "data: Привет..."}
-			yield {"data": "data: Это стрим ответа."}
-			yield {"data": "event: done"}
-		return sse_response(gen())
-	msg = {"role": "user", "content": (payload or {}).get("content", "")}
-	_MESSAGES.setdefault(chat_id, []).append(msg)
-	resp = {"role": "assistant", "content": "Привет! Это заглушка ответа."}
-	_MESSAGES[chat_id].append(resp)
-	return {"messages":[resp]}
-
-@router.patch("/{chat_id}")
-async def rename_chat(chat_id: str, payload: dict, session=Depends(db_session), user=Depends(get_current_user)):
-	if chat_id not in _CHATS:
-		_CHATS[chat_id] = {"id": chat_id}
-	_CHATS[chat_id]["name"] = (payload or {}).get("name")
-	return {"ok": True}
-
-@router.delete("/{chat_id}")
-async def delete_chat(chat_id: str, session=Depends(db_session), user=Depends(get_current_user)):
-	_CHATS.pop(chat_id, None)
-	_MESSAGES.pop(chat_id, None)
-	return {"ok": True}
+def create_chat(
+    payload: Dict[str, Any] | None = None,
+    session: Session = Depends(db_session),
+    user: Dict[str, Any] = Depends(get_current_user),
+):
+    repo = ChatsRepo(session)
+    name = (payload or {}).get("name")
+    chat = repo.create_chat(owner_id=user["id"], name=name)
+    return {"chat_id": str(chat.id)}
 
 ### app/api/routers/rag.py
 from __future__ import annotations
@@ -996,39 +1019,54 @@ app.include_router(chats_router, prefix="/api")
 app.include_router(rag_router, prefix="/api")
 
 ### app/migrations/env.py
+# backend/app/migrations/env.py
 from __future__ import annotations
 from logging.config import fileConfig
 from sqlalchemy import engine_from_config, pool
 from alembic import context
 from app.core.config import settings
-from app.models.base import Base  # type: ignore
+from app.models.base import Base  # provides Base.metadata
 
-# this is the Alembic Config object, which provides access to the values within the .ini file.
+# Alembic Config
 config = context.config
-
-# Interpret the config file for Python logging.
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 target_metadata = Base.metadata
 
+def get_url() -> str:
+    # Use application settings (supports DB_URL or DB.URL env names)
+    return settings.DB_URL
+
 def run_migrations_offline() -> None:
-    url = settings.DB_URL
+    url = get_url()
     context.configure(
         url=url,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        compare_type=True,
+        include_schemas=False,
     )
     with context.begin_transaction():
         context.run_migrations()
 
 def run_migrations_online() -> None:
     configuration = config.get_section(config.config_ini_section) or {}
-    configuration["sqlalchemy.url"] = settings.DB_URL
-    connectable = engine_from_config(configuration, prefix="sqlalchemy.", poolclass=pool.NullPool)
+    configuration["sqlalchemy.url"] = get_url()
+    connectable = engine_from_config(
+        configuration,
+        prefix="sqlalchemy.",
+        poolclass=pool.NullPool,
+        future=True,
+    )
     with connectable.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata)
+        context.configure(
+            connection=connection,
+            target_metadata=target_metadata,
+            compare_type=True,
+            include_schemas=False,
+        )
         with context.begin_transaction():
             context.run_migrations()
 
@@ -1037,72 +1075,54 @@ if context.is_offline_mode():
 else:
     run_migrations_online()
 
-### app/migrations/versions/20250904_213024_initial.py
+### app/migrations/versions/20250908_154500_add_tokens.py
+# app/migrations/versions/20250908_154500_add_tokens.py
+"""Compatibility shim: previously existed in DB history.
+This migration is intentionally a no-op to satisfy databases already stamped
+with this revision id.
+"""
+from __future__ import annotations
+from alembic import op
+import sqlalchemy as sa
+
+# revision identifiers, used by Alembic.
+revision = "20250908_154500_add_tokens"
+down_revision = None
+branch_labels = None
+depends_on = None
+
+def upgrade():
+    # No operation on purpose
+    pass
+
+def downgrade():
+    # No operation on purpose
+    pass
+
+### app/migrations/versions/20250910_175628_initial.py
+# app/migrations/versions/20250910_175628_initial.py
 from __future__ import annotations
 from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision = "20250904_213024"
-down_revision = None
+revision = "20250910_175628_initial"
+down_revision = "20250908_154500_add_tokens"
 branch_labels = None
 depends_on = None
 
 def upgrade():
-    # Enums
-    role_enum = sa.Enum("admin", "editor", "reader", name="role_enum")
+    # --- Enums (create if missing) ---
     chat_role_enum = sa.Enum("system", "user", "assistant", "tool", name="chat_role_enum")
     rag_status_enum = sa.Enum("uploaded", "normalizing", "chunking", "embedding", "indexing", "ready", "archived", "deleting", "error", name="rag_status_enum")
     analyze_status_enum = sa.Enum("queued", "processing", "done", "error", "canceled", name="analyze_status_enum")
-    role_enum.create(op.get_bind(), checkfirst=True)
-    chat_role_enum.create(op.get_bind(), checkfirst=True)
-    rag_status_enum.create(op.get_bind(), checkfirst=True)
-    analyze_status_enum.create(op.get_bind(), checkfirst=True)
+    bind = op.get_bind()
+    chat_role_enum.create(bind, checkfirst=True)
+    rag_status_enum.create(bind, checkfirst=True)
+    analyze_status_enum.create(bind, checkfirst=True)
 
-    # users
-    op.create_table(
-        "users",
-        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
-        sa.Column("fio", sa.Text(), nullable=True),
-        sa.Column("login", sa.String(length=255), nullable=False, unique=True),
-        sa.Column("password_hash", sa.Text(), nullable=False),
-        sa.Column("role", role_enum, nullable=False, server_default="reader"),
-        sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.text("true")),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-    )
-
-    # user_tokens (PAT)
-    op.create_table(
-        "usertokens",
-        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
-        sa.Column("user_id", postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column("token_hash", sa.Text(), nullable=False),
-        sa.Column("name", sa.String(length=255), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("last_used_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("revoked", sa.Boolean(), nullable=False, server_default=sa.text("false")),
-        sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
-    )
-
-    # user_refresh_tokens
-    op.create_table(
-        "userrefreshtokens",
-        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
-        sa.Column("user_id", postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column("refresh_hash", sa.Text(), nullable=False),
-        sa.Column("issued_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("rotating", sa.Boolean(), nullable=False, server_default=sa.text("true")),
-        sa.Column("revoked", sa.Boolean(), nullable=False, server_default=sa.text("false")),
-        sa.Column("meta", sa.Text(), nullable=True),
-        sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
-        sa.UniqueConstraint("refresh_hash", name="uq_user_refresh_tokens_refresh_hash"),
-    )
-    op.create_index("ix_userrefreshtokens_user_id_expires_at", "userrefreshtokens", ["user_id", "expires_at"])
-
-    # chats
+    # --- chats ---
     op.create_table(
         "chats",
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
@@ -1114,7 +1134,7 @@ def upgrade():
         sa.ForeignKeyConstraint(["owner_id"], ["users.id"], ondelete="CASCADE"),
     )
 
-    # chat_messages
+    # --- chat messages ---
     op.create_table(
         "chatmessages",
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
@@ -1130,12 +1150,12 @@ def upgrade():
     )
     op.create_index("ix_chatmessages_chat_id_created_at", "chatmessages", ["chat_id", "created_at"])
 
-    # rag_documents
+    # --- RAG documents ---
     op.create_table(
         "ragdocuments",
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
         sa.Column("name", sa.Text(), nullable=True),
-        sa.Column("status", rag_status_enum, nullable=False, server_default="uploaded"),
+        sa.Column("status", rag_status_enum, nullable=False, server_default=sa.text("'uploaded'")),
         sa.Column("date_upload", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
         sa.Column("uploaded_by", postgresql.UUID(as_uuid=True), nullable=True),
         sa.Column("url_file", sa.Text(), nullable=True),
@@ -1147,7 +1167,7 @@ def upgrade():
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=True),
     )
 
-    # rag_chunks
+    # --- RAG chunks ---
     op.create_table(
         "ragchunks",
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
@@ -1163,11 +1183,11 @@ def upgrade():
     )
     op.create_index("ix_ragchunks_document_id_chunk_idx", "ragchunks", ["document_id", "chunk_idx"])
 
-    # analysis_documents
+    # --- Analysis documents ---
     op.create_table(
         "analysisdocuments",
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
-        sa.Column("status", analyze_status_enum, nullable=False, server_default="queued"),
+        sa.Column("status", analyze_status_enum, nullable=False, server_default=sa.text("'queued'")),
         sa.Column("date_upload", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
         sa.Column("uploaded_by", postgresql.UUID(as_uuid=True), nullable=True),
         sa.Column("url_file", sa.Text(), nullable=True),
@@ -1177,7 +1197,7 @@ def upgrade():
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=True),
     )
 
-    # analysis_chunks
+    # --- Analysis chunks ---
     op.create_table(
         "analysischunks",
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
@@ -1193,25 +1213,18 @@ def upgrade():
     op.create_index("ix_analysischunks_document_id_chunk_idx", "analysischunks", ["document_id", "chunk_idx"])
 
 def downgrade():
+    # Drop in reverse dependency order
     op.drop_index("ix_analysischunks_document_id_chunk_idx", table_name="analysischunks")
     op.drop_table("analysischunks")
     op.drop_table("analysisdocuments")
+
     op.drop_index("ix_ragchunks_document_id_chunk_idx", table_name="ragchunks")
     op.drop_table("ragchunks")
     op.drop_table("ragdocuments")
+
     op.drop_index("ix_chatmessages_chat_id_created_at", table_name="chatmessages")
     op.drop_table("chatmessages")
     op.drop_table("chats")
-    op.drop_index("ix_userrefreshtokens_user_id_expires_at", table_name="userrefreshtokens")
-    op.drop_table("userrefreshtokens")
-    op.drop_table("usertokens")
-    op.drop_table("users")
-
-    # drop enums
-    op.execute("DROP TYPE IF EXISTS analyze_status_enum")
-    op.execute("DROP TYPE IF EXISTS rag_status_enum")
-    op.execute("DROP TYPE IF EXISTS chat_role_enum")
-    op.execute("DROP TYPE IF EXISTS role_enum")
 
 ### app/migrations/versions/__init__.py
 
@@ -1366,56 +1379,84 @@ class RagChunks(Base):
     document: Mapped["RagDocuments"] = relationship(back_populates="chunks")
 
 ### app/models/user.py
+# app/models/user.py
 from __future__ import annotations
 from typing import Optional, List
 from datetime import datetime
-from sqlalchemy import String, Boolean, Text, DateTime, Enum, UniqueConstraint
-from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import Mapped, mapped_column, relationship
-from .base import Base
 import uuid
 
-RolesEnum = Enum("admin", "editor", "reader", name="role_enum", create_constraint=True)
+from sqlalchemy import String, Boolean, Text, DateTime, UniqueConstraint, ForeignKey, Index
+from sqlalchemy.dialects.postgresql import UUID, ENUM as PGEnum
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from .base import Base
+
+# Use existing Postgres ENUM type created by migrations
+RolesEnum = PGEnum('admin', 'editor', 'reader', name='role_enum', create_type=False)
 
 class Users(Base):
+    __tablename__ = "users"
+
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    fio: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    login: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    login: Mapped[str] = mapped_column(String(255), nullable=False, unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(Text, nullable=False)
     role: Mapped[str] = mapped_column(RolesEnum, nullable=False, default="reader")
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default="now()")
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default="now()")
 
-    # relationships
-    refresh_tokens: Mapped[List["UserRefreshTokens"]] = relationship(back_populates="user", cascade="all, delete-orphan")
-    pat_tokens: Mapped[List["UserTokens"]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    # Relationships
+    refresh_tokens: Mapped[List["UserRefreshTokens"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    pat_tokens: Mapped[List["UserTokens"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
 
 class UserTokens(Base):
+    __tablename__ = "user_tokens"
+
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     token_hash: Mapped[str] = mapped_column(Text, nullable=False)
     name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default="now()")
     last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     revoked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
-    user: Mapped["Users"] = relationship(back_populates="pat_tokens", primaryjoin="Users.id==foreign(UserTokens.user_id)")
+    user: Mapped["Users"] = relationship(back_populates="pat_tokens")
 
 class UserRefreshTokens(Base):
+    __tablename__ = "user_refresh_tokens"
+
     __table_args__ = (
         UniqueConstraint("refresh_hash", name="uq_user_refresh_tokens_refresh_hash"),
     )
+
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     refresh_hash: Mapped[str] = mapped_column(Text, nullable=False)
     issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default="now()")
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     rotating: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     revoked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    meta: Mapped[Optional[dict]] = mapped_column(Text, nullable=True)  # store JSON as text (or JSONB via sqlalchemy.dialects)
+    meta: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON encoded as text
 
-    user: Mapped["Users"] = relationship(back_populates="refresh_tokens", primaryjoin="Users.id==foreign(UserRefreshTokens.user_id)")
+    user: Mapped["Users"] = relationship(back_populates="refresh_tokens")
 
 ### app/repositories/__init__.py
 
@@ -2308,94 +2349,93 @@ def main():
 if __name__ == "__main__":
     main()
 
-### scripts/seed_users.py
-import os
-import sys
-from datetime import datetime, timezone
+### scripts/run_migrations.py
+# backend/scripts/run_migrations.py
+"""Programmatic Alembic upgrade to head.
+Use: python scripts/run_migrations.py
+Requires: ALEMBIC_CONFIG (optional) or uses app/migrations as script_location.
+"""
+import os, sys
+from alembic import command
+from alembic.config import Config
 
+here = os.path.dirname(os.path.abspath(__file__))
+# We expect migrations under app/migrations
+cfg = Config()
+cfg.set_main_option("script_location", "app/migrations")
+# DB URL read by env.py via app.core.config.settings, so no need to set here.
+command.upgrade(cfg, "head")
+print("Migrations applied: head")
+
+### scripts/seed_users.py
+# backend/scripts/seed_users.py
+import os, sys
+from datetime import datetime, timezone
 from sqlalchemy import create_engine, MetaData, select, insert, update
-from app.models.base import Base
-# Ensure models are registered in metadata before create_all
-from app.models import user as _user  # noqa: F401
 from sqlalchemy.exc import SQLAlchemyError
 
-DB_URL = os.environ.get("DB_URL")
-# Support both email- and login-based schemas. Our app uses `login`.
+DB_URL = os.environ.get("DB_URL") or os.environ.get("DB.URL")
+if not DB_URL:
+    print("seed_users.py: DB_URL is required", file=sys.stderr); sys.exit(2)
+
 ADMIN_LOGIN = os.environ.get("ADMIN_LOGIN", "admin")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")
 USER_LOGIN = os.environ.get("USER_LOGIN", "user")
 USER_PASSWORD = os.environ.get("USER_PASSWORD", "user123")
 
-if not DB_URL:
-    print("seed_users.py: DB_URL is required", file=sys.stderr)
-    sys.exit(2)
-
 try:
     from passlib.hash import bcrypt
-    def hash_pw(pw: str) -> str:
-        return bcrypt.hash(pw)
+    def hash_pw(pw: str) -> str: return bcrypt.hash(pw)
 except Exception:
-    def hash_pw(pw: str) -> str:
-        return pw  # plaintext fallback
+    def hash_pw(pw: str) -> str: return pw  # plaintext fallback
 
 engine = create_engine(DB_URL, future=True, pool_pre_ping=True)
 md = MetaData()
 
 with engine.begin() as conn:
-    # Ensure all tables exist before seeding (idempotent)
-    Base.metadata.create_all(bind=conn)
+    # No create_all here — we rely on Alembic migrations.
     md.reflect(conn)
     if "users" not in md.tables:
-        print("seed_users.py: 'users' table not found; skipping.", file=sys.stderr)
-        sys.exit(0)
+        print("seed_users.py: users table not found — run migrations first.", file=sys.stderr)
+        sys.exit(3)
+    users_tbl = md.tables["users"]
 
-    users = md.tables["users"]
-    cols = users.c
+    def col(name, alt=None):
+        c = users_tbl.c.get(name)
+        if c is None and alt:
+            c = users_tbl.c.get(alt)
+        if c is None:
+            raise RuntimeError(f"seed_users.py: column not found: {name}")
+        return c
 
-    def pick(*names):
-        for n in names:
-            col = getattr(cols, n, None)
-            if col is not None:
-                return col
-        return None
+    login_col = col("login", "username")
+    pwd_col = users_tbl.c.get("password_hash") or users_tbl.c.get("password") or users_tbl.c.get("hashed_password")
+    if pwd_col is None:
+        print("seed_users.py: cannot identify password column", file=sys.stderr); sys.exit(4)
+    is_active_col = users_tbl.c.get("is_active")
+    role_col = users_tbl.c.get("role")
+    fio_col = users_tbl.c.get("fio") or users_tbl.c.get("full_name") or users_tbl.c.get("name")
 
-    email_col = pick("email", "username")
-    login_col = pick("login")
-    pwd_col = pick("hashed_password", "password_hash", "password")
-    is_active_col = pick("is_active")
-    is_super_col = pick("is_superuser", "is_admin", "is_staff")
-    full_name_col = pick("full_name", "name")
-
-    if (email_col is None and login_col is None) or pwd_col is None:
-        print("seed_users.py: Cannot identify login/email or password columns.", file=sys.stderr)
-        sys.exit(1)
-
-    def upsert(login_or_email: str, password: str, is_admin: bool):
-        if login_col is not None:
-            where = (login_col == login_or_email)
-            fields = {login_col.key: login_or_email, pwd_col.key: hash_pw(password)}
+    def upsert_user(login: str, password: str, is_admin: bool, fio: str | None):
+        existing = conn.execute(select(users_tbl).where(login_col == login)).first()
+        if existing:
+            upd = {pwd_col.key: hash_pw(password)}
+            if is_active_col is not None: upd[is_active_col.key] = True
+            if role_col is not None and is_admin: upd[role_col.key] = "admin"
+            conn.execute(update(users_tbl).where(login_col == login).values(**upd))
         else:
-            assert email_col is not None
-            where = (email_col == login_or_email)
-            fields = {email_col.key: login_or_email, pwd_col.key: hash_pw(password)}
-        row = conn.execute(select(users).where(where)).fetchone()
-        if is_active_col is not None:
-            fields[is_active_col.key] = True
-        if is_super_col is not None:
-            fields[is_super_col.key] = bool(is_admin)
-        if full_name_col is not None and row is None:
-            fields[full_name_col.key] = "Admin" if is_admin else "User"
-        if row is None:
-            conn.execute(insert(users).values(**fields))
-            print(f"Created {'admin' if is_admin else 'user'}: {login_or_email}")
-        else:
-            conn.execute(update(users).where(where).values(**fields))
-            print(f"Updated {'admin' if is_admin else 'user'}: {login_or_email}")
+            ins = {login_col.key: login, pwd_col.key: hash_pw(password)}
+            if is_active_col is not None: ins[is_active_col.key] = True
+            if role_col is not None: ins[role_col.key] = ("admin" if is_admin else "reader")
+            if fio_col is not None: ins[fio_col.key] = fio
+            conn.execute(insert(users_tbl).values(**ins))
 
-    upsert(ADMIN_LOGIN, ADMIN_PASSWORD, True)
-    upsert(USER_LOGIN, USER_PASSWORD, False)
-
-print("seed_users.py: done")
+    try:
+        upsert_user(ADMIN_LOGIN, ADMIN_PASSWORD, True, "Admin")
+        upsert_user(USER_LOGIN, USER_PASSWORD, False, "User")
+        print("seed_users.py: users ready")
+    except SQLAlchemyError as e:
+        print(f"seed_users.py: error: {e}", file=sys.stderr); sys.exit(5)
 
 ### stubs/emb_server.py
 from typing import List

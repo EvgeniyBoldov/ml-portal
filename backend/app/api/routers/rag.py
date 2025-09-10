@@ -56,9 +56,12 @@ async def upload_file(
 	name: str | None = Form(None),
 	session: Session = Depends(db_session),
 ):
-	# For now, just create upload entry and return meta; optional: store file to S3
-	meta = rag_service.create_upload(session, filename=name or file.filename)
-	return meta
+	try:
+		# For now, just create upload entry and return meta; optional: store file to S3
+		meta = rag_service.create_upload(session, filename=name or file.filename)
+		return meta
+	except ValueError as e:
+		raise HTTPException(status_code=400, detail=str(e))
 
 @router.post("/search")
 def rag_search(payload: dict, session: Session = Depends(db_session)):

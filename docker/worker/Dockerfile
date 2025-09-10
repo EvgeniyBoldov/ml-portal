@@ -12,4 +12,4 @@ RUN python -m pip install --upgrade pip && pip install -r requirements.txt
 
 COPY backend/ ./
 
-CMD ["python", "-c", "import time; print('Worker ready'); time.sleep(10**9)"]
+CMD ["celery", "-A", "app.celery_app", "worker", "--loglevel=info", "--concurrency=2"]

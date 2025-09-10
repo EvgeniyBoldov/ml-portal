@@ -1,73 +1,68 @@
-#!/usr/bin/env python3
-import os, sys, uuid
+# backend/scripts/seed_users.py
+import os, sys
+from datetime import datetime, timezone
 from sqlalchemy import create_engine, MetaData, select, insert, update
+from sqlalchemy.exc import SQLAlchemyError
 
-# hash like the app (argon2)
-try:
-    from app.core.security import hash_password  # Argon2
-except Exception:
-    def hash_password(pw: str) -> str:
-        return pw
+DB_URL = os.environ.get("DB_URL") or os.environ.get("DB.URL")
+if not DB_URL:
+    print("seed_users.py: DB_URL is required", file=sys.stderr); sys.exit(2)
 
-DB_URL = os.environ.get("DB_URL")
 ADMIN_LOGIN = os.environ.get("ADMIN_LOGIN", "admin")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")
 USER_LOGIN = os.environ.get("USER_LOGIN", "user")
 USER_PASSWORD = os.environ.get("USER_PASSWORD", "user123")
 
-if not DB_URL:
-    print("seed_users.py: DB_URL is required", file=sys.stderr)
-    sys.exit(2)
+try:
+    from passlib.hash import bcrypt
+    def hash_pw(pw: str) -> str: return bcrypt.hash(pw)
+except Exception:
+    def hash_pw(pw: str) -> str: return pw  # plaintext fallback
 
 engine = create_engine(DB_URL, future=True, pool_pre_ping=True)
 md = MetaData()
 
-def _pick(cols, *names):
-    for n in names:
-        c = getattr(cols, n, None)
-        if c is not None:
-            return c
-    return None
-
 with engine.begin() as conn:
+    # No create_all here — we rely on Alembic migrations.
     md.reflect(conn)
     if "users" not in md.tables:
-        print("seed_users.py: 'users' table not found; skipping.", file=sys.stderr)
-        sys.exit(0)
+        print("seed_users.py: users table not found — run migrations first.", file=sys.stderr)
+        sys.exit(3)
+    users_tbl = md.tables["users"]
 
-    users = md.tables["users"]
-    cols = users.c
-    id_col = _pick(cols, "id")
-    login_col = _pick(cols, "login", "email", "username")
-    pwd_col = _pick(cols, "password_hash", "hashed_password", "password")
-    is_active_col = _pick(cols, "is_active")
-    role_col = _pick(cols, "role")
+    def col(name, alt=None):
+        c = users_tbl.c.get(name)
+        if c is None and alt:
+            c = users_tbl.c.get(alt)
+        if c is None:
+            raise RuntimeError(f"seed_users.py: column not found: {name}")
+        return c
 
-    if login_col is None or pwd_col is None:
-        print("seed_users.py: Cannot identify login and password columns.", file=sys.stderr)
-        sys.exit(1)
+    login_col = col("login", "username")
+    pwd_col = users_tbl.c.get("password_hash") or users_tbl.c.get("password") or users_tbl.c.get("hashed_password")
+    if pwd_col is None:
+        print("seed_users.py: cannot identify password column", file=sys.stderr); sys.exit(4)
+    is_active_col = users_tbl.c.get("is_active")
+    role_col = users_tbl.c.get("role")
+    fio_col = users_tbl.c.get("fio") or users_tbl.c.get("full_name") or users_tbl.c.get("name")
 
-    def upsert(login_value: str, password_value: str, is_admin: bool):
-        where = (login_col == login_value)
-        row = conn.execute(select(users).where(where)).fetchone()
-
-        fields = {login_col.key: login_value, pwd_col.key: hash_password(password_value)}
-        if is_active_col is not None:
-            fields[is_active_col.key] = True
-        if role_col is not None and row is None:
-            fields[role_col.key] = "admin" if is_admin else "reader"
-
-        if row is None and id_col is not None:
-            fields[id_col.key] = uuid.uuid4()
-
-        if row is None:
-            conn.execute(insert(users).values(**fields))
-            print(f"Created {'admin' if is_admin else 'user'}: {login_value}")
+    def upsert_user(login: str, password: str, is_admin: bool, fio: str | None):
+        existing = conn.execute(select(users_tbl).where(login_col == login)).first()
+        if existing:
+            upd = {pwd_col.key: hash_pw(password)}
+            if is_active_col is not None: upd[is_active_col.key] = True
+            if role_col is not None and is_admin: upd[role_col.key] = "admin"
+            conn.execute(update(users_tbl).where(login_col == login).values(**upd))
         else:
-            conn.execute(update(users).where(where).values(**fields))
-            print(f"Updated {'admin' if is_admin else 'user'}: {login_value}")
+            ins = {login_col.key: login, pwd_col.key: hash_pw(password)}
+            if is_active_col is not None: ins[is_active_col.key] = True
+            if role_col is not None: ins[role_col.key] = ("admin" if is_admin else "reader")
+            if fio_col is not None: ins[fio_col.key] = fio
+            conn.execute(insert(users_tbl).values(**ins))
 
-    upsert(ADMIN_LOGIN, ADMIN_PASSWORD, True)
-    upsert(USER_LOGIN, USER_PASSWORD, False)
-
-print("seed_users.py: done")
+    try:
+        upsert_user(ADMIN_LOGIN, ADMIN_PASSWORD, True, "Admin")
+        upsert_user(USER_LOGIN, USER_PASSWORD, False, "User")
+        print("seed_users.py: users ready")
+    except SQLAlchemyError as e:
+        print(f"seed_users.py: error: {e}", file=sys.stderr); sys.exit(5)
