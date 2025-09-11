@@ -1,59 +1,81 @@
+# app/api/routers/analyze.py
+"""
+Аналитический роутер — те же правила, другой бакет:
+- analysis/{uuid}/origin.{ext}, рядом canonical.txt и preview/*
+- Метаданные в БД; скачивание presigned GET с оригинальным именем
+"""
 from __future__ import annotations
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
+from typing import Optional
+from datetime import datetime
+
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
 from sqlalchemy.orm import Session
-from app.api.deps import db_session, get_current_user
-from app.services.analyze_service import create_job, list_jobs, get_job, delete_job
-from app.tasks.analyze import run as analyze_run
+
+from app.api.deps import db_session
+from app.core.config import settings
+from app.core.s3_helpers import put_object, presign_get
+from app.repositories.analyze_repo import AnalyzeRepo
 
 router = APIRouter(prefix="/analyze", tags=["analyze"])
 
-@router.get("")
-def list_(session: Session = Depends(db_session), user=Depends(get_current_user)):
-	rows = list_jobs(session)
-	return [{
-		"id": str(r.id),
-		"status": getattr(r, "status", None),
-		"date_upload": getattr(r, "date_upload", None),
-		"error": getattr(r, "error", None),
-	} for r in rows]
+ALLOWED_EXTENSIONS = {'.txt', '.pdf', '.doc', '.docx', '.md', '.rtf', '.odt'}
 
-@router.post("", status_code=202)
-def create(
-	payload: dict | None = None,
-	file: UploadFile | None = File(None),
-	url: str | None = Form(None),
-	session: Session = Depends(db_session),
-	user=Depends(get_current_user)
+def _safe_ext(filename: Optional[str]) -> str:
+    if not filename or '.' not in filename:
+        return ''
+    ext = '.' + filename.rsplit('.', 1)[-1].lower()
+    return ext if ext in ALLOWED_EXTENSIONS else ''
+
+@router.post("/upload")
+async def upload_analysis_file(
+    file: UploadFile = File(...),
+    session: Session = Depends(db_session),
 ):
-	if file is not None:
-		job = create_job(session, uploaded_by=user["id"], url_file=file.filename)
-		analyze_run.delay(str(job.id), pipeline=None)
-		return {"id": str(job.id), "status": getattr(job, "status", "queued"), "accepted": True}
-	if payload and payload.get("url"):
-		job = create_job(session, uploaded_by=user["id"], url_file=payload.get("url"))
-		analyze_run.delay(str(job.id), pipeline=None)
-		return {"id": str(job.id), "status": getattr(job, "status", "queued"), "accepted": True}
-	if url:
-		job = create_job(session, uploaded_by=user["id"], url_file=url)
-		analyze_run.delay(str(job.id), pipeline=None)
-		return {"id": str(job.id), "status": getattr(job, "status", "queued"), "accepted": True}
-	raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="missing_file_or_url")
+    repo = AnalyzeRepo(session)
+    ext = _safe_ext(file.filename)
+    if file.filename and not ext:
+        raise HTTPException(status_code=400, detail=f"Unsupported file type. Allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}")
+    doc = repo.create_document(
+        uploaded_by=None,
+        status="queued",
+    )
+    key = f"{doc.id}/origin{ext}"
+    put_object(settings.S3_BUCKET_ANALYSIS, key, file.file, content_type=file.content_type)
 
-@router.get("/{job_id}")
-def get(job_id: str, session: Session = Depends(db_session), user=Depends(get_current_user)):
-	job = get_job(session, job_id)
-	if not job:
-		raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="not_found")
-	return {
-		"id": str(job.id),
-		"status": getattr(job, "status", None),
-		"result": getattr(job, "result", None),
-		"error": getattr(job, "error", None),
-	}
+    doc.url_file = key
+    doc.updated_at = datetime.utcnow()
+    session.commit()
 
-@router.delete("/{job_id}")
-def delete(job_id: str, session: Session = Depends(db_session), user=Depends(get_current_user)):
-	ok = delete_job(session, job_id)
-	if not ok:
-		raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="not_found")
-	return {"ok": True}
+    try:
+        from app.tasks.upload_watch import watch as upload_watch
+        upload_watch(str(doc.id), key)
+    except Exception:
+        pass
+
+    return {"id": str(doc.id), "key": key, "status": "uploaded"}
+
+@router.get("/{doc_id}/download")
+def download_analysis_file(
+    doc_id: str,
+    kind: str = Query("original", regex="^(original|canonical)$"),
+    session: Session = Depends(db_session),
+):
+    doc = AnalyzeRepo(session).get(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="not_found")
+
+    bucket = settings.S3_BUCKET_ANALYSIS
+    if kind == "original":
+        key = getattr(doc, "url_file", None)
+        if not key:
+            raise HTTPException(status_code=404, detail="original_not_ready")
+        download_name = "document"
+        mime = getattr(doc, "source_mime", None)
+    else:
+        key = getattr(doc, "url_canonical_file", None) or f"{doc.id}/canonical.txt"
+        base = "document"
+        download_name = f"{base}.txt"
+        mime = "text/plain"
+
+    url = presign_get(bucket, key, download_name=download_name, mime=mime)
+    return {"url": url}

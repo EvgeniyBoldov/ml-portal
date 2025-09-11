@@ -11,8 +11,8 @@ branch_labels = None
 depends_on = None
 
 def upgrade():
-    # Use string columns instead of ENUMs in migration
-    # ENUMs will be created by SQLAlchemy when the app runs
+    # Use string columns instead of ENUMs to avoid conflicts
+    # ENUMs will be handled by SQLAlchemy models
 
     # --- users ---
     op.create_table(

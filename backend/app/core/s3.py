@@ -35,9 +35,8 @@ def presign_put(bucket: str, key: str, expiry_seconds: int = 3600) -> str:
     from datetime import timedelta
     url = get_minio().presigned_put_object(bucket, key, expires=timedelta(seconds=expiry_seconds))
     
-    # Replace internal endpoint with public endpoint if different
+    # Replace internal endpoint with public endpoint for external access
     if settings.S3_PUBLIC_ENDPOINT != settings.S3_ENDPOINT:
-        # Simple string replacement approach to avoid connection issues
         internal_base = settings.S3_ENDPOINT.rstrip('/')
         public_base = settings.S3_PUBLIC_ENDPOINT.rstrip('/')
         url = url.replace(internal_base, public_base)

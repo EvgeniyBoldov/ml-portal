@@ -4,17 +4,23 @@ from celery import shared_task
 from app.core.qdrant import get_qdrant
 from app.core.db import SessionLocal
 from app.models.rag import RagDocuments, RagChunks
-from .shared import log, task_metrics
+from .shared import log, task_metrics, RetryableError
 
 COLLECTION = "rag_chunks"
 
 @shared_task(name="app.tasks.index.finalize", bind=True)
-def finalize(self, document_id: str) -> dict:
+def finalize(self, result: dict) -> dict:
     with task_metrics("index.finalize", "index"):
         session = SessionLocal()
         qdrant = get_qdrant()
         try:
-            doc = session.get(RagDocuments, document_id)
+            # Получаем document_id из результата предыдущей задачи
+            document_id = result.get("document_id")
+            if not document_id:
+                raise RetryableError("no_document_id")
+            
+            from uuid import UUID
+            doc = session.get(RagDocuments, UUID(document_id))
             if not doc:
                 return {"document_id": document_id, "status": "not_found"}
             # простая проверка наличия поинтов документа

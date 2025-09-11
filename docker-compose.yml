@@ -13,6 +13,8 @@ services:
       timeout: 5s
       retries: 20
     ports: ["5432:5432"]
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
 
   minio:
     image: minio/minio
@@ -23,10 +25,14 @@ services:
       MINIO_ROOT_USER: ${S3_ACCESS_KEY:-minio}
       MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-minio123}
     ports: ["9000:9000","9001:9001"]
+    volumes:
+      - minio_data:/data
 
   qdrant:
     image: qdrant/qdrant:latest
     ports: ["6333:6333"]
+    volumes:
+      - qdrant_data:/qdrant/storage
 
   redis:
     image: redis:7-alpine
@@ -149,21 +155,22 @@ services:
       api:
         condition: service_started
 
-  # seed:
-  #   build:
-  #     context: .
-  #     dockerfile: docker/api/Dockerfile
-  #   command: python scripts/seed_users.py
-  #   environment:
-  #     PYTHONPATH: "/app"
-  #     DB_URL: "${DB_URL}"
-  #     ADMIN_LOGIN: ${ADMIN_LOGIN:-admin}
-  #     ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin123}
-  #     USER_LOGIN: ${USER_LOGIN:-user}
-  #     USER_PASSWORD: ${USER_PASSWORD:-user123}
-  #   depends_on:
-  #     postgres:
-  #       condition: service_healthy
-  #     migrate:
-  #       condition: service_completed_successfully
-  #   restart: "no"
+  seed:
+    build:
+      context: .
+      dockerfile: docker/api/Dockerfile
+    command: python scripts/create_admin_user.py
+    environment:
+      PYTHONPATH: "/app"
+      DB_URL: "${DB_URL}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: "no"
+
+volumes:
+  postgres_data:
+  minio_data:
+  qdrant_data:

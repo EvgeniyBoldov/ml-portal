@@ -23,12 +23,18 @@ def _embed_sync(texts: list[str]) -> list[list[float]]:
         return payload.get("vectors", [])
 
 @shared_task(name="app.tasks.embed.compute", bind=True, autoretry_for=(RetryableError,), retry_backoff=True, retry_kwargs={"max_retries": 5})
-def compute(self, document_id: str) -> dict:
+def compute(self, result: dict) -> dict:
     with task_metrics("embed.compute", "embed"):
         session = SessionLocal()
         qdrant = get_qdrant()
         try:
-            doc = session.get(RagDocuments, document_id)
+            # Получаем document_id из результата предыдущей задачи
+            document_id = result.get("document_id")
+            if not document_id:
+                raise RetryableError("no_document_id")
+            
+            from uuid import UUID
+            doc = session.get(RagDocuments, UUID(document_id))
             if not doc:
                 raise RetryableError("document_not_found")
             doc_tags = doc.tags or []

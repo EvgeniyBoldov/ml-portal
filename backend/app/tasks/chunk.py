@@ -17,12 +17,18 @@ def _split_text(txt: str, max_chars: int, overlap: int):
         i = j - overlap if j - overlap > i else j
 
 @shared_task(name="app.tasks.chunk.split", bind=True, autoretry_for=(RetryableError,), retry_backoff=True, retry_kwargs={"max_retries": 5})
-def split(self, document_id: str, *, max_chars: int | None = None, overlap: int | None = None) -> dict:
+def split(self, result: dict, *, max_chars: int | None = None, overlap: int | None = None) -> dict:
     with task_metrics("chunk.split", "chunk"):
         session = SessionLocal()
         s3 = get_minio()
         try:
-            doc = session.get(RagDocuments, document_id)
+            # Получаем document_id из результата предыдущей задачи
+            document_id = result.get("document_id")
+            if not document_id:
+                raise RetryableError("no_document_id")
+            
+            from uuid import UUID
+            doc = session.get(RagDocuments, UUID(document_id))
             if not doc or not doc.url_canonical_file:
                 raise RetryableError("canonical_not_ready")
             max_chars = max_chars or env_int("CHUNK_MAX_CHARS", 1200)

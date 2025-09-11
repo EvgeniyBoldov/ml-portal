@@ -18,12 +18,12 @@ def process(self, document_id: str, *, source_key: str | None = None) -> dict:
                 raise RetryableError("document_not_found")
             
             # Заглушка нормализации - просто копируем файл как есть
-            src = source_key or (doc.url_file or f"{doc.id}/source.bin")
-            dst = f"{doc.id}/document.json"
+            src = source_key or (doc.url_file or f"{doc.id}/origin.bin")
+            dst = f"{doc.id}/canonical.txt"
             
             try:
                 # Получаем исходный файл
-                obj = s3.get_object(settings.S3_BUCKET_RAW, src)
+                obj = s3.get_object(settings.S3_BUCKET_RAG, src)
                 content = obj.read()
                 
                 # Простая заглушка - если это текстовый файл, читаем как текст
@@ -40,13 +40,14 @@ def process(self, document_id: str, *, source_key: str | None = None) -> dict:
                     json_content = json.dumps(normalized_data, ensure_ascii=False).encode('utf-8')
                 
                 # Сохраняем нормализованный файл
-                s3.put_object(settings.S3_BUCKET_CANONICAL, dst, json_content, length=len(json_content))
+                from io import BytesIO
+                s3.put_object(settings.S3_BUCKET_RAG, dst, BytesIO(json_content), length=len(json_content))
                 
             except Exception as e:
                 log.error(f"Error processing file {src}: {e}")
                 # Создаем пустой файл в случае ошибки
                 from io import BytesIO
-                s3.put_object(settings.S3_BUCKET_CANONICAL, dst, BytesIO(b'{"text": "", "type": "error"}'), length=2)
+                s3.put_object(settings.S3_BUCKET_RAG, dst, BytesIO(b'{"text": "", "type": "error"}'), length=2)
             
             doc.url_canonical_file = dst
             doc.status = "chunking"

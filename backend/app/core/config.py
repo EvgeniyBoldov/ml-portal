@@ -19,6 +19,8 @@ class settings:
     DB_URL = _env("DB_URL") or _env("DB.URL") or "postgresql+psycopg://postgres:postgres@postgres:5432/app"
     REDIS_URL = _env("REDIS_URL") or _env("REDIS.URL") or "redis://redis:6379/0"
     QDRANT_URL = _env("QDRANT_URL") or _env("QDRANT.URL") or "http://qdrant:6333"
+    LLM_URL = _env("LLM_URL") or _env("LLM.URL") or "http://llm:8002"
+    EMB_URL = _env("EMB_URL") or _env("EMB.URL") or "http://emb:8001"
 
     # Auth
     JWT_SECRET = os.getenv("JWT_SECRET", "dev-secret")
@@ -32,9 +34,8 @@ class settings:
     S3_ACCESS_KEY = _env("S3_ACCESS_KEY") or _env("S3.ACCESS_KEY") or "minio"
     S3_SECRET_KEY = _env("S3_SECRET_KEY") or _env("S3.SECRET_KEY") or "minio123"
 
-    S3_BUCKET_RAW = _env("S3_BUCKET_RAW") or _env("S3.BUCKET_RAW") or "raw"
-    S3_BUCKET_CANONICAL = _env("S3_BUCKET_CANONICAL") or _env("S3.BUCKET_CANONICAL") or "canonical"
-    S3_BUCKET_PREVIEW = _env("S3_BUCKET_PREVIEW") or _env("S3.BUCKET_PREVIEW") or "preview"
+    S3_BUCKET_RAG = _env("S3_BUCKET_RAG") or _env("S3.BUCKET_RAG") or "rag"
+    S3_BUCKET_ANALYSIS = _env("S3_BUCKET_ANALYSIS") or _env("S3.BUCKET_ANALYSIS") or "analysis"
 
     # Health
     HEALTH_DEEP = (os.getenv("HEALTH_DEEP", "0") == "1")

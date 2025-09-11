@@ -15,6 +15,7 @@ from app.core.idempotency import IdempotencyMiddleware
 from app.api.routers.auth import router as auth_router
 from app.api.routers.chats import router as chats_router
 from app.api.routers.rag import router as rag_router
+from app.api.routers.analyze import router as analyze_router
 
 setup_logging()
 
@@ -57,3 +58,4 @@ def metrics():
 app.include_router(auth_router, prefix="/api")
 app.include_router(chats_router, prefix="/api")
 app.include_router(rag_router, prefix="/api")
+app.include_router(analyze_router, prefix="/api")
