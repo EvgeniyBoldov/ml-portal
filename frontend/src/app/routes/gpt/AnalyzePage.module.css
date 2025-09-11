@@ -1,9 +1,104 @@
-.wrap { display: grid; gap: 12px; }
-.card { display: grid; gap: 10px; }
-.header { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 12px; }
-.title { font-weight: 700; letter-spacing: .2px; }
-.controls { display: inline-flex; gap: 8px; align-items: center; }
-.search { width: 260px; }
-.tableWrap { overflow: auto; margin-top: -6px; }
-.clickable { cursor: pointer; user-select: none; display: inline-flex; gap: 6px; align-items: center; }
-.more { padding: 8px; display: flex; justify-content: center; }
+.container {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 1rem;
+}
+
+.uploadCard,
+.documentsCard {
+  padding: 1.5rem;
+}
+
+.documentsList {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.documentItem {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.5rem;
+  background: var(--color-bg-secondary);
+}
+
+.documentInfo {
+  flex: 1;
+}
+
+.documentName {
+  font-weight: 500;
+  margin-bottom: 0.5rem;
+}
+
+.documentStatus {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.25rem;
+  flex-wrap: wrap;
+}
+
+.statusBadge {
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.25rem;
+  color: white;
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+
+.errorText {
+  font-size: 0.8rem;
+  color: var(--color-danger);
+  background: rgba(244, 67, 54, 0.1);
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.25rem;
+}
+
+.documentDate {
+  font-size: 0.8rem;
+  color: var(--color-text-secondary);
+  margin-bottom: 0.5rem;
+}
+
+.resultPreview {
+  margin-top: 0.5rem;
+  padding: 0.5rem;
+  background: var(--color-bg-primary);
+  border-radius: 0.25rem;
+  border: 1px solid var(--color-border);
+}
+
+.resultPreview pre {
+  margin: 0;
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.documentActions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-left: 1rem;
+}
+
+@media (max-width: 768px) {
+  .documentItem {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1rem;
+  }
+  
+  .documentActions {
+    margin-left: 0;
+    width: 100%;
+    justify-content: flex-start;
+  }
+}

@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Optional, Dict, Any, AsyncGenerator
 import json
 import asyncio
+import time
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -12,6 +13,15 @@ from app.api.deps import db_session, get_current_user
 from app.repositories.chats_repo import ChatsRepo
 from app.services.chat_service import post_message
 from app.services.clients import llm_chat
+from app.schemas.chat_schemas import (
+    ChatCreateRequest, 
+    ChatUpdateRequest, 
+    ChatTagsUpdateRequest, 
+    ChatMessageRequest,
+    ChatResponse,
+    ChatMessageResponse
+)
+from app.core.logging import get_logger, log_api_call
 
 router = APIRouter(prefix="/chats", tags=["chats"])
 
@@ -21,6 +31,10 @@ def _ser_chat(c) -> Dict[str, Any]:
     return {
         "id": str(c.id),
         "name": c.name or f"Chat {str(c.id)[:8]}",
+        "tags": getattr(c, 'tags', []) or [],
+        "created_at": c.created_at.isoformat() if c.created_at else None,
+        "updated_at": c.updated_at.isoformat() if c.updated_at else None,
+        "last_message_at": c.last_message_at.isoformat() if c.last_message_at else None,
     }
 
 @router.get("")
@@ -35,16 +49,31 @@ def list_chats(
     items = repo.list_chats(user["id"])[:limit]
     return {"items": [_ser_chat(c) for c in items], "next_cursor": None}
 
-@router.post("")
+@router.post("", response_model=Dict[str, str])
 def create_chat(
-    payload: Dict[str, Any] | None = None,
+    request: ChatCreateRequest,
     session: Session = Depends(db_session),
     user: Dict[str, Any] = Depends(get_current_user),
 ):
-    repo = ChatsRepo(session)
-    name = (payload or {}).get("name")
-    chat = repo.create_chat(owner_id=user["id"], name=name)
-    return {"chat_id": str(chat.id)}
+    logger = get_logger(__name__)
+    start_time = time.time()
+    
+    try:
+        repo = ChatsRepo(session)
+        chat = repo.create_chat(
+            owner_id=user["id"], 
+            name=request.name, 
+            tags=request.tags
+        )
+        
+        duration_ms = (time.time() - start_time) * 1000
+        log_api_call(logger, "POST", "/chats", user["id"], 200, duration_ms)
+        
+        return {"chat_id": str(chat.id)}
+    except Exception as e:
+        duration_ms = (time.time() - start_time) * 1000
+        log_api_call(logger, "POST", "/chats", user["id"], 500, duration_ms, str(e))
+        raise HTTPException(status_code=500, detail=str(e))
 
 async def _stream_llm_response(messages: list, use_rag: bool = False) -> AsyncGenerator[str, None]:
     """Стриминг ответа от LLM"""
@@ -167,3 +196,19 @@ async def send_message(
             }
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"LLM error: {str(e)}")
+
+@router.put("/{chat_id}/tags")
+def update_chat_tags(
+    chat_id: str,
+    payload: Dict[str, Any],
+    session: Session = Depends(db_session),
+    user: Dict[str, Any] = Depends(get_current_user),
+):
+    repo = ChatsRepo(session)
+    chat = repo.get(chat_id)
+    if not chat or chat.owner_id != user["id"]:
+        raise HTTPException(status_code=404, detail="not_found")
+    
+    tags = payload.get("tags", [])
+    repo.update_chat_tags(chat_id, tags)
+    return {"id": str(chat_id), "tags": tags}

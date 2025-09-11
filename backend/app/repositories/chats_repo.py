@@ -8,8 +8,8 @@ class ChatsRepo:
     def __init__(self, session: Session):
         self.s = session
 
-    def create_chat(self, owner_id, name: str | None) -> Chats:
-        chat = Chats(owner_id=owner_id, name=name)
+    def create_chat(self, owner_id, name: str | None, tags: List[str] | None = None) -> Chats:
+        chat = Chats(owner_id=owner_id, name=name, tags=tags)
         self.s.add(chat)
         self.s.flush()
         return chat
@@ -31,3 +31,18 @@ class ChatsRepo:
 
     def list_messages(self, chat_id) -> List[ChatMessages]:
         return self.s.execute(select(ChatMessages).where(ChatMessages.chat_id == chat_id).order_by(ChatMessages.created_at.asc())).scalars().all()
+
+    def rename_chat(self, chat_id, name: str):
+        chat = self.get(chat_id)
+        if chat:
+            chat.name = name
+            self.s.flush()
+
+    def update_chat_tags(self, chat_id, tags: List[str]):
+        chat = self.get(chat_id)
+        if chat:
+            chat.tags = tags
+            self.s.flush()
+
+    def get_chat(self, chat_id) -> Optional[Chats]:
+        return self.get(chat_id)

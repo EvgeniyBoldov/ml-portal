@@ -1,0 +1,29 @@
+.user { 
+  background: rgba(79,124,255,0.12); 
+  border: 1px solid rgba(79,124,255,0.25); 
+  padding: 10px 12px; 
+  border-radius: 12px; 
+  margin: 8px 0 8px auto; 
+  max-width: 75%; 
+}
+
+.assistant { 
+  background: rgba(0,0,0,0.04); 
+  border: 1px solid rgba(0,0,0,0.08); 
+  padding: 10px 12px; 
+  border-radius: 12px; 
+  margin: 8px auto 8px 0; 
+  max-width: 75%; 
+  white-space: pre-wrap; 
+}
+
+.messageContent {
+  margin-bottom: 0.5rem;
+}
+
+.messageTime {
+  font-size: 0.75rem;
+  color: var(--muted);
+  opacity: 0.7;
+  text-align: right;
+}

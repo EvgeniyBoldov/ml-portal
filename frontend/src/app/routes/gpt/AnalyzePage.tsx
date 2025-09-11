@@ -67,7 +67,7 @@ export default function AnalyzePage() {
     if (!file) return
     setBusy(true)
     try {
-      await analyze.createAnalyze({ file })
+      await analyze.uploadAnalysisFile(file)
       setOpenAdd(false)
       setFile(null)
       await refresh()

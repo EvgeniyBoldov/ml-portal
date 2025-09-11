@@ -10,8 +10,9 @@ export async function listChats(params: { cursor?: string; limit?: number; q?: s
   return res.json() as Promise<{ items: any[]; next_cursor?: string | null }>
 }
 
-export async function createChat(name?: string) {
-  const res = await apiFetch('/chats', { method: 'POST', body: name ? JSON.stringify({ name }) : undefined })
+export async function createChat(name?: string, tags?: string[]) {
+  const body = { name, tags }
+  const res = await apiFetch('/chats', { method: 'POST', body: JSON.stringify(body) })
   return res.json() as Promise<{ chat_id: string }>
 }
 
@@ -23,12 +24,12 @@ export async function listMessages(chat_id: string, params: { cursor?: string; l
   return res.json() as Promise<{ items: any[]; next_cursor?: string | null }>
 }
 
-export async function sendMessage(chat_id: string, body: any) {
+export async function sendMessage(chat_id: string, body: { content: string; use_rag?: boolean; response_stream?: boolean }) {
   const res = await apiFetch(`/chats/${chat_id}/messages`, { method: 'POST', body: JSON.stringify(body), idempotencyKey: crypto.randomUUID() })
   return res.json()
 }
 
-export async function* sendMessageStream(chat_id: string, body: any) {
+export async function* sendMessageStream(chat_id: string, body: { content: string; use_rag?: boolean }) {
   const res = await apiFetch(`/chats/${chat_id}/messages`, {
     method: 'POST',
     body: JSON.stringify({ ...body, response_stream: true }),
@@ -61,6 +62,11 @@ export async function* sendMessageStream(chat_id: string, body: any) {
 
 export async function renameChat(chat_id: string, name: string) {
   const res = await apiFetch(`/chats/${chat_id}`, { method: 'PATCH', body: JSON.stringify({ name }) })
+  return res.json()
+}
+
+export async function updateChatTags(chat_id: string, tags: string[]) {
+  const res = await apiFetch(`/chats/${chat_id}/tags`, { method: 'PUT', body: JSON.stringify({ tags }) })
   return res.json()
 }
 

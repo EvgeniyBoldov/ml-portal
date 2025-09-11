@@ -1,21 +1,74 @@
 import { apiFetch } from './base'
 
-export async function listDocs(params: { status?: string; tags?: string; q?: string; cursor?: string } = {}) {
+export async function listDocs(params: { 
+  page?: number; 
+  size?: number; 
+  status?: string; 
+  search?: string; 
+} = {}) {
   const qs = new URLSearchParams()
+  if (params.page) qs.set('page', String(params.page))
+  if (params.size) qs.set('size', String(params.size))
   if (params.status) qs.set('status', params.status)
-  if (params.tags) qs.set('tags', params.tags)
-  if (params.q) qs.set('q', params.q)
-  if (params.cursor) qs.set('cursor', params.cursor)
-  const res = await apiFetch(`/rag?${qs.toString()}`, { method: 'GET' })
-  return res.json() as Promise<{ items: any[]; next_cursor?: string | null }>
+  if (params.search) qs.set('search', params.search)
+  const res = await apiFetch(`/rag/?${qs.toString()}`, { method: 'GET' })
+  return res.json() as Promise<{ 
+    items: any[]; 
+    pagination: {
+      page: number;
+      size: number;
+      total: number;
+      total_pages: number;
+      has_next: boolean;
+      has_prev: boolean;
+    }
+  }>
 }
 
 export async function uploadFile(file: File, name?: string, tags?: string[]) {
   const fd = new FormData()
   fd.set('file', file)
   if (name) fd.set('name', name)
-  if (tags?.length) tags.forEach(t => fd.append('tags', t))
+  if (tags?.length) fd.set('tags', JSON.stringify(tags))
   const res = await apiFetch('/rag/upload', { method: 'POST', body: fd })
+  return res.json()
+}
+
+export async function updateRagDocumentTags(docId: string, tags: string[]) {
+  const res = await apiFetch(`/rag/${docId}/tags`, { 
+    method: 'PUT', 
+    body: JSON.stringify(tags) 
+  })
+  return res.json()
+}
+
+export async function getRagProgress(doc_id: string) {
+  const res = await apiFetch(`/rag/${doc_id}/progress`, { method: 'GET' })
+  return res.json()
+}
+
+export async function getRagStats() {
+  const res = await apiFetch('/rag/stats', { method: 'GET' })
+  return res.json()
+}
+
+export async function getRagMetrics() {
+  const res = await apiFetch('/rag/metrics', { method: 'GET' })
+  return res.json()
+}
+
+export async function downloadRagFile(doc_id: string, kind: 'original' | 'canonical' = 'original') {
+  const res = await apiFetch(`/rag/${doc_id}/download?kind=${kind}`, { method: 'GET' })
+  return res.json()
+}
+
+export async function archiveRagDocument(doc_id: string) {
+  const res = await apiFetch(`/rag/${doc_id}/archive`, { method: 'POST' })
+  return res.json()
+}
+
+export async function deleteRagDocument(doc_id: string) {
+  const res = await apiFetch(`/rag/${doc_id}`, { method: 'DELETE' })
   return res.json()
 }
 

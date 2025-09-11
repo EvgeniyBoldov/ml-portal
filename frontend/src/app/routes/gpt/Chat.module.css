@@ -15,6 +15,25 @@
 .assistant { background: rgba(0,0,0,0.04); border: 1px solid rgba(0,0,0,0.08); padding: 10px 12px; border-radius: 12px; margin: 8px auto 8px 0; max-width: 75%; white-space: pre-wrap; }
 .typing { opacity: .6; }
 
+.messageContent {
+  margin-bottom: 0.5rem;
+}
+
+.messageTime {
+  font-size: 0.75rem;
+  color: var(--muted);
+  opacity: 0.7;
+  text-align: right;
+}
+
+.loadMore {
+  display: flex;
+  justify-content: center;
+  padding: 1rem;
+  border-bottom: 1px solid var(--color-border);
+  margin-bottom: 1rem;
+}
+
 .composer {
   display: grid;
   grid-template-columns: 1fr max-content;

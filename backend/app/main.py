@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from app.core.metrics import prometheus_endpoint
-from app.core.logging import RequestIdMiddleware, setup_logging
+from app.core.logging import setup_logging
 from app.core.errors import install_exception_handlers
 from app.core.config import settings
 from app.core.db import engine
@@ -21,7 +21,6 @@ setup_logging()
 
 app = FastAPI(title="API")
 
-app.add_middleware(RequestIdMiddleware)
 app.add_middleware(IdempotencyMiddleware)
 
 if os.getenv("CORS_ENABLED", "1") not in {"0", "false", "False"}:
@@ -54,6 +53,47 @@ async def healthz(deep: int | None = None):
 @app.get("/metrics")
 def metrics():
     return prometheus_endpoint()
+
+@app.get("/api/rag/metrics")
+def rag_metrics():
+    from app.api.deps import db_session
+    from sqlalchemy import func
+    from app.models.rag import RagDocuments, RagChunks
+    
+    session = next(db_session())
+    try:
+        # Подсчитываем документы по статусам
+        status_counts = session.query(
+            RagDocuments.status,
+            func.count(RagDocuments.id)
+        ).group_by(RagDocuments.status).all()
+        
+        # Общее количество документов
+        total_documents = session.query(func.count(RagDocuments.id)).scalar()
+        
+        # Количество чанков
+        total_chunks = session.query(func.count(RagChunks.id)).scalar()
+        
+        # Количество документов в обработке
+        processing_documents = session.query(func.count(RagDocuments.id)).filter(
+            RagDocuments.status.in_(['uploaded', 'normalizing', 'chunking', 'embedding', 'indexing'])
+        ).scalar()
+        
+        # Размер хранилища (приблизительно)
+        storage_size = session.query(func.sum(RagDocuments.size_bytes)).scalar() or 0
+        
+        return {
+            "total_documents": total_documents,
+            "total_chunks": total_chunks,
+            "processing_documents": processing_documents,
+            "storage_size_bytes": storage_size,
+            "storage_size_mb": round(storage_size / (1024 * 1024), 2),
+            "status_breakdown": {status: count for status, count in status_counts},
+            "ready_documents": next((count for status, count in status_counts if status == 'ready'), 0),
+            "error_documents": next((count for status, count in status_counts if status == 'error'), 0)
+        }
+    finally:
+        session.close()
 
 app.include_router(auth_router, prefix="/api")
 app.include_router(chats_router, prefix="/api")

@@ -22,3 +22,29 @@
 .plus { width: 18px; height: 18px; border-radius: 50%; border: 1px dashed var(--muted); display: inline-flex; align-items: center; justify-content: center; font-weight: 700; font-size: 12px; }
 .actions { display: flex; gap: 6px; padding-right: 6px; }
 .icon { background: transparent; border: 0; cursor: pointer; color: var(--muted); }
+
+.messageCount {
+  font-size: 0.8rem;
+  color: var(--color-text-secondary);
+  margin-left: 0.5rem;
+  background: var(--color-bg-secondary);
+  padding: 0.2rem 0.4rem;
+  border-radius: 0.25rem;
+}
+
+.chatInfo {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.25rem;
+  flex: 1;
+}
+
+.chatInfo .name {
+  font-weight: 500;
+}
+
+.chatInfo .messageCount {
+  margin-left: 0;
+  align-self: flex-start;
+}

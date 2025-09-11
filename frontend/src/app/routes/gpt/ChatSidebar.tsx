@@ -1,62 +1,74 @@
-import React, { useEffect, useState } from 'react'
+import React, { useState } from 'react'
 import styles from './ChatSidebar.module.css'
 import Button from '@shared/ui/Button'
-import * as chats from '@shared/api/chats'
 import { useNavigate, useParams } from 'react-router-dom'
 import Modal from '@shared/ui/Modal'
 import Input from '@shared/ui/Input'
-
-type Item = { id: string; name?: string }
+import { useChat } from '../../contexts/ChatContext'
+import ChatSearch from '../../components/ChatSearch'
+import ChatExport from '../../components/ChatExport'
+import ChatStats from '../../components/ChatStats'
+import ChatTags from '../../components/ChatTags'
 
 export default function ChatSidebar() {
-  const [items, setItems] = useState<Item[]>([])
-  const [loading, setLoading] = useState(true)
   const [renameId, setRenameId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [deleteId, setDeleteId] = useState<string | null>(null)
 
   const nav = useNavigate()
   const { chatId } = useParams()
+  const { state, createChat, renameChat, deleteChat, updateChatTags } = useChat()
 
-  async function refresh() {
-    setLoading(true)
-    try {
-      const res = await chats.listChats({ limit: 100 })
-      setItems((res.items || []).map((it:any)=>({ id: it.id || it.chat_id || it, name: it.name })))
-    } finally { setLoading(false) }
-  }
-
-  useEffect(() => { refresh() }, [])
+  const { chats, isLoading } = state
+  const items = Object.values(chats).sort((a, b) => 
+    new Date(b.last_message_at || b.created_at || 0).getTime() - 
+    new Date(a.last_message_at || a.created_at || 0).getTime()
+  )
 
   async function onNew() {
-    const { chat_id } = await chats.createChat('Новый чат')
-    await refresh()
-    nav(`/gpt/chat/${chat_id}`)
+    try {
+      const chatId = await createChat('Новый чат')
+      nav(`/gpt/chat/${chatId}`)
+    } catch (error) {
+      console.error('Failed to create chat:', error)
+    }
   }
 
-  function openRename(it: Item) {
-    setRenameId(it.id)
-    setRenameValue(it.name || 'Untitled')
+  function openRename(chat: { id: string; name?: string }) {
+    setRenameId(chat.id)
+    setRenameValue(chat.name || 'Untitled')
   }
+
   async function doRename() {
     if (!renameId) return
-    await chats.renameChat(renameId, renameValue || 'Untitled')
-    setRenameId(null)
-    await refresh()
+    try {
+      await renameChat(renameId, renameValue || 'Untitled')
+      setRenameId(null)
+    } catch (error) {
+      console.error('Failed to rename chat:', error)
+    }
   }
+
   async function doDelete() {
     if (!deleteId) return
-    await chats.deleteChat(deleteId)
-    setDeleteId(null)
-    await refresh()
-    if (chatId === deleteId) nav('/gpt/chat')
+    try {
+      await deleteChat(deleteId)
+      setDeleteId(null)
+      if (chatId === deleteId) nav('/gpt/chat')
+    } catch (error) {
+      console.error('Failed to delete chat:', error)
+    }
   }
 
   return (
     <aside className={styles.sidebar}>
       <div className={styles.head}>
         <div className={styles.title}>Chats</div>
+        <ChatExport />
       </div>
+      
+      <ChatSearch />
+      
       <div className={styles.list}>
         {/* New chat as a regular item */}
         <div className={styles.row}>
@@ -66,24 +78,41 @@ export default function ChatSidebar() {
           </button>
         </div>
 
-        {loading && <div className={styles.empty}>Loading…</div>}
-        {!loading && items.length === 0 && <div className={styles.empty}>No chats yet</div>}
-        {items.map(it => (
-          <div key={it.id} className={[styles.row, chatId === it.id ? styles.active : ''].join(' ')}>
+        {isLoading && <div className={styles.empty}>Loading…</div>}
+        {!isLoading && items.length === 0 && <div className={styles.empty}>No chats yet</div>}
+        {items.map(chat => (
+          <div key={chat.id} className={[styles.row, chatId === chat.id ? styles.active : ''].join(' ')}>
             <button
               className={styles.item}
-              onClick={()=>nav(`/gpt/chat/${it.id}`)}
-              title={it.name || it.id}
+              onClick={() => {
+                nav(`/gpt/chat/${chat.id}`)
+              }}
+              title={chat.name || chat.id}
             >
-              <span className={styles.dot} /> <span className={styles.name}>{it.name || 'Untitled'}</span>
+              <span className={styles.dot} /> 
+              <div className={styles.chatInfo}>
+                <span className={styles.name}>{chat.name || 'Untitled'}</span>
+                {chat.messages.length > 0 && (
+                  <span className={styles.messageCount}>({chat.messages.length})</span>
+                )}
+                <ChatTags 
+                  chatId={chat.id} 
+                  tags={chat.tags || []} 
+                  onTagsChange={(tags) => {
+                    updateChatTags(chat.id, tags)
+                  }}
+                />
+              </div>
             </button>
             <div className={styles.actions}>
-              <button className={styles.icon} title="Rename" onClick={()=>openRename(it)}>✎</button>
-              <button className={styles.icon} title="Delete" onClick={()=>setDeleteId(it.id)}>🗑</button>
+              <button className={styles.icon} title="Rename" onClick={() => openRename(chat)}>✎</button>
+              <button className={styles.icon} title="Delete" onClick={() => setDeleteId(chat.id)}>🗑</button>
             </div>
           </div>
         ))}
       </div>
+
+      <ChatStats />
 
       <Modal open={!!renameId} onClose={()=>setRenameId(null)} title="Rename chat"
         footer={<><Button variant="ghost" onClick={()=>setRenameId(null)}>Cancel</Button><Button onClick={doRename}>Save</Button></>}>

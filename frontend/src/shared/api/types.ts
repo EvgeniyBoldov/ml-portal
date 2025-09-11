@@ -64,9 +64,13 @@ export type CursorPage<T> = {
 // === RAG ===
 export type RagDocument = {
   id: string;
-  name: string;
-  status: "pending" | "processing" | "ready" | "error";
+  name?: string;
+  status: "queued" | "processing" | "ready" | "error" | "archived";
+  date_upload?: string;
+  url_file?: string;
+  url_canonical_file?: string;
   tags?: string[];
+  progress?: number;
   created_at?: string;
   updated_at?: string;
 };
@@ -85,6 +89,17 @@ export type RagSearchItem = {
 };
 
 // === Analyze ===
+export type AnalyzeDocument = {
+  id: string;
+  status: "queued" | "processing" | "done" | "error" | "canceled";
+  date_upload?: string;
+  url_file?: string;
+  url_canonical_file?: string;
+  result?: any;
+  error?: string;
+  updated_at?: string;
+};
+
 export type AnalyzeResult = {
   id: string;
   status: string;

@@ -6,7 +6,7 @@ const Login = lazy(() => import('./routes/Login'))
 const GPTLayout = lazy(() => import('./routes/gpt/GPTLayout'))
 const ChatPage = lazy(() => import('./routes/gpt/ChatPage'))
 const AnalyzePage = lazy(() => import('./routes/gpt/AnalyzePage'))
-const RagPage = lazy(() => import('./routes/gpt/RagPage'))
+const RagPage = lazy(() => import('./routes/gpt/Rag'))
 const NotFound = lazy(() => import('./routes/NotFound'))
 
 const withSuspense = (el: React.ReactNode) => <Suspense fallback={<div />}>{el}</Suspense>

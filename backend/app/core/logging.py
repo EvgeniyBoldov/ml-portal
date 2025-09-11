@@ -1,48 +1,147 @@
-from __future__ import annotations
-import json, logging, sys, uuid, contextvars
-from typing import Any, Mapping, Optional
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import Request
-from starlette.responses import Response
+import logging
+import sys
+from typing import Any, Dict, Optional
+from datetime import datetime
+import json
+import traceback
 
-request_id_ctx = contextvars.ContextVar("request_id", default=None)
-
-class JsonFormatter(logging.Formatter):
+class JSONFormatter(logging.Formatter):
+    """Custom JSON formatter for structured logging"""
+    
     def format(self, record: logging.LogRecord) -> str:
-        payload = {
+        log_entry = {
+            "timestamp": datetime.utcnow().isoformat() + "Z",
             "level": record.levelname,
-            "message": record.getMessage(),
             "logger": record.name,
-            "time": self.formatTime(record, "%Y-%m-%dT%H:%M:%S%z"),
+            "message": record.getMessage(),
+            "module": record.module,
+            "function": record.funcName,
+            "line": record.lineno,
         }
-        rid = request_id_ctx.get()
-        if rid:
-            payload["request_id"] = rid
-        # Extra
-        for k, v in record.__dict__.items():
-            if k not in ("args", "asctime", "created", "exc_info", "exc_text", "filename",
-                         "funcName", "levelname", "levelno", "lineno", "module", "msecs",
-                         "message", "msg", "name", "pathname", "process", "processName",
-                         "relativeCreated", "stack_info", "thread", "threadName"):
-                payload[k] = v
-        return json.dumps(payload, ensure_ascii=False)
+        
+        # Add exception info if present
+        if record.exc_info:
+            log_entry["exception"] = {
+                "type": record.exc_info[0].__name__,
+                "message": str(record.exc_info[1]),
+                "traceback": traceback.format_exception(*record.exc_info)
+            }
+        
+        # Add extra fields
+        if hasattr(record, 'extra'):
+            log_entry.update(record.extra)
+        
+        return json.dumps(log_entry, ensure_ascii=False)
 
-def setup_logging(level: int = logging.INFO) -> None:
-    handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(JsonFormatter())
-    root = logging.getLogger()
-    root.handlers.clear()
-    root.addHandler(handler)
-    root.setLevel(level)
+def setup_logging(level: str = "INFO") -> None:
+    """Setup structured logging configuration"""
+    
+    # Create logger
+    logger = logging.getLogger()
+    logger.setLevel(getattr(logging, level.upper()))
+    
+    # Remove existing handlers
+    for handler in logger.handlers[:]:
+        logger.removeHandler(handler)
+    
+    # Create console handler
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(getattr(logging, level.upper()))
+    
+    # Set formatter
+    formatter = JSONFormatter()
+    console_handler.setFormatter(formatter)
+    
+    # Add handler to logger
+    logger.addHandler(console_handler)
+    
+    # Set specific loggers
+    logging.getLogger("uvicorn").setLevel(logging.INFO)
+    logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+    logging.getLogger("fastapi").setLevel(logging.INFO)
+    logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
 
-class RequestIdMiddleware(BaseHTTPMiddleware):
-    header_name = "X-Request-ID"
-    async def dispatch(self, request: Request, call_next):
-        rid = request.headers.get(self.header_name) or str(uuid.uuid4())
-        token = request_id_ctx.set(rid)
-        try:
-            response: Response = await call_next(request)
-        finally:
-            request_id_ctx.reset(token)
-        response.headers[self.header_name] = rid
-        return response
+def get_logger(name: str) -> logging.Logger:
+    """Get logger instance"""
+    return logging.getLogger(name)
+
+class LoggerMixin:
+    """Mixin class for adding logging to any class"""
+    
+    @property
+    def logger(self) -> logging.Logger:
+        return get_logger(f"{self.__class__.__module__}.{self.__class__.__name__}")
+
+def log_api_call(
+    logger: logging.Logger,
+    method: str,
+    endpoint: str,
+    user_id: Optional[str] = None,
+    status_code: Optional[int] = None,
+    duration_ms: Optional[float] = None,
+    error: Optional[str] = None
+) -> None:
+    """Log API call with structured data"""
+    extra = {
+        "api_call": {
+            "method": method,
+            "endpoint": endpoint,
+            "user_id": user_id,
+            "status_code": status_code,
+            "duration_ms": duration_ms,
+            "error": error
+        }
+    }
+    
+    if error:
+        logger.error(f"API call failed: {method} {endpoint}", extra=extra)
+    else:
+        logger.info(f"API call: {method} {endpoint}", extra=extra)
+
+def log_database_operation(
+    logger: logging.Logger,
+    operation: str,
+    table: str,
+    record_id: Optional[str] = None,
+    duration_ms: Optional[float] = None,
+    error: Optional[str] = None
+) -> None:
+    """Log database operation with structured data"""
+    extra = {
+        "db_operation": {
+            "operation": operation,
+            "table": table,
+            "record_id": record_id,
+            "duration_ms": duration_ms,
+            "error": error
+        }
+    }
+    
+    if error:
+        logger.error(f"Database operation failed: {operation} on {table}", extra=extra)
+    else:
+        logger.info(f"Database operation: {operation} on {table}", extra=extra)
+
+def log_external_service(
+    logger: logging.Logger,
+    service: str,
+    operation: str,
+    duration_ms: Optional[float] = None,
+    error: Optional[str] = None,
+    **kwargs
+) -> None:
+    """Log external service call with structured data"""
+    extra = {
+        "external_service": {
+            "service": service,
+            "operation": operation,
+            "duration_ms": duration_ms,
+            "error": error,
+            **kwargs
+        }
+    }
+    
+    if error:
+        logger.error(f"External service call failed: {service}.{operation}", extra=extra)
+    else:
+        logger.info(f"External service call: {service}.{operation}", extra=extra)

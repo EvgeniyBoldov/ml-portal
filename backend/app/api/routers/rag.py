@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import Optional
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, Body, Form
 from sqlalchemy.orm import Session
 
 from app.api.deps import db_session
@@ -20,8 +20,9 @@ from app.core.config import settings
 from app.core.s3_helpers import put_object, presign_get
 from app.repositories.rag_repo import RagRepo
 from app.services.rag_service import progress, stats, search
+from app.models.rag import RagDocuments
 
-router = APIRouter(prefix="/api/rag", tags=["rag"])
+router = APIRouter(prefix="/rag", tags=["rag"])
 
 ALLOWED_EXTENSIONS = {'.txt', '.pdf', '.doc', '.docx', '.md', '.rtf', '.odt'}
 
@@ -34,34 +35,114 @@ def _safe_ext(filename: Optional[str]) -> str:
 @router.post("/upload")
 async def upload_rag_file(
     file: UploadFile = File(...),
+    tags: str = Form("[]"),  # JSON string of tags
     session: Session = Depends(db_session),
 ):
+    # Валидация размера файла (50MB)
+    MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB
+    if hasattr(file, 'size') and file.size and file.size > MAX_FILE_SIZE:
+        raise HTTPException(status_code=413, detail="File too large. Maximum size is 50MB")
+    
+    # Валидация типа файла
     repo = RagRepo(session)
     ext = _safe_ext(file.filename)
     if file.filename and not ext:
         raise HTTPException(status_code=400, detail=f"Unsupported file type. Allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}")
-    # 1) создаём документ (UUID генерится в базе)
-    doc = repo.create_document(
-        name=file.filename,
-        uploaded_by=None,
-        status="uploaded",
-        source_mime=file.content_type,
-    )
-    # 2) ключ origin.{ext} под UUID
-    key = f"{doc.id}/origin{ext}"
-    # 3) сохраняем в MinIO
-    put_object(settings.S3_BUCKET_RAG, key, file.file, content_type=file.content_type)
-    # 4) метаданные в БД
-    doc.url_file = key
-    doc.updated_at = datetime.utcnow()
-    session.commit()
-    # 5) триггерим пайплайн (если есть upload_watch)
+    
+    # Валидация MIME типа
+    if file.content_type and not file.content_type.startswith(('text/', 'application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument')):
+        raise HTTPException(status_code=400, detail="Unsupported MIME type")
+    
+    # Парсим теги
     try:
-        from app.tasks.upload_watch import watch as upload_watch
-        upload_watch(str(doc.id), key)
-    except Exception:
-        pass
-    return {"id": str(doc.id), "key": key, "status": "uploaded"}
+        import json
+        parsed_tags = json.loads(tags) if tags else []
+        if not isinstance(parsed_tags, list):
+            parsed_tags = []
+    except (json.JSONDecodeError, TypeError):
+        parsed_tags = []
+    
+    try:
+        # 1) создаём документ (UUID генерится в базе)
+        doc = repo.create_document(
+            name=file.filename,
+            uploaded_by=None,
+            status="uploaded",
+            source_mime=file.content_type,
+            tags=parsed_tags,
+        )
+        # 2) ключ origin.{ext} под UUID
+        key = f"{doc.id}/origin{ext}"
+        # 3) сохраняем в MinIO
+        put_object(settings.S3_BUCKET_RAG, key, file.file, content_type=file.content_type)
+        # 4) метаданные в БД
+        doc.url_file = key
+        doc.updated_at = datetime.utcnow()
+        session.commit()
+        # 5) триггерим пайплайн (если есть upload_watch)
+        try:
+            from app.tasks.upload_watch import watch as upload_watch
+            upload_watch(str(doc.id), key)
+        except Exception as e:
+            # Логируем ошибку, но не прерываем процесс
+            print(f"Warning: Failed to trigger upload watch: {e}")
+        return {"id": str(doc.id), "key": key, "status": "uploaded", "tags": parsed_tags}
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
+
+@router.get("/")
+def list_rag_documents(
+    page: int = Query(1, ge=1, description="Page number"),
+    size: int = Query(20, ge=1, le=100, description="Page size"),
+    status: Optional[str] = Query(None, description="Filter by status"),
+    search: Optional[str] = Query(None, description="Search in document names"),
+    session: Session = Depends(db_session),
+):
+    repo = RagRepo(session)
+    
+    # Применяем фильтры
+    query = session.query(RagDocuments)
+    
+    if status:
+        query = query.filter(RagDocuments.status == status)
+    
+    if search:
+        query = query.filter(RagDocuments.name.ilike(f"%{search}%"))
+    
+    # Подсчитываем общее количество
+    total = query.count()
+    
+    # Применяем пагинацию
+    offset = (page - 1) * size
+    docs = query.offset(offset).limit(size).all()
+    
+    # Вычисляем метаданные пагинации
+    total_pages = (total + size - 1) // size
+    has_next = page < total_pages
+    has_prev = page > 1
+    
+    return {
+        "items": [{"id": str(doc.id), "name": doc.name, "status": doc.status, "date_upload": doc.date_upload, "url_file": doc.url_file, "url_canonical_file": doc.url_canonical_file, "tags": doc.tags, "progress": None, "updated_at": doc.updated_at} for doc in docs],
+        "pagination": {
+            "page": page,
+            "size": size,
+            "total": total,
+            "total_pages": total_pages,
+            "has_next": has_next,
+            "has_prev": has_prev
+        }
+    }
+
+@router.get("/{doc_id}")
+def get_rag_document(
+    doc_id: str,
+    session: Session = Depends(db_session),
+):
+    doc = RagRepo(session).get(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="not_found")
+    return {"id": str(doc.id), "name": doc.name, "status": doc.status, "date_upload": doc.date_upload, "url_file": doc.url_file, "url_canonical_file": doc.url_canonical_file, "tags": doc.tags, "progress": None, "updated_at": doc.updated_at}
 
 @router.get("/{doc_id}/download")
 def download_rag_file(
@@ -99,6 +180,7 @@ def get_rag_progress(
     """Получить прогресс обработки RAG документа"""
     return progress(session, doc_id)
 
+
 @router.get("/stats")
 def get_rag_stats(
     session: Session = Depends(db_session),
@@ -106,16 +188,78 @@ def get_rag_stats(
     """Получить статистику RAG документов"""
     return stats(session)
 
-@router.get("/search")
+@router.post("/{doc_id}/archive")
+def archive_rag_document(
+    doc_id: str,
+    session: Session = Depends(db_session),
+):
+    doc = RagRepo(session).get(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="not_found")
+    
+    doc.status = "archived"
+    doc.updated_at = datetime.utcnow()
+    session.commit()
+    
+    return {"id": str(doc.id), "status": doc.status}
+
+@router.put("/{doc_id}/tags")
+def update_rag_document_tags(
+    doc_id: str,
+    tags: list = Body(...),
+    session: Session = Depends(db_session),
+):
+    doc = RagRepo(session).get(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    doc.tags = tags
+    doc.updated_at = datetime.utcnow()
+    session.commit()
+    
+    return {"id": str(doc.id), "tags": tags}
+
+@router.delete("/{doc_id}")
+def delete_rag_document(
+    doc_id: str,
+    session: Session = Depends(db_session),
+):
+    doc = RagRepo(session).get(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="not_found")
+    
+    # Удаляем файлы из MinIO
+    if doc.url_file:
+        try:
+            from app.core.s3 import get_minio
+            client = get_minio()
+            client.remove_object(settings.S3_BUCKET_RAG, doc.url_file)
+        except Exception:
+            pass
+    
+    if doc.url_canonical_file:
+        try:
+            from app.core.s3 import get_minio
+            client = get_minio()
+            client.remove_object(settings.S3_BUCKET_RAG, doc.url_canonical_file)
+        except Exception:
+            pass
+    
+    # Удаляем из БД
+    session.delete(doc)
+    session.commit()
+    
+    return {"id": str(doc.id), "deleted": True}
+
+@router.post("/search")
 def search_rag(
-    query: str,
-    top_k: int = 5,
-    offset: int = 0,
-    doc_id: Optional[str] = None,
-    tags: Optional[str] = None,
-    sort_by: str = "score_desc",
+    text: str = Body(..., description="Search query"),
+    top_k: int = Body(10, ge=1, le=100),
+    min_score: float = Body(0.0, ge=0.0, le=1.0),
     session: Session = Depends(db_session),
 ):
     """Поиск в RAG документах"""
-    tags_list = tags.split(",") if tags else None
-    return search(session, query, top_k, offset=offset, doc_id=doc_id, tags=tags_list, sort_by=sort_by)
+    results = search(session, text, top_k=top_k)
+    # Фильтруем по min_score на уровне приложения
+    filtered_results = [r for r in results.get("results", []) if r.get("score", 0) >= min_score]
+    return {"items": filtered_results}

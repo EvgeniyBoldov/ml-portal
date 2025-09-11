@@ -54,6 +54,24 @@ async def upload_analysis_file(
 
     return {"id": str(doc.id), "key": key, "status": "uploaded"}
 
+@router.get("/")
+def list_analysis_documents(
+    session: Session = Depends(db_session),
+):
+    repo = AnalyzeRepo(session)
+    docs = repo.list()
+    return {"items": [{"id": str(doc.id), "status": doc.status, "date_upload": doc.date_upload, "url_file": doc.url_file, "url_canonical_file": doc.url_canonical_file, "result": doc.result, "error": doc.error, "updated_at": doc.updated_at} for doc in docs]}
+
+@router.get("/{doc_id}")
+def get_analysis_document(
+    doc_id: str,
+    session: Session = Depends(db_session),
+):
+    doc = AnalyzeRepo(session).get(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="not_found")
+    return {"id": str(doc.id), "status": doc.status, "date_upload": doc.date_upload, "url_file": doc.url_file, "url_canonical_file": doc.url_canonical_file, "result": doc.result, "error": doc.error, "updated_at": doc.updated_at}
+
 @router.get("/{doc_id}/download")
 def download_analysis_file(
     doc_id: str,
