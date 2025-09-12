@@ -1,132 +1,43 @@
 import React, { useState } from 'react'
-import { useChat } from '../contexts/ChatContext'
-import Button from '@shared/ui/Button'
-import Input from '@shared/ui/Input'
 import Modal from '@shared/ui/Modal'
-import styles from './ChatTags.module.css'
+import Input from '@shared/ui/Input'
+import Button from '@shared/ui/Button'
 
-interface ChatTagsProps {
-  chatId: string
-  tags: string[]
-  onTagsChange?: (tags: string[]) => void
-}
+export default function ChatTags({ chatId, tags, onTagsChange }: { chatId: string, tags: string[], onTagsChange: (tags: string[]) => void }) {
+  const [local, setLocal] = useState<string[]>(tags || [])
+  const [open, setOpen] = useState(true)
+  const [draft, setDraft] = useState('')
 
-export default function ChatTags({ chatId, tags, onTagsChange }: ChatTagsProps) {
-  const { updateChatTags } = useChat()
-  const [isOpen, setIsOpen] = useState(false)
-  const [newTag, setNewTag] = useState('')
-  const [currentTags, setCurrentTags] = useState<string[]>(tags)
-
-  const handleAddTag = () => {
-    if (newTag.trim() && !currentTags.includes(newTag.trim())) {
-      const updatedTags = [...currentTags, newTag.trim()]
-      setCurrentTags(updatedTags)
-      setNewTag('')
-    }
+  function add() {
+    const t = draft.trim()
+    if (!t) return
+    if (local.includes(t)) return
+    setLocal([...local, t])
+    setDraft('')
   }
-
-  const handleRemoveTag = (tagToRemove: string) => {
-    const updatedTags = currentTags.filter(tag => tag !== tagToRemove)
-    setCurrentTags(updatedTags)
-  }
-
-  const handleSave = async () => {
-    try {
-      await updateChatTags(chatId, currentTags)
-      onTagsChange?.(currentTags)
-      setIsOpen(false)
-    } catch (error) {
-      console.error('Failed to update tags:', error)
-    }
-  }
-
-  const handleKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') {
-      handleAddTag()
-    }
+  function remove(t: string) {
+    setLocal(local.filter(x => x !== t))
   }
 
   return (
-    <>
-      <div className={styles.tagsContainer}>
-        {currentTags.length > 0 ? (
-          <div className={styles.tagsList}>
-            {currentTags.map(tag => (
-              <span key={tag} className={styles.tag}>
-                {tag}
-                <button
-                  className={styles.removeTag}
-                  onClick={() => handleRemoveTag(tag)}
-                  title="Удалить тег"
-                >
-                  ×
-                </button>
-              </span>
-            ))}
-          </div>
-        ) : (
-          <span className={styles.noTags}>Нет тегов</span>
-        )}
-        <Button
-          size="small"
-          variant="ghost"
-          onClick={() => setIsOpen(true)}
-          title="Управление тегами"
-        >
-          {currentTags.length > 0 ? '✏️' : '🏷️'}
-        </Button>
+    <Modal open={open} onClose={() => setOpen(false)} title="Теги"
+      footer={<>
+        <Button variant="ghost" onClick={() => setOpen(false)}>Закрыть</Button>
+        <Button onClick={() => { onTagsChange(local); setOpen(false) }}>Сохранить</Button>
+      </>}
+    >
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+        <Input value={draft} onChange={e => setDraft(e.target.value)} placeholder="Новый тег" onKeyDown={e => { if (e.key === 'Enter') add() }} />
+        <Button onClick={add}>Добавить</Button>
       </div>
-
-      <Modal
-        open={isOpen}
-        onClose={() => setIsOpen(false)}
-        title="Управление тегами"
-        footer={
-          <>
-            <Button variant="ghost" onClick={() => setIsOpen(false)}>
-              Отмена
-            </Button>
-            <Button onClick={handleSave}>
-              Сохранить
-            </Button>
-          </>
-        }
-      >
-        <div className={styles.tagEditor}>
-          <div className={styles.addTagForm}>
-            <Input
-              value={newTag}
-              onChange={e => setNewTag(e.target.value)}
-              onKeyPress={handleKeyPress}
-              placeholder="Добавить тег..."
-            />
-            <Button onClick={handleAddTag} disabled={!newTag.trim()}>
-              Добавить
-            </Button>
-          </div>
-          
-          <div className={styles.tagsList}>
-            {currentTags.map(tag => (
-              <div key={tag} className={styles.tagItem}>
-                <span className={styles.tagName}>{tag}</span>
-                <button
-                  className={styles.removeButton}
-                  onClick={() => handleRemoveTag(tag)}
-                >
-                  ×
-                </button>
-              </div>
-            ))}
-          </div>
-          
-          {currentTags.length === 0 && (
-            <div className={styles.emptyState}>
-              <p>Теги помогают организовать чаты по темам</p>
-              <p>Например: "работа", "личное", "проект-альфа"</p>
-            </div>
-          )}
-        </div>
-      </Modal>
-    </>
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+        {local.map(t => (
+          <span key={t} style={{ border: '1px solid rgba(255,255,255,.2)', padding: '2px 8px', borderRadius: 999 }}>
+            {t} <button onClick={() => remove(t)} style={{ marginLeft: 6, opacity: .7 }}>×</button>
+          </span>
+        ))}
+        {local.length === 0 && <div style={{ opacity: .7 }}>Пока пусто</div>}
+      </div>
+    </Modal>
   )
 }

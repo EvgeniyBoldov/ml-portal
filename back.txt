@@ -1,0 +1,4511 @@
+### .env
+# ===== Auth =====
+AUTH.MODE=login
+JWT_SECRET=please_change_me
+ACCESS_TTL_SECONDS=3600
+REFRESH_TTL_DAYS=30
+REFRESH_ROTATING=true
+
+# ===== Core =====
+DB.URL=postgresql+psycopg://postgres:postgres@postgres:5432/app
+REDIS.URL=redis://redis:6379/0
+QDRANT.URL=http://qdrant:6333
+
+# ===== S3 / MinIO =====
+# S3_ENDPOINT is used by services inside the Docker network (internal).
+# S3_PUBLIC_ENDPOINT is what we return in links for users (external, e.g. https://10.4.4.2).
+S3.ENDPOINT=http://minio:9000
+S3.PUBLIC_ENDPOINT=https://10.4.4.2
+S3.ACCESS_KEY=miniouser
+S3.SECRET_KEY=miniopassword
+S3.BUCKET_RAW=raw
+S3.BUCKET_CANONICAL=canonical
+S3.BUCKET_PREVIEW=preview
+MINIO_REGION=us-east-1
+
+# ===== Pipelines =====
+EMBEDDING.MODEL=bge-m3@1.0
+EMBEDDING.BATCH_SIZE=8
+EMBEDDING.MAX_CONCURRENCY=2
+RAG.TOP_K=5
+RAG.MIN_SCORE=0.2
+
+# ===== API / Workers =====
+API_WORKERS=4
+LLM_CONCURRENCY=8
+EMBED_CONCURRENCY=4
+OMP_NUM_THREADS=6
+MKL_NUM_THREADS=6
+
+# ===== Features =====
+METRICS_ENABLED=true
+HEALTH_DEEP=false
+
+### __init__.py
+
+### adapters/emb_proxy.py
+import os
+from typing import List, Union
+import httpx
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+
+REAL_URL = os.getenv("REAL_EMBEDDINGS_URL", "").rstrip("/")
+
+app = FastAPI(title="Embeddings Proxy")
+
+class EmbedRequest(BaseModel):
+    input: Union[str, List[str]]
+
+@app.get("/healthz")
+def healthz():
+    return {"status": "ok", "mode": "proxy", "target": REAL_URL}
+
+@app.post("/embed")
+async def embed(req: EmbedRequest):
+    if not REAL_URL:
+        raise HTTPException(500, "REAL_EMBEDDINGS_URL is not set")
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            r = await client.post(f"{REAL_URL}/embed", json=req.model_dump())
+            r.raise_for_status()
+            return r.json()
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"Upstream error: {e}")
+
+### adapters/llm_proxy.py
+import os
+from typing import List, Dict, Any
+import httpx
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+
+REAL_URL = os.getenv("REAL_LLM_URL", "").rstrip("/")
+
+app = FastAPI(title="LLM Proxy")
+
+class ChatRequest(BaseModel):
+    messages: List[Dict[str, Any]]
+
+@app.get("/healthz")
+def healthz():
+    return {"status": "ok", "mode": "proxy", "target": REAL_URL}
+
+@app.post("/chat")
+async def chat(req: ChatRequest):
+    if not REAL_URL:
+        raise HTTPException(500, "REAL_LLM_URL is not set")
+    try:
+        async with httpx.AsyncClient(timeout=120) as client:
+            r = await client.post(f"{REAL_URL}/chat", json=req.model_dump())
+            r.raise_for_status()
+            return r.json()
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"Upstream error: {e}")
+
+### alembic.ini
+[alembic]
+script_location = app/migrations
+sqlalchemy.url = 
+
+[loggers]
+keys = root,sqlalchemy,alembic
+
+[handlers]
+keys = console
+
+[formatters]
+keys = generic
+
+[logger_root]
+level = WARN
+handlers = console
+
+[logger_sqlalchemy]
+level = WARN
+handlers = console
+qualname = sqlalchemy.engine
+
+[logger_alembic]
+level = INFO
+handlers = console
+qualname = alembic
+
+[handler_console]
+class = StreamHandler
+args = (sys.stderr,)
+level = NOTSET
+formatter = generic
+
+[formatter_generic]
+format = %(levelname)-5.5s [%(name)s] %(message)s
+
+### app/__init__.py
+# app package init
+
+### app/api copy/routers/chats.py
+from __future__ import annotations
+from typing import Dict, Any, AsyncGenerator, Callable
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
+from sqlalchemy.orm import Session
+from app.api.deps import db_session, get_current_user
+from app.repositories.chats_repo import ChatsRepo
+from app.schemas.chat_schemas import ChatCreateRequest, ChatUpdateRequest, ChatTagsUpdateRequest, ChatMessageRequest, ChatMessageResponse
+from app.services import clients as llm_clients
+
+router = APIRouter(prefix="/chats", tags=["chats"])
+
+def _ser_chat(c): return {"id": str(c.id), "name": c.name, "tags": c.tags or []}
+def _ser_msg(m): return {"id": str(m.id), "chat_id": str(m.chat_id), "role": m.role, "content": m.content.get("text") if isinstance(m.content, dict) else str(m.content)}
+
+try: llm_chat: Callable = getattr(llm_clients, 'llm_chat')
+except Exception:
+    def llm_chat(messages): return "(stub) llm_chat not configured"
+
+@router.get("")
+def list_chats(limit: int = Query(100, ge=1, le=200), cursor: str | None = None, q: str | None = None, session: Session = Depends(db_session), user: Dict[str, Any] = Depends(get_current_user)):
+    repo = ChatsRepo(session); items = repo.list_chats(user["id"], q=q, limit=limit)
+    return {"items": [_ser_chat(c) for c in items], "next_cursor": None}
+
+@router.post("")
+def create_chat(request: ChatCreateRequest, session: Session = Depends(db_session), user: Dict[str, Any] = Depends(get_current_user)):
+    repo = ChatsRepo(session); chat = repo.create_chat(user["id"], request.name, request.tags); return {"chat_id": str(chat.id)}
+
+@router.post("/{chat_id}/messages")
+async def post_message(chat_id: str, request: ChatMessageRequest, session: Session = Depends(db_session), user: Dict[str, Any] = Depends(get_current_user)):
+    repo = ChatsRepo(session); chat = repo.get(chat_id)
+    if not chat or chat.owner_id != user["id"]: raise HTTPException(status_code=404, detail="not_found")
+    user_msg = repo.add_message(chat_id, "user", {"text": request.content})
+    async def stream_resp() -> AsyncGenerator[bytes, None]:
+        stream_fn = getattr(llm_clients, 'llm_chat_stream', None)
+        if callable(stream_fn):
+            async for delta in stream_fn([{"role": "system", "content": "You are a helpful assistant."}, {"role": "user", "content": request.content}]):
+                if not isinstance(delta, str): delta = str(delta)
+                yield f"data: {delta}\n\n".encode("utf-8")
+            answer_final = llm_chat([{"role": "system", "content": "You are a helpful assistant."}, {"role": "user", "content": request.content}])
+            repo.add_message(chat_id, "assistant", {"text": answer_final})
+        else:
+            answer = llm_chat([{"role": "system", "content": "You are a helpful assistant."}, {"role": "user", "content": request.content}])
+            repo.add_message(chat_id, "assistant", {"text": answer})
+            for i in range(0, len(answer), 100):
+                chunk = answer[i:i+100]
+                yield f"data: {chunk}\n\n".encode("utf-8")
+    if request.response_stream: return StreamingResponse(stream_resp(), media_type="text/event-stream")
+    else:
+        answer = llm_chat([{"role": "system", "content": "You are a helpful assistant."}, {"role": "user", "content": request.content}])
+        repo.add_message(chat_id, "assistant", {"text": answer})
+        return ChatMessageResponse(message_id=str(user_msg.id), content=request.content, answer=answer)
+
+### app/api/deps.py
+from __future__ import annotations
+from typing import Optional, Dict, Any
+from fastapi import Depends, HTTPException, status, Request
+from sqlalchemy.orm import Session
+import hashlib
+import time
+
+from app.core.db import get_session
+from app.core.redis import get_redis
+from app.core.security import get_bearer_token, decode_jwt
+from app.repositories.users_repo import UsersRepo
+
+def db_session():
+    """Real DB session dependency."""
+    yield from get_session()
+
+async def rate_limit(request: Request, key: str, limit: int, window_sec: int = 60) -> None:
+    """Simple fixed-window rate limit on IP+key using Redis.
+    Raises 429 if the number of hits in the current window exceeds `limit`.
+    """
+    r = get_redis()
+    ip = request.client.host if request.client else "unknown"
+    now = int(time.time())
+    window = now - (now % window_sec)
+    rl_key = f"rl:{key}:{ip}:{window}"
+    # Use Lua for atomic INCR+EXPIRE if available; fallback to simple ops
+    try:
+        cur = await r.incr(rl_key)  # type: ignore[attr-defined]
+        if cur == 1:
+            await r.expire(rl_key, window_sec)  # type: ignore[attr-defined]
+        if cur > limit:
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="rate_limited")
+    except AttributeError:
+        # In case a sync client was wired accidentally
+        cur = r.incr(rl_key)  # type: ignore
+        if cur == 1:
+            r.expire(rl_key, window_sec)  # type: ignore
+        if cur > limit:
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="rate_limited")
+
+def _ensure_access(payload: Dict[str, Any]) -> None:
+    if payload.get("typ") != "access":
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_token_type")
+
+def get_current_user(token: str = Depends(get_bearer_token), session: Session = Depends(db_session)) -> Dict[str, Any]:
+    """Resolve user from Bearer access JWT and DB."""
+    payload = decode_jwt(token)
+    _ensure_access(payload)
+    sub = payload.get("sub")
+    if not sub:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_token")
+    repo = UsersRepo(session)
+    user = repo.get(sub)
+    if not user or getattr(user, "is_active", True) is False:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="user_not_found_or_inactive")
+    return {"id": str(user.id), "login": user.login, "role": user.role, "fio": getattr(user, "fio", None)}
+
+### app/api/routers/__init__.py
+
+### app/api/routers/analyze.py
+# app/api/routers/analyze.py
+"""
+Аналитический роутер — те же правила, другой бакет:
+- analysis/{uuid}/origin.{ext}, рядом canonical.txt и preview/*
+- Метаданные в БД; скачивание presigned GET с оригинальным именем
+"""
+from __future__ import annotations
+from typing import Optional
+from datetime import datetime
+
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
+from sqlalchemy.orm import Session
+
+from app.api.deps import db_session
+from app.core.config import settings
+from app.core.s3_helpers import put_object, presign_get
+from app.repositories.analyze_repo import AnalyzeRepo
+
+router = APIRouter(prefix="/analyze", tags=["analyze"])
+
+ALLOWED_EXTENSIONS = {'.txt', '.pdf', '.doc', '.docx', '.md', '.rtf', '.odt'}
+
+def _safe_ext(filename: Optional[str]) -> str:
+    if not filename or '.' not in filename:
+        return ''
+    ext = '.' + filename.rsplit('.', 1)[-1].lower()
+    return ext if ext in ALLOWED_EXTENSIONS else ''
+
+@router.post("/upload")
+async def upload_analysis_file(
+    file: UploadFile = File(...),
+    session: Session = Depends(db_session),
+):
+    repo = AnalyzeRepo(session)
+    ext = _safe_ext(file.filename)
+    if file.filename and not ext:
+        raise HTTPException(status_code=400, detail=f"Unsupported file type. Allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}")
+    doc = repo.create_document(
+        uploaded_by=None,
+        status="queued",
+    )
+    key = f"{doc.id}/origin{ext}"
+    put_object(settings.S3_BUCKET_ANALYSIS, key, file.file, content_type=file.content_type)
+
+    doc.url_file = key
+    doc.updated_at = datetime.utcnow()
+    session.commit()
+
+    try:
+        from app.tasks.upload_watch import watch as upload_watch
+        upload_watch(str(doc.id), key)
+    except Exception:
+        pass
+
+    return {"id": str(doc.id), "key": key, "status": "uploaded"}
+
+@router.get("/")
+def list_analysis_documents(
+    session: Session = Depends(db_session),
+):
+    repo = AnalyzeRepo(session)
+    docs = repo.list()
+    return {"items": [{"id": str(doc.id), "status": doc.status, "date_upload": doc.date_upload, "url_file": doc.url_file, "url_canonical_file": doc.url_canonical_file, "result": doc.result, "error": doc.error, "updated_at": doc.updated_at} for doc in docs]}
+
+@router.get("/{doc_id}")
+def get_analysis_document(
+    doc_id: str,
+    session: Session = Depends(db_session),
+):
+    doc = AnalyzeRepo(session).get(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="not_found")
+    return {"id": str(doc.id), "status": doc.status, "date_upload": doc.date_upload, "url_file": doc.url_file, "url_canonical_file": doc.url_canonical_file, "result": doc.result, "error": doc.error, "updated_at": doc.updated_at}
+
+@router.get("/{doc_id}/download")
+def download_analysis_file(
+    doc_id: str,
+    kind: str = Query("original", regex="^(original|canonical)$"),
+    session: Session = Depends(db_session),
+):
+    doc = AnalyzeRepo(session).get(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="not_found")
+
+    bucket = settings.S3_BUCKET_ANALYSIS
+    if kind == "original":
+        key = getattr(doc, "url_file", None)
+        if not key:
+            raise HTTPException(status_code=404, detail="original_not_ready")
+        download_name = "document"
+        mime = getattr(doc, "source_mime", None)
+    else:
+        key = getattr(doc, "url_canonical_file", None) or f"{doc.id}/canonical.txt"
+        base = "document"
+        download_name = f"{base}.txt"
+        mime = "text/plain"
+
+    url = presign_get(bucket, key, download_name=download_name, mime=mime)
+    return {"url": url}
+
+### app/api/routers/auth.py
+from __future__ import annotations
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Response
+from sqlalchemy.orm import Session
+import hashlib
+
+from app.api.deps import db_session, rate_limit, get_current_user
+from app.core.security import get_bearer_token
+from app.services.auth_service import login as do_login, refresh as do_refresh, revoke_refresh as do_revoke
+from app.repositories.users_repo import UsersRepo
+
+router = APIRouter(prefix="/auth", tags=["auth"])
+
+@router.post("/login")
+async def login(request: Request, payload: dict, session: Session = Depends(db_session)):
+    # payload: {"login":"...", "password":"..."}
+    await rate_limit(request, "auth_login", limit=10, window_sec=60)
+    login_ = (payload or {}).get("login", "").strip()
+    password = (payload or {}).get("password", "")
+    if not login_ or not password:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="missing_credentials")
+    try:
+        access, refresh, user_id = do_login(session, login_, password)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_credentials")
+    # enrich with user for convenience (per OpenAPI)
+    u = UsersRepo(session).get(user_id)
+    return {
+        "access_token": access,
+        "refresh_token": refresh,
+        "token_type": "bearer",
+        "expires_in": 3600,
+        "user": {"id": str(u.id), "fio": getattr(u, "fio", None), "login": u.login, "role": u.role} if u else None,
+    }
+
+@router.post("/refresh")
+def refresh(payload: dict, session: Session = Depends(db_session)):
+    rt = (payload or {}).get("refresh_token")
+    if not rt:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="missing_refresh_token")
+    try:
+        access, maybe_new_refresh = do_refresh(session, rt)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(e))
+    return {
+        "access_token": access,
+        "refresh_token": maybe_new_refresh,
+        "token_type": "bearer",
+        "expires_in": 3600,
+    }
+
+@router.get("/me")
+def me(user = Depends(get_current_user)):
+    return user
+
+@router.post("/logout", status_code=204)
+def logout(payload: dict | None = None, session: Session = Depends(db_session)) -> Response:
+    # Best-effort: revoke provided refresh token; if absent, just return 204 (contract allows empty body).
+    rt = (payload or {}).get("refresh_token") if isinstance(payload, dict) else None
+    if rt:
+        do_revoke(session, rt)
+    return Response(status_code=204)
+
+### app/api/routers/chats.py
+from __future__ import annotations
+from typing import Dict, Any, AsyncGenerator
+import asyncio
+import json
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
+from sqlalchemy.orm import Session
+from app.api.deps import db_session, get_current_user
+from app.repositories.chats_repo import ChatsRepo
+from app.schemas.chat_schemas import (
+    ChatCreateRequest, ChatUpdateRequest, ChatTagsUpdateRequest,
+    ChatMessageRequest, ChatMessageResponse, ChatOut, ChatMessageOut
+)
+from app.services.clients import llm_chat
+
+router = APIRouter(prefix="/chats", tags=["chats"])
+
+def _ser_chat(c) -> Dict[str, Any]:
+    return {
+        "id": str(c.id),
+        "name": c.name,
+        "tags": c.tags or [],
+        "created_at": c.created_at.isoformat() if c.created_at else None,
+        "updated_at": c.updated_at.isoformat() if c.updated_at else None,
+        "last_message_at": c.last_message_at.isoformat() if c.last_message_at else None,
+    }
+
+def _ser_msg(m) -> Dict[str, Any]:
+    content = m.content if isinstance(m.content, str) else (m.content.get("text") if isinstance(m.content, dict) else str(m.content))
+    return {
+        "id": str(m.id),
+        "chat_id": str(m.chat_id),
+        "role": m.role,
+        "content": content,
+        "created_at": m.created_at.isoformat() if m.created_at else None,
+    }
+
+@router.get("")
+def list_chats(
+    limit: int = Query(100, ge=1, le=200),
+    cursor: str | None = None,
+    q: str | None = None,
+    session: Session = Depends(db_session),
+    user: Dict[str, Any] = Depends(get_current_user),
+):
+    repo = ChatsRepo(session)
+    items = repo.list_chats(user["id"], q=q, limit=limit)
+    return {"items": [_ser_chat(c) for c in items], "next_cursor": None}
+
+@router.post("")
+def create_chat(
+    request: ChatCreateRequest,
+    session: Session = Depends(db_session),
+    user: Dict[str, Any] = Depends(get_current_user),
+):
+    repo = ChatsRepo(session)
+    chat = repo.create_chat(user["id"], request.name, request.tags)
+    return {"chat_id": str(chat.id)}
+
+@router.patch("/{chat_id}")
+def rename_chat(
+    chat_id: str,
+    request: ChatUpdateRequest,
+    session: Session = Depends(db_session),
+    user: Dict[str, Any] = Depends(get_current_user),
+):
+    repo = ChatsRepo(session)
+    chat = repo.get(chat_id)
+    if not chat or chat.owner_id != user["id"]:
+        raise HTTPException(status_code=404, detail="not_found")
+    if request.name is not None:
+        repo.rename_chat(chat_id, request.name or None)
+    return _ser_chat(repo.get(chat_id))
+
+@router.put("/{chat_id}/tags")
+def update_tags(
+    chat_id: str,
+    request: ChatTagsUpdateRequest,
+    session: Session = Depends(db_session),
+    user: Dict[str, Any] = Depends(get_current_user),
+):
+    repo = ChatsRepo(session)
+    chat = repo.get(chat_id)
+    if not chat or chat.owner_id != user["id"]:
+        raise HTTPException(status_code=404, detail="not_found")
+    repo.update_chat_tags(chat_id, request.tags)
+    return {"id": chat_id, "tags": request.tags}
+
+@router.get("/{chat_id}/messages")
+def list_messages(
+    chat_id: str,
+    limit: int = Query(50, ge=1, le=200),
+    cursor: str | None = None,
+    session: Session = Depends(db_session),
+    user: Dict[str, Any] = Depends(get_current_user),
+):
+    repo = ChatsRepo(session)
+    chat = repo.get(chat_id)
+    if not chat or chat.owner_id != user["id"]:
+        raise HTTPException(status_code=404, detail="not_found")
+    rows, next_cursor = repo.list_messages(chat_id, cursor=cursor, limit=limit)
+    items = [_ser_msg(m) for m in rows]
+    return {"items": items, "next_cursor": next_cursor}
+
+@router.post("/{chat_id}/messages")
+async def post_message(
+    chat_id: str,
+    request: ChatMessageRequest,
+    session: Session = Depends(db_session),
+    user: Dict[str, Any] = Depends(get_current_user),
+):
+    repo = ChatsRepo(session)
+    chat = repo.get(chat_id)
+    if not chat or chat.owner_id != user["id"]:
+        raise HTTPException(status_code=404, detail="not_found")
+
+    # Store user message
+    user_msg = repo.add_message(chat_id, "user", {"text": request.content})
+
+    async def stream_resp() -> AsyncGenerator[bytes, None]:
+      # Generate response with LLM (non-stream), then stream chunks to client
+      answer = llm_chat([
+          {"role": "system", "content": "You are a helpful assistant."},
+          {"role": "user", "content": request.content},
+      ])
+      # Save assistant message
+      repo.add_message(chat_id, "assistant", {"text": answer})
+      # Stream by small chunks
+      for i in range(0, len(answer), 100):
+          chunk = answer[i:i+100]
+          yield f"data: {chunk}\n\n".encode("utf-8")
+          await asyncio.sleep(0)  # yield control
+
+    if request.response_stream:
+        return StreamingResponse(stream_resp(), media_type="text/event-stream")
+    else:
+        # non-streaming
+        answer = llm_chat([
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": request.content},
+        ])
+        repo.add_message(chat_id, "assistant", {"text": answer})
+        return ChatMessageResponse(message_id=str(user_msg.id), content=request.content, answer=answer)
+
+@router.delete("/{chat_id}")
+def delete_chat(
+    chat_id: str,
+    session: Session = Depends(db_session),
+    user: Dict[str, Any] = Depends(get_current_user),
+):
+    repo = ChatsRepo(session)
+    chat = repo.get(chat_id)
+    if not chat or chat.owner_id != user["id"]:
+        raise HTTPException(status_code=404, detail="not_found")
+    repo.delete(chat_id)
+    return {"id": chat_id, "deleted": True}
+
+### app/api/routers/rag.py
+# app/api/routers/rag.py
+"""
+RAG роутер по best‑practice:
+- Принимаем multipart файл
+- Создаём UUID-документ (ORM/Repo)
+- Кладём файл в MinIO: rag/{uuid}/origin.{ext}
+- Сохраняем метаинфо в БД (оригинальное имя, mime, путь до файла без префикса бакета)
+- Триггерим пайплайн (по желанию)
+- Скачивание: presigned GET с оригинальным именем
+"""
+from __future__ import annotations
+from typing import Optional
+from datetime import datetime
+
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, Body, Form
+from sqlalchemy.orm import Session
+
+from app.api.deps import db_session
+from app.core.config import settings
+from app.core.s3_helpers import put_object, presign_get
+from app.repositories.rag_repo import RagRepo
+from app.services.rag_service import progress, stats, search
+from app.models.rag import RagDocuments
+
+router = APIRouter(prefix="/rag", tags=["rag"])
+
+ALLOWED_EXTENSIONS = {'.txt', '.pdf', '.doc', '.docx', '.md', '.rtf', '.odt'}
+
+def _safe_ext(filename: Optional[str]) -> str:
+    if not filename or '.' not in filename:
+        return ''
+    ext = '.' + filename.rsplit('.', 1)[-1].lower()
+    return ext if ext in ALLOWED_EXTENSIONS else ''
+
+@router.post("/upload")
+async def upload_rag_file(
+    file: UploadFile = File(...),
+    tags: str = Form("[]"),  # JSON string of tags
+    session: Session = Depends(db_session),
+):
+    # Валидация размера файла (50MB)
+    MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB
+    if hasattr(file, 'size') and file.size and file.size > MAX_FILE_SIZE:
+        raise HTTPException(status_code=413, detail="File too large. Maximum size is 50MB")
+    
+    # Валидация типа файла
+    repo = RagRepo(session)
+    ext = _safe_ext(file.filename)
+    if file.filename and not ext:
+        raise HTTPException(status_code=400, detail=f"Unsupported file type. Allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}")
+    
+    # Валидация MIME типа
+    if file.content_type and not file.content_type.startswith(('text/', 'application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument')):
+        raise HTTPException(status_code=400, detail="Unsupported MIME type")
+    
+    # Парсим теги
+    try:
+        import json
+        parsed_tags = json.loads(tags) if tags else []
+        if not isinstance(parsed_tags, list):
+            parsed_tags = []
+    except (json.JSONDecodeError, TypeError):
+        parsed_tags = []
+    
+    try:
+        # 1) создаём документ (UUID генерится в базе)
+        doc = repo.create_document(
+            name=file.filename,
+            uploaded_by=None,
+            status="uploaded",
+            source_mime=file.content_type,
+            tags=parsed_tags,
+        )
+        # 2) ключ origin.{ext} под UUID
+        key = f"{doc.id}/origin{ext}"
+        # 3) сохраняем в MinIO
+        put_object(settings.S3_BUCKET_RAG, key, file.file, content_type=file.content_type)
+        # 4) метаданные в БД
+        doc.url_file = key
+        doc.updated_at = datetime.utcnow()
+        session.commit()
+        # 5) триггерим пайплайн (если есть upload_watch)
+        try:
+            from app.tasks.upload_watch import watch as upload_watch
+            upload_watch(str(doc.id), key)
+        except Exception as e:
+            # Логируем ошибку, но не прерываем процесс
+            print(f"Warning: Failed to trigger upload watch: {e}")
+        return {"id": str(doc.id), "key": key, "status": "uploaded", "tags": parsed_tags}
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
+
+@router.get("/")
+def list_rag_documents(
+    page: int = Query(1, ge=1, description="Page number"),
+    size: int = Query(20, ge=1, le=100, description="Page size"),
+    status: Optional[str] = Query(None, description="Filter by status"),
+    search: Optional[str] = Query(None, description="Search in document names"),
+    session: Session = Depends(db_session),
+):
+    repo = RagRepo(session)
+    
+    # Применяем фильтры
+    query = session.query(RagDocuments)
+    
+    if status:
+        query = query.filter(RagDocuments.status == status)
+    
+    if search:
+        query = query.filter(RagDocuments.name.ilike(f"%{search}%"))
+    
+    # Подсчитываем общее количество
+    total = query.count()
+    
+    # Применяем пагинацию
+    offset = (page - 1) * size
+    docs = query.offset(offset).limit(size).all()
+    
+    # Вычисляем метаданные пагинации
+    total_pages = (total + size - 1) // size
+    has_next = page < total_pages
+    has_prev = page > 1
+    
+    return {
+        "items": [{"id": str(doc.id), "name": doc.name, "status": doc.status, "date_upload": doc.date_upload, "url_file": doc.url_file, "url_canonical_file": doc.url_canonical_file, "tags": doc.tags, "progress": None, "updated_at": doc.updated_at} for doc in docs],
+        "pagination": {
+            "page": page,
+            "size": size,
+            "total": total,
+            "total_pages": total_pages,
+            "has_next": has_next,
+            "has_prev": has_prev
+        }
+    }
+
+@router.get("/{doc_id}")
+def get_rag_document(
+    doc_id: str,
+    session: Session = Depends(db_session),
+):
+    doc = RagRepo(session).get(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="not_found")
+    return {"id": str(doc.id), "name": doc.name, "status": doc.status, "date_upload": doc.date_upload, "url_file": doc.url_file, "url_canonical_file": doc.url_canonical_file, "tags": doc.tags, "progress": None, "updated_at": doc.updated_at}
+
+@router.get("/{doc_id}/download")
+def download_rag_file(
+    doc_id: str,
+    kind: str = Query("original", regex="^(original|canonical)$"),
+    session: Session = Depends(db_session),
+):
+    repo = RagRepo(session)
+    doc = repo.get(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="not_found")
+
+    bucket = settings.S3_BUCKET_RAG
+    if kind == "original":
+        key = getattr(doc, "url_file", None)
+        if not key:
+            raise HTTPException(status_code=404, detail="original_not_ready")
+        download_name = doc.name or "document"
+        mime = getattr(doc, "source_mime", None)
+    else:
+        # canonical лежит рядом: rag/{uuid}/canonical.txt
+        key = getattr(doc, "url_canonical_file", None) or f"{doc.id}/canonical.txt"
+        base = (doc.name or "document").rsplit('.', 1)[0]
+        download_name = f"{base}.txt"
+        mime = "text/plain"
+
+    url = presign_get(bucket, key, download_name=download_name, mime=mime)
+    return {"url": url}
+
+@router.get("/{doc_id}/progress")
+def get_rag_progress(
+    doc_id: str,
+    session: Session = Depends(db_session),
+):
+    """Получить прогресс обработки RAG документа"""
+    return progress(session, doc_id)
+
+
+@router.get("/stats")
+def get_rag_stats(
+    session: Session = Depends(db_session),
+):
+    """Получить статистику RAG документов"""
+    return stats(session)
+
+@router.post("/{doc_id}/archive")
+def archive_rag_document(
+    doc_id: str,
+    session: Session = Depends(db_session),
+):
+    doc = RagRepo(session).get(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="not_found")
+    
+    doc.status = "archived"
+    doc.updated_at = datetime.utcnow()
+    session.commit()
+    
+    return {"id": str(doc.id), "status": doc.status}
+
+@router.put("/{doc_id}/tags")
+def update_rag_document_tags(
+    doc_id: str,
+    tags: list = Body(...),
+    session: Session = Depends(db_session),
+):
+    doc = RagRepo(session).get(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    doc.tags = tags
+    doc.updated_at = datetime.utcnow()
+    session.commit()
+    
+    return {"id": str(doc.id), "tags": tags}
+
+@router.delete("/{doc_id}")
+def delete_rag_document(
+    doc_id: str,
+    session: Session = Depends(db_session),
+):
+    doc = RagRepo(session).get(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="not_found")
+    
+    # Удаляем файлы из MinIO
+    if doc.url_file:
+        try:
+            from app.core.s3 import get_minio
+            client = get_minio()
+            client.remove_object(settings.S3_BUCKET_RAG, doc.url_file)
+        except Exception:
+            pass
+    
+    if doc.url_canonical_file:
+        try:
+            from app.core.s3 import get_minio
+            client = get_minio()
+            client.remove_object(settings.S3_BUCKET_RAG, doc.url_canonical_file)
+        except Exception:
+            pass
+    
+    # Удаляем из БД
+    session.delete(doc)
+    session.commit()
+    
+    return {"id": str(doc.id), "deleted": True}
+
+@router.post("/search")
+def search_rag(
+    text: str = Body(..., description="Search query"),
+    top_k: int = Body(10, ge=1, le=100),
+    min_score: float = Body(0.0, ge=0.0, le=1.0),
+    session: Session = Depends(db_session),
+):
+    """Поиск в RAG документах"""
+    results = search(session, text, top_k=top_k)
+    # Фильтруем по min_score на уровне приложения
+    filtered_results = [r for r in results.get("results", []) if r.get("score", 0) >= min_score]
+    return {"items": filtered_results}
+
+### app/api/sse.py
+from starlette.responses import StreamingResponse
+def sse_response(source):
+    def gen():
+        for item in source:
+            yield (item.get("data","") + "\n\n")
+    return StreamingResponse(gen(), media_type="text/event-stream")
+
+### app/celery_app.py
+from __future__ import annotations
+import os
+from celery import Celery
+
+BROKER_URL = os.getenv("CELERY_BROKER_URL") or "redis://redis:6379/0"
+RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND") or "redis://redis:6379/1"
+
+app = Celery(
+    "backend",
+    broker=BROKER_URL,
+    backend=RESULT_BACKEND,
+    include=[
+        "app.tasks.normalize",
+        "app.tasks.chunk",
+        "app.tasks.embed",
+        "app.tasks.index",
+        "app.tasks.analyze",
+        "app.tasks.upload_watch",
+    ],
+)
+
+# Queues & routing
+app.conf.task_routes = {
+    "app.tasks.normalize.*": {"queue": "normalize"},
+    "app.tasks.chunk.*": {"queue": "chunk"},
+    "app.tasks.embed.*": {"queue": "embed"},
+    "app.tasks.index.*": {"queue": "index"},
+    "app.tasks.analyze.*": {"queue": "analyze"},
+    "app.tasks.upload.*": {"queue": "watch"},
+    "app.tasks.upload_watch.*": {"queue": "watch"},
+}
+
+app.conf.update(
+    task_serializer="json",
+    accept_content=["json"],
+    result_serializer="json",
+    task_acks_late=True,
+    worker_prefetch_multiplier=1,
+    broker_heartbeat=20,
+    broker_pool_limit=10,
+    task_time_limit=60 * 60,
+    task_soft_time_limit=55 * 60,
+)
+
+if os.getenv("BEAT") == "1":
+    app.conf.beat_schedule = {
+        "dummy-housekeeping-5m": {
+            "task": "app.tasks.index.housekeeping",
+            "schedule": 300.0,
+        }
+    }
+
+### app/core/__init__.py
+# core package init
+
+### app/core/cache.py
+import json
+import pickle
+from typing import Any, Optional, Union
+from datetime import datetime, timedelta
+import redis
+from app.core.config import settings
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
+
+class CacheManager:
+    """Redis cache manager with JSON serialization"""
+    
+    def __init__(self):
+        self.redis_client = redis.Redis(
+            host=settings.REDIS_HOST,
+            port=settings.REDIS_PORT,
+            db=settings.REDIS_DB,
+            decode_responses=True
+        )
+        self.default_ttl = 3600  # 1 hour
+    
+    def _serialize(self, value: Any) -> str:
+        """Serialize value to JSON string"""
+        try:
+            return json.dumps(value, default=str)
+        except (TypeError, ValueError):
+            # Fallback to pickle for complex objects
+            return pickle.dumps(value).hex()
+    
+    def _deserialize(self, value: str) -> Any:
+        """Deserialize JSON string to value"""
+        try:
+            return json.loads(value)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            # Fallback to pickle for complex objects
+            return pickle.loads(bytes.fromhex(value))
+    
+    def get(self, key: str) -> Optional[Any]:
+        """Get value from cache"""
+        try:
+            value = self.redis_client.get(key)
+            if value is None:
+                return None
+            return self._deserialize(value)
+        except Exception as e:
+            logger.error(f"Cache get error for key {key}: {e}")
+            return None
+    
+    def set(
+        self, 
+        key: str, 
+        value: Any, 
+        ttl: Optional[int] = None
+    ) -> bool:
+        """Set value in cache with TTL"""
+        try:
+            serialized_value = self._serialize(value)
+            ttl = ttl or self.default_ttl
+            return self.redis_client.setex(key, ttl, serialized_value)
+        except Exception as e:
+            logger.error(f"Cache set error for key {key}: {e}")
+            return False
+    
+    def delete(self, key: str) -> bool:
+        """Delete key from cache"""
+        try:
+            return bool(self.redis_client.delete(key))
+        except Exception as e:
+            logger.error(f"Cache delete error for key {key}: {e}")
+            return False
+    
+    def exists(self, key: str) -> bool:
+        """Check if key exists in cache"""
+        try:
+            return bool(self.redis_client.exists(key))
+        except Exception as e:
+            logger.error(f"Cache exists error for key {key}: {e}")
+            return False
+    
+    def get_or_set(
+        self, 
+        key: str, 
+        factory_func, 
+        ttl: Optional[int] = None,
+        *args,
+        **kwargs
+    ) -> Any:
+        """Get value from cache or set it using factory function"""
+        value = self.get(key)
+        if value is not None:
+            return value
+        
+        # Generate value using factory function
+        value = factory_func(*args, **kwargs)
+        self.set(key, value, ttl)
+        return value
+    
+    def invalidate_pattern(self, pattern: str) -> int:
+        """Invalidate all keys matching pattern"""
+        try:
+            keys = self.redis_client.keys(pattern)
+            if keys:
+                return self.redis_client.delete(*keys)
+            return 0
+        except Exception as e:
+            logger.error(f"Cache pattern invalidation error for {pattern}: {e}")
+            return 0
+
+# Global cache instance
+cache = CacheManager()
+
+# Cache decorators
+def cached(ttl: int = 3600, key_prefix: str = ""):
+    """Decorator for caching function results"""
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            # Generate cache key
+            cache_key = f"{key_prefix}:{func.__name__}:{hash(str(args) + str(sorted(kwargs.items())))}"
+            
+            # Try to get from cache
+            result = cache.get(cache_key)
+            if result is not None:
+                return result
+            
+            # Execute function and cache result
+            result = func(*args, **kwargs)
+            cache.set(cache_key, result, ttl)
+            return result
+        
+        return wrapper
+    return decorator
+
+def cache_invalidate(pattern: str):
+    """Decorator for invalidating cache after function execution"""
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            result = func(*args, **kwargs)
+            cache.invalidate_pattern(pattern)
+            return result
+        return wrapper
+    return decorator
+
+# Cache key generators
+def chat_key(chat_id: str) -> str:
+    return f"chat:{chat_id}"
+
+def chat_messages_key(chat_id: str, limit: int = 50, cursor: str = None) -> str:
+    cursor_part = f":{cursor}" if cursor else ""
+    return f"chat_messages:{chat_id}:{limit}{cursor_part}"
+
+def rag_document_key(doc_id: str) -> str:
+    return f"rag_document:{doc_id}"
+
+def rag_documents_key(page: int, size: int, status: str = None, search: str = None) -> str:
+    status_part = f":{status}" if status else ""
+    search_part = f":{search}" if search else ""
+    return f"rag_documents:{page}:{size}{status_part}{search_part}"
+
+def rag_metrics_key() -> str:
+    return "rag_metrics"
+
+def user_chats_key(user_id: str) -> str:
+    return f"user_chats:{user_id}"
+
+### app/core/config.py
+from __future__ import annotations
+import os
+from typing import Optional
+
+def _env(key: str, default: Optional[str] = None) -> Optional[str]:
+    """Fetch env var trying both UNDER_SCORE and DOT.SEPARATED names."""
+    return os.getenv(key) or os.getenv(key.replace("_", "."), default)
+
+class settings:
+    """Central config.
+    Important S3 envs:
+      - S3_ENDPOINT: internal endpoint for SDK (e.g. http://minio:9000) — used by the app in Docker network.
+      - S3_PUBLIC_ENDPOINT: external/public base URL for links (e.g. https://10.4.4.2). Can include scheme http/https.
+        If not set, falls back to S3_ENDPOINT.
+      Buckets can be set via either S3_BUCKET_* or S3.BUCKET_* names.
+    """
+    # Core
+    # Use psycopg3 driver by default to match dependencies
+    DB_URL = _env("DB_URL") or _env("DB.URL") or "postgresql+psycopg://postgres:postgres@postgres:5432/app"
+    REDIS_URL = _env("REDIS_URL") or _env("REDIS.URL") or "redis://redis:6379/0"
+    QDRANT_URL = _env("QDRANT_URL") or _env("QDRANT.URL") or "http://qdrant:6333"
+    LLM_URL = _env("LLM_URL") or _env("LLM.URL") or "http://llm:8002"
+    EMB_URL = _env("EMB_URL") or _env("EMB.URL") or "http://emb:8001"
+
+    # Auth
+    JWT_SECRET = os.getenv("JWT_SECRET", "dev-secret")
+    ACCESS_TTL_SECONDS = int(os.getenv("ACCESS_TTL_SECONDS", "3600"))
+    REFRESH_TTL_DAYS = int(os.getenv("REFRESH_TTL_DAYS", "30"))
+    REFRESH_ROTATING = (str(os.getenv("REFRESH_ROTATING", "true")).lower() in ("1","true","yes"))
+
+    # S3 / MinIO
+    S3_ENDPOINT = _env("S3_ENDPOINT") or _env("S3.ENDPOINT") or "http://minio:9000"
+    S3_PUBLIC_ENDPOINT = _env("S3_PUBLIC_ENDPOINT") or _env("S3.PUBLIC_ENDPOINT") or S3_ENDPOINT
+    S3_ACCESS_KEY = _env("S3_ACCESS_KEY") or _env("S3.ACCESS_KEY") or "minio"
+    S3_SECRET_KEY = _env("S3_SECRET_KEY") or _env("S3.SECRET_KEY") or "minio123"
+
+    S3_BUCKET_RAG = _env("S3_BUCKET_RAG") or _env("S3.BUCKET_RAG") or "rag"
+    S3_BUCKET_ANALYSIS = _env("S3_BUCKET_ANALYSIS") or _env("S3.BUCKET_ANALYSIS") or "analysis"
+
+    # Health
+    HEALTH_DEEP = (os.getenv("HEALTH_DEEP", "0") == "1")
+
+### app/core/db.py
+from __future__ import annotations
+from contextlib import contextmanager
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from .config import settings
+
+engine = create_engine(settings.DB_URL, pool_pre_ping=True, future=True)
+SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
+
+def get_session():
+    db = SessionLocal()
+    try:
+        yield db
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+@contextmanager
+def session_scope():
+    """Provide a transactional scope around a series of operations."""
+    db = SessionLocal()
+    try:
+        yield db
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+### app/core/errors.py
+from __future__ import annotations
+from fastapi import Request
+from fastapi.responses import JSONResponse
+from fastapi import status
+from typing import Any, Optional, Dict
+# from .logging import request_id_ctx
+
+class APIError(Exception):
+    def __init__(self, code: str, message: str, *, http_status: int = 400, details: Optional[Dict[str, Any]] = None):
+        super().__init__(message)
+        self.code = code
+        self.http_status = http_status
+        self.details = details or {}
+
+def format_error_payload(code: str, message: str, details: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    return {
+        "error": {"code": code, "message": message, "details": details or {}},
+        "request_id": None,  # request_id_ctx.get(),
+    }
+
+async def http_exception_handler(request: Request, exc: APIError):
+    payload = format_error_payload(exc.code, str(exc), exc.details)
+    return JSONResponse(status_code=exc.http_status, content=payload)
+
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    payload = format_error_payload("internal_error", "Internal Server Error")
+    return JSONResponse(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content=payload)
+
+def install_exception_handlers(app):
+    from fastapi import HTTPException
+    app.add_exception_handler(APIError, http_exception_handler)
+    app.add_exception_handler(Exception, unhandled_exception_handler)
+
+### app/core/idempotency.py
+from __future__ import annotations
+import os, json, base64, hashlib
+from typing import List, Tuple, Optional, Dict, Any
+from starlette.types import ASGIApp, Scope, Receive, Send, Message
+from app.core.redis import get_redis
+
+SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+DEFAULT_TTL = int(os.getenv("IDEMPOTENCY_TTL_SECONDS", "86400"))
+ENABLED = os.getenv("IDEMPOTENCY_ENABLED", "1") not in {"0", "false", "False"}
+MAX_CAPTURE_BYTES = int(os.getenv("IDEMPOTENCY_MAX_BYTES", "1048576"))  # 1 MiB
+
+def _get_header(headers: List[Tuple[bytes, bytes]], name: str) -> Optional[bytes]:
+    name_b = name.lower().encode()
+    for k, v in headers:
+        if k.lower() == name_b:
+            return v
+    return None
+
+class IdempotencyMiddleware:
+    def __init__(self, app: ASGIApp):
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send):
+        if not ENABLED or scope.get("type") != "http":
+            return await self.app(scope, receive, send)
+
+        method = scope.get("method") or "GET"
+        if method in SAFE_METHODS:
+            return await self.app(scope, receive, send)
+
+        headers: List[Tuple[bytes, bytes]] = scope.get("headers") or []
+        idem_key_b = _get_header(headers, "idempotency-key")
+        if not idem_key_b:
+            return await self.app(scope, receive, send)
+
+        path = scope.get("path") or "/"
+        auth_b = _get_header(headers, "authorization") or b""
+        user_hash = hashlib.sha256(auth_b).hexdigest()[:16] if auth_b else "anon"
+        raw_key = b"|".join([method.encode(), path.encode(), idem_key_b, user_hash.encode()])
+        key_hash = hashlib.sha256(raw_key).hexdigest()
+        rkey = f"idemp:v1:{key_hash}"
+
+        redis = get_redis()
+        try:
+            cached = await redis.get(rkey)  # type: ignore[attr-defined]
+        except Exception:
+            cached = None
+
+        if cached:
+            try:
+                data = json.loads(cached)
+                body = base64.b64decode(data.get("body_b64", ""))
+                from starlette.responses import Response
+                headers_dict = data.get("headers") or {}
+                headers_dict["content-length"] = str(len(body))
+                resp = Response(content=body, status_code=int(data.get("status", 200)), headers=headers_dict, media_type=None)
+                return await resp(scope, receive, send)
+            except Exception:
+                pass
+
+        started: Dict[str, Any] = {"status": None, "headers": []}
+        chunks: list[bytes] = []
+        total = 0
+        is_streaming = False
+
+        async def send_wrapper(message: Message):
+            nonlocal total, is_streaming
+            if message["type"] == "http.response.start":
+                started["status"] = message["status"]
+                started["headers"] = message.get("headers", [])
+                ctype = _get_header(started["headers"], "content-type") or b""
+                if b"text/event-stream" in ctype or b"stream" in ctype:
+                    is_streaming = True
+                return await send(message)
+            elif message["type"] == "http.response.body":
+                body = message.get("body", b"") or b""
+                if body:
+                    total += len(body)
+                    if total <= MAX_CAPTURE_BYTES:
+                        chunks.append(body)
+                    else:
+                        is_streaming = True
+                return await send(message)
+            else:
+                return await send(message)
+
+        await self.app(scope, receive, send_wrapper)
+
+        if not is_streaming and started["status"] is not None:
+            try:
+                body_bytes = b"".join(chunks)
+                headers_dict = {k.decode().lower(): v.decode() for k, v in (started["headers"] or [])}
+                payload = {
+                    "status": int(started["status"]),
+                    "headers": headers_dict,
+                    "body_b64": base64.b64encode(body_bytes).decode(),
+                }
+                await redis.setex(rkey, DEFAULT_TTL, json.dumps(payload))  # type: ignore[attr-defined]
+            except Exception:
+                pass
+
+### app/core/logging.py
+import logging
+import sys
+from typing import Any, Dict, Optional
+from datetime import datetime
+import json
+import traceback
+
+class JSONFormatter(logging.Formatter):
+    """Custom JSON formatter for structured logging"""
+    
+    def format(self, record: logging.LogRecord) -> str:
+        log_entry = {
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+            "module": record.module,
+            "function": record.funcName,
+            "line": record.lineno,
+        }
+        
+        # Add exception info if present
+        if record.exc_info:
+            log_entry["exception"] = {
+                "type": record.exc_info[0].__name__,
+                "message": str(record.exc_info[1]),
+                "traceback": traceback.format_exception(*record.exc_info)
+            }
+        
+        # Add extra fields
+        if hasattr(record, 'extra'):
+            log_entry.update(record.extra)
+        
+        return json.dumps(log_entry, ensure_ascii=False)
+
+def setup_logging(level: str = "INFO") -> None:
+    """Setup structured logging configuration"""
+    
+    # Create logger
+    logger = logging.getLogger()
+    logger.setLevel(getattr(logging, level.upper()))
+    
+    # Remove existing handlers
+    for handler in logger.handlers[:]:
+        logger.removeHandler(handler)
+    
+    # Create console handler
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(getattr(logging, level.upper()))
+    
+    # Set formatter
+    formatter = JSONFormatter()
+    console_handler.setFormatter(formatter)
+    
+    # Add handler to logger
+    logger.addHandler(console_handler)
+    
+    # Set specific loggers
+    logging.getLogger("uvicorn").setLevel(logging.INFO)
+    logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+    logging.getLogger("fastapi").setLevel(logging.INFO)
+    logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
+
+def get_logger(name: str) -> logging.Logger:
+    """Get logger instance"""
+    return logging.getLogger(name)
+
+class LoggerMixin:
+    """Mixin class for adding logging to any class"""
+    
+    @property
+    def logger(self) -> logging.Logger:
+        return get_logger(f"{self.__class__.__module__}.{self.__class__.__name__}")
+
+def log_api_call(
+    logger: logging.Logger,
+    method: str,
+    endpoint: str,
+    user_id: Optional[str] = None,
+    status_code: Optional[int] = None,
+    duration_ms: Optional[float] = None,
+    error: Optional[str] = None
+) -> None:
+    """Log API call with structured data"""
+    extra = {
+        "api_call": {
+            "method": method,
+            "endpoint": endpoint,
+            "user_id": user_id,
+            "status_code": status_code,
+            "duration_ms": duration_ms,
+            "error": error
+        }
+    }
+    
+    if error:
+        logger.error(f"API call failed: {method} {endpoint}", extra=extra)
+    else:
+        logger.info(f"API call: {method} {endpoint}", extra=extra)
+
+def log_database_operation(
+    logger: logging.Logger,
+    operation: str,
+    table: str,
+    record_id: Optional[str] = None,
+    duration_ms: Optional[float] = None,
+    error: Optional[str] = None
+) -> None:
+    """Log database operation with structured data"""
+    extra = {
+        "db_operation": {
+            "operation": operation,
+            "table": table,
+            "record_id": record_id,
+            "duration_ms": duration_ms,
+            "error": error
+        }
+    }
+    
+    if error:
+        logger.error(f"Database operation failed: {operation} on {table}", extra=extra)
+    else:
+        logger.info(f"Database operation: {operation} on {table}", extra=extra)
+
+def log_external_service(
+    logger: logging.Logger,
+    service: str,
+    operation: str,
+    duration_ms: Optional[float] = None,
+    error: Optional[str] = None,
+    **kwargs
+) -> None:
+    """Log external service call with structured data"""
+    extra = {
+        "external_service": {
+            "service": service,
+            "operation": operation,
+            "duration_ms": duration_ms,
+            "error": error,
+            **kwargs
+        }
+    }
+    
+    if error:
+        logger.error(f"External service call failed: {service}.{operation}", extra=extra)
+    else:
+        logger.info(f"External service call: {service}.{operation}", extra=extra)
+### app/core/metrics.py
+from __future__ import annotations
+from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
+from fastapi.responses import Response
+
+# API metrics
+logins_total = Counter("logins_total", "Logins", ["result"])
+refresh_total = Counter("refresh_total", "Refresh", ["result"])
+chat_requests_total = Counter("chat_requests_total", "Total chat requests", ["use_rag", "model"])
+chat_latency_seconds = Histogram("chat_latency_seconds", "Chat latency", ["use_rag"])
+rag_search_total = Counter("rag_search_total", "Total RAG searches", ["model"])
+rag_documents_total = Counter("rag_documents_total", "RAG documents by status", ["status"])
+
+# Pipeline counters
+rag_ingest_started_total = Counter("rag_ingest_started_total", "RAG ingest pipelines started")
+rag_chunks_created_total = Counter("rag_chunks_created_total", "Total chunks created")
+rag_vectors_upserted_total = Counter("rag_vectors_upserted_total", "Total vectors upserted to Qdrant")
+
+# Tasks metrics
+tasks_started_total = Counter("tasks_started_total", "Tasks started", ["queue", "task"])
+tasks_failed_total  = Counter("tasks_failed_total",  "Tasks failed",  ["queue", "task"])
+task_duration_seconds = Histogram("task_duration_seconds", "Task duration", ["task"])
+embedding_batch_inflight = Gauge("embedding_batch_inflight", "Embedding batches in flight")
+
+# External calls metrics
+external_request_total = Counter("external_request_total", "External requests total", ["target", "status"])
+external_request_seconds = Histogram("external_request_seconds", "External request latency", ["target"])
+
+qdrant_points = Gauge("qdrant_points", "Qdrant points", ["collection"])
+
+def prometheus_endpoint() -> Response:
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+### app/core/pagination.py
+from __future__ import annotations
+import base64, json
+from typing import Any, Dict, Optional, Tuple
+
+def encode_cursor(payload: Dict[str, Any]) -> str:
+    return base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":")).encode()).decode()
+
+def decode_cursor(cursor: Optional[str]) -> Optional[Dict[str, Any]]:
+    if not cursor:
+        return None
+    try:
+        data = base64.urlsafe_b64decode(cursor.encode()).decode()
+        return json.loads(data)
+    except Exception:
+        return None
+
+def page(items, next_cursor_payload: Optional[Dict[str, Any]]):
+    return {"items": items, "next_cursor": encode_cursor(next_cursor_payload) if next_cursor_payload else None}
+
+### app/core/qdrant.py
+from __future__ import annotations
+from qdrant_client import QdrantClient
+from .config import settings
+
+_client: QdrantClient | None = None
+
+def get_qdrant() -> QdrantClient:
+    global _client
+    if _client is None:
+        _client = QdrantClient(url=settings.QDRANT_URL, prefer_grpc=False)
+    return _client
+
+### app/core/redis.py
+from __future__ import annotations
+from typing import Optional
+from redis.asyncio import Redis
+from .config import settings
+
+_redis: Optional[Redis] = None
+
+def get_redis() -> Redis:
+    global _redis
+    if _redis is None:
+        _redis = Redis.from_url(settings.REDIS_URL, decode_responses=True)
+    return _redis
+
+### app/core/s3.py
+from __future__ import annotations
+from typing import BinaryIO
+from urllib.parse import urlparse
+from minio import Minio
+from .config import settings
+
+_client: Minio | None = None
+
+def _mk_client() -> Minio:
+    endpoint = settings.S3_ENDPOINT
+    secure = False
+    netloc = endpoint
+    if endpoint.startswith("http://") or endpoint.startswith("https://"):
+        u = urlparse(endpoint)
+        secure = (u.scheme == "https")
+        netloc = u.netloc
+    return Minio(
+        netloc,
+        access_key=settings.S3_ACCESS_KEY,
+        secret_key=settings.S3_SECRET_KEY,
+        secure=secure,
+    )
+
+def get_minio() -> Minio:
+    global _client
+    if _client is None:
+        _client = _mk_client()
+    return _client
+
+def reset_client():
+    global _client
+    _client = None
+
+def presign_put(bucket: str, key: str, expiry_seconds: int = 3600) -> str:
+    from datetime import timedelta
+    url = get_minio().presigned_put_object(bucket, key, expires=timedelta(seconds=expiry_seconds))
+    
+    # Replace internal endpoint with public endpoint for external access
+    if settings.S3_PUBLIC_ENDPOINT != settings.S3_ENDPOINT:
+        internal_base = settings.S3_ENDPOINT.rstrip('/')
+        public_base = settings.S3_PUBLIC_ENDPOINT.rstrip('/')
+        url = url.replace(internal_base, public_base)
+    
+    return url
+
+def ensure_bucket(bucket: str) -> None:
+    c = get_minio()
+    if not c.bucket_exists(bucket):
+        c.make_bucket(bucket)
+
+def put_object(bucket: str, key: str, data: bytes | BinaryIO, length: int | None = None, content_type: str | None = None):
+    c = get_minio()
+    if hasattr(data, "read"):
+        return c.put_object(bucket, key, data, length=length or -1, content_type=content_type)  # type: ignore
+    import io
+    bio = io.BytesIO(data if isinstance(data, (bytes, bytearray)) else bytes(data))
+    return c.put_object(bucket, key, bio, length=len(bio.getvalue()), content_type=content_type)
+
+def get_object(bucket: str, key: str):
+    return get_minio().get_object(bucket, key)
+
+def stat_object(bucket: str, key: str):
+    return get_minio().stat_object(bucket, key)
+
+def list_buckets():
+    return get_minio().list_buckets()
+
+### app/core/s3_helpers.py
+# app/core/s3_helpers.py
+from __future__ import annotations
+from datetime import timedelta
+from typing import Optional
+from urllib.parse import quote
+
+from app.core.config import settings
+from app.core.s3 import get_minio  # ожидается, что он уже есть в вашем проекте
+
+def put_object(bucket: str, key: str, data, *, content_type: Optional[str] = None, part_size: int = 10 * 1024 * 1024):
+    """
+    Безопасная загрузка потока в MinIO.
+    Использует multipart (length=-1), если длина неизвестна (UploadFile.file).
+    """
+    client = get_minio()
+    return client.put_object(bucket, key, data, length=-1, part_size=part_size, content_type=content_type)
+
+def _content_disposition(filename: str) -> str:
+    # RFC 5987 filename*
+    return f"attachment; filename*=UTF-8''{quote(filename)}"
+
+def presign_get(bucket: str, key: str, *, seconds: int = 3600, download_name: Optional[str] = None, mime: Optional[str] = None) -> str:
+    """
+    Генерирует presigned GET URL. Добавляет правильный Content-Disposition и MIME.
+    Если настроен публичный endpoint, подменяет на него URL.
+    """
+    client = get_minio()
+    headers = {}
+    if download_name:
+        headers["response-content-disposition"] = _content_disposition(download_name)
+    if mime:
+        headers["response-content-type"] = mime
+    url = client.presigned_get_object(bucket, key, expires=timedelta(seconds=seconds), response_headers=headers)
+    if getattr(settings, "S3_PUBLIC_ENDPOINT", None) and settings.S3_PUBLIC_ENDPOINT != settings.S3_ENDPOINT:
+        url = url.replace(settings.S3_ENDPOINT.rstrip("/"), settings.S3_PUBLIC_ENDPOINT.rstrip("/"))
+    return url
+
+### app/core/security.py
+from __future__ import annotations
+import time
+import jwt
+from typing import Any, Dict, Optional
+from argon2 import PasswordHasher
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from .config import settings
+
+ph = PasswordHasher()
+http_bearer = HTTPBearer(auto_error=False)
+
+def hash_password(password: str) -> str:
+    return ph.hash(password)
+
+def verify_password(password: str, password_hash: str) -> bool:
+    try:
+        return ph.verify(password_hash, password)
+    except Exception:
+        return False
+
+def encode_jwt(payload: Dict[str, Any], *, ttl_seconds: int) -> str:
+    now = int(time.time())
+    to_encode = {"iat": now, "exp": now + ttl_seconds, **payload}
+    return jwt.encode(to_encode, settings.JWT_SECRET, algorithm="HS256")
+
+def decode_jwt(token: str) -> Dict[str, Any]:
+    try:
+        return jwt.decode(token, settings.JWT_SECRET, algorithms=["HS256"])
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="token_expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_token")
+
+# FastAPI dependency
+def get_bearer_token(credentials: HTTPAuthorizationCredentials | None = Depends(http_bearer)) -> str:
+    if not credentials or credentials.scheme.lower() != "bearer":
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="missing_bearer")
+    return credentials.credentials
+
+### app/llm/prompts/__init__.py
+
+### app/main.py
+from __future__ import annotations
+import os
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
+from app.core.metrics import prometheus_endpoint
+from app.core.logging import setup_logging
+from app.core.errors import install_exception_handlers
+from app.core.config import settings
+from app.core.db import engine
+from app.core.redis import get_redis
+from app.core.qdrant import get_qdrant
+from app.core.s3 import get_minio
+from app.core.idempotency import IdempotencyMiddleware
+from app.api.routers.auth import router as auth_router
+from app.api.routers.chats import router as chats_router
+from app.api.routers.rag import router as rag_router
+from app.api.routers.analyze import router as analyze_router
+
+setup_logging()
+
+app = FastAPI(title="API")
+
+app.add_middleware(IdempotencyMiddleware)
+
+if os.getenv("CORS_ENABLED", "1") not in {"0", "false", "False"}:
+    origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",")]
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=origins if origins != ["*"] else ["*"],
+        allow_credentials=True,
+        allow_methods=[m.strip() for m in os.getenv("CORS_METHODS", "*").split(",")] if os.getenv("CORS_METHODS") else ["*"],
+        allow_headers=[h.strip() for h in os.getenv("CORS_HEADERS", "*").split(",")] if os.getenv("CORS_HEADERS") else ["*"],
+        expose_headers=[h.strip() for h in os.getenv("CORS_EXPOSE_HEADERS", "").split(",")] if os.getenv("CORS_EXPOSE_HEADERS") else [],
+        max_age=int(os.getenv("CORS_MAX_AGE", "600")),
+    )
+
+install_exception_handlers(app)
+
+@app.get("/healthz")
+async def healthz(deep: int | None = None):
+    if settings.HEALTH_DEEP or deep == 1:
+        try:
+            with engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+            await get_redis().ping()
+            get_qdrant().get_collections()
+            get_minio().list_buckets()
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+    return {"ok": True}
+
+@app.get("/metrics")
+def metrics():
+    return prometheus_endpoint()
+
+@app.get("/api/rag/metrics")
+def rag_metrics():
+    from app.api.deps import db_session
+    from sqlalchemy import func
+    from app.models.rag import RagDocuments, RagChunks
+    
+    session = next(db_session())
+    try:
+        # Подсчитываем документы по статусам
+        status_counts = session.query(
+            RagDocuments.status,
+            func.count(RagDocuments.id)
+        ).group_by(RagDocuments.status).all()
+        
+        # Общее количество документов
+        total_documents = session.query(func.count(RagDocuments.id)).scalar()
+        
+        # Количество чанков
+        total_chunks = session.query(func.count(RagChunks.id)).scalar()
+        
+        # Количество документов в обработке
+        processing_documents = session.query(func.count(RagDocuments.id)).filter(
+            RagDocuments.status.in_(['uploaded', 'normalizing', 'chunking', 'embedding', 'indexing'])
+        ).scalar()
+        
+        # Размер хранилища (приблизительно)
+        storage_size = session.query(func.sum(RagDocuments.size_bytes)).scalar() or 0
+        
+        return {
+            "total_documents": total_documents,
+            "total_chunks": total_chunks,
+            "processing_documents": processing_documents,
+            "storage_size_bytes": storage_size,
+            "storage_size_mb": round(storage_size / (1024 * 1024), 2),
+            "status_breakdown": {status: count for status, count in status_counts},
+            "ready_documents": next((count for status, count in status_counts if status == 'ready'), 0),
+            "error_documents": next((count for status, count in status_counts if status == 'error'), 0)
+        }
+    finally:
+        session.close()
+
+app.include_router(auth_router, prefix="/api")
+app.include_router(chats_router, prefix="/api")
+app.include_router(rag_router, prefix="/api")
+app.include_router(analyze_router, prefix="/api")
+
+### app/migrations/env.py
+# backend/app/migrations/env.py
+from __future__ import annotations
+from logging.config import fileConfig
+from sqlalchemy import engine_from_config, pool
+from alembic import context
+import os
+import sys
+
+# Add the app directory to Python path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+
+from app.core.config import settings
+from app.models.base import Base  # provides Base.metadata
+# Don't import models to avoid ENUM creation conflicts
+
+# Alembic Config
+config = context.config
+if config.config_file_name is not None:
+    fileConfig(config.config_file_name)
+
+target_metadata = Base.metadata
+
+def get_url() -> str:
+    # Use application settings (supports DB_URL or DB.URL env names)
+    return settings.DB_URL
+
+def run_migrations_offline() -> None:
+    url = get_url()
+    context.configure(
+        url=url,
+        target_metadata=target_metadata,
+        literal_binds=True,
+        dialect_opts={"paramstyle": "named"},
+        compare_type=True,
+        include_schemas=False,
+    )
+    with context.begin_transaction():
+        context.run_migrations()
+
+def run_migrations_online() -> None:
+    configuration = config.get_section(config.config_ini_section) or {}
+    configuration["sqlalchemy.url"] = get_url()
+    connectable = engine_from_config(
+        configuration,
+        prefix="sqlalchemy.",
+        poolclass=pool.NullPool,
+        future=True,
+    )
+    with connectable.connect() as connection:
+        context.configure(
+            connection=connection,
+            target_metadata=target_metadata,
+            compare_type=True,
+            include_schemas=False,
+        )
+        with context.begin_transaction():
+            context.run_migrations()
+
+if context.is_offline_mode():
+    run_migrations_offline()
+else:
+    run_migrations_online()
+
+### app/migrations/versions/20250908_154500_add_tokens.py
+# app/migrations/versions/20250908_154500_add_tokens.py
+"""Compatibility shim: previously existed in DB history.
+This migration is intentionally a no-op to satisfy databases already stamped
+with this revision id.
+"""
+from __future__ import annotations
+from alembic import op
+import sqlalchemy as sa
+
+# revision identifiers, used by Alembic.
+revision = "20250908_154500_add_tokens"
+down_revision = None
+branch_labels = None
+depends_on = None
+
+def upgrade():
+    # No operation on purpose
+    pass
+
+def downgrade():
+    # No operation on purpose
+    pass
+
+### app/migrations/versions/20250910_175628_initial.py
+# app/migrations/versions/20250910_175628_initial.py
+from __future__ import annotations
+from alembic import op
+import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
+
+# revision identifiers, used by Alembic.
+revision = "20250910_175628_initial"
+down_revision = "20250908_154500_add_tokens"
+branch_labels = None
+depends_on = None
+
+def upgrade():
+    # Use string columns instead of ENUMs to avoid conflicts
+    # ENUMs will be handled by SQLAlchemy models
+
+    # --- users ---
+    op.create_table(
+        "users",
+        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
+        sa.Column("login", sa.String(length=255), nullable=False),
+        sa.Column("password_hash", sa.Text(), nullable=False),
+        sa.Column("role", sa.String(20), nullable=False, server_default=sa.text("'reader'")),
+        sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.text("true")),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+    )
+    op.create_index("ix_users_login", "users", ["login"], unique=True)
+
+    # --- user_tokens ---
+    op.create_table(
+        "user_tokens",
+        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
+        sa.Column("user_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("token_hash", sa.Text(), nullable=False),
+        sa.Column("name", sa.String(length=255), nullable=True),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column("last_used_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("revoked", sa.Boolean(), nullable=False, server_default=sa.text("false")),
+        sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
+    )
+    op.create_index("ix_user_tokens_user_id", "user_tokens", ["user_id"])
+
+    # --- user_refresh_tokens ---
+    op.create_table(
+        "user_refresh_tokens",
+        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
+        sa.Column("user_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("refresh_hash", sa.Text(), nullable=False),
+        sa.Column("issued_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("rotating", sa.Boolean(), nullable=False, server_default=sa.text("true")),
+        sa.Column("revoked", sa.Boolean(), nullable=False, server_default=sa.text("false")),
+        sa.Column("meta", sa.Text(), nullable=True),
+        sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
+        sa.UniqueConstraint("refresh_hash", name="uq_user_refresh_tokens_refresh_hash"),
+    )
+    op.create_index("ix_user_refresh_tokens_user_id", "user_refresh_tokens", ["user_id"])
+
+    # --- chats ---
+    op.create_table(
+        "chats",
+        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
+        sa.Column("name", sa.String(length=255), nullable=True),
+        sa.Column("owner_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column("last_message_at", sa.DateTime(timezone=True), nullable=True),
+    )
+    op.create_foreign_key("fk_chats_owner_id_users", "chats", "users", ["owner_id"], ["id"], ondelete="CASCADE")
+
+    # --- chat messages ---
+    op.create_table(
+        "chatmessages",
+        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
+        sa.Column("chat_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("role", sa.String(20), nullable=False),
+        sa.Column("content", sa.JSON(), nullable=False),
+        sa.Column("model", sa.String(length=255), nullable=True),
+        sa.Column("tokens_in", sa.Integer(), nullable=True),
+        sa.Column("tokens_out", sa.Integer(), nullable=True),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column("meta", sa.JSON(), nullable=True),
+        sa.ForeignKeyConstraint(["chat_id"], ["chats.id"], ondelete="CASCADE"),
+    )
+    op.create_index("ix_chatmessages_chat_id_created_at", "chatmessages", ["chat_id", "created_at"])
+
+    # --- RAG documents ---
+    op.create_table(
+        "ragdocuments",
+        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
+        sa.Column("name", sa.Text(), nullable=True),
+        sa.Column("status", sa.String(20), nullable=False, server_default=sa.text("'uploaded'")),
+        sa.Column("date_upload", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column("uploaded_by", postgresql.UUID(as_uuid=True), nullable=True),
+        sa.Column("url_file", sa.Text(), nullable=True),
+        sa.Column("url_canonical_file", sa.Text(), nullable=True),
+        sa.Column("source_mime", sa.String(length=255), nullable=True),
+        sa.Column("size_bytes", sa.BigInteger(), nullable=True),
+        sa.Column("tags", postgresql.ARRAY(sa.String()), nullable=True),
+        sa.Column("error", sa.Text(), nullable=True),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=True),
+    )
+    op.create_foreign_key("fk_ragdocuments_uploaded_by_users", "ragdocuments", "users", ["uploaded_by"], ["id"], ondelete="SET NULL")
+
+    # --- RAG chunks ---
+    op.create_table(
+        "ragchunks",
+        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
+        sa.Column("document_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("chunk_idx", sa.Integer(), nullable=False),
+        sa.Column("text", sa.Text(), nullable=False),
+        sa.Column("embedding_model", sa.String(length=255), nullable=True),
+        sa.Column("embedding_version", sa.String(length=255), nullable=True),
+        sa.Column("date_embedding", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("meta", sa.JSON(), nullable=True),
+        sa.Column("qdrant_point_id", postgresql.UUID(as_uuid=True), nullable=True),
+        sa.ForeignKeyConstraint(["document_id"], ["ragdocuments.id"], ondelete="CASCADE"),
+    )
+    op.create_index("ix_ragchunks_document_id_chunk_idx", "ragchunks", ["document_id", "chunk_idx"])
+
+    # --- Analysis documents ---
+    op.create_table(
+        "analysisdocuments",
+        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
+        sa.Column("status", sa.String(20), nullable=False, server_default=sa.text("'queued'")),
+        sa.Column("date_upload", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column("uploaded_by", postgresql.UUID(as_uuid=True), nullable=True),
+        sa.Column("url_file", sa.Text(), nullable=True),
+        sa.Column("url_canonical_file", sa.Text(), nullable=True),
+        sa.Column("result", sa.JSON(), nullable=True),
+        sa.Column("error", sa.Text(), nullable=True),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=True),
+    )
+    op.create_foreign_key("fk_analysisdocuments_uploaded_by_users", "analysisdocuments", "users", ["uploaded_by"], ["id"], ondelete="SET NULL")
+
+    # --- Analysis chunks ---
+    op.create_table(
+        "analysischunks",
+        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
+        sa.Column("document_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("chunk_idx", sa.Integer(), nullable=False),
+        sa.Column("text", sa.Text(), nullable=False),
+        sa.Column("embedding_model", sa.String(length=255), nullable=True),
+        sa.Column("embedding_version", sa.String(length=255), nullable=True),
+        sa.Column("date_embedding", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("meta", sa.JSON(), nullable=True),
+        sa.ForeignKeyConstraint(["document_id"], ["analysisdocuments.id"], ondelete="CASCADE"),
+    )
+    op.create_index("ix_analysischunks_document_id_chunk_idx", "analysischunks", ["document_id", "chunk_idx"])
+
+def downgrade():
+    # Drop in reverse dependency order
+    op.drop_index("ix_analysischunks_document_id_chunk_idx", table_name="analysischunks")
+    op.drop_table("analysischunks")
+    op.drop_constraint("fk_analysisdocuments_uploaded_by_users", "analysisdocuments", type_="foreignkey")
+    op.drop_table("analysisdocuments")
+
+    op.drop_index("ix_ragchunks_document_id_chunk_idx", table_name="ragchunks")
+    op.drop_table("ragchunks")
+    op.drop_constraint("fk_ragdocuments_uploaded_by_users", "ragdocuments", type_="foreignkey")
+    op.drop_table("ragdocuments")
+
+    op.drop_index("ix_chatmessages_chat_id_created_at", table_name="chatmessages")
+    op.drop_table("chatmessages")
+    op.drop_constraint("fk_chats_owner_id_users", "chats", type_="foreignkey")
+    op.drop_table("chats")
+
+    # Drop user-related tables
+    op.drop_index("ix_user_refresh_tokens_user_id", table_name="user_refresh_tokens")
+    op.drop_table("user_refresh_tokens")
+    op.drop_index("ix_user_tokens_user_id", table_name="user_tokens")
+    op.drop_table("user_tokens")
+    op.drop_index("ix_users_login", table_name="users")
+    op.drop_table("users")
+
+    # ENUMs will be dropped automatically when tables are dropped
+
+### app/migrations/versions/20250912_104656_add_chat_tags.py
+"""add chat tags column
+
+Revision ID: 20250912_104656_add_chat_tags
+Revises: 20250910_175628_initial
+Create Date: 2025-09-12 10:46:56
+"""
+
+from alembic import op
+import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
+
+# revision identifiers, used by Alembic.
+revision = '20250912_104656_add_chat_tags'
+down_revision = '20250910_175628_initial'
+branch_labels = None
+depends_on = None
+
+def upgrade() -> None:
+    op.add_column('chats', sa.Column('tags', postgresql.ARRAY(sa.Text()), nullable=False, server_default='{}'))
+    op.alter_column('chats', 'tags', server_default=None)
+
+def downgrade() -> None:
+    op.drop_column('chats', 'tags')
+
+### app/migrations/versions/__init__.py
+
+### app/models/__init__.py
+from .base import Base
+from .user import Users, UserTokens, UserRefreshTokens
+from .chat import Chats, ChatMessages
+from .rag import RagDocuments, RagChunks
+from .analyze import AnalysisDocuments, AnalysisChunks
+
+### app/models/analyze.py
+from __future__ import annotations
+from typing import Optional, List
+from datetime import datetime
+from sqlalchemy import String, Text, DateTime, Enum, Integer, JSON, ForeignKey
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+from .base import Base
+import uuid
+
+AnalyzeStatusEnum = Enum("queued", "processing", "done", "error", "canceled", name="analyze_status_enum", create_constraint=True)
+
+class AnalysisDocuments(Base):
+    __tablename__ = "analysisdocuments"
+    
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    status: Mapped[str] = mapped_column(AnalyzeStatusEnum, nullable=False, default="queued")
+    date_upload: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default="now()", nullable=False)
+    uploaded_by: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    url_file: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    url_canonical_file: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    result: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    chunks: Mapped[List["AnalysisChunks"]] = relationship(back_populates="document", cascade="all, delete-orphan")
+
+class AnalysisChunks(Base):
+    __tablename__ = "analysischunks"
+    
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    document_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("analysisdocuments.id", ondelete="CASCADE"), nullable=False)
+    chunk_idx: Mapped[int] = mapped_column(Integer, nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    embedding_model: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    embedding_version: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    date_embedding: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    meta: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+
+    document: Mapped["AnalysisDocuments"] = relationship(back_populates="chunks")
+
+### app/models/base.py
+from __future__ import annotations
+from sqlalchemy.orm import DeclarativeBase, declared_attr, Mapped, mapped_column
+from sqlalchemy import MetaData, func
+from datetime import datetime
+
+# Naming convention for Alembic-friendly constraints
+metadata = MetaData(
+    naming_convention={
+        "ix": "ix_%(column_0_label)s",
+        "uq": "uq_%(table_name)s_%(column_0_name)s",
+        "ck": "ck_%(table_name)s_%(constraint_name)s",
+        "fk": "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s",
+        "pk": "pk_%(table_name)s",
+    }
+)
+
+class Base(DeclarativeBase):
+    metadata = metadata
+
+    @declared_attr.directive
+    def __tablename__(cls) -> str:  # type: ignore[override]
+        return cls.__name__.lower()
+
+Timestamp = datetime
+
+### app/models/chat.py
+from __future__ import annotations
+from typing import Optional, List
+from datetime import datetime
+from sqlalchemy import String, Text, DateTime, Enum, Integer, ForeignKey, JSON, ARRAY
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+from .base import Base
+import uuid
+
+ChatRoleEnum = Enum("system", "user", "assistant", "tool", name="chat_role_enum", create_constraint=True)
+
+class Chats(Base):
+    __tablename__ = "chats"
+    
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    owner_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    tags: Mapped[Optional[List[str]]] = mapped_column(ARRAY(String), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default="now()", nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default="now()", nullable=False)
+    last_message_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    messages: Mapped[List["ChatMessages"]] = relationship(back_populates="chat", cascade="all, delete-orphan")
+
+class ChatMessages(Base):
+    __tablename__ = "chatmessages"
+    
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    chat_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("chats.id", ondelete="CASCADE"), nullable=False)
+    role: Mapped[str] = mapped_column(ChatRoleEnum, nullable=False)
+    content: Mapped[dict] = mapped_column(JSON, nullable=False)
+    model: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    tokens_in: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    tokens_out: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default="now()", nullable=False)
+    meta: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+
+    chat: Mapped["Chats"] = relationship(back_populates="messages")
+
+### app/models/rag.py
+from __future__ import annotations
+from typing import Optional, List
+from datetime import datetime
+from sqlalchemy import String, Text, DateTime, Enum, Integer, BigInteger, ARRAY, JSON, ForeignKey
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+from .base import Base
+import uuid
+
+RagStatusEnum = Enum(
+    "uploaded", "normalizing", "chunking", "embedding", "indexing", "ready", "archived", "deleting", "error",
+    name="rag_status_enum",
+    create_constraint=True
+)
+
+class RagDocuments(Base):
+    __tablename__ = "ragdocuments"
+    
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(RagStatusEnum, nullable=False, default="uploaded")
+    date_upload: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default="now()", nullable=False)
+    uploaded_by: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    url_file: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    url_canonical_file: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    source_mime: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    size_bytes: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    tags: Mapped[Optional[List[str]]] = mapped_column(ARRAY(String), nullable=True)
+    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    chunks: Mapped[List["RagChunks"]] = relationship(back_populates="document", cascade="all, delete-orphan")
+
+class RagChunks(Base):
+    __tablename__ = "ragchunks"
+    
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    document_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("ragdocuments.id", ondelete="CASCADE"), nullable=False)
+    chunk_idx: Mapped[int] = mapped_column(Integer, nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    embedding_model: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    embedding_version: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    date_embedding: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    meta: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    qdrant_point_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+
+    document: Mapped["RagDocuments"] = relationship(back_populates="chunks")
+
+### app/models/user.py
+# app/models/user.py
+from __future__ import annotations
+from typing import Optional, List
+from datetime import datetime
+import uuid
+
+from sqlalchemy import String, Boolean, Text, DateTime, UniqueConstraint, ForeignKey, Index
+from sqlalchemy.dialects.postgresql import UUID, ENUM as PGEnum
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from .base import Base
+
+# Use existing Postgres ENUM type created by migrations
+RolesEnum = PGEnum('admin', 'editor', 'reader', name='role_enum', create_type=False)
+
+class Users(Base):
+    __tablename__ = "users"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    login: Mapped[str] = mapped_column(String(255), nullable=False, unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    role: Mapped[str] = mapped_column(RolesEnum, nullable=False, default="reader")
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default="now()")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default="now()")
+
+    # Relationships
+    refresh_tokens: Mapped[List["UserRefreshTokens"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    pat_tokens: Mapped[List["UserTokens"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+class UserTokens(Base):
+    __tablename__ = "user_tokens"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    token_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default="now()")
+    last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    user: Mapped["Users"] = relationship(back_populates="pat_tokens")
+
+class UserRefreshTokens(Base):
+    __tablename__ = "user_refresh_tokens"
+
+    __table_args__ = (
+        UniqueConstraint("refresh_hash", name="uq_user_refresh_tokens_refresh_hash"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    refresh_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default="now()")
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    rotating: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    revoked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    meta: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON encoded as text
+
+    user: Mapped["Users"] = relationship(back_populates="refresh_tokens")
+
+### app/repositories copy/chats_repo.py
+from __future__ import annotations
+from typing import List, Optional, Tuple
+from sqlalchemy.orm import Session
+from sqlalchemy import select, desc, asc, or_
+from sqlalchemy.sql import func
+from app.models.chat import Chats, ChatMessages
+
+class ChatsRepo:
+    def __init__(self, session: Session):
+        self.s = session
+    def create_chat(self, owner_id, name: str | None, tags: List[str] | None = None) -> Chats:
+        chat = Chats(owner_id=owner_id, name=name, tags=tags or [])
+        self.s.add(chat); self.s.flush(); return chat
+    def list_chats(self, owner_id, q: Optional[str] = None, limit: int = 100) -> List[Chats]:
+        stmt = select(Chats).where(Chats.owner_id == owner_id).order_by(desc(Chats.last_message_at), desc(Chats.created_at)).limit(limit)
+        if q:
+            pattern = f"%{q.lower()}%"
+            from sqlalchemy import or_
+            stmt = stmt.where(or_(Chats.name.ilike(pattern),))
+        return list(self.s.scalars(stmt))
+    def get(self, chat_id) -> Optional[Chats]: return self.s.get(Chats, chat_id)
+    def delete(self, chat_id): chat = self.get(chat_id); 
+    def rename_chat(self, chat_id, name: str): chat = self.get(chat_id); 
+    def update_chat_tags(self, chat_id, tags: List[str]): chat = self.get(chat_id); 
+    def add_message(self, chat_id, role: str, content: dict | str, model: str | None = None) -> ChatMessages:
+        if isinstance(content, str): payload = {"text": content}
+        else: payload = content
+        msg = ChatMessages(chat_id=chat_id, role=role, content=payload, model=model)
+        self.s.add(msg)
+        chat = self.get(chat_id)
+        if chat: chat.last_message_at = func.now()
+        self.s.flush()
+        return msg
+    def list_messages(self, chat_id, cursor: Optional[str] = None, limit: int = 50) -> Tuple[List[ChatMessages], Optional[str]]:
+        stmt = select(ChatMessages).where(ChatMessages.chat_id == chat_id).order_by(asc(ChatMessages.created_at), asc(ChatMessages.id)).limit(limit)
+        if cursor:
+            try: stmt = stmt.where(ChatMessages.id > cursor)
+            except Exception: pass
+        rows = list(self.s.scalars(stmt)); next_cursor = rows[-1].id.hex if rows else None; return rows, next_cursor
+
+### app/repositories/__init__.py
+
+### app/repositories/analyze_repo.py
+from __future__ import annotations
+from typing import List, Optional
+from sqlalchemy.orm import Session
+from sqlalchemy import select
+from app.models.analyze import AnalysisDocuments, AnalysisChunks
+
+class AnalyzeRepo:
+    def __init__(self, session: Session):
+        self.s = session
+
+    def create_document(self, **kwargs) -> AnalysisDocuments:
+        doc = AnalysisDocuments(**kwargs)
+        self.s.add(doc)
+        self.s.flush()
+        return doc
+
+    def get(self, doc_id) -> Optional[AnalysisDocuments]:
+        return self.s.get(AnalysisDocuments, doc_id)
+
+    def list(self, limit: int = 50) -> List[AnalysisDocuments]:
+        return self.s.execute(select(AnalysisDocuments).order_by(AnalysisDocuments.date_upload.desc()).limit(limit)).scalars().all()
+
+    def delete(self, doc: AnalysisDocuments):
+        self.s.delete(doc)
+
+    def add_chunk(self, **kwargs) -> AnalysisChunks:
+        chunk = AnalysisChunks(**kwargs)
+        self.s.add(chunk)
+        self.s.flush()
+        return chunk
+
+    def list_chunks(self, doc_id) -> List[AnalysisChunks]:
+        return self.s.execute(select(AnalysisChunks).where(AnalysisChunks.document_id == doc_id).order_by(AnalysisChunks.chunk_idx.asc())).scalars().all()
+
+### app/repositories/chats_repo.py
+from __future__ import annotations
+from typing import List, Optional, Tuple
+from sqlalchemy.orm import Session
+from sqlalchemy import select, desc, asc, or_
+from app.models.chat import Chats, ChatMessages
+
+class ChatsRepo:
+    def __init__(self, session: Session):
+        self.s = session
+
+    # Chats
+    def create_chat(self, owner_id, name: str | None, tags: List[str] | None = None) -> Chats:
+        chat = Chats(owner_id=owner_id, name=name, tags=tags or [])
+        self.s.add(chat)
+        self.s.flush()
+        return chat
+
+    def list_chats(self, owner_id, q: Optional[str] = None, limit: int = 100) -> List[Chats]:
+        stmt = select(Chats).where(Chats.owner_id == owner_id).order_by(desc(Chats.last_message_at), desc(Chats.created_at)).limit(limit)
+        if q:
+            pattern = f"%{q.lower()}%"
+            stmt = stmt.where(or_(Chats.name.ilike(pattern),))
+        return list(self.s.scalars(stmt))
+
+    def get(self, chat_id) -> Optional[Chats]:
+        try:
+            # Convert string to UUID if needed
+            if isinstance(chat_id, str):
+                import uuid
+                chat_id = uuid.UUID(chat_id)
+            return self.s.get(Chats, chat_id)
+        except (ValueError, TypeError):
+            return None
+
+    def delete(self, chat_id):
+        chat = self.get(chat_id)
+        if chat:
+            self.s.delete(chat)
+            self.s.flush()
+
+    def rename_chat(self, chat_id, name: str):
+        chat = self.get(chat_id)
+        if chat:
+            chat.name = name
+            self.s.flush()
+
+    def update_chat_tags(self, chat_id, tags: List[str]):
+        chat = self.get(chat_id)
+        if chat:
+            chat.tags = tags
+            self.s.flush()
+
+    # Messages
+    def add_message(self, chat_id, role: str, content: dict | str, model: str | None = None) -> ChatMessages:
+        if isinstance(content, str):
+            payload = {"text": content}
+        else:
+            payload = content
+        msg = ChatMessages(chat_id=chat_id, role=role, content=payload, model=model)
+        self.s.add(msg)
+        self.s.flush()
+        return msg
+
+    def list_messages(self, chat_id, cursor: Optional[str] = None, limit: int = 50) -> Tuple[List[ChatMessages], Optional[str]]:
+        stmt = select(ChatMessages).where(ChatMessages.chat_id == chat_id).order_by(asc(ChatMessages.created_at), asc(ChatMessages.id)).limit(limit)
+        if cursor:
+            # cursor = created_at ISO or message id string; we simply skip <= cursor id
+            try:
+                stmt = stmt.where(ChatMessages.id > cursor)  # naive id cursor
+            except Exception:
+                pass
+        rows = list(self.s.scalars(stmt))
+        next_cursor = rows[-1].id.hex if rows else None
+        return rows, next_cursor
+
+### app/repositories/rag_repo.py
+from __future__ import annotations
+from typing import List, Optional
+from sqlalchemy.orm import Session
+from sqlalchemy import select
+from app.models.rag import RagDocuments, RagChunks
+
+class RagRepo:
+    def __init__(self, session: Session):
+        self.s = session
+
+    def create_document(self, **kwargs) -> RagDocuments:
+        doc = RagDocuments(**kwargs)
+        self.s.add(doc)
+        self.s.flush()
+        return doc
+
+    def get(self, doc_id) -> Optional[RagDocuments]:
+        return self.s.get(RagDocuments, doc_id)
+
+    def list(self, limit: int = 50) -> List[RagDocuments]:
+        return self.s.execute(select(RagDocuments).order_by(RagDocuments.date_upload.desc()).limit(limit)).scalars().all()
+
+    def delete(self, doc: RagDocuments):
+        self.s.delete(doc)
+
+    def add_chunk(self, **kwargs) -> RagChunks:
+        chunk = RagChunks(**kwargs)
+        self.s.add(chunk)
+        self.s.flush()
+        return chunk
+
+    def list_chunks(self, doc_id) -> List[RagChunks]:
+        return self.s.execute(select(RagChunks).where(RagChunks.document_id == doc_id).order_by(RagChunks.chunk_idx.asc())).scalars().all()
+
+### app/repositories/users_repo.py
+from __future__ import annotations
+from typing import Optional
+from sqlalchemy.orm import Session
+from sqlalchemy import select
+from app.models.user import Users, UserTokens, UserRefreshTokens
+
+class UsersRepo:
+    def __init__(self, session: Session):
+        self.s = session
+
+    def by_login(self, login: str) -> Optional[Users]:
+        return self.s.execute(select(Users).where(Users.login == login)).scalars().first()
+
+    def get(self, user_id):
+        return self.s.get(Users, user_id)
+
+    # Refresh tokens
+    def add_refresh(self, rec: UserRefreshTokens) -> None:
+        self.s.add(rec)
+
+    def get_refresh_by_hash(self, refresh_hash: str) -> Optional[UserRefreshTokens]:
+        return self.s.execute(select(UserRefreshTokens).where(UserRefreshTokens.refresh_hash == refresh_hash)).scalars().first()
+
+    def revoke_refresh(self, refresh_hash: str) -> bool:
+        rec = self.get_refresh_by_hash(refresh_hash)
+        if rec and not rec.revoked:
+            rec.revoked = True
+            return True
+        return False
+
+### app/schemas/__init__.py
+from .common import ErrorResponse
+from .auth import LoginRequest, LoginResponse, RefreshRequest, RefreshResponse
+from .chats import ChatMessage, ChatTurnRequest, ChatTurnResponse
+from .rag import RagDocument, RagSearchRequest, RagUploadRequest
+from .analyze import AnalyzeRequest, AnalyzeResult
+
+__all__ = ['ErrorResponse', 'RefreshResponse', 'LoginRequest', 'RefreshRequest', 'LoginResponse', 'ChatMessage', 'ChatTurnRequest', 'ChatTurnResponse', 'RagSearchRequest', 'RagUploadRequest', 'RagDocument', 'AnalyzeRequest', 'AnalyzeResult']
+
+### app/schemas/analyze.py
+from __future__ import annotations
+from typing import Optional, List, Dict, Any, Literal
+from pydantic import BaseModel, Field
+from datetime import datetime, date
+
+class AnalyzeRequest(BaseModel):
+    source: Optional[Dict[str, Any]] = Field(None)
+    pipeline: Optional[Dict[str, Any]] = Field(None)
+    language: Optional[str] = Field(None)
+    priority: Optional[Literal['low', 'normal', 'high']] = Field(None)
+    idempotency_key: Optional[str] = Field(None)
+
+class AnalyzeResult(BaseModel):
+    id: Optional[str] = Field(None)
+    status: Optional[str] = Field(None)
+    progress: Optional[float] = Field(None)
+    result: Optional[Dict[str, Any]] = Field(None)
+    artifacts: Optional[Dict[str, Any]] = Field(None)
+
+### app/schemas/auth.py
+from __future__ import annotations
+from typing import Optional, List, Dict, Any, Literal
+from pydantic import BaseModel, Field
+from datetime import datetime, date
+
+class RefreshResponse(BaseModel):
+    access_token: Optional[str] = Field(None)
+    refresh_token: Optional[str] = Field(None)
+    token_type: Optional[str] = Field(None)
+    expires_in: Optional[int] = Field(None)
+
+class LoginRequest(BaseModel):
+    login: str
+    password: str
+
+class RefreshRequest(BaseModel):
+    refresh_token: Optional[str] = Field(None)
+
+class LoginResponse(BaseModel):
+    access_token: Optional[str] = Field(None)
+    refresh_token: Optional[str] = Field(None)
+    token_type: Optional[str] = Field(None)
+    expires_in: Optional[int] = Field(None)
+    user: Optional[Dict[str, Any]] = Field(None)
+
+### app/schemas/chat_schemas.py
+from __future__ import annotations
+from typing import Optional, List
+from pydantic import BaseModel, Field, validator
+from datetime import datetime
+
+class ChatCreateRequest(BaseModel):
+    name: Optional[str] = Field(None, max_length=255, description="Chat name")
+    tags: Optional[List[str]] = Field(default_factory=list, description="Chat tags")
+
+    @validator('tags')
+    def validate_tags(cls, v):
+        if v is None:
+            return []
+        if len(v) > 20:
+            raise ValueError('Too many tags (max 20)')
+        for tag in v:
+            if not isinstance(tag, str):
+                raise ValueError('All tags must be strings')
+            if len(tag) > 50:
+                raise ValueError('Tag too long (max 50 characters)')
+            if not tag.strip():
+                raise ValueError('Empty tags not allowed')
+        return [tag.strip() for tag in v if tag.strip()]
+
+class ChatUpdateRequest(BaseModel):
+    name: Optional[str] = Field(None, max_length=255, description="New chat name")
+
+class ChatTagsUpdateRequest(BaseModel):
+    tags: List[str] = Field(..., description="Chat tags")
+
+    @validator('tags')
+    def validate_tags(cls, v):
+        if len(v) > 20:
+            raise ValueError('Too many tags (max 20)')
+        return [tag.strip() for tag in v if tag.strip()]
+
+class ChatMessageRequest(BaseModel):
+    content: str
+    use_rag: Optional[bool] = False
+    response_stream: Optional[bool] = False
+
+class ChatMessageResponse(BaseModel):
+    message_id: str
+    content: str
+    answer: str
+
+class ChatOut(BaseModel):
+    id: str
+    name: Optional[str]
+    tags: Optional[List[str]]
+    created_at: Optional[datetime]
+    updated_at: Optional[datetime]
+    last_message_at: Optional[datetime]
+
+    class Config:
+        from_attributes = True
+
+class ChatMessageOut(BaseModel):
+    id: str
+    chat_id: str
+    role: str
+    content: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+### app/schemas/chats.py
+from __future__ import annotations
+from typing import Optional, List, Dict, Any, Literal
+from pydantic import BaseModel, Field
+from datetime import datetime, date
+
+class ChatMessage(BaseModel):
+    role: Literal['system', 'user', 'assistant', 'tool']
+    content: str
+    created_at: Optional[datetime] = Field(None)
+
+class ChatTurnRequest(BaseModel):
+    response_stream: Optional[bool] = Field(None)
+    use_rag: Optional[bool] = Field(None)
+    rag_params: Optional[Dict[str, Any]] = Field(None)
+    messages: Optional[List[ChatMessage]] = Field(None)
+    temperature: Optional[float] = Field(None)
+    max_tokens: Optional[int] = Field(None)
+    idempotency_key: Optional[str] = Field(None)
+
+class ChatTurnResponse(BaseModel):
+    chat_id: Optional[str] = Field(None)
+    message_id: Optional[str] = Field(None)
+    created_at: Optional[datetime] = Field(None)
+    assistant_message: Optional[ChatMessage] = Field(None)
+    usage: Optional[Dict[str, Any]] = Field(None)
+    rag: Optional[Dict[str, Any]] = Field(None)
+
+### app/schemas/common.py
+from __future__ import annotations
+from typing import Optional, List, Dict, Any, Literal
+from pydantic import BaseModel, Field
+from datetime import datetime, date
+
+class ErrorResponse(BaseModel):
+    error: Dict[str, Any]
+    request_id: Optional[str] = Field(None)
+
+### app/schemas/rag.py
+from __future__ import annotations
+from typing import Optional, List, Dict, Any, Literal
+from pydantic import BaseModel, Field
+from datetime import datetime, date
+
+class RagSearchRequest(BaseModel):
+    query: Optional[str] = Field(None)
+    top_k: Optional[int] = Field(None)
+    filters: Optional[Dict[str, Any]] = Field(None)
+    with_snippets: Optional[bool] = Field(None)
+
+class RagUploadRequest(BaseModel):
+    url: Optional[str] = Field(None)
+    name: Optional[str] = Field(None)
+    tags: Optional[List[str]] = Field(None)
+
+class RagDocument(BaseModel):
+    id: Optional[str] = Field(None)
+    name: Optional[str] = Field(None)
+    status: Optional[str] = Field(None)
+    date_upload: Optional[datetime] = Field(None)
+    url_file: Optional[str] = Field(None)
+    url_canonical_file: Optional[str] = Field(None)
+    tags: Optional[List[str]] = Field(None)
+    progress: Optional[float] = Field(None)
+
+### app/schemas/rag_schemas.py
+from __future__ import annotations
+from typing import Optional, List
+from pydantic import BaseModel, Field, validator
+from datetime import datetime
+from enum import Enum
+
+class RagStatus(str, Enum):
+    UPLOADED = "uploaded"
+    NORMALIZING = "normalizing"
+    CHUNKING = "chunking"
+    EMBEDDING = "embedding"
+    INDEXING = "indexing"
+    READY = "ready"
+    ARCHIVED = "archived"
+    DELETING = "deleting"
+    ERROR = "error"
+
+class RagDocumentUploadRequest(BaseModel):
+    tags: Optional[List[str]] = Field(default_factory=list, description="Document tags")
+    
+    @validator('tags')
+    def validate_tags(cls, v):
+        if v is None:
+            return []
+        if len(v) > 20:
+            raise ValueError('Too many tags (max 20)')
+        for tag in v:
+            if not isinstance(tag, str):
+                raise ValueError('All tags must be strings')
+            if len(tag) > 50:
+                raise ValueError('Tag too long (max 50 characters)')
+            if not tag.strip():
+                raise ValueError('Empty tags not allowed')
+        return [tag.strip() for tag in v if tag.strip()]
+
+class RagDocumentTagsUpdateRequest(BaseModel):
+    tags: List[str] = Field(..., description="Document tags")
+    
+    @validator('tags')
+    def validate_tags(cls, v):
+        if len(v) > 20:
+            raise ValueError('Too many tags (max 20)')
+        for tag in v:
+            if not isinstance(tag, str):
+                raise ValueError('All tags must be strings')
+            if len(tag) > 50:
+                raise ValueError('Tag too long (max 50 characters)')
+            if not tag.strip():
+                raise ValueError('Empty tags not allowed')
+        return [tag.strip() for tag in v if tag.strip()]
+
+class RagSearchRequest(BaseModel):
+    text: str = Field(..., min_length=1, max_length=1000, description="Search query")
+    top_k: int = Field(10, ge=1, le=100, description="Number of results")
+    min_score: float = Field(0.0, ge=0.0, le=1.0, description="Minimum similarity score")
+    
+    @validator('text')
+    def validate_text(cls, v):
+        if not v.strip():
+            raise ValueError('Search text cannot be empty')
+        return v.strip()
+
+class RagDocumentResponse(BaseModel):
+    id: str
+    name: Optional[str]
+    status: RagStatus
+    date_upload: datetime
+    url_file: Optional[str]
+    url_canonical_file: Optional[str]
+    tags: List[str]
+    error: Optional[str]
+    updated_at: Optional[datetime]
+    progress: Optional[float] = None
+    
+    class Config:
+        from_attributes = True
+
+class RagSearchResult(BaseModel):
+    id: str
+    document_id: str
+    text: str
+    score: float
+    snippet: str
+    
+    class Config:
+        from_attributes = True
+
+class RagMetricsResponse(BaseModel):
+    total_documents: int
+    total_chunks: int
+    processing_documents: int
+    storage_size_bytes: int
+    storage_size_mb: float
+    status_breakdown: dict
+    ready_documents: int
+    error_documents: int
+
+### app/services/__init__.py
+# services package init
+
+### app/services/analyze_service.py
+from __future__ import annotations
+from sqlalchemy.orm import Session
+from app.repositories.analyze_repo import AnalyzeRepo
+
+def create_job(session: Session, uploaded_by=None, url_file: str | None = None):
+    return AnalyzeRepo(session).create_document(uploaded_by=uploaded_by, url_file=url_file, status="queued")
+
+def list_jobs(session: Session, limit: int = 50):
+    return AnalyzeRepo(session).list(limit=limit)
+
+def get_job(session: Session, job_id):
+    return AnalyzeRepo(session).get(job_id)
+
+def delete_job(session: Session, job_id):
+    repo = AnalyzeRepo(session)
+    doc = repo.get(job_id)
+    if not doc:
+        return False
+    repo.delete(doc)
+    return True
+
+### app/services/auth_service.py
+from __future__ import annotations
+import hashlib, uuid
+from datetime import datetime, timedelta, timezone
+from typing import Tuple, Optional
+from sqlalchemy.orm import Session
+
+from app.repositories.users_repo import UsersRepo
+from app.core.security import verify_password, encode_jwt, decode_jwt
+from app.core.config import settings
+from app.models.user import UserRefreshTokens
+
+def _hash_refresh(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+def login(session: Session, login: str, password: str) -> Tuple[str, str, uuid.UUID]:
+    repo = UsersRepo(session)
+    user = repo.by_login(login)
+    if not user or not verify_password(password, user.password_hash):
+        raise ValueError("invalid_credentials")
+    sub = str(user.id)
+    access = encode_jwt({"sub": sub, "typ": "access"}, ttl_seconds=settings.ACCESS_TTL_SECONDS)
+    refresh = encode_jwt({"sub": sub, "typ": "refresh"}, ttl_seconds=settings.REFRESH_TTL_DAYS * 86400)
+    # persist refresh (hashed)
+    rec = UserRefreshTokens(
+        user_id=user.id,
+        refresh_hash=_hash_refresh(refresh),
+        issued_at=_now(),
+        expires_at=_now() + timedelta(days=settings.REFRESH_TTL_DAYS),
+        rotating=settings.REFRESH_ROTATING,
+        revoked=False,
+        meta=None,
+    )
+    repo.add_refresh(rec)
+    return access, refresh, user.id
+
+def refresh(session: Session, refresh_token: str) -> Tuple[str, Optional[str]]:
+    payload = decode_jwt(refresh_token)
+    if payload.get("typ") != "refresh":
+        raise ValueError("not_refresh")
+    sub = payload.get("sub")
+    if not sub:
+        raise ValueError("invalid_refresh")
+    repo = UsersRepo(session)
+    rec = repo.get_refresh_by_hash(_hash_refresh(refresh_token))
+    if not rec or rec.revoked:
+        raise ValueError("revoked")
+    if rec.expires_at and rec.expires_at < _now():
+        raise ValueError("expired")
+    # rotate if configured
+    access = encode_jwt({"sub": str(sub), "typ": "access"}, ttl_seconds=settings.ACCESS_TTL_SECONDS)
+    if rec.rotating and settings.REFRESH_ROTATING:
+        rec.revoked = True
+        new_refresh = encode_jwt({"sub": str(sub), "typ": "refresh"}, ttl_seconds=settings.REFRESH_TTL_DAYS * 86400)
+        new_rec = UserRefreshTokens(
+            user_id=rec.user_id,
+            refresh_hash=_hash_refresh(new_refresh),
+            issued_at=_now(),
+            expires_at=_now() + timedelta(days=settings.REFRESH_TTL_DAYS),
+            rotating=True,
+            revoked=False,
+            meta=None,
+        )
+        repo.add_refresh(new_rec)
+        return access, new_refresh
+    # non-rotating: allow re-use
+    return access, refresh_token
+
+def revoke_refresh(session: Session, refresh_token: str) -> bool:
+    return UsersRepo(session).revoke_refresh(_hash_refresh(refresh_token))
+
+### app/services/chat_service.py
+from __future__ import annotations
+from sqlalchemy.orm import Session
+from app.repositories.chats_repo import ChatsRepo
+
+def create_chat(session: Session, owner_id, name: str | None):
+    return ChatsRepo(session).create_chat(owner_id, name)
+
+def list_chats(session: Session, owner_id):
+    return ChatsRepo(session).list_chats(owner_id)
+
+def post_message(session: Session, chat_id, role: str, content: dict, model: str | None = None):
+    repo = ChatsRepo(session)
+    chat = repo.get(chat_id)
+    if not chat:
+        raise ValueError("chat_not_found")
+    msg = repo.add_message(chat_id, role, content, model)
+    chat.last_message_at = msg.created_at
+    return msg
+
+def list_messages(session: Session, chat_id):
+    return ChatsRepo(session).list_messages(chat_id)
+
+def delete_chat(session: Session, chat_id):
+    repo = ChatsRepo(session)
+    chat = repo.get(chat_id)
+    if not chat:
+        return False
+    repo.delete(chat)
+    return True
+
+### app/services/clients.py
+from __future__ import annotations
+import os, time, httpx
+from typing import List, Dict, Any, Optional
+from app.core.qdrant import get_qdrant
+from app.core.metrics import external_request_total, external_request_seconds
+from qdrant_client.http.models import Filter, FieldCondition, MatchValue
+
+EMB_URL = os.getenv("EMBEDDINGS_URL", "http://emb:8001")
+LLM_URL = os.getenv("LLM_URL", "http://llm:8002")
+COLLECTION = os.getenv("QDRANT_COLLECTION", "rag_chunks")
+
+def _timed(name: str):
+    class _Ctx:
+        def __enter__(self):
+            self.t0 = time.perf_counter()
+            return self
+        def __exit__(self, exc_type, exc, tb):
+            dt = time.perf_counter() - self.t0
+            external_request_total.labels(target=name, status=("ok" if exc is None else "fail")).inc()
+            external_request_seconds.labels(target=name).observe(dt)
+    return _Ctx()
+
+def embed_texts(texts: List[str]) -> List[List[float]]:
+    with _timed("emb"):
+        with httpx.Client(timeout=60) as client:
+            r = client.post(f"{EMB_URL}/embed", json={"inputs": texts})
+            r.raise_for_status()
+            return r.json().get("vectors", [])
+
+def llm_chat(messages: List[Dict[str, str]], temperature: float = 0.2, max_tokens: Optional[int] = None) -> str:
+    """Обычный чат с LLM (не стриминг)"""
+    payload = {"messages": messages, "temperature": temperature}
+    if max_tokens is not None:
+        payload["max_tokens"] = max_tokens
+    with _timed("llm"):
+        with httpx.Client(timeout=120) as client:
+            r = client.post(f"{LLM_URL}/v1/chat/completions", json=payload)
+            r.raise_for_status()
+            # Обрабатываем стриминг ответ
+            content = ""
+            for line in r.text.split('\n'):
+                if line.startswith('data: '):
+                    data = line[6:]  # Убираем "data: "
+                    if data.strip() == "[DONE]":
+                        break
+                    try:
+                        chunk = r.json() if not line.startswith('data: ') else __import__('json').loads(data)
+                        if "choices" in chunk and len(chunk["choices"]) > 0:
+                            delta = chunk["choices"][0].get("delta", {})
+                            chunk_content = delta.get("content", "")
+                            if chunk_content:
+                                content += chunk_content
+                    except:
+                        continue
+            return content
+
+async def llm_chat_stream(messages: List[Dict[str, str]], temperature: float = 0.2, max_tokens: Optional[int] = None):
+    """Настоящий стриминг чат с LLM"""
+    payload = {"messages": messages, "temperature": temperature, "stream": True}
+    if max_tokens is not None:
+        payload["max_tokens"] = max_tokens
+    
+    with _timed("llm"):
+        async with httpx.AsyncClient(timeout=120) as client:
+            async with client.stream("POST", f"{LLM_URL}/v1/chat/completions", json=payload) as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    if line.startswith('data: '):
+                        data = line[6:]  # Убираем "data: "
+                        if data.strip() == "[DONE]":
+                            break
+                        try:
+                            chunk = __import__('json').loads(data)
+                            if "choices" in chunk and len(chunk["choices"]) > 0:
+                                delta = chunk["choices"][0].get("delta", {})
+                                content = delta.get("content", "")
+                                if content:
+                                    yield content
+                        except:
+                            continue
+
+def qdrant_search(vector: List[float], top_k: int, offset: Optional[int] = None,
+                  doc_id: Optional[str] = None, tags: Optional[List[str]] = None,
+                  sort_by: str = "score_desc"):
+    client = get_qdrant()
+    must = []
+    if doc_id:
+        must.append(FieldCondition(key="document_id", match=MatchValue(value=doc_id)))
+    if tags:
+        must.append(FieldCondition(key="tags", match=MatchValue(value=tags)))
+    f = Filter(must=must) if must else None
+    with _timed("qdrant.search"):
+        hits = client.search(collection_name=COLLECTION, query_vector=vector, limit=top_k, offset=offset or 0, with_payload=True, query_filter=f)
+    out = []
+    for h in hits:
+        out.append({"score": float(h.score), "id": str(h.id), "payload": h.payload or {}})
+    return out
+
+def qdrant_count_by_doc(doc_id: str) -> int:
+    client = get_qdrant()
+    f = Filter(must=[FieldCondition(key="document_id", match=MatchValue(value=doc_id))])
+    with _timed("qdrant.count"):
+        try:
+            res = client.count(collection_name=COLLECTION, count_filter=f, exact=True)
+            return int(getattr(res, "count", None) or (res.get("count") if isinstance(res, dict) else 0) or 0)
+        except Exception:
+            total = 0
+            next_page = None
+            while True:
+                points, next_page = client.scroll(
+                    collection_name=COLLECTION,
+                    scroll_filter=f,
+                    limit=1024,
+                    with_payload=False,
+                    with_vectors=False,
+                    offset=next_page,
+                )
+                total += len(points or [])
+                if not next_page:
+                    break
+            return total
+
+### app/services/rag_service.py
+# app/services/rag_service.py
+# Best-practice naming for RAG + analysis:
+# - store original filename only in DB metadata
+# - in MinIO use doc_id as "directory":
+#     RAW:       {doc_id}/source{ext}
+#     CANONICAL: {doc_id}/document.json
+#     PREVIEW:   {doc_id}/preview/page-{n}.png
+#
+# Also adds dual delete modes:
+# - soft delete: sets status='archived' (keeps data)
+# - hard delete: Celery task purges MinIO objects + Qdrant points + DB rows
+
+from __future__ import annotations
+from typing import Any, Dict, Optional
+from datetime import datetime
+
+from sqlalchemy.orm import Session
+
+from app.core.config import settings
+from app.core.s3 import presign_put
+from app.core.metrics import rag_ingest_started_total
+from app.repositories.rag_repo import RagRepo
+from app.tasks.normalize import process as normalize_process
+from app.tasks.chunk import split as chunk_split
+from app.tasks.embed import compute as embed_compute
+from app.tasks.index import finalize as index_finalize
+from app.tasks.upload_watch import watch as start_upload_watch
+from app.tasks.delete import hard_delete as hard_delete_task
+from app.models.rag import RagDocuments, RagChunks
+from . import clients
+
+# White-list of allowed extensions
+ALLOWED_EXTENSIONS = {'.txt', '.pdf', '.doc', '.docx', '.md', '.rtf', '.odt'}
+
+
+def _safe_ext(filename: Optional[str]) -> str:
+    if not filename or '.' not in filename:
+        return ''
+    ext = '.' + filename.rsplit('.', 1)[-1].lower()
+    return ext if ext in ALLOWED_EXTENSIONS else ''
+
+
+def create_upload(session: Session, filename: str, uploaded_by: Optional[str] = None) -> Dict[str, Any]:
+    """Create a document record and return a presigned PUT URL for the RAG upload.
+    New naming logic: rag/{doc_id}/origin.{ext} for original files
+    """
+    file_ext = _safe_ext(filename)
+    if filename and file_ext == '':
+        raise ValueError(f"Unsupported file type. Allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}")
+
+    repo = RagRepo(session)
+    # Persist original name in DB; storage key does NOT depend on it
+    doc = repo.create_document(name=filename, uploaded_by=uploaded_by, status="uploaded")
+
+    # New naming: rag/{doc_id}/origin.{ext}
+    key = f"{doc.id}/origin{file_ext}"
+    put_url = presign_put(settings.S3_BUCKET_RAG, key, 3600)
+
+    # Save storage key for downstream tasks
+    doc.url_file = key
+    doc.updated_at = datetime.utcnow()
+    session.commit()
+
+    # Don't start watcher yet - wait for file to be uploaded via presigned URL
+    # start_upload_watch(str(doc.id), key=key)
+    
+    # Запускаем цепочку обработки сразу после создания документа
+    start_ingest_chain(str(doc.id))
+
+    return {"id": str(doc.id), "put_url": put_url, "key": key}
+
+
+def delete_document(session: Session, doc_id: str, *, hard: bool = False) -> bool:
+    """Two deletion modes:
+    - soft (default): mark as archived (keeps MinIO/Qdrant/DB children intact)
+    - hard: schedule full purge task that removes MinIO objects, Qdrant points and DB rows
+    """
+    repo = RagRepo(session)
+    doc = repo.get(doc_id)
+    if not doc:
+        return False
+
+    if hard:
+        # Fire-and-forget Celery task
+        hard_delete_task.delay(str(doc.id))
+        return True
+
+    # Soft delete: archive only (no storage/Qdrant changes)
+    doc.status = "archived"
+    doc.updated_at = datetime.utcnow()
+    session.commit()
+    return True
+
+
+def list_documents(session: Session, limit: int = 50):
+    return RagRepo(session).list(limit=limit)
+
+
+def get_document(session: Session, doc_id):
+    return RagRepo(session).get(doc_id)
+
+
+def start_ingest_chain(doc_id: str) -> None:
+    rag_ingest_started_total.inc()
+    # Используем правильный синтаксис для Celery цепочки
+    from celery import chain
+    chain(
+        normalize_process.s(doc_id),
+        chunk_split.s(),
+        embed_compute.s(),
+        index_finalize.s()
+    ).apply_async()
+
+
+def search(session: Session, query: str, top_k: int = 5, *, offset: int = 0, doc_id: Optional[str] = None, tags: Optional[list] = None, sort_by: str = "score_desc") -> Dict[str, Any]:
+    vectors = clients.embed_texts([query])
+    if not vectors:
+        return {"results": [], "next_offset": None}
+    vec = vectors[0]
+    hits = clients.qdrant_search(vec, top_k=top_k, offset=offset, doc_id=doc_id, tags=tags, sort_by=sort_by)
+    out = []
+    for h in hits:
+        payload = h.get("payload") or {}
+        out.append({
+            "score": h["score"],
+            "text": payload.get("text"),
+            "doc_id": payload.get("document_id"),
+            "chunk_idx": payload.get("chunk_idx"),
+            "tags": payload.get("tags") or [],
+        })
+    next_offset = offset + len(out) if len(out) == top_k else None
+    return {"results": out, "next_offset": next_offset}
+
+
+def progress(session: Session, doc_id: str) -> Dict[str, Any]:
+    from sqlalchemy import func
+    doc = session.get(RagDocuments, doc_id)
+    if not doc:
+        return {"id": doc_id, "status": "not_found"}
+    chunks_total = session.query(func.count(RagChunks.id)).filter(RagChunks.document_id == doc.id).scalar() or 0
+    vectors_total = clients.qdrant_count_by_doc(str(doc.id))
+    return {
+        "id": str(doc.id),
+        "status": doc.status,
+        "chunks_total": int(chunks_total),
+        "vectors_total": int(vectors_total),
+        "updated_at": (doc.updated_at.isoformat() if getattr(doc, "updated_at", None) else None),
+    }
+
+
+def stats(session: Session) -> Dict[str, Any]:
+    from sqlalchemy import func
+    rows = session.query(RagDocuments.status, func.count(RagDocuments.id)).group_by(RagDocuments.status).all()
+    by_status = {k or "unknown": int(v or 0) for k, v in rows}
+    total_docs = sum(by_status.values())
+    return {"total_docs": total_docs, "by_status": by_status}
+
+
+def get_download_url(session: Session, doc_id: str, file_type: str = "original") -> str:
+    """Get download URL for a document file."""
+    doc = RagRepo(session).get(doc_id)
+    if not doc:
+        raise ValueError("Document not found")
+    
+    if file_type == "original":
+        key = doc.url_file
+        bucket = settings.S3_BUCKET_RAG
+    elif file_type == "canonical":
+        key = doc.url_canonical_file
+        bucket = settings.S3_BUCKET_RAG
+    elif file_type == "preview":
+        key = doc.url_preview_file
+        bucket = settings.S3_BUCKET_RAG
+    else:
+        raise ValueError("Invalid file type")
+    
+    if not key:
+        raise ValueError(f"{file_type} file not available")
+    
+    return presign_put(bucket, key, 3600)
+
+
+def reprocess_document(session: Session, doc_id: str) -> bool:
+    """Reprocess a document through the entire pipeline."""
+    doc = RagRepo(session).get(doc_id)
+    if not doc:
+        return False
+    
+    # Reset status and clear previous results
+    doc.status = "uploaded"
+    doc.url_canonical_file = None
+    doc.updated_at = datetime.utcnow()
+    session.commit()
+    
+    # Start the processing chain
+    start_ingest_chain(str(doc.id))
+    return True
+
+### app/tasks/__init__.py
+
+
+### app/tasks/analyze.py
+from __future__ import annotations
+from datetime import datetime
+from celery import shared_task
+from app.core.db import SessionLocal
+from app.models.analyze import AnalysisDocuments
+from .shared import log, RetryableError, task_metrics
+from app.services.clients import llm_chat
+
+@shared_task(name="app.tasks.analyze.run", bind=True, autoretry_for=(RetryableError,), retry_backoff=True, retry_kwargs={"max_retries": 5})
+def run(self, job_id: str, *, pipeline: dict | None = None) -> dict:
+    with task_metrics("analyze.run", "analyze"):
+        session = SessionLocal()
+        try:
+            job = session.get(AnalysisDocuments, job_id)
+            if not job:
+                raise RetryableError("job_not_found")
+            # Сбор сообщений для LLM
+            system = {"role": "system", "content": "Ты — аналитик. Кратко резюмируй данные и выдай ключевые пункты."}
+            user_msg = {"role": "user", "content": (pipeline or {}).get("prompt", "Проанализируй документ и верни краткое резюме.")}
+            content = llm_chat([system, user_msg], temperature=float((pipeline or {}).get("temperature", 0.2)))
+            job.status = "done"
+            job.updated_at = datetime.utcnow()
+            job.result = {"summary": content, "pipeline": pipeline or {}}
+            session.commit()
+            return {"job_id": str(job.id), "status": job.status}
+        finally:
+            session.close()
+
+### app/tasks/chunk.py
+from __future__ import annotations
+from celery import shared_task
+from datetime import datetime
+from app.core.config import settings
+from app.core.s3 import get_minio
+from app.core.db import SessionLocal
+from app.core.metrics import rag_chunks_created_total
+from app.models.rag import RagDocuments, RagChunks
+from .shared import log, RetryableError, task_metrics, env_int
+
+def _split_text(txt: str, max_chars: int, overlap: int):
+    i = 0; n = len(txt)
+    while i < n:
+        j = min(i + max_chars, n)
+        yield txt[i:j]
+        if j >= n: break
+        i = j - overlap if j - overlap > i else j
+
+@shared_task(name="app.tasks.chunk.split", bind=True, autoretry_for=(RetryableError,), retry_backoff=True, retry_kwargs={"max_retries": 5})
+def split(self, result: dict, *, max_chars: int | None = None, overlap: int | None = None) -> dict:
+    with task_metrics("chunk.split", "chunk"):
+        session = SessionLocal()
+        s3 = get_minio()
+        try:
+            # Получаем document_id из результата предыдущей задачи
+            document_id = result.get("document_id")
+            if not document_id:
+                raise RetryableError("no_document_id")
+            
+            from uuid import UUID
+            doc = session.get(RagDocuments, UUID(document_id))
+            if not doc or not doc.url_canonical_file:
+                raise RetryableError("canonical_not_ready")
+            max_chars = max_chars or env_int("CHUNK_MAX_CHARS", 1200)
+            overlap   = overlap   or env_int("CHUNK_OVERLAP", 100)
+            try:
+                obj = s3.get_object(settings.S3_BUCKET_CANONICAL, doc.url_canonical_file)
+                json_data = obj.read().decode("utf-8") or "{}"
+                import json
+                parsed_data = json.loads(json_data)
+                # Извлекаем текст из нормализованного JSON
+                data = parsed_data.get("text", "") if isinstance(parsed_data, dict) else ""
+            except Exception as e:
+                log.error(f"Error reading canonical file: {e}")
+                data = ""
+            chunks = list(_split_text(data, max_chars=max_chars, overlap=overlap)) or [""]
+            for idx, text in enumerate(chunks):
+                session.add(RagChunks(document_id=doc.id, chunk_idx=idx, text=text))
+            rag_chunks_created_total.inc(len(chunks))
+            doc.status = "embedding"; doc.updated_at = datetime.utcnow()
+            session.commit()
+            return {"document_id": str(doc.id), "chunks": len(chunks), "status": doc.status}
+        finally:
+            session.close()
+
+### app/tasks/delete.py
+from __future__ import annotations
+from celery import shared_task
+from app.core.s3 import get_minio
+from app.core.qdrant import get_qdrant
+from app.core.db import SessionLocal
+from app.core.config import settings
+from app.models.rag import RagDocuments, RagChunks
+from .shared import log, task_metrics
+
+COLLECTION = "rag_chunks"
+
+
+@shared_task(name="app.tasks.delete.hard_delete", bind=True)
+def hard_delete(self, document_id: str) -> dict:
+    """Hard delete: removes MinIO objects, Qdrant points and DB rows."""
+    with task_metrics("delete.hard_delete", "delete"):
+        session = SessionLocal()
+        s3 = get_minio()
+        qdrant = get_qdrant()
+        
+        try:
+            doc = session.get(RagDocuments, document_id)
+            if not doc:
+                return {"document_id": document_id, "status": "not_found"}
+            
+            # Delete MinIO objects
+            if doc.url_file:
+                try:
+                    s3.remove_object(settings.S3_BUCKET_RAG, doc.url_file)
+                    log.info(f"Deleted raw file: {doc.url_file}")
+                except Exception as e:
+                    log.error(f"Failed to delete raw file {doc.url_file}: {e}")
+            
+            if doc.url_canonical_file:
+                try:
+                    s3.remove_object(settings.S3_BUCKET_RAG, doc.url_canonical_file)
+                    log.info(f"Deleted canonical file: {doc.url_canonical_file}")
+                except Exception as e:
+                    log.error(f"Failed to delete canonical file {doc.url_canonical_file}: {e}")
+            
+            # Delete Qdrant points
+            try:
+                from qdrant_client.http.models import Filter, FieldCondition, MatchValue
+                f = Filter(must=[FieldCondition(key="document_id", match=MatchValue(value=document_id))])
+                qdrant.delete(collection_name=COLLECTION, points_selector=f)
+                log.info(f"Deleted Qdrant points for document: {document_id}")
+            except Exception as e:
+                log.error(f"Failed to delete Qdrant points for {document_id}: {e}")
+            
+            # Delete DB chunks
+            session.query(RagChunks).filter(RagChunks.document_id == doc.id).delete()
+            
+            # Delete document
+            session.delete(doc)
+            session.commit()
+            
+            log.info(f"Hard deleted document: {document_id}")
+            return {"document_id": document_id, "status": "deleted"}
+            
+        except Exception as e:
+            log.error(f"Error during hard delete of {document_id}: {e}")
+            session.rollback()
+            raise
+        finally:
+            session.close()
+### app/tasks/embed.py
+from __future__ import annotations
+import os, uuid
+from datetime import datetime
+import httpx
+from celery import shared_task
+from qdrant_client.http.models import VectorParams, Distance, PointStruct
+from app.core.config import settings
+from app.core.qdrant import get_qdrant
+from app.core.db import SessionLocal
+from app.core.metrics import rag_vectors_upserted_total
+from app.models.rag import RagDocuments, RagChunks
+from .shared import log, RetryableError, task_metrics, env_int
+from app.core.metrics import embedding_batch_inflight
+
+EMB_URL = os.getenv("EMBEDDINGS_URL", "http://emb:8001")
+COLLECTION = os.getenv("QDRANT_COLLECTION", "rag_chunks")
+
+def _embed_sync(texts: list[str]) -> list[list[float]]:
+    with httpx.Client(timeout=60) as client:
+        r = client.post(f"{EMB_URL}/embed", json={"inputs": texts})
+        r.raise_for_status()
+        payload = r.json()
+        return payload.get("vectors", [])
+
+@shared_task(name="app.tasks.embed.compute", bind=True, autoretry_for=(RetryableError,), retry_backoff=True, retry_kwargs={"max_retries": 5})
+def compute(self, result: dict) -> dict:
+    with task_metrics("embed.compute", "embed"):
+        session = SessionLocal()
+        qdrant = get_qdrant()
+        try:
+            # Получаем document_id из результата предыдущей задачи
+            document_id = result.get("document_id")
+            if not document_id:
+                raise RetryableError("no_document_id")
+            
+            from uuid import UUID
+            doc = session.get(RagDocuments, UUID(document_id))
+            if not doc:
+                raise RetryableError("document_not_found")
+            doc_tags = doc.tags or []
+            BATCH = env_int("EMBEDDING_BATCH_SIZE", 8)
+            rows = session.query(RagChunks).filter(RagChunks.document_id==doc.id, RagChunks.qdrant_point_id==None).order_by(RagChunks.chunk_idx.asc()).all()
+            total = 0
+            for i in range(0, len(rows), BATCH):
+                batch = rows[i:i+BATCH]
+                texts = [c.text for c in batch]
+                embedding_batch_inflight.inc()
+                try:
+                    vectors = _embed_sync(texts)
+                finally:
+                    embedding_batch_inflight.dec()
+                if not vectors:
+                    raise RetryableError("empty_vectors")
+
+                dim = len(vectors[0])
+                try:
+                    qdrant.get_collection(COLLECTION)
+                except Exception:
+                    from qdrant_client.http.models import OptimizersConfigDiff
+                    qdrant.recreate_collection(
+                        collection_name=COLLECTION,
+                        vectors_config=VectorParams(size=dim, distance=Distance.COSINE),
+                        optimizers_config=OptimizersConfigDiff(memmap_threshold=20000)
+                    )
+
+                points = []
+                now = datetime.utcnow()
+                for chunk, vec in zip(batch, vectors):
+                    pid = uuid.uuid4()
+                    points.append(PointStruct(id=str(pid), vector=vec, payload={
+                        "document_id": str(doc.id),
+                        "chunk_idx": chunk.chunk_idx,
+                        "text": chunk.text,
+                        "tags": doc_tags,
+                    }))
+                    chunk.qdrant_point_id = pid
+                    chunk.embedding_model = os.getenv("MODEL_ID","BAAI/bge-m3")
+                    chunk.embedding_version = "v1"
+                    chunk.date_embedding = now
+                qdrant.upsert(collection_name=COLLECTION, points=points)
+                session.commit()
+                rag_vectors_upserted_total.inc(len(points))
+                total += len(batch)
+            doc.status = "indexing"; doc.updated_at = datetime.utcnow()
+            session.commit()
+            return {"document_id": str(doc.id), "embedded": total, "status": doc.status}
+        finally:
+            session.close()
+
+### app/tasks/index.py
+from __future__ import annotations
+from datetime import datetime
+from celery import shared_task
+from app.core.qdrant import get_qdrant
+from app.core.db import SessionLocal
+from app.models.rag import RagDocuments, RagChunks
+from .shared import log, task_metrics, RetryableError
+
+COLLECTION = "rag_chunks"
+
+@shared_task(name="app.tasks.index.finalize", bind=True)
+def finalize(self, result: dict) -> dict:
+    with task_metrics("index.finalize", "index"):
+        session = SessionLocal()
+        qdrant = get_qdrant()
+        try:
+            # Получаем document_id из результата предыдущей задачи
+            document_id = result.get("document_id")
+            if not document_id:
+                raise RetryableError("no_document_id")
+            
+            from uuid import UUID
+            doc = session.get(RagDocuments, UUID(document_id))
+            if not doc:
+                return {"document_id": document_id, "status": "not_found"}
+            # простая проверка наличия поинтов документа
+            # (в реале — count по payload фильтру)
+            doc.status = "ready"
+            doc.updated_at = datetime.utcnow()
+            session.commit()
+            return {"document_id": str(doc.id), "status": doc.status}
+        finally:
+            session.close()
+
+@shared_task(name="app.tasks.index.housekeeping", bind=True)
+def housekeeping(self) -> dict:
+    with task_metrics("index.housekeeping", "index"):
+        return {"ok": True}
+
+### app/tasks/normalize.py
+from __future__ import annotations
+from celery import shared_task
+from datetime import datetime
+from app.core.config import settings
+from app.core.s3 import get_minio
+from app.core.db import SessionLocal
+from app.models.rag import RagDocuments
+from .shared import log, RetryableError, task_metrics
+
+@shared_task(name="app.tasks.normalize.process", bind=True, autoretry_for=(RetryableError,), retry_backoff=True, retry_kwargs={"max_retries": 5})
+def process(self, document_id: str, *, source_key: str | None = None) -> dict:
+    with task_metrics("normalize.process", "normalize"):
+        s3 = get_minio()
+        session = SessionLocal()
+        try:
+            doc = session.get(RagDocuments, document_id)
+            if not doc:
+                raise RetryableError("document_not_found")
+            
+            # Заглушка нормализации - просто копируем файл как есть
+            src = source_key or (doc.url_file or f"{doc.id}/origin.bin")
+            dst = f"{doc.id}/canonical.txt"
+            
+            try:
+                # Получаем исходный файл
+                obj = s3.get_object(settings.S3_BUCKET_RAG, src)
+                content = obj.read()
+                
+                # Простая заглушка - если это текстовый файл, читаем как текст
+                try:
+                    text_content = content.decode('utf-8')
+                    # Создаем JSON с текстом
+                    import json
+                    normalized_data = {"text": text_content, "type": "text", "original_filename": doc.name}
+                    json_content = json.dumps(normalized_data, ensure_ascii=False).encode('utf-8')
+                except UnicodeDecodeError:
+                    # Если не текстовый файл, сохраняем как бинарный
+                    import json
+                    normalized_data = {"type": "binary", "original_filename": doc.name, "size": len(content)}
+                    json_content = json.dumps(normalized_data, ensure_ascii=False).encode('utf-8')
+                
+                # Сохраняем нормализованный файл
+                from io import BytesIO
+                s3.put_object(settings.S3_BUCKET_RAG, dst, BytesIO(json_content), length=len(json_content))
+                
+            except Exception as e:
+                log.error(f"Error processing file {src}: {e}")
+                # Создаем пустой файл в случае ошибки
+                from io import BytesIO
+                s3.put_object(settings.S3_BUCKET_RAG, dst, BytesIO(b'{"text": "", "type": "error"}'), length=2)
+            
+            doc.url_canonical_file = dst
+            doc.status = "chunking"
+            doc.updated_at = datetime.utcnow()
+            session.commit()
+            return {"document_id": str(doc.id), "status": doc.status, "canonical_key": dst}
+        finally:
+            session.close()
+
+### app/tasks/shared.py
+from __future__ import annotations
+import logging, time, uuid, contextlib, os
+from datetime import datetime
+from app.core.metrics import tasks_started_total, tasks_failed_total, task_duration_seconds
+
+log = logging.getLogger("tasks")
+def new_id() -> str: return str(uuid.uuid4())
+
+class RetryableError(RuntimeError): ...
+class FatalError(RuntimeError): ...
+
+@contextlib.contextmanager
+def task_metrics(task: str, queue: str):
+    tasks_started_total.labels(queue=queue, task=task).inc()
+    start = time.perf_counter()
+    try:
+        yield
+    except Exception:
+        tasks_failed_total.labels(queue=queue, task=task).inc()
+        raise
+    finally:
+        task_duration_seconds.labels(task=task).observe(time.perf_counter() - start)
+
+def env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except Exception:
+        return default
+
+### app/tasks/upload_watch.py
+from __future__ import annotations
+from celery import shared_task
+from app.core.s3 import get_minio
+from app.core.db import SessionLocal
+from app.core.config import settings
+from app.models.rag import RagDocuments
+from .shared import log, task_metrics, RetryableError
+# Avoid circular import by importing inside the task function
+
+@shared_task(name="app.tasks.upload.watch", bind=True, autoretry_for=(RetryableError,), retry_backoff=True, retry_kwargs={"max_retries": 100})
+def watch(self, document_id: str, *, key: str) -> dict:
+    with task_metrics("upload.watch", "watch"):
+        s3 = get_minio()
+        session = SessionLocal()
+        try:
+            doc = session.get(RagDocuments, document_id)
+            if not doc:
+                return {"ok": False, "error": "doc_not_found"}
+            raw_bucket = settings.S3_BUCKET_RAG
+            rel = key.split(raw_bucket + "/", 1)[-1] if key.startswith(raw_bucket + "/") else key
+            try:
+                s3.stat_object(raw_bucket, rel)
+            except Exception:
+                raise RetryableError("not_uploaded_yet")
+            from app.services.rag_service import start_ingest_chain
+            start_ingest_chain(document_id)
+            return {"ok": True, "started": "ingest"}
+        finally:
+            session.close()
+
+### requirements-test.txt
+pytest==7.4.3
+pytest-asyncio==0.21.1
+httpx==0.25.2
+pytest-cov==4.1.0
+
+### scripts/__init__.py
+
+### scripts/bootstrap_minio.py
+from app.core.s3 import ensure_bucket
+from app.core.config import settings
+
+def main():
+    for b in (settings.S3_BUCKET_RAG, settings.S3_BUCKET_ANALYSIS):
+        ensure_bucket(b)
+        print(f"ensured bucket: {b}")
+
+if __name__ == "__main__":
+    main()
+
+### scripts/bootstrap_qdrant.py
+from app.core.qdrant import get_qdrant
+
+def main():
+    q = get_qdrant()
+    c = q.get_collections()
+    print("Qdrant reachable. Collections:", getattr(c, 'collections', c))
+
+if __name__ == "__main__":
+    main()
+
+### scripts/create_admin_hash.py
+#!/usr/bin/env python3
+"""
+Скрипт для создания хеша пароля admin123
+"""
+import sys
+from pathlib import Path
+
+# Добавляем путь к приложению
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from app.core.security import hash_password
+
+if __name__ == "__main__":
+    password = "admin123"
+    hashed = hash_password(password)
+    print(f"Password: {password}")
+    print(f"Hash: {hashed}")
+
+
+### scripts/create_admin_user.py
+#!/usr/bin/env python3
+"""
+Скрипт для создания администратора при запуске контейнера
+"""
+import os
+import sys
+import asyncio
+from pathlib import Path
+
+# Добавляем путь к приложению
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from app.core.db import SessionLocal
+from app.models.user import Users
+from app.core.security import hash_password
+from app.core.config import settings
+
+def create_admin_user():
+    """Создает пользователя admin с паролем admin123"""
+    session = SessionLocal()
+    try:
+        # Проверяем, существует ли уже пользователь admin
+        existing_user = session.query(Users).filter(Users.login == "admin").first()
+        if existing_user:
+            print("Пользователь admin уже существует")
+            return
+        
+        # Создаем нового пользователя
+        admin_user = Users(
+            login="admin",
+            password_hash=hash_password("admin123"),
+            role="admin",
+            is_active=True
+        )
+        
+        session.add(admin_user)
+        session.commit()
+        print("Пользователь admin создан успешно")
+        
+    except Exception as e:
+        print(f"Ошибка при создании пользователя admin: {e}")
+        session.rollback()
+    finally:
+        session.close()
+
+if __name__ == "__main__":
+    create_admin_user()
+### scripts/run_migrations.py
+# backend/scripts/run_migrations.py
+"""Programmatic Alembic upgrade to head.
+Use: python scripts/run_migrations.py
+Requires: ALEMBIC_CONFIG (optional) or uses app/migrations as script_location.
+"""
+import os, sys
+from alembic import command
+from alembic.config import Config
+
+here = os.path.dirname(os.path.abspath(__file__))
+# We expect migrations under app/migrations
+cfg = Config()
+cfg.set_main_option("script_location", "app/migrations")
+# DB URL read by env.py via app.core.config.settings, so no need to set here.
+command.upgrade(cfg, "head")
+print("Migrations applied: head")
+
+### scripts/seed_users.py
+# backend/scripts/seed_users.py
+import os, sys
+from datetime import datetime, timezone
+from sqlalchemy import create_engine, MetaData, select, insert, update
+from sqlalchemy.exc import SQLAlchemyError
+
+DB_URL = os.environ.get("DB_URL") or os.environ.get("DB.URL")
+if not DB_URL:
+    print("seed_users.py: DB_URL is required", file=sys.stderr); sys.exit(2)
+
+ADMIN_LOGIN = os.environ.get("ADMIN_LOGIN", "admin")
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")
+USER_LOGIN = os.environ.get("USER_LOGIN", "user")
+USER_PASSWORD = os.environ.get("USER_PASSWORD", "user123")
+
+try:
+    from passlib.hash import bcrypt
+    def hash_pw(pw: str) -> str: return bcrypt.hash(pw)
+except Exception:
+    def hash_pw(pw: str) -> str: return pw  # plaintext fallback
+
+engine = create_engine(DB_URL, future=True, pool_pre_ping=True)
+md = MetaData()
+
+with engine.begin() as conn:
+    # No create_all here — we rely on Alembic migrations.
+    md.reflect(conn)
+    if "users" not in md.tables:
+        print("seed_users.py: users table not found — run migrations first.", file=sys.stderr)
+        sys.exit(3)
+    users_tbl = md.tables["users"]
+
+    def col(name, alt=None):
+        c = users_tbl.c.get(name)
+        if c is None and alt:
+            c = users_tbl.c.get(alt)
+        if c is None:
+            raise RuntimeError(f"seed_users.py: column not found: {name}")
+        return c
+
+    login_col = col("login", "username")
+    pwd_col = users_tbl.c.get("password_hash") or users_tbl.c.get("password") or users_tbl.c.get("hashed_password")
+    if pwd_col is None:
+        print("seed_users.py: cannot identify password column", file=sys.stderr); sys.exit(4)
+    is_active_col = users_tbl.c.get("is_active")
+    role_col = users_tbl.c.get("role")
+    fio_col = users_tbl.c.get("fio") or users_tbl.c.get("full_name") or users_tbl.c.get("name")
+
+    def upsert_user(login: str, password: str, is_admin: bool, fio: str | None):
+        existing = conn.execute(select(users_tbl).where(login_col == login)).first()
+        if existing:
+            upd = {pwd_col.key: hash_pw(password)}
+            if is_active_col is not None: upd[is_active_col.key] = True
+            if role_col is not None and is_admin: upd[role_col.key] = "admin"
+            conn.execute(update(users_tbl).where(login_col == login).values(**upd))
+        else:
+            ins = {login_col.key: login, pwd_col.key: hash_pw(password)}
+            if is_active_col is not None: ins[is_active_col.key] = True
+            if role_col is not None: ins[role_col.key] = ("admin" if is_admin else "reader")
+            if fio_col is not None: ins[fio_col.key] = fio
+            conn.execute(insert(users_tbl).values(**ins))
+
+    try:
+        upsert_user(ADMIN_LOGIN, ADMIN_PASSWORD, True, "Admin")
+        upsert_user(USER_LOGIN, USER_PASSWORD, False, "User")
+        print("seed_users.py: users ready")
+    except SQLAlchemyError as e:
+        print(f"seed_users.py: error: {e}", file=sys.stderr); sys.exit(5)
+
+### stubs/emb_server.py
+import asyncio
+from typing import List
+from fastapi import FastAPI
+from pydantic import BaseModel
+
+app = FastAPI(title="Embeddings Stub (in-backend)")
+
+class EmbedRequest(BaseModel):
+    # Match app.services.clients.embed_texts contract
+    inputs: List[str]
+
+@app.get("/healthz")
+def healthz():
+    return {"status": "ok"}
+
+@app.post("/embed")
+async def embed(req: EmbedRequest):
+    # Добавляем задержку 5 секунд
+    await asyncio.sleep(5)
+    
+    def vec_for(_: str):
+        # 8-dim demo vector; replace with real model later
+        return [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]
+    return {"vectors": [vec_for(x) for x in req.inputs]}
+
+### stubs/llm_server.py
+import asyncio
+import json
+from fastapi import FastAPI
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+from typing import List, Dict, Any, Optional
+
+app = FastAPI(title="LLM Stub (in-backend)")
+
+class ChatRequest(BaseModel):
+    messages: List[Dict[str, Any]]
+    temperature: Optional[float] = 0.2
+    max_tokens: Optional[int] = None
+    use_rag: Optional[bool] = False
+
+@app.get("/healthz")
+def healthz():
+    return {"status": "ok"}
+
+@app.post("/v1/chat/completions")
+async def chat(req: ChatRequest):
+    # Добавляем задержку 5 секунд
+    await asyncio.sleep(5)
+    
+    last_user = next((m.get("content","") for m in reversed(req.messages) if m.get("role") == "user"), "")
+    
+    # Создаем JSON с информацией о запросе
+    request_info = {
+        "user_message": last_user,
+        "use_rag": req.use_rag,
+        "temperature": req.temperature,
+        "max_tokens": req.max_tokens,
+        "messages_count": len(req.messages)
+    }
+    
+    response_text = f"Это тестовый ответ на ваш запрос \"{last_user}\", вот полный json запроса: {json.dumps(request_info, ensure_ascii=False, indent=2)}"
+    
+    # Разбиваем ответ на части для потоковой передачи
+    chunks = [response_text[i:i+50] for i in range(0, len(response_text), 50)]
+    
+    async def generate():
+        for i, chunk in enumerate(chunks):
+            chunk_data = {
+                "id": f"chatcmpl-{i}",
+                "object": "chat.completion.chunk",
+                "created": 1234567890,
+                "model": "gpt-3.5-turbo",
+                "choices": [{
+                    "index": 0,
+                    "delta": {"content": chunk},
+                    "finish_reason": None
+                }]
+            }
+            
+            # Добавляем финальный чанк
+            if i == len(chunks) - 1:
+                chunk_data["choices"][0]["finish_reason"] = "stop"
+            
+            yield f"data: {json.dumps(chunk_data, ensure_ascii=False)}\n\n"
+            await asyncio.sleep(0.1)  # Небольшая задержка между чанками
+        
+        yield "data: [DONE]\n\n"
+    
+    return StreamingResponse(generate(), media_type="text/plain")
+
+### tests/__init__.py
+# Tests package
+
+### tests/api/__init__.py
+
+### tests/api/test_rag_progress.py
+from fastapi.testclient import TestClient
+from app.main import app
+
+def test_rag_progress_endpoint(monkeypatch):
+    from app.services import rag_service
+    def fake_progress(session, doc_id):
+        return {"id": doc_id, "status": "indexing", "chunks_total": 10, "vectors_total": 8, "updated_at": None}
+    monkeypatch.setattr(rag_service, "progress", fake_progress)
+    client = TestClient(app)
+    r = client.get("/api/rag/123/progress")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["id"] == "123" and body["status"] == "indexing"
+
+### tests/api/test_rag_search_next_offset.py
+from fastapi.testclient import TestClient
+from app.main import app
+
+def test_rag_search_next_offset(monkeypatch):
+    from app.services import rag_service
+    def fake_search(session, query, top_k, offset=0, doc_id=None, tags=None, sort_by="score_desc"):
+        return {"results":[{"score":0.5,"text":"hello","doc_id":"d1","chunk_idx":0,"tags":["a"]}], "next_offset": offset+1}
+    monkeypatch.setattr(rag_service, "search", fake_search)
+    client = TestClient(app)
+    r = client.post("/api/rag/search", json={"query":"q","top_k":1,"offset":0})
+    assert r.status_code == 200
+    body = r.json()
+    assert "next_offset" in body and body["next_offset"] == 1
+
+### tests/api/test_rag_search_payload.py
+from fastapi.testclient import TestClient
+from app.main import app
+
+def test_rag_search_payload_shape(monkeypatch):
+    from app.services import rag_service
+    def fake_search(session, query, top_k, offset=0, doc_id=None, tags=None, sort_by="score_desc"):
+        return {"results":[{"score":0.5,"text":"hello","doc_id":"d1","chunk_idx":0,"tags":["a"]}], "next_offset": offset+1}
+    monkeypatch.setattr(rag_service, "search", fake_search)
+    client = TestClient(app)
+    r = client.post("/api/rag/search", json={"query":"q","top_k":3,"offset":1,"doc_id":"d1","tags":["a"]})
+    assert r.status_code == 200
+    body = r.json()
+    assert "results" in body and body["results"][0]["doc_id"] == "d1"
+
+### tests/conftest.py
+import pytest
+import sys
+import os
+
+# Add the app directory to Python path
+sys.path.insert(0, '/app')
+
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from app.main import app
+from app.core.db import get_db, Base
+from app.core.config import settings
+
+# Test database URL
+SQLALCHEMY_DATABASE_URL = "sqlite:///./test.db"
+
+engine = create_engine(
+    SQLALCHEMY_DATABASE_URL, 
+    connect_args={"check_same_thread": False}
+)
+TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+def override_get_db():
+    try:
+        db = TestingSessionLocal()
+        yield db
+    finally:
+        db.close()
+
+@pytest.fixture(scope="session")
+def db_engine():
+    """Create test database engine"""
+    Base.metadata.create_all(bind=engine)
+    yield engine
+    Base.metadata.drop_all(bind=engine)
+
+@pytest.fixture
+def db_session(db_engine):
+    """Create test database session"""
+    connection = db_engine.connect()
+    transaction = connection.begin()
+    session = TestingSessionLocal(bind=connection)
+    
+    yield session
+    
+    session.close()
+    transaction.rollback()
+    connection.close()
+
+@pytest.fixture
+def client(db_session):
+    """Create test client with database session override"""
+    app.dependency_overrides[get_db] = lambda: db_session
+    with TestClient(app) as test_client:
+        yield test_client
+    app.dependency_overrides.clear()
+
+@pytest.fixture
+def test_user():
+    """Create test user data"""
+    return {
+        "id": "test-user-id",
+        "email": "test@example.com",
+        "role": "user"
+    }
+
+@pytest.fixture
+def test_chat():
+    """Create test chat data"""
+    return {
+        "id": "test-chat-id",
+        "name": "Test Chat",
+        "tags": ["test", "example"],
+        "owner_id": "test-user-id"
+    }
+
+@pytest.fixture
+def test_rag_document():
+    """Create test RAG document data"""
+    return {
+        "id": "test-doc-id",
+        "name": "test.pdf",
+        "status": "ready",
+        "tags": ["document", "test"]
+    }
+
+### tests/e2e/test_ingest_chain_apply.py
+def test_ingest_chain_calls_apply_async(monkeypatch):
+    from app.services import rag_service
+    called = {"ok": False}
+    class DummySign:
+        def __or__(self, other): return self
+        def apply_async(self_inner): called["ok"] = True
+    # monkeypatch each task signature .s to return DummySign
+    from app.tasks import normalize, chunk, embed, index
+    monkeypatch.setattr(normalize.process, "s", lambda *a, **k: DummySign())
+    monkeypatch.setattr(chunk.split, "s", lambda *a, **k: DummySign())
+    monkeypatch.setattr(embed.compute, "s", lambda *a, **k: DummySign())
+    monkeypatch.setattr(index.finalize, "s", lambda *a, **k: DummySign())
+    rag_service.start_ingest_chain("doc-1")
+    assert called["ok"] is True
+
+### tests/services/__init__.py
+
+### tests/services/test_clients.py
+import types
+from app.services import clients
+
+def test_qdrant_filter_build(monkeypatch):
+    # monkeypatch search to capture arguments
+    captured = {}
+    class DummyH: 
+        def __init__(self): self.score=0.9; self.id="1"; self.payload={"text":"t","document_id":"d","chunk_idx":0,"tags":["a"]}
+    def fake_search(collection_name, query_vector, limit, offset, with_payload, query_filter):
+        captured['kwargs'] = {'collection_name': collection_name, 'limit': limit, 'offset': offset, 'with_payload': with_payload, 'query_filter': query_filter}
+        return [DummyH()]
+    monkeypatch.setattr(clients.get_qdrant(), "search", fake_search)
+    out = clients.qdrant_search([0.1,0.2], 5, offset=10, doc_id="doc-1", tags=["a","b"])
+    assert out and out[0]["payload"]["document_id"] == "d"
+    k = captured['kwargs']
+    assert k['limit'] == 5 and k['offset'] == 10 and k['with_payload'] is True
+    assert k['query_filter'] is not None
+
+### tests/services/test_rag_service_pagination.py
+from app.services import rag_service
+
+def test_next_offset_and_sort(monkeypatch):
+    # monkeypatch clients: embed_texts -> fixed vector; qdrant_search -> fake hits
+    from app.services import clients
+    monkeypatch.setattr(clients, "embed_texts", lambda texts: [[0.1, 0.2]])
+    def fake_search(vec, top_k, offset=0, doc_id=None, tags=None, sort_by="score_desc"):
+        base = [
+            {"score": 0.9, "payload": {"text":"A","document_id":"d","chunk_idx":0,"tags":["x"]}},
+            {"score": 0.8, "payload": {"text":"B","document_id":"d","chunk_idx":1,"tags":["y"]}},
+        ][:top_k]
+        return list(reversed(base)) if sort_by=="score_asc" else base
+    monkeypatch.setattr(clients, "qdrant_search", fake_search)
+    class S: pass
+    out = rag_service.search(S(), "q", top_k=2, offset=10, sort_by="score_desc")
+    assert out["next_offset"] == 12
+    assert out["results"][0]["score"] == 0.9
+    out2 = rag_service.search(S(), "q", top_k=2, offset=10, sort_by="score_asc")
+    assert out2["results"][0]["score"] == 0.8
+
+### tests/simple_test.py
+import pytest
+import sys
+import os
+
+# Add the app directory to Python path
+sys.path.insert(0, '/app')
+
+from fastapi.testclient import TestClient
+from app.main import app
+
+def test_app_import():
+    """Test that the app can be imported"""
+    assert app is not None
+
+def test_app_has_routes():
+    """Test that the app has routes"""
+    routes = [route.path for route in app.routes]
+    assert "/api/chats" in routes
+
+def test_health_check():
+    """Test basic health check"""
+    client = TestClient(app)
+    response = client.get("/health")
+    assert response.status_code == 200
+
+### tests/test_chats.py
+import pytest
+from fastapi.testclient import TestClient
+from unittest.mock import patch, MagicMock
+
+class TestChatsAPI:
+    """Test cases for chats API endpoints"""
+    
+    def test_create_chat_success(self, client: TestClient, test_user):
+        """Test successful chat creation"""
+        with patch('app.api.deps.get_current_user', return_value=test_user):
+            response = client.post("/api/chats", json={
+                "name": "Test Chat",
+                "tags": ["test", "example"]
+            })
+            
+            assert response.status_code == 200
+            data = response.json()
+            assert "chat_id" in data
+            assert isinstance(data["chat_id"], str)
+    
+    def test_create_chat_without_name(self, client: TestClient, test_user):
+        """Test chat creation without name"""
+        with patch('app.api.deps.get_current_user', return_value=test_user):
+            response = client.post("/api/chats", json={
+                "tags": ["test"]
+            })
+            
+            assert response.status_code == 200
+            data = response.json()
+            assert "chat_id" in data
+    
+    def test_create_chat_invalid_tags(self, client: TestClient, test_user):
+        """Test chat creation with invalid tags"""
+        with patch('app.api.deps.get_current_user', return_value=test_user):
+            response = client.post("/api/chats", json={
+                "name": "Test Chat",
+                "tags": ["a" * 100]  # Tag too long
+            })
+            
+            assert response.status_code == 422  # Validation error
+    
+    def test_list_chats(self, client: TestClient, test_user):
+        """Test listing chats"""
+        with patch('app.api.deps.get_current_user', return_value=test_user):
+            response = client.get("/api/chats")
+            
+            assert response.status_code == 200
+            data = response.json()
+            assert "items" in data
+            assert isinstance(data["items"], list)
+    
+    def test_update_chat_tags(self, client: TestClient, test_user, test_chat):
+        """Test updating chat tags"""
+        with patch('app.api.deps.get_current_user', return_value=test_user):
+            # First create a chat
+            create_response = client.post("/api/chats", json={
+                "name": "Test Chat",
+                "tags": ["old"]
+            })
+            chat_id = create_response.json()["chat_id"]
+            
+            # Update tags
+            response = client.put(f"/api/chats/{chat_id}/tags", json={
+                "tags": ["new", "updated"]
+            })
+            
+            assert response.status_code == 200
+            data = response.json()
+            assert data["tags"] == ["new", "updated"]
+    
+    def test_send_message(self, client: TestClient, test_user, test_chat):
+        """Test sending message to chat"""
+        with patch('app.api.deps.get_current_user', return_value=test_user):
+            # Create a chat first
+            create_response = client.post("/api/chats", json={"name": "Test Chat"})
+            chat_id = create_response.json()["chat_id"]
+            
+            # Mock LLM response
+            with patch('app.services.clients.llm_chat', return_value="Test response"):
+                response = client.post(f"/api/chats/{chat_id}/messages", json={
+                    "content": "Hello, world!",
+                    "use_rag": False,
+                    "response_stream": False
+                })
+                
+                assert response.status_code == 200
+                data = response.json()
+                assert "content" in data
+                assert data["content"] == "Test response"
+    
+    def test_send_message_stream(self, client: TestClient, test_user):
+        """Test sending message with streaming response"""
+        with patch('app.api.deps.get_current_user', return_value=test_user):
+            # Create a chat first
+            create_response = client.post("/api/chats", json={"name": "Test Chat"})
+            chat_id = create_response.json()["chat_id"]
+            
+            # Mock streaming response
+            async def mock_stream():
+                yield "Test "
+                yield "streaming "
+                yield "response"
+            
+            with patch('app.api.routers.chats._stream_llm_response', return_value=mock_stream()):
+                response = client.post(f"/api/chats/{chat_id}/messages", json={
+                    "content": "Hello, world!",
+                    "use_rag": False,
+                    "response_stream": True
+                })
+                
+                assert response.status_code == 200
+                assert response.headers["content-type"] == "text/event-stream; charset=utf-8"
+    
+    def test_delete_chat(self, client: TestClient, test_user):
+        """Test deleting a chat"""
+        with patch('app.api.deps.get_current_user', return_value=test_user):
+            # Create a chat first
+            create_response = client.post("/api/chats", json={"name": "Test Chat"})
+            chat_id = create_response.json()["chat_id"]
+            
+            # Delete the chat
+            response = client.delete(f"/api/chats/{chat_id}")
+            
+            assert response.status_code == 200
+            data = response.json()
+            assert data["deleted"] is True
+
+### tests/test_rag.py
+import pytest
+from fastapi.testclient import TestClient
+from unittest.mock import patch, MagicMock
+import io
+
+class TestRAGAPI:
+    """Test cases for RAG API endpoints"""
+    
+    def test_upload_rag_file_success(self, client: TestClient):
+        """Test successful RAG file upload"""
+        # Create a test file
+        test_file = io.BytesIO(b"Test document content")
+        test_file.name = "test.txt"
+        
+        with patch('app.core.s3_helpers.put_object'), \
+             patch('app.tasks.upload_watch.watch'):
+            
+            response = client.post(
+                "/api/rag/upload",
+                files={"file": ("test.txt", test_file, "text/plain")},
+                data={"tags": '["test", "document"]'}
+            )
+            
+            assert response.status_code == 200
+            data = response.json()
+            assert "id" in data
+            assert data["status"] == "uploaded"
+            assert data["tags"] == ["test", "document"]
+    
+    def test_upload_rag_file_invalid_type(self, client: TestClient):
+        """Test upload with invalid file type"""
+        test_file = io.BytesIO(b"Test content")
+        test_file.name = "test.exe"  # Invalid extension
+        
+        response = client.post(
+            "/api/rag/upload",
+            files={"file": ("test.exe", test_file, "application/octet-stream")}
+        )
+        
+        assert response.status_code == 400
+        assert "Unsupported file type" in response.json()["detail"]
+    
+    def test_upload_rag_file_too_large(self, client: TestClient):
+        """Test upload with file too large"""
+        # Create a large file (simulate)
+        large_content = b"x" * (51 * 1024 * 1024)  # 51MB
+        test_file = io.BytesIO(large_content)
+        test_file.name = "large.txt"
+        test_file.size = 51 * 1024 * 1024
+        
+        response = client.post(
+            "/api/rag/upload",
+            files={"file": ("large.txt", test_file, "text/plain")}
+        )
+        
+        assert response.status_code == 413
+        assert "File too large" in response.json()["detail"]
+    
+    def test_list_rag_documents(self, client: TestClient):
+        """Test listing RAG documents"""
+        response = client.get("/api/rag/?page=1&size=10")
+        
+        assert response.status_code == 200
+        data = response.json()
+        assert "items" in data
+        assert "pagination" in data
+        assert isinstance(data["items"], list)
+    
+    def test_list_rag_documents_with_filters(self, client: TestClient):
+        """Test listing RAG documents with filters"""
+        response = client.get("/api/rag/?page=1&size=10&status=ready&search=test")
+        
+        assert response.status_code == 200
+        data = response.json()
+        assert "items" in data
+        assert "pagination" in data
+    
+    def test_get_rag_document(self, client: TestClient):
+        """Test getting specific RAG document"""
+        # First upload a document
+        test_file = io.BytesIO(b"Test document content")
+        test_file.name = "test.txt"
+        
+        with patch('app.core.s3_helpers.put_object'), \
+             patch('app.tasks.upload_watch.watch'):
+            
+            upload_response = client.post(
+                "/api/rag/upload",
+                files={"file": ("test.txt", test_file, "text/plain")}
+            )
+            
+            doc_id = upload_response.json()["id"]
+            
+            # Get the document
+            response = client.get(f"/api/rag/{doc_id}")
+            
+            assert response.status_code == 200
+            data = response.json()
+            assert data["id"] == doc_id
+    
+    def test_update_rag_document_tags(self, client: TestClient):
+        """Test updating RAG document tags"""
+        # First upload a document
+        test_file = io.BytesIO(b"Test document content")
+        test_file.name = "test.txt"
+        
+        with patch('app.core.s3_helpers.put_object'), \
+             patch('app.tasks.upload_watch.watch'):
+            
+            upload_response = client.post(
+                "/api/rag/upload",
+                files={"file": ("test.txt", test_file, "text/plain")}
+            )
+            
+            doc_id = upload_response.json()["id"]
+            
+            # Update tags
+            response = client.put(f"/api/rag/{doc_id}/tags", json=["new", "tags"])
+            
+            assert response.status_code == 200
+            data = response.json()
+            assert data["tags"] == ["new", "tags"]
+    
+    def test_search_rag(self, client: TestClient):
+        """Test RAG search with real implementation"""
+        # Mock only the external dependencies
+        with patch('app.services.clients.embed_texts', return_value=[[0.1] * 8]), \
+             patch('app.services.clients.qdrant_search', return_value=[
+                 {
+                     "score": 0.9,
+                     "id": "chunk1",
+                     "payload": {
+                         "text": "Test content",
+                         "document_id": "doc1",
+                         "chunk_idx": 0,
+                         "tags": ["test"]
+                     }
+                 }
+             ]):
+            
+            response = client.post("/api/rag/search", json={
+                "text": "test query",
+                "top_k": 10
+            })
+            
+            assert response.status_code == 200
+            data = response.json()
+            assert "items" in data
+            assert len(data["items"]) == 1
+            assert data["items"][0]["score"] == 0.9
+            assert data["items"][0]["text"] == "Test content"
+    
+    def test_rag_metrics(self, client: TestClient):
+        """Test RAG metrics endpoint"""
+        response = client.get("/api/rag/metrics")
+        
+        assert response.status_code == 200
+        data = response.json()
+        assert "total_documents" in data
+        assert "total_chunks" in data
+        assert "storage_size_bytes" in data
+        assert isinstance(data["total_documents"], int)
+    
+    def test_archive_rag_document(self, client: TestClient):
+        """Test archiving RAG document"""
+        # First upload a document
+        test_file = io.BytesIO(b"Test document content")
+        test_file.name = "test.txt"
+        
+        with patch('app.core.s3_helpers.put_object'), \
+             patch('app.tasks.upload_watch.watch'):
+            
+            upload_response = client.post(
+                "/api/rag/upload",
+                files={"file": ("test.txt", test_file, "text/plain")}
+            )
+            
+            doc_id = upload_response.json()["id"]
+            
+            # Archive the document
+            response = client.post(f"/api/rag/{doc_id}/archive")
+            
+            assert response.status_code == 200
+            data = response.json()
+            assert data["status"] == "archived"
+    
+    def test_delete_rag_document(self, client: TestClient):
+        """Test deleting RAG document"""
+        # First upload a document
+        test_file = io.BytesIO(b"Test document content")
+        test_file.name = "test.txt"
+        
+        with patch('app.core.s3_helpers.put_object'), \
+             patch('app.tasks.upload_watch.watch'), \
+             patch('app.core.s3.get_minio'):
+            
+            upload_response = client.post(
+                "/api/rag/upload",
+                files={"file": ("test.txt", test_file, "text/plain")}
+            )
+            
+            doc_id = upload_response.json()["id"]
+            
+            # Delete the document
+            response = client.delete(f"/api/rag/{doc_id}")
+            
+            assert response.status_code == 200
+            data = response.json()
+            assert data["deleted"] is True
+

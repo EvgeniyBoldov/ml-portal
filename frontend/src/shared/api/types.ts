@@ -1,114 +1,108 @@
-// === Auth ===
-export type LoginResponse = {
-  access_token: string;
-  refresh_token: string;
-  token_type?: string;
-  expires_in?: number;
-  user: {
-    id: string;
-    fio?: string;
-    login: string;
-    role?: string;
-  };
-};
+/** Shared API types */
+export interface Pagination {
+  page?: number
+  size?: number
+  total?: number
+  total_pages?: number
+  has_next?: boolean
+  has_prev?: boolean
+}
 
-export type User = LoginResponse["user"];
+export interface PaginatedResponse<T> {
+  items: T[]
+  next_cursor?: string | null
+  pagination?: Pagination
+}
 
-export type AuthTokens = {
-  access_token: string;
-  refresh_token?: string;
-  expires_in?: number;
-};
+export interface Chat {
+  id: string
+  name?: string | null
+  tags?: string[] | null
+  created_at?: string | null
+  updated_at?: string | null
+  last_message_at?: string | null
+}
 
-// === Chats ===
-export type Chat = {
-  id: string;
-  name?: string;
-  owner_id?: string;
-  created_at: string;
-  updated_at?: string;
-  last_message_at?: string | null;
-};
+export interface ChatMessage {
+  id: string
+  chat_id: string
+  role: 'system' | 'user' | 'assistant' | 'tool'
+  content: string
+  created_at?: string | null
+}
 
-export type ChatMessage = {
-  role: "system" | "user" | "assistant" | "tool";
-  content: string;
-  created_at?: string | null;
-};
+export interface ChatCreateRequest {
+  name?: string | null
+  tags?: string[] | null
+}
 
-export type ChatTurnRequest = {
-  response_stream?: boolean; // default true
-  use_rag?: boolean;         // default true
-  rag_params?: {
-    top_k?: number;
-    min_score?: number;
-  };
-  messages?: ChatMessage[];
-  temperature?: number;
-  max_tokens?: number;
-  idempotency_key?: string;
-};
+export interface ChatUpdateRequest {
+  name?: string | null
+}
 
-export type ChatTurnResponse = {
-  chat_id: string;
-  message_id: string;
-  created_at: string;
-  assistant_message: ChatMessage;
-};
+export interface ChatTagsUpdateRequest {
+  tags: string[]
+}
 
-export type CursorPage<T> = {
-  items: T[];
-  next_cursor?: string | null;
-};
+export interface ChatMessageRequest {
+  content: string
+  use_rag?: boolean
+  response_stream?: boolean
+}
 
-// === RAG ===
-export type RagDocument = {
-  id: string;
-  name?: string;
-  status: "queued" | "processing" | "ready" | "error" | "archived";
-  date_upload?: string;
-  url_file?: string;
-  url_canonical_file?: string;
-  tags?: string[];
-  progress?: number;
-  created_at?: string;
-  updated_at?: string;
-};
+export interface ChatMessageResponse {
+  message_id: string
+  content: string
+  answer: string
+  message?: string
+}
 
-export type RagUploadRequest = {
-  url?: string;
-  name?: string;
-  tags?: string[];
-};
+export interface User {
+  id: string
+  email: string
+  name?: string
+  role?: string
+  created_at?: string
+  updated_at?: string
+}
 
-export type RagSearchItem = {
-  document_id: string;
-  chunk_id: string;
-  score: number;
-  snippet: string;
-};
+export interface LoginResponse {
+  access_token: string
+  token_type: string
+  user: User
+  refresh_token?: string
+  expires_in?: number
+}
 
-// === Analyze ===
-export type AnalyzeDocument = {
-  id: string;
-  status: "queued" | "processing" | "done" | "error" | "canceled";
-  date_upload?: string;
-  url_file?: string;
-  url_canonical_file?: string;
-  result?: any;
-  error?: string;
-  updated_at?: string;
-};
+export interface AuthTokens {
+  access_token: string
+  token_type: string
+  refresh_token?: string
+  expires_in?: number
+}
 
-export type AnalyzeResult = {
-  id: string;
-  status: string;
-  progress?: number;
-  result?: {
-    summary?: string;
-    entities?: { type: string; text: string }[];
-    qa?: { q: string; a: string }[];
-    metrics?: { pages?: number; chunks?: number; model?: string };
-  };
-  artifacts?: { canonical?: string; preview_pdf?: string };
-};
+export interface AnalyzeDocument {
+  id: string
+  name: string
+  status: string
+  created_at: string
+  updated_at: string
+  error?: string
+  date_upload?: string
+  result?: any
+  url_canonical_file?: string
+}
+
+export interface RagDocument {
+  id: string
+  title: string
+  content: string
+  created_at: string
+  updated_at: string
+  name?: string
+  status?: string
+  progress?: number
+  date_upload?: string
+  tags?: string[]
+  url_canonical_file?: string
+}

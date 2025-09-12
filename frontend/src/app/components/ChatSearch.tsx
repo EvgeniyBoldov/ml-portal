@@ -8,16 +8,16 @@ export default function ChatSearch() {
   const [searchQuery, setSearchQuery] = useState('')
   
   const filteredChats = useMemo(() => {
-    if (!searchQuery.trim()) return Object.values(state.chats)
+    if (!searchQuery.trim()) return state.chatsOrder.map(id => state.chatsById[id])
     
     const query = searchQuery.toLowerCase()
-    return Object.values(state.chats).filter(chat => 
+    return state.chatsOrder.map(id => state.chatsById[id]).filter(chat => 
       chat.name?.toLowerCase().includes(query) ||
-      chat.messages.some(msg => 
+      (state.messagesByChat[chat.id]?.items || []).some(msg => 
         msg.content.toLowerCase().includes(query)
       )
     )
-  }, [state.chats, searchQuery])
+  }, [state.chatsOrder, state.chatsById, state.messagesByChat, searchQuery])
 
   return (
     <div className={styles.searchContainer}>
@@ -32,17 +32,20 @@ export default function ChatSearch() {
           <div className={styles.resultsHeader}>
             Найдено чатов: {filteredChats.length}
           </div>
-          {filteredChats.map(chat => (
-            <div key={chat.id} className={styles.chatResult}>
-              <div className={styles.chatName}>{chat.name || 'Untitled'}</div>
-              <div className={styles.chatPreview}>
-                {chat.messages.length > 0 
-                  ? chat.messages[chat.messages.length - 1].content.slice(0, 100) + '...'
-                  : 'Нет сообщений'
-                }
+          {filteredChats.map(chat => {
+            const messages = state.messagesByChat[chat.id]?.items || []
+            return (
+              <div key={chat.id} className={styles.chatResult}>
+                <div className={styles.chatName}>{chat.name || 'Untitled'}</div>
+                <div className={styles.chatPreview}>
+                  {messages.length > 0 
+                    ? messages[messages.length - 1].content.slice(0, 100) + '...'
+                    : 'Нет сообщений'
+                  }
+                </div>
               </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
       )}
     </div>

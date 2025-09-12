@@ -118,8 +118,10 @@ export default function AnalyzePage() {
         <FilePicker onFileSelected={setFile} />
       </Modal>
 
-      <Popover open={pop.open} onClose={()=>setPop({open:false})} anchor={pop.anchor || null}>
-        <div className="stack" style={{minWidth: 260}}>
+      <Popover 
+        trigger={<div />}
+        content={
+          <div className="stack" style={{minWidth: 260}}>
           {pop.col === 'status' ? (
             <Select
               value={filters.status || ''}
@@ -142,8 +144,10 @@ export default function AnalyzePage() {
             <Button size="sm" variant="ghost" onClick={()=>{ const col = pop.col as ColKey; setFilters(f=>({ ...f, [col]: undefined })); }}>Очистить</Button>
             <Button size="sm" onClick={()=>setPop({open:false})}>Применить</Button>
           </div>
-        </div>
-      </Popover>
+          </div>
+        }
+        align="end"
+      />
     </div>
   )
 }

@@ -98,19 +98,19 @@ services:
         condition: service_started
 
   # Ensure DB schema is created before seeding
-  migrate:
-    build:
-      context: .
-      dockerfile: docker/api/Dockerfile
-    command: bash -lc "alembic -c alembic.ini upgrade head"
-    working_dir: /app
-    environment:
-      PYTHONPATH: "/app"
-      DB_URL: "${DB_URL}"
-    depends_on:
-      postgres:
-        condition: service_healthy
-    restart: "no"
+  # migrate:
+  #   build:
+  #     context: .
+  #     dockerfile: docker/api/Dockerfile
+  #   command: bash -lc "alembic -c alembic.ini upgrade head"
+  #   working_dir: /app
+  #   environment:
+  #     PYTHONPATH: "/app"
+  #     DB_URL: "${DB_URL}"
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+  #   restart: "no"
 
   worker:
     build:
@@ -166,8 +166,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
     restart: "no"
 
 volumes:

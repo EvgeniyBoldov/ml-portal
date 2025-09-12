@@ -122,22 +122,25 @@ class TestRAGAPI:
             assert data["tags"] == ["new", "tags"]
     
     def test_search_rag(self, client: TestClient):
-        """Test RAG search"""
-        with patch('app.services.rag_service.search', return_value={
-            "results": [
-                {
-                    "id": "chunk1",
-                    "document_id": "doc1",
-                    "text": "Test content",
-                    "score": 0.9,
-                    "snippet": "Test content snippet"
-                }
-            ]
-        }):
+        """Test RAG search with real implementation"""
+        # Mock only the external dependencies
+        with patch('app.services.clients.embed_texts', return_value=[[0.1] * 8]), \
+             patch('app.services.clients.qdrant_search', return_value=[
+                 {
+                     "score": 0.9,
+                     "id": "chunk1",
+                     "payload": {
+                         "text": "Test content",
+                         "document_id": "doc1",
+                         "chunk_idx": 0,
+                         "tags": ["test"]
+                     }
+                 }
+             ]):
+            
             response = client.post("/api/rag/search", json={
                 "text": "test query",
-                "top_k": 10,
-                "min_score": 0.5
+                "top_k": 10
             })
             
             assert response.status_code == 200
@@ -145,6 +148,7 @@ class TestRAGAPI:
             assert "items" in data
             assert len(data["items"]) == 1
             assert data["items"][0]["score"] == 0.9
+            assert data["items"][0]["text"] == "Test content"
     
     def test_rag_metrics(self, client: TestClient):
         """Test RAG metrics endpoint"""

@@ -66,7 +66,8 @@ def rename_chat(
 ):
     repo = ChatsRepo(session)
     chat = repo.get(chat_id)
-    if not chat or str(chat.owner_id) != str(user["id"]):
+    # FIX: compare UUID -> str
+    if not chat or str(chat.owner_id) != user["id"]:
         raise HTTPException(status_code=404, detail="not_found")
     if request.name is not None:
         repo.rename_chat(chat_id, request.name or None)
@@ -81,7 +82,8 @@ def update_tags(
 ):
     repo = ChatsRepo(session)
     chat = repo.get(chat_id)
-    if not chat or str(chat.owner_id) != str(user["id"]):
+    # FIX: compare UUID -> str
+    if not chat or str(chat.owner_id) != user["id"]:
         raise HTTPException(status_code=404, detail="not_found")
     repo.update_chat_tags(chat_id, request.tags)
     return {"id": chat_id, "tags": request.tags}
@@ -96,7 +98,8 @@ def list_messages(
 ):
     repo = ChatsRepo(session)
     chat = repo.get(chat_id)
-    if not chat or str(chat.owner_id) != str(user["id"]):
+    # FIX: compare UUID -> str
+    if not chat or str(chat.owner_id) != user["id"]:
         raise HTTPException(status_code=404, detail="not_found")
     rows, next_cursor = repo.list_messages(chat_id, cursor=cursor, limit=limit)
     items = [_ser_msg(m) for m in rows]
@@ -111,7 +114,8 @@ async def post_message(
 ):
     repo = ChatsRepo(session)
     chat = repo.get(chat_id)
-    if not chat or str(chat.owner_id) != str(user["id"]):
+    # FIX: compare UUID -> str
+    if not chat or str(chat.owner_id) != user["id"]:
         raise HTTPException(status_code=404, detail="not_found")
 
     # Store user message
@@ -150,7 +154,8 @@ def delete_chat(
 ):
     repo = ChatsRepo(session)
     chat = repo.get(chat_id)
-    if not chat or str(chat.owner_id) != str(user["id"]):
+    # FIX: compare UUID -> str
+    if not chat or str(chat.owner_id) != user["id"]:
         raise HTTPException(status_code=404, detail="not_found")
     repo.delete(chat_id)
     return {"id": chat_id, "deleted": True}

@@ -1,43 +1,21 @@
-import React, { useEffect } from 'react'
-import { createPortal } from 'react-dom'
-import styles from './Popover.module.css'
-import Button from './Button'
+import React, { useEffect, useRef, useState } from 'react'
 
-type Props = {
-  open: boolean
-  title?: string
-  anchor: { x: number, y: number } | null
-  onClose: () => void
-  children: React.ReactNode
-  footer?: React.ReactNode
-}
-
-export default function Popover({ open, title, anchor, onClose, children, footer }: Props) {
+export default function Popover({ trigger, content, align = 'start' }: { trigger: React.ReactNode, content: React.ReactNode, align?: 'start' | 'end' }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
-    function onEsc(e: KeyboardEvent) { if (e.key === 'Escape') onClose() }
-    function onClick(e: MouseEvent) {
-      const el = document.getElementById('__popover__')
-      if (!el) return
-      if (!el.contains(e.target as Node)) onClose()
-    }
-    if (open) {
-      document.addEventListener('keydown', onEsc)
-      document.addEventListener('mousedown', onClick)
-    }
-    return () => {
-      document.removeEventListener('keydown', onEsc)
-      document.removeEventListener('mousedown', onClick)
-    }
-  }, [open, onClose])
-
-  if (!open || !anchor) return null
-  const style: React.CSSProperties = { left: Math.round(anchor.x), top: Math.round(anchor.y) }
-  return createPortal(
-    <div id="__popover__" className={styles.root} style={style}>
-      {title && <div className={styles.head}><div className={styles.title}>{title}</div><Button size="sm" variant="ghost" onClick={onClose}>✕</Button></div>}
-      <div className={styles.body}>{children}</div>
-      {footer && <div className={styles.footer}>{footer}</div>}
-    </div>,
-    document.body
+    function onDoc(e: MouseEvent) { if (!ref.current?.contains(e.target as any)) setOpen(false) }
+    document.addEventListener('mousedown', onDoc)
+    return () => document.removeEventListener('mousedown', onDoc)
+  }, [])
+  return (
+    <div ref={ref} style={{ position: 'relative' }}>
+      <div onClick={() => setOpen(v => !v)}>{trigger}</div>
+      {open && (
+        <div style={{ position: 'absolute', top: '100%', [align === 'end' ? 'right' : 'left']: 0, zIndex: 10, background: 'var(--panel)', border: '1px solid rgba(255,255,255,.12)', borderRadius: 8, padding: 4, boxShadow: '0 6px 24px rgba(0,0,0,.35)' } as any}>
+          {content}
+        </div>
+      )}
+    </div>
   )
 }

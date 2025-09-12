@@ -8,8 +8,21 @@ export type AuthTokens = { access_token: string; refresh_token?: string; expires
 let _tokens: AuthTokens | null = null;
 let _refreshPromise: Promise<void> | null = null;
 
-export function setAuthTokens(tokens: AuthTokens | null) { _tokens = tokens; }
-export function clearAuthTokens() { _tokens = null; }
+export function setAuthTokens(tokens: AuthTokens | null) { 
+  _tokens = tokens; 
+  // Also save to global state for client.ts
+  (window as any).__auth_tokens = tokens;
+  if (tokens?.access_token) {
+    localStorage.setItem('access_token', tokens.access_token);
+  } else {
+    localStorage.removeItem('access_token');
+  }
+}
+export function clearAuthTokens() { 
+  _tokens = null; 
+  (window as any).__auth_tokens = null;
+  localStorage.removeItem('access_token');
+}
 export function getAccessToken(): string | null { return _tokens?.access_token || null; }
 
 export async function apiRequest<T>(path: string, opts: RequestOptions = {}): Promise<T> {
@@ -58,6 +71,9 @@ export async function refreshAccessToken(): Promise<void> {
       refresh_token: data.refresh_token ?? _tokens!.refresh_token,
       expires_in: data.expires_in
     };
+    // Update global state and localStorage
+    (window as any).__auth_tokens = _tokens;
+    localStorage.setItem('access_token', _tokens.access_token);
     _refreshPromise = null;
   })();
   return _refreshPromise;

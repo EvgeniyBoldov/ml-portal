@@ -20,7 +20,12 @@ export const useAuthStore = create<AuthState>()(
       isAuthReady: false,
       async login(login, password) {
         const data = await apiRequest<LoginResponse>("/auth/login", { method: "POST", body: JSON.stringify({ login, password }) });
-        const tokens = { access_token: data.access_token, refresh_token: data.refresh_token, expires_in: data.expires_in };
+        const tokens = { 
+          access_token: data.access_token, 
+          token_type: data.token_type,
+          refresh_token: data.refresh_token, 
+          expires_in: data.expires_in 
+        };
         setAuthTokens(tokens);
         set({ tokens });
         set({ user: data.user });

@@ -1,50 +1,35 @@
-/* Sidebar fills the grid track and scrolls internally */
 .sidebar {
-  /* keep within the 280px grid track (padding/border won't overflow) */
   box-sizing: border-box;
   min-width: 0;
   background: var(--panel);
-  border: 1px solid rgba(255,255,255, .08);
+  border: 1px solid rgba(255,255,255,.08);
   border-radius: var(--radius);
   padding: 12px;
   overflow: auto;
 }
-
 .head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
 .title { font-weight: 600; }
 .list { display: grid; gap: 4px; }
 .row { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 4px; border-radius: 10px; }
-.row:hover { background: rgba(255,255,255, .04); }
-.active { background: rgba(79,124,255, .14); border: 1px solid rgba(79,124,255, .3); }
-.item { text-align: left; padding: 8px 10px; border-radius: 10px; border: 1px solid transparent; background: transparent; color: var(--text); cursor: pointer; display: flex; align-items: center; gap: 8px; width: 100%; }
-.empty { color: var(--muted); padding: 10px; text-align: center; }
-.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--primary); display: inline-block; }
-.plus { width: 18px; height: 18px; border-radius: 50%; border: 1px dashed var(--muted); display: inline-flex; align-items: center; justify-content: center; font-weight: 700; font-size: 12px; }
-.actions { display: flex; gap: 6px; padding-right: 6px; }
-.icon { background: transparent; border: 0; cursor: pointer; color: var(--muted); }
+.row:hover { background: rgba(255,255,255,.04); }
+.active { background: rgba(79,124,255,.14); border: 1px solid rgba(79,124,255,.3); }
+.item { text-align: left; padding: 8px 10px; border-radius: 10px; cursor: pointer; display: flex; align-items: center; gap: 8px; width: 100%; }
+.name { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tags { display: flex; gap: 6px; flex-wrap: wrap; }
+.tag { font-size: 11px; padding: 2px 6px; border-radius: 999px; border: 1px solid rgba(255,255,255,.12); opacity: .9; }
+.kebabBtn { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 8px; }
+.kebabBtn:hover { background: rgba(255,255,255,.06); }
+.menu { min-width: 160px; }
 
-.messageCount {
-  font-size: 0.8rem;
-  color: var(--color-text-secondary);
-  margin-left: 0.5rem;
-  background: var(--color-bg-secondary);
-  padding: 0.2rem 0.4rem;
-  border-radius: 0.25rem;
+/* Undo bar */
+.undoBar { 
+  position: sticky; bottom: 0; 
+  margin-top: 8px; padding: 8px 10px; 
+  border: 1px dashed rgba(255,255,255,.2);
+  background: rgba(255,255,255,.04);
+  border-radius: 10px; 
+  display: flex; align-items: center; gap: 8px;
 }
-
-.chatInfo {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 0.25rem;
-  flex: 1;
-}
-
-.chatInfo .name {
-  font-weight: 500;
-}
-
-.chatInfo .messageCount {
-  margin-left: 0;
-  align-self: flex-start;
-}
+.undoText { flex: 1; font-size: 13px; opacity: .95; }
+.undoBtn { padding: 6px 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,.2); }
+.undoBtn:hover { background: rgba(255,255,255,.06); }

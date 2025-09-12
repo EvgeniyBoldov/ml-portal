@@ -54,29 +54,30 @@ def llm_chat(messages: List[Dict[str, str]], temperature: float = 0.2, max_token
                         continue
             return content
 
-def llm_chat_stream(messages: List[Dict[str, str]], temperature: float = 0.2, max_tokens: Optional[int] = None):
-    """Стриминг чат с LLM"""
-    payload = {"messages": messages, "temperature": temperature}
+async def llm_chat_stream(messages: List[Dict[str, str]], temperature: float = 0.2, max_tokens: Optional[int] = None):
+    """Настоящий стриминг чат с LLM"""
+    payload = {"messages": messages, "temperature": temperature, "stream": True}
     if max_tokens is not None:
         payload["max_tokens"] = max_tokens
+    
     with _timed("llm"):
-        with httpx.Client(timeout=120) as client:
-            r = client.post(f"{LLM_URL}/v1/chat/completions", json=payload)
-            r.raise_for_status()
-            for line in r.text.split('\n'):
-                if line.startswith('data: '):
-                    data = line[6:]  # Убираем "data: "
-                    if data.strip() == "[DONE]":
-                        break
-                    try:
-                        chunk = __import__('json').loads(data)
-                        if "choices" in chunk and len(chunk["choices"]) > 0:
-                            delta = chunk["choices"][0].get("delta", {})
-                            content = delta.get("content", "")
-                            if content:
-                                yield content
-                    except:
-                        continue
+        async with httpx.AsyncClient(timeout=120) as client:
+            async with client.stream("POST", f"{LLM_URL}/v1/chat/completions", json=payload) as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    if line.startswith('data: '):
+                        data = line[6:]  # Убираем "data: "
+                        if data.strip() == "[DONE]":
+                            break
+                        try:
+                            chunk = __import__('json').loads(data)
+                            if "choices" in chunk and len(chunk["choices"]) > 0:
+                                delta = chunk["choices"][0].get("delta", {})
+                                content = delta.get("content", "")
+                                if content:
+                                    yield content
+                        except:
+                            continue
 
 def qdrant_search(vector: List[float], top_k: int, offset: Optional[int] = None,
                   doc_id: Optional[str] = None, tags: Optional[List[str]] = None,

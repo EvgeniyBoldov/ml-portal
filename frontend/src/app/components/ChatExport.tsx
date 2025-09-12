@@ -10,14 +10,14 @@ export default function ChatExport() {
   const [exportFormat, setExportFormat] = useState<'json' | 'txt' | 'md'>('json')
 
   const exportChats = () => {
-    const chats = Object.values(state.chats)
+    const chats = state.chatsOrder.map(id => state.chatsById[id])
     
     if (exportFormat === 'json') {
       const data = chats.map(chat => ({
         id: chat.id,
         name: chat.name,
         created_at: chat.created_at,
-        messages: chat.messages.map(msg => ({
+        messages: (state.messagesByChat[chat.id]?.items || []).map(msg => ({
           role: msg.role,
           content: msg.content,
           created_at: msg.created_at
@@ -36,7 +36,8 @@ export default function ChatExport() {
         let text = `=== ${chat.name || 'Untitled'} ===\n`
         text += `Created: ${chat.created_at ? new Date(chat.created_at).toLocaleString() : 'Unknown'}\n\n`
         
-        chat.messages.forEach(msg => {
+        const messages = state.messagesByChat[chat.id]?.items || []
+        messages.forEach(msg => {
           text += `${msg.role.toUpperCase()}: ${msg.content}\n\n`
         })
         
@@ -55,7 +56,8 @@ export default function ChatExport() {
         let md = `# ${chat.name || 'Untitled'}\n\n`
         md += `**Created:** ${chat.created_at ? new Date(chat.created_at).toLocaleString() : 'Unknown'}\n\n`
         
-        chat.messages.forEach(msg => {
+        const messages = state.messagesByChat[chat.id]?.items || []
+        messages.forEach(msg => {
           md += `## ${msg.role === 'user' ? '👤 User' : '🤖 Assistant'}\n\n`
           md += `${msg.content}\n\n`
         })
@@ -140,9 +142,9 @@ export default function ChatExport() {
           </div>
           
           <div className={styles.exportInfo}>
-            <p>Будет экспортировано чатов: <strong>{Object.keys(state.chats).length}</strong></p>
+            <p>Будет экспортировано чатов: <strong>{state.chatsOrder.length}</strong></p>
             <p>Общее количество сообщений: <strong>
-              {Object.values(state.chats).reduce((sum, chat) => sum + chat.messages.length, 0)}
+              {state.chatsOrder.reduce((sum, chatId) => sum + (state.messagesByChat[chatId]?.items.length || 0), 0)}
             </strong></p>
           </div>
         </div>

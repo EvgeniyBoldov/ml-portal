@@ -1,106 +1,68 @@
-import React, { useState, useEffect } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import Card from '@shared/ui/Card'
-import Button from '@shared/ui/Button'
-import FilePicker from '@shared/ui/FilePicker'
 import Input from '@shared/ui/Input'
+import Button from '@shared/ui/Button'
+import Badge from '@shared/ui/Badge'
+import Modal from '@shared/ui/Modal'
+import Popover from '@shared/ui/Popover'
+import { FilterIcon, MoreVerticalIcon } from '@shared/ui/Icon'
+import Select from '@shared/ui/Select'
+import FilePicker from '@shared/ui/FilePicker'
 import * as rag from '@shared/api/rag'
 import { RagDocument } from '@shared/api/types'
-import ChatTags from '../../components/ChatTags'
-import styles from './RagPage.module.css'
+import styles from './Rag.module.css'
+
+type ColKey = 'name' | 'status' | 'created_at' | 'tags'
 
 export default function Rag() {
-  const [documents, setDocuments] = useState<RagDocument[]>([])
-  const [loading, setLoading] = useState(false)
-  const [uploading, setUploading] = useState(false)
+  const [items, setItems] = useState<RagDocument[]>([])
+  const [busy, setBusy] = useState(false)
+  const [q, setQ] = useState('')
+  const [filters, setFilters] = useState<Partial<Record<ColKey, string>>>({})
+  const [pop, setPop] = useState<{ open: boolean, col?: ColKey, anchor?: {x:number,y:number} }>({ open: false })
+  const [openAdd, setOpenAdd] = useState(false)
+  const [file, setFile] = useState<File | null>(null)
   const [uploadTags, setUploadTags] = useState<string[]>([])
-  const [searchQuery, setSearchQuery] = useState('')
-  const [searchResults, setSearchResults] = useState<any[]>([])
-  const [searching, setSearching] = useState(false)
-  const [pagination, setPagination] = useState({
-    page: 1,
-    size: 20,
-    total: 0,
-    total_pages: 0,
-    has_next: false,
-    has_prev: false
-  })
-  const [filters, setFilters] = useState({
-    status: '',
-    search: ''
-  })
-  const [metrics, setMetrics] = useState<any>(null)
+  const [selectedDoc, setSelectedDoc] = useState<RagDocument | null>(null)
+  const [actionMenuOpen, setActionMenuOpen] = useState(false)
+
+  async function refresh() {
+    const res = await rag.listDocs({ page: 1, size: 100 })
+    setItems(res.items || [])
+  }
 
   useEffect(() => {
-    loadDocuments()
-    loadMetrics()
+    refresh()
   }, [])
 
-  const loadDocuments = async (page = 1) => {
-    setLoading(true)
-    try {
-      const res = await rag.listDocs({
-        page,
-        size: pagination.size,
-        status: filters.status || undefined,
-        search: filters.search || undefined
-      })
-      setDocuments(res.items || [])
-      setPagination(res.pagination || pagination)
-    } catch (error) {
-      console.error('Failed to load documents:', error)
-    } finally {
-      setLoading(false)
-    }
-  }
+  const rows = useMemo(() => {
+    return (items||[]).filter(t => {
+      const text = ((t.name||'') + ' ' + (t.status||'') + ' ' + (t.created_at||'') + ' ' + (t.tags?.join(' ')||'')).toLowerCase()
+      if (q.trim() && !text.includes(q.toLowerCase())) return false
+      if (filters.name && !(t.name||'').toLowerCase().includes((filters.name||'').toLowerCase())) return false
+      if (filters.status && t.status !== filters.status) return false
+      if (filters.tags && !(t.tags?.join(' ')||'').toLowerCase().includes((filters.tags||'').toLowerCase())) return false
+      if (filters.created_at && !(t.created_at||'').toLowerCase().includes((filters.created_at||'').toLowerCase())) return false
+      return true
+    })
+  }, [items, q, filters])
 
-  const loadMetrics = async () => {
-    try {
-      const res = await rag.getRagMetrics()
-      setMetrics(res)
-    } catch (error) {
-      console.error('Failed to load metrics:', error)
-    }
+  function openFilter(col: ColKey, el: HTMLElement) {
+    const r = el.getBoundingClientRect()
+    setPop({ open: true, col, anchor: { x: r.left, y: r.bottom + 6 } })
   }
+  function clearAll() { setFilters({}); setPop({ open:false }) }
 
-  const handleFileUpload = async (file: File) => {
-    setUploading(true)
+  async function doUpload() {
+    if (!file) return
+    setBusy(true)
     try {
       await rag.uploadFile(file, file.name, uploadTags)
-      setUploadTags([]) // Сбрасываем теги после загрузки
-      await loadDocuments()
-      await loadMetrics()
-    } catch (error) {
-      console.error('Failed to upload file:', error)
-      alert('Ошибка загрузки файла')
-    } finally {
-      setUploading(false)
-    }
-  }
-
-  const handleFilterChange = (key: string, value: string) => {
-    setFilters(prev => ({ ...prev, [key]: value }))
-    setPagination(prev => ({ ...prev, page: 1 }))
-  }
-
-  const handlePageChange = (page: number) => {
-    loadDocuments(page)
-  }
-
-  const handleSearch = async () => {
-    if (!searchQuery.trim()) return
-    setSearching(true)
-    try {
-      const res = await rag.ragSearch({ text: searchQuery, top_k: 10 })
-      setSearchResults(res.items || [])
-    } catch (error) {
-      console.error('Search failed:', error)
-    } finally {
-      setSearching(false)
-    }
-  }
-
-  const handleFilterApply = () => {
-    loadDocuments(1)
+      setOpenAdd(false)
+      setFile(null)
+      setUploadTags([])
+      await refresh()
+    } finally { setBusy(false) }
   }
 
   const handleDownload = async (doc: RagDocument, kind: 'original' | 'canonical' = 'original') => {
@@ -117,7 +79,7 @@ export default function Rag() {
   const handleArchive = async (doc: RagDocument) => {
     try {
       await rag.archiveRagDocument(doc.id)
-      await loadDocuments()
+      await refresh()
     } catch (error) {
       console.error('Archive failed:', error)
     }
@@ -127,7 +89,7 @@ export default function Rag() {
     if (!confirm('Удалить документ?')) return
     try {
       await rag.deleteRagDocument(doc.id)
-      await loadDocuments()
+      await refresh()
     } catch (error) {
       console.error('Delete failed:', error)
     }
@@ -143,26 +105,6 @@ export default function Rag() {
     }
   }
 
-  const handleUpdateTags = async (docId: string, tags: string[]) => {
-    try {
-      await rag.updateRagDocumentTags(docId, tags)
-      await loadDocuments() // Перезагружаем список документов
-    } catch (error) {
-      console.error('Failed to update tags:', error)
-      alert('Ошибка обновления тегов')
-    }
-  }
-
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'ready': return '#4caf50'
-      case 'processing': return '#ff9800'
-      case 'error': return '#f44336'
-      case 'archived': return '#9e9e9e'
-      default: return '#2196f3'
-    }
-  }
-
   const getStatusText = (status: string) => {
     switch (status) {
       case 'queued': return 'В очереди'
@@ -174,190 +116,135 @@ export default function Rag() {
     }
   }
 
+  const hasAnyFilter = Object.values(filters).some(Boolean)
+
   return (
-    <div className={styles.container}>
-      <Card className={styles.uploadCard}>
-        <h3>Загрузка документа</h3>
-        <FilePicker
-          onFileSelected={(file) => file && handleFileUpload(file)}
-          accept=".txt,.pdf,.doc,.docx,.md,.rtf,.odt"
-          disabled={uploading}
-        />
-        <div className={styles.uploadTags}>
-          <label>Теги (опционально):</label>
-          <ChatTags 
-            chatId="upload" 
-            tags={uploadTags} 
-            onTagsChange={setUploadTags}
-          />
-        </div>
-        {uploading && <p>Загрузка...</p>}
-      </Card>
-
-      <Card className={styles.searchCard}>
-        <h3>Поиск по базе знаний</h3>
-        <div className={styles.searchForm}>
-          <Input
-            value={searchQuery}
-            onChange={e => setSearchQuery(e.target.value)}
-            placeholder="Введите запрос для поиска..."
-            onKeyDown={e => e.key === 'Enter' && handleSearch()}
-          />
-          <Button onClick={handleSearch} disabled={searching || !searchQuery.trim()}>
-            {searching ? 'Поиск...' : 'Найти'}
-          </Button>
-        </div>
-        
-        {searchResults.length > 0 && (
-          <div className={styles.searchResults}>
-            <h4>Результаты поиска:</h4>
-            {searchResults.map((item, i) => (
-              <div key={i} className={styles.searchItem}>
-                <div className={styles.searchScore}>{(item.score * 100).toFixed(1)}%</div>
-                <div className={styles.searchSnippet}>{item.snippet}</div>
-              </div>
-            ))}
+    <div className={styles.wrap}>
+      <Card className={styles.card}>
+        <div className={styles.header}>
+          <div className={styles.title}>База знаний — документы</div>
+          <div className={styles.controls}>
+            <Input className={styles.search} placeholder="Поиск…" value={q} onChange={e=>setQ(e.target.value)} />
+            {hasAnyFilter && <Badge onClick={clearAll}>Сбросить фильтры</Badge>}
+            <Button onClick={()=>setOpenAdd(true)}>Добавить</Button>
           </div>
-        )}
-      </Card>
-
-      <Card className={styles.documentsCard}>
-        <div className={styles.documentsHeader}>
-          <h3>Документы ({pagination.total})</h3>
-          {metrics && (
-            <div className={styles.metrics}>
-              <span>Готово: {metrics.ready_documents}</span>
-              <span>Ошибки: {metrics.error_documents}</span>
-              <span>Размер: {metrics.storage_size_mb} MB</span>
-            </div>
-          )}
-        </div>
-        
-        <div className={styles.filters}>
-          <Input
-            value={filters.search}
-            onChange={e => handleFilterChange('search', e.target.value)}
-            placeholder="Поиск по названию..."
-            onKeyDown={e => e.key === 'Enter' && handleFilterApply()}
-          />
-          <select
-            value={filters.status}
-            onChange={e => handleFilterChange('status', e.target.value)}
-            className={styles.statusFilter}
-          >
-            <option value="">Все статусы</option>
-            <option value="uploaded">Загружено</option>
-            <option value="processing">Обработка</option>
-            <option value="ready">Готово</option>
-            <option value="error">Ошибка</option>
-            <option value="archived">Архив</option>
-          </select>
-          <Button onClick={handleFilterApply}>Применить</Button>
         </div>
 
-        {loading ? (
-          <p>Загрузка...</p>
-        ) : documents.length === 0 ? (
-          <p>Нет документов</p>
-        ) : (
-          <div className={styles.documentsList}>
-            {documents.map(doc => (
-              <div key={doc.id} className={styles.documentItem}>
-                <div className={styles.documentInfo}>
-                  <div className={styles.documentName}>
-                    {doc.name || `Документ ${doc.id.slice(0, 8)}`}
-                  </div>
-                  <div className={styles.documentStatus}>
-                    <span 
-                      className={styles.statusBadge}
-                      style={{ backgroundColor: getStatusColor(doc.status) }}
-                    >
-                      {getStatusText(doc.status)}
-                    </span>
-                    {doc.progress !== undefined && doc.status === 'processing' && (
-                      <span className={styles.progress}>
-                        {Math.round(doc.progress * 100)}%
-                      </span>
-                    )}
-                  </div>
-                  <div className={styles.documentDate}>
-                    {doc.date_upload && new Date(doc.date_upload).toLocaleString()}
-                  </div>
-                  <div className={styles.documentTags}>
-                    <ChatTags 
-                      chatId={doc.id} 
-                      tags={doc.tags || []} 
-                      onTagsChange={(tags) => handleUpdateTags(doc.id, tags)}
-                    />
-                  </div>
-                </div>
-                <div className={styles.documentActions}>
-                  {doc.status === 'ready' && (
-                    <>
-                      <Button 
-                        size="small" 
-                        onClick={() => handleDownload(doc, 'original')}
-                      >
-                        Скачать
-                      </Button>
-                      {doc.url_canonical_file && (
-                        <Button 
-                          size="small" 
-                          onClick={() => handleDownload(doc, 'canonical')}
+        <div className={styles.tableWrap}>
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Название <button className="icon" type="button" aria-label="Фильтр по названию" onClick={(e)=>openFilter('name', e.currentTarget)}><FilterIcon/></button></th>
+                <th>Статус <button className="icon" type="button" aria-label="Фильтр по статусу" onClick={(e)=>openFilter('status', e.currentTarget)}><FilterIcon/></button></th>
+                <th>Теги <button className="icon" type="button" aria-label="Фильтр по тегам" onClick={(e)=>openFilter('tags', e.currentTarget)}><FilterIcon/></button></th>
+                <th>Создано <button className="icon" type="button" aria-label="Фильтр по дате создания" onClick={(e)=>openFilter('created_at', e.currentTarget)}><FilterIcon/></button></th>
+                <th>Действия</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((t) => (
+                <tr key={t.id}>
+                  <td className="muted">{t.name || '—'}</td>
+                  <td><Badge tone={t.status==='ready'?'success':t.status==='error'?'danger':t.status==='processing'?'warn':'neutral'}>{getStatusText(t.status)}</Badge></td>
+                  <td>{t.tags?.join(', ') || '—'}</td>
+                  <td className="muted">{t.created_at || '—'}</td>
+                  <td>
+                    <Popover
+                      trigger={
+                        <button 
+                          className="icon" 
+                          type="button" 
+                          aria-label="Действия"
+                          onClick={() => {
+                            setSelectedDoc(t)
+                            setActionMenuOpen(true)
+                          }}
                         >
-                          Каноническая форма
-                        </Button>
-                      )}
-                      <Button 
-                        size="small" 
-                        onClick={() => handleReindex(doc)}
-                        title="Переиндексировать документ"
-                      >
-                        🔄
-                      </Button>
-                    </>
-                  )}
-                  {doc.status === 'ready' && (
-                    <Button 
-                      size="small" 
-                      onClick={() => handleArchive(doc)}
-                    >
-                      Архивировать
-                    </Button>
-                  )}
-                  <Button 
-                    size="small" 
-                    variant="danger"
-                    onClick={() => handleDelete(doc)}
-                  >
-                    Удалить
-                  </Button>
-                </div>
-              </div>
-            ))}
+                          <MoreVerticalIcon/>
+                        </button>
+                      }
+                      content={
+                        <div className="stack" style={{minWidth: 200}}>
+                          {t.status === 'ready' && (
+                            <>
+                              <Button size="sm" variant="ghost" onClick={() => handleDownload(t, 'original')}>
+                                Скачать документ
+                              </Button>
+                              {t.url_canonical_file && (
+                                <Button size="sm" variant="ghost" onClick={() => handleDownload(t, 'canonical')}>
+                                  Скачать канонический вид
+                                </Button>
+                              )}
+                              <Button size="sm" variant="ghost" onClick={() => handleReindex(t)}>
+                                Пересчитать
+                              </Button>
+                              <Button size="sm" variant="ghost" onClick={() => handleArchive(t)}>
+                                Заархивировать
+                              </Button>
+                            </>
+                          )}
+                          <Button size="sm" variant="ghost" onClick={() => handleDelete(t)}>
+                            Удалить
+                          </Button>
+                        </div>
+                      }
+                      align="end"
+                    />
+                  </td>
+                </tr>
+              ))}
+              {rows.length === 0 && <tr><td colSpan={5} className="muted">Нет записей</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+
+      <Modal open={openAdd} onClose={()=>setOpenAdd(false)} title="Новый документ"
+        footer={<><Button variant="ghost" onClick={()=>setOpenAdd(false)}>Отмена</Button><Button onClick={doUpload} disabled={busy || !file}>Загрузить</Button></>}>
+        <div className="stack">
+          <FilePicker onFileSelected={setFile} accept=".txt,.pdf,.doc,.docx,.md,.rtf,.odt" />
+          <div>
+            <label>Теги (опционально):</label>
+            <Input 
+              placeholder="Введите теги через запятую..." 
+              value={uploadTags.join(', ')} 
+              onChange={e => setUploadTags(e.target.value.split(',').map(t => t.trim()).filter(Boolean))} 
+            />
           </div>
-        )}
-        
-        {pagination.total_pages > 1 && (
-          <div className={styles.pagination}>
-            <Button 
-              onClick={() => handlePageChange(pagination.page - 1)}
-              disabled={!pagination.has_prev}
+        </div>
+      </Modal>
+
+      <Popover 
+        trigger={<div />}
+        content={
+          <div className="stack" style={{minWidth: 260}}>
+          {pop.col === 'status' ? (
+            <Select
+              value={filters.status || ''}
+              onChange={e=>setFilters(f=>({ ...f, status: (e.target as HTMLSelectElement).value || undefined }))}
             >
-              ←
-            </Button>
-            <span className={styles.pageInfo}>
-              Страница {pagination.page} из {pagination.total_pages}
-            </span>
-            <Button 
-              onClick={() => handlePageChange(pagination.page + 1)}
-              disabled={!pagination.has_next}
-            >
-              →
-            </Button>
+              <option value="">Любой</option>
+              <option value="queued">В очереди</option>
+              <option value="processing">Обработка</option>
+              <option value="ready">Готов</option>
+              <option value="error">Ошибка</option>
+              <option value="archived">Архив</option>
+            </Select>
+          ) : (
+            <Input placeholder="Фильтр…" value={(filters[pop.col as ColKey] || '') as string} onChange={e=>{
+              const val = e.target.value
+              const col = pop.col as ColKey
+              setFilters(f=>({ ...f, [col]: (val || '').trim() || undefined }))
+            }} />
+          )}
+          <div style={{display:'flex', gap:8, justifyContent:'space-between'}}>
+            <Button size="sm" variant="ghost" onClick={()=>{ const col = pop.col as ColKey; setFilters(f=>({ ...f, [col]: undefined })); }}>Очистить</Button>
+            <Button size="sm" onClick={()=>setPop({open:false})}>Применить</Button>
           </div>
-        )}
-    </Card>
+          </div>
+        }
+        align="end"
+      />
     </div>
   )
 }

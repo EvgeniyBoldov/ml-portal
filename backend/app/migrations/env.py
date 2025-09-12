@@ -3,6 +3,12 @@ from __future__ import annotations
 from logging.config import fileConfig
 from sqlalchemy import engine_from_config, pool
 from alembic import context
+import os
+import sys
+
+# Add the app directory to Python path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+
 from app.core.config import settings
 from app.models.base import Base  # provides Base.metadata
 # Don't import models to avoid ENUM creation conflicts

@@ -9,3 +9,13 @@ export function FilterIcon({ active=false, size=14 }: { active?: boolean, size?:
     </svg>
   )
 }
+
+export function MoreVerticalIcon({ size=14 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true" style={{ verticalAlign: 'middle' }}>
+      <circle cx="12" cy="6" r="2" fill="currentColor"/>
+      <circle cx="12" cy="12" r="2" fill="currentColor"/>
+      <circle cx="12" cy="18" r="2" fill="currentColor"/>
+    </svg>
+  )
+}

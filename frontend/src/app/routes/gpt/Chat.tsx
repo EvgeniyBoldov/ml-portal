@@ -1,147 +1,99 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import styles from './Chat.module.css'
 import Card from '@shared/ui/Card'
 import Button from '@shared/ui/Button'
 import Textarea from '@shared/ui/Textarea'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useChat } from '../../contexts/ChatContext'
+import EmptyState from '../../components/EmptyState'
 
 export default function Chat() {
   const { chatId } = useParams()
   const nav = useNavigate()
-  const { state, createChat, loadMessages, sendMessage, sendMessageStream, setCurrentChat } = useChat()
-  
+  const { state, loadMessages, setCurrentChat, sendMessageStream } = useChat()
+
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
   const [useRag, setUseRag] = useState(false)
-  const [isLoadingMore, setIsLoadingMore] = useState(false)
-  const messagesRef = useRef<HTMLDivElement>(null)
-  const taRef = useRef<HTMLTextAreaElement>(null)
+  const [streamText, setStreamText] = useState('')
 
-  const currentChat = chatId ? state.chats[chatId] : null
-  const items = currentChat?.messages || []
+  const current = useMemo(() => chatId ? state.messagesByChat[chatId] : undefined, [chatId, state.messagesByChat])
+  const messages = current?.items || []
 
   useEffect(() => {
-    (async () => {
-      if (!chatId) {
-        try {
-          const newChatId = await createChat('Новый чат')
-          nav(`/gpt/chat/${newChatId}`, { replace: true })
-        } catch (error) {
-          console.error('Failed to create chat:', error)
-        }
-        return
-      }
-      
-      setCurrentChat(chatId)
-      
-      // Загружаем сообщения если их нет
-      if (!currentChat?.messages.length) {
-        await loadMessages(chatId)
-      }
-    })()
-  }, [chatId, createChat, loadMessages, nav, setCurrentChat])
-
-  useEffect(() => {
-    // автопрокрутка вниз при новых сообщениях
-    messagesRef.current?.scrollTo({ top: messagesRef.current.scrollHeight, behavior: 'smooth' })
-  }, [items.length, busy])
-
-  const handleLoadMore = async () => {
-    if (!chatId || !currentChat?.hasMore || isLoadingMore) return
-    
-    setIsLoadingMore(true)
-    try {
-      await loadMessages(chatId, true)
-    } catch (error) {
-      console.error('Failed to load more messages:', error)
-    } finally {
-      setIsLoadingMore(false)
+    if (!chatId) return
+    setCurrentChat(chatId)
+    // load once
+    if (!state.messagesByChat[chatId]?.loaded) {
+      loadMessages(chatId).catch(console.error)
     }
+    // cleanup stream text on chat switch
+    setStreamText('')
+  }, [chatId])
+
+  if (!chatId) {
+    return (
+      <div className={styles.main}>
+        <EmptyState
+          title="Выберите чат"
+          description="Слева — список ваших чатов. Создайте новый или откройте существующий."
+          action={<Button onClick={() => nav('/gpt/chat')}>Обновить</Button>}
+        />
+      </div>
+    )
   }
 
   async function onSend() {
-    const content = text.trim()
-    if (!content || !chatId) return
+    if (!text.trim()) return
     setBusy(true)
+    setStreamText('')
+    const toSend = text
     setText('')
-    
     try {
-      // Пытаемся стримить; если не поддерживается — используем обычный ответ
-      let streamed = false
-      try {
-        await sendMessageStream(chatId, content, useRag)
-        streamed = true
-      } catch {
-        // игнор, попробуем обычный endpoint
-      }
-      
-      if (!streamed) {
-        await sendMessage(chatId, content, useRag)
-      }
-    } catch (error) {
-      console.error('Failed to send message:', error)
+      await sendMessageStream(chatId, toSend, (delta) => setStreamText(delta), useRag)
+    } catch (e) {
+      console.error(e)
     } finally {
       setBusy(false)
+      setStreamText('')
     }
-    taRef.current?.focus()
   }
 
+  const canSend = !!chatId && !!text.trim() && !busy
+
   return (
-    <div className={styles.wrap}>
-      <Card className={styles.panel}>
-        <div className={styles.messages} ref={messagesRef}>
-          {currentChat?.hasMore && (
-            <div className={styles.loadMore}>
-              <Button 
-                onClick={handleLoadMore} 
-                disabled={isLoadingMore}
-                size="small"
-                variant="ghost"
-              >
-                {isLoadingMore ? 'Загрузка...' : 'Загрузить больше сообщений'}
-              </Button>
-            </div>
-          )}
-          
-          {items.length === 0 && !currentChat?.isLoading && (
-            <div className={styles.empty}>Пока нет сообщений</div>
-          )}
-          
-          {currentChat?.isLoading && items.length === 0 && (
-            <div className={styles.empty}>Загрузка сообщений...</div>
-          )}
-          
-          {items.map((m, i) => (
-            <div key={m.id || i} className={m.role === 'user' ? styles.user : styles.assistant}>
-              <div className={styles.messageContent}>{m.content}</div>
-              {m.created_at && (
-                <div className={styles.messageTime}>
-                  {new Date(m.created_at).toLocaleTimeString()}
-                </div>
-              )}
+    <div className={styles.main}>
+      <Card title="История">
+        <div className={styles.history}>
+          {messages.map(m => (
+            <div key={m.id} className={m.role === 'user' ? styles.userMsg : styles.assistantMsg}>
+              <div className={styles.body}>{m.content}</div>
             </div>
           ))}
-          
-          {busy && <div className={[styles.assistant, styles.typing].join(' ')}>…</div>}
+          {streamText && (
+            <div className={styles.assistantMsg}>
+              <div className={styles.body}>{streamText}</div>
+            </div>
+          )}
+          {messages.length === 0 && !state.isLoading && (
+            <div style={{ opacity: .7 }}>Сообщений пока нет.</div>
+          )}
         </div>
+
         <div className={styles.composer}>
-          <div className={styles.inputArea}>
-            <Textarea
-              ref={taRef}
-              placeholder="Спросите что-нибудь… (Ctrl/⌘+Enter — отправить)"
-              value={text}
-              onChange={e=>setText(e.target.value)}
-              onKeyDown={e=>{ if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') onSend() }}
-              rows={4}
-            />
-          </div>
+          <Textarea
+            placeholder="Ваше сообщение…"
+            value={text}
+            onChange={e => setText(e.target.value)}
+            disabled={!chatId || busy}
+            rows={3}
+          />
           <div className={styles.controls}>
             <div />
             <div className={styles.actionsBottom}>
-              <Button onClick={onSend} disabled={busy || !text.trim()}>Отправить</Button>
+              <Button onClick={onSend} disabled={!canSend}>Отправить</Button>
               <label className={styles.ragToggle} title="Использовать базу знаний (RAG) при ответе">
-                <input type="checkbox" checked={useRag} onChange={e=>setUseRag(e.target.checked)} />
+                <input type="checkbox" checked={useRag} onChange={e => setUseRag(e.target.checked)} />
                 RAG из БЗ
               </label>
             </div>

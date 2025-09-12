@@ -4,23 +4,30 @@ import styles from './ChatStats.module.css'
 
 export default function ChatStats() {
   const { state } = useChat()
-  const { chats } = state
 
   const stats = React.useMemo(() => {
-    const chatList = Object.values(chats)
-    const totalMessages = chatList.reduce((sum, chat) => sum + chat.messages.length, 0)
-    const userMessages = chatList.reduce((sum, chat) => 
-      sum + chat.messages.filter(msg => msg.role === 'user').length, 0
-    )
-    const assistantMessages = chatList.reduce((sum, chat) => 
-      sum + chat.messages.filter(msg => msg.role === 'assistant').length, 0
-    )
+    const chatList = state.chatsOrder.map(id => state.chatsById[id])
+    const totalMessages = chatList.reduce((sum, chat) => {
+      const messages = state.messagesByChat[chat.id]?.items || []
+      return sum + messages.length
+    }, 0)
     
-    const totalWords = chatList.reduce((sum, chat) => 
-      sum + chat.messages.reduce((msgSum, msg) => 
+    const userMessages = chatList.reduce((sum, chat) => {
+      const messages = state.messagesByChat[chat.id]?.items || []
+      return sum + messages.filter(msg => msg.role === 'user').length
+    }, 0)
+    
+    const assistantMessages = chatList.reduce((sum, chat) => {
+      const messages = state.messagesByChat[chat.id]?.items || []
+      return sum + messages.filter(msg => msg.role === 'assistant').length
+    }, 0)
+    
+    const totalWords = chatList.reduce((sum, chat) => {
+      const messages = state.messagesByChat[chat.id]?.items || []
+      return sum + messages.reduce((msgSum, msg) => 
         msgSum + msg.content.split(' ').length, 0
-      ), 0
-    )
+      )
+    }, 0)
 
     const averageMessagesPerChat = chatList.length > 0 ? Math.round(totalMessages / chatList.length) : 0
     const averageWordsPerMessage = totalMessages > 0 ? Math.round(totalWords / totalMessages) : 0
@@ -34,7 +41,7 @@ export default function ChatStats() {
       averageMessagesPerChat,
       averageWordsPerMessage
     }
-  }, [chats])
+  }, [state.chatsOrder, state.chatsById, state.messagesByChat])
 
   return (
     <div className={styles.statsContainer}>
