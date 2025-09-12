@@ -5,8 +5,7 @@
   /* stretch both columns to the same height */
   align-items: stretch; 
   /* occupy all available vertical space inside <main> */
-  height: calc(100vh - 24px);
-  max-height: calc(100vh - 24px);
+  height: 100%;
   overflow: hidden;
 }
 /* main work area fills the grid track; inner components handle their own scroll */

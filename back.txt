@@ -143,60 +143,6 @@ format = %(levelname)-5.5s [%(name)s] %(message)s
 ### app/__init__.py
 # app package init
 
-### app/api copy/routers/chats.py
-from __future__ import annotations
-from typing import Dict, Any, AsyncGenerator, Callable
-from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import StreamingResponse
-from sqlalchemy.orm import Session
-from app.api.deps import db_session, get_current_user
-from app.repositories.chats_repo import ChatsRepo
-from app.schemas.chat_schemas import ChatCreateRequest, ChatUpdateRequest, ChatTagsUpdateRequest, ChatMessageRequest, ChatMessageResponse
-from app.services import clients as llm_clients
-
-router = APIRouter(prefix="/chats", tags=["chats"])
-
-def _ser_chat(c): return {"id": str(c.id), "name": c.name, "tags": c.tags or []}
-def _ser_msg(m): return {"id": str(m.id), "chat_id": str(m.chat_id), "role": m.role, "content": m.content.get("text") if isinstance(m.content, dict) else str(m.content)}
-
-try: llm_chat: Callable = getattr(llm_clients, 'llm_chat')
-except Exception:
-    def llm_chat(messages): return "(stub) llm_chat not configured"
-
-@router.get("")
-def list_chats(limit: int = Query(100, ge=1, le=200), cursor: str | None = None, q: str | None = None, session: Session = Depends(db_session), user: Dict[str, Any] = Depends(get_current_user)):
-    repo = ChatsRepo(session); items = repo.list_chats(user["id"], q=q, limit=limit)
-    return {"items": [_ser_chat(c) for c in items], "next_cursor": None}
-
-@router.post("")
-def create_chat(request: ChatCreateRequest, session: Session = Depends(db_session), user: Dict[str, Any] = Depends(get_current_user)):
-    repo = ChatsRepo(session); chat = repo.create_chat(user["id"], request.name, request.tags); return {"chat_id": str(chat.id)}
-
-@router.post("/{chat_id}/messages")
-async def post_message(chat_id: str, request: ChatMessageRequest, session: Session = Depends(db_session), user: Dict[str, Any] = Depends(get_current_user)):
-    repo = ChatsRepo(session); chat = repo.get(chat_id)
-    if not chat or chat.owner_id != user["id"]: raise HTTPException(status_code=404, detail="not_found")
-    user_msg = repo.add_message(chat_id, "user", {"text": request.content})
-    async def stream_resp() -> AsyncGenerator[bytes, None]:
-        stream_fn = getattr(llm_clients, 'llm_chat_stream', None)
-        if callable(stream_fn):
-            async for delta in stream_fn([{"role": "system", "content": "You are a helpful assistant."}, {"role": "user", "content": request.content}]):
-                if not isinstance(delta, str): delta = str(delta)
-                yield f"data: {delta}\n\n".encode("utf-8")
-            answer_final = llm_chat([{"role": "system", "content": "You are a helpful assistant."}, {"role": "user", "content": request.content}])
-            repo.add_message(chat_id, "assistant", {"text": answer_final})
-        else:
-            answer = llm_chat([{"role": "system", "content": "You are a helpful assistant."}, {"role": "user", "content": request.content}])
-            repo.add_message(chat_id, "assistant", {"text": answer})
-            for i in range(0, len(answer), 100):
-                chunk = answer[i:i+100]
-                yield f"data: {chunk}\n\n".encode("utf-8")
-    if request.response_stream: return StreamingResponse(stream_resp(), media_type="text/event-stream")
-    else:
-        answer = llm_chat([{"role": "system", "content": "You are a helpful assistant."}, {"role": "user", "content": request.content}])
-        repo.add_message(chat_id, "assistant", {"text": answer})
-        return ChatMessageResponse(message_id=str(user_msg.id), content=request.content, answer=answer)
-
 ### app/api/deps.py
 from __future__ import annotations
 from typing import Optional, Dict, Any
@@ -322,7 +268,12 @@ def list_analysis_documents(
     docs = repo.list()
     return {"items": [{"id": str(doc.id), "status": doc.status, "date_upload": doc.date_upload, "url_file": doc.url_file, "url_canonical_file": doc.url_canonical_file, "result": doc.result, "error": doc.error, "updated_at": doc.updated_at} for doc in docs]}
 
-@router.get("/{doc_id}")
+@router.get("/documents")
+def legacy_documents_endpoint():
+    print("DEBUG: legacy_documents_endpoint called")
+    raise HTTPException(status_code=404, detail="Endpoint moved. Use /api/analyze/ instead.")
+
+@router.get("/document/{doc_id}")
 def get_analysis_document(
     doc_id: str,
     session: Session = Depends(db_session),
@@ -332,7 +283,7 @@ def get_analysis_document(
         raise HTTPException(status_code=404, detail="not_found")
     return {"id": str(doc.id), "status": doc.status, "date_upload": doc.date_upload, "url_file": doc.url_file, "url_canonical_file": doc.url_canonical_file, "result": doc.result, "error": doc.error, "updated_at": doc.updated_at}
 
-@router.get("/{doc_id}/download")
+@router.get("/document/{doc_id}/download")
 def download_analysis_file(
     doc_id: str,
     kind: str = Query("original", regex="^(original|canonical)$"),
@@ -490,7 +441,7 @@ def rename_chat(
 ):
     repo = ChatsRepo(session)
     chat = repo.get(chat_id)
-    if not chat or chat.owner_id != user["id"]:
+    if not chat or str(chat.owner_id) != str(user["id"]):
         raise HTTPException(status_code=404, detail="not_found")
     if request.name is not None:
         repo.rename_chat(chat_id, request.name or None)
@@ -505,7 +456,7 @@ def update_tags(
 ):
     repo = ChatsRepo(session)
     chat = repo.get(chat_id)
-    if not chat or chat.owner_id != user["id"]:
+    if not chat or str(chat.owner_id) != str(user["id"]):
         raise HTTPException(status_code=404, detail="not_found")
     repo.update_chat_tags(chat_id, request.tags)
     return {"id": chat_id, "tags": request.tags}
@@ -520,7 +471,7 @@ def list_messages(
 ):
     repo = ChatsRepo(session)
     chat = repo.get(chat_id)
-    if not chat or chat.owner_id != user["id"]:
+    if not chat or str(chat.owner_id) != str(user["id"]):
         raise HTTPException(status_code=404, detail="not_found")
     rows, next_cursor = repo.list_messages(chat_id, cursor=cursor, limit=limit)
     items = [_ser_msg(m) for m in rows]
@@ -535,7 +486,7 @@ async def post_message(
 ):
     repo = ChatsRepo(session)
     chat = repo.get(chat_id)
-    if not chat or chat.owner_id != user["id"]:
+    if not chat or str(chat.owner_id) != str(user["id"]):
         raise HTTPException(status_code=404, detail="not_found")
 
     # Store user message
@@ -574,7 +525,7 @@ def delete_chat(
 ):
     repo = ChatsRepo(session)
     chat = repo.get(chat_id)
-    if not chat or chat.owner_id != user["id"]:
+    if not chat or str(chat.owner_id) != str(user["id"]):
         raise HTTPException(status_code=404, detail="not_found")
     repo.delete(chat_id)
     return {"id": chat_id, "deleted": True}
@@ -2305,47 +2256,6 @@ class UserRefreshTokens(Base):
     meta: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON encoded as text
 
     user: Mapped["Users"] = relationship(back_populates="refresh_tokens")
-
-### app/repositories copy/chats_repo.py
-from __future__ import annotations
-from typing import List, Optional, Tuple
-from sqlalchemy.orm import Session
-from sqlalchemy import select, desc, asc, or_
-from sqlalchemy.sql import func
-from app.models.chat import Chats, ChatMessages
-
-class ChatsRepo:
-    def __init__(self, session: Session):
-        self.s = session
-    def create_chat(self, owner_id, name: str | None, tags: List[str] | None = None) -> Chats:
-        chat = Chats(owner_id=owner_id, name=name, tags=tags or [])
-        self.s.add(chat); self.s.flush(); return chat
-    def list_chats(self, owner_id, q: Optional[str] = None, limit: int = 100) -> List[Chats]:
-        stmt = select(Chats).where(Chats.owner_id == owner_id).order_by(desc(Chats.last_message_at), desc(Chats.created_at)).limit(limit)
-        if q:
-            pattern = f"%{q.lower()}%"
-            from sqlalchemy import or_
-            stmt = stmt.where(or_(Chats.name.ilike(pattern),))
-        return list(self.s.scalars(stmt))
-    def get(self, chat_id) -> Optional[Chats]: return self.s.get(Chats, chat_id)
-    def delete(self, chat_id): chat = self.get(chat_id); 
-    def rename_chat(self, chat_id, name: str): chat = self.get(chat_id); 
-    def update_chat_tags(self, chat_id, tags: List[str]): chat = self.get(chat_id); 
-    def add_message(self, chat_id, role: str, content: dict | str, model: str | None = None) -> ChatMessages:
-        if isinstance(content, str): payload = {"text": content}
-        else: payload = content
-        msg = ChatMessages(chat_id=chat_id, role=role, content=payload, model=model)
-        self.s.add(msg)
-        chat = self.get(chat_id)
-        if chat: chat.last_message_at = func.now()
-        self.s.flush()
-        return msg
-    def list_messages(self, chat_id, cursor: Optional[str] = None, limit: int = 50) -> Tuple[List[ChatMessages], Optional[str]]:
-        stmt = select(ChatMessages).where(ChatMessages.chat_id == chat_id).order_by(asc(ChatMessages.created_at), asc(ChatMessages.id)).limit(limit)
-        if cursor:
-            try: stmt = stmt.where(ChatMessages.id > cursor)
-            except Exception: pass
-        rows = list(self.s.scalars(stmt)); next_cursor = rows[-1].id.hex if rows else None; return rows, next_cursor
 
 ### app/repositories/__init__.py
 

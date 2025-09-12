@@ -7061,16 +7061,22 @@ export default function Analyze() {
 }
 
 ### src/app/routes/gpt/AnalyzePage.module.css
-.wrap { height: 100%; display: grid; }
+.wrap { 
+  height: 100%; 
+  display: flex; 
+  flex-direction: column;
+}
 .card {
-  display: grid;
-  grid-template-rows: auto 1fr;
+  display: flex;
+  flex-direction: column;
   gap: 10px;
   padding: 12px;
   background: var(--chat-panel-bg, var(--panel-alt, #f4f6ff));
   border: 1px solid var(--chat-panel-border, rgba(0,0,0,0.08));
   border-radius: var(--radius);
   margin-top: 0;
+  height: 100%;
+  overflow: hidden;
 }
 
 .header {
@@ -7098,6 +7104,7 @@ export default function Analyze() {
 }
 
 .tableWrap {
+  flex: 1;
   overflow: auto;
   border-radius: var(--radius);
   border: 1px solid var(--color-border);
@@ -7635,8 +7642,7 @@ export default function Chat() {
   /* stretch both columns to the same height */
   align-items: stretch; 
   /* occupy all available vertical space inside <main> */
-  height: calc(100vh - 24px);
-  max-height: calc(100vh - 24px);
+  height: 100%;
   overflow: hidden;
 }
 /* main work area fills the grid track; inner components handle their own scroll */
@@ -7687,8 +7693,7 @@ export default function ChatPage() {
   border-radius: var(--radius);
   padding: 12px;
   overflow: hidden;
-  height: calc(100vh - 24px);
-  max-height: calc(100vh - 24px);
+  height: 100%;
   display: flex;
   flex-direction: column;
 }
@@ -8009,7 +8014,13 @@ export default function Doc() {
 .mocks { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: rgba(79,124,255,.18); border: 1px solid rgba(79,124,255,.45); }
 
 /* Keep layout-level overflow hidden so inner columns can scroll independently */
-.main { padding: 12px 16px; overflow: hidden; }
+.main { 
+  padding: 12px 16px; 
+  overflow: hidden; 
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
 
 /* Hide footer for now */
 .footer { display: none; }
@@ -8077,16 +8088,22 @@ export default function GPTLayout() {
 }
 
 ### src/app/routes/gpt/Rag.module.css
-.wrap { height: 100%; display: grid; }
+.wrap { 
+  height: 100%; 
+  display: flex; 
+  flex-direction: column;
+}
 .card {
-  display: grid;
-  grid-template-rows: auto 1fr;
+  display: flex;
+  flex-direction: column;
   gap: 10px;
   padding: 12px;
   background: var(--chat-panel-bg, var(--panel-alt, #f4f6ff));
   border: 1px solid var(--chat-panel-border, rgba(0,0,0,0.08));
   border-radius: var(--radius);
   margin-top: 0;
+  height: 100%;
+  overflow: hidden;
 }
 
 .header {
@@ -8113,6 +8130,7 @@ export default function GPTLayout() {
 }
 
 .tableWrap {
+  flex: 1;
   overflow: auto;
   border-radius: var(--radius);
   border: 1px solid var(--color-border);

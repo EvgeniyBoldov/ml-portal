@@ -35,7 +35,13 @@
 .mocks { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: rgba(79,124,255,.18); border: 1px solid rgba(79,124,255,.45); }
 
 /* Keep layout-level overflow hidden so inner columns can scroll independently */
-.main { padding: 12px 16px; overflow: hidden; }
+.main { 
+  padding: 12px 16px; 
+  overflow: hidden; 
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
 
 /* Hide footer for now */
 .footer { display: none; }
