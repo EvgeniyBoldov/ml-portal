@@ -70,11 +70,16 @@
 .table .icon {
   background: none;
   border: none;
-  padding: 0.25rem;
+  padding: 0.5rem;
   cursor: pointer;
   border-radius: var(--radius-sm);
   color: var(--color-muted);
   margin-left: 0.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
 }
 
 .table .icon:hover {
@@ -89,5 +94,18 @@
 .stack {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: 0.25rem;
+}
+
+.stack button {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--radius-sm);
+  transition: all 0.2s ease;
+}
+
+.stack button:hover {
+  background: var(--color-bg-secondary);
 }

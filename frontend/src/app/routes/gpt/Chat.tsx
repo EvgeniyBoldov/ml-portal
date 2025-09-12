@@ -63,7 +63,7 @@ export default function Chat() {
 
   return (
     <div className={styles.main}>
-      <Card title="История">
+      <Card className={styles.card}>
         <div className={styles.history}>
           {messages.map(m => (
             <div key={m.id} className={m.role === 'user' ? styles.userMsg : styles.assistantMsg}>

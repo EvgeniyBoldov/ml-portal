@@ -5,7 +5,7 @@ import Button from '@shared/ui/Button'
 import Badge from '@shared/ui/Badge'
 import Modal from '@shared/ui/Modal'
 import Popover from '@shared/ui/Popover'
-import { FilterIcon, MoreVerticalIcon } from '@shared/ui/Icon'
+import { FilterIcon, MoreVerticalIcon, DownloadIcon, RefreshIcon, ArchiveIcon, TrashIcon } from '@shared/ui/Icon'
 import Select from '@shared/ui/Select'
 import FilePicker from '@shared/ui/FilePicker'
 import * as rag from '@shared/api/rag'
@@ -164,26 +164,41 @@ export default function Rag() {
                         </button>
                       }
                       content={
-                        <div className="stack" style={{minWidth: 200}}>
+                        <div className="stack" style={{minWidth: 180}}>
                           {t.status === 'ready' && (
                             <>
                               <Button size="sm" variant="ghost" onClick={() => handleDownload(t, 'original')}>
+                                <span style={{marginRight: 6, display: 'inline-flex', alignItems: 'center'}}>
+                                  <DownloadIcon size={12}/>
+                                </span>
                                 Скачать документ
                               </Button>
                               {t.url_canonical_file && (
                                 <Button size="sm" variant="ghost" onClick={() => handleDownload(t, 'canonical')}>
+                                  <span style={{marginRight: 6, display: 'inline-flex', alignItems: 'center'}}>
+                                    <DownloadIcon size={12}/>
+                                  </span>
                                   Скачать канонический вид
                                 </Button>
                               )}
                               <Button size="sm" variant="ghost" onClick={() => handleReindex(t)}>
+                                <span style={{marginRight: 6, display: 'inline-flex', alignItems: 'center'}}>
+                                  <RefreshIcon size={12}/>
+                                </span>
                                 Пересчитать
                               </Button>
                               <Button size="sm" variant="ghost" onClick={() => handleArchive(t)}>
+                                <span style={{marginRight: 6, display: 'inline-flex', alignItems: 'center'}}>
+                                  <ArchiveIcon size={12}/>
+                                </span>
                                 Заархивировать
                               </Button>
                             </>
                           )}
                           <Button size="sm" variant="ghost" onClick={() => handleDelete(t)}>
+                            <span style={{marginRight: 6, display: 'inline-flex', alignItems: 'center'}}>
+                              <TrashIcon size={12}/>
+                            </span>
                             Удалить
                           </Button>
                         </div>

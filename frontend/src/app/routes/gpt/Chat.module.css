@@ -2,7 +2,16 @@
   display: flex;
   flex-direction: column;
   height: 100%;
-  gap: 1rem;
+  gap: 0;
+  overflow: hidden;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 0;
+  overflow: hidden;
 }
 
 .history {
@@ -83,6 +92,10 @@
   align-items: stretch;
   min-height: 120px;
   max-height: clamp(160px, 32vh, 40dvh);
+  padding: 1rem;
+  border-top: 1px solid var(--color-border);
+  background: var(--panel);
+  flex-shrink: 0;
 }
 .inputArea { grid-column: 1 / 2; display: flex; }
 .inputArea textarea {

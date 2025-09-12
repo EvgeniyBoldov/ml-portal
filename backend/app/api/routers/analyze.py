@@ -62,7 +62,12 @@ def list_analysis_documents(
     docs = repo.list()
     return {"items": [{"id": str(doc.id), "status": doc.status, "date_upload": doc.date_upload, "url_file": doc.url_file, "url_canonical_file": doc.url_canonical_file, "result": doc.result, "error": doc.error, "updated_at": doc.updated_at} for doc in docs]}
 
-@router.get("/{doc_id}")
+@router.get("/documents")
+def legacy_documents_endpoint():
+    print("DEBUG: legacy_documents_endpoint called")
+    raise HTTPException(status_code=404, detail="Endpoint moved. Use /api/analyze/ instead.")
+
+@router.get("/document/{doc_id}")
 def get_analysis_document(
     doc_id: str,
     session: Session = Depends(db_session),
@@ -72,7 +77,7 @@ def get_analysis_document(
         raise HTTPException(status_code=404, detail="not_found")
     return {"id": str(doc.id), "status": doc.status, "date_upload": doc.date_upload, "url_file": doc.url_file, "url_canonical_file": doc.url_canonical_file, "result": doc.result, "error": doc.error, "updated_at": doc.updated_at}
 
-@router.get("/{doc_id}/download")
+@router.get("/document/{doc_id}/download")
 def download_analysis_file(
     doc_id: str,
     kind: str = Query("original", regex="^(original|canonical)$"),

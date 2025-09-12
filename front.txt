@@ -5443,14 +5443,14 @@ export default function ChatExport() {
   const [exportFormat, setExportFormat] = useState<'json' | 'txt' | 'md'>('json')
 
   const exportChats = () => {
-    const chats = Object.values(state.chats)
+    const chats = state.chatsOrder.map(id => state.chatsById[id])
     
     if (exportFormat === 'json') {
       const data = chats.map(chat => ({
         id: chat.id,
         name: chat.name,
         created_at: chat.created_at,
-        messages: chat.messages.map(msg => ({
+        messages: (state.messagesByChat[chat.id]?.items || []).map(msg => ({
           role: msg.role,
           content: msg.content,
           created_at: msg.created_at
@@ -5469,7 +5469,8 @@ export default function ChatExport() {
         let text = `=== ${chat.name || 'Untitled'} ===\n`
         text += `Created: ${chat.created_at ? new Date(chat.created_at).toLocaleString() : 'Unknown'}\n\n`
         
-        chat.messages.forEach(msg => {
+        const messages = state.messagesByChat[chat.id]?.items || []
+        messages.forEach(msg => {
           text += `${msg.role.toUpperCase()}: ${msg.content}\n\n`
         })
         
@@ -5488,7 +5489,8 @@ export default function ChatExport() {
         let md = `# ${chat.name || 'Untitled'}\n\n`
         md += `**Created:** ${chat.created_at ? new Date(chat.created_at).toLocaleString() : 'Unknown'}\n\n`
         
-        chat.messages.forEach(msg => {
+        const messages = state.messagesByChat[chat.id]?.items || []
+        messages.forEach(msg => {
           md += `## ${msg.role === 'user' ? '👤 User' : '🤖 Assistant'}\n\n`
           md += `${msg.content}\n\n`
         })
@@ -5573,9 +5575,9 @@ export default function ChatExport() {
           </div>
           
           <div className={styles.exportInfo}>
-            <p>Будет экспортировано чатов: <strong>{Object.keys(state.chats).length}</strong></p>
+            <p>Будет экспортировано чатов: <strong>{state.chatsOrder.length}</strong></p>
             <p>Общее количество сообщений: <strong>
-              {Object.values(state.chats).reduce((sum, chat) => sum + chat.messages.length, 0)}
+              {state.chatsOrder.reduce((sum, chatId) => sum + (state.messagesByChat[chatId]?.items.length || 0), 0)}
             </strong></p>
           </div>
         </div>
@@ -5654,16 +5656,16 @@ export default function ChatSearch() {
   const [searchQuery, setSearchQuery] = useState('')
   
   const filteredChats = useMemo(() => {
-    if (!searchQuery.trim()) return Object.values(state.chats)
+    if (!searchQuery.trim()) return state.chatsOrder.map(id => state.chatsById[id])
     
     const query = searchQuery.toLowerCase()
-    return Object.values(state.chats).filter(chat => 
+    return state.chatsOrder.map(id => state.chatsById[id]).filter(chat => 
       chat.name?.toLowerCase().includes(query) ||
-      chat.messages.some(msg => 
+      (state.messagesByChat[chat.id]?.items || []).some(msg => 
         msg.content.toLowerCase().includes(query)
       )
     )
-  }, [state.chats, searchQuery])
+  }, [state.chatsOrder, state.chatsById, state.messagesByChat, searchQuery])
 
   return (
     <div className={styles.searchContainer}>
@@ -5678,17 +5680,20 @@ export default function ChatSearch() {
           <div className={styles.resultsHeader}>
             Найдено чатов: {filteredChats.length}
           </div>
-          {filteredChats.map(chat => (
-            <div key={chat.id} className={styles.chatResult}>
-              <div className={styles.chatName}>{chat.name || 'Untitled'}</div>
-              <div className={styles.chatPreview}>
-                {chat.messages.length > 0 
-                  ? chat.messages[chat.messages.length - 1].content.slice(0, 100) + '...'
-                  : 'Нет сообщений'
-                }
+          {filteredChats.map(chat => {
+            const messages = state.messagesByChat[chat.id]?.items || []
+            return (
+              <div key={chat.id} className={styles.chatResult}>
+                <div className={styles.chatName}>{chat.name || 'Untitled'}</div>
+                <div className={styles.chatPreview}>
+                  {messages.length > 0 
+                    ? messages[messages.length - 1].content.slice(0, 100) + '...'
+                    : 'Нет сообщений'
+                  }
+                </div>
               </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
       )}
     </div>
@@ -5744,23 +5749,30 @@ import styles from './ChatStats.module.css'
 
 export default function ChatStats() {
   const { state } = useChat()
-  const { chats } = state
 
   const stats = React.useMemo(() => {
-    const chatList = Object.values(chats)
-    const totalMessages = chatList.reduce((sum, chat) => sum + chat.messages.length, 0)
-    const userMessages = chatList.reduce((sum, chat) => 
-      sum + chat.messages.filter(msg => msg.role === 'user').length, 0
-    )
-    const assistantMessages = chatList.reduce((sum, chat) => 
-      sum + chat.messages.filter(msg => msg.role === 'assistant').length, 0
-    )
+    const chatList = state.chatsOrder.map(id => state.chatsById[id])
+    const totalMessages = chatList.reduce((sum, chat) => {
+      const messages = state.messagesByChat[chat.id]?.items || []
+      return sum + messages.length
+    }, 0)
     
-    const totalWords = chatList.reduce((sum, chat) => 
-      sum + chat.messages.reduce((msgSum, msg) => 
+    const userMessages = chatList.reduce((sum, chat) => {
+      const messages = state.messagesByChat[chat.id]?.items || []
+      return sum + messages.filter(msg => msg.role === 'user').length
+    }, 0)
+    
+    const assistantMessages = chatList.reduce((sum, chat) => {
+      const messages = state.messagesByChat[chat.id]?.items || []
+      return sum + messages.filter(msg => msg.role === 'assistant').length
+    }, 0)
+    
+    const totalWords = chatList.reduce((sum, chat) => {
+      const messages = state.messagesByChat[chat.id]?.items || []
+      return sum + messages.reduce((msgSum, msg) => 
         msgSum + msg.content.split(' ').length, 0
-      ), 0
-    )
+      )
+    }, 0)
 
     const averageMessagesPerChat = chatList.length > 0 ? Math.round(totalMessages / chatList.length) : 0
     const averageWordsPerMessage = totalMessages > 0 ? Math.round(totalWords / totalMessages) : 0
@@ -5774,7 +5786,7 @@ export default function ChatStats() {
       averageMessagesPerChat,
       averageWordsPerMessage
     }
-  }, [chats])
+  }, [state.chatsOrder, state.chatsById, state.messagesByChat])
 
   return (
     <div className={styles.statsContainer}>
@@ -6004,136 +6016,247 @@ export default function ChatStatus() {
 
 ### src/app/components/ChatTags.tsx
 import React, { useState } from 'react'
-import { useChat } from '../contexts/ChatContext'
-import Button from '@shared/ui/Button'
-import Input from '@shared/ui/Input'
 import Modal from '@shared/ui/Modal'
-import styles from './ChatTags.module.css'
+import Input from '@shared/ui/Input'
+import Button from '@shared/ui/Button'
 
-interface ChatTagsProps {
-  chatId: string
-  tags: string[]
-  onTagsChange?: (tags: string[]) => void
-}
+export default function ChatTags({ chatId, tags, onTagsChange }: { chatId: string, tags: string[], onTagsChange: (tags: string[]) => void }) {
+  const [local, setLocal] = useState<string[]>(tags || [])
+  const [open, setOpen] = useState(true)
+  const [draft, setDraft] = useState('')
 
-export default function ChatTags({ chatId, tags, onTagsChange }: ChatTagsProps) {
-  const { updateChatTags } = useChat()
-  const [isOpen, setIsOpen] = useState(false)
-  const [newTag, setNewTag] = useState('')
-  const [currentTags, setCurrentTags] = useState<string[]>(tags)
-
-  const handleAddTag = () => {
-    if (newTag.trim() && !currentTags.includes(newTag.trim())) {
-      const updatedTags = [...currentTags, newTag.trim()]
-      setCurrentTags(updatedTags)
-      setNewTag('')
-    }
+  function add() {
+    const t = draft.trim()
+    if (!t) return
+    if (local.includes(t)) return
+    setLocal([...local, t])
+    setDraft('')
   }
-
-  const handleRemoveTag = (tagToRemove: string) => {
-    const updatedTags = currentTags.filter(tag => tag !== tagToRemove)
-    setCurrentTags(updatedTags)
-  }
-
-  const handleSave = async () => {
-    try {
-      await updateChatTags(chatId, currentTags)
-      onTagsChange?.(currentTags)
-      setIsOpen(false)
-    } catch (error) {
-      console.error('Failed to update tags:', error)
-    }
-  }
-
-  const handleKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') {
-      handleAddTag()
-    }
+  function remove(t: string) {
+    setLocal(local.filter(x => x !== t))
   }
 
   return (
-    <>
-      <div className={styles.tagsContainer}>
-        {currentTags.length > 0 ? (
-          <div className={styles.tagsList}>
-            {currentTags.map(tag => (
-              <span key={tag} className={styles.tag}>
-                {tag}
-                <button
-                  className={styles.removeTag}
-                  onClick={() => handleRemoveTag(tag)}
-                  title="Удалить тег"
-                >
-                  ×
-                </button>
-              </span>
-            ))}
-          </div>
-        ) : (
-          <span className={styles.noTags}>Нет тегов</span>
-        )}
-        <Button
-          size="small"
-          variant="ghost"
-          onClick={() => setIsOpen(true)}
-          title="Управление тегами"
-        >
-          {currentTags.length > 0 ? '✏️' : '🏷️'}
-        </Button>
+    <Modal open={open} onClose={() => setOpen(false)} title="Теги"
+      footer={<>
+        <Button variant="ghost" onClick={() => setOpen(false)}>Закрыть</Button>
+        <Button onClick={() => { onTagsChange(local); setOpen(false) }}>Сохранить</Button>
+      </>}
+    >
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+        <Input value={draft} onChange={e => setDraft(e.target.value)} placeholder="Новый тег" onKeyDown={e => { if (e.key === 'Enter') add() }} />
+        <Button onClick={add}>Добавить</Button>
       </div>
-
-      <Modal
-        open={isOpen}
-        onClose={() => setIsOpen(false)}
-        title="Управление тегами"
-        footer={
-          <>
-            <Button variant="ghost" onClick={() => setIsOpen(false)}>
-              Отмена
-            </Button>
-            <Button onClick={handleSave}>
-              Сохранить
-            </Button>
-          </>
-        }
-      >
-        <div className={styles.tagEditor}>
-          <div className={styles.addTagForm}>
-            <Input
-              value={newTag}
-              onChange={e => setNewTag(e.target.value)}
-              onKeyPress={handleKeyPress}
-              placeholder="Добавить тег..."
-            />
-            <Button onClick={handleAddTag} disabled={!newTag.trim()}>
-              Добавить
-            </Button>
-          </div>
-          
-          <div className={styles.tagsList}>
-            {currentTags.map(tag => (
-              <div key={tag} className={styles.tagItem}>
-                <span className={styles.tagName}>{tag}</span>
-                <button
-                  className={styles.removeButton}
-                  onClick={() => handleRemoveTag(tag)}
-                >
-                  ×
-                </button>
-              </div>
-            ))}
-          </div>
-          
-          {currentTags.length === 0 && (
-            <div className={styles.emptyState}>
-              <p>Теги помогают организовать чаты по темам</p>
-              <p>Например: "работа", "личное", "проект-альфа"</p>
-            </div>
-          )}
-        </div>
-      </Modal>
-    </>
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+        {local.map(t => (
+          <span key={t} style={{ border: '1px solid rgba(255,255,255,.2)', padding: '2px 8px', borderRadius: 999 }}>
+            {t} <button onClick={() => remove(t)} style={{ marginLeft: 6, opacity: .7 }}>×</button>
+          </span>
+        ))}
+        {local.length === 0 && <div style={{ opacity: .7 }}>Пока пусто</div>}
+      </div>
+    </Modal>
   )
+}
+
+### src/app/components/EmptyState.module.css
+.emptyState {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 3rem 2rem;
+  text-align: center;
+  color: var(--color-text-secondary);
+}
+
+.icon {
+  font-size: 3rem;
+  margin-bottom: 1rem;
+  opacity: 0.6;
+}
+
+.title {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin-bottom: 0.5rem;
+}
+
+.description {
+  font-size: 1rem;
+  line-height: 1.5;
+  margin-bottom: 1.5rem;
+  max-width: 400px;
+}
+
+.actionButton {
+  background: var(--color-primary);
+  color: white;
+  border: none;
+  padding: 0.75rem 1.5rem;
+  border-radius: 0.25rem;
+  font-size: 1rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.actionButton:hover {
+  background: var(--color-primary-hover);
+}
+
+.actionButton:active {
+  transform: translateY(1px);
+}
+
+### src/app/components/EmptyState.tsx
+import React from 'react'
+
+export default function EmptyState({ title, description, action }: { title: string, description?: string, action?: React.ReactNode }) {
+  return (
+    <div style={{ display: 'grid', placeItems: 'center', minHeight: 260, textAlign: 'center', gap: 8 }}>
+      <div style={{ fontWeight: 600, fontSize: 18 }}>{title}</div>
+      {description && <div style={{ opacity: .75 }}>{description}</div>}
+      {action}
+    </div>
+  )
+}
+
+### src/app/components/ErrorBoundary.module.css
+.error-boundary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 400px;
+  padding: 2rem;
+  background: var(--color-bg-primary);
+}
+
+.error-content {
+  text-align: center;
+  max-width: 600px;
+  padding: 2rem;
+  background: var(--color-bg-secondary);
+  border-radius: 0.5rem;
+  border: 1px solid var(--color-border);
+}
+
+.error-content h2 {
+  color: var(--color-danger);
+  margin-bottom: 1rem;
+}
+
+.error-content p {
+  color: var(--color-text-secondary);
+  margin-bottom: 1.5rem;
+  line-height: 1.5;
+}
+
+.error-content details {
+  margin: 1.5rem 0;
+  text-align: left;
+}
+
+.error-content summary {
+  cursor: pointer;
+  color: var(--color-text-secondary);
+  font-size: 0.9rem;
+  margin-bottom: 0.5rem;
+}
+
+.error-content pre {
+  background: var(--color-bg-primary);
+  padding: 1rem;
+  border-radius: 0.25rem;
+  border: 1px solid var(--color-border);
+  font-size: 0.8rem;
+  color: var(--color-text-secondary);
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.retry-button {
+  background: var(--color-primary);
+  color: white;
+  border: none;
+  padding: 0.75rem 1.5rem;
+  border-radius: 0.25rem;
+  font-size: 1rem;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.retry-button:hover {
+  background: var(--color-primary-hover);
+}
+
+### src/app/components/ErrorBoundary.tsx
+import React, { Component, ErrorInfo, ReactNode } from 'react'
+
+interface Props {
+  children: ReactNode
+  fallback?: ReactNode
+  onError?: (error: Error, errorInfo: ErrorInfo) => void
+}
+
+interface State {
+  hasError: boolean
+  error?: Error
+}
+
+export class ErrorBoundary extends Component<Props, State> {
+  constructor(props: Props) {
+    super(props)
+    this.state = { hasError: false }
+  }
+
+  static getDerivedStateFromError(error: Error): State {
+    return { hasError: true, error }
+  }
+
+  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    console.error('ErrorBoundary caught an error:', error, errorInfo)
+    this.props.onError?.(error, errorInfo)
+  }
+
+  render() {
+    if (this.state.hasError) {
+      if (this.props.fallback) {
+        return this.props.fallback
+      }
+
+      return (
+        <div className="error-boundary">
+          <div className="error-content">
+            <h2>Что-то пошло не так</h2>
+            <p>Произошла неожиданная ошибка. Пожалуйста, обновите страницу.</p>
+            <details>
+              <summary>Детали ошибки</summary>
+              <pre>{this.state.error?.stack}</pre>
+            </details>
+            <button 
+              onClick={() => window.location.reload()}
+              className="retry-button"
+            >
+              Обновить страницу
+            </button>
+          </div>
+        </div>
+      )
+    }
+
+    return this.props.children
+  }
+}
+
+// Hook version for functional components
+export function useErrorHandler() {
+  return (error: Error, errorInfo?: ErrorInfo) => {
+    console.error('Error caught by useErrorHandler:', error, errorInfo)
+    // You can add error reporting here
+  }
 }
 
 ### src/app/components/OptimizedChatMessage.module.css
@@ -6384,432 +6507,249 @@ describe('ChatTags', () => {
 })
 
 ### src/app/contexts/ChatContext.tsx
-import React, { createContext, useContext, useReducer, useEffect } from 'react'
-import * as chats from '@shared/api/chats'
+import React, { createContext, useContext, useReducer, useEffect, useRef } from 'react'
+import * as chatsApi from '@shared/api/chats'
+import type { Chat, ChatMessage } from '@shared/api/types'
 
-export interface ChatMessage {
-  id?: string
-  role: 'user' | 'assistant' | 'system'
-  content: string
-  created_at?: string
-  chat_id?: string
+type MessagesState = {
+  items: ChatMessage[]
+  nextCursor: string | null
+  hasMore: boolean
+  loaded: boolean
 }
 
-export interface Chat {
-  id: string
-  name?: string
-  tags?: string[]
-  created_at?: string
-  updated_at?: string
-  last_message_at?: string
-  messages: ChatMessage[]
-  isLoading?: boolean
-  hasMore?: boolean
-  nextCursor?: string | null
-}
-
-interface ChatState {
-  chats: Record<string, Chat>
-  currentChatId: string | null
+type ChatState = {
   isLoading: boolean
   error: string | null
+  chatsOrder: string[]
+  chatsById: Record<string, Chat>
+  messagesByChat: Record<string, MessagesState>
+  currentChatId: string | null
 }
 
 type ChatAction =
   | { type: 'SET_LOADING'; payload: boolean }
   | { type: 'SET_ERROR'; payload: string | null }
-  | { type: 'SET_CURRENT_CHAT'; payload: string | null }
   | { type: 'SET_CHATS'; payload: Chat[] }
-  | { type: 'ADD_CHAT'; payload: Chat }
-  | { type: 'UPDATE_CHAT'; payload: { id: string; updates: Partial<Chat> } }
+  | { type: 'UPSERT_CHAT'; payload: Chat }
   | { type: 'DELETE_CHAT'; payload: string }
-  | { type: 'ADD_MESSAGE'; payload: { chatId: string; message: ChatMessage } }
-  | { type: 'UPDATE_MESSAGE'; payload: { chatId: string; messageId: string; updates: Partial<ChatMessage> } }
-  | { type: 'SET_MESSAGES'; payload: { chatId: string; messages: ChatMessage[]; hasMore: boolean; nextCursor: string | null } }
-  | { type: 'APPEND_MESSAGES'; payload: { chatId: string; messages: ChatMessage[]; hasMore: boolean; nextCursor: string | null } }
+  | { type: 'SET_CURRENT_CHAT'; payload: string | null }
+  | { type: 'SET_MESSAGES'; payload: { chatId: string; items: ChatMessage[]; nextCursor: string | null; hasMore: boolean } }
+  | { type: 'APPEND_MESSAGES'; payload: { chatId: string; items: ChatMessage[]; nextCursor: string | null; hasMore: boolean } }
+  | { type: 'ADD_MESSAGE'; payload: { chatId: string; item: ChatMessage } }
+  | { type: 'UPDATE_CHAT_PARTIAL'; payload: { chatId: string; patch: Partial<Chat> } }
 
 const initialState: ChatState = {
-  chats: {},
-  currentChatId: null,
   isLoading: false,
-  error: null
+  error: null,
+  chatsOrder: [],
+  chatsById: {},
+  messagesByChat: {},
+  currentChatId: null,
 }
 
-function chatReducer(state: ChatState, action: ChatAction): ChatState {
+function reducer(state: ChatState, action: ChatAction): ChatState {
   switch (action.type) {
-    case 'SET_LOADING':
-      return { ...state, isLoading: action.payload }
-    
-    case 'SET_ERROR':
-      return { ...state, error: action.payload }
-    
-    case 'SET_CURRENT_CHAT':
-      return { ...state, currentChatId: action.payload }
-    
-    case 'SET_CHATS':
-      const chatsMap = action.payload.reduce((acc, chat) => {
-        acc[chat.id] = chat
-        return acc
-      }, {} as Record<string, Chat>)
-      return { ...state, chats: chatsMap }
-    
-    case 'ADD_CHAT':
-      return {
-        ...state,
-        chats: {
-          ...state.chats,
-          [action.payload.id]: action.payload
-        }
+    case 'SET_LOADING': return { ...state, isLoading: action.payload }
+    case 'SET_ERROR': return { ...state, error: action.payload }
+    case 'SET_CURRENT_CHAT': return { ...state, currentChatId: action.payload }
+
+    case 'SET_CHATS': {
+      const byId: Record<string, Chat> = {}
+      const order: string[] = []
+      for (const c of action.payload) {
+        byId[c.id] = c
+        order.push(c.id)
       }
-    
-    case 'UPDATE_CHAT':
-      return {
-        ...state,
-        chats: {
-          ...state.chats,
-          [action.payload.id]: {
-            ...state.chats[action.payload.id],
-            ...action.payload.updates
-          }
-        }
-      }
-    
-    case 'DELETE_CHAT':
-      const { [action.payload]: deleted, ...remainingChats } = state.chats
-      return {
-        ...state,
-        chats: remainingChats,
-        currentChatId: state.currentChatId === action.payload ? null : state.currentChatId
-      }
-    
-    case 'ADD_MESSAGE':
-      const chat = state.chats[action.payload.chatId]
+      return { ...state, chatsById: byId, chatsOrder: order }
+    }
+
+    case 'UPSERT_CHAT': {
+      const id = action.payload.id
+      const exists = !!state.chatsById[id]
+      const chatsById = { ...state.chatsById, [id]: { ...state.chatsById[id], ...action.payload } }
+      const chatsOrder = exists ? state.chatsOrder : [id, ...state.chatsOrder]
+      return { ...state, chatsById, chatsOrder }
+    }
+
+    case 'DELETE_CHAT': {
+      const { [action.payload]: _omit, ...rest } = state.chatsById
+      return { ...state, chatsById: rest, chatsOrder: state.chatsOrder.filter(id => id !== action.payload) }
+    }
+
+    case 'SET_MESSAGES': {
+      const { chatId, items, nextCursor, hasMore } = action.payload
+      const messagesByChat = { ...state.messagesByChat, [chatId]: { items, nextCursor, hasMore, loaded: true } }
+      return { ...state, messagesByChat }
+    }
+
+    case 'APPEND_MESSAGES': {
+      const { chatId, items, nextCursor, hasMore } = action.payload
+      const prev = state.messagesByChat[chatId] || { items: [], nextCursor: null, hasMore: false, loaded: false }
+      const merged = [...prev.items, ...items]
+      return { ...state, messagesByChat: { ...state.messagesByChat, [chatId]: { items: merged, nextCursor, hasMore, loaded: true } } }
+    }
+
+    case 'ADD_MESSAGE': {
+      const { chatId, item } = action.payload
+      const prev = state.messagesByChat[chatId] || { items: [], nextCursor: null, hasMore: false, loaded: false }
+      return { ...state, messagesByChat: { ...state.messagesByChat, [chatId]: { ...prev, items: [...prev.items, item], loaded: true } } }
+    }
+
+    case 'UPDATE_CHAT_PARTIAL': {
+      const { chatId, patch } = action.payload
+      const chat = state.chatsById[chatId]
       if (!chat) return state
-      
-      return {
-        ...state,
-        chats: {
-          ...state.chats,
-          [action.payload.chatId]: {
-            ...chat,
-            messages: [...chat.messages, action.payload.message],
-            last_message_at: action.payload.message.created_at || new Date().toISOString()
-          }
-        }
-      }
-    
-    case 'UPDATE_MESSAGE':
-      const chatToUpdate = state.chats[action.payload.chatId]
-      if (!chatToUpdate) return state
-      
-      return {
-        ...state,
-        chats: {
-          ...state.chats,
-          [action.payload.chatId]: {
-            ...chatToUpdate,
-            messages: chatToUpdate.messages.map(msg =>
-              msg.id === action.payload.messageId
-                ? { ...msg, ...action.payload.updates }
-                : msg
-            )
-          }
-        }
-      }
-    
-    case 'SET_MESSAGES':
-      return {
-        ...state,
-        chats: {
-          ...state.chats,
-          [action.payload.chatId]: {
-            ...state.chats[action.payload.chatId],
-            messages: action.payload.messages,
-            hasMore: action.payload.hasMore,
-            nextCursor: action.payload.nextCursor,
-            isLoading: false
-          }
-        }
-      }
-    
-    case 'APPEND_MESSAGES':
-      const existingChat = state.chats[action.payload.chatId]
-      if (!existingChat) return state
-      
-      return {
-        ...state,
-        chats: {
-          ...state.chats,
-          [action.payload.chatId]: {
-            ...existingChat,
-            messages: [...action.payload.messages, ...existingChat.messages],
-            hasMore: action.payload.hasMore,
-            nextCursor: action.payload.nextCursor,
-            isLoading: false
-          }
-        }
-      }
-    
-    default:
-      return state
+      return { ...state, chatsById: { ...state.chatsById, [chatId]: { ...chat, ...patch } } }
+    }
   }
 }
 
-interface ChatContextType {
+type ChatContextValue = {
   state: ChatState
-  dispatch: React.Dispatch<ChatAction>
-  // Actions
-  createChat: (name?: string, tags?: string[]) => Promise<string>
   loadChats: () => Promise<void>
-  loadMessages: (chatId: string, loadMore?: boolean) => Promise<void>
-  sendMessage: (chatId: string, content: string, useRag?: boolean) => Promise<void>
-  sendMessageStream: (chatId: string, content: string, useRag?: boolean) => Promise<void>
+  loadChatsIfAuthenticated: () => Promise<void>
+  createChat: (name?: string | null, tags?: string[] | null) => Promise<string>
   renameChat: (chatId: string, name: string) => Promise<void>
-  updateChatTags: (chatId: string, tags: string[]) => Promise<void>
   deleteChat: (chatId: string) => Promise<void>
+  removeChatLocal: (chatId: string) => void
+  restoreChatLocal: (chat: Chat) => void
+  deleteChatApiOnly: (chatId: string) => Promise<void>
+  updateChatTags: (chatId: string, tags: string[]) => Promise<void>
   setCurrentChat: (chatId: string | null) => void
+  loadMessages: (chatId: string, append?: boolean) => Promise<void>
+  sendMessage: (chatId: string, content: string, useRag?: boolean) => Promise<string>
+  sendMessageStream: (chatId: string, content: string, onDelta: (chunk: string) => void, useRag?: boolean) => Promise<void>
 }
 
-const ChatContext = createContext<ChatContextType | undefined>(undefined)
+const ChatContext = createContext<ChatContextValue | undefined>(undefined)
 
 export function ChatProvider({ children }: { children: React.ReactNode }) {
-  const [state, dispatch] = useReducer(chatReducer, initialState)
+  const [state, dispatch] = useReducer(reducer, initialState)
+  const bootRef = useRef(false)
 
-  const createChat = async (name?: string, tags?: string[]): Promise<string> => {
+  async function loadChats() {
+    dispatch({ type: 'SET_LOADING', payload: true })
     try {
-      dispatch({ type: 'SET_LOADING', payload: true })
-      const { chat_id } = await chats.createChat(name, tags)
-      
-      const newChat: Chat = {
-        id: chat_id,
-        name: name || 'Новый чат',
-        tags: tags || [],
-        messages: [],
-        hasMore: false,
-        nextCursor: null,
-        created_at: new Date().toISOString()
-      }
-      
-      dispatch({ type: 'ADD_CHAT', payload: newChat })
-      dispatch({ type: 'SET_CURRENT_CHAT', payload: chat_id })
-      
-      return chat_id
-    } catch (error) {
-      dispatch({ type: 'SET_ERROR', payload: 'Ошибка создания чата' })
-      throw error
+      const res = await chatsApi.listChats({ limit: 100 })
+      dispatch({ type: 'SET_CHATS', payload: res.items })
+      dispatch({ type: 'SET_ERROR', payload: null })
+    } catch (e: any) {
+      dispatch({ type: 'SET_ERROR', payload: e?.message || 'failed_to_load_chats' })
     } finally {
       dispatch({ type: 'SET_LOADING', payload: false })
     }
   }
 
-  const loadChats = async (): Promise<void> => {
-    try {
-      dispatch({ type: 'SET_LOADING', payload: true })
-      const res = await chats.listChats({ limit: 100 })
-      
-      const chatsList = (res.items || []).map((item: any) => ({
-        id: item.id || item.chat_id,
-        name: item.name || 'Untitled',
-        tags: item.tags || [],
-        created_at: item.created_at,
-        updated_at: item.updated_at,
-        last_message_at: item.last_message_at,
-        messages: [],
-        hasMore: true,
-        nextCursor: null
-      }))
-      
-      // Очищаем существующие чаты и добавляем новые
-      dispatch({ type: 'SET_CHATS', payload: chatsList })
-    } catch (error) {
-      dispatch({ type: 'SET_ERROR', payload: 'Ошибка загрузки чатов' })
-    } finally {
-      dispatch({ type: 'SET_LOADING', payload: false })
+  async function loadChatsIfAuthenticated() {
+    const token = (window as any).__auth_tokens?.access_token || localStorage.getItem('access_token')
+    if (token) {
+      await loadChats()
     }
   }
 
-  const loadMessages = async (chatId: string, loadMore = false): Promise<void> => {
-    try {
-      dispatch({ type: 'UPDATE_CHAT', payload: { id: chatId, updates: { isLoading: true } } })
-      
-      const chat = state.chats[chatId]
-      const cursor = loadMore ? chat?.nextCursor : undefined
-      
-      const res = await chats.listMessages(chatId, { 
-        limit: 50, 
-        cursor 
-      })
-      
-      const messages = (res.items || []).map((msg: any) => ({
-        id: msg.id || msg.message_id,
-        role: msg.role,
-        content: msg.content,
-        created_at: msg.created_at,
-        chat_id: chatId
-      }))
-      
-      if (loadMore) {
-        dispatch({ 
-          type: 'APPEND_MESSAGES', 
-          payload: { 
-            chatId, 
-            messages, 
-            hasMore: !!res.next_cursor, 
-            nextCursor: res.next_cursor 
-          } 
-        })
-      } else {
-        dispatch({ 
-          type: 'SET_MESSAGES', 
-          payload: { 
-            chatId, 
-            messages, 
-            hasMore: !!res.next_cursor, 
-            nextCursor: res.next_cursor 
-          } 
-        })
-      }
-    } catch (error) {
-      dispatch({ type: 'SET_ERROR', payload: 'Ошибка загрузки сообщений' })
-    }
+  useEffect(() => {
+    if (bootRef.current) return
+    bootRef.current = true
+    loadChatsIfAuthenticated()
+  }, [])
+
+  async function createChat(name?: string | null, tags?: string[] | null) {
+    const res = await chatsApi.createChat(name ?? null, tags ?? null)
+    const chatId = res.chat_id
+    // optimistic
+    dispatch({ type: 'UPSERT_CHAT', payload: { id: chatId, name: name ?? null, tags: tags ?? null } as Chat })
+    return chatId
   }
 
-  const sendMessage = async (chatId: string, content: string, useRag = false): Promise<void> => {
-    try {
-      // Добавляем сообщение пользователя
-      const userMessage: ChatMessage = {
-        role: 'user',
-        content,
-        chat_id: chatId,
-        created_at: new Date().toISOString()
-      }
-      dispatch({ type: 'ADD_MESSAGE', payload: { chatId, message: userMessage } })
-      
-      // Отправляем сообщение
-      const res = await chats.sendMessage(chatId, { content, use_rag: useRag, response_stream: false })
-      const answer = (res && (res.answer || res.content || res.message || '')) as string
-      
-      // Добавляем ответ ассистента
-      const assistantMessage: ChatMessage = {
-        role: 'assistant',
-        content: answer,
-        chat_id: chatId,
-        created_at: new Date().toISOString()
-      }
-      dispatch({ type: 'ADD_MESSAGE', payload: { chatId, message: assistantMessage } })
-    } catch (error) {
-      dispatch({ type: 'SET_ERROR', payload: 'Ошибка отправки сообщения' })
-      throw error
-    }
+  async function renameChat(chatId: string, name: string) {
+    await chatsApi.renameChat(chatId, name)
+    dispatch({ type: 'UPDATE_CHAT_PARTIAL', payload: { chatId, patch: { name } } })
   }
 
-  const sendMessageStream = async (chatId: string, content: string, useRag = false): Promise<void> => {
-    try {
-      // Добавляем сообщение пользователя
-      const userMessage: ChatMessage = {
-        role: 'user',
-        content,
-        chat_id: chatId,
-        created_at: new Date().toISOString()
-      }
-      dispatch({ type: 'ADD_MESSAGE', payload: { chatId, message: userMessage } })
-      
-      // Добавляем плейсхолдер для ответа
-      const assistantMessageId = `temp_${Date.now()}`
-      const assistantMessage: ChatMessage = {
-        id: assistantMessageId,
-        role: 'assistant',
-        content: '',
-        chat_id: chatId,
-        created_at: new Date().toISOString()
-      }
-      dispatch({ type: 'ADD_MESSAGE', payload: { chatId, message: assistantMessage } })
-      
-      // Отправляем сообщение с потоком
-      let fullContent = ''
-      for await (const chunk of chats.sendMessageStream(chatId, { content, use_rag: useRag })) {
-        fullContent += String(chunk || '')
-        dispatch({ 
-          type: 'UPDATE_MESSAGE', 
-          payload: { 
-            chatId, 
-            messageId: assistantMessageId, 
-            updates: { content: fullContent } 
-          } 
-        })
-      }
-    } catch (error) {
-      dispatch({ type: 'SET_ERROR', payload: 'Ошибка отправки сообщения' })
-      throw error
-    }
+  async function deleteChat(chatId: string) {
+    await chatsApi.deleteChat(chatId)
+    dispatch({ type: 'DELETE_CHAT', payload: chatId })
+    if (state.currentChatId === chatId) dispatch({ type: 'SET_CURRENT_CHAT', payload: null })
   }
 
-  const renameChat = async (chatId: string, name: string): Promise<void> => {
-    try {
-      await chats.renameChat(chatId, name)
-      dispatch({ type: 'UPDATE_CHAT', payload: { id: chatId, updates: { name } } })
-    } catch (error) {
-      dispatch({ type: 'SET_ERROR', payload: 'Ошибка переименования чата' })
-      throw error
-    }
+function removeChatLocal(chatId: string) {
+  dispatch({ type: 'DELETE_CHAT', payload: chatId })
+  if (state.currentChatId === chatId) dispatch({ type: 'SET_CURRENT_CHAT', payload: null })
+}
+
+function restoreChatLocal(chat: Chat) {
+  dispatch({ type: 'UPSERT_CHAT', payload: chat })
+}
+
+async function deleteChatApiOnly(chatId: string) {
+  await chatsApi.deleteChat(chatId)
+}
+
+  async function updateChatTags(chatId: string, tags: string[]) {
+    await chatsApi.updateChatTags(chatId, tags)
+    dispatch({ type: 'UPDATE_CHAT_PARTIAL', payload: { chatId, patch: { tags } } })
   }
 
-  const updateChatTags = async (chatId: string, tags: string[]): Promise<void> => {
-    try {
-      await chats.updateChatTags(chatId, tags)
-      dispatch({ type: 'UPDATE_CHAT', payload: { id: chatId, updates: { tags } } })
-    } catch (error) {
-      dispatch({ type: 'SET_ERROR', payload: 'Ошибка обновления тегов' })
-      throw error
-    }
-  }
-
-  const deleteChat = async (chatId: string): Promise<void> => {
-    try {
-      await chats.deleteChat(chatId)
-      dispatch({ type: 'DELETE_CHAT', payload: chatId })
-    } catch (error) {
-      dispatch({ type: 'SET_ERROR', payload: 'Ошибка удаления чата' })
-      throw error
-    }
-  }
-
-  const setCurrentChat = (chatId: string | null): void => {
+  function setCurrentChat(chatId: string | null) {
     dispatch({ type: 'SET_CURRENT_CHAT', payload: chatId })
   }
 
-  // Загружаем чаты при инициализации
-  useEffect(() => {
-    loadChats()
-  }, [])
+  async function loadMessages(chatId: string, append?: boolean) {
+    const cur = state.messagesByChat[chatId]
+    if (!append && cur?.loaded) return // avoid duplicate initial load
+    const res = await chatsApi.listMessages(chatId, append ? { cursor: cur?.nextCursor || undefined } : {})
+    const items = res.items
+    const next = res.next_cursor ?? null
+    const hasMore = !!next && items.length > 0
+    dispatch({ type: append ? 'APPEND_MESSAGES' : 'SET_MESSAGES', payload: { chatId, items, nextCursor: next, hasMore } })
+  }
 
-  const value: ChatContextType = {
+  async function sendMessage(chatId: string, content: string, useRag?: boolean) {
+    const res = await chatsApi.sendMessage(chatId, { content, use_rag: !!useRag })
+    const userMsg: ChatMessage = { id: res.message_id, chat_id: chatId, role: 'user', content }
+    dispatch({ type: 'ADD_MESSAGE', payload: { chatId, item: userMsg } })
+    const assistantMsg: ChatMessage = { id: crypto.randomUUID(), chat_id: chatId, role: 'assistant', content: res.answer }
+    dispatch({ type: 'ADD_MESSAGE', payload: { chatId, item: assistantMsg } })
+    return res.message_id
+  }
+
+  async function sendMessageStream(chatId: string, content: string, onDelta: (chunk: string) => void, useRag?: boolean) {
+    // add user message immediately
+    dispatch({ type: 'ADD_MESSAGE', payload: { chatId, item: { id: crypto.randomUUID(), chat_id: chatId, role: 'user', content } } })
+    let acc = ''
+    for await (const chunk of chatsApi.sendMessageStream(chatId, { content, use_rag: !!useRag })) {
+      acc += chunk
+      onDelta(acc)
+    }
+    // push final assistant message
+    dispatch({ type: 'ADD_MESSAGE', payload: { chatId, item: { id: crypto.randomUUID(), chat_id: chatId, role: 'assistant', content: acc } } })
+  }
+
+  const value: ChatContextValue = {
     state,
-    dispatch,
-    createChat,
     loadChats,
+    loadChatsIfAuthenticated,
+    createChat,
+    renameChat,
+    deleteChat,
+    removeChatLocal,
+    restoreChatLocal,
+    deleteChatApiOnly,
+    updateChatTags,
+    setCurrentChat,
     loadMessages,
     sendMessage,
     sendMessageStream,
-    renameChat,
-    updateChatTags,
-    deleteChat,
-    setCurrentChat
   }
 
-  return (
-    <ChatContext.Provider value={value}>
-      {children}
-    </ChatContext.Provider>
-  )
+  return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>
 }
 
 export function useChat() {
-  const context = useContext(ChatContext)
-  if (context === undefined) {
-    throw new Error('useChat must be used within a ChatProvider')
-  }
-  return context
+  const ctx = useContext(ChatContext)
+  if (!ctx) throw new Error('useChat must be used within ChatProvider')
+  return ctx
 }
 
 ### src/app/router.tsx
@@ -7121,13 +7061,99 @@ export default function Analyze() {
 }
 
 ### src/app/routes/gpt/AnalyzePage.module.css
-.container {
+.wrap { height: 100%; display: grid; }
+.card {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  gap: 10px;
+  padding: 12px;
+  background: var(--chat-panel-bg, var(--panel-alt, #f4f6ff));
+  border: 1px solid var(--chat-panel-border, rgba(0,0,0,0.08));
+  border-radius: var(--radius);
+  margin-top: 0;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+}
+
+.title {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-left: auto;
+}
+
+.search {
+  min-width: 200px;
+}
+
+.tableWrap {
+  overflow: auto;
+  border-radius: var(--radius);
+  border: 1px solid var(--color-border);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--color-bg);
+}
+
+.table th {
+  background: var(--color-bg-secondary);
+  padding: 0.75rem;
+  text-align: left;
+  font-weight: 600;
+  color: var(--color-text);
+  border-bottom: 1px solid var(--color-border);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.table td {
+  padding: 0.75rem;
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-text);
+}
+
+.table tr:hover {
+  background: var(--color-bg-secondary);
+}
+
+.table .icon {
+  background: none;
+  border: none;
+  padding: 0.25rem;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  color: var(--color-muted);
+  margin-left: 0.5rem;
+}
+
+.table .icon:hover {
+  background: var(--color-bg-secondary);
+  color: var(--color-text);
+}
+
+.muted {
+  color: var(--color-muted);
+}
+
+.stack {
   display: flex;
   flex-direction: column;
-  gap: 1.5rem;
-  max-width: 1200px;
-  margin: 0 auto;
-  padding: 1rem;
+  gap: 0.5rem;
 }
 
 .uploadCard,
@@ -7346,8 +7372,10 @@ export default function AnalyzePage() {
         <FilePicker onFileSelected={setFile} />
       </Modal>
 
-      <Popover open={pop.open} onClose={()=>setPop({open:false})} anchor={pop.anchor || null}>
-        <div className="stack" style={{minWidth: 260}}>
+      <Popover 
+        trigger={<div />}
+        content={
+          <div className="stack" style={{minWidth: 260}}>
           {pop.col === 'status' ? (
             <Select
               value={filters.status || ''}
@@ -7370,29 +7398,82 @@ export default function AnalyzePage() {
             <Button size="sm" variant="ghost" onClick={()=>{ const col = pop.col as ColKey; setFilters(f=>({ ...f, [col]: undefined })); }}>Очистить</Button>
             <Button size="sm" onClick={()=>setPop({open:false})}>Применить</Button>
           </div>
-        </div>
-      </Popover>
+          </div>
+        }
+        align="end"
+      />
     </div>
   )
 }
 
 ### src/app/routes/gpt/Chat.module.css
-.wrap { height: 100%; display: grid; }
-.panel {
-  display: grid;
-  grid-template-rows: 1fr auto;
-  gap: 10px;
-  padding: 12px;
-  background: var(--chat-panel-bg, var(--panel-alt, #f4f6ff));
-  border: 1px solid var(--chat-panel-border, rgba(0,0,0,0.08));
-  border-radius: var(--radius);
-  margin-top: 0; /* выравнивание с карточкой списка чатов */
+.main {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  gap: 0;
+  overflow: hidden;
 }
-.messages { overflow: auto; padding: 4px; }
-.empty { color: var(--muted); text-align: center; padding: 24px; }
-.user { background: rgba(79,124,255,0.12); border: 1px solid rgba(79,124,255,0.25); padding: 10px 12px; border-radius: 12px; margin: 8px 0 8px auto; max-width: 75%; }
-.assistant { background: rgba(0,0,0,0.04); border: 1px solid rgba(0,0,0,0.08); padding: 10px 12px; border-radius: 12px; margin: 8px auto 8px 0; max-width: 75%; white-space: pre-wrap; }
-.typing { opacity: .6; }
+
+.card {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 0;
+  overflow: hidden;
+}
+
+.history {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.userMsg {
+  display: flex;
+  justify-content: flex-end;
+  margin-left: auto;
+  max-width: 70%;
+}
+
+.userMsg .body {
+  background: var(--color-primary);
+  color: white;
+  padding: 0.75rem 1rem;
+  border-radius: 1rem 1rem 0.25rem 1rem;
+  word-wrap: break-word;
+  white-space: pre-wrap;
+}
+
+.assistantMsg {
+  display: flex;
+  justify-content: flex-start;
+  margin-right: auto;
+  max-width: 70%;
+}
+
+.assistantMsg .body {
+  background: var(--color-bg-secondary);
+  color: var(--color-text);
+  padding: 0.75rem 1rem;
+  border-radius: 1rem 1rem 1rem 0.25rem;
+  word-wrap: break-word;
+  white-space: pre-wrap;
+  border: 1px solid var(--color-border);
+}
+
+.meta {
+  display: none; /* Скрываем мета-информацию */
+}
+
+.empty {
+  color: var(--muted);
+  text-align: center;
+  padding: 24px;
+}
 
 .messageContent {
   margin-bottom: 0.5rem;
@@ -7420,6 +7501,10 @@ export default function AnalyzePage() {
   align-items: stretch;
   min-height: 120px;
   max-height: clamp(160px, 32vh, 40dvh);
+  padding: 1rem;
+  border-top: 1px solid var(--color-border);
+  background: var(--panel);
+  flex-shrink: 0;
 }
 .inputArea { grid-column: 1 / 2; display: flex; }
 .inputArea textarea {
@@ -7436,150 +7521,102 @@ export default function AnalyzePage() {
 .ragToggle input { transform: translateY(1px); }
 
 ### src/app/routes/gpt/Chat.tsx
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import styles from './Chat.module.css'
 import Card from '@shared/ui/Card'
 import Button from '@shared/ui/Button'
 import Textarea from '@shared/ui/Textarea'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useChat } from '../../contexts/ChatContext'
+import EmptyState from '../../components/EmptyState'
 
 export default function Chat() {
   const { chatId } = useParams()
   const nav = useNavigate()
-  const { state, createChat, loadMessages, sendMessage, sendMessageStream, setCurrentChat } = useChat()
-  
+  const { state, loadMessages, setCurrentChat, sendMessageStream } = useChat()
+
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
   const [useRag, setUseRag] = useState(false)
-  const [isLoadingMore, setIsLoadingMore] = useState(false)
-  const messagesRef = useRef<HTMLDivElement>(null)
-  const taRef = useRef<HTMLTextAreaElement>(null)
+  const [streamText, setStreamText] = useState('')
 
-  const currentChat = chatId ? state.chats[chatId] : null
-  const items = currentChat?.messages || []
+  const current = useMemo(() => chatId ? state.messagesByChat[chatId] : undefined, [chatId, state.messagesByChat])
+  const messages = current?.items || []
 
   useEffect(() => {
-    (async () => {
-      if (!chatId) {
-        try {
-          const newChatId = await createChat('Новый чат')
-          nav(`/gpt/chat/${newChatId}`, { replace: true })
-        } catch (error) {
-          console.error('Failed to create chat:', error)
-        }
-        return
-      }
-      
-      setCurrentChat(chatId)
-      
-      // Загружаем сообщения если их нет
-      if (!currentChat?.messages.length) {
-        await loadMessages(chatId)
-      }
-    })()
-  }, [chatId, createChat, loadMessages, nav, setCurrentChat])
-
-  useEffect(() => {
-    // автопрокрутка вниз при новых сообщениях
-    messagesRef.current?.scrollTo({ top: messagesRef.current.scrollHeight, behavior: 'smooth' })
-  }, [items.length, busy])
-
-  const handleLoadMore = async () => {
-    if (!chatId || !currentChat?.hasMore || isLoadingMore) return
-    
-    setIsLoadingMore(true)
-    try {
-      await loadMessages(chatId, true)
-    } catch (error) {
-      console.error('Failed to load more messages:', error)
-    } finally {
-      setIsLoadingMore(false)
+    if (!chatId) return
+    setCurrentChat(chatId)
+    // load once
+    if (!state.messagesByChat[chatId]?.loaded) {
+      loadMessages(chatId).catch(console.error)
     }
+    // cleanup stream text on chat switch
+    setStreamText('')
+  }, [chatId])
+
+  if (!chatId) {
+    return (
+      <div className={styles.main}>
+        <EmptyState
+          title="Выберите чат"
+          description="Слева — список ваших чатов. Создайте новый или откройте существующий."
+          action={<Button onClick={() => nav('/gpt/chat')}>Обновить</Button>}
+        />
+      </div>
+    )
   }
 
   async function onSend() {
-    const content = text.trim()
-    if (!content || !chatId) return
+    if (!text.trim()) return
     setBusy(true)
+    setStreamText('')
+    const toSend = text
     setText('')
-    
     try {
-      // Пытаемся стримить; если не поддерживается — используем обычный ответ
-      let streamed = false
-      try {
-        await sendMessageStream(chatId, content, useRag)
-        streamed = true
-      } catch {
-        // игнор, попробуем обычный endpoint
-      }
-      
-      if (!streamed) {
-        await sendMessage(chatId, content, useRag)
-      }
-    } catch (error) {
-      console.error('Failed to send message:', error)
+      await sendMessageStream(chatId, toSend, (delta) => setStreamText(delta), useRag)
+    } catch (e) {
+      console.error(e)
     } finally {
       setBusy(false)
+      setStreamText('')
     }
-    taRef.current?.focus()
   }
 
+  const canSend = !!chatId && !!text.trim() && !busy
+
   return (
-    <div className={styles.wrap}>
-      <Card className={styles.panel}>
-        <div className={styles.messages} ref={messagesRef}>
-          {currentChat?.hasMore && (
-            <div className={styles.loadMore}>
-              <Button 
-                onClick={handleLoadMore} 
-                disabled={isLoadingMore}
-                size="small"
-                variant="ghost"
-              >
-                {isLoadingMore ? 'Загрузка...' : 'Загрузить больше сообщений'}
-              </Button>
-            </div>
-          )}
-          
-          {items.length === 0 && !currentChat?.isLoading && (
-            <div className={styles.empty}>Пока нет сообщений</div>
-          )}
-          
-          {currentChat?.isLoading && items.length === 0 && (
-            <div className={styles.empty}>Загрузка сообщений...</div>
-          )}
-          
-          {items.map((m, i) => (
-            <div key={m.id || i} className={m.role === 'user' ? styles.user : styles.assistant}>
-              <div className={styles.messageContent}>{m.content}</div>
-              {m.created_at && (
-                <div className={styles.messageTime}>
-                  {new Date(m.created_at).toLocaleTimeString()}
-                </div>
-              )}
+    <div className={styles.main}>
+      <Card className={styles.card}>
+        <div className={styles.history}>
+          {messages.map(m => (
+            <div key={m.id} className={m.role === 'user' ? styles.userMsg : styles.assistantMsg}>
+              <div className={styles.body}>{m.content}</div>
             </div>
           ))}
-          
-          {busy && <div className={[styles.assistant, styles.typing].join(' ')}>…</div>}
+          {streamText && (
+            <div className={styles.assistantMsg}>
+              <div className={styles.body}>{streamText}</div>
+            </div>
+          )}
+          {messages.length === 0 && !state.isLoading && (
+            <div style={{ opacity: .7 }}>Сообщений пока нет.</div>
+          )}
         </div>
+
         <div className={styles.composer}>
-          <div className={styles.inputArea}>
-            <Textarea
-              ref={taRef}
-              placeholder="Спросите что-нибудь… (Ctrl/⌘+Enter — отправить)"
-              value={text}
-              onChange={e=>setText(e.target.value)}
-              onKeyDown={e=>{ if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') onSend() }}
-              rows={4}
-            />
-          </div>
+          <Textarea
+            placeholder="Ваше сообщение…"
+            value={text}
+            onChange={e => setText(e.target.value)}
+            disabled={!chatId || busy}
+            rows={3}
+          />
           <div className={styles.controls}>
             <div />
             <div className={styles.actionsBottom}>
-              <Button onClick={onSend} disabled={busy || !text.trim()}>Отправить</Button>
+              <Button onClick={onSend} disabled={!canSend}>Отправить</Button>
               <label className={styles.ragToggle} title="Использовать базу знаний (RAG) при ответе">
-                <input type="checkbox" checked={useRag} onChange={e=>setUseRag(e.target.checked)} />
+                <input type="checkbox" checked={useRag} onChange={e => setUseRag(e.target.checked)} />
                 RAG из БЗ
               </label>
             </div>
@@ -7598,21 +7635,24 @@ export default function Chat() {
   /* stretch both columns to the same height */
   align-items: stretch; 
   /* occupy all available vertical space inside <main> */
-  height: 100%;
-  min-height: 100%;
+  height: calc(100vh - 24px);
+  max-height: calc(100vh - 24px);
+  overflow: hidden;
 }
 /* main work area fills the grid track; inner components handle their own scroll */
 .main { 
   height: 100%; 
-  display: grid; 
+  display: flex;
+  flex-direction: column;
   min-width: 0; /* allow content to shrink within the grid track */
+  overflow: hidden;
 }
 
 @media (max-width: 980px) { 
   .shell { 
     grid-template-columns: 1fr; 
-    height: auto;       /* allow natural height in single-column layout */
-    min-height: 0;
+    height: calc(100vh - 24px);
+    max-height: calc(100vh - 24px);
   } 
 }
 
@@ -7639,183 +7679,281 @@ export default function ChatPage() {
 }
 
 ### src/app/routes/gpt/ChatSidebar.module.css
-/* Sidebar fills the grid track and scrolls internally */
 .sidebar {
-  /* keep within the 280px grid track (padding/border won't overflow) */
   box-sizing: border-box;
   min-width: 0;
   background: var(--panel);
-  border: 1px solid rgba(255,255,255, .08);
+  border: 1px solid var(--color-border);
   border-radius: var(--radius);
   padding: 12px;
-  overflow: auto;
-}
-
-.head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
-.title { font-weight: 600; }
-.list { display: grid; gap: 4px; }
-.row { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 4px; border-radius: 10px; }
-.row:hover { background: rgba(255,255,255, .04); }
-.active { background: rgba(79,124,255, .14); border: 1px solid rgba(79,124,255, .3); }
-.item { text-align: left; padding: 8px 10px; border-radius: 10px; border: 1px solid transparent; background: transparent; color: var(--text); cursor: pointer; display: flex; align-items: center; gap: 8px; width: 100%; }
-.empty { color: var(--muted); padding: 10px; text-align: center; }
-.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--primary); display: inline-block; }
-.plus { width: 18px; height: 18px; border-radius: 50%; border: 1px dashed var(--muted); display: inline-flex; align-items: center; justify-content: center; font-weight: 700; font-size: 12px; }
-.actions { display: flex; gap: 6px; padding-right: 6px; }
-.icon { background: transparent; border: 0; cursor: pointer; color: var(--muted); }
-
-.messageCount {
-  font-size: 0.8rem;
-  color: var(--color-text-secondary);
-  margin-left: 0.5rem;
-  background: var(--color-bg-secondary);
-  padding: 0.2rem 0.4rem;
-  border-radius: 0.25rem;
-}
-
-.chatInfo {
+  overflow: hidden;
+  height: calc(100vh - 24px);
+  max-height: calc(100vh - 24px);
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
-  gap: 0.25rem;
-  flex: 1;
 }
-
-.chatInfo .name {
+.head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.title { font-weight: 600; }
+.list { 
+  display: flex; 
+  flex-direction: column;
+  gap: 4px; 
+  flex: 1; 
+  overflow-y: auto;
+  padding-right: 4px;
+}
+.row { 
+  display: grid; 
+  grid-template-columns: 1fr auto; 
+  align-items: center; 
+  gap: 4px; 
+  border-radius: 8px; 
+  position: relative;
+  height: 48px; /* Фиксированная высота для всех чатов */
+  min-height: 48px;
+  flex-shrink: 0; /* Не сжимается */
+}
+.row:hover { background: var(--color-bg-secondary); }
+.row:hover .kebabBtn { opacity: 1; }
+.active { background: var(--color-primary-light); border: 1px solid var(--color-primary); }
+.item { 
+  text-align: left; 
+  padding: 8px 10px; 
+  border-radius: 8px; 
+  cursor: pointer; 
+  display: flex; 
+  flex-direction: column; 
+  gap: 4px; 
+  width: 100%; 
+  background: transparent;
+  border: none;
+  color: var(--text);
+  transition: background-color 0.15s ease;
+  justify-content: center;
+  height: 100%;
+}
+.item:hover { background: transparent; }
+.name { 
+  flex: 1 1 auto; 
+  overflow: hidden; 
+  text-overflow: ellipsis; 
+  white-space: nowrap; 
   font-weight: 500;
+  line-height: 1.3;
+  font-size: 14px;
+}
+.tags { 
+  display: flex; 
+  gap: 4px; 
+  flex-wrap: wrap; 
+  margin-top: 2px;
+}
+.tag { 
+  font-size: 10px; 
+  padding: 1px 4px; 
+  border-radius: 6px; 
+  border: 1px solid var(--color-border); 
+  background: var(--color-bg-secondary); 
+  color: var(--color-text); 
+  line-height: 1.2;
+}
+.kebabBtn { 
+  width: 28px; 
+  height: 28px; 
+  display: grid; 
+  place-items: center; 
+  border-radius: 8px; 
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease, background-color 0.15s ease, color 0.15s ease;
+  align-self: center;
+}
+.kebabBtn:hover { 
+  background: var(--color-bg-secondary); 
+  color: var(--text);
+}
+.menu { 
+  min-width: 160px; 
+  background: var(--panel);
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 8px;
+  padding: 4px;
+  box-shadow: 0 6px 24px rgba(0,0,0,.35);
+}
+.menu .item {
+  display: block;
+  width: 100%;
+  padding: 8px 12px;
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  cursor: pointer;
+  border-radius: 6px;
+  transition: background-color 0.15s ease;
+  font-size: 14px;
+}
+.menu .item:hover {
+  background: var(--color-bg-secondary);
 }
 
-.chatInfo .messageCount {
-  margin-left: 0;
-  align-self: flex-start;
+/* Undo bar */
+.undoBar { 
+  position: sticky; bottom: 0; 
+  margin-top: 8px; padding: 8px 10px; 
+  border: 1px dashed var(--color-border);
+  background: var(--color-bg-secondary);
+  border-radius: 10px; 
+  display: flex; align-items: center; gap: 8px;
 }
+.undoText { flex: 1; font-size: 13px; opacity: .95; }
+.undoBtn { padding: 6px 10px; border-radius: 8px; border: 1px solid var(--color-border); }
+.undoBtn:hover { background: var(--color-bg-secondary); }
 
 ### src/app/routes/gpt/ChatSidebar.tsx
-import React, { useState } from 'react'
+import React, { useMemo, useState } from 'react'
 import styles from './ChatSidebar.module.css'
 import Button from '@shared/ui/Button'
 import { useNavigate, useParams } from 'react-router-dom'
 import Modal from '@shared/ui/Modal'
 import Input from '@shared/ui/Input'
+import Popover from '@shared/ui/Popover'
 import { useChat } from '../../contexts/ChatContext'
-import ChatSearch from '../../components/ChatSearch'
-import ChatExport from '../../components/ChatExport'
-import ChatStats from '../../components/ChatStats'
 import ChatTags from '../../components/ChatTags'
 
+function hueFromString(s: string){
+  let h = 0
+  for (let i=0;i<s.length;i++) h = (h*31 + s.charCodeAt(i)) >>> 0
+  return h % 360
+}
+
+function KebabIcon() {
+  return <svg width="16" height="16" viewBox="0 0 24 24"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>
+}
+
 export default function ChatSidebar() {
-  const [renameId, setRenameId] = useState<string | null>(null)
-  const [renameValue, setRenameValue] = useState('')
-  const [deleteId, setDeleteId] = useState<string | null>(null)
-
-  const nav = useNavigate()
   const { chatId } = useParams()
-  const { state, createChat, renameChat, deleteChat, updateChatTags } = useChat()
+  const nav = useNavigate()
+  const { state, createChat, renameChat, deleteChat, updateChatTags, removeChatLocal, restoreChatLocal, deleteChatApiOnly } = useChat()
 
-  const { chats, isLoading } = state
-  const items = Object.values(chats).sort((a, b) => 
-    new Date(b.last_message_at || b.created_at || 0).getTime() - 
-    new Date(a.last_message_at || a.created_at || 0).getTime()
-  )
+  const [renameTarget, setRenameTarget] = useState<{ id: string, name: string } | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string, name?: string } | null>(null)
+  const [pendingUndo, setPendingUndo] = useState<{ id: string, name?: string|null, tags?: string[]|null, secs: number, tid: any, iid: any } | null>(null)
+  const [editTagsTarget, setEditTagsTarget] = useState<{ id: string, tags: string[] } | null>(null)
 
-  async function onNew() {
-    try {
-      const chatId = await createChat('Новый чат')
-      nav(`/gpt/chat/${chatId}`)
-    } catch (error) {
-      console.error('Failed to create chat:', error)
-    }
-  }
+  const chats = useMemo(() => state.chatsOrder.map(id => state.chatsById[id]), [state.chatsOrder, state.chatsById])
 
-  function openRename(chat: { id: string; name?: string }) {
-    setRenameId(chat.id)
-    setRenameValue(chat.name || 'Untitled')
-  }
-
-  async function doRename() {
-    if (!renameId) return
-    try {
-      await renameChat(renameId, renameValue || 'Untitled')
-      setRenameId(null)
-    } catch (error) {
-      console.error('Failed to rename chat:', error)
-    }
-  }
-
-  async function doDelete() {
-    if (!deleteId) return
-    try {
-      await deleteChat(deleteId)
-      setDeleteId(null)
-      if (chatId === deleteId) nav('/gpt/chat')
-    } catch (error) {
-      console.error('Failed to delete chat:', error)
-    }
+  async function onCreate() {
+    const id = await createChat('Новый чат')
+    nav(`/gpt/chat/${id}`)
   }
 
   return (
     <aside className={styles.sidebar}>
       <div className={styles.head}>
-        <div className={styles.title}>Chats</div>
-        <ChatExport />
+        <div className={styles.title}>Чаты</div>
+        <Button size="sm" onClick={onCreate}>+ Новый</Button>
       </div>
-      
-      <ChatSearch />
-      
-      <div className={styles.list}>
-        {/* New chat as a regular item */}
-        <div className={styles.row}>
-          <button className={styles.item} onClick={onNew} title="+ Новый чат">
-            <span className={styles.plus}>+</span>
-            <span className={styles.name}>+ Новый чат</span>
-          </button>
-        </div>
 
-        {isLoading && <div className={styles.empty}>Loading…</div>}
-        {!isLoading && items.length === 0 && <div className={styles.empty}>No chats yet</div>}
-        {items.map(chat => (
+      <div className={styles.list}>
+        {chats.length === 0 && <div className={styles.item} style={{ opacity: .7 }}>Нет чатов</div>}
+        {chats.map(chat => (
           <div key={chat.id} className={[styles.row, chatId === chat.id ? styles.active : ''].join(' ')}>
-            <button
-              className={styles.item}
-              onClick={() => {
-                nav(`/gpt/chat/${chat.id}`)
-              }}
-              title={chat.name || chat.id}
-            >
-              <span className={styles.dot} /> 
-              <div className={styles.chatInfo}>
-                <span className={styles.name}>{chat.name || 'Untitled'}</span>
-                {chat.messages.length > 0 && (
-                  <span className={styles.messageCount}>({chat.messages.length})</span>
-                )}
-                <ChatTags 
-                  chatId={chat.id} 
-                  tags={chat.tags || []} 
-                  onTagsChange={(tags) => {
-                    updateChatTags(chat.id, tags)
-                  }}
-                />
-              </div>
+            <button className={styles.item} onClick={() => nav(`/gpt/chat/${chat.id}`)}>
+              <div className={styles.name}>{chat.name || 'Без названия'}</div>
+              {Array.isArray(chat.tags) && chat.tags.length > 0 && (
+                <div className={styles.tags}>
+                  {chat.tags.map(tag => {
+                  const h = hueFromString(tag)
+                  const bg = `hsla(${h}, 70%, 45%, .18)`
+                  const bd = `hsla(${h}, 70%, 50%, .45)`
+                  const fg = `hsla(${h}, 80%, 80%, .95)`
+                  return <span key={tag} className={styles.tag} style={{ background: bg, borderColor: bd, color: fg }}>{tag}</span>
+                  })}
+                </div>
+              )}
             </button>
-            <div className={styles.actions}>
-              <button className={styles.icon} title="Rename" onClick={() => openRename(chat)}>✎</button>
-              <button className={styles.icon} title="Delete" onClick={() => setDeleteId(chat.id)}>🗑</button>
-            </div>
+            <Popover
+              trigger={<button className={styles.kebabBtn} aria-label="Меню"><KebabIcon/></button>}
+              content={<div className={styles.menu}>
+                <button className={styles.item} onClick={() => setRenameTarget({ id: chat.id, name: chat.name || '' })}>Переименовать</button>
+                <button className={styles.item} onClick={() => setEditTagsTarget({ id: chat.id, tags: chat.tags || [] })}>Теги…</button>
+                <button className={styles.item} onClick={() => setDeleteTarget({ id: chat.id, name: chat.name || '' })}>Удалить</button>
+              </div>}
+              align="end"
+            />
           </div>
         ))}
       </div>
 
-      <ChatStats />
-
-      <Modal open={!!renameId} onClose={()=>setRenameId(null)} title="Rename chat"
-        footer={<><Button variant="ghost" onClick={()=>setRenameId(null)}>Cancel</Button><Button onClick={doRename}>Save</Button></>}>
-        <Input className="w-100" value={renameValue} onChange={e=>setRenameValue(e.target.value)} />
+      <Modal open={!!renameTarget} onClose={() => setRenameTarget(null)} title="Переименовать чат"
+        footer={<>
+          <Button variant="ghost" onClick={() => setRenameTarget(null)}>Отмена</Button>
+          <Button onClick={async () => {
+            if (!renameTarget) return
+            await renameChat(renameTarget.id, renameTarget.name || 'Без названия')
+            setRenameTarget(null)
+          }}>Сохранить</Button>
+        </>}
+      >
+        <Input value={renameTarget?.name || ''} onChange={e => setRenameTarget(v => v ? { ...v, name: e.target.value } : v)} className="w-100" />
       </Modal>
 
-      <Modal open={!!deleteId} onClose={()=>setDeleteId(null)} title="Delete chat"
-        footer={<><Button variant="ghost" onClick={()=>setDeleteId(null)}>Cancel</Button><Button variant="danger" onClick={doDelete}>Delete</Button></>}>
-        <div>Удалить чат безвозвратно?</div>
+      <Modal open={!!deleteTarget} onClose={() => setDeleteTarget(null)} title="Удалить чат"
+        footer={<>
+          <Button variant="ghost" onClick={() => setDeleteTarget(null)}>Отмена</Button>
+          <Button variant="danger" onClick={async () => {
+            if (!deleteTarget) return
+            const chat = state.chatsById[deleteTarget.id]
+            // Optimistic remove from state
+            // We will call API after countdown unless undone
+            const secsTotal = 5
+            let secs = secsTotal
+            // remove locally
+            removeChatLocal(deleteTarget.id)
+            if (chatId === deleteTarget.id) nav('/gpt/chat')
+            setDeleteTarget(null)
+
+            const tid = setTimeout(async () => {
+              try { await deleteChatApiOnly(chat.id) } catch(e){ console.error(e) }
+              setPendingUndo(null)
+            }, secsTotal*1000)
+            const iid = setInterval(() => {
+              secs -= 1
+              setPendingUndo(v => v ? { ...v, secs } : v)
+            }, 1000)
+            setPendingUndo({ id: chat.id, name: chat?.name || 'Без названия', tags: chat?.tags || [], secs, tid, iid })
+          }}>Удалить</Button>
+        </>}
+      >
+        Вы уверены, что хотите удалить чат «{deleteTarget?.name || 'Без названия'}»?
       </Modal>
+
+      {editTagsTarget && (
+        <ChatTags
+          chatId={editTagsTarget.id}
+          tags={editTagsTarget.tags}
+          onTagsChange={async (tags) => {
+            await updateChatTags(editTagsTarget.id, tags)
+            setEditTagsTarget(null)
+          }}
+        />
+      )}
+    {pendingUndo && (
+        <div className={styles.undoBar} role="status">
+          <div className={styles.undoText}>Чат «{pendingUndo.name}» удалён. Отменить можно в течение {pendingUndo.secs} с.</div>
+          <button className={styles.undoBtn} onClick={() => {
+            clearTimeout(pendingUndo.tid)
+            clearInterval(pendingUndo.iid)
+            // restore in local state
+            restoreChatLocal({ id: pendingUndo.id, name: pendingUndo.name || null, tags: pendingUndo.tags || [] } as any)
+            setPendingUndo(null)
+          }}>Отменить</button>
+        </div>
+      )}
     </aside>
   )
 }
@@ -7938,110 +8076,185 @@ export default function GPTLayout() {
   )
 }
 
+### src/app/routes/gpt/Rag.module.css
+.wrap { height: 100%; display: grid; }
+.card {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  gap: 10px;
+  padding: 12px;
+  background: var(--chat-panel-bg, var(--panel-alt, #f4f6ff));
+  border: 1px solid var(--chat-panel-border, rgba(0,0,0,0.08));
+  border-radius: var(--radius);
+  margin-top: 0;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+}
+
+.title {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.search {
+  min-width: 200px;
+}
+
+.tableWrap {
+  overflow: auto;
+  border-radius: var(--radius);
+  border: 1px solid var(--color-border);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--color-bg);
+}
+
+.table th {
+  background: var(--color-bg-secondary);
+  padding: 0.75rem;
+  text-align: left;
+  font-weight: 600;
+  color: var(--color-text);
+  border-bottom: 1px solid var(--color-border);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.table td {
+  padding: 0.75rem;
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-text);
+}
+
+.table tr:hover {
+  background: var(--color-bg-secondary);
+}
+
+.table .icon {
+  background: none;
+  border: none;
+  padding: 0.5rem;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  color: var(--color-muted);
+  margin-left: 0.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+}
+
+.table .icon:hover {
+  background: var(--color-bg-secondary);
+  color: var(--color-text);
+}
+
+.muted {
+  color: var(--color-muted);
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.stack button {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--radius-sm);
+  transition: all 0.2s ease;
+}
+
+.stack button:hover {
+  background: var(--color-bg-secondary);
+}
+
 ### src/app/routes/gpt/Rag.tsx
-import React, { useState, useEffect } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import Card from '@shared/ui/Card'
-import Button from '@shared/ui/Button'
-import FilePicker from '@shared/ui/FilePicker'
 import Input from '@shared/ui/Input'
+import Button from '@shared/ui/Button'
+import Badge from '@shared/ui/Badge'
+import Modal from '@shared/ui/Modal'
+import Popover from '@shared/ui/Popover'
+import { FilterIcon, MoreVerticalIcon, DownloadIcon, RefreshIcon, ArchiveIcon, TrashIcon } from '@shared/ui/Icon'
+import Select from '@shared/ui/Select'
+import FilePicker from '@shared/ui/FilePicker'
 import * as rag from '@shared/api/rag'
 import { RagDocument } from '@shared/api/types'
-import ChatTags from '../../components/ChatTags'
-import styles from './RagPage.module.css'
+import styles from './Rag.module.css'
+
+type ColKey = 'name' | 'status' | 'created_at' | 'tags'
 
 export default function Rag() {
-  const [documents, setDocuments] = useState<RagDocument[]>([])
-  const [loading, setLoading] = useState(false)
-  const [uploading, setUploading] = useState(false)
+  const [items, setItems] = useState<RagDocument[]>([])
+  const [busy, setBusy] = useState(false)
+  const [q, setQ] = useState('')
+  const [filters, setFilters] = useState<Partial<Record<ColKey, string>>>({})
+  const [pop, setPop] = useState<{ open: boolean, col?: ColKey, anchor?: {x:number,y:number} }>({ open: false })
+  const [openAdd, setOpenAdd] = useState(false)
+  const [file, setFile] = useState<File | null>(null)
   const [uploadTags, setUploadTags] = useState<string[]>([])
-  const [searchQuery, setSearchQuery] = useState('')
-  const [searchResults, setSearchResults] = useState<any[]>([])
-  const [searching, setSearching] = useState(false)
-  const [pagination, setPagination] = useState({
-    page: 1,
-    size: 20,
-    total: 0,
-    total_pages: 0,
-    has_next: false,
-    has_prev: false
-  })
-  const [filters, setFilters] = useState({
-    status: '',
-    search: ''
-  })
-  const [metrics, setMetrics] = useState<any>(null)
+  const [selectedDoc, setSelectedDoc] = useState<RagDocument | null>(null)
+  const [actionMenuOpen, setActionMenuOpen] = useState(false)
+
+  async function refresh() {
+    const res = await rag.listDocs({ page: 1, size: 100 })
+    setItems(res.items || [])
+  }
 
   useEffect(() => {
-    loadDocuments()
-    loadMetrics()
+    refresh()
   }, [])
 
-  const loadDocuments = async (page = 1) => {
-    setLoading(true)
-    try {
-      const res = await rag.listDocs({
-        page,
-        size: pagination.size,
-        status: filters.status || undefined,
-        search: filters.search || undefined
-      })
-      setDocuments(res.items || [])
-      setPagination(res.pagination || pagination)
-    } catch (error) {
-      console.error('Failed to load documents:', error)
-    } finally {
-      setLoading(false)
-    }
-  }
+  const rows = useMemo(() => {
+    return (items||[]).filter(t => {
+      const text = ((t.name||'') + ' ' + (t.status||'') + ' ' + (t.created_at||'') + ' ' + (t.tags?.join(' ')||'')).toLowerCase()
+      if (q.trim() && !text.includes(q.toLowerCase())) return false
+      if (filters.name && !(t.name||'').toLowerCase().includes((filters.name||'').toLowerCase())) return false
+      if (filters.status && t.status !== filters.status) return false
+      if (filters.tags && !(t.tags?.join(' ')||'').toLowerCase().includes((filters.tags||'').toLowerCase())) return false
+      if (filters.created_at && !(t.created_at||'').toLowerCase().includes((filters.created_at||'').toLowerCase())) return false
+      return true
+    })
+  }, [items, q, filters])
 
-  const loadMetrics = async () => {
-    try {
-      const res = await rag.getRagMetrics()
-      setMetrics(res)
-    } catch (error) {
-      console.error('Failed to load metrics:', error)
-    }
+  function openFilter(col: ColKey, el: HTMLElement) {
+    const r = el.getBoundingClientRect()
+    setPop({ open: true, col, anchor: { x: r.left, y: r.bottom + 6 } })
   }
+  function clearAll() { setFilters({}); setPop({ open:false }) }
 
-  const handleFileUpload = async (file: File) => {
-    setUploading(true)
+  async function doUpload() {
+    if (!file) return
+    setBusy(true)
     try {
       await rag.uploadFile(file, file.name, uploadTags)
-      setUploadTags([]) // Сбрасываем теги после загрузки
-      await loadDocuments()
-      await loadMetrics()
-    } catch (error) {
-      console.error('Failed to upload file:', error)
-      alert('Ошибка загрузки файла')
-    } finally {
-      setUploading(false)
-    }
-  }
-
-  const handleFilterChange = (key: string, value: string) => {
-    setFilters(prev => ({ ...prev, [key]: value }))
-    setPagination(prev => ({ ...prev, page: 1 }))
-  }
-
-  const handlePageChange = (page: number) => {
-    loadDocuments(page)
-  }
-
-  const handleSearch = async () => {
-    if (!searchQuery.trim()) return
-    setSearching(true)
-    try {
-      const res = await rag.ragSearch({ text: searchQuery, top_k: 10 })
-      setSearchResults(res.items || [])
-    } catch (error) {
-      console.error('Search failed:', error)
-    } finally {
-      setSearching(false)
-    }
-  }
-
-  const handleFilterApply = () => {
-    loadDocuments(1)
+      setOpenAdd(false)
+      setFile(null)
+      setUploadTags([])
+      await refresh()
+    } finally { setBusy(false) }
   }
 
   const handleDownload = async (doc: RagDocument, kind: 'original' | 'canonical' = 'original') => {
@@ -8058,7 +8271,7 @@ export default function Rag() {
   const handleArchive = async (doc: RagDocument) => {
     try {
       await rag.archiveRagDocument(doc.id)
-      await loadDocuments()
+      await refresh()
     } catch (error) {
       console.error('Archive failed:', error)
     }
@@ -8068,7 +8281,7 @@ export default function Rag() {
     if (!confirm('Удалить документ?')) return
     try {
       await rag.deleteRagDocument(doc.id)
-      await loadDocuments()
+      await refresh()
     } catch (error) {
       console.error('Delete failed:', error)
     }
@@ -8084,26 +8297,6 @@ export default function Rag() {
     }
   }
 
-  const handleUpdateTags = async (docId: string, tags: string[]) => {
-    try {
-      await rag.updateRagDocumentTags(docId, tags)
-      await loadDocuments() // Перезагружаем список документов
-    } catch (error) {
-      console.error('Failed to update tags:', error)
-      alert('Ошибка обновления тегов')
-    }
-  }
-
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'ready': return '#4caf50'
-      case 'processing': return '#ff9800'
-      case 'error': return '#f44336'
-      case 'archived': return '#9e9e9e'
-      default: return '#2196f3'
-    }
-  }
-
   const getStatusText = (status: string) => {
     switch (status) {
       case 'queued': return 'В очереди'
@@ -8115,190 +8308,150 @@ export default function Rag() {
     }
   }
 
+  const hasAnyFilter = Object.values(filters).some(Boolean)
+
   return (
-    <div className={styles.container}>
-      <Card className={styles.uploadCard}>
-        <h3>Загрузка документа</h3>
-        <FilePicker
-          onFileSelected={(file) => file && handleFileUpload(file)}
-          accept=".txt,.pdf,.doc,.docx,.md,.rtf,.odt"
-          disabled={uploading}
-        />
-        <div className={styles.uploadTags}>
-          <label>Теги (опционально):</label>
-          <ChatTags 
-            chatId="upload" 
-            tags={uploadTags} 
-            onTagsChange={setUploadTags}
-          />
-        </div>
-        {uploading && <p>Загрузка...</p>}
-      </Card>
-
-      <Card className={styles.searchCard}>
-        <h3>Поиск по базе знаний</h3>
-        <div className={styles.searchForm}>
-          <Input
-            value={searchQuery}
-            onChange={e => setSearchQuery(e.target.value)}
-            placeholder="Введите запрос для поиска..."
-            onKeyDown={e => e.key === 'Enter' && handleSearch()}
-          />
-          <Button onClick={handleSearch} disabled={searching || !searchQuery.trim()}>
-            {searching ? 'Поиск...' : 'Найти'}
-          </Button>
-        </div>
-        
-        {searchResults.length > 0 && (
-          <div className={styles.searchResults}>
-            <h4>Результаты поиска:</h4>
-            {searchResults.map((item, i) => (
-              <div key={i} className={styles.searchItem}>
-                <div className={styles.searchScore}>{(item.score * 100).toFixed(1)}%</div>
-                <div className={styles.searchSnippet}>{item.snippet}</div>
-              </div>
-            ))}
+    <div className={styles.wrap}>
+      <Card className={styles.card}>
+        <div className={styles.header}>
+          <div className={styles.title}>База знаний — документы</div>
+          <div className={styles.controls}>
+            <Input className={styles.search} placeholder="Поиск…" value={q} onChange={e=>setQ(e.target.value)} />
+            {hasAnyFilter && <Badge onClick={clearAll}>Сбросить фильтры</Badge>}
+            <Button onClick={()=>setOpenAdd(true)}>Добавить</Button>
           </div>
-        )}
-      </Card>
-
-      <Card className={styles.documentsCard}>
-        <div className={styles.documentsHeader}>
-          <h3>Документы ({pagination.total})</h3>
-          {metrics && (
-            <div className={styles.metrics}>
-              <span>Готово: {metrics.ready_documents}</span>
-              <span>Ошибки: {metrics.error_documents}</span>
-              <span>Размер: {metrics.storage_size_mb} MB</span>
-            </div>
-          )}
-        </div>
-        
-        <div className={styles.filters}>
-          <Input
-            value={filters.search}
-            onChange={e => handleFilterChange('search', e.target.value)}
-            placeholder="Поиск по названию..."
-            onKeyDown={e => e.key === 'Enter' && handleFilterApply()}
-          />
-          <select
-            value={filters.status}
-            onChange={e => handleFilterChange('status', e.target.value)}
-            className={styles.statusFilter}
-          >
-            <option value="">Все статусы</option>
-            <option value="uploaded">Загружено</option>
-            <option value="processing">Обработка</option>
-            <option value="ready">Готово</option>
-            <option value="error">Ошибка</option>
-            <option value="archived">Архив</option>
-          </select>
-          <Button onClick={handleFilterApply}>Применить</Button>
         </div>
 
-        {loading ? (
-          <p>Загрузка...</p>
-        ) : documents.length === 0 ? (
-          <p>Нет документов</p>
-        ) : (
-          <div className={styles.documentsList}>
-            {documents.map(doc => (
-              <div key={doc.id} className={styles.documentItem}>
-                <div className={styles.documentInfo}>
-                  <div className={styles.documentName}>
-                    {doc.name || `Документ ${doc.id.slice(0, 8)}`}
-                  </div>
-                  <div className={styles.documentStatus}>
-                    <span 
-                      className={styles.statusBadge}
-                      style={{ backgroundColor: getStatusColor(doc.status) }}
-                    >
-                      {getStatusText(doc.status)}
-                    </span>
-                    {doc.progress !== undefined && doc.status === 'processing' && (
-                      <span className={styles.progress}>
-                        {Math.round(doc.progress * 100)}%
-                      </span>
-                    )}
-                  </div>
-                  <div className={styles.documentDate}>
-                    {doc.date_upload && new Date(doc.date_upload).toLocaleString()}
-                  </div>
-                  <div className={styles.documentTags}>
-                    <ChatTags 
-                      chatId={doc.id} 
-                      tags={doc.tags || []} 
-                      onTagsChange={(tags) => handleUpdateTags(doc.id, tags)}
-                    />
-                  </div>
-                </div>
-                <div className={styles.documentActions}>
-                  {doc.status === 'ready' && (
-                    <>
-                      <Button 
-                        size="small" 
-                        onClick={() => handleDownload(doc, 'original')}
-                      >
-                        Скачать
-                      </Button>
-                      {doc.url_canonical_file && (
-                        <Button 
-                          size="small" 
-                          onClick={() => handleDownload(doc, 'canonical')}
+        <div className={styles.tableWrap}>
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Название <button className="icon" type="button" aria-label="Фильтр по названию" onClick={(e)=>openFilter('name', e.currentTarget)}><FilterIcon/></button></th>
+                <th>Статус <button className="icon" type="button" aria-label="Фильтр по статусу" onClick={(e)=>openFilter('status', e.currentTarget)}><FilterIcon/></button></th>
+                <th>Теги <button className="icon" type="button" aria-label="Фильтр по тегам" onClick={(e)=>openFilter('tags', e.currentTarget)}><FilterIcon/></button></th>
+                <th>Создано <button className="icon" type="button" aria-label="Фильтр по дате создания" onClick={(e)=>openFilter('created_at', e.currentTarget)}><FilterIcon/></button></th>
+                <th>Действия</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((t) => (
+                <tr key={t.id}>
+                  <td className="muted">{t.name || '—'}</td>
+                  <td><Badge tone={t.status==='ready'?'success':t.status==='error'?'danger':t.status==='processing'?'warn':'neutral'}>{getStatusText(t.status)}</Badge></td>
+                  <td>{t.tags?.join(', ') || '—'}</td>
+                  <td className="muted">{t.created_at || '—'}</td>
+                  <td>
+                    <Popover
+                      trigger={
+                        <button 
+                          className="icon" 
+                          type="button" 
+                          aria-label="Действия"
+                          onClick={() => {
+                            setSelectedDoc(t)
+                            setActionMenuOpen(true)
+                          }}
                         >
-                          Каноническая форма
-                        </Button>
-                      )}
-                      <Button 
-                        size="small" 
-                        onClick={() => handleReindex(doc)}
-                        title="Переиндексировать документ"
-                      >
-                        🔄
-                      </Button>
-                    </>
-                  )}
-                  {doc.status === 'ready' && (
-                    <Button 
-                      size="small" 
-                      onClick={() => handleArchive(doc)}
-                    >
-                      Архивировать
-                    </Button>
-                  )}
-                  <Button 
-                    size="small" 
-                    variant="danger"
-                    onClick={() => handleDelete(doc)}
-                  >
-                    Удалить
-                  </Button>
-                </div>
-              </div>
-            ))}
+                          <MoreVerticalIcon/>
+                        </button>
+                      }
+                      content={
+                        <div className="stack" style={{minWidth: 180}}>
+                          {t.status === 'ready' && (
+                            <>
+                              <Button size="sm" variant="ghost" onClick={() => handleDownload(t, 'original')}>
+                                <span style={{marginRight: 6, display: 'inline-flex', alignItems: 'center'}}>
+                                  <DownloadIcon size={12}/>
+                                </span>
+                                Скачать документ
+                              </Button>
+                              {t.url_canonical_file && (
+                                <Button size="sm" variant="ghost" onClick={() => handleDownload(t, 'canonical')}>
+                                  <span style={{marginRight: 6, display: 'inline-flex', alignItems: 'center'}}>
+                                    <DownloadIcon size={12}/>
+                                  </span>
+                                  Скачать канонический вид
+                                </Button>
+                              )}
+                              <Button size="sm" variant="ghost" onClick={() => handleReindex(t)}>
+                                <span style={{marginRight: 6, display: 'inline-flex', alignItems: 'center'}}>
+                                  <RefreshIcon size={12}/>
+                                </span>
+                                Пересчитать
+                              </Button>
+                              <Button size="sm" variant="ghost" onClick={() => handleArchive(t)}>
+                                <span style={{marginRight: 6, display: 'inline-flex', alignItems: 'center'}}>
+                                  <ArchiveIcon size={12}/>
+                                </span>
+                                Заархивировать
+                              </Button>
+                            </>
+                          )}
+                          <Button size="sm" variant="ghost" onClick={() => handleDelete(t)}>
+                            <span style={{marginRight: 6, display: 'inline-flex', alignItems: 'center'}}>
+                              <TrashIcon size={12}/>
+                            </span>
+                            Удалить
+                          </Button>
+                        </div>
+                      }
+                      align="end"
+                    />
+                  </td>
+                </tr>
+              ))}
+              {rows.length === 0 && <tr><td colSpan={5} className="muted">Нет записей</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+
+      <Modal open={openAdd} onClose={()=>setOpenAdd(false)} title="Новый документ"
+        footer={<><Button variant="ghost" onClick={()=>setOpenAdd(false)}>Отмена</Button><Button onClick={doUpload} disabled={busy || !file}>Загрузить</Button></>}>
+        <div className="stack">
+          <FilePicker onFileSelected={setFile} accept=".txt,.pdf,.doc,.docx,.md,.rtf,.odt" />
+          <div>
+            <label>Теги (опционально):</label>
+            <Input 
+              placeholder="Введите теги через запятую..." 
+              value={uploadTags.join(', ')} 
+              onChange={e => setUploadTags(e.target.value.split(',').map(t => t.trim()).filter(Boolean))} 
+            />
           </div>
-        )}
-        
-        {pagination.total_pages > 1 && (
-          <div className={styles.pagination}>
-            <Button 
-              onClick={() => handlePageChange(pagination.page - 1)}
-              disabled={!pagination.has_prev}
+        </div>
+      </Modal>
+
+      <Popover 
+        trigger={<div />}
+        content={
+          <div className="stack" style={{minWidth: 260}}>
+          {pop.col === 'status' ? (
+            <Select
+              value={filters.status || ''}
+              onChange={e=>setFilters(f=>({ ...f, status: (e.target as HTMLSelectElement).value || undefined }))}
             >
-              ←
-            </Button>
-            <span className={styles.pageInfo}>
-              Страница {pagination.page} из {pagination.total_pages}
-            </span>
-            <Button 
-              onClick={() => handlePageChange(pagination.page + 1)}
-              disabled={!pagination.has_next}
-            >
-              →
-            </Button>
+              <option value="">Любой</option>
+              <option value="queued">В очереди</option>
+              <option value="processing">Обработка</option>
+              <option value="ready">Готов</option>
+              <option value="error">Ошибка</option>
+              <option value="archived">Архив</option>
+            </Select>
+          ) : (
+            <Input placeholder="Фильтр…" value={(filters[pop.col as ColKey] || '') as string} onChange={e=>{
+              const val = e.target.value
+              const col = pop.col as ColKey
+              setFilters(f=>({ ...f, [col]: (val || '').trim() || undefined }))
+            }} />
+          )}
+          <div style={{display:'flex', gap:8, justifyContent:'space-between'}}>
+            <Button size="sm" variant="ghost" onClick={()=>{ const col = pop.col as ColKey; setFilters(f=>({ ...f, [col]: undefined })); }}>Очистить</Button>
+            <Button size="sm" onClick={()=>setPop({open:false})}>Применить</Button>
           </div>
-        )}
-    </Card>
+          </div>
+        }
+        align="end"
+      />
     </div>
   )
 }
@@ -8516,59 +8669,29 @@ export default function Rag() {
 }
 
 ### src/app/store/auth.ts
-import { create } from 'zustand'
-import * as auth from '@shared/api/auth'
+import { useAuthStore } from '@/entities/auth/model/auth.store'
 
 export type User = { id: string; login?: string; fio?: string; role?: string }
 
-type State = {
-  user: User | null
-  loading: boolean
-  error?: string | null
-}
-
-type Actions = {
-  login: (login: string, password: string) => Promise<void>
-  fetchMe: () => Promise<User | null>
-  logout: () => Promise<void>
-}
-
-export const useAuth = create<State & Actions>((set, get) => ({
-  user: null,
-  loading: false,
-  error: null,
-
-  async login(login, password) {
-    set({ loading: true, error: null })
-    try {
-      await auth.login(login, password)
-      await get().fetchMe()
-    } catch (e: any) {
-      set({ error: e?.message || 'Login failed' })
-      throw e
-    } finally {
-      set({ loading: false })
-    }
-  },
-
-  async fetchMe() {
-    set({ loading: true, error: null })
-    try {
-      const me = await auth.me()
-      set({ user: me || null })
-      return me || null
-    } catch {
-      set({ user: null })
-      return null
-    } finally {
-      set({ loading: false })
-    }
-  },
-
-  async logout() {
-    try { await auth.logout() } finally { set({ user: null }) }
+export const useAuth = () => {
+  const authStore = useAuthStore()
+  
+  return {
+    user: authStore.user,
+    loading: false, // authStore doesn't have loading state
+    error: null, // authStore doesn't have error state
+    login: authStore.login,
+    fetchMe: async () => {
+      try {
+        await authStore.hydrate()
+        return authStore.user
+      } catch {
+        return null
+      }
+    },
+    logout: authStore.logout
   }
-}))
+}
 
 ### src/app/store/useChatStore.ts
 import { create } from 'zustand'
@@ -8821,7 +8944,12 @@ export const useAuthStore = create<AuthState>()(
       isAuthReady: false,
       async login(login, password) {
         const data = await apiRequest<LoginResponse>("/auth/login", { method: "POST", body: JSON.stringify({ login, password }) });
-        const tokens = { access_token: data.access_token, refresh_token: data.refresh_token, expires_in: data.expires_in };
+        const tokens = { 
+          access_token: data.access_token, 
+          token_type: data.token_type,
+          refresh_token: data.refresh_token, 
+          expires_in: data.expires_in 
+        };
         setAuthTokens(tokens);
         set({ tokens });
         set({ user: data.user });
@@ -8856,6 +8984,16 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import AppRouter from './app/router'
 import './theme.css'
+
+// Initialize auth tokens from localStorage
+const initAuthTokens = () => {
+  const token = localStorage.getItem('access_token');
+  if (token) {
+    (window as any).__auth_tokens = { access_token: token };
+  }
+};
+
+initAuthTokens();
 
 if ((import.meta as any).env?.VITE_USE_MOCKS === 'true') {
   import('./mocks/enableMocks')
@@ -9180,33 +9318,29 @@ export async function uploadAnalysisFile(file: File) {
 }
 
 export async function getAnalyze(id: string) {
-  const res = await apiFetch(`/analyze/${id}`, { method: 'GET' })
+  const res = await apiFetch(`/analyze/document/${id}`, { method: 'GET' })
   return res.json()
 }
 
 export async function downloadAnalysisFile(doc_id: string, kind: 'original' | 'canonical' = 'original') {
-  const res = await apiFetch(`/analyze/${doc_id}/download?kind=${kind}`, { method: 'GET' })
+  const res = await apiFetch(`/analyze/document/${doc_id}/download?kind=${kind}`, { method: 'GET' })
   return res.json()
 }
 
 ### src/shared/api/auth.ts
-import { apiFetch } from './base'
-import { saveTokens } from '@shared/lib/storage'
+import { apiRequest } from './http'
+import type { LoginResponse, User } from './types'
 
-export async function login(login: string, password: string) {
-  const res = await apiFetch('/auth/login', { method: 'POST', body: JSON.stringify({ login, password }) })
-  const data = await res.json() as any
-  const expires_at = Date.now() + (data.expires_in ? data.expires_in*1000 : 50*60*1000)
-  saveTokens({ access_token: data.access_token, refresh_token: data.refresh_token, expires_at })
-  return data
+export async function login(login: string, password: string): Promise<LoginResponse> {
+  return apiRequest<LoginResponse>('/auth/login', { method: 'POST', body: JSON.stringify({ login, password }) })
 }
-export async function me() {
-  const res = await apiFetch('/auth/me', { method: 'GET' })
-  return res.json()
+
+export async function me(): Promise<User> {
+  return apiRequest<User>('/auth/me', { method: 'GET' })
 }
-export async function logout() {
-  await apiFetch('/auth/logout', { method: 'POST' })
-  saveTokens(null)
+
+export async function logout(): Promise<void> {
+  return apiRequest<void>('/auth/logout', { method: 'POST' })
 }
 
 ### src/shared/api/base.ts
@@ -9257,50 +9391,64 @@ export async function apiFetch(path: string, opts: FetchOpts = {}) {
 }
 
 ### src/shared/api/chats.ts
-import { apiFetch } from './base'
+import { api } from './client'
 import { parseSSE } from '@shared/lib/sse'
+import type { 
+  PaginatedResponse, 
+  Chat, 
+  ChatCreateRequest, 
+  ChatUpdateRequest, 
+  ChatTagsUpdateRequest,
+  ChatMessageRequest,
+  ChatMessageResponse,
+  ChatMessage
+} from './types'
 
 export async function listChats(params: { cursor?: string; limit?: number; q?: string } = {}) {
   const qs = new URLSearchParams()
   if (params.limit) qs.set('limit', String(params.limit))
   if (params.cursor) qs.set('cursor', params.cursor)
   if (params.q) qs.set('q', params.q)
-  const res = await apiFetch(`/chats?${qs.toString()}`, { method: 'GET' })
-  return res.json() as Promise<{ items: any[]; next_cursor?: string | null }>
+  return api.get<PaginatedResponse<Chat>>(`/chats?${qs.toString()}`)
 }
 
-export async function createChat(name?: string, tags?: string[]) {
-  const body = { name, tags }
-  const res = await apiFetch('/chats', { method: 'POST', body: JSON.stringify(body) })
-  return res.json() as Promise<{ chat_id: string }>
+export async function createChat(name?: string | null, tags?: string[] | null) {
+  const body: ChatCreateRequest = { name: name ?? null, tags: tags ?? null }
+  return api.post<{ chat_id: string }>('/chats', body)
 }
 
 export async function listMessages(chat_id: string, params: { cursor?: string; limit?: number } = {}) {
   const qs = new URLSearchParams()
   if (params.limit) qs.set('limit', String(params.limit))
   if (params.cursor) qs.set('cursor', params.cursor)
-  const res = await apiFetch(`/chats/${chat_id}/messages?${qs.toString()}`, { method: 'GET' })
-  return res.json() as Promise<{ items: any[]; next_cursor?: string | null }>
+  return api.get<PaginatedResponse<ChatMessage>>(`/chats/${chat_id}/messages?${qs.toString()}`)
 }
 
-export async function sendMessage(chat_id: string, body: { content: string; use_rag?: boolean; response_stream?: boolean }) {
-  const res = await apiFetch(`/chats/${chat_id}/messages`, { method: 'POST', body: JSON.stringify(body), idempotencyKey: crypto.randomUUID() })
-  return res.json()
+export async function sendMessage(chat_id: string, body: ChatMessageRequest) {
+  return api.post<ChatMessageResponse>(`/chats/${chat_id}/messages`, body, { idempotent: true })
 }
 
 export async function* sendMessageStream(chat_id: string, body: { content: string; use_rag?: boolean }) {
-  const res = await apiFetch(`/chats/${chat_id}/messages`, {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  // Add auth token if available
+  const token = (window as any).__auth_tokens?.access_token || localStorage.getItem('access_token')
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`
+  }
+  
+  const res = await fetch(`/api/chats/${chat_id}/messages`, {
     method: 'POST',
-    body: JSON.stringify({ ...body, response_stream: true }),
-    idempotencyKey: crypto.randomUUID()
+    headers,
+    body: JSON.stringify({ ...body, response_stream: true })
   })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+
   const contentType = res.headers.get('content-type') || ''
   if (contentType.includes('text/event-stream')) {
     for await (const ev of parseSSE(res.body!)) {
       if (ev.data) yield ev.data
     }
   } else {
-    // Fallback: NDJSON or chunked text
     const reader = res.body!.getReader()
     const decoder = new TextDecoder()
     let pending = ''
@@ -9320,17 +9468,62 @@ export async function* sendMessageStream(chat_id: string, body: { content: strin
 }
 
 export async function renameChat(chat_id: string, name: string) {
-  const res = await apiFetch(`/chats/${chat_id}`, { method: 'PATCH', body: JSON.stringify({ name }) })
-  return res.json()
+  const body: ChatUpdateRequest = { name }
+  return api.patch<Chat>(`/chats/${chat_id}`, body)
 }
 
 export async function updateChatTags(chat_id: string, tags: string[]) {
-  const res = await apiFetch(`/chats/${chat_id}/tags`, { method: 'PUT', body: JSON.stringify({ tags }) })
-  return res.json()
+  const body: ChatTagsUpdateRequest = { tags }
+  return api.put<{ id: string; tags: string[] }>(`/chats/${chat_id}/tags`, body)
 }
 
 export async function deleteChat(chat_id: string) {
-  await apiFetch(`/chats/${chat_id}`, { method: 'DELETE' })
+  return api.delete<{ id: string; deleted: boolean }>(`/chats/${chat_id}`)
+}
+
+### src/shared/api/client.ts
+/* Lightweight API client with idempotency support */
+import { API_BASE } from '@/shared/config/env'
+const BASE = API_BASE
+
+function withBase(path: string) {
+  if (path.startsWith('http')) return path
+  return `${BASE}${path}`
+}
+
+function headers(extra?: Record<string, string>) {
+  const h: Record<string, string> = { 'Content-Type': 'application/json' }
+  // Try to get token from http.ts first, then fallback to localStorage
+  const token = (window as any).__auth_tokens?.access_token || localStorage.getItem('access_token')
+  if (token) {
+    h['Authorization'] = `Bearer ${token}`
+  }
+  return { ...h, ...(extra || {}) }
+}
+
+async function request<T>(method: string, path: string, body?: any, opts: { idempotent?: boolean } = {}) {
+  const init: RequestInit = {
+    method,
+    headers: headers(opts.idempotent ? { 'Idempotency-Key': crypto.randomUUID() } : undefined),
+  }
+  if (body !== undefined) init.body = JSON.stringify(body)
+  const res = await fetch(withBase(path), init)
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(`HTTP ${res.status}: ${text}`)
+  }
+  const ct = res.headers.get('content-type') || ''
+  if (ct.includes('application/json')) return res.json() as Promise<T>
+  // @ts-ignore
+  return res.text() as unknown as T
+}
+
+export const api = {
+  get: <T>(path: string) => request<T>('GET', path),
+  post: <T>(path: string, body?: any, opts?: { idempotent?: boolean }) => request<T>('POST', path, body, opts),
+  patch: <T>(path: string, body?: any) => request<T>('PATCH', path, body),
+  put:   <T>(path: string, body?: any) => request<T>('PUT', path, body),
+  delete:<T>(path: string) => request<T>('DELETE', path),
 }
 
 ### src/shared/api/errors.ts
@@ -9381,8 +9574,21 @@ export type AuthTokens = { access_token: string; refresh_token?: string; expires
 let _tokens: AuthTokens | null = null;
 let _refreshPromise: Promise<void> | null = null;
 
-export function setAuthTokens(tokens: AuthTokens | null) { _tokens = tokens; }
-export function clearAuthTokens() { _tokens = null; }
+export function setAuthTokens(tokens: AuthTokens | null) { 
+  _tokens = tokens; 
+  // Also save to global state for client.ts
+  (window as any).__auth_tokens = tokens;
+  if (tokens?.access_token) {
+    localStorage.setItem('access_token', tokens.access_token);
+  } else {
+    localStorage.removeItem('access_token');
+  }
+}
+export function clearAuthTokens() { 
+  _tokens = null; 
+  (window as any).__auth_tokens = null;
+  localStorage.removeItem('access_token');
+}
 export function getAccessToken(): string | null { return _tokens?.access_token || null; }
 
 export async function apiRequest<T>(path: string, opts: RequestOptions = {}): Promise<T> {
@@ -9431,6 +9637,9 @@ export async function refreshAccessToken(): Promise<void> {
       refresh_token: data.refresh_token ?? _tokens!.refresh_token,
       expires_in: data.expires_in
     };
+    // Update global state and localStorage
+    (window as any).__auth_tokens = _tokens;
+    localStorage.setItem('access_token', _tokens.access_token);
     _refreshPromise = null;
   })();
   return _refreshPromise;
@@ -9520,120 +9729,114 @@ export async function ragSearch(payload: { text?: string; top_k?: number; min_sc
 }
 
 ### src/shared/api/types.ts
-// === Auth ===
-export type LoginResponse = {
-  access_token: string;
-  refresh_token: string;
-  token_type?: string;
-  expires_in?: number;
-  user: {
-    id: string;
-    fio?: string;
-    login: string;
-    role?: string;
-  };
-};
+/** Shared API types */
+export interface Pagination {
+  page?: number
+  size?: number
+  total?: number
+  total_pages?: number
+  has_next?: boolean
+  has_prev?: boolean
+}
 
-export type User = LoginResponse["user"];
+export interface PaginatedResponse<T> {
+  items: T[]
+  next_cursor?: string | null
+  pagination?: Pagination
+}
 
-export type AuthTokens = {
-  access_token: string;
-  refresh_token?: string;
-  expires_in?: number;
-};
+export interface Chat {
+  id: string
+  name?: string | null
+  tags?: string[] | null
+  created_at?: string | null
+  updated_at?: string | null
+  last_message_at?: string | null
+}
 
-// === Chats ===
-export type Chat = {
-  id: string;
-  name?: string;
-  owner_id?: string;
-  created_at: string;
-  updated_at?: string;
-  last_message_at?: string | null;
-};
+export interface ChatMessage {
+  id: string
+  chat_id: string
+  role: 'system' | 'user' | 'assistant' | 'tool'
+  content: string
+  created_at?: string | null
+}
 
-export type ChatMessage = {
-  role: "system" | "user" | "assistant" | "tool";
-  content: string;
-  created_at?: string | null;
-};
+export interface ChatCreateRequest {
+  name?: string | null
+  tags?: string[] | null
+}
 
-export type ChatTurnRequest = {
-  response_stream?: boolean; // default true
-  use_rag?: boolean;         // default true
-  rag_params?: {
-    top_k?: number;
-    min_score?: number;
-  };
-  messages?: ChatMessage[];
-  temperature?: number;
-  max_tokens?: number;
-  idempotency_key?: string;
-};
+export interface ChatUpdateRequest {
+  name?: string | null
+}
 
-export type ChatTurnResponse = {
-  chat_id: string;
-  message_id: string;
-  created_at: string;
-  assistant_message: ChatMessage;
-};
+export interface ChatTagsUpdateRequest {
+  tags: string[]
+}
 
-export type CursorPage<T> = {
-  items: T[];
-  next_cursor?: string | null;
-};
+export interface ChatMessageRequest {
+  content: string
+  use_rag?: boolean
+  response_stream?: boolean
+}
 
-// === RAG ===
-export type RagDocument = {
-  id: string;
-  name?: string;
-  status: "queued" | "processing" | "ready" | "error" | "archived";
-  date_upload?: string;
-  url_file?: string;
-  url_canonical_file?: string;
-  tags?: string[];
-  progress?: number;
-  created_at?: string;
-  updated_at?: string;
-};
+export interface ChatMessageResponse {
+  message_id: string
+  content: string
+  answer: string
+  message?: string
+}
 
-export type RagUploadRequest = {
-  url?: string;
-  name?: string;
-  tags?: string[];
-};
+export interface User {
+  id: string
+  email: string
+  name?: string
+  role?: string
+  created_at?: string
+  updated_at?: string
+}
 
-export type RagSearchItem = {
-  document_id: string;
-  chunk_id: string;
-  score: number;
-  snippet: string;
-};
+export interface LoginResponse {
+  access_token: string
+  token_type: string
+  user: User
+  refresh_token?: string
+  expires_in?: number
+}
 
-// === Analyze ===
-export type AnalyzeDocument = {
-  id: string;
-  status: "queued" | "processing" | "done" | "error" | "canceled";
-  date_upload?: string;
-  url_file?: string;
-  url_canonical_file?: string;
-  result?: any;
-  error?: string;
-  updated_at?: string;
-};
+export interface AuthTokens {
+  access_token: string
+  token_type: string
+  refresh_token?: string
+  expires_in?: number
+}
 
-export type AnalyzeResult = {
-  id: string;
-  status: string;
-  progress?: number;
-  result?: {
-    summary?: string;
-    entities?: { type: string; text: string }[];
-    qa?: { q: string; a: string }[];
-    metrics?: { pages?: number; chunks?: number; model?: string };
-  };
-  artifacts?: { canonical?: string; preview_pdf?: string };
-};
+export interface AnalyzeDocument {
+  id: string
+  name: string
+  status: string
+  created_at: string
+  updated_at: string
+  error?: string
+  date_upload?: string
+  result?: any
+  url_canonical_file?: string
+}
+
+export interface RagDocument {
+  id: string
+  title: string
+  content: string
+  created_at: string
+  updated_at: string
+  name?: string
+  status?: string
+  progress?: number
+  date_upload?: string
+  tags?: string[]
+  url_canonical_file?: string
+}
 
 ### src/shared/config/env.ts
 export const USE_MOCKS = (import.meta as any).env?.VITE_USE_MOCKS === 'true'
@@ -9889,6 +10092,55 @@ export function FilterIcon({ active=false, size=14 }: { active?: boolean, size?:
   )
 }
 
+export function MoreVerticalIcon({ size=14 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true" style={{ verticalAlign: 'middle' }}>
+      <circle cx="12" cy="6" r="2" fill="currentColor"/>
+      <circle cx="12" cy="12" r="2" fill="currentColor"/>
+      <circle cx="12" cy="18" r="2" fill="currentColor"/>
+    </svg>
+  )
+}
+
+export function DownloadIcon({ size=14 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true" style={{ verticalAlign: 'middle' }}>
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" stroke="currentColor" strokeWidth="2" fill="none"/>
+      <polyline points="7,10 12,15 17,10" stroke="currentColor" strokeWidth="2" fill="none"/>
+      <line x1="12" y1="15" x2="12" y2="3" stroke="currentColor" strokeWidth="2"/>
+    </svg>
+  )
+}
+
+export function RefreshIcon({ size=14 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true" style={{ verticalAlign: 'middle' }}>
+      <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" stroke="currentColor" strokeWidth="2" fill="none"/>
+      <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" stroke="currentColor" strokeWidth="2" fill="none"/>
+    </svg>
+  )
+}
+
+export function ArchiveIcon({ size=14 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true" style={{ verticalAlign: 'middle' }}>
+      <rect x="2" y="3" width="20" height="4" rx="2" stroke="currentColor" strokeWidth="2" fill="none"/>
+      <path d="M4 7v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7" stroke="currentColor" strokeWidth="2" fill="none"/>
+      <path d="M10 13h4" stroke="currentColor" strokeWidth="2"/>
+    </svg>
+  )
+}
+
+export function TrashIcon({ size=14 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true" style={{ verticalAlign: 'middle' }}>
+      <path d="M3 6h18" stroke="currentColor" strokeWidth="2"/>
+      <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" stroke="currentColor" strokeWidth="2" fill="none"/>
+      <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" stroke="currentColor" strokeWidth="2" fill="none"/>
+    </svg>
+  )
+}
+
 ### src/shared/ui/Input.module.css
 .input {
   background: var(--panel);
@@ -9964,47 +10216,25 @@ export default function Modal({ open, title, onClose, children, footer, size='md
 .footer { display: flex; justify-content: end; gap: 8px; margin-top: 8px; }
 
 ### src/shared/ui/Popover.tsx
-import React, { useEffect } from 'react'
-import { createPortal } from 'react-dom'
-import styles from './Popover.module.css'
-import Button from './Button'
+import React, { useEffect, useRef, useState } from 'react'
 
-type Props = {
-  open: boolean
-  title?: string
-  anchor: { x: number, y: number } | null
-  onClose: () => void
-  children: React.ReactNode
-  footer?: React.ReactNode
-}
-
-export default function Popover({ open, title, anchor, onClose, children, footer }: Props) {
+export default function Popover({ trigger, content, align = 'start' }: { trigger: React.ReactNode, content: React.ReactNode, align?: 'start' | 'end' }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
-    function onEsc(e: KeyboardEvent) { if (e.key === 'Escape') onClose() }
-    function onClick(e: MouseEvent) {
-      const el = document.getElementById('__popover__')
-      if (!el) return
-      if (!el.contains(e.target as Node)) onClose()
-    }
-    if (open) {
-      document.addEventListener('keydown', onEsc)
-      document.addEventListener('mousedown', onClick)
-    }
-    return () => {
-      document.removeEventListener('keydown', onEsc)
-      document.removeEventListener('mousedown', onClick)
-    }
-  }, [open, onClose])
-
-  if (!open || !anchor) return null
-  const style: React.CSSProperties = { left: Math.round(anchor.x), top: Math.round(anchor.y) }
-  return createPortal(
-    <div id="__popover__" className={styles.root} style={style}>
-      {title && <div className={styles.head}><div className={styles.title}>{title}</div><Button size="sm" variant="ghost" onClick={onClose}>✕</Button></div>}
-      <div className={styles.body}>{children}</div>
-      {footer && <div className={styles.footer}>{footer}</div>}
-    </div>,
-    document.body
+    function onDoc(e: MouseEvent) { if (!ref.current?.contains(e.target as any)) setOpen(false) }
+    document.addEventListener('mousedown', onDoc)
+    return () => document.removeEventListener('mousedown', onDoc)
+  }, [])
+  return (
+    <div ref={ref} style={{ position: 'relative' }}>
+      <div onClick={() => setOpen(v => !v)}>{trigger}</div>
+      {open && (
+        <div style={{ position: 'absolute', top: '100%', [align === 'end' ? 'right' : 'left']: 0, zIndex: 10, background: 'var(--panel)', border: '1px solid rgba(255,255,255,.12)', borderRadius: 8, padding: 4, boxShadow: '0 6px 24px rgba(0,0,0,.35)' } as any}>
+          {content}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -10190,6 +10420,12 @@ Object.defineProperty(global, 'crypto', {
   /* UI */
   --radius: 14px;
   --shadow: 0 8px 24px rgba(0,0,0,.25);
+  
+  /* Additional UI variables */
+  --color-border: rgba(255,255,255,.08);
+  --color-bg-secondary: rgba(255,255,255,.04);
+  --color-primary-light: rgba(79,124,255,.12);
+  --color-text: var(--text);
 }
 
 /* Predictable sizing */
@@ -10208,6 +10444,12 @@ Object.defineProperty(global, 'crypto', {
   --chat-panel-border: rgba(0,0,0,.08);
 
   --shadow: 0 6px 24px rgba(0,0,0,.08);
+  
+  /* Additional UI variables for light theme */
+  --color-border: rgba(0,0,0,.08);
+  --color-bg-secondary: rgba(0,0,0,.04);
+  --color-primary-light: rgba(79,124,255,.12);
+  --color-text: var(--text);
 }
 
 html, body, #root { height: 100%; }
