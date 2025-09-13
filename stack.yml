@@ -50,9 +50,8 @@ services:
       QDRANT_URL: "http://qdrant:6333"
       S3_ENDPOINT: "http://minio:9000"
       S3_PUBLIC_ENDPOINT: "${S3_PUBLIC_ENDPOINT:-https://10.4.4.2}"
-      S3_BUCKET_RAW: "raw"
-      S3_BUCKET_CANONICAL: "canonical"
-      S3_BUCKET_PREVIEW: "preview"
+      S3_BUCKET_RAG: "rag"
+      S3_BUCKET_ANALYSIS: "analysis"
       JWT_SECRET: "${JWT_SECRET:-please_change_me}"
     deploy:
       replicas: 1
@@ -78,9 +77,8 @@ services:
       QDRANT_URL: "http://qdrant:6333"
       S3_ENDPOINT: "http://minio:9000"
       S3_PUBLIC_ENDPOINT: "${S3_PUBLIC_ENDPOINT:-https://10.4.4.2}"
-      S3_BUCKET_RAW: "raw"
-      S3_BUCKET_CANONICAL: "canonical"
-      S3_BUCKET_PREVIEW: "preview"
+      S3_BUCKET_RAG: "rag"
+      S3_BUCKET_ANALYSIS: "analysis"
     command: ["bash","-lc","celery -A app.celery_app:app worker -l info -Q normalize,chunk,embed,index,analyze"]
     deploy:
       replicas: 1

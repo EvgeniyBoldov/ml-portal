@@ -98,10 +98,11 @@ export default function Rag() {
   const handleReindex = async (doc: RagDocument) => {
     if (!confirm('Переиндексировать документ?')) return
     try {
-      // TODO: Добавить API для переиндексации
-      alert('Функция переиндексации будет добавлена')
+      await rag.reindexRagDocument(doc.id)
+      await refresh()
     } catch (error) {
       console.error('Reindex failed:', error)
+      alert('Ошибка переиндексации')
     }
   }
 

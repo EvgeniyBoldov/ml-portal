@@ -60,45 +60,112 @@ def list_analysis_documents(
 ):
     repo = AnalyzeRepo(session)
     docs = repo.list()
-    return {"items": [{"id": str(doc.id), "status": doc.status, "date_upload": doc.date_upload, "url_file": doc.url_file, "url_canonical_file": doc.url_canonical_file, "result": doc.result, "error": doc.error, "updated_at": doc.updated_at} for doc in docs]}
+    return {"items": [{"id": str(doc.id), "status": doc.status, "created_at": doc.date_upload.isoformat() if doc.date_upload else None, "url_file": doc.url_file, "url_canonical_file": doc.url_canonical_file, "result": doc.result, "error": doc.error, "updated_at": doc.updated_at.isoformat() if doc.updated_at else None} for doc in docs]}
 
-@router.get("/documents")
-def legacy_documents_endpoint():
-    print("DEBUG: legacy_documents_endpoint called")
-    raise HTTPException(status_code=404, detail="Endpoint moved. Use /api/analyze/ instead.")
-
-@router.get("/document/{doc_id}")
+@router.get("/{doc_id}")
 def get_analysis_document(
     doc_id: str,
     session: Session = Depends(db_session),
 ):
-    doc = AnalyzeRepo(session).get(doc_id)
+    """Получить информацию о документе анализа"""
+    repo = AnalyzeRepo(session)
+    doc = repo.get(doc_id)
     if not doc:
-        raise HTTPException(status_code=404, detail="not_found")
-    return {"id": str(doc.id), "status": doc.status, "date_upload": doc.date_upload, "url_file": doc.url_file, "url_canonical_file": doc.url_canonical_file, "result": doc.result, "error": doc.error, "updated_at": doc.updated_at}
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    return {
+        "id": str(doc.id),
+        "status": doc.status,
+        "created_at": doc.date_upload.isoformat() if doc.date_upload else None,
+        "url_file": doc.url_file,
+        "url_canonical_file": doc.url_canonical_file,
+        "result": doc.result,
+        "error": doc.error,
+        "updated_at": doc.updated_at.isoformat() if doc.updated_at else None
+    }
 
-@router.get("/document/{doc_id}/download")
+@router.get("/{doc_id}/download")
 def download_analysis_file(
     doc_id: str,
-    kind: str = Query("original", regex="^(original|canonical)$"),
+    kind: str = Query("original", description="File type: original or canonical"),
     session: Session = Depends(db_session),
 ):
-    doc = AnalyzeRepo(session).get(doc_id)
+    """Скачать файл анализа"""
+    repo = AnalyzeRepo(session)
+    doc = repo.get(doc_id)
     if not doc:
-        raise HTTPException(status_code=404, detail="not_found")
-
-    bucket = settings.S3_BUCKET_ANALYSIS
-    if kind == "original":
-        key = getattr(doc, "url_file", None)
-        if not key:
-            raise HTTPException(status_code=404, detail="original_not_ready")
-        download_name = "document"
-        mime = getattr(doc, "source_mime", None)
-    else:
-        key = getattr(doc, "url_canonical_file", None) or f"{doc.id}/canonical.txt"
-        base = "document"
-        download_name = f"{base}.txt"
-        mime = "text/plain"
-
-    url = presign_get(bucket, key, download_name=download_name, mime=mime)
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    if kind == "canonical" and not doc.url_canonical_file:
+        raise HTTPException(status_code=404, detail="Canonical file not available")
+    
+    file_key = doc.url_canonical_file if kind == "canonical" else doc.url_file
+    if not file_key:
+        raise HTTPException(status_code=404, detail="File not found")
+    
+    url = presign_get(settings.S3_BUCKET_ANALYSIS, file_key, 3600)
     return {"url": url}
+
+@router.delete("/{doc_id}")
+def delete_analysis_document(
+    doc_id: str,
+    session: Session = Depends(db_session),
+):
+    """Удалить документ анализа"""
+    repo = AnalyzeRepo(session)
+    doc = repo.get(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    # Удаляем из S3
+    if doc.url_file:
+        try:
+            from app.core.s3 import get_minio
+            minio = get_minio()
+            minio.remove_object(settings.S3_BUCKET_ANALYSIS, doc.url_file)
+        except Exception:
+            pass  # Игнорируем ошибки удаления из S3
+    
+    if doc.url_canonical_file:
+        try:
+            from app.core.s3 import get_minio
+            minio = get_minio()
+            minio.remove_object(settings.S3_BUCKET_RAG, doc.url_canonical_file)
+        except Exception:
+            pass
+    
+    # Удаляем из БД
+    session.delete(doc)
+    session.commit()
+    
+    return {"id": str(doc.id), "deleted": True}
+
+@router.post("/{doc_id}/reanalyze")
+def reanalyze_document(
+    doc_id: str,
+    session: Session = Depends(db_session),
+):
+    """Повторно проанализировать документ"""
+    repo = AnalyzeRepo(session)
+    doc = repo.get(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    # Сбрасываем статус и запускаем заново
+    doc.status = "queued"
+    doc.result = None
+    doc.error = None
+    doc.updated_at = datetime.utcnow()
+    session.commit()
+    
+    # Запускаем задачу анализа
+    try:
+        from app.tasks.analyze import run as analyze_task
+        analyze_task.delay(str(doc.id))
+    except Exception as e:
+        doc.status = "error"
+        doc.error = f"Failed to start reanalysis: {str(e)}"
+        session.commit()
+        raise HTTPException(status_code=500, detail="Failed to start reanalysis")
+    
+    return {"id": str(doc.id), "status": "reanalysis_started"}

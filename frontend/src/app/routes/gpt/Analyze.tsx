@@ -54,20 +54,22 @@ export default function Analyze() {
   const handleDelete = async (doc: AnalyzeDocument) => {
     if (!confirm('Удалить документ?')) return
     try {
-      // TODO: Добавить API для удаления документов анализа
-      alert('Функция удаления будет добавлена')
+      await analyze.deleteAnalysisFile(doc.id)
+      await loadDocuments()
     } catch (error) {
       console.error('Delete failed:', error)
+      alert('Ошибка удаления документа')
     }
   }
 
   const handleReanalyze = async (doc: AnalyzeDocument) => {
     if (!confirm('Повторно проанализировать документ?')) return
     try {
-      // TODO: Добавить API для повторного анализа
-      alert('Функция повторного анализа будет добавлена')
+      await analyze.reanalyzeFile(doc.id)
+      await loadDocuments()
     } catch (error) {
       console.error('Reanalyze failed:', error)
+      alert('Ошибка повторного анализа')
     }
   }
 

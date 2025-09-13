@@ -6930,20 +6930,22 @@ export default function Analyze() {
   const handleDelete = async (doc: AnalyzeDocument) => {
     if (!confirm('Удалить документ?')) return
     try {
-      // TODO: Добавить API для удаления документов анализа
-      alert('Функция удаления будет добавлена')
+      await analyze.deleteAnalysisFile(doc.id)
+      await loadDocuments()
     } catch (error) {
       console.error('Delete failed:', error)
+      alert('Ошибка удаления документа')
     }
   }
 
   const handleReanalyze = async (doc: AnalyzeDocument) => {
     if (!confirm('Повторно проанализировать документ?')) return
     try {
-      // TODO: Добавить API для повторного анализа
-      alert('Функция повторного анализа будет добавлена')
+      await analyze.reanalyzeFile(doc.id)
+      await loadDocuments()
     } catch (error) {
       console.error('Reanalyze failed:', error)
+      alert('Ошибка повторного анализа')
     }
   }
 
@@ -8308,10 +8310,11 @@ export default function Rag() {
   const handleReindex = async (doc: RagDocument) => {
     if (!confirm('Переиндексировать документ?')) return
     try {
-      // TODO: Добавить API для переиндексации
-      alert('Функция переиндексации будет добавлена')
+      await rag.reindexRagDocument(doc.id)
+      await refresh()
     } catch (error) {
       console.error('Reindex failed:', error)
+      alert('Ошибка переиндексации')
     }
   }
 
@@ -9321,28 +9324,32 @@ export async function mockFetch(url: string, opts: Opts = {}) {
 }
 
 ### src/shared/api/analyze.ts
-import { apiFetch } from './base'
+import { apiRequest } from './http'
 
 export async function listAnalyze() {
-  const res = await apiFetch('/analyze', { method: 'GET' })
-  return res.json()
+  return apiRequest<{ items: any[] }>('/analyze')
 }
 
 export async function uploadAnalysisFile(file: File) {
   const fd = new FormData()
   fd.set('file', file)
-  const res = await apiFetch('/analyze/upload', { method: 'POST', body: fd })
-  return res.json()
+  return apiRequest<{ id: string; status: string }>('/analyze/upload', { method: 'POST', body: fd })
 }
 
 export async function getAnalyze(id: string) {
-  const res = await apiFetch(`/analyze/document/${id}`, { method: 'GET' })
-  return res.json()
+  return apiRequest<any>(`/analyze/${id}`)
 }
 
 export async function downloadAnalysisFile(doc_id: string, kind: 'original' | 'canonical' = 'original') {
-  const res = await apiFetch(`/analyze/document/${doc_id}/download?kind=${kind}`, { method: 'GET' })
-  return res.json()
+  return apiRequest<{ url: string }>(`/analyze/${doc_id}/download?kind=${kind}`)
+}
+
+export async function deleteAnalysisFile(doc_id: string) {
+  return apiRequest<{ id: string; deleted: boolean }>(`/analyze/${doc_id}`, { method: 'DELETE' })
+}
+
+export async function reanalyzeFile(doc_id: string) {
+  return apiRequest<{ id: string; status: string }>(`/analyze/${doc_id}/reanalyze`, { method: 'POST' })
 }
 
 ### src/shared/api/auth.ts
@@ -9361,55 +9368,8 @@ export async function logout(): Promise<void> {
   return apiRequest<void>('/auth/logout', { method: 'POST' })
 }
 
-### src/shared/api/base.ts
-import { loadTokens, saveTokens } from '@shared/lib/storage'
-
-const API_BASE = import.meta.env.VITE_API_BASE || '/api'
-
-type FetchOpts = RequestInit & { idempotencyKey?: string }
-
-async function refreshToken() {
-  const tokens = loadTokens()
-  if (!tokens?.refresh_token) return null
-  const res = await fetch(`${API_BASE}/auth/refresh`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ refresh_token: tokens.refresh_token })
-  })
-  if (!res.ok) { saveTokens(null); return null }
-  const data = await res.json() as any
-  const expires_at = Date.now() + (data.expires_in ? data.expires_in*1000 : 50*60*1000)
-  const newTokens = { access_token: data.access_token, refresh_token: data.refresh_token ?? tokens.refresh_token, expires_at }
-  saveTokens(newTokens)
-  return newTokens
-}
-
-export async function apiFetch(path: string, opts: FetchOpts = {}) {
-  const tokens = loadTokens()
-  const headers: Record<string,string> = { ...(opts.headers as Record<string,string> || {}) }
-  if (!headers['Content-Type'] && !(opts.body instanceof FormData)) headers['Content-Type'] = 'application/json'
-  if (tokens?.access_token) headers['Authorization'] = `Bearer ${tokens.access_token}`
-  if (opts.idempotencyKey) headers['Idempotency-Key'] = opts.idempotencyKey
-
-  let res = await fetch(`${API_BASE}${path}`, { ...opts, headers })
-
-  // If unauthorized, try refresh once
-  if (res.status === 401 && tokens?.refresh_token) {
-    const newTokens = await refreshToken()
-    if (newTokens?.access_token) {
-      headers['Authorization'] = `Bearer ${newTokens.access_token}`
-      res = await fetch(`${API_BASE}${path}`, { ...opts, headers })
-    }
-  }
-  if (!res.ok) {
-    const text = await res.text()
-    throw new Error(text || `HTTP ${res.status}`)
-  }
-  return res
-}
-
 ### src/shared/api/chats.ts
-import { api } from './client'
+import { apiRequest } from './http'
 import { parseSSE } from '@shared/lib/sse'
 import type { 
   PaginatedResponse, 
@@ -9427,23 +9387,27 @@ export async function listChats(params: { cursor?: string; limit?: number; q?: s
   if (params.limit) qs.set('limit', String(params.limit))
   if (params.cursor) qs.set('cursor', params.cursor)
   if (params.q) qs.set('q', params.q)
-  return api.get<PaginatedResponse<Chat>>(`/chats?${qs.toString()}`)
+  return apiRequest<PaginatedResponse<Chat>>(`/chats?${qs.toString()}`)
 }
 
 export async function createChat(name?: string | null, tags?: string[] | null) {
   const body: ChatCreateRequest = { name: name ?? null, tags: tags ?? null }
-  return api.post<{ chat_id: string }>('/chats', body)
+  return apiRequest<{ chat_id: string }>('/chats', { method: 'POST', body: JSON.stringify(body) })
 }
 
 export async function listMessages(chat_id: string, params: { cursor?: string; limit?: number } = {}) {
   const qs = new URLSearchParams()
   if (params.limit) qs.set('limit', String(params.limit))
   if (params.cursor) qs.set('cursor', params.cursor)
-  return api.get<PaginatedResponse<ChatMessage>>(`/chats/${chat_id}/messages?${qs.toString()}`)
+  return apiRequest<PaginatedResponse<ChatMessage>>(`/chats/${chat_id}/messages?${qs.toString()}`)
 }
 
 export async function sendMessage(chat_id: string, body: ChatMessageRequest) {
-  return api.post<ChatMessageResponse>(`/chats/${chat_id}/messages`, body, { idempotent: true })
+  return apiRequest<ChatMessageResponse>(`/chats/${chat_id}/messages`, { 
+    method: 'POST', 
+    body: JSON.stringify(body),
+    idempotent: true 
+  })
 }
 
 export async function* sendMessageStream(chat_id: string, body: { content: string; use_rag?: boolean }) {
@@ -9454,7 +9418,8 @@ export async function* sendMessageStream(chat_id: string, body: { content: strin
     headers['Authorization'] = `Bearer ${token}`
   }
   
-  const res = await fetch(`/api/chats/${chat_id}/messages`, {
+  const API_BASE = import.meta.env.VITE_API_BASE || '/api'
+  const res = await fetch(`${API_BASE}/chats/${chat_id}/messages`, {
     method: 'POST',
     headers,
     body: JSON.stringify({ ...body, response_stream: true })
@@ -9487,61 +9452,22 @@ export async function* sendMessageStream(chat_id: string, body: { content: strin
 
 export async function renameChat(chat_id: string, name: string) {
   const body: ChatUpdateRequest = { name }
-  return api.patch<Chat>(`/chats/${chat_id}`, body)
+  return apiRequest<Chat>(`/chats/${chat_id}`, { 
+    method: 'PATCH', 
+    body: JSON.stringify(body) 
+  })
 }
 
 export async function updateChatTags(chat_id: string, tags: string[]) {
   const body: ChatTagsUpdateRequest = { tags }
-  return api.put<{ id: string; tags: string[] }>(`/chats/${chat_id}/tags`, body)
+  return apiRequest<{ id: string; tags: string[] }>(`/chats/${chat_id}/tags`, { 
+    method: 'PUT', 
+    body: JSON.stringify(body) 
+  })
 }
 
 export async function deleteChat(chat_id: string) {
-  return api.delete<{ id: string; deleted: boolean }>(`/chats/${chat_id}`)
-}
-
-### src/shared/api/client.ts
-/* Lightweight API client with idempotency support */
-import { API_BASE } from '@/shared/config/env'
-const BASE = API_BASE
-
-function withBase(path: string) {
-  if (path.startsWith('http')) return path
-  return `${BASE}${path}`
-}
-
-function headers(extra?: Record<string, string>) {
-  const h: Record<string, string> = { 'Content-Type': 'application/json' }
-  // Try to get token from http.ts first, then fallback to localStorage
-  const token = (window as any).__auth_tokens?.access_token || localStorage.getItem('access_token')
-  if (token) {
-    h['Authorization'] = `Bearer ${token}`
-  }
-  return { ...h, ...(extra || {}) }
-}
-
-async function request<T>(method: string, path: string, body?: any, opts: { idempotent?: boolean } = {}) {
-  const init: RequestInit = {
-    method,
-    headers: headers(opts.idempotent ? { 'Idempotency-Key': crypto.randomUUID() } : undefined),
-  }
-  if (body !== undefined) init.body = JSON.stringify(body)
-  const res = await fetch(withBase(path), init)
-  if (!res.ok) {
-    const text = await res.text().catch(() => '')
-    throw new Error(`HTTP ${res.status}: ${text}`)
-  }
-  const ct = res.headers.get('content-type') || ''
-  if (ct.includes('application/json')) return res.json() as Promise<T>
-  // @ts-ignore
-  return res.text() as unknown as T
-}
-
-export const api = {
-  get: <T>(path: string) => request<T>('GET', path),
-  post: <T>(path: string, body?: any, opts?: { idempotent?: boolean }) => request<T>('POST', path, body, opts),
-  patch: <T>(path: string, body?: any) => request<T>('PATCH', path, body),
-  put:   <T>(path: string, body?: any) => request<T>('PUT', path, body),
-  delete:<T>(path: string) => request<T>('DELETE', path),
+  return apiRequest<{ id: string; deleted: boolean }>(`/chats/${chat_id}`, { method: 'DELETE' })
 }
 
 ### src/shared/api/errors.ts
@@ -9667,7 +9593,7 @@ export async function refreshAccessToken(): Promise<void> {
 export const API_BASE = (import.meta.env.VITE_API_BASE || '/api') as string
 
 ### src/shared/api/rag.ts
-import { apiFetch } from './base'
+import { apiRequest } from './http'
 
 export async function listDocs(params: { 
   page?: number; 
@@ -9680,8 +9606,7 @@ export async function listDocs(params: {
   if (params.size) qs.set('size', String(params.size))
   if (params.status) qs.set('status', params.status)
   if (params.search) qs.set('search', params.search)
-  const res = await apiFetch(`/rag/?${qs.toString()}`, { method: 'GET' })
-  return res.json() as Promise<{ 
+  return apiRequest<{ 
     items: any[]; 
     pagination: {
       page: number;
@@ -9691,7 +9616,7 @@ export async function listDocs(params: {
       has_next: boolean;
       has_prev: boolean;
     }
-  }>
+  }>(`/rag/?${qs.toString()}`)
 }
 
 export async function uploadFile(file: File, name?: string, tags?: string[]) {
@@ -9699,51 +9624,53 @@ export async function uploadFile(file: File, name?: string, tags?: string[]) {
   fd.set('file', file)
   if (name) fd.set('name', name)
   if (tags?.length) fd.set('tags', JSON.stringify(tags))
-  const res = await apiFetch('/rag/upload', { method: 'POST', body: fd })
-  return res.json()
+  return apiRequest<{ id: string; status: string }>('/rag/upload', { method: 'POST', body: fd })
 }
 
 export async function updateRagDocumentTags(docId: string, tags: string[]) {
-  const res = await apiFetch(`/rag/${docId}/tags`, { 
+  return apiRequest<{ id: string; tags: string[] }>(`/rag/${docId}/tags`, { 
     method: 'PUT', 
     body: JSON.stringify(tags) 
   })
-  return res.json()
 }
 
 export async function getRagProgress(doc_id: string) {
-  const res = await apiFetch(`/rag/${doc_id}/progress`, { method: 'GET' })
-  return res.json()
+  return apiRequest<any>(`/rag/${doc_id}/progress`)
 }
 
 export async function getRagStats() {
-  const res = await apiFetch('/rag/stats', { method: 'GET' })
-  return res.json()
+  return apiRequest<any>('/rag/stats')
 }
 
 export async function getRagMetrics() {
-  const res = await apiFetch('/rag/metrics', { method: 'GET' })
-  return res.json()
+  return apiRequest<any>('/rag/metrics')
 }
 
 export async function downloadRagFile(doc_id: string, kind: 'original' | 'canonical' = 'original') {
-  const res = await apiFetch(`/rag/${doc_id}/download?kind=${kind}`, { method: 'GET' })
-  return res.json()
+  return apiRequest<{ url: string }>(`/rag/${doc_id}/download?kind=${kind}`)
 }
 
 export async function archiveRagDocument(doc_id: string) {
-  const res = await apiFetch(`/rag/${doc_id}/archive`, { method: 'POST' })
-  return res.json()
+  return apiRequest<{ id: string; archived: boolean }>(`/rag/${doc_id}/archive`, { method: 'POST' })
 }
 
 export async function deleteRagDocument(doc_id: string) {
-  const res = await apiFetch(`/rag/${doc_id}`, { method: 'DELETE' })
-  return res.json()
+  return apiRequest<{ id: string; deleted: boolean }>(`/rag/${doc_id}`, { method: 'DELETE' })
 }
 
 export async function ragSearch(payload: { text?: string; top_k?: number; min_score?: number }) {
-  const res = await apiFetch('/rag/search', { method: 'POST', body: JSON.stringify(payload) })
-  return res.json() as Promise<{ items: Array<{ document_id: string; chunk_id: string; score: number; snippet: string }> }>
+  return apiRequest<{ items: Array<{ document_id: string; chunk_id: string; score: number; snippet: string }> }>('/rag/search', { 
+    method: 'POST', 
+    body: JSON.stringify(payload) 
+  })
+}
+
+export async function reindexRagDocument(doc_id: string) {
+  return apiRequest<{ id: string; status: string }>(`/rag/${doc_id}/reindex`, { method: 'POST' })
+}
+
+export async function reindexAllRagDocuments() {
+  return apiRequest<{ reindexed_count: number; total_documents: number }>('/rag/reindex', { method: 'POST' })
 }
 
 ### src/shared/api/types.ts

@@ -19,7 +19,7 @@ from app.api.deps import db_session
 from app.core.config import settings
 from app.core.s3_helpers import put_object, presign_get
 from app.repositories.rag_repo import RagRepo
-from app.services.rag_service import progress, stats, search
+from app.services.rag_service import progress, stats, search, reprocess_document
 from app.models.rag import RagDocuments
 
 router = APIRouter(prefix="/rag", tags=["rag"])
@@ -79,10 +79,11 @@ async def upload_rag_file(
         doc.url_file = key
         doc.updated_at = datetime.utcnow()
         session.commit()
-        # 5) триггерим пайплайн (если есть upload_watch)
+        # 5) триггерим пайплайн с задержкой (файл должен быть полностью загружен)
         try:
             from app.tasks.upload_watch import watch as upload_watch
-            upload_watch(str(doc.id), key)
+            # Запускаем с задержкой 5 секунд, чтобы файл успел загрузиться
+            upload_watch.apply_async(args=[str(doc.id)], kwargs={'key': key}, countdown=5)
         except Exception as e:
             # Логируем ошибку, но не прерываем процесс
             print(f"Warning: Failed to trigger upload watch: {e}")
@@ -123,7 +124,7 @@ def list_rag_documents(
     has_prev = page > 1
     
     return {
-        "items": [{"id": str(doc.id), "name": doc.name, "status": doc.status, "date_upload": doc.date_upload, "url_file": doc.url_file, "url_canonical_file": doc.url_canonical_file, "tags": doc.tags, "progress": None, "updated_at": doc.updated_at} for doc in docs],
+        "items": [{"id": str(doc.id), "name": doc.name, "status": doc.status, "created_at": doc.date_upload.isoformat() if doc.date_upload else None, "url_file": doc.url_file, "url_canonical_file": doc.url_canonical_file, "tags": doc.tags, "progress": None, "updated_at": doc.updated_at.isoformat() if doc.updated_at else None} for doc in docs],
         "pagination": {
             "page": page,
             "size": size,
@@ -263,3 +264,35 @@ def search_rag(
     # Фильтруем по min_score на уровне приложения
     filtered_results = [r for r in results.get("results", []) if r.get("score", 0) >= min_score]
     return {"items": filtered_results}
+
+@router.post("/{doc_id}/reindex")
+def reindex_rag_document(
+    doc_id: str,
+    session: Session = Depends(db_session),
+):
+    """Переиндексация RAG документа"""
+    repo = RagRepo(session)
+    doc = repo.get(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    success = reprocess_document(session, doc_id)
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to start reindexing")
+    
+    return {"id": doc_id, "status": "reindexing_started"}
+
+@router.post("/reindex")
+def reindex_all_rag_documents(
+    session: Session = Depends(db_session),
+):
+    """Массовая переиндексация всех RAG документов"""
+    # Получаем все документы со статусом ready
+    docs = session.query(RagDocuments).filter(RagDocuments.status == "ready").all()
+    
+    reindexed_count = 0
+    for doc in docs:
+        if reprocess_document(session, str(doc.id)):
+            reindexed_count += 1
+    
+    return {"reindexed_count": reindexed_count, "total_documents": len(docs)}

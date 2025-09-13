@@ -266,49 +266,115 @@ def list_analysis_documents(
 ):
     repo = AnalyzeRepo(session)
     docs = repo.list()
-    return {"items": [{"id": str(doc.id), "status": doc.status, "date_upload": doc.date_upload, "url_file": doc.url_file, "url_canonical_file": doc.url_canonical_file, "result": doc.result, "error": doc.error, "updated_at": doc.updated_at} for doc in docs]}
+    return {"items": [{"id": str(doc.id), "status": doc.status, "created_at": doc.date_upload.isoformat() if doc.date_upload else None, "url_file": doc.url_file, "url_canonical_file": doc.url_canonical_file, "result": doc.result, "error": doc.error, "updated_at": doc.updated_at.isoformat() if doc.updated_at else None} for doc in docs]}
 
-@router.get("/documents")
-def legacy_documents_endpoint():
-    print("DEBUG: legacy_documents_endpoint called")
-    raise HTTPException(status_code=404, detail="Endpoint moved. Use /api/analyze/ instead.")
-
-@router.get("/document/{doc_id}")
+@router.get("/{doc_id}")
 def get_analysis_document(
     doc_id: str,
     session: Session = Depends(db_session),
 ):
-    doc = AnalyzeRepo(session).get(doc_id)
+    """Получить информацию о документе анализа"""
+    repo = AnalyzeRepo(session)
+    doc = repo.get(doc_id)
     if not doc:
-        raise HTTPException(status_code=404, detail="not_found")
-    return {"id": str(doc.id), "status": doc.status, "date_upload": doc.date_upload, "url_file": doc.url_file, "url_canonical_file": doc.url_canonical_file, "result": doc.result, "error": doc.error, "updated_at": doc.updated_at}
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    return {
+        "id": str(doc.id),
+        "status": doc.status,
+        "created_at": doc.date_upload.isoformat() if doc.date_upload else None,
+        "url_file": doc.url_file,
+        "url_canonical_file": doc.url_canonical_file,
+        "result": doc.result,
+        "error": doc.error,
+        "updated_at": doc.updated_at.isoformat() if doc.updated_at else None
+    }
 
-@router.get("/document/{doc_id}/download")
+@router.get("/{doc_id}/download")
 def download_analysis_file(
     doc_id: str,
-    kind: str = Query("original", regex="^(original|canonical)$"),
+    kind: str = Query("original", description="File type: original or canonical"),
     session: Session = Depends(db_session),
 ):
-    doc = AnalyzeRepo(session).get(doc_id)
+    """Скачать файл анализа"""
+    repo = AnalyzeRepo(session)
+    doc = repo.get(doc_id)
     if not doc:
-        raise HTTPException(status_code=404, detail="not_found")
-
-    bucket = settings.S3_BUCKET_ANALYSIS
-    if kind == "original":
-        key = getattr(doc, "url_file", None)
-        if not key:
-            raise HTTPException(status_code=404, detail="original_not_ready")
-        download_name = "document"
-        mime = getattr(doc, "source_mime", None)
-    else:
-        key = getattr(doc, "url_canonical_file", None) or f"{doc.id}/canonical.txt"
-        base = "document"
-        download_name = f"{base}.txt"
-        mime = "text/plain"
-
-    url = presign_get(bucket, key, download_name=download_name, mime=mime)
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    if kind == "canonical" and not doc.url_canonical_file:
+        raise HTTPException(status_code=404, detail="Canonical file not available")
+    
+    file_key = doc.url_canonical_file if kind == "canonical" else doc.url_file
+    if not file_key:
+        raise HTTPException(status_code=404, detail="File not found")
+    
+    url = presign_get(settings.S3_BUCKET_ANALYSIS, file_key, 3600)
     return {"url": url}
 
+@router.delete("/{doc_id}")
+def delete_analysis_document(
+    doc_id: str,
+    session: Session = Depends(db_session),
+):
+    """Удалить документ анализа"""
+    repo = AnalyzeRepo(session)
+    doc = repo.get(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    # Удаляем из S3
+    if doc.url_file:
+        try:
+            from app.core.s3 import get_minio
+            minio = get_minio()
+            minio.remove_object(settings.S3_BUCKET_ANALYSIS, doc.url_file)
+        except Exception:
+            pass  # Игнорируем ошибки удаления из S3
+    
+    if doc.url_canonical_file:
+        try:
+            from app.core.s3 import get_minio
+            minio = get_minio()
+            minio.remove_object(settings.S3_BUCKET_RAG, doc.url_canonical_file)
+        except Exception:
+            pass
+    
+    # Удаляем из БД
+    session.delete(doc)
+    session.commit()
+    
+    return {"id": str(doc.id), "deleted": True}
+
+@router.post("/{doc_id}/reanalyze")
+def reanalyze_document(
+    doc_id: str,
+    session: Session = Depends(db_session),
+):
+    """Повторно проанализировать документ"""
+    repo = AnalyzeRepo(session)
+    doc = repo.get(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    # Сбрасываем статус и запускаем заново
+    doc.status = "queued"
+    doc.result = None
+    doc.error = None
+    doc.updated_at = datetime.utcnow()
+    session.commit()
+    
+    # Запускаем задачу анализа
+    try:
+        from app.tasks.analyze import run as analyze_task
+        analyze_task.delay(str(doc.id))
+    except Exception as e:
+        doc.status = "error"
+        doc.error = f"Failed to start reanalysis: {str(e)}"
+        session.commit()
+        raise HTTPException(status_code=500, detail="Failed to start reanalysis")
+    
+    return {"id": str(doc.id), "status": "reanalysis_started"}
 ### app/api/routers/auth.py
 from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Response
@@ -494,10 +560,22 @@ async def post_message(
 
     async def stream_resp() -> AsyncGenerator[bytes, None]:
       # Generate response with LLM (non-stream), then stream chunks to client
-      answer = llm_chat([
-          {"role": "system", "content": "You are a helpful assistant."},
-          {"role": "user", "content": request.content},
-      ])
+      messages = [{"role": "system", "content": "You are a helpful assistant."}]
+      
+      # Add RAG context if requested
+      if request.use_rag:
+          try:
+              from app.services.rag_service import search
+              rag_results = search(session, request.content, top_k=3)
+              if rag_results.get("results"):
+                  context = "\n\n".join([r.get("snippet", "") for r in rag_results["results"][:3]])
+                  messages.append({"role": "system", "content": f"Context from knowledge base:\n{context}"})
+          except Exception as e:
+              print(f"RAG search failed: {e}")
+      
+      messages.append({"role": "user", "content": request.content})
+      answer = llm_chat(messages)
+      
       # Save assistant message
       repo.add_message(chat_id, "assistant", {"text": answer})
       # Stream by small chunks
@@ -510,10 +588,21 @@ async def post_message(
         return StreamingResponse(stream_resp(), media_type="text/event-stream")
     else:
         # non-streaming
-        answer = llm_chat([
-            {"role": "system", "content": "You are a helpful assistant."},
-            {"role": "user", "content": request.content},
-        ])
+        messages = [{"role": "system", "content": "You are a helpful assistant."}]
+        
+        # Add RAG context if requested
+        if request.use_rag:
+            try:
+                from app.services.rag_service import search
+                rag_results = search(session, request.content, top_k=3)
+                if rag_results.get("results"):
+                    context = "\n\n".join([r.get("snippet", "") for r in rag_results["results"][:3]])
+                    messages.append({"role": "system", "content": f"Context from knowledge base:\n{context}"})
+            except Exception as e:
+                print(f"RAG search failed: {e}")
+        
+        messages.append({"role": "user", "content": request.content})
+        answer = llm_chat(messages)
         repo.add_message(chat_id, "assistant", {"text": answer})
         return ChatMessageResponse(message_id=str(user_msg.id), content=request.content, answer=answer)
 
@@ -552,7 +641,7 @@ from app.api.deps import db_session
 from app.core.config import settings
 from app.core.s3_helpers import put_object, presign_get
 from app.repositories.rag_repo import RagRepo
-from app.services.rag_service import progress, stats, search
+from app.services.rag_service import progress, stats, search, reprocess_document
 from app.models.rag import RagDocuments
 
 router = APIRouter(prefix="/rag", tags=["rag"])
@@ -612,10 +701,11 @@ async def upload_rag_file(
         doc.url_file = key
         doc.updated_at = datetime.utcnow()
         session.commit()
-        # 5) триггерим пайплайн (если есть upload_watch)
+        # 5) триггерим пайплайн с задержкой (файл должен быть полностью загружен)
         try:
             from app.tasks.upload_watch import watch as upload_watch
-            upload_watch(str(doc.id), key)
+            # Запускаем с задержкой 5 секунд, чтобы файл успел загрузиться
+            upload_watch.apply_async(args=[str(doc.id)], kwargs={'key': key}, countdown=5)
         except Exception as e:
             # Логируем ошибку, но не прерываем процесс
             print(f"Warning: Failed to trigger upload watch: {e}")
@@ -656,7 +746,7 @@ def list_rag_documents(
     has_prev = page > 1
     
     return {
-        "items": [{"id": str(doc.id), "name": doc.name, "status": doc.status, "date_upload": doc.date_upload, "url_file": doc.url_file, "url_canonical_file": doc.url_canonical_file, "tags": doc.tags, "progress": None, "updated_at": doc.updated_at} for doc in docs],
+        "items": [{"id": str(doc.id), "name": doc.name, "status": doc.status, "created_at": doc.date_upload.isoformat() if doc.date_upload else None, "url_file": doc.url_file, "url_canonical_file": doc.url_canonical_file, "tags": doc.tags, "progress": None, "updated_at": doc.updated_at.isoformat() if doc.updated_at else None} for doc in docs],
         "pagination": {
             "page": page,
             "size": size,
@@ -797,12 +887,44 @@ def search_rag(
     filtered_results = [r for r in results.get("results", []) if r.get("score", 0) >= min_score]
     return {"items": filtered_results}
 
+@router.post("/{doc_id}/reindex")
+def reindex_rag_document(
+    doc_id: str,
+    session: Session = Depends(db_session),
+):
+    """Переиндексация RAG документа"""
+    repo = RagRepo(session)
+    doc = repo.get(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    success = reprocess_document(session, doc_id)
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to start reindexing")
+    
+    return {"id": doc_id, "status": "reindexing_started"}
+
+@router.post("/reindex")
+def reindex_all_rag_documents(
+    session: Session = Depends(db_session),
+):
+    """Массовая переиндексация всех RAG документов"""
+    # Получаем все документы со статусом ready
+    docs = session.query(RagDocuments).filter(RagDocuments.status == "ready").all()
+    
+    reindexed_count = 0
+    for doc in docs:
+        if reprocess_document(session, str(doc.id)):
+            reindexed_count += 1
+    
+    return {"reindexed_count": reindexed_count, "total_documents": len(docs)}
+
 ### app/api/sse.py
 from starlette.responses import StreamingResponse
 def sse_response(source):
     def gen():
         for item in source:
-            yield (item.get("data","") + "\n\n")
+            yield ("data: " + item.get("data","") + "\n\n")
     return StreamingResponse(gen(), media_type="text/event-stream")
 
 ### app/celery_app.py
@@ -1416,7 +1538,51 @@ embedding_batch_inflight = Gauge("embedding_batch_inflight", "Embedding batches 
 external_request_total = Counter("external_request_total", "External requests total", ["target", "status"])
 external_request_seconds = Histogram("external_request_seconds", "External request latency", ["target"])
 
+# Enhanced metrics for observability
+llm_request_total = Counter("llm_request_total", "LLM requests total", ["model", "status"])
+llm_latency_seconds = Histogram("llm_latency_seconds", "LLM request latency", ["model"], buckets=[0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0])
+llm_tokens_total = Counter("llm_tokens_total", "LLM tokens processed", ["model", "type"])  # type: input/output
+
+embedding_request_total = Counter("embedding_request_total", "Embedding requests total", ["model", "status"])
+embedding_latency_seconds = Histogram("embedding_latency_seconds", "Embedding request latency", ["model"], buckets=[0.1, 0.5, 1.0, 2.0, 5.0, 10.0])
+
+document_processing_total = Counter("document_processing_total", "Document processing", ["format", "status"])
+document_processing_seconds = Histogram("document_processing_seconds", "Document processing time", ["format"], buckets=[1.0, 5.0, 10.0, 30.0, 60.0, 300.0])
+
+chunking_quality = Histogram("chunking_quality", "Chunk quality metrics", ["metric"], buckets=[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0])
+
+reranking_total = Counter("reranking_total", "Reranking operations", ["method", "status"])
+reranking_latency_seconds = Histogram("reranking_latency_seconds", "Reranking latency", ["method"])
+
+pipeline_stage_duration = Histogram("pipeline_stage_duration_seconds", "Pipeline stage duration", ["stage"], buckets=[1.0, 5.0, 10.0, 30.0, 60.0, 300.0, 600.0])
+pipeline_errors_total = Counter("pipeline_errors_total", "Pipeline errors", ["stage", "error_type"])
+
 qdrant_points = Gauge("qdrant_points", "Qdrant points", ["collection"])
+qdrant_operations_total = Counter("qdrant_operations_total", "Qdrant operations", ["operation", "status"])
+qdrant_latency_seconds = Histogram("qdrant_latency_seconds", "Qdrant operation latency", ["operation"])
+
+# RAG-specific metrics
+rag_ingest_stage_duration = Histogram("rag_ingest_stage_duration_seconds", "RAG ingest stage duration", ["stage"], buckets=[1.0, 5.0, 10.0, 30.0, 60.0, 300.0])
+rag_ingest_errors_total = Counter("rag_ingest_errors_total", "RAG ingest errors", ["stage", "error_type"])
+
+rag_vectors_total = Gauge("rag_vectors_total", "Total vectors in Qdrant", ["collection"])
+rag_chunks_total = Gauge("rag_chunks_total", "Total chunks in Qdrant", ["collection"])
+
+rag_search_latency_seconds = Histogram("rag_search_latency_seconds", "RAG search latency", ["model"], buckets=[0.1, 0.5, 1.0, 2.0, 5.0, 10.0])
+rag_search_top_k = Histogram("rag_search_top_k", "RAG search top_k distribution", ["model"], buckets=[1, 3, 5, 10, 20, 50])
+rag_search_scores = Histogram("rag_search_scores", "RAG search score distribution", ["model"], buckets=[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0])
+rag_search_coverage = Histogram("rag_search_coverage", "RAG search document coverage", ["model"], buckets=[1, 2, 3, 5, 10, 20])
+
+rag_quality_mrr = Histogram("rag_quality_mrr", "RAG quality MRR@K", ["k"], buckets=[1, 3, 5, 10])
+rag_quality_ndcg = Histogram("rag_quality_ndcg", "RAG quality nDCG@K", ["k"], buckets=[1, 3, 5, 10])
+
+chat_rag_usage_total = Counter("chat_rag_usage_total", "Chat RAG usage", ["model", "has_context"])
+chat_rag_fallback_total = Counter("chat_rag_fallback_total", "Chat RAG fallback", ["reason"])
+
+# System health metrics
+memory_usage_bytes = Gauge("memory_usage_bytes", "Memory usage", ["type"])
+cpu_usage_percent = Gauge("cpu_usage_percent", "CPU usage percentage")
+disk_usage_bytes = Gauge("disk_usage_bytes", "Disk usage", ["path"])
 
 def prometheus_endpoint() -> Response:
     return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
@@ -2725,6 +2891,309 @@ class RagMetricsResponse(BaseModel):
 ### app/services/__init__.py
 # services package init
 
+### app/services/adaptive_chunker.py
+from __future__ import annotations
+
+import re
+from typing import List, Dict, Any, Tuple
+from dataclasses import dataclass
+
+@dataclass
+class Chunk:
+    text: str
+    chunk_idx: int
+    metadata: Dict[str, Any]
+    is_header: bool = False
+    is_table: bool = False
+    parent_section: str = ""
+
+class AdaptiveChunker:
+    """
+    Adaptive text chunking that preserves structure and context
+    """
+    
+    def __init__(self, max_chars: int = 1200, overlap: int = 100):
+        self.max_chars = max_chars
+        self.overlap = overlap
+        
+        # Patterns for structure detection
+        self.header_patterns = [
+            r'^#{1,6}\s+.+',  # Markdown headers
+            r'^\d+\.\s+.+',   # Numbered lists
+            r'^[A-Z][A-Z\s]+$',  # ALL CAPS headers
+            r'^[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*:$',  # Title Case headers
+        ]
+        
+        self.section_patterns = [
+            r'^(?:Chapter|Section|Part)\s+\d+',  # Chapter markers
+            r'^\d+\.\d+',  # Subsection numbers
+            r'^[IVX]+\.',  # Roman numerals
+        ]
+        
+        self.table_indicators = [
+            r'^\s*\|.*\|',  # Markdown tables
+            r'^\s*\w+\s+\w+\s+\w+',  # Space-separated columns
+            r'^\s*\w+,\s*\w+',  # CSV-like data
+        ]
+
+    def chunk_text(self, text: str, document_meta: Dict[str, Any] = None) -> List[Chunk]:
+        """
+        Chunk text while preserving structure
+        """
+        if not text.strip():
+            return []
+        
+        # Detect document structure
+        structure = self._analyze_structure(text)
+        
+        # Create chunks based on structure
+        chunks = []
+        current_chunk = ""
+        current_metadata = {}
+        chunk_idx = 0
+        
+        lines = text.split('\n')
+        i = 0
+        
+        while i < len(lines):
+            line = lines[i].strip()
+            
+            # Check if this is a structural element
+            if self._is_header(line):
+                # Save current chunk if it exists
+                if current_chunk.strip():
+                    chunks.append(Chunk(
+                        text=current_chunk.strip(),
+                        chunk_idx=chunk_idx,
+                        metadata=current_metadata.copy(),
+                        is_header=False,
+                        is_table=self._is_table(current_chunk),
+                        parent_section=current_metadata.get('section', '')
+                    ))
+                    chunk_idx += 1
+                    current_chunk = ""
+                
+                # Start new chunk with header
+                header_chunk = self._create_header_chunk(line, i, lines, chunk_idx)
+                chunks.append(header_chunk)
+                chunk_idx += 1
+                
+                # Set metadata for following chunks
+                current_metadata = {
+                    'section': line,
+                    'header_line': i,
+                    'document_meta': document_meta or {}
+                }
+                
+            elif self._is_table_start(line):
+                # Handle table as separate chunk
+                table_chunk = self._extract_table_chunk(lines, i, chunk_idx, current_metadata)
+                if table_chunk:
+                    chunks.append(table_chunk)
+                    chunk_idx += 1
+                    i = table_chunk.metadata.get('end_line', i)
+            
+            else:
+                # Regular text line
+                if len(current_chunk + line) > self.max_chars:
+                    # Save current chunk
+                    if current_chunk.strip():
+                        chunks.append(Chunk(
+                            text=current_chunk.strip(),
+                            chunk_idx=chunk_idx,
+                            metadata=current_metadata.copy(),
+                            is_header=False,
+                            is_table=self._is_table(current_chunk),
+                            parent_section=current_metadata.get('section', '')
+                        ))
+                        chunk_idx += 1
+                    
+                    # Start new chunk with overlap
+                    current_chunk = self._create_overlap(current_chunk) + line
+                else:
+                    current_chunk += '\n' + line if current_chunk else line
+            
+            i += 1
+        
+        # Add final chunk
+        if current_chunk.strip():
+            chunks.append(Chunk(
+                text=current_chunk.strip(),
+                chunk_idx=chunk_idx,
+                metadata=current_metadata.copy(),
+                is_header=False,
+                is_table=self._is_table(current_chunk),
+                parent_section=current_metadata.get('section', '')
+            ))
+        
+        # Apply overlap between chunks
+        return self._apply_overlap(chunks)
+
+    def _analyze_structure(self, text: str) -> Dict[str, Any]:
+        """Analyze document structure"""
+        lines = text.split('\n')
+        
+        structure = {
+            'headers': [],
+            'sections': [],
+            'tables': [],
+            'lists': []
+        }
+        
+        for i, line in enumerate(lines):
+            line = line.strip()
+            
+            if self._is_header(line):
+                structure['headers'].append({'line': i, 'text': line})
+            elif self._is_section(line):
+                structure['sections'].append({'line': i, 'text': line})
+            elif self._is_table_start(line):
+                structure['tables'].append({'line': i, 'text': line})
+        
+        return structure
+
+    def _is_header(self, line: str) -> bool:
+        """Check if line is a header"""
+        for pattern in self.header_patterns:
+            if re.match(pattern, line):
+                return True
+        return False
+
+    def _is_section(self, line: str) -> bool:
+        """Check if line is a section marker"""
+        for pattern in self.section_patterns:
+            if re.match(pattern, line):
+                return True
+        return False
+
+    def _is_table_start(self, line: str) -> bool:
+        """Check if line starts a table"""
+        for pattern in self.table_indicators:
+            if re.match(pattern, line):
+                return True
+        return False
+
+    def _is_table(self, text: str) -> bool:
+        """Check if text contains table data"""
+        lines = text.split('\n')
+        table_lines = 0
+        
+        for line in lines:
+            if self._is_table_start(line):
+                table_lines += 1
+        
+        return table_lines >= 2  # At least 2 table lines
+
+    def _create_header_chunk(self, header: str, line_idx: int, lines: List[str], chunk_idx: int) -> Chunk:
+        """Create a chunk for a header with some following context"""
+        # Include a few lines after header for context
+        context_lines = []
+        for i in range(line_idx + 1, min(line_idx + 3, len(lines))):
+            if lines[i].strip():
+                context_lines.append(lines[i])
+                break
+        
+        text = header
+        if context_lines:
+            text += '\n' + '\n'.join(context_lines)
+        
+        return Chunk(
+            text=text,
+            chunk_idx=chunk_idx,
+            metadata={
+                'is_header': True,
+                'header_line': line_idx,
+                'header_text': header
+            },
+            is_header=True,
+            is_table=False,
+            parent_section=""
+        )
+
+    def _extract_table_chunk(self, lines: List[str], start_idx: int, chunk_idx: int, metadata: Dict) -> Chunk:
+        """Extract a complete table as a chunk"""
+        table_lines = []
+        i = start_idx
+        
+        # Collect table lines
+        while i < len(lines):
+            line = lines[i].strip()
+            if self._is_table_start(line) or (table_lines and line and not line.startswith(' ')):
+                table_lines.append(line)
+            elif not line and table_lines:
+                # Empty line might end table
+                break
+            elif not table_lines:
+                # No table started yet
+                break
+            else:
+                table_lines.append(line)
+            i += 1
+        
+        if len(table_lines) >= 2:
+            return Chunk(
+                text='\n'.join(table_lines),
+                chunk_idx=chunk_idx,
+                metadata={
+                    **metadata,
+                    'is_table': True,
+                    'table_lines': len(table_lines),
+                    'start_line': start_idx,
+                    'end_line': i
+                },
+                is_header=False,
+                is_table=True,
+                parent_section=metadata.get('section', '')
+            )
+        
+        return None
+
+    def _create_overlap(self, text: str) -> str:
+        """Create overlap text from the end of current chunk"""
+        if not text:
+            return ""
+        
+        # Take last few sentences or words
+        sentences = re.split(r'[.!?]+', text)
+        if len(sentences) > 1:
+            # Take last sentence
+            return sentences[-2].strip() + " "
+        else:
+            # Take last few words
+            words = text.split()
+            if len(words) > 10:
+                return ' '.join(words[-10:]) + " "
+            return text[-self.overlap:] + " " if len(text) > self.overlap else text
+
+    def _apply_overlap(self, chunks: List[Chunk]) -> List[Chunk]:
+        """Apply overlap between chunks"""
+        if len(chunks) <= 1:
+            return chunks
+        
+        result = []
+        
+        for i, chunk in enumerate(chunks):
+            if i > 0:
+                # Add overlap from previous chunk
+                prev_chunk = result[-1]
+                overlap_text = self._create_overlap(prev_chunk.text)
+                
+                if overlap_text:
+                    chunk.text = overlap_text + chunk.text
+                    chunk.metadata['has_overlap'] = True
+                    chunk.metadata['overlap_from'] = i - 1
+            
+            result.append(chunk)
+        
+        return result
+
+def chunk_text_adaptive(text: str, max_chars: int = 1200, overlap: int = 100, document_meta: Dict[str, Any] = None) -> List[Chunk]:
+    """
+    Convenience function for adaptive chunking
+    """
+    chunker = AdaptiveChunker(max_chars=max_chars, overlap=overlap)
+    return chunker.chunk_text(text, document_meta)
+
 ### app/services/analyze_service.py
 from __future__ import annotations
 from sqlalchemy.orm import Session
@@ -2975,6 +3444,505 @@ def qdrant_count_by_doc(doc_id: str) -> int:
                     break
             return total
 
+### app/services/enhanced_text_extractor.py
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any, Dict, List, Tuple, Optional
+from io import BytesIO
+import csv
+import json
+import base64
+
+# External deps (add to requirements):
+# - pdfminer.six
+# - PyPDF2 (optional fallback/meta)
+# - python-docx
+# - openpyxl
+# - charset-normalizer
+# - pdfplumber (for tables)
+# - pdf2image (for OCR)
+# - pytesseract (for OCR)
+# - mammoth (for DOCX)
+# - pandas (for CSV/Excel)
+
+@dataclass
+class TableData:
+    name: str
+    csv_data: str
+    rows: int
+    cols: int
+
+@dataclass
+class ExtractResult:
+    text: str
+    kind: str
+    meta: Dict[str, Any]
+    warnings: List[str]
+    tables: List[TableData]
+
+    def to_json(self) -> str:
+        return json.dumps(
+            {
+                "text": self.text,
+                "tables": [{"name": t.name, "csv": t.csv_data, "rows": t.rows, "cols": t.cols} for t in self.tables],
+                "meta": self.meta,
+                "extractor": self.kind,
+                "warnings": self.warnings,
+            },
+            ensure_ascii=False
+        )
+
+def extract_text_enhanced(content: bytes, filename: str) -> ExtractResult:
+    """
+    Enhanced text extraction with OCR fallback and table support
+    """
+    if not content:
+        return ExtractResult("", "empty", {}, [], [])
+    
+    ext = filename.lower().split('.')[-1] if '.' in filename else ''
+    warnings = []
+    tables = []
+    
+    # Text files
+    if ext in ('txt', 'md', 'rtf'):
+        return _extract_text_file(content, ext, warnings)
+    
+    # CSV files
+    elif ext == 'csv':
+        return _extract_csv_file(content, warnings)
+    
+    # PDF files
+    elif ext == 'pdf':
+        return _extract_pdf_enhanced(content, warnings)
+    
+    # DOCX files
+    elif ext == 'docx':
+        return _extract_docx_enhanced(content, warnings)
+    
+    # XLSX files
+    elif ext == 'xlsx':
+        return _extract_xlsx_enhanced(content, warnings)
+    
+    # DOC files (legacy)
+    elif ext == 'doc':
+        return _extract_doc_file(content, warnings)
+    
+    # Unknown format - try as text
+    else:
+        warnings.append(f"Unknown extension '.{ext}', treated as text.")
+        return _extract_text_file(content, 'txt', warnings)
+
+def _extract_text_file(content: bytes, ext: str, warnings: List[str]) -> ExtractResult:
+    """Extract text from plain text files"""
+    try:
+        # Try to detect encoding
+        import charset_normalizer
+        detected = charset_normalizer.detect(content)
+        encoding = detected.get('encoding', 'utf-8')
+        confidence = detected.get('confidence', 0.0)
+        
+        if confidence < 0.7:
+            warnings.append(f"Low confidence encoding detection: {encoding} ({confidence:.2f})")
+        
+        text = content.decode(encoding, errors='replace')
+        
+        # Handle RTF
+        if ext == 'rtf':
+            text = _clean_rtf(text)
+        
+        return ExtractResult(
+            text=text,
+            kind=f"txt({encoding})",
+            meta={"encoding": encoding, "confidence": confidence},
+            warnings=warnings,
+            tables=[]
+        )
+    except Exception as e:
+        warnings.append(f"Text extraction failed: {e}")
+        return ExtractResult(
+            text=content.decode('utf-8', errors='replace'),
+            kind="txt(utf_8_fallback)",
+            meta={"encoding": "utf-8", "error": str(e)},
+            warnings=warnings,
+            tables=[]
+        )
+
+def _extract_csv_file(content: bytes, warnings: List[str]) -> ExtractResult:
+    """Extract text and tables from CSV files"""
+    try:
+        import pandas as pd
+        import io
+        
+        # Detect encoding
+        import charset_normalizer
+        detected = charset_normalizer.detect(content)
+        encoding = detected.get('encoding', 'utf-8')
+        
+        # Read CSV
+        df = pd.read_csv(io.BytesIO(content), encoding=encoding)
+        
+        # Convert to text
+        text = df.to_string(index=False)
+        
+        # Create table data
+        csv_data = df.to_csv(index=False)
+        table = TableData(
+            name="main_table",
+            csv_data=csv_data,
+            rows=len(df),
+            cols=len(df.columns)
+        )
+        
+        return ExtractResult(
+            text=text,
+            kind="csv(enhanced)",
+            meta={"encoding": encoding, "rows": len(df), "cols": len(df.columns)},
+            warnings=warnings,
+            tables=[table]
+        )
+    except Exception as e:
+        warnings.append(f"Enhanced CSV extraction failed: {e}")
+        # Fallback to simple CSV
+        return _extract_simple_csv(content, warnings)
+
+def _extract_simple_csv(content: bytes, warnings: List[str]) -> ExtractResult:
+    """Simple CSV extraction fallback"""
+    try:
+        import csv
+        import io
+        
+        # Detect encoding
+        import charset_normalizer
+        detected = charset_normalizer.detect(content)
+        encoding = detected.get('encoding', 'utf-8')
+        
+        # Read CSV
+        text_content = content.decode(encoding, errors='replace')
+        csv_reader = csv.reader(io.StringIO(text_content))
+        rows = list(csv_reader)
+        
+        # Format as text
+        text = '\n'.join(['\t'.join(row) for row in rows])
+        
+        # Create table data
+        csv_data = text_content
+        table = TableData(
+            name="main_table",
+            csv_data=csv_data,
+            rows=len(rows),
+            cols=len(rows[0]) if rows else 0
+        )
+        
+        return ExtractResult(
+            text=text,
+            kind="csv(simple)",
+            meta={"encoding": encoding, "rows": len(rows)},
+            warnings=warnings,
+            tables=[table]
+        )
+    except Exception as e:
+        warnings.append(f"CSV extraction failed: {e}")
+        return ExtractResult(
+            text=content.decode('utf-8', errors='replace'),
+            kind="csv(fallback)",
+            meta={"encoding": "utf-8", "error": str(e)},
+            warnings=warnings,
+            tables=[]
+        )
+
+def _extract_pdf_enhanced(content: bytes, warnings: List[str]) -> ExtractResult:
+    """Enhanced PDF extraction with OCR fallback and table support"""
+    text = ""
+    tables = []
+    meta = {}
+    
+    # Try pdfplumber first (better for tables)
+    try:
+        import pdfplumber
+        with pdfplumber.open(BytesIO(content)) as pdf:
+            pages_text = []
+            all_tables = []
+            
+            for page_num, page in enumerate(pdf.pages):
+                # Extract text
+                page_text = page.extract_text()
+                if page_text:
+                    pages_text.append(page_text)
+                
+                # Extract tables
+                page_tables = page.extract_tables()
+                for table_num, table in enumerate(page_tables):
+                    if table and len(table) > 1:  # Skip empty tables
+                        # Convert to CSV
+                        csv_data = '\n'.join([','.join([str(cell or '') for cell in row]) for row in table])
+                        table_data = TableData(
+                            name=f"page_{page_num+1}_table_{table_num+1}",
+                            csv_data=csv_data,
+                            rows=len(table),
+                            cols=len(table[0]) if table else 0
+                        )
+                        all_tables.append(table_data)
+            
+            text = '\n\n'.join(pages_text)
+            tables = all_tables
+            meta = {"pages": len(pdf.pages), "tables_found": len(tables)}
+            
+            if text.strip():
+                return ExtractResult(
+                    text=text,
+                    kind="pdf(pdfplumber)",
+                    meta=meta,
+                    warnings=warnings,
+                    tables=tables
+                )
+    except Exception as e:
+        warnings.append(f"PDF extraction via pdfplumber failed: {e}")
+    
+    # Try pdfminer.six
+    try:
+        from pdfminer.high_level import extract_text
+        text = extract_text(BytesIO(content))
+        if text.strip():
+            return ExtractResult(
+                text=text,
+                kind="pdf(pdfminer)",
+                meta={"pages": 1, "method": "pdfminer"},
+                warnings=warnings,
+                tables=tables
+            )
+    except Exception as e:
+        warnings.append(f"PDF extraction via pdfminer failed: {e}")
+    
+    # Try PyPDF2
+    try:
+        import PyPDF2
+        pdf_reader = PyPDF2.PdfReader(BytesIO(content))
+        text = ""
+        for page in pdf_reader.pages:
+            text += page.extract_text() + "\n"
+        
+        if text.strip():
+            return ExtractResult(
+                text=text,
+                kind="pdf(pypdf2)",
+                meta={"pages": len(pdf_reader.pages), "method": "pypdf2"},
+                warnings=warnings,
+                tables=tables
+            )
+    except Exception as e:
+        warnings.append(f"PDF extraction via PyPDF2 failed: {e}")
+    
+    # OCR fallback
+    try:
+        return _extract_pdf_ocr(content, warnings)
+    except Exception as e:
+        warnings.append(f"OCR extraction failed: {e}")
+    
+    # Final fallback
+    return ExtractResult(
+        text="",
+        kind="pdf(failed)",
+        meta={"pages": 0, "error": "All extraction methods failed"},
+        warnings=warnings,
+        tables=[]
+    )
+
+def _extract_pdf_ocr(content: bytes, warnings: List[str]) -> ExtractResult:
+    """OCR extraction for scanned PDFs"""
+    try:
+        from pdf2image import convert_from_bytes
+        import pytesseract
+        
+        # Convert PDF to images
+        images = convert_from_bytes(content, dpi=300)
+        
+        text_parts = []
+        for i, image in enumerate(images):
+            # OCR each page
+            page_text = pytesseract.image_to_string(image, lang='rus+eng')
+            text_parts.append(page_text)
+        
+        text = '\n\n'.join(text_parts)
+        
+        return ExtractResult(
+            text=text,
+            kind="pdf(ocr)",
+            meta={"pages": len(images), "method": "ocr", "lang": "rus+eng"},
+            warnings=warnings,
+            tables=[]
+        )
+    except Exception as e:
+        raise Exception(f"OCR processing failed: {e}")
+
+def _extract_docx_enhanced(content: bytes, warnings: List[str]) -> ExtractResult:
+    """Enhanced DOCX extraction with table support"""
+    try:
+        from docx import Document
+        from docx.table import Table
+        
+        doc = Document(BytesIO(content))
+        
+        # Extract text
+        text_parts = []
+        tables = []
+        
+        for paragraph in doc.paragraphs:
+            if paragraph.text.strip():
+                text_parts.append(paragraph.text)
+        
+        # Extract tables
+        for table_num, table in enumerate(doc.tables):
+            table_data = []
+            for row in table.rows:
+                row_data = [cell.text.strip() for cell in row.cells]
+                table_data.append(row_data)
+            
+            if table_data:
+                # Convert to CSV
+                csv_data = '\n'.join([','.join(row) for row in table_data])
+                table_obj = TableData(
+                    name=f"table_{table_num+1}",
+                    csv_data=csv_data,
+                    rows=len(table_data),
+                    cols=len(table_data[0]) if table_data else 0
+                )
+                tables.append(table_obj)
+        
+        text = '\n'.join(text_parts)
+        
+        return ExtractResult(
+            text=text,
+            kind="docx(enhanced)",
+            meta={"tables_found": len(tables)},
+            warnings=warnings,
+            tables=tables
+        )
+    except Exception as e:
+        warnings.append(f"Enhanced DOCX extraction failed: {e}")
+        # Fallback to mammoth
+        return _extract_docx_mammoth(content, warnings)
+
+def _extract_docx_mammoth(content: bytes, warnings: List[str]) -> ExtractResult:
+    """DOCX extraction using mammoth"""
+    try:
+        import mammoth
+        
+        result = mammoth.extract_raw_text(BytesIO(content))
+        text = result.value
+        
+        return ExtractResult(
+            text=text,
+            kind="docx(mammoth)",
+            meta={"method": "mammoth"},
+            warnings=warnings,
+            tables=[]
+        )
+    except Exception as e:
+        warnings.append(f"DOCX extraction via mammoth failed: {e}")
+        return ExtractResult(
+            text="",
+            kind="docx(failed)",
+            meta={"error": str(e)},
+            warnings=warnings,
+            tables=[]
+        )
+
+def _extract_xlsx_enhanced(content: bytes, warnings: List[str]) -> ExtractResult:
+    """Enhanced XLSX extraction with table support"""
+    try:
+        import openpyxl
+        import pandas as pd
+        import io
+        
+        # Load workbook
+        workbook = openpyxl.load_workbook(BytesIO(content))
+        
+        text_parts = []
+        tables = []
+        
+        for sheet_name in workbook.sheetnames:
+            sheet = workbook[sheet_name]
+            
+            # Extract text from sheet
+            sheet_text = []
+            for row in sheet.iter_rows(values_only=True):
+                row_text = [str(cell or '') for cell in row]
+                if any(cell.strip() for cell in row_text):
+                    sheet_text.append('\t'.join(row_text))
+            
+            if sheet_text:
+                text_parts.append(f"Sheet: {sheet_name}\n" + '\n'.join(sheet_text))
+            
+            # Create table data
+            if sheet_text:
+                # Convert to DataFrame for CSV
+                df = pd.read_excel(BytesIO(content), sheet_name=sheet_name)
+                csv_data = df.to_csv(index=False)
+                
+                table = TableData(
+                    name=sheet_name,
+                    csv_data=csv_data,
+                    rows=len(df),
+                    cols=len(df.columns)
+                )
+                tables.append(table)
+        
+        text = '\n\n'.join(text_parts)
+        
+        return ExtractResult(
+            text=text,
+            kind="xlsx(enhanced)",
+            meta={"sheets": len(workbook.sheetnames), "tables_found": len(tables)},
+            warnings=warnings,
+            tables=tables
+        )
+    except Exception as e:
+        warnings.append(f"Enhanced XLSX extraction failed: {e}")
+        return ExtractResult(
+            text="",
+            kind="xlsx(failed)",
+            meta={"error": str(e)},
+            warnings=warnings,
+            tables=[]
+        )
+
+def _extract_doc_file(content: bytes, warnings: List[str]) -> ExtractResult:
+    """Extract from legacy DOC files"""
+    try:
+        import mammoth
+        
+        result = mammoth.extract_raw_text(BytesIO(content))
+        text = result.value
+        
+        return ExtractResult(
+            text=text,
+            kind="doc(mammoth)",
+            meta={"method": "mammoth"},
+            warnings=warnings,
+            tables=[]
+        )
+    except Exception as e:
+        warnings.append(f"DOC extraction failed: {e}")
+        return ExtractResult(
+            text="",
+            kind="doc(failed)",
+            meta={"error": str(e)},
+            warnings=warnings,
+            tables=[]
+        )
+
+def _clean_rtf(text: str) -> str:
+    """Basic RTF cleaning"""
+    import re
+    
+    # Remove RTF control codes
+    text = re.sub(r'\\[a-z]+\d*\s?', '', text)
+    text = re.sub(r'[{}]', '', text)
+    text = re.sub(r'\s+', ' ', text)
+    
+    return text.strip()
+
 ### app/services/rag_service.py
 # app/services/rag_service.py
 # Best-practice naming for RAG + analysis:
@@ -3174,6 +4142,422 @@ def reprocess_document(session: Session, doc_id: str) -> bool:
     start_ingest_chain(str(doc.id))
     return True
 
+### app/services/reranker.py
+from __future__ import annotations
+
+from typing import List, Dict, Any, Tuple
+import json
+import logging
+
+logger = logging.getLogger(__name__)
+
+class Reranker:
+    """
+    Reranker using cross-encoder for better search results
+    """
+    
+    def __init__(self, model_name: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"):
+        self.model_name = model_name
+        self._model = None
+        self._tokenizer = None
+    
+    def _load_model(self):
+        """Lazy load the cross-encoder model"""
+        if self._model is None:
+            try:
+                from sentence_transformers import CrossEncoder
+                self._model = CrossEncoder(self.model_name)
+                logger.info(f"Loaded reranker model: {self.model_name}")
+            except ImportError:
+                logger.warning("sentence-transformers not available, reranking disabled")
+                self._model = None
+            except Exception as e:
+                logger.error(f"Failed to load reranker model: {e}")
+                self._model = None
+    
+    def rerank(self, query: str, documents: List[Dict[str, Any]], top_k: int = 10) -> List[Dict[str, Any]]:
+        """
+        Rerank documents based on query relevance
+        
+        Args:
+            query: Search query
+            documents: List of documents with 'text' field
+            top_k: Number of top results to return
+            
+        Returns:
+            Reranked list of documents with relevance scores
+        """
+        if not documents:
+            return []
+        
+        self._load_model()
+        
+        if self._model is None:
+            # Fallback: return original order with dummy scores
+            return [{"document": doc, "score": 1.0} for doc in documents[:top_k]]
+        
+        try:
+            # Prepare query-document pairs
+            pairs = [(query, doc.get('text', '')) for doc in documents]
+            
+            # Get relevance scores
+            scores = self._model.predict(pairs)
+            
+            # Combine documents with scores
+            scored_docs = []
+            for doc, score in zip(documents, scores):
+                scored_docs.append({
+                    "document": doc,
+                    "score": float(score)
+                })
+            
+            # Sort by score (descending)
+            scored_docs.sort(key=lambda x: x["score"], reverse=True)
+            
+            return scored_docs[:top_k]
+            
+        except Exception as e:
+            logger.error(f"Reranking failed: {e}")
+            # Fallback: return original order
+            return [{"document": doc, "score": 1.0} for doc in documents[:top_k]]
+
+class SemanticReranker:
+    """
+    Semantic reranker using embedding similarity
+    """
+    
+    def __init__(self, embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"):
+        self.embedding_model = embedding_model
+        self._model = None
+    
+    def _load_model(self):
+        """Lazy load the embedding model"""
+        if self._model is None:
+            try:
+                from sentence_transformers import SentenceTransformer
+                self._model = SentenceTransformer(self.embedding_model)
+                logger.info(f"Loaded semantic reranker model: {self.embedding_model}")
+            except ImportError:
+                logger.warning("sentence-transformers not available, semantic reranking disabled")
+                self._model = None
+            except Exception as e:
+                logger.error(f"Failed to load semantic reranker model: {e}")
+                self._model = None
+    
+    def rerank(self, query: str, documents: List[Dict[str, Any]], top_k: int = 10) -> List[Dict[str, Any]]:
+        """
+        Rerank documents using semantic similarity
+        """
+        if not documents:
+            return []
+        
+        self._load_model()
+        
+        if self._model is None:
+            # Fallback: return original order
+            return [{"document": doc, "score": 1.0} for doc in documents[:top_k]]
+        
+        try:
+            import numpy as np
+            from sklearn.metrics.pairwise import cosine_similarity
+            
+            # Encode query and documents
+            query_embedding = self._model.encode([query])
+            doc_texts = [doc.get('text', '') for doc in documents]
+            doc_embeddings = self._model.encode(doc_texts)
+            
+            # Calculate similarities
+            similarities = cosine_similarity(query_embedding, doc_embeddings)[0]
+            
+            # Combine documents with scores
+            scored_docs = []
+            for doc, score in zip(documents, similarities):
+                scored_docs.append({
+                    "document": doc,
+                    "score": float(score)
+                })
+            
+            # Sort by score (descending)
+            scored_docs.sort(key=lambda x: x["score"], reverse=True)
+            
+            return scored_docs[:top_k]
+            
+        except Exception as e:
+            logger.error(f"Semantic reranking failed: {e}")
+            # Fallback: return original order
+            return [{"document": doc, "score": 1.0} for doc in documents[:top_k]]
+
+def rerank_search_results(query: str, results: List[Dict[str, Any]], method: str = "cross-encoder", top_k: int = 10) -> List[Dict[str, Any]]:
+    """
+    Convenience function for reranking search results
+    
+    Args:
+        query: Search query
+        results: List of search results from Qdrant
+        method: Reranking method ("cross-encoder" or "semantic")
+        top_k: Number of top results to return
+        
+    Returns:
+        Reranked results with relevance scores
+    """
+    if method == "cross-encoder":
+        reranker = Reranker()
+    elif method == "semantic":
+        reranker = SemanticReranker()
+    else:
+        logger.warning(f"Unknown reranking method: {method}, using cross-encoder")
+        reranker = Reranker()
+    
+    return reranker.rerank(query, results, top_k)
+
+### app/services/text_extractor.py
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any, Dict, List, Tuple
+from io import BytesIO
+import csv
+import json
+
+# External deps (add to requirements):
+# - pdfminer.six
+# - PyPDF2 (optional fallback/meta)
+# - python-docx
+# - openpyxl
+# - charset-normalizer
+#
+# We import lazily inside functions to avoid import errors when a format isn't used.
+
+@dataclass
+class ExtractResult:
+    text: str
+    kind: str
+    meta: Dict[str, Any]
+    warnings: List[str]
+
+    def to_json(self) -> str:
+        return json.dumps(
+            {
+                "text": self.text,
+                "type": "text",
+                "extractor": self.kind,
+                "meta": self.meta,
+                "warnings": self.warnings,
+            },
+            ensure_ascii=False,
+        )
+
+
+def _detect_ext(filename: str) -> str:
+    name = (filename or "").lower()
+    if "." not in name:
+        return ""
+    return name[name.rfind(".") + 1 :]  # ext without dot
+
+
+def _decode_best_effort(data: bytes) -> Tuple[str, str, List[str]]:
+    """Decode bytes to str using charset-normalizer (fallback to utf-8)."""
+    warnings: List[str] = []
+    try:
+        from charset_normalizer import from_bytes as cn_from_bytes  # type: ignore
+        res = cn_from_bytes(data).best()
+        if res is not None:
+            return str(res), (res.encoding or "utf-8"), warnings
+        warnings.append("charset-normalizer: no best match, fallback to utf-8.")
+        return data.decode("utf-8", errors="replace"), "utf-8", warnings
+    except Exception as e:  # optional dep may be absent in tests
+        warnings.append(f"charset-normalizer unavailable ({e!r}); fallback to utf-8.")
+        return data.decode("utf-8", errors="replace"), "utf-8", warnings
+
+
+def _extract_pdf(data: bytes) -> ExtractResult:
+    warnings: List[str] = []
+    text = ""
+    pages = 0
+    try:
+        # pdfminer.six is more accurate for text PDFs than PyPDF2
+        from pdfminer.high_level import extract_text as pdf_extract_text  # type: ignore
+        text = pdf_extract_text(BytesIO(data)) or ""
+        # Try PyPDF2 for meta/page count
+        try:
+            import PyPDF2  # type: ignore
+            r = PyPDF2.PdfReader(BytesIO(data))
+            pages = len(r.pages)
+        except Exception:
+            pages = 0
+        if not text.strip():
+            warnings.append("PDF appears to have no extractable text (maybe scanned). Consider OCR later.")
+    except Exception as e:
+        warnings.append(f"PDF extraction failed via pdfminer: {e!r}")
+        # last resort: try PyPDF2.extract_text
+        try:
+            import PyPDF2  # type: ignore
+            r = PyPDF2.PdfReader(BytesIO(data))
+            pages = len(r.pages)
+            text = ""
+            for p in r.pages:
+                try:
+                    text += (p.extract_text() or "") + "\n"
+                except Exception:
+                    continue
+            if not text.strip():
+                warnings.append("PyPDF2 yielded empty text. Consider OCR.")
+        except Exception as e2:
+            warnings.append(f"PyPDF2 fallback failed: {e2!r}")
+            text = ""
+    return ExtractResult(text=text, kind="pdf", meta={"pages": pages}, warnings=warnings)
+
+
+def _extract_docx(data: bytes) -> ExtractResult:
+    warnings: List[str] = []
+    text = ""
+    try:
+        from docx import Document  # type: ignore
+        doc = Document(BytesIO(data))
+        parts: List[str] = []
+        # paragraphs
+        for p in doc.paragraphs:
+            if p.text:
+                parts.append(p.text)
+        # tables
+        for t in doc.tables:
+            for row in t.rows:
+                cells = [c.text.strip() for c in row.cells]
+                if any(cells):
+                    parts.append("\t".join(cells))
+        text = "\n".join(parts).strip()
+        if not text:
+            warnings.append("DOCX parsed but no visible text was found.")
+    except Exception as e:
+        warnings.append(f"DOCX extraction failed: {e!r}")
+        text = ""
+    return ExtractResult(text=text, kind="docx", meta={}, warnings=warnings)
+
+
+def _extract_txt(data: bytes) -> ExtractResult:
+    text, enc, warn = _decode_best_effort(data)
+    return ExtractResult(text=text, kind=f"txt({enc})", meta={"encoding": enc}, warnings=warn)
+
+
+def _extract_csv(data: bytes) -> ExtractResult:
+    text, enc, warn = _decode_best_effort(data)
+    # Try sniffing CSV dialect; render as TSV-like plain text
+    out_lines: List[str] = []
+    try:
+        sniffer = csv.Sniffer()
+        dialect = sniffer.sniff(text[:10000])
+    except Exception:
+        dialect = csv.excel
+    reader = csv.reader(text.splitlines(), dialect=dialect)
+    for row in reader:
+        out_lines.append("\t".join("" if v is None else str(v) for v in row))
+    return ExtractResult(text="\n".join(out_lines), kind=f"csv({enc})", meta={"encoding": enc}, warnings=warn)
+
+
+def _extract_xlsx(data: bytes) -> ExtractResult:
+    warnings: List[str] = []
+    text = ""
+    try:
+        from openpyxl import load_workbook  # type: ignore
+        wb = load_workbook(BytesIO(data), data_only=True, read_only=True)
+        out_lines: List[str] = []
+        for ws in wb.worksheets:
+            out_lines.append(f"# Sheet: {ws.title}")
+            for row in ws.iter_rows(values_only=True):
+                out_lines.append("\t".join("" if v is None else str(v) for v in row))
+            out_lines.append("")
+        text = "\n".join(out_lines).strip()
+    except Exception as e:
+        warnings.append(f"XLSX extraction failed: {e!r}")
+        text = ""
+    return ExtractResult(text=text, kind="xlsx", meta={}, warnings=warnings)
+
+
+def extract_text(data: bytes, filename: str) -> ExtractResult:
+    """
+    Universal text extractor for: PDF, DOCX, TXT, CSV, XLSX.
+    Returns ExtractResult(text, kind, meta, warnings).
+    """
+    ext = _detect_ext(filename)
+    if ext in ("pdf",):
+        return _extract_pdf(data)
+    if ext in ("docx",):
+        return _extract_docx(data)
+    if ext in ("txt", "log", ""):
+        return _extract_txt(data)
+    if ext in ("csv",):
+        return _extract_csv(data)
+    if ext in ("xlsx",):
+        return _extract_xlsx(data)
+    # Unknown → try text decode
+    res = _extract_txt(data)
+    res.warnings.append(f"Unknown extension '.{ext}', treated as text.")
+    return res
+
+### app/services/text_normalizer.py
+from __future__ import annotations
+
+import re
+import unicodedata
+from typing import List
+
+ZERO_WIDTH = (
+    "\u200B"  # zero width space
+    "\u200C"  # zero width non-joiner
+    "\u200D"  # zero width joiner
+    "\u2060"  # word joiner
+    "\uFEFF"  # zero width no-break space (BOM)
+)
+CONTROL_CHARS = "".join(map(chr, list(range(0, 32)) + [127]))
+CONTROL_RE = re.compile(f"[{re.escape(CONTROL_CHARS)}]", flags=re.UNICODE)
+ZEROW_RE = re.compile(f"[{re.escape(ZERO_WIDTH)}]", flags=re.UNICODE)
+
+PUNCT_MAP = {
+    "\u2018": "'", "\u2019": "'", "\u201A": "'", "\u201B": "'",
+    "\u201C": '"', "\u201D": '"', "\u201E": '"', "\u201F": '"',
+    "\u2013": "-", "\u2014": "-", "\u2212": "-", "\u00AD": "",  # soft hyphen
+    "\u00A0": " ",  # nbsp
+}
+BULLET_RE = re.compile(r"^\s*([•·▪◦►▶»\-–—])\s+", re.UNICODE)
+MULTISPACE_RE = re.compile(r"[ \t\f\v]+")
+BLANKS_RE = re.compile(r"\n{3,}")
+HYPHEN_WRAP_RE = re.compile(r"(\w)[\-­]\n(\w)", flags=re.UNICODE)
+SOFT_BREAK_RE = re.compile(r"([^\S\n]*\n)(?=\S)(?<!\.\n)", flags=re.UNICODE)
+
+def normalize_text(text: str) -> str:
+    """
+    Canonicalize text:
+      - Unicode NFKC
+      - remove zero-width/control chars
+      - map fancy quotes/dashes to standard ASCII
+      - fix hyphenated line wraps and soft breaks
+      - normalize bullets to "- "
+      - collapse spaces and blank lines
+    """
+    if not text:
+        return ""
+
+    t = unicodedata.normalize("NFKC", text)
+    t = t.translate(str.maketrans(PUNCT_MAP))
+    t = ZEROW_RE.sub("", t)
+    t = CONTROL_RE.sub("", t)
+    t = t.replace("\r\n", "\n").replace("\r", "\n")
+    t = HYPHEN_WRAP_RE.sub(r"\1\2", t)
+    t = SOFT_BREAK_RE.sub(" ", t)
+
+    lines = []
+    for line in t.split("\n"):
+        if BULLET_RE.match(line):
+            line = "- " + BULLET_RE.sub("", line, count=1).strip()
+        else:
+            line = line.strip()
+        line = MULTISPACE_RE.sub(" ", line)
+        lines.append(line)
+
+    t = "\n".join(lines)
+    t = BLANKS_RE.sub("\n\n", t)
+    return t.strip()
+
 ### app/tasks/__init__.py
 
 
@@ -3216,6 +4600,7 @@ from app.core.db import SessionLocal
 from app.core.metrics import rag_chunks_created_total
 from app.models.rag import RagDocuments, RagChunks
 from .shared import log, RetryableError, task_metrics, env_int
+from app.services.adaptive_chunker import chunk_text_adaptive
 
 def _split_text(txt: str, max_chars: int, overlap: int):
     i = 0; n = len(txt)
@@ -3243,22 +4628,45 @@ def split(self, result: dict, *, max_chars: int | None = None, overlap: int | No
             max_chars = max_chars or env_int("CHUNK_MAX_CHARS", 1200)
             overlap   = overlap   or env_int("CHUNK_OVERLAP", 100)
             try:
-                obj = s3.get_object(settings.S3_BUCKET_CANONICAL, doc.url_canonical_file)
+                obj = s3.get_object(settings.S3_BUCKET_RAG, doc.url_canonical_file)
                 json_data = obj.read().decode("utf-8") or "{}"
                 import json
                 parsed_data = json.loads(json_data)
                 # Извлекаем текст из нормализованного JSON
                 data = parsed_data.get("text", "") if isinstance(parsed_data, dict) else ""
+                document_meta = parsed_data.get("meta", {}) if isinstance(parsed_data, dict) else {}
             except Exception as e:
                 log.error(f"Error reading canonical file: {e}")
                 data = ""
-            chunks = list(_split_text(data, max_chars=max_chars, overlap=overlap)) or [""]
-            for idx, text in enumerate(chunks):
-                session.add(RagChunks(document_id=doc.id, chunk_idx=idx, text=text))
-            rag_chunks_created_total.inc(len(chunks))
+                document_meta = {}
+            
+            # Используем адаптивный chunker
+            adaptive_chunks = chunk_text_adaptive(data, max_chars=max_chars, overlap=overlap, document_meta=document_meta)
+            
+            if not adaptive_chunks:
+                # Fallback to simple splitting
+                chunks = list(_split_text(data, max_chars=max_chars, overlap=overlap)) or [""]
+                for idx, text in enumerate(chunks):
+                    session.add(RagChunks(document_id=doc.id, chunk_idx=idx, text=text))
+            else:
+                # Use adaptive chunks
+                for chunk in adaptive_chunks:
+                    chunk_metadata = {
+                        'is_header': chunk.is_header,
+                        'is_table': chunk.is_table,
+                        'parent_section': chunk.parent_section,
+                        **chunk.metadata
+                    }
+                    session.add(RagChunks(
+                        document_id=doc.id, 
+                        chunk_idx=chunk.chunk_idx, 
+                        text=chunk.text,
+                        metadata=chunk_metadata
+                    ))
+            rag_chunks_created_total.inc(len(adaptive_chunks) if adaptive_chunks else len(chunks))
             doc.status = "embedding"; doc.updated_at = datetime.utcnow()
             session.commit()
-            return {"document_id": str(doc.id), "chunks": len(chunks), "status": doc.status}
+            return {"document_id": str(doc.id), "chunks": len(adaptive_chunks) if adaptive_chunks else len(chunks), "status": doc.status}
         finally:
             session.close()
 
@@ -3460,63 +4868,304 @@ def housekeeping(self) -> dict:
 
 ### app/tasks/normalize.py
 from __future__ import annotations
+
+import json
+from typing import Optional
+
+from app.core.config import settings  # expects settings.S3_BUCKET_RAG
+from app.core.s3 import get_object, put_object  # S3 functions
+
+from app.services.enhanced_text_extractor import extract_text_enhanced
+from app.services.text_normalizer import normalize_text
+
+def process(document_id: str, source_key: Optional[str] = None, original_filename: Optional[str] = None) -> dict:
+    """
+    Read original file from S3, extract + normalize text, and write canonical JSON to
+    f"{document_id}/canonical.txt" in the same RAG bucket.
+    Returns a dict with canonical path and counters for logging/metrics.
+    """
+    # 1) Determine keys
+    bucket = settings.S3_BUCKET_RAG
+    if source_key is None:
+        raise ValueError("source_key is required to locate the original file in S3")
+    canonical_key = f"{document_id}/canonical.txt"
+
+    # 2) Load original bytes
+    obj = get_object(bucket, source_key)
+    content = obj.read()
+
+    # 3) Extract text by format, normalize
+    filename = original_filename or source_key.split("/")[-1]
+    result = extract_text_enhanced(content, filename=filename)
+    cleaned = normalize_text(result.text)
+
+    # 4) Build canonical JSON payload with tables
+    canonical_payload = {
+        "text": cleaned,
+        "tables": [{"name": t.name, "csv": t.csv_data, "rows": t.rows, "cols": t.cols} for t in result.tables],
+        "meta": result.meta,
+        "original_filename": filename,
+        "extractor": result.kind,
+        "warnings": result.warnings,
+    }
+    data = json.dumps(canonical_payload, ensure_ascii=False).encode("utf-8")
+
+    # 5) Store canonical alongside original (same bucket)
+    put_object(bucket, canonical_key, data, content_type="application/json; charset=utf-8")
+
+    return {
+        "document_id": document_id,
+        "source_key": source_key,
+        "canonical_key": canonical_key,
+        "text_chars": len(cleaned),
+        "extractor": result.kind,
+        "warnings": result.warnings,
+    }
+
+### app/tasks/ocr_tables.py
+from __future__ import annotations
+
+import json
+from typing import Dict, List, Any, Optional
 from celery import shared_task
-from datetime import datetime
 from app.core.config import settings
-from app.core.s3 import get_minio
+from app.core.s3 import get_object, put_object
 from app.core.db import SessionLocal
-from app.models.rag import RagDocuments
+from app.core.metrics import rag_ingest_stage_duration, rag_ingest_errors_total
 from .shared import log, RetryableError, task_metrics
 
-@shared_task(name="app.tasks.normalize.process", bind=True, autoretry_for=(RetryableError,), retry_backoff=True, retry_kwargs={"max_retries": 5})
-def process(self, document_id: str, *, source_key: str | None = None) -> dict:
-    with task_metrics("normalize.process", "normalize"):
-        s3 = get_minio()
+@shared_task(name="app.tasks.ocr_tables.process", bind=True, autoretry_for=(RetryableError,), retry_backoff=True, retry_kwargs={"max_retries": 3})
+def process_ocr_tables(self, document_id: str, source_key: str, original_filename: str) -> Dict[str, Any]:
+    """
+    Process PDF for OCR and table extraction
+    """
+    with task_metrics("ocr_tables.process", "ocr"):
         session = SessionLocal()
         try:
-            doc = session.get(RagDocuments, document_id)
-            if not doc:
-                raise RetryableError("document_not_found")
+            # Load PDF from S3
+            obj = get_object(settings.S3_BUCKET_RAG, source_key)
+            pdf_content = obj.read()
             
-            # Заглушка нормализации - просто копируем файл как есть
-            src = source_key or (doc.url_file or f"{doc.id}/origin.bin")
-            dst = f"{doc.id}/canonical.txt"
-            
+            # Process OCR if needed
+            ocr_text = ""
+            ocr_meta = {}
             try:
-                # Получаем исходный файл
-                obj = s3.get_object(settings.S3_BUCKET_RAG, src)
-                content = obj.read()
-                
-                # Простая заглушка - если это текстовый файл, читаем как текст
-                try:
-                    text_content = content.decode('utf-8')
-                    # Создаем JSON с текстом
-                    import json
-                    normalized_data = {"text": text_content, "type": "text", "original_filename": doc.name}
-                    json_content = json.dumps(normalized_data, ensure_ascii=False).encode('utf-8')
-                except UnicodeDecodeError:
-                    # Если не текстовый файл, сохраняем как бинарный
-                    import json
-                    normalized_data = {"type": "binary", "original_filename": doc.name, "size": len(content)}
-                    json_content = json.dumps(normalized_data, ensure_ascii=False).encode('utf-8')
-                
-                # Сохраняем нормализованный файл
-                from io import BytesIO
-                s3.put_object(settings.S3_BUCKET_RAG, dst, BytesIO(json_content), length=len(json_content))
-                
+                ocr_text, ocr_meta = _extract_ocr_text(pdf_content)
+                log.info(f"OCR extracted {len(ocr_text)} characters")
             except Exception as e:
-                log.error(f"Error processing file {src}: {e}")
-                # Создаем пустой файл в случае ошибки
-                from io import BytesIO
-                s3.put_object(settings.S3_BUCKET_RAG, dst, BytesIO(b'{"text": "", "type": "error"}'), length=2)
+                log.warning(f"OCR extraction failed: {e}")
+                rag_ingest_errors_total.labels(stage="ocr", error_type="extraction_failed").inc()
             
-            doc.url_canonical_file = dst
-            doc.status = "chunking"
-            doc.updated_at = datetime.utcnow()
-            session.commit()
-            return {"document_id": str(doc.id), "status": doc.status, "canonical_key": dst}
+            # Extract tables
+            tables = []
+            try:
+                tables = _extract_tables(pdf_content)
+                log.info(f"Extracted {len(tables)} tables")
+            except Exception as e:
+                log.warning(f"Table extraction failed: {e}")
+                rag_ingest_errors_total.labels(stage="tables", error_type="extraction_failed").inc()
+            
+            # Combine results
+            result = {
+                "document_id": document_id,
+                "ocr_text": ocr_text,
+                "ocr_meta": ocr_meta,
+                "tables": tables,
+                "processing_method": "ocr_tables"
+            }
+            
+            # Save enhanced canonical
+            canonical_key = f"{document_id}/canonical_enhanced.json"
+            canonical_data = json.dumps(result, ensure_ascii=False).encode("utf-8")
+            put_object(settings.S3_BUCKET_RAG, canonical_key, canonical_data, content_type="application/json; charset=utf-8")
+            
+            return result
+            
+        except Exception as e:
+            log.error(f"OCR/tables processing failed: {e}")
+            rag_ingest_errors_total.labels(stage="ocr_tables", error_type="processing_failed").inc()
+            raise RetryableError(f"OCR/tables processing failed: {e}")
         finally:
             session.close()
+
+def _extract_ocr_text(pdf_content: bytes) -> tuple[str, Dict[str, Any]]:
+    """Extract text using OCR from PDF images"""
+    try:
+        from pdf2image import convert_from_bytes
+        import pytesseract
+        
+        # Convert PDF to images
+        images = convert_from_bytes(pdf_content, dpi=300)
+        
+        text_parts = []
+        meta = {
+            "pages": len(images),
+            "method": "pytesseract",
+            "dpi": 300,
+            "lang": "rus+eng"
+        }
+        
+        for i, image in enumerate(images):
+            # OCR each page
+            page_text = pytesseract.image_to_string(image, lang='rus+eng')
+            text_parts.append(page_text)
+            
+            # Log progress
+            if i % 10 == 0:
+                log.info(f"OCR processed page {i+1}/{len(images)}")
+        
+        full_text = '\n\n'.join(text_parts)
+        
+        return full_text, meta
+        
+    except ImportError:
+        log.warning("OCR dependencies not available")
+        return "", {"error": "OCR dependencies not available"}
+    except Exception as e:
+        log.error(f"OCR extraction failed: {e}")
+        return "", {"error": str(e)}
+
+def _extract_tables(pdf_content: bytes) -> List[Dict[str, Any]]:
+    """Extract tables from PDF using multiple methods"""
+    import io
+    tables = []
+    
+    # Method 1: pdfplumber (simple tables)
+    try:
+        import pdfplumber
+        with pdfplumber.open(io.BytesIO(pdf_content)) as pdf:
+            for page_num, page in enumerate(pdf.pages):
+                page_tables = page.extract_tables()
+                for table_num, table in enumerate(page_tables):
+                    if table and len(table) > 1:
+                        # Convert to structured format
+                        table_data = {
+                            "page": page_num + 1,
+                            "table": table_num + 1,
+                            "rows": len(table),
+                            "cols": len(table[0]) if table else 0,
+                            "data": table,
+                            "method": "pdfplumber"
+                        }
+                        tables.append(table_data)
+    except ImportError:
+        log.warning("pdfplumber not available for table extraction")
+    except Exception as e:
+        log.warning(f"pdfplumber table extraction failed: {e}")
+    
+    # Method 2: camelot (advanced tables)
+    try:
+        import camelot
+        import io
+        
+        # Extract tables using camelot
+        camelot_tables = camelot.read_pdf(io.BytesIO(pdf_content), pages='all')
+        
+        for i, table in enumerate(camelot_tables):
+            if table.df is not None and not table.df.empty:
+                table_data = {
+                    "page": table.page,
+                    "table": i + 1,
+                    "rows": len(table.df),
+                    "cols": len(table.df.columns),
+                    "data": table.df.values.tolist(),
+                    "method": "camelot",
+                    "accuracy": table.accuracy
+                }
+                tables.append(table_data)
+    except ImportError:
+        log.warning("camelot not available for table extraction")
+    except Exception as e:
+        log.warning(f"camelot table extraction failed: {e}")
+    
+    # Method 3: tabula (Java-based)
+    try:
+        import tabula
+        import io
+        
+        # Extract tables using tabula
+        tabula_tables = tabula.read_pdf(io.BytesIO(pdf_content), pages='all', multiple_tables=True)
+        
+        for i, table in enumerate(tabula_tables):
+            if table is not None and not table.empty:
+                table_data = {
+                    "page": 1,  # tabula doesn't provide page info easily
+                    "table": i + 1,
+                    "rows": len(table),
+                    "cols": len(table.columns),
+                    "data": table.values.tolist(),
+                    "method": "tabula"
+                }
+                tables.append(table_data)
+    except ImportError:
+        log.warning("tabula not available for table extraction")
+    except Exception as e:
+        log.warning(f"tabula table extraction failed: {e}")
+    
+    return tables
+
+def _convert_table_to_markdown(table_data: List[List[str]]) -> str:
+    """Convert table data to Markdown format"""
+    if not table_data or len(table_data) < 2:
+        return ""
+    
+    # Create header
+    header = "| " + " | ".join(str(cell or "") for cell in table_data[0]) + " |"
+    separator = "| " + " | ".join("---" for _ in table_data[0]) + " |"
+    
+    # Create rows
+    rows = []
+    for row in table_data[1:]:
+        row_str = "| " + " | ".join(str(cell or "") for cell in row) + " |"
+        rows.append(row_str)
+    
+    return "\n".join([header, separator] + rows)
+
+@shared_task(name="app.tasks.ocr_tables.enhance_canonical", bind=True)
+def enhance_canonical_with_ocr_tables(self, document_id: str, canonical_key: str) -> Dict[str, Any]:
+    """
+    Enhance existing canonical file with OCR and table data
+    """
+    with task_metrics("ocr_tables.enhance_canonical", "enhance"):
+        try:
+            # Load existing canonical
+            obj = get_object(settings.S3_BUCKET_RAG, canonical_key)
+            canonical_data = json.loads(obj.read().decode("utf-8"))
+            
+            # Get original PDF
+            source_key = f"{document_id}/origin.pdf"  # Assuming PDF extension
+            pdf_obj = get_object(settings.S3_BUCKET_RAG, source_key)
+            pdf_content = pdf_obj.read()
+            
+            # Extract OCR and tables
+            ocr_text, ocr_meta = _extract_ocr_text(pdf_content)
+            tables = _extract_tables(pdf_content)
+            
+            # Enhance canonical data
+            enhanced_data = {
+                **canonical_data,
+                "ocr_text": ocr_text,
+                "ocr_meta": ocr_meta,
+                "extracted_tables": tables,
+                "enhanced_at": "2024-01-01T00:00:00Z"  # Would use actual timestamp
+            }
+            
+            # Save enhanced canonical
+            enhanced_key = f"{document_id}/canonical_enhanced.json"
+            enhanced_json = json.dumps(enhanced_data, ensure_ascii=False).encode("utf-8")
+            put_object(settings.S3_BUCKET_RAG, enhanced_key, enhanced_json, content_type="application/json; charset=utf-8")
+            
+            return {
+                "document_id": document_id,
+                "enhanced": True,
+                "ocr_chars": len(ocr_text),
+                "tables_count": len(tables)
+            }
+            
+        except Exception as e:
+            log.error(f"Canonical enhancement failed: {e}")
+            rag_ingest_errors_total.labels(stage="enhance", error_type="enhancement_failed").inc()
+            raise RetryableError(f"Canonical enhancement failed: {e}")
 
 ### app/tasks/shared.py
 from __future__ import annotations
@@ -4418,4 +6067,25 @@ class TestRAGAPI:
             assert response.status_code == 200
             data = response.json()
             assert data["deleted"] is True
+
+### tests/test_text_extractor.py
+import io
+from app.services.text_extractor import extract_text
+from app.services.text_normalizer import normalize_text
+
+def test_txt_basic():
+    data = "Привет, мир!\nСтрока 2".encode("utf-8")
+    res = extract_text(data, "note.txt")
+    assert "Привет" in res.text
+    assert res.kind.startswith("txt")
+
+def test_csv_basic():
+    data = b"a,b,c\n1,2,3\n4,5,6\n"
+    res = extract_text(data, "table.csv")
+    assert "1\t2\t3" in res.text
+
+def test_normalize_hyphen_wrap():
+    raw = "слово-\nперенос"
+    norm = normalize_text(raw)
+    assert norm == "словореренос" or "слово перенос" in norm  # depending on rules
 

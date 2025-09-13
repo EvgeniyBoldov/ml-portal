@@ -1,58 +1,54 @@
 from __future__ import annotations
-from celery import shared_task
-from datetime import datetime
-from app.core.config import settings
-from app.core.s3 import get_minio
-from app.core.db import SessionLocal
-from app.models.rag import RagDocuments
-from .shared import log, RetryableError, task_metrics
 
-@shared_task(name="app.tasks.normalize.process", bind=True, autoretry_for=(RetryableError,), retry_backoff=True, retry_kwargs={"max_retries": 5})
-def process(self, document_id: str, *, source_key: str | None = None) -> dict:
-    with task_metrics("normalize.process", "normalize"):
-        s3 = get_minio()
-        session = SessionLocal()
-        try:
-            doc = session.get(RagDocuments, document_id)
-            if not doc:
-                raise RetryableError("document_not_found")
-            
-            # Заглушка нормализации - просто копируем файл как есть
-            src = source_key or (doc.url_file or f"{doc.id}/origin.bin")
-            dst = f"{doc.id}/canonical.txt"
-            
-            try:
-                # Получаем исходный файл
-                obj = s3.get_object(settings.S3_BUCKET_RAG, src)
-                content = obj.read()
-                
-                # Простая заглушка - если это текстовый файл, читаем как текст
-                try:
-                    text_content = content.decode('utf-8')
-                    # Создаем JSON с текстом
-                    import json
-                    normalized_data = {"text": text_content, "type": "text", "original_filename": doc.name}
-                    json_content = json.dumps(normalized_data, ensure_ascii=False).encode('utf-8')
-                except UnicodeDecodeError:
-                    # Если не текстовый файл, сохраняем как бинарный
-                    import json
-                    normalized_data = {"type": "binary", "original_filename": doc.name, "size": len(content)}
-                    json_content = json.dumps(normalized_data, ensure_ascii=False).encode('utf-8')
-                
-                # Сохраняем нормализованный файл
-                from io import BytesIO
-                s3.put_object(settings.S3_BUCKET_RAG, dst, BytesIO(json_content), length=len(json_content))
-                
-            except Exception as e:
-                log.error(f"Error processing file {src}: {e}")
-                # Создаем пустой файл в случае ошибки
-                from io import BytesIO
-                s3.put_object(settings.S3_BUCKET_RAG, dst, BytesIO(b'{"text": "", "type": "error"}'), length=2)
-            
-            doc.url_canonical_file = dst
-            doc.status = "chunking"
-            doc.updated_at = datetime.utcnow()
-            session.commit()
-            return {"document_id": str(doc.id), "status": doc.status, "canonical_key": dst}
-        finally:
-            session.close()
+import json
+from typing import Optional
+
+from app.core.config import settings  # expects settings.S3_BUCKET_RAG
+from app.core.s3 import get_object, put_object  # S3 functions
+
+from app.services.enhanced_text_extractor import extract_text_enhanced
+from app.services.text_normalizer import normalize_text
+
+def process(document_id: str, source_key: Optional[str] = None, original_filename: Optional[str] = None) -> dict:
+    """
+    Read original file from S3, extract + normalize text, and write canonical JSON to
+    f"{document_id}/canonical.txt" in the same RAG bucket.
+    Returns a dict with canonical path and counters for logging/metrics.
+    """
+    # 1) Determine keys
+    bucket = settings.S3_BUCKET_RAG
+    if source_key is None:
+        raise ValueError("source_key is required to locate the original file in S3")
+    canonical_key = f"{document_id}/canonical.txt"
+
+    # 2) Load original bytes
+    obj = get_object(bucket, source_key)
+    content = obj.read()
+
+    # 3) Extract text by format, normalize
+    filename = original_filename or source_key.split("/")[-1]
+    result = extract_text_enhanced(content, filename=filename)
+    cleaned = normalize_text(result.text)
+
+    # 4) Build canonical JSON payload with tables
+    canonical_payload = {
+        "text": cleaned,
+        "tables": [{"name": t.name, "csv": t.csv_data, "rows": t.rows, "cols": t.cols} for t in result.tables],
+        "meta": result.meta,
+        "original_filename": filename,
+        "extractor": result.kind,
+        "warnings": result.warnings,
+    }
+    data = json.dumps(canonical_payload, ensure_ascii=False).encode("utf-8")
+
+    # 5) Store canonical alongside original (same bucket)
+    put_object(bucket, canonical_key, data, content_type="application/json; charset=utf-8")
+
+    return {
+        "document_id": document_id,
+        "source_key": source_key,
+        "canonical_key": canonical_key,
+        "text_chars": len(cleaned),
+        "extractor": result.kind,
+        "warnings": result.warnings,
+    }

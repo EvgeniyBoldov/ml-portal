@@ -1,4 +1,4 @@
-import { apiFetch } from './base'
+import { apiRequest } from './http'
 
 export async function listDocs(params: { 
   page?: number; 
@@ -11,8 +11,7 @@ export async function listDocs(params: {
   if (params.size) qs.set('size', String(params.size))
   if (params.status) qs.set('status', params.status)
   if (params.search) qs.set('search', params.search)
-  const res = await apiFetch(`/rag/?${qs.toString()}`, { method: 'GET' })
-  return res.json() as Promise<{ 
+  return apiRequest<{ 
     items: any[]; 
     pagination: {
       page: number;
@@ -22,7 +21,7 @@ export async function listDocs(params: {
       has_next: boolean;
       has_prev: boolean;
     }
-  }>
+  }>(`/rag/?${qs.toString()}`)
 }
 
 export async function uploadFile(file: File, name?: string, tags?: string[]) {
@@ -30,49 +29,51 @@ export async function uploadFile(file: File, name?: string, tags?: string[]) {
   fd.set('file', file)
   if (name) fd.set('name', name)
   if (tags?.length) fd.set('tags', JSON.stringify(tags))
-  const res = await apiFetch('/rag/upload', { method: 'POST', body: fd })
-  return res.json()
+  return apiRequest<{ id: string; status: string }>('/rag/upload', { method: 'POST', body: fd })
 }
 
 export async function updateRagDocumentTags(docId: string, tags: string[]) {
-  const res = await apiFetch(`/rag/${docId}/tags`, { 
+  return apiRequest<{ id: string; tags: string[] }>(`/rag/${docId}/tags`, { 
     method: 'PUT', 
     body: JSON.stringify(tags) 
   })
-  return res.json()
 }
 
 export async function getRagProgress(doc_id: string) {
-  const res = await apiFetch(`/rag/${doc_id}/progress`, { method: 'GET' })
-  return res.json()
+  return apiRequest<any>(`/rag/${doc_id}/progress`)
 }
 
 export async function getRagStats() {
-  const res = await apiFetch('/rag/stats', { method: 'GET' })
-  return res.json()
+  return apiRequest<any>('/rag/stats')
 }
 
 export async function getRagMetrics() {
-  const res = await apiFetch('/rag/metrics', { method: 'GET' })
-  return res.json()
+  return apiRequest<any>('/rag/metrics')
 }
 
 export async function downloadRagFile(doc_id: string, kind: 'original' | 'canonical' = 'original') {
-  const res = await apiFetch(`/rag/${doc_id}/download?kind=${kind}`, { method: 'GET' })
-  return res.json()
+  return apiRequest<{ url: string }>(`/rag/${doc_id}/download?kind=${kind}`)
 }
 
 export async function archiveRagDocument(doc_id: string) {
-  const res = await apiFetch(`/rag/${doc_id}/archive`, { method: 'POST' })
-  return res.json()
+  return apiRequest<{ id: string; archived: boolean }>(`/rag/${doc_id}/archive`, { method: 'POST' })
 }
 
 export async function deleteRagDocument(doc_id: string) {
-  const res = await apiFetch(`/rag/${doc_id}`, { method: 'DELETE' })
-  return res.json()
+  return apiRequest<{ id: string; deleted: boolean }>(`/rag/${doc_id}`, { method: 'DELETE' })
 }
 
 export async function ragSearch(payload: { text?: string; top_k?: number; min_score?: number }) {
-  const res = await apiFetch('/rag/search', { method: 'POST', body: JSON.stringify(payload) })
-  return res.json() as Promise<{ items: Array<{ document_id: string; chunk_id: string; score: number; snippet: string }> }>
+  return apiRequest<{ items: Array<{ document_id: string; chunk_id: string; score: number; snippet: string }> }>('/rag/search', { 
+    method: 'POST', 
+    body: JSON.stringify(payload) 
+  })
+}
+
+export async function reindexRagDocument(doc_id: string) {
+  return apiRequest<{ id: string; status: string }>(`/rag/${doc_id}/reindex`, { method: 'POST' })
+}
+
+export async function reindexAllRagDocuments() {
+  return apiRequest<{ reindexed_count: number; total_documents: number }>('/rag/reindex', { method: 'POST' })
 }

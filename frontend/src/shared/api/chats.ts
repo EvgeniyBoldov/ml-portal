@@ -1,4 +1,4 @@
-import { api } from './client'
+import { apiRequest } from './http'
 import { parseSSE } from '@shared/lib/sse'
 import type { 
   PaginatedResponse, 
@@ -16,23 +16,27 @@ export async function listChats(params: { cursor?: string; limit?: number; q?: s
   if (params.limit) qs.set('limit', String(params.limit))
   if (params.cursor) qs.set('cursor', params.cursor)
   if (params.q) qs.set('q', params.q)
-  return api.get<PaginatedResponse<Chat>>(`/chats?${qs.toString()}`)
+  return apiRequest<PaginatedResponse<Chat>>(`/chats?${qs.toString()}`)
 }
 
 export async function createChat(name?: string | null, tags?: string[] | null) {
   const body: ChatCreateRequest = { name: name ?? null, tags: tags ?? null }
-  return api.post<{ chat_id: string }>('/chats', body)
+  return apiRequest<{ chat_id: string }>('/chats', { method: 'POST', body: JSON.stringify(body) })
 }
 
 export async function listMessages(chat_id: string, params: { cursor?: string; limit?: number } = {}) {
   const qs = new URLSearchParams()
   if (params.limit) qs.set('limit', String(params.limit))
   if (params.cursor) qs.set('cursor', params.cursor)
-  return api.get<PaginatedResponse<ChatMessage>>(`/chats/${chat_id}/messages?${qs.toString()}`)
+  return apiRequest<PaginatedResponse<ChatMessage>>(`/chats/${chat_id}/messages?${qs.toString()}`)
 }
 
 export async function sendMessage(chat_id: string, body: ChatMessageRequest) {
-  return api.post<ChatMessageResponse>(`/chats/${chat_id}/messages`, body, { idempotent: true })
+  return apiRequest<ChatMessageResponse>(`/chats/${chat_id}/messages`, { 
+    method: 'POST', 
+    body: JSON.stringify(body),
+    idempotent: true 
+  })
 }
 
 export async function* sendMessageStream(chat_id: string, body: { content: string; use_rag?: boolean }) {
@@ -43,7 +47,8 @@ export async function* sendMessageStream(chat_id: string, body: { content: strin
     headers['Authorization'] = `Bearer ${token}`
   }
   
-  const res = await fetch(`/api/chats/${chat_id}/messages`, {
+  const API_BASE = import.meta.env.VITE_API_BASE || '/api'
+  const res = await fetch(`${API_BASE}/chats/${chat_id}/messages`, {
     method: 'POST',
     headers,
     body: JSON.stringify({ ...body, response_stream: true })
@@ -76,14 +81,20 @@ export async function* sendMessageStream(chat_id: string, body: { content: strin
 
 export async function renameChat(chat_id: string, name: string) {
   const body: ChatUpdateRequest = { name }
-  return api.patch<Chat>(`/chats/${chat_id}`, body)
+  return apiRequest<Chat>(`/chats/${chat_id}`, { 
+    method: 'PATCH', 
+    body: JSON.stringify(body) 
+  })
 }
 
 export async function updateChatTags(chat_id: string, tags: string[]) {
   const body: ChatTagsUpdateRequest = { tags }
-  return api.put<{ id: string; tags: string[] }>(`/chats/${chat_id}/tags`, body)
+  return apiRequest<{ id: string; tags: string[] }>(`/chats/${chat_id}/tags`, { 
+    method: 'PUT', 
+    body: JSON.stringify(body) 
+  })
 }
 
 export async function deleteChat(chat_id: string) {
-  return api.delete<{ id: string; deleted: boolean }>(`/chats/${chat_id}`)
+  return apiRequest<{ id: string; deleted: boolean }>(`/chats/${chat_id}`, { method: 'DELETE' })
 }

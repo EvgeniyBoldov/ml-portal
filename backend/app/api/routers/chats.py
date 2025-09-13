@@ -119,10 +119,22 @@ async def post_message(
 
     async def stream_resp() -> AsyncGenerator[bytes, None]:
       # Generate response with LLM (non-stream), then stream chunks to client
-      answer = llm_chat([
-          {"role": "system", "content": "You are a helpful assistant."},
-          {"role": "user", "content": request.content},
-      ])
+      messages = [{"role": "system", "content": "You are a helpful assistant."}]
+      
+      # Add RAG context if requested
+      if request.use_rag:
+          try:
+              from app.services.rag_service import search
+              rag_results = search(session, request.content, top_k=3)
+              if rag_results.get("results"):
+                  context = "\n\n".join([r.get("snippet", "") for r in rag_results["results"][:3]])
+                  messages.append({"role": "system", "content": f"Context from knowledge base:\n{context}"})
+          except Exception as e:
+              print(f"RAG search failed: {e}")
+      
+      messages.append({"role": "user", "content": request.content})
+      answer = llm_chat(messages)
+      
       # Save assistant message
       repo.add_message(chat_id, "assistant", {"text": answer})
       # Stream by small chunks
@@ -135,10 +147,21 @@ async def post_message(
         return StreamingResponse(stream_resp(), media_type="text/event-stream")
     else:
         # non-streaming
-        answer = llm_chat([
-            {"role": "system", "content": "You are a helpful assistant."},
-            {"role": "user", "content": request.content},
-        ])
+        messages = [{"role": "system", "content": "You are a helpful assistant."}]
+        
+        # Add RAG context if requested
+        if request.use_rag:
+            try:
+                from app.services.rag_service import search
+                rag_results = search(session, request.content, top_k=3)
+                if rag_results.get("results"):
+                    context = "\n\n".join([r.get("snippet", "") for r in rag_results["results"][:3]])
+                    messages.append({"role": "system", "content": f"Context from knowledge base:\n{context}"})
+            except Exception as e:
+                print(f"RAG search failed: {e}")
+        
+        messages.append({"role": "user", "content": request.content})
+        answer = llm_chat(messages)
         repo.add_message(chat_id, "assistant", {"text": answer})
         return ChatMessageResponse(message_id=str(user_msg.id), content=request.content, answer=answer)
 
