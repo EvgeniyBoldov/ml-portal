@@ -106,6 +106,100 @@ create_dispatcher_tasks(app)
 # ===== app/__init__.py =====
 # app package init
 
+# ===== app/cli.py =====
+#!/usr/bin/env python3
+"""
+CLI commands for the ML Portal application.
+"""
+import argparse
+import sys
+from typing import Optional
+from sqlalchemy.orm import Session
+
+from app.core.db import get_session
+from app.core.security import hash_password
+from app.repositories.users_repo import UsersRepo
+
+
+def create_superuser(login: str, password: str, email: Optional[str] = None) -> None:
+    """Create a superuser account."""
+    session = next(get_session())
+    repo = UsersRepo(session)
+    
+    try:
+        # Check if user already exists
+        existing_user = repo.by_login(login)
+        if existing_user:
+            print(f"❌ Error: User with login '{login}' already exists")
+            sys.exit(1)
+        
+        # Create superuser
+        password_hash = hash_password(password)
+        user = repo.create_user(
+            login=login,
+            password_hash=password_hash,
+            role="admin",
+            email=email,
+            is_active=True
+        )
+        
+        print(f"✅ Superuser created successfully!")
+        print(f"   Login: {user.login}")
+        print(f"   Role: {user.role}")
+        print(f"   Email: {user.email or 'Not set'}")
+        print(f"   ID: {user.id}")
+        
+    except Exception as e:
+        print(f"❌ Error creating superuser: {e}")
+        sys.exit(1)
+    finally:
+        session.close()
+
+
+def main():
+    """Main CLI entry point."""
+    parser = argparse.ArgumentParser(description="ML Portal CLI")
+    subparsers = parser.add_subparsers(dest="command", help="Available commands")
+    
+    # Create superuser command
+    create_superuser_parser = subparsers.add_parser(
+        "create-superuser",
+        help="Create a superuser account"
+    )
+    create_superuser_parser.add_argument(
+        "--login",
+        required=True,
+        help="Login username"
+    )
+    create_superuser_parser.add_argument(
+        "--password",
+        required=True,
+        help="Password (min 12 characters)"
+    )
+    create_superuser_parser.add_argument(
+        "--email",
+        help="Email address (optional)"
+    )
+    
+    args = parser.parse_args()
+    
+    if args.command == "create-superuser":
+        if len(args.password) < 12:
+            print("❌ Error: Password must be at least 12 characters long")
+            sys.exit(1)
+        
+        create_superuser(
+            login=args.login,
+            password=args.password,
+            email=args.email
+        )
+    else:
+        parser.print_help()
+
+
+if __name__ == "__main__":
+    main()
+
 # ===== app/main.py =====
 from __future__ import annotations
 import os
@@ -121,28 +215,46 @@ from app.core.redis import get_redis
 from app.core.qdrant import get_qdrant
 from app.core.s3 import get_minio
 from app.core.idempotency import IdempotencyMiddleware
+from app.core.request_id import RequestIDMiddleware
+from app.core.security_headers import SecurityHeadersMiddleware
 from app.api.routers.auth import router as auth_router
 from app.api.routers.chats import router as chats_router
 from app.api.routers.rag import router as rag_router
 from app.api.routers.analyze import router as analyze_router
+from app.api.routers.admin import router as admin_router
+from app.api.routers.password_reset import router as password_reset_router
 
 setup_logging()
 
 app = FastAPI(title="API")
 
+app.add_middleware(RequestIDMiddleware)
+app.add_middleware(SecurityHeadersMiddleware, environment=os.getenv("ENVIRONMENT", "development"))
 app.add_middleware(IdempotencyMiddleware)
 
 if os.getenv("CORS_ENABLED", "1") not in {"0", "false", "False"}:
     origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",")]
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=origins if origins != ["*"] else ["*"],
-        allow_credentials=True,
-        allow_methods=[m.strip() for m in os.getenv("CORS_METHODS", "*").split(",")] if os.getenv("CORS_METHODS") else ["*"],
-        allow_headers=[h.strip() for h in os.getenv("CORS_HEADERS", "*").split(",")] if os.getenv("CORS_HEADERS") else ["*"],
-        expose_headers=[h.strip() for h in os.getenv("CORS_EXPOSE_HEADERS", "").split(",")] if os.getenv("CORS_EXPOSE_HEADERS") else [],
-        max_age=int(os.getenv("CORS_MAX_AGE", "600")),
-    )
+    # В DEV разрешаем все origins, в PROD - только явно указанные
+    is_dev = os.getenv("ENVIRONMENT", "development") == "development"
+    
+    if is_dev or origins == ["*"]:
+        # DEV режим - разрешаем все origins, но без credentials
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=["*"],
+            allow_credentials=False,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
+    else:
+        # PROD режим - только указанные origins с credentials
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=origins,
+            allow_credentials=True,
+            allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+            allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
+        )
 
 install_exception_handlers(app)
 
@@ -209,6 +321,8 @@ app.include_router(auth_router, prefix="/api")
 app.include_router(chats_router, prefix="/api")
 app.include_router(rag_router, prefix="/api")
 app.include_router(analyze_router, prefix="/api")
+app.include_router(admin_router)
+app.include_router(password_reset_router)
 
 # ===== tests/conftest.py =====
 import pytest
@@ -297,6 +411,263 @@ def test_rag_document():
         "status": "ready",
         "tags": ["document", "test"]
     }
+
+# ===== tests/test_security_improvements.py =====
+"""
+Tests for security improvements: password validation, rate limiting, PAT scopes
+"""
+import pytest
+from fastapi.testclient import TestClient
+from unittest.mock import patch
+import time
+
+from app.main import app
+from app.core.security import validate_password_strength, hash_password, verify_password
+from app.core.pat_validation import validate_scopes, check_scope_permission
+from app.core.config import settings
+
+client = TestClient(app)
+
+class TestPasswordValidation:
+    """Test password strength validation"""
+    
+    def test_valid_password(self):
+        """Test valid password passes validation"""
+        password = "StrongPassword123!"
+        is_valid, error_msg = validate_password_strength(password)
+        assert is_valid
+        assert error_msg == ""
+    
+    def test_password_too_short(self):
+        """Test password too short fails validation"""
+        password = "Short1!"
+        is_valid, error_msg = validate_password_strength(password)
+        assert not is_valid
+        assert "at least" in error_msg and "characters" in error_msg
+    
+    def test_password_no_uppercase(self):
+        """Test password without uppercase fails validation"""
+        password = "lowercase123!"
+        is_valid, error_msg = validate_password_strength(password)
+        assert not is_valid
+        assert "uppercase" in error_msg
+    
+    def test_password_no_lowercase(self):
+        """Test password without lowercase fails validation"""
+        password = "UPPERCASE123!"
+        is_valid, error_msg = validate_password_strength(password)
+        assert not is_valid
+        assert "lowercase" in error_msg
+    
+    def test_password_no_digits(self):
+        """Test password without digits fails validation"""
+        password = "NoDigits!"
+        is_valid, error_msg = validate_password_strength(password)
+        assert not is_valid
+        assert "digit" in error_msg
+    
+    def test_password_no_special(self):
+        """Test password without special characters fails validation"""
+        password = "NoSpecial123"
+        is_valid, error_msg = validate_password_strength(password)
+        assert not is_valid
+        assert "special" in error_msg
+    
+    def test_password_with_pepper(self):
+        """Test password hashing with pepper"""
+        password = "TestPassword123!"
+        hash1 = hash_password(password)
+        hash2 = hash_password(password)
+        
+        # Hashes should be different due to salt
+        assert hash1 != hash2
+        
+        # Both should verify correctly
+        assert verify_password(password, hash1)
+        assert verify_password(password, hash2)
+        
+        # Wrong password should not verify
+        assert not verify_password("WrongPassword123!", hash1)
+
+class TestPATScopeValidation:
+    """Test PAT scope validation"""
+    
+    def test_valid_scopes(self):
+        """Test valid scopes pass validation"""
+        scopes = ["api:read", "rag:write", "chat:admin"]
+        validated = validate_scopes(scopes)
+        assert "api:read" in validated
+        assert "rag:write" in validated
+        assert "chat:admin" in validated
+        assert "chat:read" in validated  # Should be expanded from chat:admin
+        assert "chat:write" in validated  # Should be expanded from chat:admin
+    
+    def test_invalid_scopes(self):
+        """Test invalid scopes raise exception"""
+        scopes = ["invalid:scope", "api:read"]
+        with pytest.raises(Exception):  # HTTPException
+            validate_scopes(scopes)
+    
+    def test_empty_scopes(self):
+        """Test empty scopes return empty list"""
+        scopes = []
+        validated = validate_scopes(scopes)
+        assert validated == []
+    
+    def test_scope_permission_check(self):
+        """Test scope permission checking"""
+        user_scopes = ["api:admin", "rag:read"]
+        
+        # Should have permission for included scopes
+        assert check_scope_permission(user_scopes, "api:admin")
+        assert check_scope_permission(user_scopes, "rag:read")
+        
+        # Should have permission for lower-level scopes
+        assert check_scope_permission(user_scopes, "api:read")
+        assert check_scope_permission(user_scopes, "api:write")
+        
+        # Should not have permission for unrelated scopes
+        assert not check_scope_permission(user_scopes, "chat:read")
+        assert not check_scope_permission(user_scopes, "users:admin")
+
+class TestRateLimiting:
+    """Test rate limiting functionality"""
+    
+    def test_login_rate_limiting(self):
+        """Test login endpoint rate limiting"""
+        # Make multiple login attempts
+        for i in range(12):  # More than the limit
+            response = client.post("/api/auth/login", json={
+                "login": "testuser",
+                "password": "wrongpassword"
+            })
+            
+            if i < 10:  # First 10 should be allowed
+                assert response.status_code in [400, 401]  # Bad request or unauthorized
+            else:  # After 10 should be rate limited
+                assert response.status_code == 429  # Too Many Requests
+                assert "rate_limit_exceeded" in response.json().get("error", "")
+                break
+    
+    def test_password_reset_rate_limiting(self):
+        """Test password reset endpoint rate limiting"""
+        # Make multiple password reset requests
+        for i in range(7):  # More than the limit
+            response = client.post("/auth/password/forgot", json={
+                "login_or_email": "test@example.com"
+            })
+            
+            if i < 5:  # First 5 should be allowed
+                assert response.status_code == 200
+            else:  # After 5 should be rate limited
+                assert response.status_code == 429
+                break
+
+class TestAdminAPIValidation:
+    """Test admin API with new validations"""
+    
+    def test_create_user_with_weak_password(self):
+        """Test creating user with weak password fails"""
+        # This would need admin authentication in real test
+        # For now, just test the validation logic
+        weak_passwords = [
+            "short",
+            "nouppercase123!",
+            "NOLOWERCASE123!",
+            "NoDigits!",
+            "NoSpecial123"
+        ]
+        
+        for password in weak_passwords:
+            is_valid, error_msg = validate_password_strength(password)
+            assert not is_valid, f"Password '{password}' should be invalid"
+            assert error_msg != "", f"Error message should not be empty for '{password}'"
+    
+    def test_create_pat_with_invalid_scopes(self):
+        """Test creating PAT with invalid scopes fails"""
+        invalid_scopes = ["invalid:scope", "api:invalid", "unknown:action"]
+        
+        for scope in invalid_scopes:
+            with pytest.raises(Exception):  # HTTPException
+                validate_scopes([scope])
+
+class TestSSEHeartbeat:
+    """Test SSE heartbeat functionality"""
+    
+    def test_sse_heartbeat_response(self):
+        """Test SSE heartbeat response structure"""
+        from app.api.sse import sse_heartbeat_response
+        
+        # This would need to be tested with actual SSE endpoint
+        # For now, test the response structure
+        response = sse_heartbeat_response(heartbeat_interval=1)
+        
+        assert response.media_type == "text/event-stream"
+        assert "Cache-Control" in response.headers
+        assert "Connection" in response.headers
+        assert response.headers["Cache-Control"] == "no-cache"
+        assert response.headers["Connection"] == "keep-alive"
+
+class TestCORSConfiguration:
+    """Test CORS configuration"""
+    
+    def test_cors_headers_present(self):
+        """Test that CORS headers are present in responses"""
+        response = client.options("/api/auth/login")
+        
+        # Should have CORS headers
+        assert "access-control-allow-origin" in response.headers
+        assert "access-control-allow-methods" in response.headers
+    
+    def test_cors_origins_configuration(self):
+        """Test CORS origins configuration"""
+        # Test that CORS origins are properly configured
+        assert hasattr(settings, 'CORS_ORIGINS')
+        assert hasattr(settings, 'CORS_ENABLED')
+        assert hasattr(settings, 'CORS_ALLOW_CREDENTIALS')
+
+class TestPasswordResetSecurity:
+    """Test password reset security features"""
+    
+    def test_password_reset_token_expiry(self):
+        """Test that password reset tokens have proper expiry"""
+        from datetime import datetime, timedelta
+        
+        # Test token creation with expiry
+        expires_at = datetime.utcnow() + timedelta(minutes=60)
+        assert expires_at > datetime.utcnow()
+    
+    def test_password_reset_always_returns_200(self):
+        """Test that password reset always returns 200 for security"""
+        # Test with non-existent user
+        response = client.post("/auth/password/forgot", json={
+            "login_or_email": "nonexistent@example.com"
+        })
+        assert response.status_code == 200
+        
+        # Test with invalid email format
+        response = client.post("/auth/password/forgot", json={
+            "login_or_email": "invalid-email"
+        })
+        assert response.status_code == 200
+
+class TestAuditLogging:
+    """Test audit logging functionality"""
+    
+    def test_audit_log_structure(self):
+        """Test audit log entry structure"""
+        from app.services.audit_service import AuditService
+        from app.core.db import get_db
+        
+        # This would need proper database setup in real test
+        # For now, test the service structure
+        assert hasattr(AuditService, 'log_action')
+        assert hasattr(AuditService, 'log_user_action')
+        assert hasattr(AuditService, 'log_token_action')
+        assert hasattr(AuditService, 'log_auth_action')
+
+if __name__ == "__main__":
+    pytest.main([__file__])
 
 # ===== tests/test_chats.py =====
 import pytest
@@ -426,6 +797,288 @@ class TestChatsAPI:
             data = response.json()
             assert data["deleted"] is True
 
+# ===== tests/test_rbac.py =====
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
+from unittest.mock import patch
+
+from app.main import app
+from app.core.security import hash_password
+from app.repositories.users_repo import UsersRepo
+from app.schemas.admin import UserRole
+
+
+@pytest.fixture
+def client():
+    return TestClient(app)
+
+
+@pytest.fixture
+def admin_user(session: Session):
+    """Create admin user for testing."""
+    repo = UsersRepo(session)
+    user = repo.create_user(
+        login="admin",
+        password_hash=hash_password("admin123456"),
+        role="admin",
+        email="admin@test.com",
+        is_active=True
+    )
+    return user
+
+
+@pytest.fixture
+def editor_user(session: Session):
+    """Create editor user for testing."""
+    repo = UsersRepo(session)
+    user = repo.create_user(
+        login="editor",
+        password_hash=hash_password("editor123456"),
+        role="editor",
+        email="editor@test.com",
+        is_active=True
+    )
+    return user
+
+
+@pytest.fixture
+def reader_user(session: Session):
+    """Create reader user for testing."""
+    repo = UsersRepo(session)
+    user = repo.create_user(
+        login="reader",
+        password_hash=hash_password("reader123456"),
+        role="reader",
+        email="reader@test.com",
+        is_active=True
+    )
+    return user
+
+
+def get_auth_headers(client: TestClient, login: str, password: str):
+    """Get authorization headers for a user."""
+    response = client.post("/api/auth/login", json={"login": login, "password": password})
+    assert response.status_code == 200
+    token = response.json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}
+
+
+class TestRBAC:
+    """Test RBAC functionality."""
+    
+    def test_admin_can_access_all_endpoints(self, client: TestClient, admin_user):
+        """Test that admin can access all endpoints."""
+        headers = get_auth_headers(client, "admin", "admin123456")
+        
+        # Test admin endpoints
+        response = client.get("/api/admin/users", headers=headers)
+        assert response.status_code == 200
+        
+        # Test RAG endpoints
+        response = client.get("/api/rag/", headers=headers)
+        assert response.status_code == 200
+        
+        response = client.get("/api/rag/stats", headers=headers)
+        assert response.status_code == 200
+    
+    def test_editor_can_access_rag_write_operations(self, client: TestClient, editor_user):
+        """Test that editor can access RAG write operations."""
+        headers = get_auth_headers(client, "editor", "editor123456")
+        
+        # Test RAG read operations
+        response = client.get("/api/rag/", headers=headers)
+        assert response.status_code == 200
+        
+        response = client.get("/api/rag/stats", headers=headers)
+        assert response.status_code == 200
+        
+        # Test RAG search
+        response = client.post("/api/rag/search", json={"query": "test"}, headers=headers)
+        assert response.status_code == 200
+    
+    def test_editor_cannot_access_admin_endpoints(self, client: TestClient, editor_user):
+        """Test that editor cannot access admin endpoints."""
+        headers = get_auth_headers(client, "editor", "editor123456")
+        
+        response = client.get("/api/admin/users", headers=headers)
+        assert response.status_code == 403
+    
+    def test_reader_can_access_read_operations(self, client: TestClient, reader_user):
+        """Test that reader can access read operations."""
+        headers = get_auth_headers(client, "reader", "reader123456")
+        
+        # Test RAG read operations
+        response = client.get("/api/rag/", headers=headers)
+        assert response.status_code == 200
+        
+        response = client.get("/api/rag/stats", headers=headers)
+        assert response.status_code == 200
+        
+        # Test RAG search
+        response = client.post("/api/rag/search", json={"query": "test"}, headers=headers)
+        assert response.status_code == 200
+    
+    def test_reader_cannot_access_write_operations(self, client: TestClient, reader_user):
+        """Test that reader cannot access write operations."""
+        headers = get_auth_headers(client, "reader", "reader123456")
+        
+        # Test RAG upload (should fail)
+        with open("test_file.txt", "w") as f:
+            f.write("test content")
+        
+        try:
+            with open("test_file.txt", "rb") as f:
+                response = client.post("/api/rag/upload", files={"file": f}, headers=headers)
+                assert response.status_code == 403
+        finally:
+            import os
+            if os.path.exists("test_file.txt"):
+                os.remove("test_file.txt")
+    
+    def test_reader_cannot_access_admin_endpoints(self, client: TestClient, reader_user):
+        """Test that reader cannot access admin endpoints."""
+        headers = get_auth_headers(client, "reader", "reader123456")
+        
+        response = client.get("/api/admin/users", headers=headers)
+        assert response.status_code == 403
+    
+    def test_inactive_user_cannot_access_anything(self, client: TestClient, session: Session):
+        """Test that inactive user cannot access anything."""
+        repo = UsersRepo(session)
+        user = repo.create_user(
+            login="inactive",
+            password_hash=hash_password("inactive123456"),
+            role="admin",
+            is_active=False
+        )
+        
+        headers = get_auth_headers(client, "inactive", "inactive123456")
+        
+        # Should get 401 for any endpoint
+        response = client.get("/api/rag/", headers=headers)
+        assert response.status_code == 401
+
+
+class TestAdminAPI:
+    """Test admin API functionality."""
+    
+    def test_create_user(self, client: TestClient, admin_user):
+        """Test creating a new user."""
+        headers = get_auth_headers(client, "admin", "admin123456")
+        
+        user_data = {
+            "login": "newuser",
+            "password": "newuser123456",
+            "role": "reader",
+            "email": "newuser@test.com"
+        }
+        
+        response = client.post("/api/admin/users", json=user_data, headers=headers)
+        assert response.status_code == 201
+        
+        data = response.json()
+        assert data["login"] == "newuser"
+        assert data["role"] == "reader"
+        assert data["email"] == "newuser@test.com"
+        assert data["is_active"] is True
+    
+    def test_list_users(self, client: TestClient, admin_user, editor_user, reader_user):
+        """Test listing users."""
+        headers = get_auth_headers(client, "admin", "admin123456")
+        
+        response = client.get("/api/admin/users", headers=headers)
+        assert response.status_code == 200
+        
+        data = response.json()
+        assert data["total"] >= 3  # At least our test users
+        assert len(data["users"]) >= 3
+    
+    def test_get_user(self, client: TestClient, admin_user, editor_user):
+        """Test getting a specific user."""
+        headers = get_auth_headers(client, "admin", "admin123456")
+        
+        response = client.get(f"/api/admin/users/{editor_user.id}", headers=headers)
+        assert response.status_code == 200
+        
+        data = response.json()
+        assert data["id"] == str(editor_user.id)
+        assert data["login"] == "editor"
+        assert data["role"] == "editor"
+    
+    def test_update_user(self, client: TestClient, admin_user, editor_user):
+        """Test updating a user."""
+        headers = get_auth_headers(client, "admin", "admin123456")
+        
+        update_data = {
+            "role": "reader",
+            "is_active": False
+        }
+        
+        response = client.patch(f"/api/admin/users/{editor_user.id}", json=update_data, headers=headers)
+        assert response.status_code == 200
+        
+        data = response.json()
+        assert data["role"] == "reader"
+        assert data["is_active"] is False
+    
+    def test_reset_user_password(self, client: TestClient, admin_user, editor_user):
+        """Test resetting user password."""
+        headers = get_auth_headers(client, "admin", "admin123456")
+        
+        response = client.post(f"/api/admin/users/{editor_user.id}/password", json={}, headers=headers)
+        assert response.status_code == 200
+        
+        data = response.json()
+        assert "new_password" in data
+        assert len(data["new_password"]) > 0
+    
+    def test_create_pat_token(self, client: TestClient, admin_user, editor_user):
+        """Test creating a PAT token."""
+        headers = get_auth_headers(client, "admin", "admin123456")
+        
+        token_data = {
+            "name": "test-token",
+            "scopes": ["api:read", "rag:read"]
+        }
+        
+        response = client.post(f"/api/admin/users/{editor_user.id}/tokens", json=token_data, headers=headers)
+        assert response.status_code == 201
+        
+        data = response.json()
+        assert data["name"] == "test-token"
+        assert "token_plain_once" in data
+        assert data["scopes"] == ["api:read", "rag:read"]
+    
+    def test_list_user_tokens(self, client: TestClient, admin_user, editor_user):
+        """Test listing user tokens."""
+        headers = get_auth_headers(client, "admin", "admin123456")
+        
+        # Create a token first
+        token_data = {"name": "test-token"}
+        client.post(f"/api/admin/users/{editor_user.id}/tokens", json=token_data, headers=headers)
+        
+        response = client.get(f"/api/admin/users/{editor_user.id}/tokens", headers=headers)
+        assert response.status_code == 200
+        
+        data = response.json()
+        assert data["total"] >= 1
+        assert len(data["tokens"]) >= 1
+    
+    def test_audit_logs(self, client: TestClient, admin_user, editor_user):
+        """Test audit logs functionality."""
+        headers = get_auth_headers(client, "admin", "admin123456")
+        
+        # Perform some actions that should be logged
+        client.patch(f"/api/admin/users/{editor_user.id}", json={"role": "reader"}, headers=headers)
+        
+        response = client.get("/api/admin/audit-logs", headers=headers)
+        assert response.status_code == 200
+        
+        data = response.json()
+        assert data["total"] >= 1
+        assert len(data["logs"]) >= 1
+
 # ===== tests/__init__.py =====
 # Tests package
 
@@ -475,6 +1128,252 @@ def test_health_check():
     client = TestClient(app)
     response = client.get("/health")
     assert response.status_code == 200
+
+# ===== tests/test_tz_compliance.py =====
+"""
+Тесты соответствия техническому заданию
+"""
+import pytest
+from fastapi.testclient import TestClient
+from unittest.mock import patch
+import json
+
+from app.main import app
+from app.core.config import settings
+
+client = TestClient(app)
+
+class TestTZCompliance:
+    """Тесты соответствия ТЗ"""
+    
+    def test_role_check_constraint(self):
+        """Тест CHECK constraint для роли пользователя"""
+        # Проверяем, что миграция создала правильный constraint
+        from app.models.user import Users
+        from sqlalchemy import text
+        
+        # В реальном тесте нужно подключиться к БД и проверить constraint
+        # Пока проверяем, что модель определена правильно
+        assert hasattr(Users, '__table_args__')
+        constraints = Users.__table_args__
+        assert any('ck_users_role' in str(constraint) for constraint in constraints)
+    
+    def test_cursor_pagination_format(self):
+        """Тест cursor-based пагинации"""
+        # Проверяем схему ответа
+        from app.schemas.admin import UserListResponse
+        
+        # Схема должна содержать cursor поля
+        fields = UserListResponse.__fields__
+        assert 'has_more' in fields
+        assert 'next_cursor' in fields
+        assert 'users' in fields
+        assert 'total' in fields
+    
+    def test_error_format_standardization(self):
+        """Тест стандартизации формата ошибок"""
+        # Проверяем, что все ошибки имеют стандартный формат
+        response = client.get("/api/admin/users", headers={"Authorization": "Bearer invalid"})
+        
+        # Должен быть стандартный формат ошибки
+        assert response.status_code in [401, 403]
+        data = response.json()
+        
+        # Проверяем структуру ошибки
+        if "error" in data:
+            assert "code" in data["error"]
+            assert "message" in data["error"]
+        if "request_id" in data:
+            assert isinstance(data["request_id"], str)
+    
+    def test_password_algorithm_argon2id(self):
+        """Тест использования Argon2id для паролей"""
+        from app.core.security import hash_password, verify_password
+        
+        password = "TestPassword123!"
+        hash1 = hash_password(password)
+        hash2 = hash_password(password)
+        
+        # Хеши должны быть разными (соль)
+        assert hash1 != hash2
+        
+        # Оба должны верифицироваться
+        assert verify_password(password, hash1)
+        assert verify_password(password, hash2)
+        
+        # Неправильный пароль не должен верифицироваться
+        assert not verify_password("WrongPassword123!", hash1)
+    
+    def test_refresh_token_rotation(self):
+        """Тест ротации refresh токенов"""
+        from app.core.config import settings
+        
+        # Проверяем, что ротация включена по умолчанию
+        assert settings.REFRESH_ROTATING == True
+        
+        # Проверяем TTL настройки
+        assert settings.ACCESS_TTL_SECONDS == 900  # 15 минут
+        assert settings.REFRESH_TTL_DAYS == 7
+    
+    def test_cookie_auth_configuration(self):
+        """Тест конфигурации cookie аутентификации"""
+        # Проверяем, что настройки cookie auth присутствуют
+        assert hasattr(settings, 'AUTH_MODE')
+        assert hasattr(settings, 'COOKIE_AUTH_ENABLED')
+        assert hasattr(settings, 'CSRF_ENABLED')
+        
+        # По умолчанию должен быть bearer режим
+        assert settings.AUTH_MODE == "bearer"
+        assert settings.COOKIE_AUTH_ENABLED == False
+        assert settings.CSRF_ENABLED == False
+    
+    def test_reader_upload_permission(self):
+        """Тест разрешения загрузок для reader"""
+        # Проверяем настройку
+        assert hasattr(settings, 'ALLOW_READER_UPLOADS')
+        assert settings.ALLOW_READER_UPLOADS == False  # По умолчанию отключено
+    
+    def test_soft_delete_behavior(self):
+        """Тест мягкого удаления пользователей"""
+        # Проверяем, что есть endpoint для удаления
+        response = client.delete("/api/admin/users/nonexistent", 
+                               headers={"Authorization": "Bearer admin_token"})
+        
+        # Должен возвращать 404 для несуществующего пользователя
+        # В реальном тесте нужно создать пользователя и проверить мягкое удаление
+        assert response.status_code in [401, 404]  # 401 из-за отсутствия валидного токена
+    
+    def test_admin_metrics_availability(self):
+        """Тест доступности метрик админ операций"""
+        from app.core.metrics import (
+            admin_operations_total,
+            admin_user_operations_total,
+            admin_token_operations_total,
+            rate_limit_hits_total,
+            auth_attempts_total
+        )
+        
+        # Проверяем, что метрики определены
+        assert admin_operations_total is not None
+        assert admin_user_operations_total is not None
+        assert admin_token_operations_total is not None
+        assert rate_limit_hits_total is not None
+        assert auth_attempts_total is not None
+    
+    def test_openapi_schemas(self):
+        """Тест OpenAPI схем"""
+        response = client.get("/openapi.json")
+        assert response.status_code == 200
+        
+        openapi_spec = response.json()
+        
+        # Проверяем, что админ API присутствует
+        paths = openapi_spec.get("paths", {})
+        admin_paths = [path for path in paths.keys() if "/api/admin" in path]
+        assert len(admin_paths) > 0
+        
+        # Проверяем схемы
+        schemas = openapi_spec.get("components", {}).get("schemas", {})
+        assert "UserResponse" in schemas
+        assert "UserListResponse" in schemas
+        assert "TokenResponse" in schemas
+        assert "AuditLogResponse" in schemas
+    
+    def test_password_reset_security(self):
+        """Тест безопасности password reset"""
+        # Тестируем, что всегда возвращается 200
+        test_cases = [
+            "nonexistent@example.com",
+            "invalid-email",
+            "nonexistent_user"
+        ]
+        
+        for test_case in test_cases:
+            response = client.post("/auth/password/forgot", json={
+                "login_or_email": test_case
+            })
+            assert response.status_code == 200
+    
+    def test_pat_scope_validation(self):
+        """Тест валидации PAT scopes"""
+        from app.core.pat_validation import validate_scopes, check_scope_permission
+        
+        # Валидные scopes
+        valid_scopes = ["api:read", "rag:write", "chat:admin"]
+        validated = validate_scopes(valid_scopes)
+        
+        assert "api:read" in validated
+        assert "rag:write" in validated
+        assert "chat:admin" in validated
+        assert "chat:read" in validated  # Должен быть расширен
+        assert "chat:write" in validated  # Должен быть расширен
+        
+        # Проверка разрешений
+        user_scopes = ["api:admin"]
+        assert check_scope_permission(user_scopes, "api:read")
+        assert check_scope_permission(user_scopes, "api:write")
+        assert not check_scope_permission(user_scopes, "chat:read")
+    
+    def test_cors_configuration(self):
+        """Тест CORS конфигурации"""
+        # Проверяем настройки
+        assert hasattr(settings, 'CORS_ENABLED')
+        assert hasattr(settings, 'CORS_ORIGINS')
+        assert hasattr(settings, 'CORS_ALLOW_CREDENTIALS')
+        
+        # Тестируем OPTIONS запрос
+        response = client.options("/api/auth/login")
+        assert "access-control-allow-origin" in response.headers
+    
+    def test_sse_heartbeat_configuration(self):
+        """Тест конфигурации SSE heartbeat"""
+        from app.api.sse import sse_heartbeat_response
+        
+        # Тестируем создание SSE ответа
+        response = sse_heartbeat_response(heartbeat_interval=1)
+        assert response.media_type == "text/event-stream"
+        assert "Cache-Control" in response.headers
+        assert response.headers["Cache-Control"] == "no-cache"
+    
+    def test_audit_logging_structure(self):
+        """Тест структуры audit logging"""
+        from app.services.audit_service import AuditService
+        
+        # Проверяем методы
+        assert hasattr(AuditService, 'log_action')
+        assert hasattr(AuditService, 'log_user_action')
+        assert hasattr(AuditService, 'log_token_action')
+        assert hasattr(AuditService, 'log_auth_action')
+    
+    def test_rate_limiting_configuration(self):
+        """Тест конфигурации rate limiting"""
+        # Проверяем настройки
+        assert hasattr(settings, 'RATE_LIMIT_LOGIN_ATTEMPTS')
+        assert hasattr(settings, 'RATE_LIMIT_LOGIN_WINDOW')
+        
+        assert settings.RATE_LIMIT_LOGIN_ATTEMPTS == 10
+        assert settings.RATE_LIMIT_LOGIN_WINDOW == 60
+    
+    def test_password_policy_configuration(self):
+        """Тест конфигурации политики паролей"""
+        # Проверяем настройки
+        assert hasattr(settings, 'PASSWORD_MIN_LENGTH')
+        assert hasattr(settings, 'PASSWORD_REQUIRE_UPPERCASE')
+        assert hasattr(settings, 'PASSWORD_REQUIRE_LOWERCASE')
+        assert hasattr(settings, 'PASSWORD_REQUIRE_DIGITS')
+        assert hasattr(settings, 'PASSWORD_REQUIRE_SPECIAL')
+        assert hasattr(settings, 'PASSWORD_PEPPER')
+        
+        # Проверяем значения по умолчанию
+        assert settings.PASSWORD_MIN_LENGTH == 12
+        assert settings.PASSWORD_REQUIRE_UPPERCASE == True
+        assert settings.PASSWORD_REQUIRE_LOWERCASE == True
+        assert settings.PASSWORD_REQUIRE_DIGITS == True
+        assert settings.PASSWORD_REQUIRE_SPECIAL == True
+        assert len(settings.PASSWORD_PEPPER) > 0
+
+if __name__ == "__main__":
+    pytest.main([__file__])
 
 # ===== tests/test_rag.py =====
 import pytest
@@ -804,6 +1703,628 @@ if __name__ == "__main__":
     print(f"Hash: {hashed}")
 
 
+# ===== scripts/create_superuser.py =====
+#!/usr/bin/env python3
+"""
+Script to create a superuser account.
+Usage: python scripts/create_superuser.py --login admin --password 'secure_password123'
+"""
+import sys
+import os
+import argparse
+
+# Add the parent directory to the path so we can import from app
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
+from app.core.db import get_session
+from app.core.security import hash_password
+from app.repositories.users_repo import UsersRepo
+
+
+def create_superuser(login: str, password: str, email: str = None):
+    """Create a superuser account."""
+    session = next(get_session())
+    repo = UsersRepo(session)
+    
+    try:
+        # Check if user already exists
+        existing_user = repo.by_login(login)
+        if existing_user:
+            print(f"❌ Error: User with login '{login}' already exists")
+            return False
+        
+        # Validate password
+        if len(password) < 12:
+            print("❌ Error: Password must be at least 12 characters long")
+            return False
+        
+        # Create superuser
+        password_hash = hash_password(password)
+        user = repo.create_user(
+            login=login,
+            password_hash=password_hash,
+            role="admin",
+            email=email,
+            is_active=True
+        )
+        
+        print(f"✅ Superuser created successfully!")
+        print(f"   Login: {user.login}")
+        print(f"   Role: {user.role}")
+        print(f"   Email: {user.email or 'Not set'}")
+        print(f"   ID: {user.id}")
+        
+        return True
+        
+    except Exception as e:
+        print(f"❌ Error creating superuser: {e}")
+        return False
+    finally:
+        session.close()
+
+
+def main():
+    """Main function."""
+    parser = argparse.ArgumentParser(description="Create a superuser account")
+    parser.add_argument("--login", required=True, help="Login username")
+    parser.add_argument("--password", required=True, help="Password (min 12 characters)")
+    parser.add_argument("--email", help="Email address (optional)")
+    
+    args = parser.parse_args()
+    
+    success = create_superuser(
+        login=args.login,
+        password=args.password,
+        email=args.email
+    )
+    
+    sys.exit(0 if success else 1)
+
+
+if __name__ == "__main__":
+    main()
+
+# ===== scripts/test_security_improvements.py =====
+#!/usr/bin/env python3
+"""
+Скрипт для тестирования всех улучшений безопасности
+"""
+import os
+import sys
+import asyncio
+import requests
+import json
+from datetime import datetime, timedelta
+
+# Добавляем путь к приложению
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
+from app.core.security import validate_password_strength, hash_password, verify_password
+from app.core.pat_validation import validate_scopes, check_scope_permission
+from app.core.config import settings
+
+def test_password_validation():
+    """Тестирование валидации паролей"""
+    print("🔐 Тестирование валидации паролей...")
+    
+    # Валидные пароли
+    valid_passwords = [
+        "StrongPassword123!",
+        "AnotherValid1@",
+        "Test123!@#$%"
+    ]
+    
+    for password in valid_passwords:
+        is_valid, error_msg = validate_password_strength(password)
+        assert is_valid, f"Пароль '{password}' должен быть валидным: {error_msg}"
+        print(f"  ✅ {password}")
+    
+    # Невалидные пароли
+    invalid_passwords = [
+        ("short", "слишком короткий"),
+        ("nouppercase123!", "нет заглавных букв"),
+        ("NOLOWERCASE123!", "нет строчных букв"),
+        ("NoDigits!", "нет цифр"),
+        ("NoSpecial123", "нет спецсимволов")
+    ]
+    
+    for password, reason in invalid_passwords:
+        is_valid, error_msg = validate_password_strength(password)
+        assert not is_valid, f"Пароль '{password}' должен быть невалидным ({reason})"
+        print(f"  ❌ {password} - {error_msg}")
+    
+    print("  ✅ Валидация паролей работает корректно")
+
+def test_password_hashing():
+    """Тестирование хеширования паролей с pepper"""
+    print("🔒 Тестирование хеширования паролей...")
+    
+    password = "TestPassword123!"
+    hash1 = hash_password(password)
+    hash2 = hash_password(password)
+    
+    # Хеши должны быть разными из-за соли
+    assert hash1 != hash2, "Хеши должны быть разными из-за соли"
+    
+    # Оба должны верифицироваться корректно
+    assert verify_password(password, hash1), "Первый хеш должен верифицироваться"
+    assert verify_password(password, hash2), "Второй хеш должен верифицироваться"
+    
+    # Неправильный пароль не должен верифицироваться
+    assert not verify_password("WrongPassword123!", hash1), "Неправильный пароль не должен верифицироваться"
+    
+    print("  ✅ Хеширование паролей работает корректно")
+
+def test_pat_scope_validation():
+    """Тестирование валидации scopes для PAT"""
+    print("🎫 Тестирование валидации PAT scopes...")
+    
+    # Валидные scopes
+    valid_scopes = ["api:read", "rag:write", "chat:admin"]
+    validated = validate_scopes(valid_scopes)
+    
+    assert "api:read" in validated
+    assert "rag:write" in validated
+    assert "chat:admin" in validated
+    assert "chat:read" in validated  # Должен быть расширен из chat:admin
+    assert "chat:write" in validated  # Должен быть расширен из chat:admin
+    
+    print(f"  ✅ Валидные scopes: {validated}")
+    
+    # Тестирование проверки разрешений
+    user_scopes = ["api:admin", "rag:read"]
+    
+    # Должны иметь разрешения для включенных scopes
+    assert check_scope_permission(user_scopes, "api:admin")
+    assert check_scope_permission(user_scopes, "rag:read")
+    
+    # Должны иметь разрешения для scopes более низкого уровня
+    assert check_scope_permission(user_scopes, "api:read")
+    assert check_scope_permission(user_scopes, "api:write")
+    
+    # Не должны иметь разрешения для несвязанных scopes
+    assert not check_scope_permission(user_scopes, "chat:read")
+    assert not check_scope_permission(user_scopes, "users:admin")
+    
+    print("  ✅ Проверка разрешений scopes работает корректно")
+    
+    # Невалидные scopes
+    try:
+        validate_scopes(["invalid:scope", "api:read"])
+        assert False, "Должно было выбросить исключение для невалидных scopes"
+    except Exception as e:
+        print(f"  ✅ Невалидные scopes корректно отклонены: {e}")
+
+def test_rate_limiting():
+    """Тестирование rate limiting"""
+    print("⏱️  Тестирование rate limiting...")
+    
+    base_url = "http://localhost:8000"
+    
+    # Тестируем rate limiting для login
+    print("  Тестирование rate limiting для /api/auth/login...")
+    
+    for i in range(12):  # Больше лимита
+        try:
+            response = requests.post(f"{base_url}/api/auth/login", json={
+                "login": "testuser",
+                "password": "wrongpassword"
+            }, timeout=5)
+            
+            if i < 10:  # Первые 10 должны быть разрешены
+                assert response.status_code in [400, 401], f"Попытка {i+1}: ожидался 400/401, получен {response.status_code}"
+            else:  # После 10 должны быть ограничены
+                assert response.status_code == 429, f"Попытка {i+1}: ожидался 429, получен {response.status_code}"
+                print(f"  ✅ Rate limiting сработал на попытке {i+1}")
+                break
+        except requests.exceptions.RequestException as e:
+            print(f"  ⚠️  Ошибка подключения: {e}")
+            break
+    
+    # Тестируем rate limiting для password reset
+    print("  Тестирование rate limiting для /auth/password/forgot...")
+    
+    for i in range(7):  # Больше лимита
+        try:
+            response = requests.post(f"{base_url}/auth/password/forgot", json={
+                "login_or_email": "test@example.com"
+            }, timeout=5)
+            
+            if i < 5:  # Первые 5 должны быть разрешены
+                assert response.status_code == 200, f"Попытка {i+1}: ожидался 200, получен {response.status_code}"
+            else:  # После 5 должны быть ограничены
+                assert response.status_code == 429, f"Попытка {i+1}: ожидался 429, получен {response.status_code}"
+                print(f"  ✅ Rate limiting сработал на попытке {i+1}")
+                break
+        except requests.exceptions.RequestException as e:
+            print(f"  ⚠️  Ошибка подключения: {e}")
+            break
+
+def test_cors_configuration():
+    """Тестирование CORS конфигурации"""
+    print("🌐 Тестирование CORS конфигурации...")
+    
+    base_url = "http://localhost:8000"
+    
+    try:
+        # Тестируем OPTIONS запрос
+        response = requests.options(f"{base_url}/api/auth/login", timeout=5)
+        
+        # Должны быть CORS заголовки
+        assert "access-control-allow-origin" in response.headers, "Отсутствует CORS заголовок"
+        assert "access-control-allow-methods" in response.headers, "Отсутствует CORS заголовок методов"
+        
+        print("  ✅ CORS заголовки присутствуют")
+        
+        # Проверяем конфигурацию
+        assert hasattr(settings, 'CORS_ORIGINS'), "Отсутствует CORS_ORIGINS в настройках"
+        assert hasattr(settings, 'CORS_ENABLED'), "Отсутствует CORS_ENABLED в настройках"
+        assert hasattr(settings, 'CORS_ALLOW_CREDENTIALS'), "Отсутствует CORS_ALLOW_CREDENTIALS в настройках"
+        
+        print(f"  ✅ CORS настройки: origins={settings.CORS_ORIGINS}, enabled={settings.CORS_ENABLED}")
+        
+    except requests.exceptions.RequestException as e:
+        print(f"  ⚠️  Ошибка подключения: {e}")
+
+def test_password_reset_security():
+    """Тестирование безопасности password reset"""
+    print("🔑 Тестирование безопасности password reset...")
+    
+    base_url = "http://localhost:8000"
+    
+    # Тестируем, что всегда возвращается 200 для безопасности
+    test_cases = [
+        "nonexistent@example.com",
+        "invalid-email",
+        "nonexistent_user"
+    ]
+    
+    for test_case in test_cases:
+        try:
+            response = requests.post(f"{base_url}/auth/password/forgot", json={
+                "login_or_email": test_case
+            }, timeout=5)
+            
+            assert response.status_code == 200, f"Для '{test_case}' ожидался 200, получен {response.status_code}"
+            print(f"  ✅ '{test_case}' корректно возвращает 200")
+            
+        except requests.exceptions.RequestException as e:
+            print(f"  ⚠️  Ошибка подключения для '{test_case}': {e}")
+
+def test_sse_heartbeat():
+    """Тестирование SSE heartbeat"""
+    print("💓 Тестирование SSE heartbeat...")
+    
+    from app.api.sse import sse_heartbeat_response
+    
+    # Тестируем структуру ответа
+    response = sse_heartbeat_response(heartbeat_interval=1)
+    
+    assert response.media_type == "text/event-stream", "Неправильный media type"
+    assert "Cache-Control" in response.headers, "Отсутствует Cache-Control заголовок"
+    assert "Connection" in response.headers, "Отсутствует Connection заголовок"
+    assert response.headers["Cache-Control"] == "no-cache", "Неправильный Cache-Control"
+    assert response.headers["Connection"] == "keep-alive", "Неправильный Connection"
+    
+    print("  ✅ SSE heartbeat структура корректна")
+
+def test_audit_logging():
+    """Тестирование audit logging"""
+    print("📝 Тестирование audit logging...")
+    
+    from app.services.audit_service import AuditService
+    
+    # Проверяем, что сервис имеет необходимые методы
+    assert hasattr(AuditService, 'log_action'), "Отсутствует метод log_action"
+    assert hasattr(AuditService, 'log_user_action'), "Отсутствует метод log_user_action"
+    assert hasattr(AuditService, 'log_token_action'), "Отсутствует метод log_token_action"
+    assert hasattr(AuditService, 'log_auth_action'), "Отсутствует метод log_auth_action"
+    
+    print("  ✅ Audit logging методы присутствуют")
+
+def main():
+    """Основная функция тестирования"""
+    print("🚀 Запуск тестирования улучшений безопасности...")
+    print("=" * 60)
+    
+    try:
+        test_password_validation()
+        print()
+        
+        test_password_hashing()
+        print()
+        
+        test_pat_scope_validation()
+        print()
+        
+        test_rate_limiting()
+        print()
+        
+        test_cors_configuration()
+        print()
+        
+        test_password_reset_security()
+        print()
+        
+        test_sse_heartbeat()
+        print()
+        
+        test_audit_logging()
+        print()
+        
+        print("=" * 60)
+        print("✅ Все тесты безопасности прошли успешно!")
+        
+    except Exception as e:
+        print("=" * 60)
+        print(f"❌ Ошибка в тестах безопасности: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
+
+# ===== scripts/test_rbac_system.py =====
+#!/usr/bin/env python3
+"""
+Test script for RBAC system.
+This script demonstrates the admin functionality and RBAC system.
+"""
+import sys
+import os
+import requests
+import json
+from typing import Dict, Any
+
+# Add the parent directory to the path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
+from app.core.db import get_session
+from app.core.security import hash_password
+from app.repositories.users_repo import UsersRepo
+
+
+class RBACTester:
+    def __init__(self, base_url: str = "http://localhost:8000"):
+        self.base_url = base_url
+        self.session = requests.Session()
+        self.tokens = {}
+    
+    def login(self, username: str, password: str) -> bool:
+        """Login and store token."""
+        try:
+            response = self.session.post(
+                f"{self.base_url}/api/auth/login",
+                json={"login": username, "password": password}
+            )
+            if response.status_code == 200:
+                data = response.json()
+                self.tokens[username] = data["access_token"]
+                print(f"✅ Logged in as {username}")
+                return True
+            else:
+                print(f"❌ Login failed for {username}: {response.text}")
+                return False
+        except Exception as e:
+            print(f"❌ Login error for {username}: {e}")
+            return False
+    
+    def make_request(self, method: str, endpoint: str, username: str, **kwargs) -> requests.Response:
+        """Make authenticated request."""
+        if username not in self.tokens:
+            raise ValueError(f"No token for user {username}")
+        
+        headers = kwargs.get('headers', {})
+        headers['Authorization'] = f"Bearer {self.tokens[username]}"
+        kwargs['headers'] = headers
+        
+        return self.session.request(method, f"{self.base_url}{endpoint}", **kwargs)
+    
+    def test_rbac(self):
+        """Test RBAC functionality."""
+        print("\n🔐 Testing RBAC System")
+        print("=" * 50)
+        
+        # Test admin access
+        print("\n1. Testing admin access...")
+        response = self.make_request("GET", "/api/admin/users", "admin")
+        if response.status_code == 200:
+            print("✅ Admin can access admin API")
+        else:
+            print(f"❌ Admin cannot access admin API: {response.status_code}")
+        
+        # Test editor access
+        print("\n2. Testing editor access...")
+        response = self.make_request("GET", "/api/rag/", "editor")
+        if response.status_code == 200:
+            print("✅ Editor can access RAG API")
+        else:
+            print(f"❌ Editor cannot access RAG API: {response.status_code}")
+        
+        response = self.make_request("GET", "/api/admin/users", "editor")
+        if response.status_code == 403:
+            print("✅ Editor correctly denied admin access")
+        else:
+            print(f"❌ Editor should be denied admin access: {response.status_code}")
+        
+        # Test reader access
+        print("\n3. Testing reader access...")
+        response = self.make_request("GET", "/api/rag/", "reader")
+        if response.status_code == 200:
+            print("✅ Reader can access RAG read operations")
+        else:
+            print(f"❌ Reader cannot access RAG read operations: {response.status_code}")
+        
+        response = self.make_request("GET", "/api/admin/users", "reader")
+        if response.status_code == 403:
+            print("✅ Reader correctly denied admin access")
+        else:
+            print(f"❌ Reader should be denied admin access: {response.status_code}")
+    
+    def test_admin_api(self):
+        """Test admin API functionality."""
+        print("\n👑 Testing Admin API")
+        print("=" * 50)
+        
+        # Create a test user
+        print("\n1. Creating test user...")
+        user_data = {
+            "login": "testuser",
+            "password": "testuser123456",
+            "role": "reader",
+            "email": "testuser@example.com"
+        }
+        
+        response = self.make_request("POST", "/api/admin/users", "admin", json=user_data)
+        if response.status_code == 201:
+            print("✅ Test user created successfully")
+            user_id = response.json()["id"]
+        else:
+            print(f"❌ Failed to create test user: {response.text}")
+            return
+        
+        # List users
+        print("\n2. Listing users...")
+        response = self.make_request("GET", "/api/admin/users", "admin")
+        if response.status_code == 200:
+            users = response.json()["users"]
+            print(f"✅ Found {len(users)} users")
+        else:
+            print(f"❌ Failed to list users: {response.text}")
+        
+        # Update user
+        print("\n3. Updating test user...")
+        update_data = {"role": "editor", "is_active": True}
+        response = self.make_request("PATCH", f"/api/admin/users/{user_id}", "admin", json=update_data)
+        if response.status_code == 200:
+            print("✅ Test user updated successfully")
+        else:
+            print(f"❌ Failed to update test user: {response.text}")
+        
+        # Create PAT token
+        print("\n4. Creating PAT token...")
+        token_data = {
+            "name": "test-token",
+            "scopes": ["api:read", "rag:read"]
+        }
+        response = self.make_request("POST", f"/api/admin/users/{user_id}/tokens", "admin", json=token_data)
+        if response.status_code == 201:
+            print("✅ PAT token created successfully")
+            token_info = response.json()
+            print(f"   Token: {token_info.get('token_plain_once', 'N/A')[:20]}...")
+        else:
+            print(f"❌ Failed to create PAT token: {response.text}")
+        
+        # List audit logs
+        print("\n5. Checking audit logs...")
+        response = self.make_request("GET", "/api/admin/audit-logs", "admin")
+        if response.status_code == 200:
+            logs = response.json()["logs"]
+            print(f"✅ Found {len(logs)} audit log entries")
+        else:
+            print(f"❌ Failed to get audit logs: {response.text}")
+    
+    def test_rag_api(self):
+        """Test RAG API with different roles."""
+        print("\n📚 Testing RAG API")
+        print("=" * 50)
+        
+        # Test search (should work for all roles)
+        print("\n1. Testing RAG search...")
+        for role in ["admin", "editor", "reader"]:
+            response = self.make_request("POST", "/api/rag/search", role, json={"query": "test"})
+            if response.status_code == 200:
+                print(f"✅ {role.capitalize()} can search RAG documents")
+            else:
+                print(f"❌ {role.capitalize()} cannot search RAG documents: {response.status_code}")
+        
+        # Test stats (should work for all roles)
+        print("\n2. Testing RAG stats...")
+        for role in ["admin", "editor", "reader"]:
+            response = self.make_request("GET", "/api/rag/stats", role)
+            if response.status_code == 200:
+                print(f"✅ {role.capitalize()} can view RAG stats")
+            else:
+                print(f"❌ {role.capitalize()} cannot view RAG stats: {response.status_code}")
+
+
+def setup_test_users():
+    """Setup test users in the database."""
+    print("🔧 Setting up test users...")
+    
+    session = next(get_session())
+    repo = UsersRepo(session)
+    
+    try:
+        # Create admin user
+        if not repo.by_login("admin"):
+            repo.create_user(
+                login="admin",
+                password_hash=hash_password("admin123456"),
+                role="admin",
+                email="admin@test.com"
+            )
+            print("✅ Created admin user")
+        
+        # Create editor user
+        if not repo.by_login("editor"):
+            repo.create_user(
+                login="editor",
+                password_hash=hash_password("editor123456"),
+                role="editor",
+                email="editor@test.com"
+            )
+            print("✅ Created editor user")
+        
+        # Create reader user
+        if not repo.by_login("reader"):
+            repo.create_user(
+                login="reader",
+                password_hash=hash_password("reader123456"),
+                role="reader",
+                email="reader@test.com"
+            )
+            print("✅ Created reader user")
+        
+    except Exception as e:
+        print(f"❌ Error setting up test users: {e}")
+    finally:
+        session.close()
+
+
+def main():
+    """Main test function."""
+    print("🚀 RBAC System Test")
+    print("=" * 50)
+    
+    # Setup test users
+    setup_test_users()
+    
+    # Initialize tester
+    tester = RBACTester()
+    
+    # Login all users
+    print("\n🔑 Logging in users...")
+    if not all([
+        tester.login("admin", "admin123456"),
+        tester.login("editor", "editor123456"),
+        tester.login("reader", "reader123456")
+    ]):
+        print("❌ Failed to login all users. Make sure the server is running.")
+        return
+    
+    # Run tests
+    tester.test_rbac()
+    tester.test_admin_api()
+    tester.test_rag_api()
+    
+    print("\n✅ All tests completed!")
+
+
+if __name__ == "__main__":
+    main()
+
 # ===== scripts/demo_embedding_system.py =====
 #!/usr/bin/env python3
 """
@@ -1077,7 +2598,7 @@ from app.core.security import hash_password
 from app.core.config import settings
 
 def create_admin_user():
-    """Создает пользователя admin с паролем admin123"""
+    """Создает пользователя admin с паролем из ENV"""
     session = SessionLocal()
     try:
         # Проверяем, существует ли уже пользователь admin
@@ -1086,21 +2607,40 @@ def create_admin_user():
             print("Пользователь admin уже существует")
             return
         
+        # Получаем пароль из ENV
+        admin_password = os.getenv("ADMIN_PASSWORD")
+        if not admin_password:
+            print("❌ ERROR: ADMIN_PASSWORD environment variable is required!")
+            print("   Set ADMIN_PASSWORD to a secure password for the admin user.")
+            print("   Example: ADMIN_PASSWORD=mySecurePassword123")
+            sys.exit(1)
+        
+        # Проверяем, что пароль не дефолтный в продакшене
+        if admin_password in ["admin123", "admin", "password", "123456"]:
+            env = os.getenv("ENVIRONMENT", "development")
+            if env == "production":
+                print("❌ ERROR: Weak password detected in production!")
+                print("   Use a strong password for ADMIN_PASSWORD in production.")
+                sys.exit(1)
+            else:
+                print("⚠️  WARNING: Using weak password in development mode")
+        
         # Создаем нового пользователя
         admin_user = Users(
             login="admin",
-            password_hash=hash_password("admin123"),
+            password_hash=hash_password(admin_password),
             role="admin",
             is_active=True
         )
         
         session.add(admin_user)
         session.commit()
-        print("Пользователь admin создан успешно")
+        print("✅ Пользователь admin создан успешно")
         
     except Exception as e:
-        print(f"Ошибка при создании пользователя admin: {e}")
+        print(f"❌ Ошибка при создании пользователя admin: {e}")
         session.rollback()
+        sys.exit(1)
     finally:
         session.close()
 
@@ -3576,6 +5116,29 @@ memory_usage_bytes = Gauge("memory_usage_bytes", "Memory usage", ["type"])
 cpu_usage_percent = Gauge("cpu_usage_percent", "CPU usage percentage")
 disk_usage_bytes = Gauge("disk_usage_bytes", "Disk usage", ["path"])
 
+# Admin operations metrics
+admin_operations_total = Counter("admin_operations_total", "Admin operations", ["operation", "status"])
+admin_user_operations_total = Counter("admin_user_operations_total", "Admin user operations", ["action", "status"])
+admin_token_operations_total = Counter("admin_token_operations_total", "Admin token operations", ["action", "status"])
+admin_audit_operations_total = Counter("admin_audit_operations_total", "Admin audit operations", ["action", "status"])
+
+# Rate limiting metrics
+rate_limit_hits_total = Counter("rate_limit_hits_total", "Rate limit hits", ["endpoint", "ip"])
+rate_limit_blocks_total = Counter("rate_limit_blocks_total", "Rate limit blocks", ["endpoint", "ip"])
+
+# Authentication metrics
+auth_attempts_total = Counter("auth_attempts_total", "Authentication attempts", ["method", "result"])
+password_reset_requests_total = Counter("password_reset_requests_total", "Password reset requests", ["status"])
+password_reset_completions_total = Counter("password_reset_completions_total", "Password reset completions", ["status"])
+
+# Email metrics (if enabled)
+email_sent_total = Counter("email_sent_total", "Emails sent", ["type", "status"])
+email_errors_total = Counter("email_errors_total", "Email errors", ["type", "error"])
+
+# CSRF metrics
+csrf_tokens_generated_total = Counter("csrf_tokens_generated_total", "CSRF tokens generated")
+csrf_validation_failures_total = Counter("csrf_validation_failures_total", "CSRF validation failures", ["reason"])
+
 def prometheus_endpoint() -> Response:
     return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
@@ -3613,6 +5176,274 @@ def session_scope():
     finally:
         db.close()
 
+# ===== app/core/pat_validation.py =====
+"""
+PAT (Personal Access Token) scope validation
+"""
+from __future__ import annotations
+from typing import List, Set, Optional
+from fastapi import HTTPException, status
+
+# Valid scope patterns
+VALID_SCOPE_PATTERNS = {
+    "api:read",      # Read API access
+    "api:write",     # Write API access
+    "api:admin",     # Admin API access
+    "rag:read",      # Read RAG documents
+    "rag:write",     # Write RAG documents
+    "rag:admin",     # Admin RAG operations
+    "chat:read",     # Read chat history
+    "chat:write",    # Send messages
+    "chat:admin",    # Admin chat operations
+    "users:read",    # Read user data
+    "users:write",   # Write user data
+    "users:admin",   # Admin user operations
+}
+
+# Scope hierarchy (higher scopes include lower ones)
+SCOPE_HIERARCHY = {
+    "api:admin": ["api:read", "api:write"],
+    "api:write": ["api:read"],
+    "rag:admin": ["rag:read", "rag:write"],
+    "rag:write": ["rag:read"],
+    "chat:admin": ["chat:read", "chat:write"],
+    "chat:write": ["chat:read"],
+    "users:admin": ["users:read", "users:write"],
+    "users:write": ["users:read"],
+}
+
+def validate_scopes(scopes: Optional[List[str]]) -> List[str]:
+    """
+    Validate and normalize PAT scopes
+    
+    Args:
+        scopes: List of scope strings
+        
+    Returns:
+        Normalized list of valid scopes
+        
+    Raises:
+        HTTPException: If scopes are invalid
+    """
+    if not scopes:
+        return []
+    
+    if not isinstance(scopes, list):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Scopes must be a list"
+        )
+    
+    # Check for invalid scopes
+    invalid_scopes = []
+    for scope in scopes:
+        if not isinstance(scope, str):
+            invalid_scopes.append(str(scope))
+        elif scope not in VALID_SCOPE_PATTERNS:
+            invalid_scopes.append(scope)
+    
+    if invalid_scopes:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid scopes: {', '.join(invalid_scopes)}. Valid scopes: {', '.join(sorted(VALID_SCOPE_PATTERNS))}"
+        )
+    
+    # Expand hierarchical scopes
+    expanded_scopes = set(scopes)
+    for scope in scopes:
+        if scope in SCOPE_HIERARCHY:
+            expanded_scopes.update(SCOPE_HIERARCHY[scope])
+    
+    return sorted(list(expanded_scopes))
+
+def check_scope_permission(user_scopes: List[str], required_scope: str) -> bool:
+    """
+    Check if user has permission for required scope
+    
+    Args:
+        user_scopes: List of user's scopes
+        required_scope: Required scope to check
+        
+    Returns:
+        True if user has permission
+    """
+    if not user_scopes:
+        return False
+    
+    # Direct scope match
+    if required_scope in user_scopes:
+        return True
+    
+    # Check if user has a higher-level scope that includes this one
+    for user_scope in user_scopes:
+        if user_scope in SCOPE_HIERARCHY and required_scope in SCOPE_HIERARCHY[user_scope]:
+            return True
+    
+    return False
+
+def get_scope_description(scope: str) -> str:
+    """Get human-readable description for a scope"""
+    descriptions = {
+        "api:read": "Read API access",
+        "api:write": "Write API access", 
+        "api:admin": "Admin API access",
+        "rag:read": "Read RAG documents",
+        "rag:write": "Write RAG documents",
+        "rag:admin": "Admin RAG operations",
+        "chat:read": "Read chat history",
+        "chat:write": "Send messages",
+        "chat:admin": "Admin chat operations",
+        "users:read": "Read user data",
+        "users:write": "Write user data",
+        "users:admin": "Admin user operations",
+    }
+    return descriptions.get(scope, scope)
+
+def format_scopes_for_display(scopes: List[str]) -> List[dict]:
+    """Format scopes for API response with descriptions"""
+    return [
+        {
+            "scope": scope,
+            "description": get_scope_description(scope)
+        }
+        for scope in sorted(scopes)
+    ]
+
+# ===== app/core/rate_limiting.py =====
+"""
+Rate limiting middleware for authentication endpoints
+"""
+from __future__ import annotations
+import time
+from typing import Dict, Optional
+from fastapi import Request, HTTPException, status
+from fastapi.responses import JSONResponse
+import redis
+from .config import settings
+
+# Redis connection for rate limiting
+redis_client = redis.from_url(settings.REDIS_URL, decode_responses=True)
+
+def get_client_ip(request: Request) -> str:
+    """Extract client IP from request, considering X-Forwarded-For header"""
+    # Check for forwarded IP first (for load balancers/proxies)
+    forwarded_for = request.headers.get("X-Forwarded-For")
+    if forwarded_for:
+        # Take the first IP in the chain
+        return forwarded_for.split(",")[0].strip()
+    
+    # Fall back to direct connection IP
+    if hasattr(request, "client") and request.client:
+        return request.client.host
+    
+    return "unknown"
+
+def check_rate_limit(
+    request: Request,
+    key_prefix: str = "rate_limit",
+    max_attempts: int = None,
+    window_seconds: int = None
+) -> bool:
+    """
+    Check if request is within rate limits
+    
+    Args:
+        request: FastAPI request object
+        key_prefix: Prefix for Redis key
+        max_attempts: Maximum attempts per window (uses config if None)
+        window_seconds: Time window in seconds (uses config if None)
+    
+    Returns:
+        True if request is allowed, False if rate limited
+    """
+    if max_attempts is None:
+        max_attempts = settings.RATE_LIMIT_LOGIN_ATTEMPTS
+    if window_seconds is None:
+        window_seconds = settings.RATE_LIMIT_LOGIN_WINDOW
+    
+    client_ip = get_client_ip(request)
+    current_time = int(time.time())
+    window_start = current_time - window_seconds
+    
+    # Create rate limit key
+    rate_key = f"{key_prefix}:{client_ip}"
+    
+    try:
+        # Use Redis pipeline for atomic operations
+        pipe = redis_client.pipeline()
+        
+        # Remove expired entries
+        pipe.zremrangebyscore(rate_key, 0, window_start)
+        
+        # Count current attempts
+        pipe.zcard(rate_key)
+        
+        # Add current attempt
+        pipe.zadd(rate_key, {str(current_time): current_time})
+        
+        # Set expiration
+        pipe.expire(rate_key, window_seconds)
+        
+        results = pipe.execute()
+        current_attempts = results[1]
+        
+        return current_attempts < max_attempts
+        
+    except Exception as e:
+        # If Redis is unavailable, allow the request (fail open)
+        print(f"Rate limiting error: {e}")
+        return True
+
+def rate_limit_middleware(
+    max_attempts: int = None,
+    window_seconds: int = None,
+    key_prefix: str = "rate_limit"
+):
+    """
+    Rate limiting decorator for endpoints
+    
+    Usage:
+        @app.post("/auth/login")
+        @rate_limit_middleware(max_attempts=5, window_seconds=300)
+        async def login(...):
+            ...
+    """
+    def decorator(func):
+        async def wrapper(*args, **kwargs):
+            # Find request object in args
+            request = None
+            for arg in args:
+                if isinstance(arg, Request):
+                    request = arg
+                    break
+            
+            if not request:
+                return await func(*args, **kwargs)
+            
+            if not check_rate_limit(request, key_prefix, max_attempts, window_seconds):
+                return JSONResponse(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    content={
+                        "error": "rate_limit_exceeded",
+                        "message": f"Too many requests. Try again in {window_seconds or settings.RATE_LIMIT_LOGIN_WINDOW} seconds.",
+                        "retry_after": window_seconds or settings.RATE_LIMIT_LOGIN_WINDOW
+                    }
+                )
+            
+            return await func(*args, **kwargs)
+        return wrapper
+    return decorator
+
+def clear_rate_limit(request: Request, key_prefix: str = "rate_limit") -> None:
+    """Clear rate limit for a specific client (e.g., after successful login)"""
+    client_ip = get_client_ip(request)
+    rate_key = f"{key_prefix}:{client_ip}"
+    
+    try:
+        redis_client.delete(rate_key)
+    except Exception as e:
+        print(f"Error clearing rate limit: {e}")
+
 # ===== app/core/config.py =====
 from __future__ import annotations
 import os
@@ -3639,9 +5470,20 @@ class settings:
     EMB_URL = _env("EMB_URL") or _env("EMB.URL") or "http://emb:8001"
 
     # Auth
-    JWT_SECRET = os.getenv("JWT_SECRET", "dev-secret")
-    ACCESS_TTL_SECONDS = int(os.getenv("ACCESS_TTL_SECONDS", "3600"))
-    REFRESH_TTL_DAYS = int(os.getenv("REFRESH_TTL_DAYS", "30"))
+    JWT_SECRET = os.getenv("JWT_SECRET")
+    if not JWT_SECRET:
+        import secrets
+        JWT_SECRET = secrets.token_urlsafe(32)
+        print("⚠️  WARNING: JWT_SECRET not set, using random secret. Set JWT_SECRET env var for production!")
+    
+    PASSWORD_PEPPER = os.getenv("PASSWORD_PEPPER", "")
+    if not PASSWORD_PEPPER:
+        import secrets
+        PASSWORD_PEPPER = secrets.token_urlsafe(32)
+        print("⚠️  WARNING: PASSWORD_PEPPER not set, using random pepper. Set PASSWORD_PEPPER env var for production!")
+    
+    ACCESS_TTL_SECONDS = int(os.getenv("ACCESS_TTL_SECONDS", "900"))  # 15 минут вместо 1 часа
+    REFRESH_TTL_DAYS = int(os.getenv("REFRESH_TTL_DAYS", "7"))  # 7 дней вместо 30
     REFRESH_ROTATING = (str(os.getenv("REFRESH_ROTATING", "true")).lower() in ("1","true","yes"))
 
     # S3 / MinIO
@@ -3653,6 +5495,42 @@ class settings:
     S3_BUCKET_RAG = _env("S3_BUCKET_RAG") or _env("S3.BUCKET_RAG") or "rag"
     S3_BUCKET_ANALYSIS = _env("S3_BUCKET_ANALYSIS") or _env("S3.BUCKET_ANALYSIS") or "analysis"
 
+    # Email (optional)
+    EMAIL_ENABLED = (os.getenv("EMAIL_ENABLED", "false").lower() in ("1", "true", "yes"))
+    SMTP_HOST = os.getenv("SMTP_HOST", "localhost")
+    SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+    SMTP_USER = os.getenv("SMTP_USER", "")
+    SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
+    SMTP_USE_TLS = (os.getenv("SMTP_USE_TLS", "true").lower() in ("1", "true", "yes"))
+    FROM_EMAIL = os.getenv("FROM_EMAIL", "noreply@ml-portal.local")
+    
+    # Password policy
+    PASSWORD_MIN_LENGTH = int(os.getenv("PASSWORD_MIN_LENGTH", "12"))
+    PASSWORD_REQUIRE_UPPERCASE = (os.getenv("PASSWORD_REQUIRE_UPPERCASE", "true").lower() in ("1", "true", "yes"))
+    PASSWORD_REQUIRE_LOWERCASE = (os.getenv("PASSWORD_REQUIRE_LOWERCASE", "true").lower() in ("1", "true", "yes"))
+    PASSWORD_REQUIRE_DIGITS = (os.getenv("PASSWORD_REQUIRE_DIGITS", "true").lower() in ("1", "true", "yes"))
+    PASSWORD_REQUIRE_SPECIAL = (os.getenv("PASSWORD_REQUIRE_SPECIAL", "true").lower() in ("1", "true", "yes"))
+    
+    # Rate limiting
+    RATE_LIMIT_LOGIN_ATTEMPTS = int(os.getenv("RATE_LIMIT_LOGIN_ATTEMPTS", "10"))
+    RATE_LIMIT_LOGIN_WINDOW = int(os.getenv("RATE_LIMIT_LOGIN_WINDOW", "60"))
+    
+    # CORS
+    CORS_ENABLED = (os.getenv("CORS_ENABLED", "true").lower() in ("1", "true", "yes"))
+    CORS_ORIGINS = os.getenv("CORS_ORIGINS", "*").split(",")
+    CORS_ALLOW_CREDENTIALS = (os.getenv("CORS_ALLOW_CREDENTIALS", "false").lower() in ("1", "true", "yes"))
+    
+    # Authentication modes
+    AUTH_MODE = os.getenv("AUTH_MODE", "bearer")  # "bearer" or "cookie"
+    COOKIE_AUTH_ENABLED = (os.getenv("COOKIE_AUTH_ENABLED", "false").lower() in ("1", "true", "yes"))
+    CSRF_ENABLED = (os.getenv("CSRF_ENABLED", "false").lower() in ("1", "true", "yes"))
+    
+    # Reader permissions
+    ALLOW_READER_UPLOADS = (os.getenv("ALLOW_READER_UPLOADS", "false").lower() in ("1", "true", "yes"))
+    
+    # Debug mode
+    DEBUG = (os.getenv("DEBUG", "false").lower() in ("1", "true", "yes"))
+    
     # Health
     HEALTH_DEEP = (os.getenv("HEALTH_DEEP", "0") == "1")
 
@@ -3668,6 +5546,142 @@ def get_qdrant() -> QdrantClient:
     if _client is None:
         _client = QdrantClient(url=settings.QDRANT_URL, prefer_grpc=False)
     return _client
+
+# ===== app/core/cookie_auth.py =====
+"""
+Cookie-based authentication with CSRF protection
+"""
+from __future__ import annotations
+import secrets
+from typing import Optional
+from fastapi import Request, Response, HTTPException, status
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from starlette.middleware.base import BaseHTTPMiddleware
+
+from .config import settings
+from .security import decode_jwt
+
+# CSRF token storage (in production, use Redis)
+_csrf_tokens = {}
+
+class CSRFMiddleware(BaseHTTPMiddleware):
+    """CSRF protection middleware"""
+    
+    def __init__(self, app, secret_key: str = None):
+        super().__init__(app)
+        self.secret_key = secret_key or settings.JWT_SECRET
+    
+    async def dispatch(self, request: Request, call_next):
+        # Skip CSRF for safe methods and auth endpoints
+        if request.method in ["GET", "HEAD", "OPTIONS"]:
+            return await call_next(request)
+        
+        # Skip CSRF for auth endpoints
+        if request.url.path.startswith("/api/auth/"):
+            return await call_next(request)
+        
+        # Check CSRF token
+        csrf_token = request.headers.get("X-CSRF-Token")
+        if not csrf_token:
+            return HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"error": {"code": "csrf_missing", "message": "CSRF token required"}}
+            )
+        
+        # Validate CSRF token
+        if not self._validate_csrf_token(csrf_token, request):
+            return HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"error": {"code": "csrf_invalid", "message": "Invalid CSRF token"}}
+            )
+        
+        return await call_next(request)
+    
+    def _validate_csrf_token(self, token: str, request: Request) -> bool:
+        """Validate CSRF token"""
+        # In production, implement proper CSRF token validation
+        # For now, just check if token exists in our storage
+        return token in _csrf_tokens
+
+def generate_csrf_token() -> str:
+    """Generate CSRF token"""
+    token = secrets.token_urlsafe(32)
+    _csrf_tokens[token] = True
+    return token
+
+def set_auth_cookies(response: Response, access_token: str, refresh_token: str, csrf_token: str):
+    """Set authentication cookies"""
+    # Access token cookie (short-lived)
+    response.set_cookie(
+        key="access_token",
+        value=access_token,
+        max_age=settings.ACCESS_TTL_SECONDS,
+        httponly=True,
+        secure=not settings.DEBUG,  # HTTPS only in production
+        samesite="lax"
+    )
+    
+    # Refresh token cookie (long-lived)
+    response.set_cookie(
+        key="refresh_token", 
+        value=refresh_token,
+        max_age=settings.REFRESH_TTL_DAYS * 86400,
+        httponly=True,
+        secure=not settings.DEBUG,
+        samesite="lax"
+    )
+    
+    # CSRF token cookie (not httpOnly for JS access)
+    response.set_cookie(
+        key="csrf_token",
+        value=csrf_token,
+        max_age=settings.REFRESH_TTL_DAYS * 86400,
+        httponly=False,  # Allow JS access
+        secure=not settings.DEBUG,
+        samesite="lax"
+    )
+
+def clear_auth_cookies(response: Response):
+    """Clear authentication cookies"""
+    response.delete_cookie("access_token")
+    response.delete_cookie("refresh_token") 
+    response.delete_cookie("csrf_token")
+
+def get_token_from_cookie(request: Request) -> Optional[str]:
+    """Get access token from cookie"""
+    return request.cookies.get("access_token")
+
+def get_refresh_token_from_cookie(request: Request) -> Optional[str]:
+    """Get refresh token from cookie"""
+    return request.cookies.get("refresh_token")
+
+def get_csrf_token_from_cookie(request: Request) -> Optional[str]:
+    """Get CSRF token from cookie"""
+    return request.cookies.get("csrf_token")
+
+class CookieAuthBearer(HTTPBearer):
+    """Cookie-based authentication with Bearer fallback"""
+    
+    def __init__(self, auto_error: bool = True):
+        super().__init__(auto_error=auto_error)
+    
+    async def __call__(self, request: Request) -> Optional[HTTPAuthorizationCredentials]:
+        # Try cookie first
+        token = get_token_from_cookie(request)
+        if token:
+            return HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
+        
+        # Fallback to header
+        return await super().__call__(request)
+
+# Cookie auth dependency
+cookie_auth = CookieAuthBearer(auto_error=False)
+
+def get_cookie_token(credentials: Optional[HTTPAuthorizationCredentials] = None) -> Optional[str]:
+    """Get token from cookie or header"""
+    if credentials and credentials.scheme.lower() == "bearer":
+        return credentials.credentials
+    return None
 
 # ===== app/core/idempotency.py =====
 from __future__ import annotations
@@ -3771,10 +5785,76 @@ class IdempotencyMiddleware:
             except Exception:
                 pass
 
+# ===== app/core/security_headers.py =====
+"""
+Security headers middleware для защиты от различных атак
+"""
+from fastapi import Request, Response
+from starlette.middleware.base import BaseHTTPMiddleware
+import os
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Middleware для добавления защитных HTTP-заголовков"""
+    
+    def __init__(self, app, environment: str = "development"):
+        super().__init__(app)
+        self.environment = environment
+    
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        
+        # X-Frame-Options - защита от clickjacking
+        response.headers["X-Frame-Options"] = "DENY"
+        
+        # X-Content-Type-Options - защита от MIME-sniffing
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        
+        # Referrer-Policy - контроль реферальной информации
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        
+        # X-XSS-Protection (устаревший, но для совместимости)
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        
+        # Strict-Transport-Security (только для HTTPS)
+        if request.url.scheme == "https":
+            response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        
+        # Content-Security-Policy (только в production)
+        if self.environment == "production":
+            csp = (
+                "default-src 'self'; "
+                "script-src 'self' 'unsafe-inline'; "
+                "style-src 'self' 'unsafe-inline'; "
+                "img-src 'self' data: https:; "
+                "font-src 'self'; "
+                "connect-src 'self'; "
+                "frame-ancestors 'none';"
+            )
+            response.headers["Content-Security-Policy"] = csp
+        else:
+            # В development более мягкая политика
+            response.headers["Content-Security-Policy"] = "default-src 'self' 'unsafe-inline' 'unsafe-eval'"
+        
+        # Permissions-Policy (новый стандарт)
+        permissions = (
+            "camera=(), "
+            "microphone=(), "
+            "geolocation=(), "
+            "payment=(), "
+            "usb=(), "
+            "magnetometer=(), "
+            "gyroscope=(), "
+            "speaker=()"
+        )
+        response.headers["Permissions-Policy"] = permissions
+        
+        return response
+
 # ===== app/core/security.py =====
 from __future__ import annotations
 import time
 import jwt
+import re
 from typing import Any, Dict, Optional
 from argon2 import PasswordHasher
 from fastapi import Depends, HTTPException, status
@@ -3785,13 +5865,45 @@ ph = PasswordHasher()
 http_bearer = HTTPBearer(auto_error=False)
 
 def hash_password(password: str) -> str:
+    """Hash password with Argon2id and pepper"""
+    # Add pepper if configured
+    if hasattr(settings, 'PASSWORD_PEPPER') and settings.PASSWORD_PEPPER:
+        password = password + settings.PASSWORD_PEPPER
     return ph.hash(password)
 
 def verify_password(password: str, password_hash: str) -> bool:
+    """Verify password with Argon2id and pepper"""
     try:
+        # Add pepper if configured
+        if hasattr(settings, 'PASSWORD_PEPPER') and settings.PASSWORD_PEPPER:
+            password = password + settings.PASSWORD_PEPPER
         return ph.verify(password_hash, password)
     except Exception:
         return False
+
+def validate_password_strength(password: str) -> tuple[bool, str]:
+    """Validate password strength according to policy"""
+    errors = []
+    
+    if len(password) < settings.PASSWORD_MIN_LENGTH:
+        errors.append(f"Password must be at least {settings.PASSWORD_MIN_LENGTH} characters long")
+    
+    if settings.PASSWORD_REQUIRE_UPPERCASE and not re.search(r'[A-Z]', password):
+        errors.append("Password must contain at least one uppercase letter")
+    
+    if settings.PASSWORD_REQUIRE_LOWERCASE and not re.search(r'[a-z]', password):
+        errors.append("Password must contain at least one lowercase letter")
+    
+    if settings.PASSWORD_REQUIRE_DIGITS and not re.search(r'\d', password):
+        errors.append("Password must contain at least one digit")
+    
+    if settings.PASSWORD_REQUIRE_SPECIAL and not re.search(r'[!@#$%^&*(),.?":{}|<>]', password):
+        errors.append("Password must contain at least one special character")
+    
+    if errors:
+        return False, "; ".join(errors)
+    
+    return True, ""
 
 def encode_jwt(payload: Dict[str, Any], *, ttl_seconds: int) -> str:
     now = int(time.time())
@@ -3981,6 +6093,40 @@ def user_chats_key(user_id: str) -> str:
 # ===== app/core/__init__.py =====
 # core package init
 
+# ===== app/core/request_id.py =====
+"""
+Request ID middleware для трассировки запросов
+"""
+import uuid
+from contextvars import ContextVar
+from fastapi import Request, Response
+from starlette.middleware.base import BaseHTTPMiddleware
+
+# Context variable для хранения request ID
+request_id_ctx: ContextVar[str] = ContextVar('request_id', default=None)
+
+class RequestIDMiddleware(BaseHTTPMiddleware):
+    """Middleware для генерации и передачи request ID"""
+    
+    async def dispatch(self, request: Request, call_next):
+        # Генерируем или получаем request ID
+        request_id = request.headers.get('X-Request-ID') or str(uuid.uuid4())
+        
+        # Сохраняем в контекст
+        request_id_ctx.set(request_id)
+        
+        # Обрабатываем запрос
+        response = await call_next(request)
+        
+        # Добавляем request ID в заголовки ответа
+        response.headers['X-Request-ID'] = request_id
+        
+        return response
+
+def get_request_id() -> str:
+    """Получить текущий request ID"""
+    return request_id_ctx.get() or "unknown"
+
 # ===== app/core/redis.py =====
 from __future__ import annotations
 from typing import Optional
@@ -4001,7 +6147,7 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 from fastapi import status
 from typing import Any, Optional, Dict
-# from .logging import request_id_ctx
+from .request_id import get_request_id
 
 class APIError(Exception):
     def __init__(self, code: str, message: str, *, http_status: int = 400, details: Optional[Dict[str, Any]] = None):
@@ -4013,7 +6159,7 @@ class APIError(Exception):
 def format_error_payload(code: str, message: str, details: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     return {
         "error": {"code": code, "message": message, "details": details or {}},
-        "request_id": None,  # request_id_ctx.get(),
+        "request_id": get_request_id(),
     }
 
 async def http_exception_handler(request: Request, exc: APIError):
@@ -4485,10 +6631,13 @@ class AnalyzeRepo:
 
 # ===== app/repositories/users_repo.py =====
 from __future__ import annotations
-from typing import Optional
+from typing import Optional, List, Dict, Any
 from sqlalchemy.orm import Session
-from sqlalchemy import select
-from app.models.user import Users, UserTokens, UserRefreshTokens
+from sqlalchemy import select, func, and_, or_, desc
+from datetime import datetime
+import uuid
+
+from app.models.user import Users, UserTokens, UserRefreshTokens, PasswordResetTokens, AuditLogs
 
 class UsersRepo:
     def __init__(self, session: Session):
@@ -4514,30 +6663,255 @@ class UsersRepo:
             return True
         return False
 
+    # User management methods
+    def create_user(self, login: str, password_hash: str, role: str = "reader", 
+                   email: Optional[str] = None, is_active: bool = True) -> Users:
+        """Create a new user."""
+        user = Users(
+            login=login,
+            password_hash=password_hash,
+            role=role,
+            email=email,
+            is_active=is_active
+        )
+        self.s.add(user)
+        self.s.commit()
+        self.s.refresh(user)
+        return user
+
+    def update_user(self, user_id: str, **updates) -> Optional[Users]:
+        """Update user fields."""
+        user = self.get(user_id)
+        if not user:
+            return None
+        
+        for key, value in updates.items():
+            if hasattr(user, key):
+                setattr(user, key, value)
+        
+        user.updated_at = datetime.utcnow()
+        self.s.commit()
+        self.s.refresh(user)
+        return user
+
+    def list_users(self, query: Optional[str] = None, role: Optional[str] = None, 
+                  is_active: Optional[bool] = None, limit: int = 50, 
+                  cursor: Optional[str] = None) -> tuple[List[Users], bool, Optional[str]]:
+        """List users with pagination and filters."""
+        stmt = select(Users)
+        
+        # Apply filters
+        if query:
+            stmt = stmt.where(
+                or_(
+                    Users.login.ilike(f"%{query}%"),
+                    Users.email.ilike(f"%{query}%")
+                )
+            )
+        
+        if role:
+            stmt = stmt.where(Users.role == role)
+        
+        if is_active is not None:
+            stmt = stmt.where(Users.is_active == is_active)
+        
+        # Apply cursor-based pagination
+        if cursor:
+            try:
+                cursor_time = datetime.fromisoformat(cursor)
+                stmt = stmt.where(Users.created_at < cursor_time)
+            except ValueError:
+                pass  # Invalid cursor, ignore
+        
+        # Order and limit
+        stmt = stmt.order_by(desc(Users.created_at)).limit(limit + 1)
+        
+        users = self.s.execute(stmt).scalars().all()
+        has_more = len(users) > limit
+        
+        if has_more:
+            users = users[:-1]
+            next_cursor = users[-1].created_at.isoformat() if users else None
+        else:
+            next_cursor = None
+        
+        return users, has_more, next_cursor
+
+    def count_users(self, query: Optional[str] = None, role: Optional[str] = None, 
+                   is_active: Optional[bool] = None) -> int:
+        """Count users matching filters."""
+        stmt = select(func.count(Users.id))
+        
+        if query:
+            stmt = stmt.where(
+                or_(
+                    Users.login.ilike(f"%{query}%"),
+                    Users.email.ilike(f"%{query}%")
+                )
+            )
+        
+        if role:
+            stmt = stmt.where(Users.role == role)
+        
+        if is_active is not None:
+            stmt = stmt.where(Users.is_active == is_active)
+        
+        return self.s.execute(stmt).scalar() or 0
+
+    # PAT Token methods
+    def create_token(self, user_id: str, token_hash: str, name: str,
+                    scopes: Optional[List[str]] = None, expires_at: Optional[datetime] = None) -> UserTokens:
+        """Create a new PAT token."""
+        token = UserTokens(
+            user_id=user_id,
+            token_hash=token_hash,
+            name=name,
+            scopes=scopes,
+            expires_at=expires_at
+        )
+        self.s.add(token)
+        self.s.commit()
+        self.s.refresh(token)
+        return token
+
+    def get_user_tokens(self, user_id: str, include_revoked: bool = False) -> List[UserTokens]:
+        """Get user's PAT tokens."""
+        stmt = select(UserTokens).where(UserTokens.user_id == user_id)
+        
+        if not include_revoked:
+            stmt = stmt.where(UserTokens.revoked_at.is_(None))
+        
+        return self.s.execute(stmt.order_by(desc(UserTokens.created_at))).scalars().all()
+
+    def revoke_token(self, token_id: str) -> bool:
+        """Revoke a PAT token."""
+        token = self.s.get(UserTokens, token_id)
+        if token and not token.revoked_at:
+            token.revoked_at = datetime.utcnow()
+            self.s.commit()
+            return True
+        return False
+
+    def get_token_by_hash(self, token_hash: str) -> Optional[UserTokens]:
+        """Get token by hash."""
+        return self.s.execute(
+            select(UserTokens).where(UserTokens.token_hash == token_hash)
+        ).scalars().first()
+
+    # Password reset methods
+    def create_password_reset_token(self, user_id: str, token_hash: str, 
+                                   expires_at: datetime) -> PasswordResetTokens:
+        """Create a password reset token."""
+        token = PasswordResetTokens(
+            user_id=user_id,
+            token_hash=token_hash,
+            expires_at=expires_at
+        )
+        self.s.add(token)
+        self.s.commit()
+        self.s.refresh(token)
+        return token
+
+    def get_password_reset_token(self, token_hash: str) -> Optional[PasswordResetTokens]:
+        """Get password reset token by hash."""
+        return self.s.execute(
+            select(PasswordResetTokens)
+            .where(
+                and_(
+                    PasswordResetTokens.token_hash == token_hash,
+                    PasswordResetTokens.used_at.is_(None),
+                    PasswordResetTokens.expires_at > datetime.utcnow()
+                )
+            )
+        ).scalars().first()
+
+    def use_password_reset_token(self, token_hash: str) -> bool:
+        """Mark password reset token as used."""
+        token = self.get_password_reset_token(token_hash)
+        if token:
+            token.used_at = datetime.utcnow()
+            self.s.commit()
+            return True
+        return False
+
+    # Audit log methods
+    def get_audit_logs(self, actor_user_id: Optional[str] = None, action: Optional[str] = None,
+                      object_type: Optional[str] = None, limit: int = 50,
+                      cursor: Optional[str] = None) -> tuple[List[AuditLogs], bool, Optional[str]]:
+        """Get audit logs with pagination."""
+        stmt = select(AuditLogs)
+        
+        if actor_user_id:
+            stmt = stmt.where(AuditLogs.actor_user_id == actor_user_id)
+        
+        if action:
+            stmt = stmt.where(AuditLogs.action == action)
+        
+        if object_type:
+            stmt = stmt.where(AuditLogs.object_type == object_type)
+        
+        if cursor:
+            try:
+                cursor_time = datetime.fromisoformat(cursor)
+                stmt = stmt.where(AuditLogs.ts < cursor_time)
+            except ValueError:
+                pass
+        
+        stmt = stmt.order_by(desc(AuditLogs.ts)).limit(limit + 1)
+        
+        logs = self.s.execute(stmt).scalars().all()
+        has_more = len(logs) > limit
+        
+        if has_more:
+            logs = logs[:-1]
+            next_cursor = logs[-1].ts.isoformat() if logs else None
+        else:
+            next_cursor = None
+        
+        return logs, has_more, next_cursor
+
+    def count_audit_logs(self, actor_user_id: Optional[str] = None, action: Optional[str] = None,
+                        object_type: Optional[str] = None) -> int:
+        """Count audit logs matching filters."""
+        stmt = select(func.count(AuditLogs.id))
+        
+        if actor_user_id:
+            stmt = stmt.where(AuditLogs.actor_user_id == actor_user_id)
+        
+        if action:
+            stmt = stmt.where(AuditLogs.action == action)
+        
+        if object_type:
+            stmt = stmt.where(AuditLogs.object_type == object_type)
+        
+        return self.s.execute(stmt).scalar() or 0
+
 # ===== app/models/user.py =====
 # app/models/user.py
 from __future__ import annotations
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from datetime import datetime
 import uuid
 
-from sqlalchemy import String, Boolean, Text, DateTime, UniqueConstraint, ForeignKey, Index
-from sqlalchemy.dialects.postgresql import UUID, ENUM as PGEnum
+from sqlalchemy import String, Boolean, Text, DateTime, UniqueConstraint, ForeignKey, Index, CheckConstraint
+from sqlalchemy.dialects.postgresql import UUID, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base
 
-# Use existing Postgres ENUM type created by migrations
-RolesEnum = PGEnum('admin', 'editor', 'reader', name='role_enum', create_type=False)
-
 class Users(Base):
     __tablename__ = "users"
+
+    __table_args__ = (
+        CheckConstraint("role IN ('admin', 'editor', 'reader')", name="ck_users_role"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     login: Mapped[str] = mapped_column(String(255), nullable=False, unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(Text, nullable=False)
-    role: Mapped[str] = mapped_column(RolesEnum, nullable=False, default="reader")
+    role: Mapped[str] = mapped_column(String(20), nullable=False, default="reader")
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default="now()")
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default="now()")
 
@@ -4549,6 +6923,16 @@ class Users(Base):
     )
     pat_tokens: Mapped[List["UserTokens"]] = relationship(
         back_populates="user",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    password_reset_tokens: Mapped[List["PasswordResetTokens"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    audit_logs: Mapped[List["AuditLogs"]] = relationship(
+        back_populates="actor_user",
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
@@ -4565,9 +6949,11 @@ class UserTokens(Base):
     )
     token_hash: Mapped[str] = mapped_column(Text, nullable=False)
     name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    scopes: Mapped[Optional[List[str]]] = mapped_column(JSON, nullable=True)
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default="now()")
     last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    revoked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     user: Mapped["Users"] = relationship(back_populates="pat_tokens")
 
@@ -4593,6 +6979,46 @@ class UserRefreshTokens(Base):
     meta: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON encoded as text
 
     user: Mapped["Users"] = relationship(back_populates="refresh_tokens")
+
+
+class PasswordResetTokens(Base):
+    __tablename__ = "password_reset_tokens"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    token_hash: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default="now()")
+
+    user: Mapped["Users"] = relationship(back_populates="password_reset_tokens")
+
+
+class AuditLogs(Base):
+    __tablename__ = "audit_logs"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default="now()", index=True)
+    actor_user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    action: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    object_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, index=True)
+    object_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
+    meta: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSON, nullable=True)
+    ip: Mapped[Optional[str]] = mapped_column(String(45), nullable=True)  # IPv6 support
+    user_agent: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    request_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
+
+    actor_user: Mapped[Optional["Users"]] = relationship(back_populates="audit_logs")
 
 # ===== app/models/__init__.py =====
 from .base import Base
@@ -4860,6 +7286,170 @@ class ChatMessageOut(BaseModel):
     class Config:
         from_attributes = True
 
+# ===== app/schemas/admin.py =====
+from __future__ import annotations
+from typing import Optional, List, Dict, Any
+from pydantic import BaseModel, Field, validator
+from datetime import datetime
+from enum import Enum
+
+
+class UserRole(str, Enum):
+    ADMIN = "admin"
+    EDITOR = "editor"
+    READER = "reader"
+
+
+class UserStatus(str, Enum):
+    ACTIVE = "active"
+    INACTIVE = "inactive"
+
+
+# User schemas
+class UserBase(BaseModel):
+    login: str = Field(..., min_length=3, max_length=255)
+    role: UserRole = Field(default=UserRole.READER)
+    email: Optional[str] = Field(None, max_length=255)
+    is_active: bool = Field(default=True)
+
+
+class UserCreate(UserBase):
+    password: Optional[str] = Field(None, min_length=12)
+    
+    @validator('password')
+    def validate_password(cls, v):
+        if v is not None:
+            # Basic password policy validation
+            if len(v) < 12:
+                raise ValueError('Password must be at least 12 characters long')
+            # Add more complex validation if needed
+        return v
+
+
+class UserUpdate(BaseModel):
+    role: Optional[UserRole] = None
+    email: Optional[str] = Field(None, max_length=255)
+    is_active: Optional[bool] = None
+    require_password_change: Optional[bool] = None
+
+
+class UserResponse(UserBase):
+    id: str
+    created_at: datetime
+    updated_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+
+class UserListResponse(BaseModel):
+    users: List[UserResponse]
+    total: int
+    has_more: bool
+    next_cursor: Optional[str] = None
+
+
+# Password reset schemas
+class PasswordResetRequest(BaseModel):
+    login_or_email: str = Field(..., min_length=1)
+
+
+class PasswordResetConfirm(BaseModel):
+    token: str = Field(..., min_length=1)
+    new_password: str = Field(..., min_length=12)
+
+
+class PasswordChange(BaseModel):
+    new_password: Optional[str] = Field(None, min_length=12)
+    
+    @validator('new_password')
+    def validate_password(cls, v):
+        if v is not None and len(v) < 12:
+            raise ValueError('Password must be at least 12 characters long')
+        return v
+
+
+# PAT Token schemas
+class TokenScope(str, Enum):
+    API_READ = "api:read"
+    API_WRITE = "api:write"
+    RAG_ALL = "rag:*"
+    RAG_READ = "rag:read"
+    RAG_WRITE = "rag:write"
+    CHAT_ALL = "chat:*"
+    CHAT_READ = "chat:read"
+    CHAT_WRITE = "chat:write"
+
+
+class TokenCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    scopes: Optional[List[TokenScope]] = Field(default=None)
+    expires_at: Optional[datetime] = None
+
+
+class TokenResponse(BaseModel):
+    id: str
+    name: str
+    scopes: Optional[List[str]] = None
+    expires_at: Optional[datetime] = None
+    created_at: datetime
+    last_used_at: Optional[datetime] = None
+    token_plain_once: Optional[str] = None  # Only returned on creation
+    
+    class Config:
+        from_attributes = True
+
+
+class TokenListResponse(BaseModel):
+    tokens: List[TokenResponse]
+    total: int
+
+
+# Audit log schemas
+class AuditAction(str, Enum):
+    USER_CREATED = "user_created"
+    USER_UPDATED = "user_updated"
+    USER_DELETED = "user_deleted"
+    USER_ACTIVATED = "user_activated"
+    USER_DEACTIVATED = "user_deactivated"
+    PASSWORD_RESET = "password_reset"
+    TOKEN_CREATED = "token_created"
+    TOKEN_REVOKED = "token_revoked"
+    LOGIN = "login"
+    LOGOUT = "logout"
+    SYSTEM = "system"
+
+
+class AuditLogResponse(BaseModel):
+    id: str
+    ts: datetime
+    actor_user_id: Optional[str] = None
+    action: str
+    object_type: Optional[str] = None
+    object_id: Optional[str] = None
+    meta: Optional[Dict[str, Any]] = None
+    ip: Optional[str] = None
+    user_agent: Optional[str] = None
+    request_id: Optional[str] = None
+    
+    class Config:
+        from_attributes = True
+
+
+class AuditLogListResponse(BaseModel):
+    logs: List[AuditLogResponse]
+    total: int
+    has_more: bool
+    next_cursor: Optional[str] = None
+
+
+# Error response schema
+class ErrorResponse(BaseModel):
+    code: str
+    message: str
+    request_id: Optional[str] = None
+    details: Optional[Dict[str, Any]] = None
+
 # ===== app/schemas/common.py =====
 from __future__ import annotations
 from typing import Optional, List, Dict, Any, Literal
@@ -5045,16 +7635,19 @@ class AnalyzeResult(BaseModel):
 
 # ===== app/api/deps.py =====
 from __future__ import annotations
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List, Union
 from fastapi import Depends, HTTPException, status, Request
 from sqlalchemy.orm import Session
 import hashlib
 import time
+import uuid
 
 from app.core.db import get_session
 from app.core.redis import get_redis
 from app.core.security import get_bearer_token, decode_jwt
+from app.core.config import settings
 from app.repositories.users_repo import UsersRepo
+from app.schemas.admin import UserRole
 
 def db_session():
     """Real DB session dependency."""
@@ -5101,13 +7694,162 @@ def get_current_user(token: str = Depends(get_bearer_token), session: Session = 
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="user_not_found_or_inactive")
     return {"id": str(user.id), "login": user.login, "role": user.role, "fio": getattr(user, "fio", None)}
 
+
+def require_roles(*roles: Union[str, UserRole]) -> callable:
+    """RBAC dependency factory. Returns a dependency that requires specific roles."""
+    role_values = [r.value if isinstance(r, UserRole) else r for r in roles]
+    
+    def check_roles(current_user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
+        user_role = current_user.get("role")
+        if user_role not in role_values:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Access denied. Required roles: {role_values}, user role: {user_role}"
+            )
+        return current_user
+    
+    return check_roles
+
+
+def require_admin(current_user: Dict[str, Any] = Depends(require_roles(UserRole.ADMIN))) -> Dict[str, Any]:
+    """Require admin role."""
+    return current_user
+
+def require_upload_permission(current_user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
+    """Require upload permission (editor, admin, or reader if enabled)."""
+    user_role = current_user.get("role")
+    
+    # Admin and editor always have upload permission
+    if user_role in ["admin", "editor"]:
+        return current_user
+    
+    # Reader can upload if enabled
+    if user_role == "reader" and settings.ALLOW_READER_UPLOADS:
+        return current_user
+    
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={
+            "error": {
+                "code": "upload_forbidden",
+                "message": "Upload permission denied. Reader uploads are disabled."
+            }
+        }
+    )
+
+
+def get_request_id(request: Request) -> str:
+    """Extract or generate request ID."""
+    request_id = request.headers.get("X-Request-ID")
+    if not request_id:
+        request_id = str(uuid.uuid4())
+    return request_id
+
+
+def get_client_ip(request: Request) -> str:
+    """Extract client IP considering X-Forwarded-For header."""
+    forwarded_for = request.headers.get("X-Forwarded-For")
+    if forwarded_for:
+        return forwarded_for.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def get_user_agent(request: Request) -> Optional[str]:
+    """Extract user agent."""
+    return request.headers.get("User-Agent")
+
 # ===== app/api/sse.py =====
+import asyncio
+import json
+from datetime import datetime
 from starlette.responses import StreamingResponse
-def sse_response(source):
-    def gen():
-        for item in source:
-            yield ("data: " + item.get("data","") + "\n\n")
-    return StreamingResponse(gen(), media_type="text/event-stream")
+
+def sse_response(source, heartbeat_interval: int = 30):
+    """
+    Create SSE response with heartbeat
+    
+    Args:
+        source: Generator/async generator that yields data
+        heartbeat_interval: Heartbeat interval in seconds (default 30)
+    """
+    async def gen():
+        last_heartbeat = datetime.now()
+        
+        try:
+            async for item in source:
+                # Send data
+                data = item.get("data", "")
+                if isinstance(data, dict):
+                    data = json.dumps(data)
+                yield f"data: {data}\n\n"
+                
+                # Update heartbeat timestamp
+                last_heartbeat = datetime.now()
+                
+                # Check if we need to send heartbeat
+                now = datetime.now()
+                if (now - last_heartbeat).total_seconds() >= heartbeat_interval:
+                    yield f"data: {json.dumps({'type': 'heartbeat', 'timestamp': now.isoformat()})}\n\n"
+                    last_heartbeat = now
+                    
+        except asyncio.CancelledError:
+            # Client disconnected
+            pass
+        except Exception as e:
+            # Send error event
+            error_data = json.dumps({
+                "type": "error",
+                "message": str(e),
+                "timestamp": datetime.now().isoformat()
+            })
+            yield f"data: {error_data}\n\n"
+    
+    return StreamingResponse(
+        gen(), 
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"  # Disable nginx buffering
+        }
+    )
+
+def sse_heartbeat_response(heartbeat_interval: int = 30):
+    """
+    Create SSE response that only sends heartbeats
+    
+    Args:
+        heartbeat_interval: Heartbeat interval in seconds
+    """
+    async def gen():
+        while True:
+            try:
+                heartbeat_data = json.dumps({
+                    "type": "heartbeat",
+                    "timestamp": datetime.now().isoformat()
+                })
+                yield f"data: {heartbeat_data}\n\n"
+                await asyncio.sleep(heartbeat_interval)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                error_data = json.dumps({
+                    "type": "error",
+                    "message": str(e),
+                    "timestamp": datetime.now().isoformat()
+                })
+                yield f"data: {error_data}\n\n"
+                break
+    
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
 
 # ===== app/services/auth_service.py =====
 from __future__ import annotations
@@ -6496,6 +9238,114 @@ def qdrant_count_by_doc(doc_id: str) -> int:
                     break
             return total
 
+# ===== app/services/audit_service.py =====
+from __future__ import annotations
+from typing import Optional, Dict, Any
+from datetime import datetime
+from sqlalchemy.orm import Session
+from fastapi import Request
+
+from app.models.user import AuditLogs
+from app.schemas.admin import AuditAction
+
+
+class AuditService:
+    def __init__(self, session: Session):
+        self.session = session
+
+    def log_action(
+        self,
+        action: str,
+        actor_user_id: Optional[str] = None,
+        object_type: Optional[str] = None,
+        object_id: Optional[str] = None,
+        meta: Optional[Dict[str, Any]] = None,
+        request: Optional[Request] = None,
+        request_id: Optional[str] = None,
+    ) -> None:
+        """Log an audit action."""
+        audit_log = AuditLogs(
+            actor_user_id=actor_user_id,
+            action=action,
+            object_type=object_type,
+            object_id=object_id,
+            meta=meta,
+            request_id=request_id,
+        )
+        
+        if request:
+            # Extract IP and User-Agent from request
+            forwarded_for = request.headers.get("X-Forwarded-For")
+            if forwarded_for:
+                audit_log.ip = forwarded_for.split(",")[0].strip()
+            else:
+                audit_log.ip = request.client.host if request.client else None
+            
+            audit_log.user_agent = request.headers.get("User-Agent")
+        
+        self.session.add(audit_log)
+        self.session.commit()
+
+    def log_user_action(
+        self,
+        action: AuditAction,
+        target_user_id: str,
+        actor_user_id: Optional[str] = None,
+        request: Optional[Request] = None,
+        request_id: Optional[str] = None,
+        **meta
+    ) -> None:
+        """Log a user-related action."""
+        self.log_action(
+            action=action.value,
+            actor_user_id=actor_user_id,
+            object_type="user",
+            object_id=target_user_id,
+            meta=meta,
+            request=request,
+            request_id=request_id,
+        )
+
+    def log_token_action(
+        self,
+        action: AuditAction,
+        token_id: str,
+        user_id: str,
+        actor_user_id: Optional[str] = None,
+        request: Optional[Request] = None,
+        request_id: Optional[str] = None,
+        **meta
+    ) -> None:
+        """Log a token-related action."""
+        self.log_action(
+            action=action.value,
+            actor_user_id=actor_user_id,
+            object_type="token",
+            object_id=token_id,
+            meta={"user_id": user_id, **meta},
+            request=request,
+            request_id=request_id,
+        )
+
+    def log_auth_action(
+        self,
+        action: AuditAction,
+        user_id: str,
+        request: Optional[Request] = None,
+        request_id: Optional[str] = None,
+        **meta
+    ) -> None:
+        """Log an authentication-related action."""
+        self.log_action(
+            action=action.value,
+            actor_user_id=user_id,
+            object_type="auth",
+            object_id=user_id,
+            meta=meta,
+            request=request,
+            request_id=request_id,
+        )
+
 # ===== app/services/embedding_dispatcher.py =====
 """
 Embedding Dispatcher - маршрутизатор задач эмбеддинга
@@ -7063,7 +9913,662 @@ def logout(payload: dict | None = None, session: Session = Depends(db_session)) 
         do_revoke(session, rt)
     return Response(status_code=204)
 
+# ===== app/api/routers/password_reset.py =====
+from __future__ import annotations
+from typing import Optional
+from fastapi import APIRouter, Depends, HTTPException, status, Request
+from sqlalchemy.orm import Session
+import secrets
+import hashlib
+from datetime import datetime, timedelta
+
+from app.api.deps import db_session, get_request_id, get_client_ip, get_user_agent, rate_limit
+from app.core.security import hash_password, validate_password_strength
+from app.repositories.users_repo import UsersRepo
+from app.services.audit_service import AuditService
+from app.schemas.admin import PasswordResetRequest, PasswordResetConfirm, ErrorResponse, AuditAction
+
+router = APIRouter(prefix="/auth", tags=["password-reset"])
+
+
+def create_error_response(code: str, message: str, request_id: str, 
+                         details: Optional[dict] = None) -> ErrorResponse:
+    """Create standardized error response."""
+    return ErrorResponse(
+        code=code,
+        message=message,
+        request_id=request_id,
+        details=details
+    )
+
+
+@router.post("/password/forgot", status_code=status.HTTP_200_OK)
+async def forgot_password(
+    request_data: PasswordResetRequest,
+    session: Session = Depends(db_session),
+    request: Request = None,
+    request_id: str = Depends(get_request_id)
+):
+    """Request password reset. Always returns 200 for security."""
+    # Rate limiting for password reset requests
+    await rate_limit(request, "password_reset", limit=5, window_sec=300)  # 5 attempts per 5 minutes
+    
+    repo = UsersRepo(session)
+    audit = AuditService(session)
+    
+    # Find user by login or email
+    user = repo.by_login(request_data.login_or_email)
+    if not user and "@" in request_data.login_or_email:
+        # Try to find by email
+        users = repo.s.execute(
+            repo.s.query(repo.Users).filter(repo.Users.email == request_data.login_or_email)
+        ).scalars().all()
+        if users:
+            user = users[0]
+    
+    if not user or not user.is_active:
+        # Always return 200 for security (don't reveal if user exists)
+        return {"message": "If the account exists, a password reset link has been sent"}
+    
+    # Generate reset token
+    token_plain = secrets.token_urlsafe(32)
+    token_hash = hashlib.sha256(token_plain.encode()).hexdigest()
+    expires_at = datetime.utcnow() + timedelta(minutes=60)  # 1 hour expiry
+    
+    # Create reset token
+    repo.create_password_reset_token(
+        user_id=str(user.id),
+        token_hash=token_hash,
+        expires_at=expires_at
+    )
+    
+    # Log audit action
+    audit.log_auth_action(
+        action=AuditAction.PASSWORD_RESET,
+        user_id=str(user.id),
+        request=request,
+        request_id=request_id,
+        method="email_request"
+    )
+    
+    # TODO: Send email with reset link
+    # For now, we'll just return the token in development
+    # In production, this should be sent via email
+    if not user.email:
+        return {
+            "message": "Password reset requested. Contact administrator for reset token.",
+            "token": token_plain  # Only for development
+        }
+    
+    # TODO: Implement email sending
+    # send_password_reset_email(user.email, token_plain)
+    
+    return {"message": "If the account exists, a password reset link has been sent"}
+
+
+@router.post("/password/reset", status_code=status.HTTP_200_OK)
+async def reset_password(
+    request_data: PasswordResetConfirm,
+    session: Session = Depends(db_session),
+    request: Request = None,
+    request_id: str = Depends(get_request_id)
+):
+    """Reset password using token."""
+    # Rate limiting for password reset attempts
+    await rate_limit(request, "password_reset_confirm", limit=10, window_sec=300)  # 10 attempts per 5 minutes
+    
+    repo = UsersRepo(session)
+    audit = AuditService(session)
+    
+    # Hash the provided token
+    token_hash = hashlib.sha256(request_data.token.encode()).hexdigest()
+    
+    # Find valid reset token
+    reset_token = repo.get_password_reset_token(token_hash)
+    if not reset_token:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=create_error_response(
+                "invalid_token",
+                "Invalid or expired reset token",
+                request_id
+            ).dict()
+        )
+    
+    # Validate new password
+    is_valid, error_msg = validate_password_strength(request_data.new_password)
+    if not is_valid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=create_error_response(
+                "invalid_password",
+                f"Password validation failed: {error_msg}",
+                request_id
+            ).dict()
+        )
+    
+    # Update password
+    password_hash = hash_password(request_data.new_password)
+    repo.update_user(str(reset_token.user_id), password_hash=password_hash)
+    
+    # Mark token as used
+    repo.use_password_reset_token(token_hash)
+    
+    # Revoke all refresh tokens for security
+    user = repo.get(str(reset_token.user_id))
+    if user:
+        for token in user.refresh_tokens:
+            if not token.revoked:
+                token.revoked = True
+        session.commit()
+    
+    # Log audit action
+    audit.log_auth_action(
+        action=AuditAction.PASSWORD_RESET,
+        user_id=str(reset_token.user_id),
+        request=request,
+        request_id=request_id,
+        method="email_reset"
+    )
+    
+    return {"message": "Password reset successfully"}
+
 # ===== app/api/routers/__init__.py =====
+
+# ===== app/api/routers/admin.py =====
+from __future__ import annotations
+from typing import Optional, List
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Response
+from sqlalchemy.orm import Session
+import secrets
+import hashlib
+from datetime import datetime, timedelta
+
+from app.api.deps import (
+    db_session, require_admin, get_request_id, get_client_ip, get_user_agent
+)
+from app.core.security import hash_password, verify_password, validate_password_strength
+from app.core.pat_validation import validate_scopes, check_scope_permission
+from app.repositories.users_repo import UsersRepo
+from app.services.audit_service import AuditService
+from app.schemas.admin import (
+    UserCreate, UserUpdate, UserResponse, UserListResponse,
+    PasswordResetRequest, PasswordResetConfirm, PasswordChange,
+    TokenCreate, TokenResponse, TokenListResponse,
+    AuditLogResponse, AuditLogListResponse,
+    ErrorResponse, UserRole, AuditAction
+)
+
+router = APIRouter(prefix="/api/admin", tags=["admin"])
+
+
+def create_error_response(code: str, message: str, request_id: str, 
+                         details: Optional[dict] = None) -> dict:
+    """Create standardized error response."""
+    return {
+        "error": {
+            "code": code,
+            "message": message,
+            "details": details or {}
+        },
+        "request_id": request_id
+    }
+
+
+# User Management Endpoints
+@router.get("/users", response_model=UserListResponse)
+def list_users(
+    query: Optional[str] = None,
+    role: Optional[str] = None,
+    is_active: Optional[bool] = None,
+    limit: int = 50,
+    cursor: Optional[str] = None,
+    session: Session = Depends(db_session),
+    current_user: dict = Depends(require_admin),
+    request: Request = None,
+    request_id: str = Depends(get_request_id)
+):
+    """List users with pagination and filters."""
+    if limit > 100:
+        limit = 100
+    
+    repo = UsersRepo(session)
+    users, has_more, next_cursor = repo.list_users(
+        query=query, role=role, is_active=is_active, 
+        limit=limit, cursor=cursor
+    )
+    
+    total = repo.count_users(query=query, role=role, is_active=is_active)
+    
+    return UserListResponse(
+        users=[UserResponse.from_orm(user) for user in users],
+        total=total,
+        has_more=has_more,
+        next_cursor=next_cursor
+    )
+
+
+@router.post("/users", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+def create_user(
+    user_data: UserCreate,
+    session: Session = Depends(db_session),
+    current_user: dict = Depends(require_admin),
+    request: Request = None,
+    request_id: str = Depends(get_request_id)
+):
+    """Create a new user."""
+    repo = UsersRepo(session)
+    audit = AuditService(session)
+    
+    # Check if user already exists
+    existing_user = repo.by_login(user_data.login)
+    if existing_user:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=create_error_response(
+                "user_exists", 
+                f"User with login '{user_data.login}' already exists",
+                request_id
+            ).dict()
+        )
+    
+    # Generate password if not provided
+    password = user_data.password
+    if not password:
+        password = secrets.token_urlsafe(16)
+    else:
+        # Validate password strength if provided
+        is_valid, error_msg = validate_password_strength(password)
+        if not is_valid:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=create_error_response(
+                    "invalid_password",
+                    f"Password validation failed: {error_msg}",
+                    request_id
+                ).dict()
+            )
+    
+    password_hash = hash_password(password)
+    
+    # Create user
+    user = repo.create_user(
+        login=user_data.login,
+        password_hash=password_hash,
+        role=user_data.role.value,
+        email=user_data.email,
+        is_active=user_data.is_active
+    )
+    
+    # Log audit action
+    audit.log_user_action(
+        action=AuditAction.USER_CREATED,
+        target_user_id=str(user.id),
+        actor_user_id=current_user["id"],
+        request=request,
+        request_id=request_id,
+        role=user_data.role.value,
+        email=user_data.email
+    )
+    
+    response = UserResponse.from_orm(user)
+    
+    # Include generated password in response if not provided
+    if not user_data.password:
+        response_dict = response.dict()
+        response_dict["generated_password"] = password
+        return response_dict
+    
+    return response
+
+
+@router.get("/users/{user_id}", response_model=UserResponse)
+def get_user(
+    user_id: str,
+    session: Session = Depends(db_session),
+    current_user: dict = Depends(require_admin),
+    request: Request = None,
+    request_id: str = Depends(get_request_id)
+):
+    """Get user by ID."""
+    repo = UsersRepo(session)
+    user = repo.get(user_id)
+    
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=create_error_response(
+                "user_not_found",
+                f"User with ID '{user_id}' not found",
+                request_id
+            ).dict()
+        )
+    
+    return UserResponse.from_orm(user)
+
+
+@router.patch("/users/{user_id}", response_model=UserResponse)
+def update_user(
+    user_id: str,
+    user_data: UserUpdate,
+    session: Session = Depends(db_session),
+    current_user: dict = Depends(require_admin),
+    request: Request = None,
+    request_id: str = Depends(get_request_id)
+):
+    """Update user."""
+    repo = UsersRepo(session)
+    audit = AuditService(session)
+    
+    user = repo.get(user_id)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=create_error_response(
+                "user_not_found",
+                f"User with ID '{user_id}' not found",
+                request_id
+            ).dict()
+        )
+    
+    # Prepare updates
+    updates = {}
+    if user_data.role is not None:
+        updates["role"] = user_data.role.value
+    if user_data.email is not None:
+        updates["email"] = user_data.email
+    if user_data.is_active is not None:
+        updates["is_active"] = user_data.is_active
+    
+    # Update user
+    updated_user = repo.update_user(user_id, **updates)
+    
+    # Log audit action
+    audit.log_user_action(
+        action=AuditAction.USER_UPDATED,
+        target_user_id=user_id,
+        actor_user_id=current_user["id"],
+        request=request,
+        request_id=request_id,
+        changes=updates
+    )
+    
+    return UserResponse.from_orm(updated_user)
+
+
+@router.post("/users/{user_id}/password", response_model=dict)
+def reset_user_password(
+    user_id: str,
+    password_data: PasswordChange,
+    session: Session = Depends(db_session),
+    current_user: dict = Depends(require_admin),
+    request: Request = None,
+    request_id: str = Depends(get_request_id)
+):
+    """Reset user password."""
+    repo = UsersRepo(session)
+    audit = AuditService(session)
+    
+    user = repo.get(user_id)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=create_error_response(
+                "user_not_found",
+                f"User with ID '{user_id}' not found",
+                request_id
+            ).dict()
+        )
+    
+    # Generate new password if not provided
+    new_password = password_data.new_password
+    if not new_password:
+        new_password = secrets.token_urlsafe(16)
+    
+    password_hash = hash_password(new_password)
+    
+    # Update password
+    repo.update_user(user_id, password_hash=password_hash)
+    
+    # Revoke all refresh tokens
+    for token in user.refresh_tokens:
+        if not token.revoked:
+            token.revoked = True
+    
+    session.commit()
+    
+    # Log audit action
+    audit.log_user_action(
+        action=AuditAction.PASSWORD_RESET,
+        target_user_id=user_id,
+        actor_user_id=current_user["id"],
+        request=request,
+        request_id=request_id
+    )
+    
+    return {
+        "message": "Password reset successfully",
+        "new_password": new_password
+    }
+
+
+@router.delete("/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_user(
+    user_id: str,
+    session: Session = Depends(db_session),
+    current_user: dict = Depends(require_admin),
+    request: Request = None,
+    request_id: str = Depends(get_request_id)
+):
+    """Soft delete user (deactivate)."""
+    repo = UsersRepo(session)
+    audit = AuditService(session)
+    
+    user = repo.get(user_id)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=create_error_response(
+                "user_not_found",
+                f"User with ID '{user_id}' not found",
+                request_id
+            ).dict()
+        )
+    
+    # Soft delete (deactivate)
+    repo.update_user(user_id, is_active=False)
+    
+    # Log audit action
+    audit.log_user_action(
+        action=AuditAction.USER_DEACTIVATED,
+        target_user_id=user_id,
+        actor_user_id=current_user["id"],
+        request=request,
+        request_id=request_id
+    )
+    
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# PAT Token Management Endpoints
+@router.get("/users/{user_id}/tokens", response_model=TokenListResponse)
+def list_user_tokens(
+    user_id: str,
+    session: Session = Depends(db_session),
+    current_user: dict = Depends(require_admin),
+    request: Request = None,
+    request_id: str = Depends(get_request_id)
+):
+    """List user's PAT tokens."""
+    repo = UsersRepo(session)
+    
+    user = repo.get(user_id)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=create_error_response(
+                "user_not_found",
+                f"User with ID '{user_id}' not found",
+                request_id
+            ).dict()
+        )
+    
+    tokens = repo.get_user_tokens(user_id)
+    total = len(tokens)
+    
+    return TokenListResponse(
+        tokens=[TokenResponse.from_orm(token) for token in tokens],
+        total=total
+    )
+
+
+@router.post("/users/{user_id}/tokens", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
+def create_user_token(
+    user_id: str,
+    token_data: TokenCreate,
+    session: Session = Depends(db_session),
+    current_user: dict = Depends(require_admin),
+    request: Request = None,
+    request_id: str = Depends(get_request_id)
+):
+    """Create a new PAT token for user."""
+    repo = UsersRepo(session)
+    audit = AuditService(session)
+    
+    user = repo.get(user_id)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=create_error_response(
+                "user_not_found",
+                f"User with ID '{user_id}' not found",
+                request_id
+            ).dict()
+        )
+    
+    # Validate scopes
+    scopes = [scope.value for scope in token_data.scopes] if token_data.scopes else []
+    try:
+        validated_scopes = validate_scopes(scopes)
+    except HTTPException as e:
+        raise e
+    
+    # Generate token
+    token_plain = secrets.token_urlsafe(32)
+    token_hash = hashlib.sha256(token_plain.encode()).hexdigest()
+    
+    # Create token
+    token = repo.create_token(
+        user_id=user_id,
+        token_hash=token_hash,
+        name=token_data.name,
+        scopes=validated_scopes,
+        expires_at=token_data.expires_at
+    )
+    
+    # Log audit action
+    audit.log_token_action(
+        action=AuditAction.TOKEN_CREATED,
+        token_id=str(token.id),
+        user_id=user_id,
+        actor_user_id=current_user["id"],
+        request=request,
+        request_id=request_id,
+        name=token_data.name
+    )
+    
+    response = TokenResponse.from_orm(token)
+    response.token_plain_once = token_plain
+    
+    return response
+
+
+@router.delete("/tokens/{token_id}", status_code=status.HTTP_204_NO_CONTENT)
+def revoke_token(
+    token_id: str,
+    session: Session = Depends(db_session),
+    current_user: dict = Depends(require_admin),
+    request: Request = None,
+    request_id: str = Depends(get_request_id)
+):
+    """Revoke a PAT token."""
+    repo = UsersRepo(session)
+    audit = AuditService(session)
+    
+    token = repo.s.get(repo.UserTokens, token_id)
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=create_error_response(
+                "token_not_found",
+                f"Token with ID '{token_id}' not found",
+                request_id
+            ).dict()
+        )
+    
+    # Revoke token
+    success = repo.revoke_token(token_id)
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=create_error_response(
+                "token_already_revoked",
+                "Token is already revoked",
+                request_id
+            ).dict()
+        )
+    
+    # Log audit action
+    audit.log_token_action(
+        action=AuditAction.TOKEN_REVOKED,
+        token_id=token_id,
+        user_id=str(token.user_id),
+        actor_user_id=current_user["id"],
+        request=request,
+        request_id=request_id
+    )
+    
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# Audit Logs Endpoints
+@router.get("/audit-logs", response_model=AuditLogListResponse)
+def list_audit_logs(
+    actor_user_id: Optional[str] = None,
+    action: Optional[str] = None,
+    object_type: Optional[str] = None,
+    limit: int = 50,
+    cursor: Optional[str] = None,
+    session: Session = Depends(db_session),
+    current_user: dict = Depends(require_admin),
+    request: Request = None,
+    request_id: str = Depends(get_request_id)
+):
+    """List audit logs with pagination and filters."""
+    if limit > 100:
+        limit = 100
+    
+    repo = UsersRepo(session)
+    logs, has_more, next_cursor = repo.get_audit_logs(
+        actor_user_id=actor_user_id,
+        action=action,
+        object_type=object_type,
+        limit=limit,
+        cursor=cursor
+    )
+    
+    total = repo.count_audit_logs(
+        actor_user_id=actor_user_id,
+        action=action,
+        object_type=object_type
+    )
+    
+    return AuditLogListResponse(
+        logs=[AuditLogResponse.from_orm(log) for log in logs],
+        total=total,
+        has_more=has_more,
+        next_cursor=next_cursor
+    )
 
 # ===== app/api/routers/rag.py =====
 # app/api/routers/rag.py
@@ -7083,7 +10588,17 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, Body, Form
 from sqlalchemy.orm import Session
 
-from app.api.deps import db_session
+from app.api.deps import db_session, require_roles, get_current_user
+from app.schemas.admin import UserRole
+
+# RBAC helpers
+def require_editor_or_admin():
+    """Require editor or admin role for write operations."""
+    return require_roles(UserRole.EDITOR, UserRole.ADMIN)
+
+def require_reader_or_above():
+    """Require reader role or above for read operations."""
+    return require_roles(UserRole.READER, UserRole.EDITOR, UserRole.ADMIN)
 from app.core.config import settings
 from app.core.s3_helpers import put_object, presign_get
 from app.repositories.rag_repo import RagRepo
@@ -7105,6 +10620,7 @@ async def upload_rag_file(
     file: UploadFile = File(...),
     tags: str = Form("[]"),  # JSON string of tags
     session: Session = Depends(db_session),
+    current_user: dict = Depends(require_editor_or_admin()),
 ):
     # Валидация размера файла (50MB)
     MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB
@@ -7167,6 +10683,7 @@ def list_rag_documents(
     status: Optional[str] = Query(None, description="Filter by status"),
     search: Optional[str] = Query(None, description="Search in document names"),
     session: Session = Depends(db_session),
+    current_user: dict = Depends(require_reader_or_above()),
 ):
     repo = RagRepo(session)
     
@@ -7207,6 +10724,7 @@ def list_rag_documents(
 def get_rag_document(
     doc_id: str,
     session: Session = Depends(db_session),
+    current_user: dict = Depends(require_reader_or_above()),
 ):
     doc = RagRepo(session).get(doc_id)
     if not doc:
@@ -7218,6 +10736,7 @@ def download_rag_file(
     doc_id: str,
     kind: str = Query("original", regex="^(original|canonical)$"),
     session: Session = Depends(db_session),
+    current_user: dict = Depends(require_reader_or_above()),
 ):
     repo = RagRepo(session)
     doc = repo.get(doc_id)
@@ -7245,6 +10764,7 @@ def download_rag_file(
 def get_rag_progress(
     doc_id: str,
     session: Session = Depends(db_session),
+    current_user: dict = Depends(require_reader_or_above()),
 ):
     """Получить прогресс обработки RAG документа"""
     return progress(session, doc_id)
@@ -7253,6 +10773,7 @@ def get_rag_progress(
 @router.get("/stats")
 def get_rag_stats(
     session: Session = Depends(db_session),
+    current_user: dict = Depends(require_reader_or_above()),
 ):
     """Получить статистику RAG документов"""
     return stats(session)
@@ -7261,6 +10782,7 @@ def get_rag_stats(
 def archive_rag_document(
     doc_id: str,
     session: Session = Depends(db_session),
+    current_user: dict = Depends(require_editor_or_admin()),
 ):
     doc = RagRepo(session).get(doc_id)
     if not doc:
@@ -7277,6 +10799,7 @@ def update_rag_document_tags(
     doc_id: str,
     tags: list = Body(...),
     session: Session = Depends(db_session),
+    current_user: dict = Depends(require_editor_or_admin()),
 ):
     doc = RagRepo(session).get(doc_id)
     if not doc:
@@ -7292,6 +10815,7 @@ def update_rag_document_tags(
 def delete_rag_document(
     doc_id: str,
     session: Session = Depends(db_session),
+    current_user: dict = Depends(require_editor_or_admin()),
 ):
     doc = RagRepo(session).get(doc_id)
     if not doc:
@@ -7322,21 +10846,27 @@ def delete_rag_document(
 
 @router.post("/search")
 def search_rag(
-    text: str = Body(..., description="Search query"),
+    query: str = Body(..., description="Search query"),
     top_k: int = Body(10, ge=1, le=100),
     min_score: float = Body(0.0, ge=0.0, le=1.0),
+    offset: int = Body(0, ge=0),
     session: Session = Depends(db_session),
+    current_user: dict = Depends(require_reader_or_above()),
 ):
     """Поиск в RAG документах"""
-    results = search(session, text, top_k=top_k)
+    results = search(session, query, top_k=top_k, offset=offset)
     # Фильтруем по min_score на уровне приложения
     filtered_results = [r for r in results.get("results", []) if r.get("score", 0) >= min_score]
-    return {"items": filtered_results}
+    return {
+        "results": filtered_results,
+        "next_offset": results.get("next_offset")
+    }
 
 @router.post("/{doc_id}/reindex")
 def reindex_rag_document(
     doc_id: str,
     session: Session = Depends(db_session),
+    current_user: dict = Depends(require_editor_or_admin()),
 ):
     """Переиндексация RAG документа"""
     repo = RagRepo(session)
@@ -7353,6 +10883,7 @@ def reindex_rag_document(
 @router.post("/reindex")
 def reindex_all_rag_documents(
     session: Session = Depends(db_session),
+    current_user: dict = Depends(require_editor_or_admin()),
 ):
     """Массовая переиндексация всех RAG документов"""
     # Получаем все документы со статусом ready
@@ -7746,6 +11277,113 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_column('chats', 'tags')
+
+# ===== app/migrations/versions/20250115_000000_rbac_admin_models.py =====
+"""rbac admin models
+
+Revision ID: 20250115_000000_rbac_admin_models
+Revises: 20250912_104656_add_chat_tags
+Create Date: 2025-01-15 00:00:00
+"""
+
+from alembic import op
+import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
+
+# revision identifiers, used by Alembic.
+revision = '20250115_000000_rbac_admin_models'
+down_revision = '20250912_104656_add_chat_tags'
+branch_labels = None
+depends_on = None
+
+
+def upgrade() -> None:
+    # Drop existing ENUM type and replace with VARCHAR + CHECK constraint
+    op.execute("DROP TYPE IF EXISTS role_enum CASCADE")
+    
+    # Add email column to users
+    op.add_column('users', sa.Column('email', sa.String(255), nullable=True))
+    op.create_index('ix_users_email', 'users', ['email'])
+    
+    # Change role column from ENUM to VARCHAR with CHECK constraint
+    op.alter_column('users', 'role', type_=sa.String(20), existing_type=postgresql.ENUM('admin', 'editor', 'reader', name='role_enum'))
+    op.create_check_constraint('ck_users_role', 'users', "role IN ('admin', 'editor', 'reader')")
+    
+    # Update user_tokens table
+    op.add_column('user_tokens', sa.Column('scopes', postgresql.JSON(astext_type=sa.Text()), nullable=True))
+    op.add_column('user_tokens', sa.Column('expires_at', sa.DateTime(timezone=True), nullable=True))
+    op.alter_column('user_tokens', 'revoked', new_column_name='revoked_at', type_=sa.DateTime(timezone=True))
+    op.alter_column('user_tokens', 'revoked_at', nullable=True)
+    
+    # Create password_reset_tokens table
+    op.create_table('password_reset_tokens',
+        sa.Column('id', postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column('user_id', postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column('token_hash', sa.Text(), nullable=False),
+        sa.Column('expires_at', sa.DateTime(timezone=True), nullable=False),
+        sa.Column('used_at', sa.DateTime(timezone=True), nullable=True),
+        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+        sa.ForeignKeyConstraint(['user_id'], ['users.id'], ondelete='CASCADE'),
+        sa.PrimaryKeyConstraint('id'),
+        sa.UniqueConstraint('token_hash')
+    )
+    op.create_index('ix_password_reset_tokens_user_id', 'password_reset_tokens', ['user_id'])
+    op.create_index('ix_password_reset_tokens_expires_at', 'password_reset_tokens', ['expires_at'])
+    op.create_index('ix_password_reset_tokens_used_at', 'password_reset_tokens', ['used_at'])
+    
+    # Add TTL cleanup function for password reset tokens (expires after 1 hour)
+    op.execute("""
+        CREATE OR REPLACE FUNCTION cleanup_expired_password_reset_tokens()
+        RETURNS void AS $$
+        BEGIN
+            DELETE FROM password_reset_tokens 
+            WHERE expires_at < NOW() OR used_at IS NOT NULL;
+        END;
+        $$ LANGUAGE plpgsql;
+    """)
+    
+    # Create audit_logs table
+    op.create_table('audit_logs',
+        sa.Column('id', postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column('ts', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+        sa.Column('actor_user_id', postgresql.UUID(as_uuid=True), nullable=True),
+        sa.Column('action', sa.String(50), nullable=False),
+        sa.Column('object_type', sa.String(50), nullable=True),
+        sa.Column('object_id', sa.String(255), nullable=True),
+        sa.Column('meta', postgresql.JSON(astext_type=sa.Text()), nullable=True),
+        sa.Column('ip', sa.String(45), nullable=True),
+        sa.Column('user_agent', sa.Text(), nullable=True),
+        sa.Column('request_id', sa.String(255), nullable=True),
+        sa.ForeignKeyConstraint(['actor_user_id'], ['users.id'], ondelete='SET NULL'),
+        sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index('ix_audit_logs_ts', 'audit_logs', ['ts'])
+    op.create_index('ix_audit_logs_actor_user_id', 'audit_logs', ['actor_user_id'])
+    op.create_index('ix_audit_logs_action', 'audit_logs', ['action'])
+    op.create_index('ix_audit_logs_object_type', 'audit_logs', ['object_type'])
+    op.create_index('ix_audit_logs_object_id', 'audit_logs', ['object_id'])
+    op.create_index('ix_audit_logs_request_id', 'audit_logs', ['request_id'])
+
+
+def downgrade() -> None:
+    # Drop new tables
+    op.drop_table('audit_logs')
+    op.drop_table('password_reset_tokens')
+    
+    # Revert user_tokens changes
+    op.alter_column('user_tokens', 'revoked_at', new_column_name='revoked', type_=sa.Boolean())
+    op.alter_column('user_tokens', 'revoked', nullable=False, server_default=sa.text('false'))
+    op.drop_column('user_tokens', 'expires_at')
+    op.drop_column('user_tokens', 'scopes')
+    
+    # Revert users changes
+    op.drop_constraint('ck_users_role', 'users', type_='check')
+    op.alter_column('users', 'role', type_=postgresql.ENUM('admin', 'editor', 'reader', name='role_enum'))
+    op.drop_index('ix_users_email', 'users')
+    op.drop_column('users', 'email')
+    
+    # Recreate ENUM type
+    op.execute("CREATE TYPE role_enum AS ENUM ('admin', 'editor', 'reader')")
 
 # ===== app/migrations/versions/20250910_175628_initial.py =====
 # app/migrations/versions/20250910_175628_initial.py

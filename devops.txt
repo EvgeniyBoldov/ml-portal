@@ -1,0 +1,700 @@
+# ===== Dockerfile'ы =====
+
+## API Dockerfile
+
+FROM python:3.11-slim
+
+# Установка системных зависимостей
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libpq-dev \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Копирование requirements
+COPY docker/api/requirements-api.txt ./requirements.txt
+
+# Установка Python зависимостей
+RUN python -m pip install --upgrade pip && pip install -r requirements.txt
+
+# Копирование кода приложения
+COPY backend/app/ ./app/
+COPY backend/alembic.ini ./
+COPY backend/scripts/ ./scripts/
+
+# Создание пользователя
+RUN groupadd -r appuser && useradd -r -g appuser appuser
+RUN chown -R appuser:appuser /app
+
+USER appuser
+
+# Запуск приложения
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+
+## Worker Dockerfile
+
+FROM python:3.11-slim
+
+# Установка системных зависимостей
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libpq-dev \
+    libffi-dev \
+    libssl-dev \
+    libxml2-dev \
+    libxslt1-dev \
+    zlib1g-dev \
+    libjpeg-dev \
+    libpng-dev \
+    tesseract-ocr \
+    tesseract-ocr-rus \
+    poppler-utils \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Копирование requirements
+COPY docker/worker/requirements-worker.txt ./requirements.txt
+
+# Установка Python зависимостей
+RUN python -m pip install --upgrade pip && pip install -r requirements.txt
+
+# Копирование кода приложения
+COPY backend/app/ ./app/
+COPY backend/alembic.ini ./
+COPY backend/scripts/ ./scripts/
+
+# Создание пользователя
+RUN groupadd -r appuser && useradd -r -g appuser appuser
+RUN chown -R appuser:appuser /app
+
+USER appuser
+
+# Запуск worker
+CMD ["celery", "-A", "app.celery_app", "worker", "--loglevel=info"]
+
+
+## Embedding Dockerfile
+
+FROM python:3.11-slim
+
+# Установка системных зависимостей
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libpq-dev \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Копирование requirements
+COPY docker/emb/requirements-emb.txt ./requirements.txt
+
+# Установка Python зависимостей
+RUN python -m pip install --upgrade pip && pip install -r requirements.txt
+
+# Копирование кода приложения
+COPY backend/app/ ./app/
+COPY backend/scripts/ ./scripts/
+
+# Создание пользователя
+RUN groupadd -r appuser && useradd -r -g appuser appuser
+RUN chown -R appuser:appuser /app
+
+USER appuser
+
+# Запуск embedding сервиса
+CMD ["python", "scripts/run_embedding_service.py"]
+
+
+## LLM Dockerfile
+
+FROM python:3.11-slim
+
+# Установка системных зависимостей
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libpq-dev \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Копирование requirements
+COPY docker/llm/requirements-llm.txt ./requirements.txt
+
+# Установка Python зависимостей
+RUN python -m pip install --upgrade pip && pip install -r requirements.txt
+
+# Копирование кода приложения
+COPY backend/app/ ./app/
+COPY backend/scripts/ ./scripts/
+
+# Создание пользователя
+RUN groupadd -r appuser && useradd -r -g appuser appuser
+RUN chown -R appuser:appuser /app
+
+USER appuser
+
+# Запуск LLM сервиса
+CMD ["python", "scripts/run_llm_service.py"]
+
+
+## Frontend Dockerfile
+
+FROM node:18-alpine AS builder
+
+WORKDIR /app
+
+# Копирование package.json и package-lock.json
+COPY frontend/package*.json ./
+
+# Установка зависимостей
+RUN npm ci --only=production
+
+# Копирование исходного кода
+COPY frontend/ ./
+
+# Сборка приложения
+RUN npm run build
+
+# Production stage
+FROM nginx:alpine
+
+# Копирование собранного приложения
+COPY --from=builder /app/dist /usr/share/nginx/html
+
+# Копирование конфигурации nginx
+COPY docker/frontend/nginx.conf /etc/nginx/nginx.conf
+
+# Создание пользователя
+RUN addgroup -g 1001 -S nodejs && adduser -S nextjs -u 1001
+
+# Запуск nginx
+CMD ["nginx", "-g", "daemon off;"]
+
+
+# ===== Docker Compose файлы =====
+
+## docker-compose.local.yml
+
+version: '3.8'
+
+services:
+  # База данных
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: ml_portal
+      POSTGRES_USER: ml_portal
+      POSTGRES_PASSWORD: ml_portal
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ml_portal"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Qdrant
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+
+  # MinIO
+  minio:
+    image: minio/minio:latest
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  # API (легкий)
+  api:
+    build:
+      context: .
+      dockerfile: docker/api/Dockerfile.api
+    environment:
+      - DATABASE_URL=postgresql://ml_portal:ml_portal@postgres:5432/ml_portal
+      - DB_URL=postgresql://ml_portal:ml_portal@postgres:5432/ml_portal
+      - REDIS_URL=redis://redis:6379
+      - QDRANT_URL=http://qdrant:6333
+      - S3_ENDPOINT=http://minio:9000
+      - S3_ACCESS_KEY=minioadmin
+      - S3_SECRET_KEY=minioadmin
+      - S3_BUCKET_RAG=rag
+      - S3_BUCKET_ANALYSIS=analysis
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postgres
+      - redis
+      - qdrant
+      - minio
+
+  # Worker (полный) - 1 экземпляр для тестирования
+  worker:
+    build:
+      context: .
+      dockerfile: docker/worker/Dockerfile.worker
+    environment:
+      - DATABASE_URL=postgresql://ml_portal:ml_portal@postgres:5432/ml_portal
+      - REDIS_URL=redis://redis:6379
+      - QDRANT_URL=http://qdrant:6333
+      - S3_ENDPOINT=http://minio:9000
+      - S3_ACCESS_KEY=minioadmin
+      - S3_SECRET_KEY=minioadmin
+      - S3_BUCKET_RAG=rag
+      - S3_BUCKET_ANALYSIS=analysis
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # Embedding сервис
+  emb:
+    build:
+      context: .
+      dockerfile: docker/emb/Dockerfile.emb
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - QDRANT_URL=http://qdrant:6333
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  # LLM сервис
+  llm:
+    build:
+      context: .
+      dockerfile: docker/llm/Dockerfile.llm
+    environment:
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  # Frontend
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend/Dockerfile
+    ports:
+      - "3000:80"
+    depends_on:
+      - api
+
+volumes:
+  postgres_data:
+  qdrant_data:
+  minio_data:
+
+
+## docker-compose.prod.yml
+
+version: '3.8'
+
+services:
+  # База данных
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-ml_portal}
+      POSTGRES_USER: ${POSTGRES_USER:-ml_portal}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - ml_portal_network
+    deploy:
+      placement:
+        constraints:
+          - node.role == manager
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ml_portal}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis
+  redis:
+    image: redis:7-alpine
+    networks:
+      - ml_portal_network
+    deploy:
+      placement:
+        constraints:
+          - node.role == manager
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Qdrant
+  qdrant:
+    image: qdrant/qdrant:latest
+    volumes:
+      - qdrant_data:/qdrant/storage
+    networks:
+      - ml_portal_network
+    deploy:
+      placement:
+        constraints:
+          - node.role == manager
+
+  # MinIO
+  minio:
+    image: minio/minio:latest
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    networks:
+      - ml_portal_network
+    deploy:
+      placement:
+        constraints:
+          - node.role == manager
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  # API (легкий)
+  api:
+    image: ml-portal-api:latest
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-ml_portal}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-ml_portal}
+      - REDIS_URL=redis://redis:6379
+      - QDRANT_URL=http://qdrant:6333
+      - S3_ENDPOINT=http://minio:9000
+      - S3_ACCESS_KEY=${MINIO_ROOT_USER:-minioadmin}
+      - S3_SECRET_KEY=${MINIO_ROOT_PASSWORD}
+      - S3_BUCKET_RAG=rag
+      - S3_BUCKET_ANALYSIS=analysis
+      - JWT_SECRET=${JWT_SECRET}
+    networks:
+      - ml_portal_network
+    deploy:
+      replicas: 2
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    depends_on:
+      - postgres
+      - redis
+      - qdrant
+      - minio
+
+  # Worker-RAG (легкая ВМ)
+  worker-rag:
+    image: ml-portal-worker:latest
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-ml_portal}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-ml_portal}
+      - REDIS_URL=redis://redis:6379
+      - QDRANT_URL=http://qdrant:6333
+      - S3_ENDPOINT=http://minio:9000
+      - S3_ACCESS_KEY=${MINIO_ROOT_USER:-minioadmin}
+      - S3_SECRET_KEY=${MINIO_ROOT_PASSWORD}
+      - S3_BUCKET_RAG=rag
+      - S3_BUCKET_ANALYSIS=analysis
+      - CELERY_QUEUES=rag_low,cleanup_low
+    networks:
+      - ml_portal_network
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.worker_type == light
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+        reservations:
+          cpus: '1'
+          memory: 2G
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # Worker-Mixed (тяжелые ВМ)
+  worker-mixed:
+    image: ml-portal-worker:latest
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-ml_portal}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-ml_portal}
+      - REDIS_URL=redis://redis:6379
+      - QDRANT_URL=http://qdrant:6333
+      - S3_ENDPOINT=http://minio:9000
+      - S3_ACCESS_KEY=${MINIO_ROOT_USER:-minioadmin}
+      - S3_SECRET_KEY=${MINIO_ROOT_PASSWORD}
+      - S3_BUCKET_RAG=rag
+      - S3_BUCKET_ANALYSIS=analysis
+      - CELERY_QUEUES=chat_critical,upload_high,analyze_medium,ocr_medium
+    networks:
+      - ml_portal_network
+    deploy:
+      replicas: 2
+      placement:
+        constraints:
+          - node.labels.worker_type == heavy
+      resources:
+        limits:
+          cpus: '4'
+          memory: 8G
+        reservations:
+          cpus: '2'
+          memory: 4G
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # Embedding сервис
+  emb:
+    image: ml-portal-emb:latest
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - QDRANT_URL=http://qdrant:6333
+    networks:
+      - ml_portal_network
+    deploy:
+      replicas: 2
+      placement:
+        constraints:
+          - node.labels.worker_type == heavy
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+        reservations:
+          cpus: '1'
+          memory: 2G
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  # LLM сервис
+  llm:
+    image: ml-portal-llm:latest
+    environment:
+      - REDIS_URL=redis://redis:6379
+    networks:
+      - ml_portal_network
+    deploy:
+      replicas: 2
+      placement:
+        constraints:
+          - node.labels.worker_type == heavy
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+        reservations:
+          cpus: '1'
+          memory: 2G
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  # Frontend
+  frontend:
+    image: ml-portal-frontend:latest
+    networks:
+      - ml_portal_network
+    deploy:
+      replicas: 2
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    depends_on:
+      - api
+
+volumes:
+  postgres_data:
+    driver: local
+  qdrant_data:
+    driver: local
+  minio_data:
+    driver: local
+
+networks:
+  ml_portal_network:
+    driver: overlay
+    attachable: true
+
+
+# ===== Nginx конфигурация =====
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    upstream api_backend {
+        server api:8000;
+    }
+    
+    upstream frontend_backend {
+        server frontend:80;
+    }
+    
+    server {
+        listen 80;
+        server_name localhost;
+        
+        # API прокси
+        location /api/ {
+            proxy_pass http://api_backend;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+        }
+        
+        # Frontend
+        location / {
+            proxy_pass http://frontend_backend;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+        }
+    }
+}
+
+
+# ===== Requirements файлы =====
+
+## docker/api/requirements-api.txt
+
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+sqlalchemy==2.0.23
+alembic==1.12.1
+psycopg[binary]==3.1.13
+redis==5.0.1
+celery==5.3.4
+pydantic==2.5.0
+python-multipart==0.0.6
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+argon2-cffi==23.1.0
+minio==7.2.0
+qdrant-client==1.7.0
+prometheus-client==0.19.0
+structlog==23.2.0
+
+
+## docker/worker/requirements-worker.txt
+
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+sqlalchemy==2.0.23
+alembic==1.12.1
+psycopg[binary]==3.1.13
+redis==5.0.1
+celery==5.3.4
+pydantic==2.5.0
+python-multipart==0.0.6
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+argon2-cffi==23.1.0
+minio==7.2.0
+qdrant-client==1.7.0
+prometheus-client==0.19.0
+structlog==23.2.0
+# ML и обработка документов
+transformers==4.36.0
+torch==2.1.0
+sentence-transformers==2.2.2
+langchain==0.0.350
+langchain-community==0.0.10
+openai==1.3.7
+# OCR и обработка документов
+pytesseract==0.3.10
+pdfplumber==0.10.3
+python-docx==1.1.0
+openpyxl==3.1.2
+Pillow==10.1.0
+# Дополнительные зависимости
+numpy==1.24.3
+pandas==2.1.4
+scikit-learn==1.3.2
+
+
+## docker/emb/requirements-emb.txt
+
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+redis==5.0.1
+qdrant-client==1.7.0
+transformers==4.36.0
+torch==2.1.0
+sentence-transformers==2.2.2
+numpy==1.24.3
+
+
+## docker/llm/requirements-llm.txt
+
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+redis==5.0.1
+transformers==4.36.0
+torch==2.1.0
+langchain==0.0.350
+langchain-community==0.0.10
+openai==1.3.7
+
+

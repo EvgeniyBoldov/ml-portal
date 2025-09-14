@@ -71,5 +71,28 @@ memory_usage_bytes = Gauge("memory_usage_bytes", "Memory usage", ["type"])
 cpu_usage_percent = Gauge("cpu_usage_percent", "CPU usage percentage")
 disk_usage_bytes = Gauge("disk_usage_bytes", "Disk usage", ["path"])
 
+# Admin operations metrics
+admin_operations_total = Counter("admin_operations_total", "Admin operations", ["operation", "status"])
+admin_user_operations_total = Counter("admin_user_operations_total", "Admin user operations", ["action", "status"])
+admin_token_operations_total = Counter("admin_token_operations_total", "Admin token operations", ["action", "status"])
+admin_audit_operations_total = Counter("admin_audit_operations_total", "Admin audit operations", ["action", "status"])
+
+# Rate limiting metrics
+rate_limit_hits_total = Counter("rate_limit_hits_total", "Rate limit hits", ["endpoint", "ip"])
+rate_limit_blocks_total = Counter("rate_limit_blocks_total", "Rate limit blocks", ["endpoint", "ip"])
+
+# Authentication metrics
+auth_attempts_total = Counter("auth_attempts_total", "Authentication attempts", ["method", "result"])
+password_reset_requests_total = Counter("password_reset_requests_total", "Password reset requests", ["status"])
+password_reset_completions_total = Counter("password_reset_completions_total", "Password reset completions", ["status"])
+
+# Email metrics (if enabled)
+email_sent_total = Counter("email_sent_total", "Emails sent", ["type", "status"])
+email_errors_total = Counter("email_errors_total", "Email errors", ["type", "error"])
+
+# CSRF metrics
+csrf_tokens_generated_total = Counter("csrf_tokens_generated_total", "CSRF tokens generated")
+csrf_validation_failures_total = Counter("csrf_validation_failures_total", "CSRF validation failures", ["reason"])
+
 def prometheus_endpoint() -> Response:
     return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)

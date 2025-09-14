@@ -1,26 +1,28 @@
 # app/models/user.py
 from __future__ import annotations
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from datetime import datetime
 import uuid
 
-from sqlalchemy import String, Boolean, Text, DateTime, UniqueConstraint, ForeignKey, Index
-from sqlalchemy.dialects.postgresql import UUID, ENUM as PGEnum
+from sqlalchemy import String, Boolean, Text, DateTime, UniqueConstraint, ForeignKey, Index, CheckConstraint
+from sqlalchemy.dialects.postgresql import UUID, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base
 
-# Use existing Postgres ENUM type created by migrations
-RolesEnum = PGEnum('admin', 'editor', 'reader', name='role_enum', create_type=False)
-
 class Users(Base):
     __tablename__ = "users"
+
+    __table_args__ = (
+        CheckConstraint("role IN ('admin', 'editor', 'reader')", name="ck_users_role"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     login: Mapped[str] = mapped_column(String(255), nullable=False, unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(Text, nullable=False)
-    role: Mapped[str] = mapped_column(RolesEnum, nullable=False, default="reader")
+    role: Mapped[str] = mapped_column(String(20), nullable=False, default="reader")
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default="now()")
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default="now()")
 
@@ -32,6 +34,16 @@ class Users(Base):
     )
     pat_tokens: Mapped[List["UserTokens"]] = relationship(
         back_populates="user",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    password_reset_tokens: Mapped[List["PasswordResetTokens"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    audit_logs: Mapped[List["AuditLogs"]] = relationship(
+        back_populates="actor_user",
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
@@ -48,9 +60,11 @@ class UserTokens(Base):
     )
     token_hash: Mapped[str] = mapped_column(Text, nullable=False)
     name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    scopes: Mapped[Optional[List[str]]] = mapped_column(JSON, nullable=True)
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default="now()")
     last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    revoked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     user: Mapped["Users"] = relationship(back_populates="pat_tokens")
 
@@ -76,3 +90,43 @@ class UserRefreshTokens(Base):
     meta: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON encoded as text
 
     user: Mapped["Users"] = relationship(back_populates="refresh_tokens")
+
+
+class PasswordResetTokens(Base):
+    __tablename__ = "password_reset_tokens"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    token_hash: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default="now()")
+
+    user: Mapped["Users"] = relationship(back_populates="password_reset_tokens")
+
+
+class AuditLogs(Base):
+    __tablename__ = "audit_logs"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default="now()", index=True)
+    actor_user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    action: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    object_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, index=True)
+    object_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
+    meta: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSON, nullable=True)
+    ip: Mapped[Optional[str]] = mapped_column(String(45), nullable=True)  # IPv6 support
+    user_agent: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    request_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
+
+    actor_user: Mapped[Optional["Users"]] = relationship(back_populates="audit_logs")

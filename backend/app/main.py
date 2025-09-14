@@ -18,6 +18,8 @@ from app.api.routers.auth import router as auth_router
 from app.api.routers.chats import router as chats_router
 from app.api.routers.rag import router as rag_router
 from app.api.routers.analyze import router as analyze_router
+from app.api.routers.admin import router as admin_router
+from app.api.routers.password_reset import router as password_reset_router
 
 setup_logging()
 
@@ -116,3 +118,5 @@ app.include_router(auth_router, prefix="/api")
 app.include_router(chats_router, prefix="/api")
 app.include_router(rag_router, prefix="/api")
 app.include_router(analyze_router, prefix="/api")
+app.include_router(admin_router)
+app.include_router(password_reset_router)

@@ -15,7 +15,17 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, Body, Form
 from sqlalchemy.orm import Session
 
-from app.api.deps import db_session
+from app.api.deps import db_session, require_roles, get_current_user
+from app.schemas.admin import UserRole
+
+# RBAC helpers
+def require_editor_or_admin():
+    """Require editor or admin role for write operations."""
+    return require_roles(UserRole.EDITOR, UserRole.ADMIN)
+
+def require_reader_or_above():
+    """Require reader role or above for read operations."""
+    return require_roles(UserRole.READER, UserRole.EDITOR, UserRole.ADMIN)
 from app.core.config import settings
 from app.core.s3_helpers import put_object, presign_get
 from app.repositories.rag_repo import RagRepo
@@ -37,6 +47,7 @@ async def upload_rag_file(
     file: UploadFile = File(...),
     tags: str = Form("[]"),  # JSON string of tags
     session: Session = Depends(db_session),
+    current_user: dict = Depends(require_editor_or_admin()),
 ):
     # Валидация размера файла (50MB)
     MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB
@@ -99,6 +110,7 @@ def list_rag_documents(
     status: Optional[str] = Query(None, description="Filter by status"),
     search: Optional[str] = Query(None, description="Search in document names"),
     session: Session = Depends(db_session),
+    current_user: dict = Depends(require_reader_or_above()),
 ):
     repo = RagRepo(session)
     
@@ -139,6 +151,7 @@ def list_rag_documents(
 def get_rag_document(
     doc_id: str,
     session: Session = Depends(db_session),
+    current_user: dict = Depends(require_reader_or_above()),
 ):
     doc = RagRepo(session).get(doc_id)
     if not doc:
@@ -150,6 +163,7 @@ def download_rag_file(
     doc_id: str,
     kind: str = Query("original", regex="^(original|canonical)$"),
     session: Session = Depends(db_session),
+    current_user: dict = Depends(require_reader_or_above()),
 ):
     repo = RagRepo(session)
     doc = repo.get(doc_id)
@@ -177,6 +191,7 @@ def download_rag_file(
 def get_rag_progress(
     doc_id: str,
     session: Session = Depends(db_session),
+    current_user: dict = Depends(require_reader_or_above()),
 ):
     """Получить прогресс обработки RAG документа"""
     return progress(session, doc_id)
@@ -185,6 +200,7 @@ def get_rag_progress(
 @router.get("/stats")
 def get_rag_stats(
     session: Session = Depends(db_session),
+    current_user: dict = Depends(require_reader_or_above()),
 ):
     """Получить статистику RAG документов"""
     return stats(session)
@@ -193,6 +209,7 @@ def get_rag_stats(
 def archive_rag_document(
     doc_id: str,
     session: Session = Depends(db_session),
+    current_user: dict = Depends(require_editor_or_admin()),
 ):
     doc = RagRepo(session).get(doc_id)
     if not doc:
@@ -209,6 +226,7 @@ def update_rag_document_tags(
     doc_id: str,
     tags: list = Body(...),
     session: Session = Depends(db_session),
+    current_user: dict = Depends(require_editor_or_admin()),
 ):
     doc = RagRepo(session).get(doc_id)
     if not doc:
@@ -224,6 +242,7 @@ def update_rag_document_tags(
 def delete_rag_document(
     doc_id: str,
     session: Session = Depends(db_session),
+    current_user: dict = Depends(require_editor_or_admin()),
 ):
     doc = RagRepo(session).get(doc_id)
     if not doc:
@@ -259,6 +278,7 @@ def search_rag(
     min_score: float = Body(0.0, ge=0.0, le=1.0),
     offset: int = Body(0, ge=0),
     session: Session = Depends(db_session),
+    current_user: dict = Depends(require_reader_or_above()),
 ):
     """Поиск в RAG документах"""
     results = search(session, query, top_k=top_k, offset=offset)
@@ -273,6 +293,7 @@ def search_rag(
 def reindex_rag_document(
     doc_id: str,
     session: Session = Depends(db_session),
+    current_user: dict = Depends(require_editor_or_admin()),
 ):
     """Переиндексация RAG документа"""
     repo = RagRepo(session)
@@ -289,6 +310,7 @@ def reindex_rag_document(
 @router.post("/reindex")
 def reindex_all_rag_documents(
     session: Session = Depends(db_session),
+    current_user: dict = Depends(require_editor_or_admin()),
 ):
     """Массовая переиндексация всех RAG документов"""
     # Получаем все документы со статусом ready
