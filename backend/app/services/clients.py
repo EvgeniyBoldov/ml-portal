@@ -20,12 +20,20 @@ def _timed(name: str):
             external_request_seconds.labels(target=name).observe(dt)
     return _Ctx()
 
-def embed_texts(texts: List[str]) -> List[List[float]]:
-    with _timed("emb"):
-        with httpx.Client(timeout=60) as client:
-            r = client.post(f"{EMB_URL}/embed", json={"inputs": texts})
-            r.raise_for_status()
-            return r.json().get("vectors", [])
+def embed_texts(texts: List[str], profile: str = "rt", models: Optional[List[str]] = None) -> List[List[float]]:
+    """Эмбеддинг текстов через диспетчер или HTTP fallback"""
+    try:
+        # Пробуем использовать новый диспетчер
+        from app.services.embedding_dispatcher import embed_texts_dispatcher
+        return embed_texts_dispatcher(texts, profile, models)
+    except Exception as e:
+        print(f"Dispatcher failed, falling back to HTTP: {e}")
+        # Fallback на старый HTTP API
+        with _timed("emb"):
+            with httpx.Client(timeout=60) as client:
+                r = client.post(f"{EMB_URL}/embed", json={"inputs": texts})
+                r.raise_for_status()
+                return r.json().get("vectors", [])
 
 def llm_chat(messages: List[Dict[str, str]], temperature: float = 0.2, max_tokens: Optional[int] = None) -> str:
     """Обычный чат с LLM (не стриминг)"""
@@ -34,24 +42,36 @@ def llm_chat(messages: List[Dict[str, str]], temperature: float = 0.2, max_token
         payload["max_tokens"] = max_tokens
     with _timed("llm"):
         with httpx.Client(timeout=120) as client:
-            r = client.post(f"{LLM_URL}/v1/chat/completions", json=payload)
+            r = client.post(f"{LLM_URL}/chat", json=payload)
             r.raise_for_status()
-            # Обрабатываем стриминг ответ
-            content = ""
-            for line in r.text.split('\n'):
-                if line.startswith('data: '):
-                    data = line[6:]  # Убираем "data: "
-                    if data.strip() == "[DONE]":
-                        break
-                    try:
-                        chunk = r.json() if not line.startswith('data: ') else __import__('json').loads(data)
-                        if "choices" in chunk and len(chunk["choices"]) > 0:
-                            delta = chunk["choices"][0].get("delta", {})
-                            chunk_content = delta.get("content", "")
-                            if chunk_content:
-                                content += chunk_content
-                    except:
-                        continue
+            
+            # Проверяем, является ли ответ стримингом или обычным JSON
+            content_type = r.headers.get("content-type", "")
+            if "text/event-stream" in content_type:
+                # Обрабатываем стриминг ответ
+                content = ""
+                for line in r.text.split('\n'):
+                    if line.startswith('data: '):
+                        data = line[6:]  # Убираем "data: "
+                        if data.strip() == "[DONE]":
+                            break
+                        try:
+                            chunk = r.json() if not line.startswith('data: ') else __import__('json').loads(data)
+                            if "choices" in chunk and len(chunk["choices"]) > 0:
+                                delta = chunk["choices"][0].get("delta", {})
+                                chunk_content = delta.get("content", "")
+                                if chunk_content:
+                                    content += chunk_content
+                        except:
+                            continue
+            else:
+                # Обрабатываем обычный JSON ответ (заглушка)
+                try:
+                    data = r.json()
+                    content = data.get("content", "")
+                except:
+                    content = r.text
+                    
             return content
 
 async def llm_chat_stream(messages: List[Dict[str, str]], temperature: float = 0.2, max_tokens: Optional[int] = None):

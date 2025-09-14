@@ -23,9 +23,14 @@ class settings:
     EMB_URL = _env("EMB_URL") or _env("EMB.URL") or "http://emb:8001"
 
     # Auth
-    JWT_SECRET = os.getenv("JWT_SECRET", "dev-secret")
-    ACCESS_TTL_SECONDS = int(os.getenv("ACCESS_TTL_SECONDS", "3600"))
-    REFRESH_TTL_DAYS = int(os.getenv("REFRESH_TTL_DAYS", "30"))
+    JWT_SECRET = os.getenv("JWT_SECRET")
+    if not JWT_SECRET:
+        import secrets
+        JWT_SECRET = secrets.token_urlsafe(32)
+        print("⚠️  WARNING: JWT_SECRET not set, using random secret. Set JWT_SECRET env var for production!")
+    
+    ACCESS_TTL_SECONDS = int(os.getenv("ACCESS_TTL_SECONDS", "900"))  # 15 минут вместо 1 часа
+    REFRESH_TTL_DAYS = int(os.getenv("REFRESH_TTL_DAYS", "7"))  # 7 дней вместо 30
     REFRESH_ROTATING = (str(os.getenv("REFRESH_ROTATING", "true")).lower() in ("1","true","yes"))
 
     # S3 / MinIO

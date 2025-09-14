@@ -11,6 +11,8 @@ A comprehensive AI-powered platform for document management, chat interactions, 
 - **🏷️ Tagging System**: Organize chats and documents with custom tags
 - **🔍 Advanced Search**: Semantic search across document collections
 - **📈 Analytics & Metrics**: Comprehensive statistics and usage analytics
+- **🤖 Advanced Embedding System**: Scalable embedding dispatcher with model registry and MinIO caching
+- **📦 Model Management**: Download and manage ML models from HuggingFace
 
 ### Technical Features
 - **🌙 Dark/Light Theme**: Automatic theme detection with manual override
@@ -308,6 +310,69 @@ The application uses structured JSON logging with the following format:
 - **Database**: Read replicas for read-heavy operations
 - **Caching**: Redis cluster for distributed caching
 - **Storage**: S3-compatible storage for file persistence
+
+## 🛠️ Development Commands
+
+### Quick Start
+```bash
+# Build and start all services
+make build-local
+make up-local
+
+# Initialize models bucket
+make init-models
+
+# Download popular embedding models
+make download-popular
+
+# Test embedding system
+make demo-embedding
+```
+
+### Code Generation
+```bash
+# Generate code files
+make gen-backend    # Backend code in back.txt
+make gen-frontend   # Frontend code in front.txt
+make gen-all        # All code
+make gen-docs       # Architecture documentation
+```
+
+### Model Management
+```bash
+# Download models from HuggingFace
+make download-models      # Show usage examples
+make download-model       # Download specific model (e.g., BAAI/bge-3m)
+make list-models          # Show downloaded models
+
+# Direct usage
+python scripts/download_model.py BAAI/bge-3m --test --info
+python scripts/download_models.py sentence-transformers/all-MiniLM-L6-v2 --test
+python scripts/download_models.py intfloat/e5-large-v2 --include "*.safetensors"
+```
+
+### System Management
+```bash
+# Services
+make up-local       # Start local stack
+make down-local     # Stop local stack
+make logs           # Show all logs
+make status         # Show service status
+
+# Embedding system
+make test-embedding # Test embedding system
+make demo-embedding # Demo embedding system
+make logs-embedding # Show embedding worker logs
+```
+
+### Utilities
+```bash
+# Cleanup
+make clean          # Clean images and volumes
+
+# Testing
+make test-local     # Run tests in containers
+```
 
 ## 🤝 Contributing
 

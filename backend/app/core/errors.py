@@ -3,7 +3,7 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 from fastapi import status
 from typing import Any, Optional, Dict
-# from .logging import request_id_ctx
+from .request_id import get_request_id
 
 class APIError(Exception):
     def __init__(self, code: str, message: str, *, http_status: int = 400, details: Optional[Dict[str, Any]] = None):
@@ -15,7 +15,7 @@ class APIError(Exception):
 def format_error_payload(code: str, message: str, details: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     return {
         "error": {"code": code, "message": message, "details": details or {}},
-        "request_id": None,  # request_id_ctx.get(),
+        "request_id": get_request_id(),
     }
 
 async def http_exception_handler(request: Request, exc: APIError):

@@ -1,1 +1,40 @@
+# Dependencies
 /frontend/node_modules/
+
+# Generated files
+back.txt
+front.txt
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Models (too large for git)
+models/
+*.bin
+*.safetensors
+*.h5
+*.onnx
+
+# Docker volumes
+postgres_data/
+qdrant_data/
+minio_data/
+models-cache/

@@ -1,0 +1,3 @@
+# Requirements for scripts
+huggingface_hub>=0.16.0
+boto3>=1.26.0

@@ -12,6 +12,8 @@ from app.core.redis import get_redis
 from app.core.qdrant import get_qdrant
 from app.core.s3 import get_minio
 from app.core.idempotency import IdempotencyMiddleware
+from app.core.request_id import RequestIDMiddleware
+from app.core.security_headers import SecurityHeadersMiddleware
 from app.api.routers.auth import router as auth_router
 from app.api.routers.chats import router as chats_router
 from app.api.routers.rag import router as rag_router
@@ -21,23 +23,38 @@ setup_logging()
 
 app = FastAPI(title="API")
 
+app.add_middleware(RequestIDMiddleware)
+app.add_middleware(SecurityHeadersMiddleware, environment=os.getenv("ENVIRONMENT", "development"))
 app.add_middleware(IdempotencyMiddleware)
 
 if os.getenv("CORS_ENABLED", "1") not in {"0", "false", "False"}:
     origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",")]
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=origins if origins != ["*"] else ["*"],
-        allow_credentials=True,
-        allow_methods=[m.strip() for m in os.getenv("CORS_METHODS", "*").split(",")] if os.getenv("CORS_METHODS") else ["*"],
-        allow_headers=[h.strip() for h in os.getenv("CORS_HEADERS", "*").split(",")] if os.getenv("CORS_HEADERS") else ["*"],
-        expose_headers=[h.strip() for h in os.getenv("CORS_EXPOSE_HEADERS", "").split(",")] if os.getenv("CORS_EXPOSE_HEADERS") else [],
-        max_age=int(os.getenv("CORS_MAX_AGE", "600")),
-    )
+    # В DEV разрешаем все origins, в PROD - только явно указанные
+    is_dev = os.getenv("ENVIRONMENT", "development") == "development"
+    
+    if is_dev or origins == ["*"]:
+        # DEV режим - разрешаем все origins, но без credentials
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=["*"],
+            allow_credentials=False,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
+    else:
+        # PROD режим - только указанные origins с credentials
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=origins,
+            allow_credentials=True,
+            allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+            allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
+        )
 
 install_exception_handlers(app)
 
 @app.get("/healthz")
+@app.get("/health")  # Алиас для совместимости с тестами
 async def healthz(deep: int | None = None):
     if settings.HEALTH_DEEP or deep == 1:
         try:

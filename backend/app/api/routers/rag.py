@@ -254,16 +254,20 @@ def delete_rag_document(
 
 @router.post("/search")
 def search_rag(
-    text: str = Body(..., description="Search query"),
+    query: str = Body(..., description="Search query"),
     top_k: int = Body(10, ge=1, le=100),
     min_score: float = Body(0.0, ge=0.0, le=1.0),
+    offset: int = Body(0, ge=0),
     session: Session = Depends(db_session),
 ):
     """Поиск в RAG документах"""
-    results = search(session, text, top_k=top_k)
+    results = search(session, query, top_k=top_k, offset=offset)
     # Фильтруем по min_score на уровне приложения
     filtered_results = [r for r in results.get("results", []) if r.get("score", 0) >= min_score]
-    return {"items": filtered_results}
+    return {
+        "results": filtered_results,
+        "next_offset": results.get("next_offset")
+    }
 
 @router.post("/{doc_id}/reindex")
 def reindex_rag_document(
