@@ -1,6 +1,10 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { adminApi, type User, type UserListResponse } from '../../../shared/api/admin';
+import {
+  adminApi,
+  type User,
+  type UserListResponse,
+} from '../../../shared/api/admin';
 import { Table, type TableColumn } from '../../../shared/ui/Table';
 import { RoleBadge, StatusBadge } from '../../../shared/ui/RoleBadge';
 import Button from '../../../shared/ui/Button';
@@ -21,7 +25,7 @@ export function UsersPage() {
   const [total, setTotal] = useState(0);
   const [hasMore, setHasMore] = useState(false);
   const [nextCursor, setNextCursor] = useState<string | undefined>();
-  const [currentCursor, setCurrentCursor] = useState<string | undefined>();
+  const [, setCurrentCursor] = useState<string | undefined>();
 
   // Filters
   const [query, setQuery] = useState('');
@@ -31,37 +35,40 @@ export function UsersPage() {
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
 
   // Load users
-  const loadUsers = useCallback(async (cursor?: string, reset = false) => {
-    try {
-      setLoading(true);
-      
-      const params = {
-        query: query || undefined,
-        role: roleFilter || undefined,
-        is_active: statusFilter ? statusFilter === 'active' : undefined,
-        limit: 20,
-        cursor,
-      };
+  const loadUsers = useCallback(
+    async (cursor?: string, reset = false) => {
+      try {
+        setLoading(true);
 
-      const response: UserListResponse = await adminApi.getUsers(params);
-      
-      if (reset) {
-        setUsers(response.users);
-        setCurrentCursor(undefined);
-      } else {
-        setUsers(prev => [...prev, ...response.users]);
+        const params = {
+          query: query || undefined,
+          role: roleFilter || undefined,
+          is_active: statusFilter ? statusFilter === 'active' : undefined,
+          limit: 20,
+          cursor,
+        };
+
+        const response: UserListResponse = await adminApi.getUsers(params);
+
+        if (reset) {
+          setUsers(response.users);
+          setCurrentCursor(undefined);
+        } else {
+          setUsers(prev => [...prev, ...response.users]);
+        }
+
+        setTotal(response.total || 0);
+        setHasMore(response.has_more);
+        setNextCursor(response.next_cursor);
+      } catch (error) {
+        console.error('Failed to load users:', error);
+        showError('Failed to load users. Please try again.');
+      } finally {
+        setLoading(false);
       }
-      
-      setTotal(response.total);
-      setHasMore(response.has_more);
-      setNextCursor(response.next_cursor);
-    } catch (error) {
-      console.error('Failed to load users:', error);
-      showError('Failed to load users. Please try again.');
-    } finally {
-      setLoading(false);
-    }
-  }, [query, roleFilter, statusFilter, showError]);
+    },
+    [query, roleFilter, statusFilter, showError]
+  );
 
   // Load more users
   const loadMore = useCallback(() => {
@@ -82,38 +89,53 @@ export function UsersPage() {
   }, [loadUsers]);
 
   // Handle sort
-  const handleSort = useCallback((column: string, order: 'asc' | 'desc') => {
-    setSortBy(column);
-    setSortOrder(order);
-    loadUsers(undefined, true);
-  }, [loadUsers]);
+  const handleSort = useCallback(
+    (column: string, order: 'asc' | 'desc') => {
+      setSortBy(column);
+      setSortOrder(order);
+      loadUsers(undefined, true);
+    },
+    [loadUsers]
+  );
 
   // Handle user actions
-  const handleToggleUserStatus = useCallback(async (user: User) => {
-    try {
-      await adminApi.updateUser(user.id, { is_active: !user.is_active });
-      showSuccess(`User ${user.login} ${user.is_active ? 'deactivated' : 'activated'} successfully`);
-      refreshUsers();
-    } catch (error) {
-      console.error('Failed to toggle user status:', error);
-      showError('Failed to update user status. Please try again.');
-    }
-  }, [showSuccess, showError, refreshUsers]);
+  const handleToggleUserStatus = useCallback(
+    async (user: User) => {
+      try {
+        await adminApi.updateUser(user.id, { is_active: !user.is_active });
+        showSuccess(
+          `User ${user.login} ${user.is_active ? 'deactivated' : 'activated'} successfully`
+        );
+        refreshUsers();
+      } catch (error) {
+        console.error('Failed to toggle user status:', error);
+        showError('Failed to update user status. Please try again.');
+      }
+    },
+    [showSuccess, showError, refreshUsers]
+  );
 
-  const handleDeleteUser = useCallback(async (user: User) => {
-    if (!window.confirm(`Are you sure you want to deactivate user ${user.login}?`)) {
-      return;
-    }
+  const handleDeleteUser = useCallback(
+    async (user: User) => {
+      if (
+        !window.confirm(
+          `Are you sure you want to deactivate user ${user.login}?`
+        )
+      ) {
+        return;
+      }
 
-    try {
-      await adminApi.deleteUser(user.id);
-      showSuccess(`User ${user.login} deactivated successfully`);
-      refreshUsers();
-    } catch (error) {
-      console.error('Failed to delete user:', error);
-      showError('Failed to deactivate user. Please try again.');
-    }
-  }, [showSuccess, showError, refreshUsers]);
+      try {
+        await adminApi.deleteUser(user.id);
+        showSuccess(`User ${user.login} deactivated successfully`);
+        refreshUsers();
+      } catch (error) {
+        console.error('Failed to delete user:', error);
+        showError('Failed to deactivate user. Please try again.');
+      }
+    },
+    [showSuccess, showError, refreshUsers]
+  );
 
   // Load users on mount and when filters change
   useEffect(() => {
@@ -128,7 +150,7 @@ export function UsersPage() {
       dataIndex: 'login',
       sortable: true,
       render: (value, record) => (
-        <Link 
+        <Link
           to={`/admin/users/${record.id}`}
           className="text-primary hover:text-primary-dark font-medium"
         >
@@ -141,27 +163,27 @@ export function UsersPage() {
       title: 'Role',
       dataIndex: 'role',
       sortable: true,
-      render: (value) => <RoleBadge role={value as any} />,
+      render: value => <RoleBadge role={value as any} />,
     },
     {
       key: 'email',
       title: 'Email',
       dataIndex: 'email',
-      render: (value) => value || <span className="text-text-tertiary">—</span>,
+      render: value => value || <span className="text-text-tertiary">—</span>,
     },
     {
       key: 'is_active',
       title: 'Status',
       dataIndex: 'is_active',
       sortable: true,
-      render: (value) => <StatusBadge active={value} />,
+      render: value => <StatusBadge active={value} />,
     },
     {
       key: 'created_at',
       title: 'Created',
       dataIndex: 'created_at',
       sortable: true,
-      render: (value) => new Date(value).toLocaleDateString(),
+      render: value => new Date(value).toLocaleDateString(),
     },
     {
       key: 'actions',
@@ -214,8 +236,8 @@ export function UsersPage() {
           <Input
             placeholder="Search by login or email..."
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyPress={(e) => e.key === 'Enter' && handleSearch()}
+            onChange={e => setQuery(e.target.value)}
+            onKeyPress={e => e.key === 'Enter' && handleSearch()}
           />
         </div>
 
@@ -223,7 +245,7 @@ export function UsersPage() {
           <label className={styles.filterLabel}>Role</label>
           <Select
             value={roleFilter}
-            onChange={(e) => setRoleFilter(e.target.value)}
+            onChange={e => setRoleFilter(e.target.value)}
           >
             <option value="">All Roles</option>
             <option value="admin">Admin</option>
@@ -236,7 +258,7 @@ export function UsersPage() {
           <label className={styles.filterLabel}>Status</label>
           <Select
             value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
+            onChange={e => setStatusFilter(e.target.value)}
           >
             <option value="">All Status</option>
             <option value="active">Active</option>
@@ -248,7 +270,7 @@ export function UsersPage() {
           <Button onClick={handleSearch} variant="outline">
             Search
           </Button>
-          <Button 
+          <Button
             onClick={() => {
               setQuery('');
               setRoleFilter('');
@@ -300,11 +322,7 @@ export function UsersPage() {
               Showing {users.length} of {total} users
             </div>
             <div className={styles.paginationControls}>
-              <Button
-                onClick={loadMore}
-                disabled={loading}
-                variant="outline"
-              >
+              <Button onClick={loadMore} disabled={loading} variant="outline">
                 {loading ? 'Loading...' : 'Load More'}
               </Button>
             </div>

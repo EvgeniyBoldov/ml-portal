@@ -69,7 +69,7 @@ export function EmailSettingsPage() {
     if (!status.email_enabled) {
       return { className: styles.disabled, text: 'Disabled' };
     }
-    
+
     switch (status.email_status) {
       case 'ok':
         return { className: styles.enabled, text: 'Enabled' };
@@ -105,16 +105,16 @@ export function EmailSettingsPage() {
         <div className={styles.statusInfo}>
           <div className={styles.statusItem}>
             <div className={styles.statusLabel}>Email Enabled</div>
-            <div className={`${styles.statusValue} ${styles.boolean} ${status.email_enabled ? styles.true : styles.false}`}>
+            <div
+              className={`${styles.statusValue} ${styles.boolean} ${status.email_enabled ? styles.true : styles.false}`}
+            >
               {status.email_enabled ? 'Yes' : 'No'}
             </div>
           </div>
 
           <div className={styles.statusItem}>
             <div className={styles.statusLabel}>Email Status</div>
-            <div className={styles.statusValue}>
-              {status.email_status}
-            </div>
+            <div className={styles.statusValue}>{status.email_status}</div>
           </div>
 
           <div className={styles.statusItem}>
@@ -138,33 +138,38 @@ export function EmailSettingsPage() {
         <h3 className={styles.infoTitle}>Email Configuration</h3>
         <div className={styles.infoContent}>
           <p>
-            Email functionality is controlled by environment variables and system configuration.
-            The following settings determine how email features work in the system:
+            Email functionality is controlled by environment variables and
+            system configuration. The following settings determine how email
+            features work in the system:
           </p>
-          
+
           <ul className={styles.infoList}>
             <li className={styles.infoListItem}>
               <span className={styles.infoListIcon}>📧</span>
               <span className={styles.infoListText}>
-                <strong>EMAIL_ENABLED</strong> - Master switch for email functionality
+                <strong>EMAIL_ENABLED</strong> - Master switch for email
+                functionality
               </span>
             </li>
             <li className={styles.infoListItem}>
               <span className={styles.infoListIcon}>🔧</span>
               <span className={styles.infoListText}>
-                <strong>SMTP Settings</strong> - SMTP server configuration for sending emails
+                <strong>SMTP Settings</strong> - SMTP server configuration for
+                sending emails
               </span>
             </li>
             <li className={styles.infoListItem}>
               <span className={styles.infoListIcon}>🔐</span>
               <span className={styles.infoListText}>
-                <strong>Authentication</strong> - SMTP username and password for server access
+                <strong>Authentication</strong> - SMTP username and password for
+                server access
               </span>
             </li>
             <li className={styles.infoListItem}>
               <span className={styles.infoListIcon}>🛡️</span>
               <span className={styles.infoListText}>
-                <strong>TLS/SSL</strong> - Secure connection settings for email transmission
+                <strong>TLS/SSL</strong> - Secure connection settings for email
+                transmission
               </span>
             </li>
           </ul>
@@ -174,13 +179,9 @@ export function EmailSettingsPage() {
       {/* Warning for disabled email */}
       {!status.email_enabled && (
         <div className={styles.warningCard}>
-          <h3 className={styles.warningTitle}>
-            ⚠️ Email System Disabled
-          </h3>
+          <h3 className={styles.warningTitle}>⚠️ Email System Disabled</h3>
           <div className={styles.warningContent}>
-            <p>
-              Email functionality is currently disabled. This means:
-            </p>
+            <p>Email functionality is currently disabled. This means:</p>
             <ul className={styles.infoList}>
               <li className={styles.infoListItem}>
                 <span className={styles.infoListIcon}>❌</span>
@@ -202,8 +203,8 @@ export function EmailSettingsPage() {
               </li>
             </ul>
             <p>
-              To enable email functionality, configure the EMAIL_ENABLED environment variable
-              and provide valid SMTP settings.
+              To enable email functionality, configure the EMAIL_ENABLED
+              environment variable and provide valid SMTP settings.
             </p>
           </div>
         </div>
@@ -215,28 +216,44 @@ export function EmailSettingsPage() {
         <div className={styles.metricsGrid}>
           <div className={styles.metricItem}>
             <div className={styles.metricValue}>
-              {loading ? <Skeleton width={60} height={32} /> : status.total_users}
+              {loading ? (
+                <Skeleton width={60} height={32} />
+              ) : (
+                status.total_users
+              )}
             </div>
             <div className={styles.metricLabel}>Total Users</div>
           </div>
 
           <div className={styles.metricItem}>
             <div className={styles.metricValue}>
-              {loading ? <Skeleton width={60} height={32} /> : status.active_users}
+              {loading ? (
+                <Skeleton width={60} height={32} />
+              ) : (
+                status.active_users
+              )}
             </div>
             <div className={styles.metricLabel}>Active Users</div>
           </div>
 
           <div className={styles.metricItem}>
             <div className={styles.metricValue}>
-              {loading ? <Skeleton width={60} height={32} /> : status.total_tokens}
+              {loading ? (
+                <Skeleton width={60} height={32} />
+              ) : (
+                status.total_tokens
+              )}
             </div>
             <div className={styles.metricLabel}>Total Tokens</div>
           </div>
 
           <div className={styles.metricItem}>
             <div className={styles.metricValue}>
-              {loading ? <Skeleton width={60} height={32} /> : status.active_tokens}
+              {loading ? (
+                <Skeleton width={60} height={32} />
+              ) : (
+                status.active_tokens
+              )}
             </div>
             <div className={styles.metricLabel}>Active Tokens</div>
           </div>
@@ -244,7 +261,13 @@ export function EmailSettingsPage() {
       </div>
 
       {/* Actions */}
-      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 'var(--spacing-md)' }}>
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'flex-end',
+          gap: 'var(--spacing-md)',
+        }}
+      >
         <Button onClick={handleRefresh} variant="outline">
           Refresh Status
         </Button>

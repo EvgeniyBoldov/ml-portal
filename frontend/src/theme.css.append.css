@@ -8,5 +8,10 @@
   cursor: pointer;
   vertical-align: middle;
 }
-.icon:hover { background: rgba(255,255,255,.06); color: var(--text); }
-.icon:active { transform: translateY(1px); }
+.icon:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+}
+.icon:active {
+  transform: translateY(1px);
+}

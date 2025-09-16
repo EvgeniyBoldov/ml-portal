@@ -165,7 +165,7 @@
     background: var(--color-background-dark);
     border-color: var(--color-border-dark);
   }
-  
+
   .toastClose:hover {
     background: var(--color-surface-dark);
   }
@@ -179,7 +179,7 @@
     left: var(--spacing-sm);
     max-width: none;
   }
-  
+
   .toast {
     padding: var(--spacing-sm);
   }

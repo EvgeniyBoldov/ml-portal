@@ -57,22 +57,22 @@
     background: var(--color-danger-dark);
     color: var(--color-danger-light);
   }
-  
+
   .badge.editor {
     background: var(--color-warning-dark);
     color: var(--color-warning-light);
   }
-  
+
   .badge.reader {
     background: var(--color-info-dark);
     color: var(--color-info-light);
   }
-  
+
   .badge.inactive {
     background: var(--color-surface-dark);
     color: var(--color-text-secondary);
   }
-  
+
   .badge.active {
     background: var(--color-success-dark);
     color: var(--color-success-light);

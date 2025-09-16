@@ -1,12 +1,12 @@
-import React from 'react'
-import { useChat } from '../contexts/ChatContext'
-import styles from './ChatStatus.module.css'
+import React from 'react';
+import { useChat } from '../contexts/ChatContext';
+import styles from './ChatStatus.module.css';
 
 export default function ChatStatus() {
-  const { state } = useChat()
-  const { error, isLoading } = state
+  const { state } = useChat();
+  const { error, isLoading } = state;
 
-  if (!error && !isLoading) return null
+  if (!error && !isLoading) return null;
 
   return (
     <div className={styles.statusBar}>
@@ -16,11 +16,7 @@ export default function ChatStatus() {
           Загрузка...
         </div>
       )}
-      {error && (
-        <div className={styles.error}>
-          ⚠️ {error}
-        </div>
-      )}
+      {error && <div className={styles.error}>⚠️ {error}</div>}
     </div>
-  )
+  );
 }

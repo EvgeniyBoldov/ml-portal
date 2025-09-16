@@ -1,0 +1,1 @@
+import{j as s}from"./index-FkM6qUsl.js";const p="_input_1ghpu_1",u="_error_1ghpu_15",r={input:p,error:u};function i({error:t,className:n,...o}){return s.jsx("input",{...o,className:[r.input,t?r.error:"",n||""].join(" ")})}export{i as I};

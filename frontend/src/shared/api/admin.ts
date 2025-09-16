@@ -2,7 +2,7 @@
  * Admin API client
  */
 import { apiFetch } from '../lib/apiFetch';
-import type { ApiResponse, PaginatedResponse } from './types';
+// import type { ApiResponse, PaginatedResponse } from './types';
 
 // Types
 export interface User {
@@ -113,17 +113,20 @@ export interface SystemStatus {
 // API functions
 export const adminApi = {
   // Users
-  async getUsers(params: {
-    query?: string;
-    role?: string;
-    is_active?: boolean;
-    limit?: number;
-    cursor?: string;
-  } = {}): Promise<UserListResponse> {
+  async getUsers(
+    params: {
+      query?: string;
+      role?: string;
+      is_active?: boolean;
+      limit?: number;
+      cursor?: string;
+    } = {}
+  ): Promise<UserListResponse> {
     const searchParams = new URLSearchParams();
     if (params.query) searchParams.set('query', params.query);
     if (params.role) searchParams.set('role', params.role);
-    if (params.is_active !== undefined) searchParams.set('is_active', String(params.is_active));
+    if (params.is_active !== undefined)
+      searchParams.set('is_active', String(params.is_active));
     if (params.limit) searchParams.set('limit', String(params.limit));
     if (params.cursor) searchParams.set('cursor', params.cursor);
 
@@ -134,7 +137,9 @@ export const adminApi = {
     return apiFetch(`/api/admin/users/${id}`);
   },
 
-  async createUser(user: UserCreate): Promise<{ user: User; password?: string }> {
+  async createUser(
+    user: UserCreate
+  ): Promise<{ user: User; password?: string }> {
     return apiFetch('/api/admin/users', {
       method: 'POST',
       body: JSON.stringify(user),
@@ -154,7 +159,10 @@ export const adminApi = {
     });
   },
 
-  async resetUserPassword(id: string, passwordData: PasswordChange): Promise<{ password?: string }> {
+  async resetUserPassword(
+    id: string,
+    passwordData: PasswordChange
+  ): Promise<{ password?: string }> {
     return apiFetch(`/api/admin/users/${id}/password`, {
       method: 'POST',
       body: JSON.stringify(passwordData),
@@ -166,7 +174,10 @@ export const adminApi = {
     return apiFetch(`/api/admin/users/${userId}/tokens`);
   },
 
-  async createUserToken(userId: string, token: TokenCreate): Promise<TokenResponse> {
+  async createUserToken(
+    userId: string,
+    token: TokenCreate
+  ): Promise<TokenResponse> {
     return apiFetch(`/api/admin/users/${userId}/tokens`, {
       method: 'POST',
       body: JSON.stringify(token),
@@ -180,17 +191,20 @@ export const adminApi = {
   },
 
   // Audit
-  async getAuditLogs(params: {
-    actor_user_id?: string;
-    action?: string;
-    object_type?: string;
-    start_date?: string;
-    end_date?: string;
-    limit?: number;
-    cursor?: string;
-  } = {}): Promise<AuditLogListResponse> {
+  async getAuditLogs(
+    params: {
+      actor_user_id?: string;
+      action?: string;
+      object_type?: string;
+      start_date?: string;
+      end_date?: string;
+      limit?: number;
+      cursor?: string;
+    } = {}
+  ): Promise<AuditLogListResponse> {
     const searchParams = new URLSearchParams();
-    if (params.actor_user_id) searchParams.set('actor_user_id', params.actor_user_id);
+    if (params.actor_user_id)
+      searchParams.set('actor_user_id', params.actor_user_id);
     if (params.action) searchParams.set('action', params.action);
     if (params.object_type) searchParams.set('object_type', params.object_type);
     if (params.start_date) searchParams.set('start_date', params.start_date);
@@ -207,14 +221,19 @@ export const adminApi = {
   },
 
   // Password reset
-  async requestPasswordReset(loginOrEmail: string): Promise<{ message: string }> {
+  async requestPasswordReset(
+    loginOrEmail: string
+  ): Promise<{ message: string }> {
     return apiFetch('/auth/password/forgot', {
       method: 'POST',
       body: JSON.stringify({ login_or_email: loginOrEmail }),
     });
   },
 
-  async resetPassword(token: string, newPassword: string): Promise<{ message: string }> {
+  async resetPassword(
+    token: string,
+    newPassword: string
+  ): Promise<{ message: string }> {
     return apiFetch('/auth/password/reset', {
       method: 'POST',
       body: JSON.stringify({ token, new_password: newPassword }),

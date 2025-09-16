@@ -1,10 +1,10 @@
-import { useAuthStore } from '@/entities/auth/model/auth.store'
+import { useAuthStore } from '@/entities/auth/model/auth.store';
 
-export type User = { id: string; login?: string; fio?: string; role?: string }
+export type User = { id: string; login?: string; fio?: string; role?: string };
 
 export const useAuth = () => {
-  const authStore = useAuthStore()
-  
+  const authStore = useAuthStore();
+
   return {
     user: authStore.user,
     loading: false, // authStore doesn't have loading state
@@ -12,12 +12,12 @@ export const useAuth = () => {
     login: authStore.login,
     fetchMe: async () => {
       try {
-        await authStore.hydrate()
-        return authStore.user
+        await authStore.hydrate();
+        return authStore.user;
       } catch {
-        return null
+        return null;
       }
     },
-    logout: authStore.logout
-  }
-}
+    logout: authStore.logout,
+  };
+};

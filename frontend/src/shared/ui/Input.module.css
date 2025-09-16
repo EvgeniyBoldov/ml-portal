@@ -1,10 +1,17 @@
 .input {
   background: var(--panel);
-  border: 1px solid rgba(255,255,255,.12);
+  border: 1px solid rgba(255, 255, 255, 0.12);
   color: var(--text);
   padding: 10px 12px;
   border-radius: 10px;
   outline: none;
 }
-.input::placeholder { color: var(--muted); }
-.input:focus { border-color: var(--primary); }
+.input::placeholder {
+  color: var(--muted);
+}
+.input:focus {
+  border-color: var(--primary);
+}
+.input.error {
+  border-color: var(--danger);
+}

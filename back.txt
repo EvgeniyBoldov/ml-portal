@@ -223,6 +223,7 @@ from app.api.routers.rag import router as rag_router
 from app.api.routers.analyze import router as analyze_router
 from app.api.routers.admin import router as admin_router
 from app.api.routers.password_reset import router as password_reset_router
+from app.api.routers.setup import router as setup_router
 
 setup_logging()
 
@@ -266,7 +267,15 @@ async def healthz(deep: int | None = None):
             with engine.connect() as conn:
                 conn.execute(text("SELECT 1"))
             await get_redis().ping()
-            get_qdrant().get_collections()
+            # Qdrant health check - use a simple ping instead of get_collections
+            try:
+                get_qdrant().get_collections()
+            except Exception:
+                # If get_collections fails, try a simple ping
+                import requests
+                response = requests.get(f"{settings.QDRANT_URL}/health", timeout=5)
+                if response.status_code != 200:
+                    raise Exception(f"Qdrant health check failed: {response.status_code}")
             get_minio().list_buckets()
         except Exception as e:
             return {"ok": False, "error": str(e)}
@@ -323,6 +332,7 @@ app.include_router(rag_router, prefix="/api")
 app.include_router(analyze_router, prefix="/api")
 app.include_router(admin_router)
 app.include_router(password_reset_router)
+app.include_router(setup_router)
 
 # ===== tests/conftest.py =====
 import pytest
@@ -6237,6 +6247,7 @@ class UserResponse(UserBase):
     id: str
     created_at: datetime
     updated_at: datetime
+    require_password_change: bool = False
     
     class Config:
         from_attributes = True
@@ -7167,23 +7178,27 @@ def start_ingest_chain(doc_id: str) -> None:
 
 
 def search(session: Session, query: str, top_k: int = 5, *, offset: int = 0, doc_id: Optional[str] = None, tags: Optional[list] = None, sort_by: str = "score_desc") -> Dict[str, Any]:
-    vectors = clients.embed_texts([query])
-    if not vectors:
-        return {"results": [], "next_offset": None}
-    vec = vectors[0]
-    hits = clients.qdrant_search(vec, top_k=top_k, offset=offset, doc_id=doc_id, tags=tags, sort_by=sort_by)
-    out = []
-    for h in hits:
-        payload = h.get("payload") or {}
-        out.append({
-            "score": h["score"],
-            "text": payload.get("text"),
-            "doc_id": payload.get("document_id"),
-            "chunk_idx": payload.get("chunk_idx"),
-            "tags": payload.get("tags") or [],
-        })
-    next_offset = offset + len(out) if len(out) == top_k else None
-    return {"results": out, "next_offset": next_offset}
+    try:
+        vectors = clients.embed_texts([query])
+        if not vectors:
+            return {"results": [], "next_offset": None}
+        vec = vectors[0]
+        hits = clients.qdrant_search(vec, top_k=top_k, offset=offset, doc_id=doc_id, tags=tags, sort_by=sort_by)
+        out = []
+        for h in hits:
+            payload = h.get("payload") or {}
+            out.append({
+                "score": h["score"],
+                "text": payload.get("text"),
+                "doc_id": payload.get("document_id"),
+                "chunk_idx": payload.get("chunk_idx"),
+                "tags": payload.get("tags") or [],
+            })
+        next_offset = offset + len(out) if len(out) == top_k else None
+        return {"results": out, "next_offset": next_offset}
+    except Exception as e:
+        # Если сервисы эмбеддингов недоступны, возвращаем пустой результат
+        return {"results": [], "next_offset": None, "error": "Embedding service unavailable"}
 
 
 def progress(session: Session, doc_id: str) -> Dict[str, Any]:
@@ -8982,6 +8997,97 @@ async def reset_password(
 
 # ===== app/api/routers/__init__.py =====
 
+# ===== app/api/routers/setup.py =====
+"""
+Setup endpoints for local development
+"""
+from fastapi import APIRouter, HTTPException, Depends
+from sqlalchemy.orm import Session
+from app.core.db import get_session
+from app.repositories.users_repo import UsersRepo
+from app.core.security import hash_password
+from app.schemas.admin import UserCreate, UserResponse
+from app.models.user import Users
+import logging
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/api/setup", tags=["setup"])
+
+
+@router.post("/create-superuser", response_model=UserResponse)
+async def create_superuser(
+    login: str = "admin",
+    password: str = "admin123456",
+    email: str = "admin@test.com",
+    session: Session = Depends(get_session)
+):
+    """
+    Create a superuser for local development.
+    Only works when DEBUG=true and no admin users exist.
+    """
+    # Check if we're in debug mode
+    from app.core.config import settings
+    if not settings.DEBUG:
+        raise HTTPException(status_code=403, detail="Setup endpoints only available in debug mode")
+    
+    repo = UsersRepo(session)
+    
+    # Check if admin already exists
+    existing_admin = session.query(Users).filter(Users.login == login).first()
+    if existing_admin:
+        raise HTTPException(status_code=400, detail=f"User '{login}' already exists")
+    
+    try:
+        # Create admin user
+        admin_user = repo.create_user(
+            login=login,
+            password_hash=hash_password(password),
+            role="admin",
+            email=email,
+            is_active=True
+        )
+        
+        logger.info(f"Superuser created: {login} (ID: {admin_user.id})")
+        
+        return UserResponse(
+            id=str(admin_user.id),
+            login=admin_user.login,
+            email=admin_user.email,
+            role=admin_user.role,
+            is_active=admin_user.is_active,
+            created_at=admin_user.created_at,
+            updated_at=admin_user.updated_at,
+            require_password_change=admin_user.require_password_change
+        )
+        
+    except Exception as e:
+        logger.error(f"Failed to create superuser: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to create superuser: {str(e)}")
+
+
+@router.get("/status")
+async def setup_status(session: Session = Depends(get_session)):
+    """
+    Check setup status - whether admin user exists.
+    """
+    from app.core.config import settings
+    
+    if not settings.DEBUG:
+        raise HTTPException(status_code=403, detail="Setup endpoints only available in debug mode")
+    
+    repo = UsersRepo(session)
+    
+    # Count admin users
+    admin_count = session.query(Users).filter(Users.role == "admin").count()
+    
+    return {
+        "debug_mode": settings.DEBUG,
+        "admin_users_count": admin_count,
+        "has_admin": admin_count > 0,
+        "database_connected": True
+    }
+
 # ===== app/api/routers/admin.py =====
 from __future__ import annotations
 from typing import Optional, List
@@ -9022,6 +9128,20 @@ def create_error_response(code: str, message: str, request_id: str,
     }
 
 
+def user_to_response(user) -> UserResponse:
+    """Convert User model to UserResponse schema."""
+    return UserResponse(
+        id=str(user.id),
+        login=user.login,
+        email=user.email,
+        role=user.role,
+        is_active=user.is_active,
+        created_at=user.created_at,
+        updated_at=user.updated_at,
+        require_password_change=getattr(user, 'require_password_change', False)
+    )
+
+
 # User Management Endpoints
 @router.get("/users", response_model=UserListResponse)
 def list_users(
@@ -9048,7 +9168,7 @@ def list_users(
     total = repo.count_users(query=query, role=role, is_active=is_active)
     
     return UserListResponse(
-        users=[UserResponse.from_orm(user) for user in users],
+        users=[user_to_response(user) for user in users],
         total=total,
         has_more=has_more,
         next_cursor=next_cursor
@@ -9118,7 +9238,7 @@ def create_user(
         email=user_data.email
     )
     
-    response = UserResponse.from_orm(user)
+    response = user_to_response(user)
     
     # Include generated password in response only if EMAIL_ENABLED=false
     if not user_data.password and not settings.EMAIL_ENABLED:
@@ -9151,7 +9271,7 @@ def get_user(
             ).dict()
         )
     
-    return UserResponse.from_orm(user)
+    return user_to_response(user)
 
 
 @router.patch("/users/{user_id}", response_model=UserResponse)
@@ -9202,7 +9322,7 @@ def update_user(
         changes=updates
     )
     
-    return UserResponse.from_orm(updated_user)
+    return user_to_response(updated_user)
 
 
 @router.post("/users/{user_id}/password", response_model=dict)
@@ -10165,34 +10285,6 @@ def reanalyze_document(
 
 # ===== app/migrations/versions/__init__.py =====
 
-# ===== app/migrations/versions/20250115_000001_add_require_password_change.py =====
-"""Add require_password_change field to users table
-
-Revision ID: 20250115_000001
-Revises: 20250115_000000
-Create Date: 2025-01-15 00:00:01.000000
-
-"""
-from alembic import op
-import sqlalchemy as sa
-
-
-# revision identifiers, used by Alembic.
-revision = '20250115_000001'
-down_revision = '20250115_000000'
-branch_labels = None
-depends_on = None
-
-
-def upgrade() -> None:
-    # Add require_password_change field to users table
-    op.add_column('users', sa.Column('require_password_change', sa.Boolean(), nullable=False, server_default='false'))
-
-
-def downgrade() -> None:
-    # Remove require_password_change field from users table
-    op.drop_column('users', 'require_password_change')
-
 # ===== app/migrations/versions/20250912_104656_add_chat_tags.py =====
 """add chat tags column
 
@@ -10217,113 +10309,6 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_column('chats', 'tags')
-
-# ===== app/migrations/versions/20250115_000000_rbac_admin_models.py =====
-"""rbac admin models
-
-Revision ID: 20250115_000000_rbac_admin_models
-Revises: 20250912_104656_add_chat_tags
-Create Date: 2025-01-15 00:00:00
-"""
-
-from alembic import op
-import sqlalchemy as sa
-from sqlalchemy.dialects import postgresql
-
-# revision identifiers, used by Alembic.
-revision = '20250115_000000_rbac_admin_models'
-down_revision = '20250912_104656_add_chat_tags'
-branch_labels = None
-depends_on = None
-
-
-def upgrade() -> None:
-    # Drop existing ENUM type and replace with VARCHAR + CHECK constraint
-    op.execute("DROP TYPE IF EXISTS role_enum CASCADE")
-    
-    # Add email column to users
-    op.add_column('users', sa.Column('email', sa.String(255), nullable=True))
-    op.create_index('ix_users_email', 'users', ['email'])
-    
-    # Change role column from ENUM to VARCHAR with CHECK constraint
-    op.alter_column('users', 'role', type_=sa.String(20), existing_type=postgresql.ENUM('admin', 'editor', 'reader', name='role_enum'))
-    op.create_check_constraint('ck_users_role', 'users', "role IN ('admin', 'editor', 'reader')")
-    
-    # Update user_tokens table
-    op.add_column('user_tokens', sa.Column('scopes', postgresql.JSON(astext_type=sa.Text()), nullable=True))
-    op.add_column('user_tokens', sa.Column('expires_at', sa.DateTime(timezone=True), nullable=True))
-    op.alter_column('user_tokens', 'revoked', new_column_name='revoked_at', type_=sa.DateTime(timezone=True))
-    op.alter_column('user_tokens', 'revoked_at', nullable=True)
-    
-    # Create password_reset_tokens table
-    op.create_table('password_reset_tokens',
-        sa.Column('id', postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column('user_id', postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column('token_hash', sa.Text(), nullable=False),
-        sa.Column('expires_at', sa.DateTime(timezone=True), nullable=False),
-        sa.Column('used_at', sa.DateTime(timezone=True), nullable=True),
-        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
-        sa.ForeignKeyConstraint(['user_id'], ['users.id'], ondelete='CASCADE'),
-        sa.PrimaryKeyConstraint('id'),
-        sa.UniqueConstraint('token_hash')
-    )
-    op.create_index('ix_password_reset_tokens_user_id', 'password_reset_tokens', ['user_id'])
-    op.create_index('ix_password_reset_tokens_expires_at', 'password_reset_tokens', ['expires_at'])
-    op.create_index('ix_password_reset_tokens_used_at', 'password_reset_tokens', ['used_at'])
-    
-    # Add TTL cleanup function for password reset tokens (expires after 1 hour)
-    op.execute("""
-        CREATE OR REPLACE FUNCTION cleanup_expired_password_reset_tokens()
-        RETURNS void AS $$
-        BEGIN
-            DELETE FROM password_reset_tokens 
-            WHERE expires_at < NOW() OR used_at IS NOT NULL;
-        END;
-        $$ LANGUAGE plpgsql;
-    """)
-    
-    # Create audit_logs table
-    op.create_table('audit_logs',
-        sa.Column('id', postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column('ts', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
-        sa.Column('actor_user_id', postgresql.UUID(as_uuid=True), nullable=True),
-        sa.Column('action', sa.String(50), nullable=False),
-        sa.Column('object_type', sa.String(50), nullable=True),
-        sa.Column('object_id', sa.String(255), nullable=True),
-        sa.Column('meta', postgresql.JSON(astext_type=sa.Text()), nullable=True),
-        sa.Column('ip', sa.String(45), nullable=True),
-        sa.Column('user_agent', sa.Text(), nullable=True),
-        sa.Column('request_id', sa.String(255), nullable=True),
-        sa.ForeignKeyConstraint(['actor_user_id'], ['users.id'], ondelete='SET NULL'),
-        sa.PrimaryKeyConstraint('id')
-    )
-    op.create_index('ix_audit_logs_ts', 'audit_logs', ['ts'])
-    op.create_index('ix_audit_logs_actor_user_id', 'audit_logs', ['actor_user_id'])
-    op.create_index('ix_audit_logs_action', 'audit_logs', ['action'])
-    op.create_index('ix_audit_logs_object_type', 'audit_logs', ['object_type'])
-    op.create_index('ix_audit_logs_object_id', 'audit_logs', ['object_id'])
-    op.create_index('ix_audit_logs_request_id', 'audit_logs', ['request_id'])
-
-
-def downgrade() -> None:
-    # Drop new tables
-    op.drop_table('audit_logs')
-    op.drop_table('password_reset_tokens')
-    
-    # Revert user_tokens changes
-    op.alter_column('user_tokens', 'revoked_at', new_column_name='revoked', type_=sa.Boolean())
-    op.alter_column('user_tokens', 'revoked', nullable=False, server_default=sa.text('false'))
-    op.drop_column('user_tokens', 'expires_at')
-    op.drop_column('user_tokens', 'scopes')
-    
-    # Revert users changes
-    op.drop_constraint('ck_users_role', 'users', type_='check')
-    op.alter_column('users', 'role', type_=postgresql.ENUM('admin', 'editor', 'reader', name='role_enum'))
-    op.drop_index('ix_users_email', 'users')
-    op.drop_column('users', 'email')
-    
-    # Recreate ENUM type
-    op.execute("CREATE TYPE role_enum AS ENUM ('admin', 'editor', 'reader')")
 
 # ===== app/migrations/versions/20250910_175628_initial.py =====
 # app/migrations/versions/20250910_175628_initial.py

@@ -22,7 +22,7 @@ export interface TableProps<T = any> {
   onRowDoubleClick?: (record: T, index: number) => void;
   rowKey?: keyof T | ((record: T) => string);
   selectedRowKeys?: string[];
-  onSelectionChange?: (selectedKeys: string[]) => void;
+  _onSelectionChange?: (selectedKeys: string[]) => void;
   sortBy?: string;
   sortOrder?: 'asc' | 'desc';
   onSort?: (column: string, order: 'asc' | 'desc') => void;
@@ -41,7 +41,7 @@ export function Table<T = any>({
   onRowDoubleClick,
   rowKey = 'id' as keyof T,
   selectedRowKeys = [],
-  onSelectionChange,
+  _onSelectionChange,
   sortBy,
   sortOrder,
   onSort,
@@ -58,7 +58,7 @@ export function Table<T = any>({
 
   const handleSort = (column: string) => {
     if (!onSort) return;
-    
+
     const newOrder = sortBy === column && sortOrder === 'asc' ? 'desc' : 'asc';
     onSort(column, newOrder);
   };
@@ -73,20 +73,28 @@ export function Table<T = any>({
     </tr>
   );
 
-  const renderLoadingRow = () => (
-    <tr>
-      <td colSpan={columns.length} className={styles.loadingRow}>
-        <div className={styles.skeleton} style={{ width: '200px', margin: '0 auto' }} />
-      </td>
-    </tr>
-  );
+  // const _renderLoadingRow = () => (
+  //   <tr>
+  //     <td colSpan={columns.length} className={styles.loadingRow}>
+  //       <div
+  //         className={styles.skeleton}
+  //         style={{ width: '200px', margin: '0 auto' }}
+  //       />
+  //     </td>
+  //   </tr>
+  // );
 
   const renderSkeletonRows = () => {
     return Array.from({ length: 5 }).map((_, index) => (
       <tr key={index}>
-        {columns.map((column) => (
-          <td key={column.key} className={`${styles.tableCell} ${styles.loadingCell}`}>
-            <div className={`${styles.skeleton} ${index % 3 === 0 ? styles.short : index % 3 === 1 ? styles.medium : styles.long}`} />
+        {columns.map(column => (
+          <td
+            key={column.key}
+            className={`${styles.tableCell} ${styles.loadingCell}`}
+          >
+            <div
+              className={`${styles.skeleton} ${index % 3 === 0 ? styles.short : index % 3 === 1 ? styles.medium : styles.long}`}
+            />
           </td>
         ))}
       </tr>
@@ -96,7 +104,7 @@ export function Table<T = any>({
   const renderHeader = () => (
     <thead className={styles.tableHeader}>
       <tr>
-        {columns.map((column) => (
+        {columns.map(column => (
           <th
             key={column.key}
             className={`
@@ -125,48 +133,50 @@ export function Table<T = any>({
 
   const renderBody = () => (
     <tbody className={styles.tableBody}>
-      {loading ? (
-        renderSkeletonRows()
-      ) : data.length === 0 ? (
-        renderEmptyState()
-      ) : (
-        data.map((record, index) => {
-          const key = getRowKey(record, index);
-          const isSelected = selectedRowKeys.includes(key);
-          
-          return (
-            <tr
-              key={key}
-              className={`${styles.tableRow} ${isSelected ? styles.selected : ''}`}
-              onClick={() => onRowClick?.(record, index)}
-              onDoubleClick={() => onRowDoubleClick?.(record, index)}
-            >
-              {columns.map((column) => {
-                const value = column.dataIndex ? record[column.dataIndex] : undefined;
-                const cellContent = column.render ? column.render(value, record, index) : (value as React.ReactNode);
-                
-                return (
-                  <td
-                    key={column.key}
-                    className={`
+      {loading
+        ? renderSkeletonRows()
+        : data.length === 0
+          ? renderEmptyState()
+          : data.map((record, index) => {
+              const key = getRowKey(record, index);
+              const isSelected = selectedRowKeys.includes(key);
+
+              return (
+                <tr
+                  key={key}
+                  className={`${styles.tableRow} ${isSelected ? styles.selected : ''}`}
+                  onClick={() => onRowClick?.(record, index)}
+                  onDoubleClick={() => onRowDoubleClick?.(record, index)}
+                >
+                  {columns.map(column => {
+                    const value = column.dataIndex
+                      ? record[column.dataIndex]
+                      : undefined;
+                    const cellContent = column.render
+                      ? column.render(value, record, index)
+                      : (value as React.ReactNode);
+
+                    return (
+                      <td
+                        key={column.key}
+                        className={`
                       ${styles.tableCell}
                       ${size === 'small' ? styles.compact : ''}
                       ${column.align === 'right' ? styles.numeric : ''}
                       ${column.key === 'actions' ? styles.actions : ''}
                       ${column.className || ''}
                     `}
-                    style={{
-                      textAlign: column.align || 'left',
-                    }}
-                  >
-                    {cellContent}
-                  </td>
-                );
-              })}
-            </tr>
-          );
-        })
-      )}
+                        style={{
+                          textAlign: column.align || 'left',
+                        }}
+                      >
+                        {cellContent}
+                      </td>
+                    );
+                  })}
+                </tr>
+              );
+            })}
     </tbody>
   );
 

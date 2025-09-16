@@ -1,8 +1,8 @@
-import React from 'react'
-import ReactDOM from 'react-dom/client'
-import AppRouter from './app/router'
-import { ToastProvider } from './shared/ui/Toast'
-import './theme.css'
+import React from 'react';
+import ReactDOM from 'react-dom/client';
+import AppRouter from './app/router';
+import { ToastProvider } from './shared/ui/Toast';
+import './theme.css';
 
 // Initialize auth tokens from localStorage
 const initAuthTokens = () => {
@@ -15,7 +15,7 @@ const initAuthTokens = () => {
 initAuthTokens();
 
 if ((import.meta as any).env?.VITE_USE_MOCKS === 'true') {
-  import('./mocks/enableMocks')
+  import('./mocks/enableMocks');
 }
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
@@ -24,4 +24,4 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
       <AppRouter />
     </ToastProvider>
   </React.StrictMode>
-)
+);

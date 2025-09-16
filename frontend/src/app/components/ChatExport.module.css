@@ -24,7 +24,7 @@
   background: var(--color-bg-secondary);
 }
 
-.formatOption input[type="radio"] {
+.formatOption input[type='radio'] {
   margin: 0;
 }
 

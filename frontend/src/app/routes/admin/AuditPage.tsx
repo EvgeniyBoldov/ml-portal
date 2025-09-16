@@ -1,5 +1,9 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { adminApi, type AuditLog, type AuditLogListResponse } from '../../../shared/api/admin';
+import {
+  adminApi,
+  type AuditLog,
+  type AuditLogListResponse,
+} from '../../../shared/api/admin';
 import Button from '../../../shared/ui/Button';
 import Input from '../../../shared/ui/Input';
 import Select from '../../../shared/ui/Select';
@@ -16,7 +20,7 @@ export function AuditPage() {
   const [total, setTotal] = useState(0);
   const [hasMore, setHasMore] = useState(false);
   const [nextCursor, setNextCursor] = useState<string | undefined>();
-  const [currentCursor, setCurrentCursor] = useState<string | undefined>();
+  const [, setCurrentCursor] = useState<string | undefined>();
 
   // Filters
   const [filters, setFilters] = useState({
@@ -28,39 +32,43 @@ export function AuditPage() {
   });
 
   // Load audit logs
-  const loadLogs = useCallback(async (cursor?: string, reset = false) => {
-    try {
-      setLoading(true);
-      
-      const params = {
-        actor_user_id: filters.actor_user_id || undefined,
-        action: filters.action || undefined,
-        object_type: filters.object_type || undefined,
-        start_date: filters.start_date || undefined,
-        end_date: filters.end_date || undefined,
-        limit: 50,
-        cursor,
-      };
+  const loadLogs = useCallback(
+    async (cursor?: string, reset = false) => {
+      try {
+        setLoading(true);
 
-      const response: AuditLogListResponse = await adminApi.getAuditLogs(params);
-      
-      if (reset) {
-        setLogs(response.logs);
-        setCurrentCursor(undefined);
-      } else {
-        setLogs(prev => [...prev, ...response.logs]);
+        const params = {
+          actor_user_id: filters.actor_user_id || undefined,
+          action: filters.action || undefined,
+          object_type: filters.object_type || undefined,
+          start_date: filters.start_date || undefined,
+          end_date: filters.end_date || undefined,
+          limit: 50,
+          cursor,
+        };
+
+        const response: AuditLogListResponse =
+          await adminApi.getAuditLogs(params);
+
+        if (reset) {
+          setLogs(response.logs);
+          setCurrentCursor(undefined);
+        } else {
+          setLogs(prev => [...prev, ...response.logs]);
+        }
+
+        setTotal(response.total || 0);
+        setHasMore(response.has_more);
+        setNextCursor(response.next_cursor);
+      } catch (error) {
+        console.error('Failed to load audit logs:', error);
+        showError('Failed to load audit logs. Please try again.');
+      } finally {
+        setLoading(false);
       }
-      
-      setTotal(response.total);
-      setHasMore(response.has_more);
-      setNextCursor(response.next_cursor);
-    } catch (error) {
-      console.error('Failed to load audit logs:', error);
-      showError('Failed to load audit logs. Please try again.');
-    } finally {
-      setLoading(false);
-    }
-  }, [filters, showError]);
+    },
+    [filters, showError]
+  );
 
   // Load more logs
   const loadMore = useCallback(() => {
@@ -81,11 +89,11 @@ export function AuditPage() {
   }, [loadLogs]);
 
   // Handle filter changes
-  const handleFilterChange = (field: string) => (
-    e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>
-  ) => {
-    setFilters(prev => ({ ...prev, [field]: e.target.value }));
-  };
+  const handleFilterChange =
+    (field: string) =>
+    (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+      setFilters(prev => ({ ...prev, [field]: e.target.value }));
+    };
 
   // Load logs on mount and when filters change
   useEffect(() => {
@@ -94,9 +102,12 @@ export function AuditPage() {
 
   // Get action badge style
   const getActionBadgeStyle = (action: string) => {
-    if (action.includes('create') || action.includes('created')) return 'create';
-    if (action.includes('update') || action.includes('updated')) return 'update';
-    if (action.includes('delete') || action.includes('deleted')) return 'delete';
+    if (action.includes('create') || action.includes('created'))
+      return 'create';
+    if (action.includes('update') || action.includes('updated'))
+      return 'update';
+    if (action.includes('delete') || action.includes('deleted'))
+      return 'delete';
     if (action.includes('login') || action.includes('auth')) return 'login';
     return 'default';
   };
@@ -186,7 +197,7 @@ export function AuditPage() {
           <Button onClick={handleSearch} variant="outline">
             Search
           </Button>
-          <Button 
+          <Button
             onClick={() => {
               setFilters({
                 actor_user_id: '',
@@ -232,55 +243,69 @@ export function AuditPage() {
             </div>
           ) : (
             <div>
-              {logs.map((log) => (
+              {logs.map(log => (
                 <div key={log.id} className={styles.auditItem}>
                   <div className={styles.auditInfo}>
                     <div className={styles.auditAction}>
-                      <span className={`${styles.actionBadge} ${styles[getActionBadgeStyle(log.action)]}`}>
+                      <span
+                        className={`${styles.actionBadge} ${styles[getActionBadgeStyle(log.action)]}`}
+                      >
                         {formatAction(log.action)}
                       </span>
                     </div>
-                    
+
                     <div className={styles.auditDetails}>
                       {log.object_type && log.object_id && (
                         <>
-                          <span className={styles.objectType}>{log.object_type}</span>
-                          <span className={styles.objectId}> ({log.object_id})</span>
+                          <span className={styles.objectType}>
+                            {log.object_type}
+                          </span>
+                          <span className={styles.objectId}>
+                            {' '}
+                            ({log.object_id})
+                          </span>
                         </>
                       )}
                     </div>
-                    
+
                     <div className={styles.auditMeta}>
                       <div className={styles.actorInfo}>
                         <div className={styles.actorAvatar}>
                           {getActorInitials(log.actor_user_id)}
                         </div>
-                        <span className={log.actor_user_id ? styles.actorName : styles.systemActor}>
-                          {log.actor_user_id ? `User ${log.actor_user_id.slice(0, 8)}` : 'System'}
+                        <span
+                          className={
+                            log.actor_user_id
+                              ? styles.actorName
+                              : styles.systemActor
+                          }
+                        >
+                          {log.actor_user_id
+                            ? `User ${log.actor_user_id.slice(0, 8)}`
+                            : 'System'}
                         </span>
                       </div>
-                      
+
                       {log.ip && (
                         <>
                           <span>•</span>
                           <span>IP: {log.ip}</span>
                         </>
                       )}
-                      
+
                       {log.user_agent && (
                         <>
                           <span>•</span>
                           <span title={log.user_agent}>
-                            {log.user_agent.length > 50 
-                              ? `${log.user_agent.slice(0, 50)}...` 
-                              : log.user_agent
-                            }
+                            {log.user_agent.length > 50
+                              ? `${log.user_agent.slice(0, 50)}...`
+                              : log.user_agent}
                           </span>
                         </>
                       )}
                     </div>
                   </div>
-                  
+
                   <div className={styles.auditTime}>
                     {new Date(log.ts).toLocaleString()}
                   </div>
@@ -296,11 +321,7 @@ export function AuditPage() {
               Showing {logs.length} of {total} logs
             </div>
             <div className={styles.paginationControls}>
-              <Button
-                onClick={loadMore}
-                disabled={loading}
-                variant="outline"
-              >
+              <Button onClick={loadMore} disabled={loading} variant="outline">
                 {loading ? 'Loading...' : 'Load More'}
               </Button>
             </div>

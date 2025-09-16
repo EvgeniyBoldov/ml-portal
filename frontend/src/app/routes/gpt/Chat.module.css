@@ -97,7 +97,10 @@
   background: var(--panel);
   flex-shrink: 0;
 }
-.inputArea { grid-column: 1 / 2; display: flex; }
+.inputArea {
+  grid-column: 1 / 2;
+  display: flex;
+}
 .inputArea textarea {
   display: block;
   width: 100%;
@@ -106,7 +109,27 @@
   overflow: auto;
   box-sizing: border-box;
 }
-.controls { grid-column: 2 / 3; width: max-content; display: grid; grid-template-rows: 1fr auto; height: 100%; }
-.actionsBottom { margin-top: auto; display: grid; gap: 8px; justify-items: start; align-content: end; }
-.ragToggle { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
-.ragToggle input { transform: translateY(1px); }
+.controls {
+  grid-column: 2 / 3;
+  width: max-content;
+  display: grid;
+  grid-template-rows: 1fr auto;
+  height: 100%;
+}
+.actionsBottom {
+  margin-top: auto;
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+  align-content: end;
+}
+.ragToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.ragToggle input {
+  transform: translateY(1px);
+}

@@ -1,7 +1,12 @@
-import { create } from "zustand";
-import { persist } from "zustand/middleware";
-import { apiRequest, setAuthTokens, clearAuthTokens, refreshAccessToken } from "@/shared/api/http";
-import type { User, LoginResponse, AuthTokens } from "@/shared/api/types";
+import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
+import {
+  apiRequest,
+  setAuthTokens,
+  clearAuthTokens,
+  refreshAccessToken,
+} from '@/shared/api/http';
+import type { User, LoginResponse, AuthTokens } from '@/shared/api/types';
 
 type AuthState = {
   user: User | null;
@@ -14,35 +19,42 @@ type AuthState = {
 
 export const useAuthStore = create<AuthState>()(
   persist(
-    (set, get) => ({
+    (set, _get) => ({
       user: null,
       tokens: null,
       isAuthReady: false,
       async login(login, password) {
-        const data = await apiRequest<LoginResponse>("/auth/login", { method: "POST", body: JSON.stringify({ login, password }) });
-        const tokens = { 
-          access_token: data.access_token, 
+        const data = await apiRequest<LoginResponse>('/auth/login', {
+          method: 'POST',
+          body: JSON.stringify({ login, password }),
+        });
+        const tokens = {
+          access_token: data.access_token,
           token_type: data.token_type,
-          refresh_token: data.refresh_token, 
-          expires_in: data.expires_in 
+          refresh_token: data.refresh_token,
+          expires_in: data.expires_in,
         };
         setAuthTokens(tokens);
         set({ tokens });
         set({ user: data.user });
       },
       async logout() {
-        try { await apiRequest<void>("/auth/logout", { method: "POST" }); } catch {}
+        try {
+          await apiRequest<void>('/auth/logout', { method: 'POST' });
+        } catch {
+          // Ignore logout errors
+        }
         clearAuthTokens();
         set({ tokens: null, user: null });
       },
       async hydrate() {
         try {
-          const me = await apiRequest<User>("/auth/me", { method: "GET" });
+          const me = await apiRequest<User>('/auth/me', { method: 'GET' });
           set({ user: me, isAuthReady: true });
         } catch {
           try {
             await refreshAccessToken();
-            const me = await apiRequest<User>("/auth/me", { method: "GET" });
+            const me = await apiRequest<User>('/auth/me', { method: 'GET' });
             set({ user: me, isAuthReady: true });
           } catch {
             clearAuthTokens();
@@ -51,6 +63,6 @@ export const useAuthStore = create<AuthState>()(
         }
       },
     }),
-    { name: "auth-store", partialize: (s) => ({ tokens: s.tokens }) }
+    { name: 'auth-store', partialize: s => ({ tokens: s.tokens }) }
   )
 );

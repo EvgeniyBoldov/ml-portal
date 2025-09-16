@@ -1,19 +1,19 @@
-import React from 'react'
-import { Outlet, NavLink, useNavigate } from 'react-router-dom'
-import Button from '@shared/ui/Button'
-import styles from './GPTLayout.module.css'
-import { useAuth } from '@app/store/auth'
-import ThemeSwitch from '@shared/ui/ThemeSwitch'
+import React from 'react';
+import { Outlet, NavLink, useNavigate } from 'react-router-dom';
+import Button from '@shared/ui/Button';
+import styles from './GPTLayout.module.css';
+import { useAuth } from '@app/store/auth';
+import ThemeSwitch from '@shared/ui/ThemeSwitch';
 
-const USE_MOCKS = import.meta.env.VITE_USE_MOCKS === 'true'
+const USE_MOCKS = import.meta.env.VITE_USE_MOCKS === 'true';
 
 export default function GPTLayout() {
-  const nav = useNavigate()
-  const { logout, user } = useAuth()
-  const isAdmin = (user?.role || '').toLowerCase() === 'admin'
+  const nav = useNavigate();
+  const { logout, user } = useAuth();
+  const isAdmin = (user?.role || '').toLowerCase() === 'admin';
 
   // Logo is served from /public/logo.png to avoid bundler import issues.
-  const logoSrc = '/logo.png'
+  const logoSrc = '/logo.png';
 
   return (
     <div className={styles.shell}>
@@ -23,7 +23,10 @@ export default function GPTLayout() {
           <img
             src={logoSrc}
             alt="Почемучка logo"
-            onError={(e)=>{ const el=e.currentTarget as HTMLImageElement; el.style.display='none' }}
+            onError={e => {
+              const el = e.currentTarget as HTMLImageElement;
+              el.style.display = 'none';
+            }}
           />
           <div className={styles.brandName}>Почемучка</div>
         </div>
@@ -32,10 +35,31 @@ export default function GPTLayout() {
         <nav className={styles.nav}>
           <div className={styles.segWrap}>
             <div className={styles.seg}>
-              <NavLink to="/gpt/chat" className={({isActive}) => [styles.segBtn, isActive ? styles.active : ''].join(' ')}>Чат</NavLink>
-              <NavLink to="/gpt/analyze" className={({isActive}) => [styles.segBtn, isActive ? styles.active : ''].join(' ')}>Аналитика</NavLink>
+              <NavLink
+                to="/gpt/chat"
+                className={({ isActive }) =>
+                  [styles.segBtn, isActive ? styles.active : ''].join(' ')
+                }
+              >
+                Чат
+              </NavLink>
+              <NavLink
+                to="/gpt/analyze"
+                className={({ isActive }) =>
+                  [styles.segBtn, isActive ? styles.active : ''].join(' ')
+                }
+              >
+                Аналитика
+              </NavLink>
               {isAdmin && (
-                <NavLink to="/gpt/rag" className={({isActive}) => [styles.segBtn, isActive ? styles.active : ''].join(' ')}>База знаний</NavLink>
+                <NavLink
+                  to="/gpt/rag"
+                  className={({ isActive }) =>
+                    [styles.segBtn, isActive ? styles.active : ''].join(' ')
+                  }
+                >
+                  База знаний
+                </NavLink>
               )}
             </div>
           </div>
@@ -51,7 +75,15 @@ export default function GPTLayout() {
               Админка
             </Button>
           )}
-          <Button variant="ghost" onClick={async () => { await logout(); nav('/login') }}>Выйти</Button>
+          <Button
+            variant="ghost"
+            onClick={async () => {
+              await logout();
+              nav('/login');
+            }}
+          >
+            Выйти
+          </Button>
         </div>
       </header>
 
@@ -59,7 +91,9 @@ export default function GPTLayout() {
         <Outlet />
       </main>
 
-      <footer className={styles.footer}>{/* пустой подвал, заполним позже */}</footer>
+      <footer className={styles.footer}>
+        {/* пустой подвал, заполним позже */}
+      </footer>
     </div>
-  )
+  );
 }

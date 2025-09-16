@@ -239,8 +239,12 @@
 }
 
 @keyframes spin {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
 }
 
 /* Dark mode */
@@ -250,17 +254,17 @@
     background: var(--color-background-dark);
     border-color: var(--color-border-dark);
   }
-  
+
   .infoCard {
     background: var(--color-surface-dark);
     border-color: var(--color-border-dark);
   }
-  
+
   .metricItem {
     background: var(--color-surface-dark);
     border-color: var(--color-border-dark);
   }
-  
+
   .warningCard {
     background: var(--color-warning-dark);
     border-color: var(--color-warning-border-dark);
@@ -272,12 +276,12 @@
   .page {
     max-width: none;
   }
-  
+
   .statusInfo {
     grid-template-columns: 1fr;
     gap: var(--spacing-md);
   }
-  
+
   .metricsGrid {
     grid-template-columns: 1fr;
     gap: var(--spacing-md);

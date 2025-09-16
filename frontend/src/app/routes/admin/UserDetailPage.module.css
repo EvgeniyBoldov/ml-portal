@@ -352,8 +352,12 @@
 }
 
 @keyframes spin {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
 }
 
 /* Dark mode */
@@ -362,21 +366,21 @@
     background: var(--color-background-dark);
     border-color: var(--color-border-dark);
   }
-  
+
   .sectionTitle {
     border-color: var(--color-border-dark);
   }
-  
+
   .tokenItem {
     background: var(--color-surface-dark);
     border-color: var(--color-border-dark);
   }
-  
+
   .auditItem {
     background: var(--color-surface-dark);
     border-color: var(--color-border-dark);
   }
-  
+
   .formActions {
     border-color: var(--color-border-dark);
   }
@@ -388,31 +392,31 @@
     flex-direction: column;
     align-items: stretch;
   }
-  
+
   .sectionContent {
     grid-template-columns: 1fr;
     gap: var(--spacing-md);
   }
-  
+
   .userInfo {
     flex-direction: column;
     text-align: center;
   }
-  
+
   .tokenItem {
     flex-direction: column;
     align-items: stretch;
   }
-  
+
   .tokenActions {
     justify-content: center;
   }
-  
+
   .auditItem {
     flex-direction: column;
     align-items: stretch;
   }
-  
+
   .auditTime {
     text-align: center;
   }

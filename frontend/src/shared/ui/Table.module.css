@@ -116,7 +116,12 @@
 }
 
 .skeleton {
-  background: linear-gradient(90deg, var(--color-surface) 25%, var(--color-border) 50%, var(--color-surface) 75%);
+  background: linear-gradient(
+    90deg,
+    var(--color-surface) 25%,
+    var(--color-border) 50%,
+    var(--color-surface) 75%
+  );
   background-size: 200% 100%;
   animation: skeleton-loading 1.5s infinite;
   border-radius: var(--border-radius-sm);
@@ -149,12 +154,12 @@
   .table {
     font-size: var(--font-size-xs);
   }
-  
+
   .tableHeaderCell,
   .tableCell {
     padding: var(--spacing-sm);
   }
-  
+
   .tableCell.actions {
     padding: var(--spacing-xs);
   }
@@ -165,11 +170,11 @@
   .tableHeader {
     background: var(--color-surface-dark);
   }
-  
+
   .tableRow:hover {
     background: var(--color-surface-dark);
   }
-  
+
   .tableRow.selected {
     background: var(--color-primary-dark);
   }

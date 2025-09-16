@@ -1,12 +1,18 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { adminApi, type User, type UserToken, type AuditLog, TOKEN_SCOPES } from '../../../shared/api/admin';
+import {
+  adminApi,
+  type User,
+  type UserToken,
+  type AuditLog,
+  TOKEN_SCOPES,
+} from '../../../shared/api/admin';
 import { RoleBadge, StatusBadge } from '../../../shared/ui/RoleBadge';
 import Button from '../../../shared/ui/Button';
 import Input from '../../../shared/ui/Input';
 import Select from '../../../shared/ui/Select';
 import Modal from '../../../shared/ui/Modal';
-import { Skeleton } from '../../../shared/ui/Skeleton';
+// import { Skeleton } from '../../../shared/ui/Skeleton';
 import { useErrorToast, useSuccessToast } from '../../../shared/ui/Toast';
 import styles from './UserDetailPage.module.css';
 
@@ -103,7 +109,9 @@ export function UserDetailPage() {
     try {
       const response = await adminApi.resetUserPassword(user.id, {});
       if (response.password) {
-        showSuccess(`Password reset successfully. New password: ${response.password}`);
+        showSuccess(
+          `Password reset successfully. New password: ${response.password}`
+        );
       } else {
         showSuccess('Password reset email sent successfully');
       }
@@ -127,7 +135,7 @@ export function UserDetailPage() {
       setTokens(prev => [...prev, response]);
       setShowTokenModal(false);
       setTokenForm({ name: '', scopes: [], expires_at: '' });
-      
+
       if (response.token_plain_once) {
         showSuccess(`Token created successfully: ${response.token_plain_once}`);
       } else {
@@ -197,10 +205,7 @@ export function UserDetailPage() {
       <div className={styles.pageHeader}>
         <h1 className={styles.pageTitle}>User Details</h1>
         <div className={styles.pageActions}>
-          <Button
-            variant="outline"
-            onClick={() => navigate('/admin/users')}
-          >
+          <Button variant="outline" onClick={() => navigate('/admin/users')}>
             Back to Users
           </Button>
           {editing ? (
@@ -218,25 +223,18 @@ export function UserDetailPage() {
               >
                 Cancel
               </Button>
-              <Button
-                onClick={handleSave}
-                disabled={saving}
-              >
+              <Button onClick={handleSave} disabled={saving}>
                 {saving ? 'Saving...' : 'Save Changes'}
               </Button>
             </>
           ) : (
-            <Button onClick={() => setEditing(true)}>
-              Edit User
-            </Button>
+            <Button onClick={() => setEditing(true)}>Edit User</Button>
           )}
         </div>
       </div>
 
       <div className={styles.userInfo}>
-        <div className={styles.userAvatar}>
-          {getInitials(user.login)}
-        </div>
+        <div className={styles.userAvatar}>{getInitials(user.login)}</div>
         <div className={styles.userDetails}>
           <h2 className={styles.userName}>{user.login}</h2>
           <div className={styles.userRole}>
@@ -250,10 +248,12 @@ export function UserDetailPage() {
               <strong>Email:</strong> {user.email || 'Not provided'}
             </div>
             <div className={styles.userMetaItem}>
-              <strong>Created:</strong> {new Date(user.created_at).toLocaleDateString()}
+              <strong>Created:</strong>{' '}
+              {new Date(user.created_at).toLocaleDateString()}
             </div>
             <div className={styles.userMetaItem}>
-              <strong>Last Updated:</strong> {new Date(user.updated_at).toLocaleDateString()}
+              <strong>Last Updated:</strong>{' '}
+              {new Date(user.updated_at).toLocaleDateString()}
             </div>
           </div>
         </div>
@@ -287,17 +287,15 @@ export function UserDetailPage() {
       </div>
 
       {/* Profile Tab */}
-      <div className={`${styles.tabContent} ${activeTab === 'profile' ? styles.active : ''}`}>
+      <div
+        className={`${styles.tabContent} ${activeTab === 'profile' ? styles.active : ''}`}
+      >
         <div className={styles.section}>
           <h3 className={styles.sectionTitle}>Profile Information</h3>
           <div className={styles.sectionContent}>
             <div className={styles.formGroup}>
               <label className={styles.formLabel}>Login</label>
-              <Input
-                value={user.login}
-                disabled
-                className={styles.formInput}
-              />
+              <Input value={user.login} disabled className={styles.formInput} />
               <div className={styles.formHelp}>
                 Username cannot be changed after creation.
               </div>
@@ -309,7 +307,9 @@ export function UserDetailPage() {
                 <Input
                   type="email"
                   value={formData.email}
-                  onChange={(e) => setFormData(prev => ({ ...prev, email: e.target.value }))}
+                  onChange={e =>
+                    setFormData(prev => ({ ...prev, email: e.target.value }))
+                  }
                   className={styles.formInput}
                 />
               ) : (
@@ -326,10 +326,12 @@ export function UserDetailPage() {
               {editing ? (
                 <Select
                   value={formData.role}
-                  onChange={(e) => setFormData(prev => ({ 
-                    ...prev, 
-                    role: e.target.value as any 
-                  }))}
+                  onChange={e =>
+                    setFormData(prev => ({
+                      ...prev,
+                      role: e.target.value as any,
+                    }))
+                  }
                   className={styles.formSelect}
                 >
                   <option value="reader">Reader</option>
@@ -348,10 +350,12 @@ export function UserDetailPage() {
               {editing ? (
                 <Select
                   value={formData.is_active ? 'active' : 'inactive'}
-                  onChange={(e) => setFormData(prev => ({ 
-                    ...prev, 
-                    is_active: e.target.value === 'active' 
-                  }))}
+                  onChange={e =>
+                    setFormData(prev => ({
+                      ...prev,
+                      is_active: e.target.value === 'active',
+                    }))
+                  }
                   className={styles.formSelect}
                 >
                   <option value="active">Active</option>
@@ -368,19 +372,19 @@ export function UserDetailPage() {
       </div>
 
       {/* Security Tab */}
-      <div className={`${styles.tabContent} ${activeTab === 'security' ? styles.active : ''}`}>
+      <div
+        className={`${styles.tabContent} ${activeTab === 'security' ? styles.active : ''}`}
+      >
         <div className={styles.section}>
           <h3 className={styles.sectionTitle}>Security Settings</h3>
           <div className={styles.sectionContent}>
             <div className={styles.formGroup}>
               <label className={styles.formLabel}>Password Reset</label>
               <div className={styles.formHelp}>
-                Reset the user's password. They will be required to change it on next login.
+                Reset the user&apos;s password. They will be required to change
+                it on next login.
               </div>
-              <Button
-                variant="outline"
-                onClick={handlePasswordReset}
-              >
+              <Button variant="outline" onClick={handlePasswordReset}>
                 Reset Password
               </Button>
             </div>
@@ -389,7 +393,9 @@ export function UserDetailPage() {
       </div>
 
       {/* Tokens Tab */}
-      <div className={`${styles.tabContent} ${activeTab === 'tokens' ? styles.active : ''}`}>
+      <div
+        className={`${styles.tabContent} ${activeTab === 'tokens' ? styles.active : ''}`}
+      >
         <div className={styles.section}>
           <div className={styles.sectionTitle}>
             Personal Access Tokens
@@ -401,7 +407,7 @@ export function UserDetailPage() {
               Create Token
             </Button>
           </div>
-          
+
           {tokens.length === 0 ? (
             <div className={styles.emptyState}>
               <div className={styles.emptyStateIcon}>🔑</div>
@@ -412,12 +418,12 @@ export function UserDetailPage() {
             </div>
           ) : (
             <div className={styles.tokensList}>
-              {tokens.map((token) => (
+              {tokens.map(token => (
                 <div key={token.id} className={styles.tokenItem}>
                   <div className={styles.tokenInfo}>
                     <div className={styles.tokenName}>{token.name}</div>
                     <div className={styles.tokenScopes}>
-                      {token.scopes.map((scope) => (
+                      {token.scopes.map(scope => (
                         <span key={scope.scope} className={styles.tokenScope}>
                           {scope.scope}
                         </span>
@@ -426,13 +432,25 @@ export function UserDetailPage() {
                     <div className={styles.tokenMeta}>
                       Created: {new Date(token.created_at).toLocaleDateString()}
                       {token.expires_at && (
-                        <> • Expires: {new Date(token.expires_at).toLocaleDateString()}</>
+                        <>
+                          {' '}
+                          • Expires:{' '}
+                          {new Date(token.expires_at).toLocaleDateString()}
+                        </>
                       )}
                       {token.last_used_at && (
-                        <> • Last used: {new Date(token.last_used_at).toLocaleDateString()}</>
+                        <>
+                          {' '}
+                          • Last used:{' '}
+                          {new Date(token.last_used_at).toLocaleDateString()}
+                        </>
                       )}
                       {token.revoked_at && (
-                        <> • Revoked: {new Date(token.revoked_at).toLocaleDateString()}</>
+                        <>
+                          {' '}
+                          • Revoked:{' '}
+                          {new Date(token.revoked_at).toLocaleDateString()}
+                        </>
                       )}
                     </div>
                   </div>
@@ -455,10 +473,12 @@ export function UserDetailPage() {
       </div>
 
       {/* Audit Tab */}
-      <div className={`${styles.tabContent} ${activeTab === 'audit' ? styles.active : ''}`}>
+      <div
+        className={`${styles.tabContent} ${activeTab === 'audit' ? styles.active : ''}`}
+      >
         <div className={styles.section}>
           <h3 className={styles.sectionTitle}>Recent Activity</h3>
-          
+
           {auditLogs.length === 0 ? (
             <div className={styles.emptyState}>
               <div className={styles.emptyStateIcon}>📋</div>
@@ -469,13 +489,15 @@ export function UserDetailPage() {
             </div>
           ) : (
             <div className={styles.auditList}>
-              {auditLogs.map((log) => (
+              {auditLogs.map(log => (
                 <div key={log.id} className={styles.auditItem}>
                   <div className={styles.auditInfo}>
                     <div className={styles.auditAction}>{log.action}</div>
                     <div className={styles.auditDetails}>
                       {log.object_type && log.object_id && (
-                        <>Object: {log.object_type} ({log.object_id})</>
+                        <>
+                          Object: {log.object_type} ({log.object_id})
+                        </>
                       )}
                     </div>
                     <div className={styles.auditMeta}>
@@ -506,7 +528,9 @@ export function UserDetailPage() {
             </label>
             <Input
               value={tokenForm.name}
-              onChange={(e) => setTokenForm(prev => ({ ...prev, name: e.target.value }))}
+              onChange={e =>
+                setTokenForm(prev => ({ ...prev, name: e.target.value }))
+              }
               placeholder="Enter token name"
               className={styles.formInput}
             />
@@ -519,22 +543,30 @@ export function UserDetailPage() {
             <div className={styles.formHelp}>
               Select the permissions this token should have.
             </div>
-            <div style={{ maxHeight: '200px', overflowY: 'auto', border: '1px solid var(--color-border)', borderRadius: 'var(--border-radius)', padding: 'var(--spacing-sm)' }}>
-              {TOKEN_SCOPES.map((scope) => (
+            <div
+              style={{
+                maxHeight: '200px',
+                overflowY: 'auto',
+                border: '1px solid var(--color-border)',
+                borderRadius: 'var(--border-radius)',
+                padding: 'var(--spacing-sm)',
+              }}
+            >
+              {TOKEN_SCOPES.map(scope => (
                 <label key={scope.scope} className={styles.formCheckbox}>
                   <input
                     type="checkbox"
                     checked={tokenForm.scopes.includes(scope.scope)}
-                    onChange={(e) => {
+                    onChange={e => {
                       if (e.target.checked) {
-                        setTokenForm(prev => ({ 
-                          ...prev, 
-                          scopes: [...prev.scopes, scope.scope] 
+                        setTokenForm(prev => ({
+                          ...prev,
+                          scopes: [...prev.scopes, scope.scope],
                         }));
                       } else {
-                        setTokenForm(prev => ({ 
-                          ...prev, 
-                          scopes: prev.scopes.filter(s => s !== scope.scope) 
+                        setTokenForm(prev => ({
+                          ...prev,
+                          scopes: prev.scopes.filter(s => s !== scope.scope),
                         }));
                       }
                     }}
@@ -549,13 +581,13 @@ export function UserDetailPage() {
           </div>
 
           <div className={styles.formGroup}>
-            <label className={styles.formLabel}>
-              Expires At
-            </label>
+            <label className={styles.formLabel}>Expires At</label>
             <Input
               type="datetime-local"
               value={tokenForm.expires_at}
-              onChange={(e) => setTokenForm(prev => ({ ...prev, expires_at: e.target.value }))}
+              onChange={e =>
+                setTokenForm(prev => ({ ...prev, expires_at: e.target.value }))
+              }
               className={styles.formInput}
             />
             <div className={styles.formHelp}>
@@ -565,10 +597,7 @@ export function UserDetailPage() {
         </div>
 
         <div className={styles.formActions}>
-          <Button
-            variant="outline"
-            onClick={() => setShowTokenModal(false)}
-          >
+          <Button variant="outline" onClick={() => setShowTokenModal(false)}>
             Cancel
           </Button>
           <Button

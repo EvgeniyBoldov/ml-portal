@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
+import React, { createContext, useContext, useState, useCallback } from 'react';
 import styles from './Toast.module.css';
 
 export interface Toast {
@@ -43,16 +43,16 @@ export function ToastProvider({ children }: ToastProviderProps) {
       duration: 5000,
       ...toast,
     };
-    
+
     setToasts(prev => [...prev, newToast]);
-    
+
     // Auto-hide after duration
     if (newToast.duration && newToast.duration > 0) {
       setTimeout(() => {
         hideToast(id);
       }, newToast.duration);
     }
-    
+
     return id;
   }, []);
 
@@ -112,20 +112,12 @@ function ToastItem({ toast, onHide }: ToastItemProps) {
 
   return (
     <div className={`${styles.toast} ${styles[toast.type]}`}>
-      <div className={styles.toastIcon}>
-        {getIcon(toast.type)}
-      </div>
-      
+      <div className={styles.toastIcon}>{getIcon(toast.type)}</div>
+
       <div className={styles.toastContent}>
-        {toast.title && (
-          <div className={styles.toastTitle}>
-            {toast.title}
-          </div>
-        )}
-        <div className={styles.toastMessage}>
-          {toast.message}
-        </div>
-        
+        {toast.title && <div className={styles.toastTitle}>{toast.title}</div>}
+        <div className={styles.toastMessage}>{toast.message}</div>
+
         {toast.actions && toast.actions.length > 0 && (
           <div className={styles.toastActions}>
             {toast.actions.map((action, index) => (
@@ -140,7 +132,7 @@ function ToastItem({ toast, onHide }: ToastItemProps) {
           </div>
         )}
       </div>
-      
+
       <button
         className={styles.toastClose}
         onClick={() => onHide(toast.id)}
@@ -148,7 +140,7 @@ function ToastItem({ toast, onHide }: ToastItemProps) {
       >
         ×
       </button>
-      
+
       {toast.duration && toast.duration > 0 && (
         <div
           className={styles.toastProgress}
@@ -162,30 +154,42 @@ function ToastItem({ toast, onHide }: ToastItemProps) {
 // Convenience hooks
 export function useSuccessToast() {
   const { showToast } = useToast();
-  return useCallback((message: string, title?: string) => {
-    return showToast({ type: 'success', message, title });
-  }, [showToast]);
+  return useCallback(
+    (message: string, title?: string) => {
+      return showToast({ type: 'success', message, title });
+    },
+    [showToast]
+  );
 }
 
 export function useErrorToast() {
   const { showToast } = useToast();
-  return useCallback((message: string, title?: string) => {
-    return showToast({ type: 'error', message, title });
-  }, [showToast]);
+  return useCallback(
+    (message: string, title?: string) => {
+      return showToast({ type: 'error', message, title });
+    },
+    [showToast]
+  );
 }
 
 export function useWarningToast() {
   const { showToast } = useToast();
-  return useCallback((message: string, title?: string) => {
-    return showToast({ type: 'warning', message, title });
-  }, [showToast]);
+  return useCallback(
+    (message: string, title?: string) => {
+      return showToast({ type: 'warning', message, title });
+    },
+    [showToast]
+  );
 }
 
 export function useInfoToast() {
   const { showToast } = useToast();
-  return useCallback((message: string, title?: string) => {
-    return showToast({ type: 'info', message, title });
-  }, [showToast]);
+  return useCallback(
+    (message: string, title?: string) => {
+      return showToast({ type: 'info', message, title });
+    },
+    [showToast]
+  );
 }
 
 export default Toast;

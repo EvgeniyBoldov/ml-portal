@@ -4,7 +4,7 @@ import { adminApi, type UserCreate } from '../../../shared/api/admin';
 import Button from '../../../shared/ui/Button';
 import Input from '../../../shared/ui/Input';
 import Select from '../../../shared/ui/Select';
-import { useErrorToast, useSuccessToast } from '../../../shared/ui/Toast';
+import { useSuccessToast } from '../../../shared/ui/Toast';
 import styles from './CreateUserPage.module.css';
 
 interface FormData {
@@ -26,7 +26,7 @@ interface FormErrors {
 
 export function CreateUserPage() {
   const navigate = useNavigate();
-  const showError = useErrorToast();
+  // const _showError = useErrorToast();
   const showSuccess = useSuccessToast();
 
   // State
@@ -68,7 +68,10 @@ export function CreateUserPage() {
       { test: /[A-Z]/.test(password), message: 'One uppercase letter' },
       { test: /[a-z]/.test(password), message: 'One lowercase letter' },
       { test: /\d/.test(password), message: 'One number' },
-      { test: /[!@#$%^&*(),.?":{}|<>]/.test(password), message: 'One special character' },
+      {
+        test: /[!@#$%^&*(),.?":{}|<>]/.test(password),
+        message: 'One special character',
+      },
     ];
 
     return rules.map(rule => ({
@@ -87,7 +90,8 @@ export function CreateUserPage() {
     } else if (formData.login.length < 3) {
       newErrors.login = 'Login must be at least 3 characters';
     } else if (!/^[a-zA-Z0-9_-]+$/.test(formData.login)) {
-      newErrors.login = 'Login can only contain letters, numbers, hyphens, and underscores';
+      newErrors.login =
+        'Login can only contain letters, numbers, hyphens, and underscores';
     }
 
     // Email validation
@@ -148,10 +152,12 @@ export function CreateUserPage() {
       navigate(`/admin/users/${response.user.id}`);
     } catch (error: any) {
       console.error('Failed to create user:', error);
-      
+
       if (error.response?.data?.detail?.error?.code === 'user_exists') {
         setErrors({ login: 'User with this login already exists' });
-      } else if (error.response?.data?.detail?.error?.code === 'invalid_password') {
+      } else if (
+        error.response?.data?.detail?.error?.code === 'invalid_password'
+      ) {
         setErrors({ password: error.response.data.detail.error.message });
       } else {
         setErrors({ general: 'Failed to create user. Please try again.' });
@@ -162,20 +168,21 @@ export function CreateUserPage() {
   };
 
   // Handle input changes
-  const handleInputChange = (field: keyof FormData) => (
-    e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>
-  ) => {
-    const value = e.target.type === 'checkbox' 
-      ? (e.target as HTMLInputElement).checked 
-      : e.target.value;
+  const handleInputChange =
+    (field: keyof FormData) =>
+    (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+      const value =
+        e.target.type === 'checkbox'
+          ? (e.target as HTMLInputElement).checked
+          : e.target.value;
 
-    setFormData(prev => ({ ...prev, [field]: value }));
-    
-    // Clear error when user starts typing
-    if (errors[field as keyof FormErrors]) {
-      setErrors(prev => ({ ...prev, [field]: undefined }));
-    }
-  };
+      setFormData(prev => ({ ...prev, [field]: value }));
+
+      // Clear error when user starts typing
+      if (errors[field as keyof FormErrors]) {
+        setErrors(prev => ({ ...prev, [field]: undefined }));
+      }
+    };
 
   const passwordRules = validatePassword(formData.password);
 
@@ -190,7 +197,10 @@ export function CreateUserPage() {
 
       <form onSubmit={handleSubmit} className={styles.form}>
         {errors.general && (
-          <div className={styles.formError} style={{ marginBottom: 'var(--spacing-lg)' }}>
+          <div
+            className={styles.formError}
+            style={{ marginBottom: 'var(--spacing-lg)' }}
+          >
             {errors.general}
           </div>
         )}
@@ -198,7 +208,7 @@ export function CreateUserPage() {
         {/* Basic Information */}
         <div className={styles.formSection}>
           <h2 className={styles.sectionTitle}>Basic Information</h2>
-          
+
           <div className={styles.formGrid}>
             <div className={styles.formGroup}>
               <label className={`${styles.formLabel} ${styles.required}`}>
@@ -216,14 +226,13 @@ export function CreateUserPage() {
                 <div className={styles.formError}>{errors.login}</div>
               )}
               <div className={styles.formHelp}>
-                Username for login. Only letters, numbers, hyphens, and underscores allowed.
+                Username for login. Only letters, numbers, hyphens, and
+                underscores allowed.
               </div>
             </div>
 
             <div className={styles.formGroup}>
-              <label className={styles.formLabel}>
-                Email
-              </label>
+              <label className={styles.formLabel}>Email</label>
               <Input
                 type="email"
                 value={formData.email}
@@ -261,15 +270,15 @@ export function CreateUserPage() {
             </div>
 
             <div className={styles.formGroup}>
-              <label className={styles.formLabel}>
-                Status
-              </label>
+              <label className={styles.formLabel}>Status</label>
               <Select
                 value={formData.is_active ? 'active' : 'inactive'}
-                onChange={(e) => setFormData(prev => ({ 
-                  ...prev, 
-                  is_active: e.target.value === 'active' 
-                }))}
+                onChange={e =>
+                  setFormData(prev => ({
+                    ...prev,
+                    is_active: e.target.value === 'active',
+                  }))
+                }
                 className={styles.formSelect}
               >
                 <option value="active">Active</option>
@@ -297,9 +306,14 @@ export function CreateUserPage() {
                 />
                 Send password setup link via email
               </label>
-              <div 
+              <div
                 className={`${styles.passwordToggleSwitch} ${formData.send_email ? styles.active : ''}`}
-                onClick={() => setFormData(prev => ({ ...prev, send_email: !prev.send_email }))}
+                onClick={() =>
+                  setFormData(prev => ({
+                    ...prev,
+                    send_email: !prev.send_email,
+                  }))
+                }
               />
             </div>
           )}
@@ -327,10 +341,12 @@ export function CreateUserPage() {
               </div>
 
               <div className={styles.passwordPolicy}>
-                <div className={styles.passwordPolicyTitle}>Password Requirements:</div>
+                <div className={styles.passwordPolicyTitle}>
+                  Password Requirements:
+                </div>
                 <ul className={styles.passwordPolicyList}>
                   {passwordRules.map((rule, index) => (
-                    <li 
+                    <li
                       key={index}
                       className={`${styles.passwordPolicyItem} ${rule.valid ? styles.valid : styles.invalid}`}
                     >
@@ -373,10 +389,7 @@ export function CreateUserPage() {
           >
             Cancel
           </Button>
-          <Button
-            type="submit"
-            disabled={loading}
-          >
+          <Button type="submit" disabled={loading}>
             {loading ? 'Creating...' : 'Create User'}
           </Button>
         </div>

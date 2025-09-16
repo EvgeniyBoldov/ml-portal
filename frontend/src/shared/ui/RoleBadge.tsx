@@ -7,7 +7,11 @@ export interface RoleBadgeProps {
   className?: string;
 }
 
-export function RoleBadge({ role, size = 'medium', className = '' }: RoleBadgeProps) {
+export function RoleBadge({
+  role,
+  size = 'medium',
+  className = '',
+}: RoleBadgeProps) {
   const getRoleLabel = (role: string) => {
     switch (role) {
       case 'admin':
@@ -22,7 +26,9 @@ export function RoleBadge({ role, size = 'medium', className = '' }: RoleBadgePr
   };
 
   return (
-    <span className={`${styles.badge} ${styles[role]} ${styles[size]} ${className}`}>
+    <span
+      className={`${styles.badge} ${styles[role]} ${styles[size]} ${className}`}
+    >
       {getRoleLabel(role)}
     </span>
   );
@@ -34,9 +40,15 @@ export interface StatusBadgeProps {
   className?: string;
 }
 
-export function StatusBadge({ active, size = 'medium', className = '' }: StatusBadgeProps) {
+export function StatusBadge({
+  active,
+  size = 'medium',
+  className = '',
+}: StatusBadgeProps) {
   return (
-    <span className={`${styles.badge} ${active ? styles.active : styles.inactive} ${styles[size]} ${className}`}>
+    <span
+      className={`${styles.badge} ${active ? styles.active : styles.inactive} ${styles[size]} ${className}`}
+    >
       {active ? 'Active' : 'Inactive'}
     </span>
   );

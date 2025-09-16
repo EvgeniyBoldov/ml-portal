@@ -1,39 +1,50 @@
-import React from 'react'
-import Button from '@shared/ui/Button'
-import styles from './AccessibleButton.module.css'
+import React from 'react';
+import styles from './AccessibleButton.module.css';
 
-interface AccessibleButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
-  variant?: 'primary' | 'ghost' | 'danger'
-  size?: 'md' | 'sm' | 'small'
-  loading?: boolean
-  icon?: React.ReactNode
-  children: React.ReactNode
-  ariaLabel?: string
-  ariaDescribedBy?: string
-  ariaExpanded?: boolean
-  ariaControls?: string
-  ariaPressed?: boolean
+interface AccessibleButtonProps
+  extends React.ButtonHTMLAttributes<HTMLButtonElement> {
+  variant?: 'primary' | 'ghost' | 'danger';
+  size?: 'md' | 'sm' | 'small';
+  loading?: boolean;
+  icon?: React.ReactNode;
+  children: React.ReactNode;
+  ariaLabel?: string;
+  ariaDescribedBy?: string;
+  ariaExpanded?: boolean;
+  ariaControls?: string;
+  ariaPressed?: boolean;
 }
 
-const AccessibleButton = React.forwardRef<HTMLButtonElement, AccessibleButtonProps>(
-  ({
-    variant = 'primary',
-    size = 'md',
-    loading = false,
-    icon,
-    children,
-    ariaLabel,
-    ariaDescribedBy,
-    ariaExpanded,
-    ariaControls,
-    ariaPressed,
-    disabled,
-    className = '',
-    ...rest
-  }, ref) => {
-    const sizeClass = size === 'small' ? 'sm' : size
-    const cls = [styles.btn, styles[variant], styles[sizeClass], className].join(' ')
-    
+const AccessibleButton = React.forwardRef<
+  HTMLButtonElement,
+  AccessibleButtonProps
+>(
+  (
+    {
+      variant = 'primary',
+      size = 'md',
+      loading = false,
+      icon,
+      children,
+      ariaLabel,
+      ariaDescribedBy,
+      ariaExpanded,
+      ariaControls,
+      ariaPressed,
+      disabled,
+      className = '',
+      ...rest
+    },
+    ref
+  ) => {
+    const sizeClass = size === 'small' ? 'sm' : size;
+    const cls = [
+      styles.btn,
+      styles[variant],
+      styles[sizeClass],
+      className,
+    ].join(' ');
+
     return (
       <button
         ref={ref}
@@ -48,25 +59,19 @@ const AccessibleButton = React.forwardRef<HTMLButtonElement, AccessibleButtonPro
         {...rest}
       >
         {loading && (
-          <span 
-            className={styles.spinner} 
-            aria-hidden="true"
-            role="status"
-          />
+          <span className={styles.spinner} aria-hidden="true" role="status" />
         )}
         {icon && !loading && (
           <span className={styles.icon} aria-hidden="true">
             {icon}
           </span>
         )}
-        <span className={loading ? styles.hidden : ''}>
-          {children}
-        </span>
+        <span className={loading ? styles.hidden : ''}>{children}</span>
       </button>
-    )
+    );
   }
-)
+);
 
-AccessibleButton.displayName = 'AccessibleButton'
+AccessibleButton.displayName = 'AccessibleButton';
 
-export default AccessibleButton
+export default AccessibleButton;

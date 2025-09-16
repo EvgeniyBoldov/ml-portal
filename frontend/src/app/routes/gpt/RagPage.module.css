@@ -169,23 +169,23 @@
     align-items: flex-start;
     gap: 1rem;
   }
-  
+
   .documentActions {
     width: 100%;
     justify-content: flex-start;
   }
-  
+
   .documentsHeader {
     flex-direction: column;
     align-items: flex-start;
     gap: 0.5rem;
   }
-  
+
   .filters {
     flex-direction: column;
     align-items: stretch;
   }
-  
+
   .metrics {
     flex-wrap: wrap;
   }

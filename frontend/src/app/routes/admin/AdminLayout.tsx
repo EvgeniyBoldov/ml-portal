@@ -28,21 +28,29 @@ export function AdminLayout({ children }: AdminLayoutProps) {
 
   const getBreadcrumb = () => {
     const pathSegments = location.pathname.split('/').filter(Boolean);
-    const breadcrumbs = [{ label: 'Admin', path: '/admin' }];
-    
+    const breadcrumbs: Array<{ label: string; path: string }> = [
+      { label: 'Admin', path: '/admin' },
+    ];
+
     if (pathSegments.length > 1) {
       const currentPath = pathSegments.slice(0, 2).join('/');
-      const currentLabel = navItems
-        .flatMap(group => group.items)
-        .find(item => item.path === `/${currentPath}`)?.label || pathSegments[1];
-      
+      const currentLabel =
+        navItems
+          .flatMap(group => group.items)
+          .find(item => item.path === `/${currentPath}`)?.label ||
+        pathSegments[1] ||
+        'Unknown';
+
       breadcrumbs.push({ label: currentLabel, path: `/${currentPath}` });
     }
-    
+
     if (pathSegments.length > 2) {
-      breadcrumbs.push({ label: pathSegments[2], path: location.pathname });
+      breadcrumbs.push({
+        label: pathSegments[2] || 'Unknown',
+        path: location.pathname,
+      });
     }
-    
+
     return breadcrumbs;
   };
 
@@ -55,12 +63,12 @@ export function AdminLayout({ children }: AdminLayoutProps) {
           <h1 className={styles.sidebarTitle}>Administration</h1>
           <p className={styles.sidebarSubtitle}>Manage users and system</p>
         </div>
-        
+
         <nav className={styles.nav}>
-          {navItems.map((group) => (
+          {navItems.map(group => (
             <div key={group.group} className={styles.navGroup}>
               <div className={styles.navGroupTitle}>{group.group}</div>
-              {group.items.map((item) => (
+              {group.items.map(item => (
                 <Link
                   key={item.path}
                   to={item.path}
@@ -76,16 +84,20 @@ export function AdminLayout({ children }: AdminLayoutProps) {
           ))}
         </nav>
       </aside>
-      
+
       <main className={styles.main}>
         <header className={styles.header}>
           <div>
             <nav className={styles.breadcrumb}>
               {breadcrumbs.map((crumb, index) => (
                 <React.Fragment key={crumb.path}>
-                  {index > 0 && <span className={styles.breadcrumbSeparator}>/</span>}
+                  {index > 0 && (
+                    <span className={styles.breadcrumbSeparator}>/</span>
+                  )}
                   {index === breadcrumbs.length - 1 ? (
-                    <span className={styles.breadcrumbCurrent}>{crumb.label}</span>
+                    <span className={styles.breadcrumbCurrent}>
+                      {crumb.label}
+                    </span>
                   ) : (
                     <Link to={crumb.path} className={styles.breadcrumbItem}>
                       {crumb.label}
@@ -98,15 +110,13 @@ export function AdminLayout({ children }: AdminLayoutProps) {
               {breadcrumbs[breadcrumbs.length - 1]?.label || 'Admin'}
             </h1>
           </div>
-          
+
           <div className={styles.headerActions}>
             {/* Add header actions here */}
           </div>
         </header>
-        
-        <div className={styles.content}>
-          {children || <Outlet />}
-        </div>
+
+        <div className={styles.content}>{children || <Outlet />}</div>
       </main>
     </div>
   );
