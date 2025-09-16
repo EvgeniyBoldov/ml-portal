@@ -1,0 +1,37 @@
+.btn {
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  background: var(--panel);
+  color: var(--text);
+  cursor: pointer;
+  transition:
+    transform 0.05s ease,
+    background 0.2s ease,
+    border-color 0.2s ease;
+  font-weight: 500;
+}
+.btn:active {
+  transform: translateY(1px);
+}
+.primary {
+  background: var(--primary);
+  color: white;
+}
+.ghost {
+  background: transparent;
+  border-color: rgba(255, 255, 255, 0.12);
+}
+.danger {
+  background: var(--danger);
+  color: white;
+}
+.md {
+  padding: 10px 14px;
+  font-size: 14px;
+}
+.sm {
+  padding: 6px 10px;
+  font-size: 12px;
+  border-radius: 8px;
+}

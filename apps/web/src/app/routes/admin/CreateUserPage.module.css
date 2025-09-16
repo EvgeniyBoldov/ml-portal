@@ -1,0 +1,278 @@
+.page {
+  max-width: 600px;
+  margin: 0 auto;
+}
+
+.pageHeader {
+  margin-bottom: var(--spacing-xl);
+}
+
+.pageTitle {
+  font-size: var(--font-size-2xl);
+  font-weight: 700;
+  color: var(--color-text);
+  margin: 0 0 var(--spacing-sm) 0;
+}
+
+.pageDescription {
+  font-size: var(--font-size-lg);
+  color: var(--color-text-secondary);
+  margin: 0;
+}
+
+.form {
+  background: var(--color-background);
+  border-radius: var(--border-radius);
+  border: 1px solid var(--color-border);
+  padding: var(--spacing-xl);
+}
+
+.formSection {
+  margin-bottom: var(--spacing-xl);
+}
+
+.formSection:last-child {
+  margin-bottom: 0;
+}
+
+.sectionTitle {
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+  color: var(--color-text);
+  margin: 0 0 var(--spacing-lg) 0;
+  padding-bottom: var(--spacing-sm);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.formGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--spacing-lg);
+}
+
+.formGroup {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+}
+
+.formGroup.fullWidth {
+  grid-column: 1 / -1;
+}
+
+.formLabel {
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  color: var(--color-text);
+}
+
+.formLabel.required::after {
+  content: ' *';
+  color: var(--color-danger);
+}
+
+.formInput {
+  width: 100%;
+}
+
+.formSelect {
+  width: 100%;
+}
+
+.formTextarea {
+  width: 100%;
+  min-height: 100px;
+  resize: vertical;
+}
+
+.formCheckbox {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  cursor: pointer;
+}
+
+.formCheckboxInput {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+.formCheckboxLabel {
+  font-size: var(--font-size-sm);
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.formHelp {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  margin-top: var(--spacing-xs);
+}
+
+.formError {
+  font-size: var(--font-size-xs);
+  color: var(--color-danger);
+  margin-top: var(--spacing-xs);
+}
+
+.passwordToggle {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  margin-top: var(--spacing-sm);
+  padding: var(--spacing-sm);
+  background: var(--color-surface);
+  border-radius: var(--border-radius);
+  border: 1px solid var(--color-border);
+}
+
+.passwordToggleLabel {
+  font-size: var(--font-size-sm);
+  color: var(--color-text);
+  cursor: pointer;
+  flex: 1;
+}
+
+.passwordToggleSwitch {
+  position: relative;
+  width: 44px;
+  height: 24px;
+  background: var(--color-border);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+}
+
+.passwordToggleSwitch.active {
+  background: var(--color-primary);
+}
+
+.passwordToggleSwitch::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  background: white;
+  border-radius: 50%;
+  transition: transform 0.2s ease;
+}
+
+.passwordToggleSwitch.active::after {
+  transform: translateX(20px);
+}
+
+.passwordField {
+  margin-top: var(--spacing-md);
+}
+
+.formActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--spacing-md);
+  padding-top: var(--spacing-lg);
+  border-top: 1px solid var(--color-border);
+}
+
+.passwordPolicy {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--border-radius);
+  padding: var(--spacing-md);
+  margin-top: var(--spacing-sm);
+}
+
+.passwordPolicyTitle {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--color-text);
+  margin: 0 0 var(--spacing-sm) 0;
+}
+
+.passwordPolicyList {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--spacing-xs);
+}
+
+.passwordPolicyItem {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+}
+
+.passwordPolicyItem.valid {
+  color: var(--color-success);
+}
+
+.passwordPolicyItem.invalid {
+  color: var(--color-danger);
+}
+
+.passwordPolicyIcon {
+  width: 12px;
+  height: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+}
+
+/* Dark mode */
+@media (prefers-color-scheme: dark) {
+  .form {
+    background: var(--color-background-dark);
+    border-color: var(--color-border-dark);
+  }
+
+  .sectionTitle {
+    border-color: var(--color-border-dark);
+  }
+
+  .passwordToggle {
+    background: var(--color-surface-dark);
+    border-color: var(--color-border-dark);
+  }
+
+  .passwordPolicy {
+    background: var(--color-surface-dark);
+    border-color: var(--color-border-dark);
+  }
+
+  .formActions {
+    border-color: var(--color-border-dark);
+  }
+}
+
+/* Mobile */
+@media (max-width: 768px) {
+  .page {
+    max-width: none;
+  }
+
+  .form {
+    padding: var(--spacing-lg);
+  }
+
+  .formGrid {
+    grid-template-columns: 1fr;
+    gap: var(--spacing-md);
+  }
+
+  .passwordPolicyList {
+    grid-template-columns: 1fr;
+  }
+
+  .formActions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}

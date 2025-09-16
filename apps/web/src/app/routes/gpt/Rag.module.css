@@ -1,0 +1,118 @@
+.wrap {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  background: var(--chat-panel-bg, var(--panel-alt, #f4f6ff));
+  border: 1px solid var(--chat-panel-border, rgba(0, 0, 0, 0.08));
+  border-radius: var(--radius);
+  margin-top: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+}
+
+.title {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.search {
+  min-width: 200px;
+}
+
+.tableWrap {
+  flex: 1;
+  overflow: auto;
+  border-radius: var(--radius);
+  border: 1px solid var(--color-border);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--color-bg);
+}
+
+.table th {
+  background: var(--color-bg-secondary);
+  padding: 0.75rem;
+  text-align: left;
+  font-weight: 600;
+  color: var(--color-text);
+  border-bottom: 1px solid var(--color-border);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.table td {
+  padding: 0.75rem;
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-text);
+}
+
+.table tr:hover {
+  background: var(--color-bg-secondary);
+}
+
+.table .icon {
+  background: none;
+  border: none;
+  padding: 0.5rem;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  color: var(--color-muted);
+  margin-left: 0.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+}
+
+.table .icon:hover {
+  background: var(--color-bg-secondary);
+  color: var(--color-text);
+}
+
+.muted {
+  color: var(--color-muted);
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.stack button {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--radius-sm);
+  transition: all 0.2s ease;
+}
+
+.stack button:hover {
+  background: var(--color-bg-secondary);
+}

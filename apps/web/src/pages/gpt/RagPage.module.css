@@ -1,0 +1,210 @@
+.container {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 1rem;
+}
+
+.uploadCard,
+.searchCard,
+.documentsCard {
+  padding: 1.5rem;
+}
+
+.searchForm {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.searchForm input {
+  flex: 1;
+}
+
+.searchResults {
+  margin-top: 1rem;
+  padding: 1rem;
+  background: var(--color-bg-secondary);
+  border-radius: 0.5rem;
+}
+
+.searchItem {
+  display: flex;
+  gap: 1rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.searchItem:last-child {
+  border-bottom: none;
+}
+
+.searchScore {
+  min-width: 60px;
+  font-weight: bold;
+  color: var(--color-primary);
+}
+
+.searchSnippet {
+  flex: 1;
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+.documentsList {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.documentItem {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.5rem;
+  background: var(--color-bg-secondary);
+}
+
+.documentInfo {
+  flex: 1;
+}
+
+.documentName {
+  font-weight: 500;
+  margin-bottom: 0.5rem;
+}
+
+.documentStatus {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.25rem;
+}
+
+.statusBadge {
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.25rem;
+  color: white;
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+
+.progress {
+  font-size: 0.8rem;
+  color: var(--color-text-secondary);
+}
+
+.documentDate {
+  font-size: 0.8rem;
+  color: var(--color-text-secondary);
+}
+
+.documentActions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.documentsHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
+.metrics {
+  display: flex;
+  gap: 1rem;
+  font-size: 0.9rem;
+  color: var(--color-text-secondary);
+}
+
+.metrics span {
+  padding: 0.25rem 0.5rem;
+  background: var(--color-bg-secondary);
+  border-radius: 0.25rem;
+}
+
+.filters {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+  align-items: center;
+}
+
+.filters input {
+  flex: 1;
+}
+
+.statusFilter {
+  padding: 0.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.25rem;
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  min-width: 150px;
+}
+
+.pagination {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 1rem;
+  margin-top: 1rem;
+  padding: 1rem;
+}
+
+.pageInfo {
+  font-size: 0.9rem;
+  color: var(--color-text-secondary);
+}
+
+@media (max-width: 768px) {
+  .documentItem {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1rem;
+  }
+
+  .documentActions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .documentsHeader {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.5rem;
+  }
+
+  .filters {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .metrics {
+    flex-wrap: wrap;
+  }
+}
+
+.uploadTags {
+  margin-top: 1rem;
+  padding: 1rem;
+  background: var(--color-bg-secondary);
+  border-radius: 0.5rem;
+}
+
+.uploadTags label {
+  display: block;
+  margin-bottom: 0.5rem;
+  font-weight: 500;
+  color: var(--color-text-primary);
+}
+
+.documentTags {
+  margin-top: 0.5rem;
+}

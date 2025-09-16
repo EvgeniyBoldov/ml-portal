@@ -1,0 +1,12 @@
+.wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+.name {
+  color: var(--muted);
+  font-size: 13px;
+}
+.inputHidden {
+  display: none;
+}
