@@ -36,7 +36,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && rm -rf /var/lib/apt/lists/*
 
 # Все зависимости для воркера
-COPY requirements-worker.txt ./requirements.txt
+COPY infra/docker/worker/requirements-worker.txt ./requirements.txt
 RUN python -m pip install --upgrade pip && pip install -r requirements.txt
 
 # Копируем весь backend

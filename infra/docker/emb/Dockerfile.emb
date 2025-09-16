@@ -15,12 +15,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && rm -rf /var/lib/apt/lists/*
 
 # Только embedding зависимости
-COPY requirements-emb.txt ./requirements.txt
+COPY infra/docker/emb/requirements-emb.txt ./requirements.txt
 RUN python -m pip install --upgrade pip && pip install -r requirements.txt
 
 # Копируем только необходимые файлы
 COPY src/app/ ./app/
-COPY entrypoint.sh /entrypoint.sh
+COPY infra/docker/emb/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 EXPOSE 8001
