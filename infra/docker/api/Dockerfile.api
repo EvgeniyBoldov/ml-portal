@@ -11,13 +11,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && rm -rf /var/lib/apt/lists/*
 
 # Только API зависимости
-COPY docker/api/requirements-api.txt ./requirements.txt
+COPY requirements-api.txt ./requirements.txt
 RUN python -m pip install --upgrade pip && pip install -r requirements.txt
 
 # Копируем только необходимые файлы
-COPY backend/app/ ./app/
-COPY backend/alembic.ini ./
-COPY backend/scripts/ ./scripts/
+COPY src/app/ ./app/
+COPY alembic.ini ./
+COPY scripts/ ./scripts/
 
 # Создаем non-root пользователя
 RUN groupadd -r appuser && useradd -r -g appuser appuser

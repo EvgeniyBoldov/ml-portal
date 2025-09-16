@@ -261,8 +261,38 @@ services:
         reservations:
           cpus: '0.5'
           memory: 512M
+    expose:
+      - "3000"
+    networks:
+      - ml-portal-network
+
+  # Nginx Reverse Proxy (на легкой ВМ)
+  nginx:
+    build:
+      context: ../../infra/nginx
+      dockerfile: ../../infra/docker/nginx/Dockerfile
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
     ports:
-      - "3000:3000"
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - api
+      - frontend
     networks:
       - ml-portal-network
 

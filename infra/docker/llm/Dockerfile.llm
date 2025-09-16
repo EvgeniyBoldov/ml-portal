@@ -10,13 +10,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && rm -rf /var/lib/apt/lists/*
 
 # Только LLM зависимости
-COPY docker/llm/requirements-llm.txt ./requirements.txt
+COPY requirements-llm.txt ./requirements.txt
 RUN python -m pip install --upgrade pip && pip install -r requirements.txt
 
 # Копируем только необходимые файлы
-COPY backend/app/ ./app/
-COPY backend/adapters/ ./adapters/
-COPY docker/llm/entrypoint.sh /entrypoint.sh
+COPY src/app/ ./app/
+COPY src/adapters/ ./adapters/
+COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 EXPOSE 8002

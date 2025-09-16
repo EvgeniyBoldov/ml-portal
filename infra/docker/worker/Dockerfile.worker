@@ -36,11 +36,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && rm -rf /var/lib/apt/lists/*
 
 # Все зависимости для воркера
-COPY docker/worker/requirements-worker.txt ./requirements.txt
+COPY requirements-worker.txt ./requirements.txt
 RUN python -m pip install --upgrade pip && pip install -r requirements.txt
 
 # Копируем весь backend
-COPY backend/ ./
+COPY src/ ./
 
 # Health check
 HEALTHCHECK --interval=60s --timeout=30s --start-period=10s --retries=3 \

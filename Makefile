@@ -22,11 +22,13 @@ help: ## Показать справку
 	@echo ""
 	@echo "🐳 Docker:"
 	@echo "  make build-local        - Собрать образы для локальной разработки"
-	@echo "  make up-local           - Запустить локальный стек"
+	@echo "  make up-local           - Запустить локальный стек (с nginx)"
 	@echo "  make down-local         - Остановить локальный стек"
 	@echo "  make build-prod         - Собрать образы для продакшна"
-	@echo "  make up-prod            - Запустить продакшн стек"
+	@echo "  make up-prod            - Запустить продакшн стек (с nginx)"
 	@echo "  make down-prod          - Остановить продакшн стек"
+	@echo "  make nginx-logs         - Показать логи nginx"
+	@echo "  make nginx-reload       - Перезагрузить nginx"
 	@echo ""
 	@echo "🧪 Тестирование:"
 	@echo "  make test-all           - Запустить все тесты"
@@ -354,3 +356,12 @@ rollback: ## Откат к предыдущей версии
 	docker service update --rollback ml-portal_api
 	docker service update --rollback ml-portal_worker-mixed
 	docker service update --rollback ml-portal_worker-rag
+
+# Nginx команды
+nginx-logs: ## Показать логи nginx
+	@echo "📊 Логи nginx:"
+	docker-compose -f $(COMPOSE_LOCAL) logs nginx
+
+nginx-reload: ## Перезагрузить nginx
+	@echo "🔄 Перезагрузка nginx..."
+	docker-compose -f $(COMPOSE_LOCAL) exec nginx nginx -s reload

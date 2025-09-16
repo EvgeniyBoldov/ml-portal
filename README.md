@@ -46,12 +46,24 @@ ml-portal/
 # Установка зависимостей
 npm install
 
-# Запуск всех сервисов
-npm run docker:up
+# Запуск всех сервисов (с nginx)
+make up-local
 
 # Или только фронтенд
-npm run dev
+make dev
 ```
+
+### Доступ к приложению
+
+После запуска `make up-local`:
+
+- **Frontend**: http://localhost (через nginx)
+- **API**: http://localhost/api (через nginx)
+- **Health Check**: http://localhost/health
+
+Прямой доступ (без nginx):
+- **Frontend**: http://localhost:3000
+- **API**: http://localhost:8000
 
 ### Доступные команды
 
@@ -89,6 +101,7 @@ npm run docker:prod  # Запуск в продакшен режиме
 
 ### Инфраструктура
 - **Docker** + **Docker Compose**
+- **Nginx** reverse proxy (HTTP/HTTPS)
 - **PostgreSQL** база данных
 - **Redis** кэш и очереди
 - **Qdrant** векторная БД
