@@ -1,24 +1,39 @@
 {
-  "name": "ml-portal",
-  "version": "0.1.0",
-  "description": "ML Portal - Full Stack Application",
+  "name": "ml-portal-monorepo",
+  "version": "1.0.0",
+  "description": "ML Portal Monorepo - AI-powered document processing and chat system",
   "private": true,
   "workspaces": [
-    "apps/web",
-    "packages/*"
+    "apps/*"
   ],
   "scripts": {
-    "dev": "npm run dev --workspace=apps/web",
+    "start": "docker-compose -f infra/compose/docker-compose.local.yml up",
     "build": "npm run build --workspace=apps/web",
+    "dev": "npm run dev --workspace=apps/web",
     "test": "npm run test --workspace=apps/web",
     "lint": "npm run lint --workspace=apps/web",
     "format": "npm run format --workspace=apps/web",
-    "docker:up": "docker-compose -f infra/compose/docker-compose.local.yml up --build",
-    "docker:down": "docker-compose -f infra/compose/docker-compose.local.yml down",
-    "docker:prod": "docker-compose -f infra/compose/docker-compose.prod.yml up --build"
+    "type-check": "npm run type-check --workspace=apps/web"
   },
   "devDependencies": {
-    "@types/node": "^20.0.0",
     "typescript": "^5.0.0"
-  }
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=8.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/your-org/ml-portal.git"
+  },
+  "keywords": [
+    "ai",
+    "ml",
+    "rag",
+    "document-processing",
+    "chat",
+    "monorepo"
+  ],
+  "author": "ML Portal Team",
+  "license": "MIT"
 }
