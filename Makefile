@@ -61,6 +61,7 @@ help: ## Показать справку
 	@echo "🔧 Утилиты:"
 	@echo "  make gen-structure      - Генерировать структуру проекта в текстовом виде"
 	@echo "  make gen-tree           - Показать дерево файлов проекта"
+	@echo "  make gen-content        - Генерировать полное содержимое проекта (apps.txt, infra.txt)"
 	@echo "  make gen-openapi        - Генерировать OpenAPI SDK"
 	@echo "  make gen-docs           - Генерировать документацию"
 
@@ -324,6 +325,14 @@ gen-tree: ## Показать дерево файлов проекта
 	@echo "🌳 Дерево файлов проекта:"
 	@echo ""
 	@tree -I 'node_modules|__pycache__|*.pyc|.git|.venv|.pytest_cache|dist|*.tsbuildinfo' -a || find . -type f -not -path './node_modules/*' -not -path './__pycache__/*' -not -path './.git/*' -not -path './.venv/*' -not -path './.pytest_cache/*' -not -path './dist/*' -not -path './*.tsbuildinfo' | head -50
+
+gen-content: ## Генерировать полное содержимое проекта (apps.txt, infra.txt)
+	@echo "📄 Генерация полного содержимого проекта..."
+	@echo "Создание apps.txt и infra.txt с содержимым всех файлов..."
+	python3 $(SCRIPTS_DIR)/generate_project_content.py
+	@echo "✅ Сгенерированы файлы:"
+	@echo "  📄 docs/generated/apps.txt - Содержимое всех файлов из apps/"
+	@echo "  📄 docs/generated/infra.txt - Содержимое всех файлов из infra/"
 
 gen-openapi: ## Генерировать OpenAPI SDK
 	@echo "🔧 Генерация OpenAPI SDK..."

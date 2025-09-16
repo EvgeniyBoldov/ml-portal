@@ -39,3 +39,6 @@ qdrant_data/
 minio_data/
 models-cache/
 node_modules
+
+# Generated documentation
+docs/generated/
