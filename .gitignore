@@ -38,3 +38,4 @@ postgres_data/
 qdrant_data/
 minio_data/
 models-cache/
+node_modules

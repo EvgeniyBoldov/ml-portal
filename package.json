@@ -15,9 +15,6 @@
     "format": "npm run format --workspace=apps/web",
     "type-check": "npm run type-check --workspace=apps/web"
   },
-  "devDependencies": {
-    "typescript": "^5.0.0"
-  },
   "engines": {
     "node": ">=18.0.0",
     "npm": ">=8.0.0"
