@@ -1,6 +1,7 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import AppRouter from './app/router'
+import { ToastProvider } from './shared/ui/Toast'
 import './theme.css'
 
 // Initialize auth tokens from localStorage
@@ -19,6 +20,8 @@ if ((import.meta as any).env?.VITE_USE_MOCKS === 'true') {
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <AppRouter />
+    <ToastProvider>
+      <AppRouter />
+    </ToastProvider>
   </React.StrictMode>
 )

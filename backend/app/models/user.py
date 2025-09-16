@@ -23,6 +23,7 @@ class Users(Base):
     role: Mapped[str] = mapped_column(String(20), nullable=False, default="reader")
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
+    require_password_change: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default="now()")
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default="now()")
 

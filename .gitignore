@@ -1,9 +1,9 @@
 # Dependencies
 /frontend/node_modules/
 
-# Generated files
-back.txt
-front.txt
+# Generated files (moved to tests/legacy/)
+# back.txt
+# front.txt
 
 # Python cache
 __pycache__/

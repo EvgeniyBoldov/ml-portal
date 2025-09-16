@@ -136,6 +136,10 @@ test-local: ## Запустить тесты в локальном окруже�
 	@echo "Запуск тестов..."
 	docker-compose -f docker-compose.local.yml exec api python -m pytest
 
+test-system: ## Тестировать локальную систему
+	@echo "🧪 Тестирование локальной системы..."
+	python3 test_local_system.py
+
 test-e2e: ## Запустить E2E тесты всей системы
 	@echo "Запуск E2E тестов..."
 	python3 scripts/run_e2e_tests.py
@@ -239,7 +243,7 @@ test-rbac: ## Тестировать RBAC систему
 
 run-migrations: ## Запустить миграции БД
 	@echo "🗄️ Запуск миграций БД..."
-	@cd backend && python -m alembic upgrade head
+	docker-compose -f docker-compose.local.yml exec api python -m alembic upgrade head
 
 reset-db: run-migrations create-superuser ## Сбросить БД и создать суперпользователя
 	@echo "✅ БД сброшена и суперпользователь создан"

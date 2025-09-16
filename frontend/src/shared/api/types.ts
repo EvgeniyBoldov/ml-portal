@@ -14,6 +14,15 @@ export interface PaginatedResponse<T> {
   pagination?: Pagination
 }
 
+export interface ApiResponse<T = any> {
+  data?: T
+  error?: {
+    code: string
+    message: string
+  }
+  request_id?: string
+}
+
 export interface Chat {
   id: string
   name?: string | null

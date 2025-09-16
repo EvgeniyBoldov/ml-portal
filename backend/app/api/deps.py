@@ -17,15 +17,20 @@ def db_session():
     """Real DB session dependency."""
     yield from get_session()
 
-async def rate_limit(request: Request, key: str, limit: int, window_sec: int = 60) -> None:
-    """Simple fixed-window rate limit on IP+key using Redis.
+async def rate_limit(request: Request, key: str, limit: int, window_sec: int = 60, login: str = None) -> None:
+    """Simple fixed-window rate limit on IP+key+login using Redis.
     Raises 429 if the number of hits in the current window exceeds `limit`.
     """
     r = get_redis()
-    ip = request.client.host if request.client else "unknown"
+    ip = get_client_ip(request)
     now = int(time.time())
     window = now - (now % window_sec)
-    rl_key = f"rl:{key}:{ip}:{window}"
+    
+    # Include login in rate limit key if provided
+    if login:
+        rl_key = f"rl:{key}:{ip}:{login}:{window}"
+    else:
+        rl_key = f"rl:{key}:{ip}:{window}"
     # Use Lua for atomic INCR+EXPIRE if available; fallback to simple ops
     try:
         cur = await r.incr(rl_key)  # type: ignore[attr-defined]

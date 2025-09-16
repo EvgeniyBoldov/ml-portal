@@ -15,7 +15,7 @@ async function refresh() {
   return data.access_token
 }
 
-export async function apiFetch(path: string, opts: Opts = {}) {
+export async function apiFetch<T = any>(path: string, opts: Opts = {}): Promise<T> {
   const url = path.startsWith('http') ? path : API_BASE + path
   const headers: Record<string,string> = { ...(opts.headers||{}) as any }
   if (opts.auth !== false && token()) headers['Authorization'] = 'Bearer ' + token()
@@ -31,5 +31,5 @@ export async function apiFetch(path: string, opts: Opts = {}) {
     try { const j = await res.json(); msg = j.message || j.detail || JSON.stringify(j) } catch {}
     throw new Error(msg)
   }
-  return res
+  return res.json()
 }

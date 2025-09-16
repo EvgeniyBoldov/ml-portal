@@ -37,6 +37,20 @@ def create_error_response(code: str, message: str, request_id: str,
     }
 
 
+def user_to_response(user) -> UserResponse:
+    """Convert User model to UserResponse schema."""
+    return UserResponse(
+        id=str(user.id),
+        login=user.login,
+        email=user.email,
+        role=user.role,
+        is_active=user.is_active,
+        created_at=user.created_at,
+        updated_at=user.updated_at,
+        require_password_change=getattr(user, 'require_password_change', False)
+    )
+
+
 # User Management Endpoints
 @router.get("/users", response_model=UserListResponse)
 def list_users(
@@ -63,7 +77,7 @@ def list_users(
     total = repo.count_users(query=query, role=role, is_active=is_active)
     
     return UserListResponse(
-        users=[UserResponse.from_orm(user) for user in users],
+        users=[user_to_response(user) for user in users],
         total=total,
         has_more=has_more,
         next_cursor=next_cursor
@@ -133,10 +147,10 @@ def create_user(
         email=user_data.email
     )
     
-    response = UserResponse.from_orm(user)
+    response = user_to_response(user)
     
-    # Include generated password in response if not provided
-    if not user_data.password:
+    # Include generated password in response only if EMAIL_ENABLED=false
+    if not user_data.password and not settings.EMAIL_ENABLED:
         response_dict = response.dict()
         response_dict["generated_password"] = password
         return response_dict
@@ -166,7 +180,7 @@ def get_user(
             ).dict()
         )
     
-    return UserResponse.from_orm(user)
+    return user_to_response(user)
 
 
 @router.patch("/users/{user_id}", response_model=UserResponse)
@@ -201,6 +215,8 @@ def update_user(
         updates["email"] = user_data.email
     if user_data.is_active is not None:
         updates["is_active"] = user_data.is_active
+    if user_data.require_password_change is not None:
+        updates["require_password_change"] = user_data.require_password_change
     
     # Update user
     updated_user = repo.update_user(user_id, **updates)
@@ -215,7 +231,7 @@ def update_user(
         changes=updates
     )
     
-    return UserResponse.from_orm(updated_user)
+    return user_to_response(updated_user)
 
 
 @router.post("/users/{user_id}/password", response_model=dict)
@@ -268,10 +284,13 @@ def reset_user_password(
         request_id=request_id
     )
     
-    return {
-        "message": "Password reset successfully",
-        "new_password": new_password
-    }
+    response = {"message": "Password reset successfully"}
+    
+    # Include new password only if EMAIL_ENABLED=false
+    if not settings.EMAIL_ENABLED:
+        response["new_password"] = new_password
+    
+    return response
 
 
 @router.delete("/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT)

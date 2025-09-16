@@ -840,6 +840,267 @@ export async function reindexAllRagDocuments() {
   return apiRequest<{ reindexed_count: number; total_documents: number }>('/rag/reindex', { method: 'POST' })
 }
 
+// ===== shared/api/admin.ts =====
+/**
+ * Admin API client
+ */
+import { apiFetch } from '../lib/apiFetch';
+import type { ApiResponse, PaginatedResponse } from './types';
+
+// Types
+export interface User {
+  id: string;
+  login: string;
+  role: 'admin' | 'editor' | 'reader';
+  email?: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface UserCreate {
+  login: string;
+  email?: string;
+  role: 'admin' | 'editor' | 'reader';
+  is_active?: boolean;
+  password?: string;
+  send_email?: boolean;
+}
+
+export interface UserUpdate {
+  role?: 'admin' | 'editor' | 'reader';
+  email?: string;
+  is_active?: boolean;
+  require_password_change?: boolean;
+}
+
+export interface UserListResponse extends PaginatedResponse {
+  users: User[];
+  has_more: boolean;
+  next_cursor?: string;
+}
+
+export interface PasswordChange {
+  new_password?: string;
+  require_change?: boolean;
+}
+
+export interface TokenScope {
+  scope: string;
+  description: string;
+}
+
+export interface UserToken {
+  id: string;
+  name: string;
+  scopes: TokenScope[];
+  expires_at?: string;
+  created_at: string;
+  last_used_at?: string;
+  revoked_at?: string;
+}
+
+export interface TokenCreate {
+  name: string;
+  scopes: string[];
+  expires_at?: string;
+}
+
+export interface TokenResponse extends UserToken {
+  token_plain_once?: string; // Only returned on creation
+}
+
+export interface TokenListResponse {
+  tokens: UserToken[];
+  total: number;
+}
+
+export interface AuditLog {
+  id: string;
+  ts: string;
+  actor_user_id?: string;
+  action: string;
+  object_type?: string;
+  object_id?: string;
+  meta?: Record<string, any>;
+  ip?: string;
+  user_agent?: string;
+  request_id?: string;
+}
+
+export interface AuditLogListResponse extends PaginatedResponse {
+  logs: AuditLog[];
+  has_more: boolean;
+  next_cursor?: string;
+}
+
+export interface AuditFilters {
+  actor_user_id?: string;
+  action?: string;
+  object_type?: string;
+  start_date?: string;
+  end_date?: string;
+}
+
+export interface SystemStatus {
+  email_enabled: boolean;
+  email_status: 'ok' | 'error' | 'disabled';
+  total_users: number;
+  active_users: number;
+  total_tokens: number;
+  active_tokens: number;
+}
+
+// API functions
+export const adminApi = {
+  // Users
+  async getUsers(params: {
+    query?: string;
+    role?: string;
+    is_active?: boolean;
+    limit?: number;
+    cursor?: string;
+  } = {}): Promise<UserListResponse> {
+    const searchParams = new URLSearchParams();
+    if (params.query) searchParams.set('query', params.query);
+    if (params.role) searchParams.set('role', params.role);
+    if (params.is_active !== undefined) searchParams.set('is_active', String(params.is_active));
+    if (params.limit) searchParams.set('limit', String(params.limit));
+    if (params.cursor) searchParams.set('cursor', params.cursor);
+
+    return apiFetch(`/api/admin/users?${searchParams.toString()}`);
+  },
+
+  async getUser(id: string): Promise<User> {
+    return apiFetch(`/api/admin/users/${id}`);
+  },
+
+  async createUser(user: UserCreate): Promise<{ user: User; password?: string }> {
+    return apiFetch('/api/admin/users', {
+      method: 'POST',
+      body: JSON.stringify(user),
+    });
+  },
+
+  async updateUser(id: string, user: UserUpdate): Promise<User> {
+    return apiFetch(`/api/admin/users/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(user),
+    });
+  },
+
+  async deleteUser(id: string): Promise<void> {
+    return apiFetch(`/api/admin/users/${id}`, {
+      method: 'DELETE',
+    });
+  },
+
+  async resetUserPassword(id: string, passwordData: PasswordChange): Promise<{ password?: string }> {
+    return apiFetch(`/api/admin/users/${id}/password`, {
+      method: 'POST',
+      body: JSON.stringify(passwordData),
+    });
+  },
+
+  // Tokens
+  async getUserTokens(userId: string): Promise<TokenListResponse> {
+    return apiFetch(`/api/admin/users/${userId}/tokens`);
+  },
+
+  async createUserToken(userId: string, token: TokenCreate): Promise<TokenResponse> {
+    return apiFetch(`/api/admin/users/${userId}/tokens`, {
+      method: 'POST',
+      body: JSON.stringify(token),
+    });
+  },
+
+  async revokeToken(tokenId: string): Promise<void> {
+    return apiFetch(`/api/admin/tokens/${tokenId}`, {
+      method: 'DELETE',
+    });
+  },
+
+  // Audit
+  async getAuditLogs(params: {
+    actor_user_id?: string;
+    action?: string;
+    object_type?: string;
+    start_date?: string;
+    end_date?: string;
+    limit?: number;
+    cursor?: string;
+  } = {}): Promise<AuditLogListResponse> {
+    const searchParams = new URLSearchParams();
+    if (params.actor_user_id) searchParams.set('actor_user_id', params.actor_user_id);
+    if (params.action) searchParams.set('action', params.action);
+    if (params.object_type) searchParams.set('object_type', params.object_type);
+    if (params.start_date) searchParams.set('start_date', params.start_date);
+    if (params.end_date) searchParams.set('end_date', params.end_date);
+    if (params.limit) searchParams.set('limit', String(params.limit));
+    if (params.cursor) searchParams.set('cursor', params.cursor);
+
+    return apiFetch(`/api/admin/audit-logs?${searchParams.toString()}`);
+  },
+
+  // System status
+  async getSystemStatus(): Promise<SystemStatus> {
+    return apiFetch('/api/admin/system/status');
+  },
+
+  // Password reset
+  async requestPasswordReset(loginOrEmail: string): Promise<{ message: string }> {
+    return apiFetch('/auth/password/forgot', {
+      method: 'POST',
+      body: JSON.stringify({ login_or_email: loginOrEmail }),
+    });
+  },
+
+  async resetPassword(token: string, newPassword: string): Promise<{ message: string }> {
+    return apiFetch('/auth/password/reset', {
+      method: 'POST',
+      body: JSON.stringify({ token, new_password: newPassword }),
+    });
+  },
+};
+
+// Token scopes configuration
+export const TOKEN_SCOPES: TokenScope[] = [
+  { scope: 'api:read', description: 'Read API access' },
+  { scope: 'api:write', description: 'Write API access' },
+  { scope: 'api:admin', description: 'Admin API access' },
+  { scope: 'rag:read', description: 'Read RAG documents' },
+  { scope: 'rag:write', description: 'Write RAG documents' },
+  { scope: 'rag:admin', description: 'Admin RAG operations' },
+  { scope: 'chat:read', description: 'Read chat history' },
+  { scope: 'chat:write', description: 'Send messages' },
+  { scope: 'chat:admin', description: 'Admin chat operations' },
+  { scope: 'users:read', description: 'Read user data' },
+  { scope: 'users:write', description: 'Write user data' },
+  { scope: 'users:admin', description: 'Admin user operations' },
+];
+
+// Role hierarchy for scope expansion
+export const SCOPE_HIERARCHY: Record<string, string[]> = {
+  'api:admin': ['api:read', 'api:write'],
+  'api:write': ['api:read'],
+  'rag:admin': ['rag:read', 'rag:write'],
+  'rag:write': ['rag:read'],
+  'chat:admin': ['chat:read', 'chat:write'],
+  'chat:write': ['chat:read'],
+  'users:admin': ['users:read', 'users:write'],
+  'users:write': ['users:read'],
+};
+
+export function expandScopes(scopes: string[]): string[] {
+  const expanded = new Set(scopes);
+  for (const scope of scopes) {
+    if (SCOPE_HIERARCHY[scope]) {
+      SCOPE_HIERARCHY[scope].forEach(s => expanded.add(s));
+    }
+  }
+  return Array.from(expanded).sort();
+}
+
 // ===== shared/api/types.ts =====
 /** Shared API types */
 export interface Pagination {
@@ -855,6 +1116,15 @@ export interface PaginatedResponse<T> {
   items: T[]
   next_cursor?: string | null
   pagination?: Pagination
+}
+
+export interface ApiResponse<T = any> {
+  data?: T
+  error?: {
+    code: string
+    message: string
+  }
+  request_id?: string
 }
 
 export interface Chat {
@@ -952,6 +1222,9 @@ export interface RagDocument {
 
 // ===== shared/api/index.ts =====
 export const API_BASE = (import.meta.env.VITE_API_BASE || '/api') as string
+
+// Re-export admin API
+export * from './admin'
 
 // ===== shared/api/auth.ts =====
 import { apiRequest } from './http'
@@ -1226,6 +1499,7 @@ export const useAuth = () => {
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import AppRouter from './app/router'
+import { ToastProvider } from './shared/ui/Toast'
 import './theme.css'
 
 // Initialize auth tokens from localStorage
@@ -1244,7 +1518,9 @@ if ((import.meta as any).env?.VITE_USE_MOCKS === 'true') {
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <AppRouter />
+    <ToastProvider>
+      <AppRouter />
+    </ToastProvider>
   </React.StrictMode>
 )
 
@@ -1260,6 +1536,14 @@ const AnalyzePage = lazy(() => import('./routes/gpt/AnalyzePage'))
 const RagPage = lazy(() => import('./routes/gpt/Rag'))
 const NotFound = lazy(() => import('./routes/NotFound'))
 
+// Admin routes
+const AdminLayout = lazy(() => import('./routes/admin/AdminLayout'))
+const UsersPage = lazy(() => import('./routes/admin/UsersPage'))
+const CreateUserPage = lazy(() => import('./routes/admin/CreateUserPage'))
+const UserDetailPage = lazy(() => import('./routes/admin/UserDetailPage'))
+const AuditPage = lazy(() => import('./routes/admin/AuditPage'))
+const EmailSettingsPage = lazy(() => import('./routes/admin/EmailSettingsPage'))
+
 const withSuspense = (el: React.ReactNode) => <Suspense fallback={<div />}>{el}</Suspense>
 
 const router = createBrowserRouter([
@@ -1272,6 +1556,17 @@ const router = createBrowserRouter([
       { path: 'chat/:chatId', element: withSuspense(<ChatPage />) },
       { path: 'analyze', element: withSuspense(<AnalyzePage />) },
       { path: 'rag', element: withSuspense(<RagPage />) }
+    ]
+  },
+  {
+    path: '/admin',
+    element: withSuspense(<GPTGate>{withSuspense(<AdminLayout />)}</GPTGate>),
+    children: [
+      { path: 'users', element: withSuspense(<UsersPage />) },
+      { path: 'users/new', element: withSuspense(<CreateUserPage />) },
+      { path: 'users/:id', element: withSuspense(<UserDetailPage />) },
+      { path: 'audit', element: withSuspense(<AuditPage />) },
+      { path: 'settings/email', element: withSuspense(<EmailSettingsPage />) }
     ]
   },
   { path: '*', element: withSuspense(<NotFound />) }
@@ -1387,6 +1682,53 @@ export function TrashIcon({ size=14 }: { size?: number }) {
   )
 }
 
+// ===== shared/ui/RoleBadge.tsx =====
+import React from 'react';
+import styles from './RoleBadge.module.css';
+
+export interface RoleBadgeProps {
+  role: 'admin' | 'editor' | 'reader';
+  size?: 'small' | 'medium' | 'large';
+  className?: string;
+}
+
+export function RoleBadge({ role, size = 'medium', className = '' }: RoleBadgeProps) {
+  const getRoleLabel = (role: string) => {
+    switch (role) {
+      case 'admin':
+        return 'Admin';
+      case 'editor':
+        return 'Editor';
+      case 'reader':
+        return 'Reader';
+      default:
+        return role;
+    }
+  };
+
+  return (
+    <span className={`${styles.badge} ${styles[role]} ${styles[size]} ${className}`}>
+      {getRoleLabel(role)}
+    </span>
+  );
+}
+
+export interface StatusBadgeProps {
+  active: boolean;
+  size?: 'small' | 'medium' | 'large';
+  className?: string;
+}
+
+export function StatusBadge({ active, size = 'medium', className = '' }: StatusBadgeProps) {
+  return (
+    <span className={`${styles.badge} ${active ? styles.active : styles.inactive} ${styles[size]} ${className}`}>
+      {active ? 'Active' : 'Inactive'}
+    </span>
+  );
+}
+
+export default RoleBadge;
+
 // ===== shared/ui/FilePicker.tsx =====
 import React, { useRef } from 'react'
 import Button from './Button'
@@ -1429,6 +1771,191 @@ type Props = React.HTMLAttributes<HTMLSpanElement> & {
 export default function Badge({ tone='neutral', className='', children, ...rest }: Props) {
   return <span {...rest} className={[styles.badge, styles[tone], className].join(' ')}>{children}</span>
 }
+
+// ===== shared/ui/Table.tsx =====
+import React from 'react';
+import styles from './Table.module.css';
+
+export interface TableColumn<T = any> {
+  key: string;
+  title: string;
+  dataIndex?: keyof T;
+  render?: (value: any, record: T, index: number) => React.ReactNode;
+  width?: string | number;
+  align?: 'left' | 'center' | 'right';
+  sortable?: boolean;
+  className?: string;
+}
+
+export interface TableProps<T = any> {
+  columns: TableColumn<T>[];
+  data: T[];
+  loading?: boolean;
+  emptyText?: string;
+  emptyIcon?: React.ReactNode;
+  onRowClick?: (record: T, index: number) => void;
+  onRowDoubleClick?: (record: T, index: number) => void;
+  rowKey?: keyof T | ((record: T) => string);
+  selectedRowKeys?: string[];
+  onSelectionChange?: (selectedKeys: string[]) => void;
+  sortBy?: string;
+  sortOrder?: 'asc' | 'desc';
+  onSort?: (column: string, order: 'asc' | 'desc') => void;
+  className?: string;
+  size?: 'small' | 'medium' | 'large';
+  stickyHeader?: boolean;
+}
+
+export function Table<T = any>({
+  columns,
+  data,
+  loading = false,
+  emptyText = 'No data',
+  emptyIcon,
+  onRowClick,
+  onRowDoubleClick,
+  rowKey = 'id',
+  selectedRowKeys = [],
+  onSelectionChange,
+  sortBy,
+  sortOrder,
+  onSort,
+  className = '',
+  size = 'medium',
+  stickyHeader = true,
+}: TableProps<T>) {
+  const getRowKey = (record: T, index: number): string => {
+    if (typeof rowKey === 'function') {
+      return rowKey(record);
+    }
+    return String(record[rowKey as keyof T] || index);
+  };
+
+  const handleSort = (column: string) => {
+    if (!onSort) return;
+    
+    const newOrder = sortBy === column && sortOrder === 'asc' ? 'desc' : 'asc';
+    onSort(column, newOrder);
+  };
+
+  const renderEmptyState = () => (
+    <tr>
+      <td colSpan={columns.length} className={styles.emptyState}>
+        {emptyIcon && <div className={styles.emptyStateIcon}>{emptyIcon}</div>}
+        <div className={styles.emptyStateTitle}>No data</div>
+        <div className={styles.emptyStateDescription}>{emptyText}</div>
+      </td>
+    </tr>
+  );
+
+  const renderLoadingRow = () => (
+    <tr>
+      <td colSpan={columns.length} className={styles.loadingRow}>
+        <div className={styles.skeleton} style={{ width: '200px', margin: '0 auto' }} />
+      </td>
+    </tr>
+  );
+
+  const renderSkeletonRows = () => {
+    return Array.from({ length: 5 }).map((_, index) => (
+      <tr key={index}>
+        {columns.map((column) => (
+          <td key={column.key} className={`${styles.tableCell} ${styles.loadingCell}`}>
+            <div className={`${styles.skeleton} ${index % 3 === 0 ? styles.short : index % 3 === 1 ? styles.medium : styles.long}`} />
+          </td>
+        ))}
+      </tr>
+    ));
+  };
+
+  const renderHeader = () => (
+    <thead className={styles.tableHeader}>
+      <tr>
+        {columns.map((column) => (
+          <th
+            key={column.key}
+            className={`
+              ${styles.tableHeaderCell}
+              ${column.sortable ? styles.sortable : ''}
+              ${sortBy === column.key ? styles.active : ''}
+              ${column.className || ''}
+            `}
+            style={{
+              width: column.width,
+              textAlign: column.align || 'left',
+            }}
+            onClick={column.sortable ? () => handleSort(column.key) : undefined}
+          >
+            {column.title}
+            {column.sortable && sortBy === column.key && (
+              <span style={{ marginLeft: '4px' }}>
+                {sortOrder === 'asc' ? '↑' : '↓'}
+              </span>
+            )}
+          </th>
+        ))}
+      </tr>
+    </thead>
+  );
+
+  const renderBody = () => (
+    <tbody className={styles.tableBody}>
+      {loading ? (
+        renderSkeletonRows()
+      ) : data.length === 0 ? (
+        renderEmptyState()
+      ) : (
+        data.map((record, index) => {
+          const key = getRowKey(record, index);
+          const isSelected = selectedRowKeys.includes(key);
+          
+          return (
+            <tr
+              key={key}
+              className={`${styles.tableRow} ${isSelected ? styles.selected : ''}`}
+              onClick={() => onRowClick?.(record, index)}
+              onDoubleClick={() => onRowDoubleClick?.(record, index)}
+            >
+              {columns.map((column) => {
+                const value = column.dataIndex ? record[column.dataIndex] : undefined;
+                const cellContent = column.render ? column.render(value, record, index) : value;
+                
+                return (
+                  <td
+                    key={column.key}
+                    className={`
+                      ${styles.tableCell}
+                      ${size === 'small' ? styles.compact : ''}
+                      ${column.align === 'right' ? styles.numeric : ''}
+                      ${column.key === 'actions' ? styles.actions : ''}
+                      ${column.className || ''}
+                    `}
+                    style={{
+                      textAlign: column.align || 'left',
+                    }}
+                  >
+                    {cellContent}
+                  </td>
+                );
+              })}
+            </tr>
+          );
+        })
+      )}
+    </tbody>
+  );
+
+  return (
+    <div className={`${styles.tableContainer} ${className}`}>
+      <table className={styles.table}>
+        {stickyHeader && renderHeader()}
+        {renderBody()}
+      </table>
+    </div>
+  );
+}
+
+export default Table;
 
 // ===== shared/ui/Button.tsx =====
 import React from 'react'
@@ -1477,6 +2004,199 @@ export default function Modal({ open, title, onClose, children, footer, size='md
   )
 }
 
+// ===== shared/ui/Toast.tsx =====
+import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
+import styles from './Toast.module.css';
+
+export interface Toast {
+  id: string;
+  type: 'success' | 'error' | 'warning' | 'info';
+  title?: string;
+  message: string;
+  duration?: number;
+  actions?: Array<{
+    label: string;
+    onClick: () => void;
+  }>;
+}
+
+interface ToastContextType {
+  showToast: (toast: Omit<Toast, 'id'>) => string;
+  hideToast: (id: string) => void;
+  hideAllToasts: () => void;
+}
+
+const ToastContext = createContext<ToastContextType | null>(null);
+
+export function useToast() {
+  const context = useContext(ToastContext);
+  if (!context) {
+    throw new Error('useToast must be used within a ToastProvider');
+  }
+  return context;
+}
+
+interface ToastProviderProps {
+  children: React.ReactNode;
+}
+
+export function ToastProvider({ children }: ToastProviderProps) {
+  const [toasts, setToasts] = useState<Toast[]>([]);
+
+  const showToast = useCallback((toast: Omit<Toast, 'id'>) => {
+    const id = Math.random().toString(36).substr(2, 9);
+    const newToast: Toast = {
+      id,
+      duration: 5000,
+      ...toast,
+    };
+    
+    setToasts(prev => [...prev, newToast]);
+    
+    // Auto-hide after duration
+    if (newToast.duration && newToast.duration > 0) {
+      setTimeout(() => {
+        hideToast(id);
+      }, newToast.duration);
+    }
+    
+    return id;
+  }, []);
+
+  const hideToast = useCallback((id: string) => {
+    setToasts(prev => prev.filter(toast => toast.id !== id));
+  }, []);
+
+  const hideAllToasts = useCallback(() => {
+    setToasts([]);
+  }, []);
+
+  return (
+    <ToastContext.Provider value={{ showToast, hideToast, hideAllToasts }}>
+      {children}
+      <ToastContainer toasts={toasts} onHide={hideToast} />
+    </ToastContext.Provider>
+  );
+}
+
+interface ToastContainerProps {
+  toasts: Toast[];
+  onHide: (id: string) => void;
+}
+
+function ToastContainer({ toasts, onHide }: ToastContainerProps) {
+  if (toasts.length === 0) return null;
+
+  return (
+    <div className={styles.toastContainer}>
+      {toasts.map(toast => (
+        <ToastItem key={toast.id} toast={toast} onHide={onHide} />
+      ))}
+    </div>
+  );
+}
+
+interface ToastItemProps {
+  toast: Toast;
+  onHide: (id: string) => void;
+}
+
+function ToastItem({ toast, onHide }: ToastItemProps) {
+  const getIcon = (type: Toast['type']) => {
+    switch (type) {
+      case 'success':
+        return '✓';
+      case 'error':
+        return '✕';
+      case 'warning':
+        return '⚠';
+      case 'info':
+        return 'ℹ';
+      default:
+        return 'ℹ';
+    }
+  };
+
+  return (
+    <div className={`${styles.toast} ${styles[toast.type]}`}>
+      <div className={styles.toastIcon}>
+        {getIcon(toast.type)}
+      </div>
+      
+      <div className={styles.toastContent}>
+        {toast.title && (
+          <div className={styles.toastTitle}>
+            {toast.title}
+          </div>
+        )}
+        <div className={styles.toastMessage}>
+          {toast.message}
+        </div>
+        
+        {toast.actions && toast.actions.length > 0 && (
+          <div className={styles.toastActions}>
+            {toast.actions.map((action, index) => (
+              <button
+                key={index}
+                onClick={action.onClick}
+                className="text-sm text-primary hover:text-primary-dark underline"
+              >
+                {action.label}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+      
+      <button
+        className={styles.toastClose}
+        onClick={() => onHide(toast.id)}
+        aria-label="Close notification"
+      >
+        ×
+      </button>
+      
+      {toast.duration && toast.duration > 0 && (
+        <div
+          className={styles.toastProgress}
+          style={{ animationDuration: `${toast.duration}ms` }}
+        />
+      )}
+    </div>
+  );
+}
+
+// Convenience hooks
+export function useSuccessToast() {
+  const { showToast } = useToast();
+  return useCallback((message: string, title?: string) => {
+    return showToast({ type: 'success', message, title });
+  }, [showToast]);
+}
+
+export function useErrorToast() {
+  const { showToast } = useToast();
+  return useCallback((message: string, title?: string) => {
+    return showToast({ type: 'error', message, title });
+  }, [showToast]);
+}
+
+export function useWarningToast() {
+  const { showToast } = useToast();
+  return useCallback((message: string, title?: string) => {
+    return showToast({ type: 'warning', message, title });
+  }, [showToast]);
+}
+
+export function useInfoToast() {
+  const { showToast } = useToast();
+  return useCallback((message: string, title?: string) => {
+    return showToast({ type: 'info', message, title });
+  }, [showToast]);
+}
+
+export default Toast;
+
 // ===== shared/ui/Select.tsx =====
 import React from 'react'
 import styles from './Select.module.css'
@@ -1520,6 +2240,164 @@ type Props = React.InputHTMLAttributes<HTMLInputElement>
 export default function Input(props: Props) {
   return <input {...props} className={[styles.input, props.className||''].join(' ')} />
 }
+
+// ===== shared/ui/Skeleton.tsx =====
+import React from 'react';
+import styles from './Skeleton.module.css';
+
+export interface SkeletonProps {
+  variant?: 'text' | 'circle' | 'rectangle' | 'avatar' | 'button' | 'badge' | 'card' | 'table';
+  size?: 'short' | 'medium' | 'long';
+  width?: string | number;
+  height?: string | number;
+  className?: string;
+  style?: React.CSSProperties;
+}
+
+export function Skeleton({
+  variant = 'text',
+  size = 'medium',
+  width,
+  height,
+  className = '',
+  style = {},
+}: SkeletonProps) {
+  const skeletonStyle = {
+    ...style,
+    ...(width && { width: typeof width === 'number' ? `${width}px` : width }),
+    ...(height && { height: typeof height === 'number' ? `${height}px` : height }),
+  };
+
+  return (
+    <div
+      className={`
+        ${styles.skeleton}
+        ${styles[variant]}
+        ${variant === 'text' ? styles[size] : ''}
+        ${className}
+      `}
+      style={skeletonStyle}
+    />
+  );
+}
+
+export interface SkeletonListProps {
+  count?: number;
+  variant?: 'vertical' | 'horizontal' | 'grid';
+  children?: React.ReactNode;
+  className?: string;
+}
+
+export function SkeletonList({
+  count = 5,
+  variant = 'vertical',
+  children,
+  className = '',
+}: SkeletonListProps) {
+  const items = children || Array.from({ length: count }, (_, index) => (
+    <Skeleton key={index} />
+  ));
+
+  return (
+    <div className={`${styles.skeletonList} ${styles[variant]} ${className}`}>
+      {items}
+    </div>
+  );
+}
+
+export interface SkeletonTableProps {
+  rows?: number;
+  columns?: number;
+  showAvatar?: boolean;
+  showBadge?: boolean;
+  showActions?: boolean;
+  className?: string;
+}
+
+export function SkeletonTable({
+  rows = 5,
+  columns = 4,
+  showAvatar = false,
+  showBadge = false,
+  showActions = true,
+  className = '',
+}: SkeletonTableProps) {
+  const renderRow = (rowIndex: number) => (
+    <div key={rowIndex} className={styles.skeletonTableRow}>
+      {showAvatar && (
+        <div className={styles.skeletonTableCell}>
+          <Skeleton variant="avatar" />
+        </div>
+      )}
+      
+      {Array.from({ length: columns }, (_, colIndex) => (
+        <div key={colIndex} className={styles.skeletonTableCell}>
+          <Skeleton variant="table" size={colIndex % 3 === 0 ? 'short' : colIndex % 3 === 1 ? 'medium' : 'long'} />
+        </div>
+      ))}
+      
+      {showBadge && (
+        <div className={`${styles.skeletonTableCell} ${styles.badge}`}>
+          <Skeleton variant="badge" />
+        </div>
+      )}
+      
+      {showActions && (
+        <div className={`${styles.skeletonTableCell} ${styles.actions}`}>
+          <Skeleton variant="button" />
+        </div>
+      )}
+    </div>
+  );
+
+  return (
+    <div className={`${styles.skeletonTable} ${className}`}>
+      {Array.from({ length: rows }, (_, index) => renderRow(index))}
+    </div>
+  );
+}
+
+export interface SkeletonCardProps {
+  showAvatar?: boolean;
+  showActions?: boolean;
+  className?: string;
+}
+
+export function SkeletonCard({
+  showAvatar = true,
+  showActions = true,
+  className = '',
+}: SkeletonCardProps) {
+  return (
+    <div className={`${styles.skeleton.card} ${className}`}>
+      <div style={{ padding: 'var(--spacing-md)' }}>
+        {showAvatar && (
+          <div style={{ display: 'flex', alignItems: 'center', marginBottom: 'var(--spacing-sm)' }}>
+            <Skeleton variant="avatar" />
+            <div style={{ marginLeft: 'var(--spacing-sm)', flex: 1 }}>
+              <Skeleton size="medium" style={{ marginBottom: 'var(--spacing-xs)' }} />
+              <Skeleton size="short" />
+            </div>
+          </div>
+        )}
+        
+        <div style={{ marginBottom: 'var(--spacing-sm)' }}>
+          <Skeleton size="long" style={{ marginBottom: 'var(--spacing-xs)' }} />
+          <Skeleton size="medium" />
+        </div>
+        
+        {showActions && (
+          <div style={{ display: 'flex', gap: 'var(--spacing-sm)', justifyContent: 'flex-end' }}>
+            <Skeleton variant="button" />
+            <Skeleton variant="button" />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export default Skeleton;
 
 // ===== shared/ui/ThemeSwitch.tsx =====
 import React, { useEffect, useState } from 'react'
@@ -3443,6 +4321,1995 @@ export default function ChatPage() {
     </ChatProvider>
   )
 }
+
+// ===== app/routes/admin/CreateUserPage.tsx =====
+import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { adminApi, type UserCreate } from '../../../shared/api/admin';
+import { Button } from '../../../shared/ui/Button';
+import { Input } from '../../../shared/ui/Input';
+import { Select } from '../../../shared/ui/Select';
+import { useErrorToast, useSuccessToast } from '../../../shared/ui/Toast';
+import styles from './CreateUserPage.module.css';
+
+interface FormData {
+  login: string;
+  email: string;
+  role: 'admin' | 'editor' | 'reader';
+  is_active: boolean;
+  password: string;
+  send_email: boolean;
+  require_password_change: boolean;
+}
+
+interface FormErrors {
+  login?: string;
+  email?: string;
+  password?: string;
+  general?: string;
+}
+
+export function CreateUserPage() {
+  const navigate = useNavigate();
+  const showError = useErrorToast();
+  const showSuccess = useSuccessToast();
+
+  // State
+  const [formData, setFormData] = useState<FormData>({
+    login: '',
+    email: '',
+    role: 'reader',
+    is_active: true,
+    password: '',
+    send_email: true,
+    require_password_change: true,
+  });
+
+  const [errors, setErrors] = useState<FormErrors>({});
+  const [loading, setLoading] = useState(false);
+  const [emailEnabled, setEmailEnabled] = useState(false);
+
+  // Load system status to check if email is enabled
+  useEffect(() => {
+    const loadSystemStatus = async () => {
+      try {
+        const status = await adminApi.getSystemStatus();
+        setEmailEnabled(status.email_enabled);
+        if (!status.email_enabled) {
+          setFormData(prev => ({ ...prev, send_email: false }));
+        }
+      } catch (error) {
+        console.error('Failed to load system status:', error);
+      }
+    };
+
+    loadSystemStatus();
+  }, []);
+
+  // Password validation
+  const validatePassword = (password: string) => {
+    const rules = [
+      { test: password.length >= 8, message: 'At least 8 characters' },
+      { test: /[A-Z]/.test(password), message: 'One uppercase letter' },
+      { test: /[a-z]/.test(password), message: 'One lowercase letter' },
+      { test: /\d/.test(password), message: 'One number' },
+      { test: /[!@#$%^&*(),.?":{}|<>]/.test(password), message: 'One special character' },
+    ];
+
+    return rules.map(rule => ({
+      ...rule,
+      valid: rule.test,
+    }));
+  };
+
+  // Form validation
+  const validateForm = (): boolean => {
+    const newErrors: FormErrors = {};
+
+    // Login validation
+    if (!formData.login.trim()) {
+      newErrors.login = 'Login is required';
+    } else if (formData.login.length < 3) {
+      newErrors.login = 'Login must be at least 3 characters';
+    } else if (!/^[a-zA-Z0-9_-]+$/.test(formData.login)) {
+      newErrors.login = 'Login can only contain letters, numbers, hyphens, and underscores';
+    }
+
+    // Email validation
+    if (formData.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email)) {
+      newErrors.email = 'Please enter a valid email address';
+    }
+
+    // Password validation
+    if (!formData.send_email) {
+      if (!formData.password) {
+        newErrors.password = 'Password is required when not sending email';
+      } else {
+        const passwordRules = validatePassword(formData.password);
+        const invalidRules = passwordRules.filter(rule => !rule.valid);
+        if (invalidRules.length > 0) {
+          newErrors.password = 'Password does not meet requirements';
+        }
+      }
+    }
+
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
+  };
+
+  // Handle form submission
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    if (!validateForm()) {
+      return;
+    }
+
+    setLoading(true);
+    setErrors({});
+
+    try {
+      const userData: UserCreate = {
+        login: formData.login.trim(),
+        email: formData.email.trim() || undefined,
+        role: formData.role,
+        is_active: formData.is_active,
+        send_email: formData.send_email,
+      };
+
+      // Only include password if not sending email
+      if (!formData.send_email) {
+        userData.password = formData.password;
+      }
+
+      const response = await adminApi.createUser(userData);
+
+      showSuccess(
+        `User ${formData.login} created successfully${
+          response.password ? ` with password: ${response.password}` : ''
+        }`
+      );
+
+      navigate(`/admin/users/${response.user.id}`);
+    } catch (error: any) {
+      console.error('Failed to create user:', error);
+      
+      if (error.response?.data?.detail?.error?.code === 'user_exists') {
+        setErrors({ login: 'User with this login already exists' });
+      } else if (error.response?.data?.detail?.error?.code === 'invalid_password') {
+        setErrors({ password: error.response.data.detail.error.message });
+      } else {
+        setErrors({ general: 'Failed to create user. Please try again.' });
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Handle input changes
+  const handleInputChange = (field: keyof FormData) => (
+    e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>
+  ) => {
+    const value = e.target.type === 'checkbox' 
+      ? (e.target as HTMLInputElement).checked 
+      : e.target.value;
+
+    setFormData(prev => ({ ...prev, [field]: value }));
+    
+    // Clear error when user starts typing
+    if (errors[field as keyof FormErrors]) {
+      setErrors(prev => ({ ...prev, [field]: undefined }));
+    }
+  };
+
+  const passwordRules = validatePassword(formData.password);
+
+  return (
+    <div className={styles.page}>
+      <div className={styles.pageHeader}>
+        <h1 className={styles.pageTitle}>Create New User</h1>
+        <p className={styles.pageDescription}>
+          Create a new user account with appropriate role and permissions.
+        </p>
+      </div>
+
+      <form onSubmit={handleSubmit} className={styles.form}>
+        {errors.general && (
+          <div className={styles.formError} style={{ marginBottom: 'var(--spacing-lg)' }}>
+            {errors.general}
+          </div>
+        )}
+
+        {/* Basic Information */}
+        <div className={styles.formSection}>
+          <h2 className={styles.sectionTitle}>Basic Information</h2>
+          
+          <div className={styles.formGrid}>
+            <div className={styles.formGroup}>
+              <label className={`${styles.formLabel} ${styles.required}`}>
+                Login
+              </label>
+              <Input
+                type="text"
+                value={formData.login}
+                onChange={handleInputChange('login')}
+                placeholder="Enter username"
+                className={styles.formInput}
+                error={!!errors.login}
+              />
+              {errors.login && (
+                <div className={styles.formError}>{errors.login}</div>
+              )}
+              <div className={styles.formHelp}>
+                Username for login. Only letters, numbers, hyphens, and underscores allowed.
+              </div>
+            </div>
+
+            <div className={styles.formGroup}>
+              <label className={styles.formLabel}>
+                Email
+              </label>
+              <Input
+                type="email"
+                value={formData.email}
+                onChange={handleInputChange('email')}
+                placeholder="Enter email address"
+                className={styles.formInput}
+                error={!!errors.email}
+              />
+              {errors.email && (
+                <div className={styles.formError}>{errors.email}</div>
+              )}
+              <div className={styles.formHelp}>
+                Optional email address for notifications.
+              </div>
+            </div>
+          </div>
+
+          <div className={styles.formGrid}>
+            <div className={styles.formGroup}>
+              <label className={`${styles.formLabel} ${styles.required}`}>
+                Role
+              </label>
+              <Select
+                value={formData.role}
+                onChange={handleInputChange('role')}
+                className={styles.formSelect}
+              >
+                <option value="reader">Reader - View only access</option>
+                <option value="editor">Editor - Create and edit content</option>
+                <option value="admin">Admin - Full system access</option>
+              </Select>
+              <div className={styles.formHelp}>
+                Determines user permissions and access level.
+              </div>
+            </div>
+
+            <div className={styles.formGroup}>
+              <label className={styles.formLabel}>
+                Status
+              </label>
+              <Select
+                value={formData.is_active ? 'active' : 'inactive'}
+                onChange={(e) => setFormData(prev => ({ 
+                  ...prev, 
+                  is_active: e.target.value === 'active' 
+                }))}
+                className={styles.formSelect}
+              >
+                <option value="active">Active</option>
+                <option value="inactive">Inactive</option>
+              </Select>
+              <div className={styles.formHelp}>
+                Inactive users cannot log in to the system.
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Password Settings */}
+        <div className={styles.formSection}>
+          <h2 className={styles.sectionTitle}>Password Settings</h2>
+
+          {emailEnabled && (
+            <div className={styles.passwordToggle}>
+              <label className={styles.passwordToggleLabel}>
+                <input
+                  type="checkbox"
+                  checked={formData.send_email}
+                  onChange={handleInputChange('send_email')}
+                  className={styles.formCheckboxInput}
+                />
+                Send password setup link via email
+              </label>
+              <div 
+                className={`${styles.passwordToggleSwitch} ${formData.send_email ? styles.active : ''}`}
+                onClick={() => setFormData(prev => ({ ...prev, send_email: !prev.send_email }))}
+              />
+            </div>
+          )}
+
+          {!formData.send_email && (
+            <div className={styles.passwordField}>
+              <div className={styles.formGroup}>
+                <label className={`${styles.formLabel} ${styles.required}`}>
+                  Temporary Password
+                </label>
+                <Input
+                  type="password"
+                  value={formData.password}
+                  onChange={handleInputChange('password')}
+                  placeholder="Enter temporary password"
+                  className={styles.formInput}
+                  error={!!errors.password}
+                />
+                {errors.password && (
+                  <div className={styles.formError}>{errors.password}</div>
+                )}
+                <div className={styles.formHelp}>
+                  User will be required to change this password on first login.
+                </div>
+              </div>
+
+              <div className={styles.passwordPolicy}>
+                <div className={styles.passwordPolicyTitle}>Password Requirements:</div>
+                <ul className={styles.passwordPolicyList}>
+                  {passwordRules.map((rule, index) => (
+                    <li 
+                      key={index}
+                      className={`${styles.passwordPolicyItem} ${rule.valid ? styles.valid : styles.invalid}`}
+                    >
+                      <span className={styles.passwordPolicyIcon}>
+                        {rule.valid ? '✓' : '✕'}
+                      </span>
+                      {rule.message}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          )}
+
+          <div className={styles.formGroup}>
+            <label className={styles.formCheckbox}>
+              <input
+                type="checkbox"
+                checked={formData.require_password_change}
+                onChange={handleInputChange('require_password_change')}
+                className={styles.formCheckboxInput}
+              />
+              <span className={styles.formCheckboxLabel}>
+                Require password change on first login
+              </span>
+            </label>
+            <div className={styles.formHelp}>
+              User must set a new password when they first log in.
+            </div>
+          </div>
+        </div>
+
+        {/* Form Actions */}
+        <div className={styles.formActions}>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => navigate('/admin/users')}
+            disabled={loading}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="submit"
+            disabled={loading}
+          >
+            {loading ? 'Creating...' : 'Create User'}
+          </Button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+export default CreateUserPage;
+
+// ===== app/routes/admin/EmailSettingsPage.tsx =====
+import React, { useState, useEffect } from 'react';
+import { adminApi, type SystemStatus } from '../../../shared/api/admin';
+import { Button } from '../../../shared/ui/Button';
+import { Skeleton } from '../../../shared/ui/Skeleton';
+import { useErrorToast } from '../../../shared/ui/Toast';
+import styles from './EmailSettingsPage.module.css';
+
+export function EmailSettingsPage() {
+  const showError = useErrorToast();
+
+  // State
+  const [status, setStatus] = useState<SystemStatus | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  // Load system status
+  useEffect(() => {
+    const loadSystemStatus = async () => {
+      try {
+        setLoading(true);
+        const systemStatus = await adminApi.getSystemStatus();
+        setStatus(systemStatus);
+      } catch (error) {
+        console.error('Failed to load system status:', error);
+        showError('Failed to load system status. Please try again.');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadSystemStatus();
+  }, [showError]);
+
+  // Refresh status
+  const handleRefresh = async () => {
+    try {
+      setLoading(true);
+      const systemStatus = await adminApi.getSystemStatus();
+      setStatus(systemStatus);
+    } catch (error) {
+      console.error('Failed to refresh system status:', error);
+      showError('Failed to refresh system status. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className={styles.page}>
+        <div className={styles.loadingState}>
+          <div className={styles.loadingSpinner} />
+          <p>Loading email settings...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!status) {
+    return (
+      <div className={styles.page}>
+        <div className={styles.loadingState}>
+          <div className="text-danger">Failed to load system status</div>
+        </div>
+      </div>
+    );
+  }
+
+  const getStatusBadge = () => {
+    if (!status.email_enabled) {
+      return { className: styles.disabled, text: 'Disabled' };
+    }
+    
+    switch (status.email_status) {
+      case 'ok':
+        return { className: styles.enabled, text: 'Enabled' };
+      case 'error':
+        return { className: styles.error, text: 'Error' };
+      case 'disabled':
+        return { className: styles.disabled, text: 'Disabled' };
+      default:
+        return { className: styles.disabled, text: 'Unknown' };
+    }
+  };
+
+  const statusBadge = getStatusBadge();
+
+  return (
+    <div className={styles.page}>
+      <div className={styles.pageHeader}>
+        <h1 className={styles.pageTitle}>Email Settings</h1>
+        <p className={styles.pageDescription}>
+          Monitor email system status and configuration.
+        </p>
+      </div>
+
+      {/* Email Status */}
+      <div className={styles.statusCard}>
+        <div className={styles.statusHeader}>
+          <h2 className={styles.statusTitle}>Email System Status</h2>
+          <span className={`${styles.statusBadge} ${statusBadge.className}`}>
+            {statusBadge.text}
+          </span>
+        </div>
+
+        <div className={styles.statusInfo}>
+          <div className={styles.statusItem}>
+            <div className={styles.statusLabel}>Email Enabled</div>
+            <div className={`${styles.statusValue} ${styles.boolean} ${status.email_enabled ? styles.true : styles.false}`}>
+              {status.email_enabled ? 'Yes' : 'No'}
+            </div>
+          </div>
+
+          <div className={styles.statusItem}>
+            <div className={styles.statusLabel}>Email Status</div>
+            <div className={styles.statusValue}>
+              {status.email_status}
+            </div>
+          </div>
+
+          <div className={styles.statusItem}>
+            <div className={styles.statusLabel}>Total Users</div>
+            <div className={styles.statusValue}>
+              {status.total_users.toLocaleString()}
+            </div>
+          </div>
+
+          <div className={styles.statusItem}>
+            <div className={styles.statusLabel}>Active Users</div>
+            <div className={styles.statusValue}>
+              {status.active_users.toLocaleString()}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Email Configuration Info */}
+      <div className={styles.infoCard}>
+        <h3 className={styles.infoTitle}>Email Configuration</h3>
+        <div className={styles.infoContent}>
+          <p>
+            Email functionality is controlled by environment variables and system configuration.
+            The following settings determine how email features work in the system:
+          </p>
+          
+          <ul className={styles.infoList}>
+            <li className={styles.infoListItem}>
+              <span className={styles.infoListIcon}>📧</span>
+              <span className={styles.infoListText}>
+                <strong>EMAIL_ENABLED</strong> - Master switch for email functionality
+              </span>
+            </li>
+            <li className={styles.infoListItem}>
+              <span className={styles.infoListIcon}>🔧</span>
+              <span className={styles.infoListText}>
+                <strong>SMTP Settings</strong> - SMTP server configuration for sending emails
+              </span>
+            </li>
+            <li className={styles.infoListItem}>
+              <span className={styles.infoListIcon}>🔐</span>
+              <span className={styles.infoListText}>
+                <strong>Authentication</strong> - SMTP username and password for server access
+              </span>
+            </li>
+            <li className={styles.infoListItem}>
+              <span className={styles.infoListIcon}>🛡️</span>
+              <span className={styles.infoListText}>
+                <strong>TLS/SSL</strong> - Secure connection settings for email transmission
+              </span>
+            </li>
+          </ul>
+        </div>
+      </div>
+
+      {/* Warning for disabled email */}
+      {!status.email_enabled && (
+        <div className={styles.warningCard}>
+          <h3 className={styles.warningTitle}>
+            ⚠️ Email System Disabled
+          </h3>
+          <div className={styles.warningContent}>
+            <p>
+              Email functionality is currently disabled. This means:
+            </p>
+            <ul className={styles.infoList}>
+              <li className={styles.infoListItem}>
+                <span className={styles.infoListIcon}>❌</span>
+                <span className={styles.infoListText}>
+                  Password reset emails will not be sent
+                </span>
+              </li>
+              <li className={styles.infoListItem}>
+                <span className={styles.infoListIcon}>❌</span>
+                <span className={styles.infoListText}>
+                  User creation emails will not be sent
+                </span>
+              </li>
+              <li className={styles.infoListItem}>
+                <span className={styles.infoListIcon}>✅</span>
+                <span className={styles.infoListText}>
+                  Offline password reset will be used instead
+                </span>
+              </li>
+            </ul>
+            <p>
+              To enable email functionality, configure the EMAIL_ENABLED environment variable
+              and provide valid SMTP settings.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* System Metrics */}
+      <div className={styles.metricsCard}>
+        <h3 className={styles.metricsTitle}>System Metrics</h3>
+        <div className={styles.metricsGrid}>
+          <div className={styles.metricItem}>
+            <div className={styles.metricValue}>
+              {loading ? <Skeleton width={60} height={32} /> : status.total_users}
+            </div>
+            <div className={styles.metricLabel}>Total Users</div>
+          </div>
+
+          <div className={styles.metricItem}>
+            <div className={styles.metricValue}>
+              {loading ? <Skeleton width={60} height={32} /> : status.active_users}
+            </div>
+            <div className={styles.metricLabel}>Active Users</div>
+          </div>
+
+          <div className={styles.metricItem}>
+            <div className={styles.metricValue}>
+              {loading ? <Skeleton width={60} height={32} /> : status.total_tokens}
+            </div>
+            <div className={styles.metricLabel}>Total Tokens</div>
+          </div>
+
+          <div className={styles.metricItem}>
+            <div className={styles.metricValue}>
+              {loading ? <Skeleton width={60} height={32} /> : status.active_tokens}
+            </div>
+            <div className={styles.metricLabel}>Active Tokens</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Actions */}
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 'var(--spacing-md)' }}>
+        <Button onClick={handleRefresh} variant="outline">
+          Refresh Status
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+export default EmailSettingsPage;
+
+// ===== app/routes/admin/UsersPage.tsx =====
+import React, { useState, useEffect, useCallback } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import { adminApi, type User, type UserListResponse } from '../../../shared/api/admin';
+import { Table, type TableColumn } from '../../../shared/ui/Table';
+import { RoleBadge, StatusBadge } from '../../../shared/ui/RoleBadge';
+import { Button } from '../../../shared/ui/Button';
+import { Input } from '../../../shared/ui/Input';
+import { Select } from '../../../shared/ui/Select';
+import { Skeleton } from '../../../shared/ui/Skeleton';
+import { useErrorToast, useSuccessToast } from '../../../shared/ui/Toast';
+import styles from './UsersPage.module.css';
+
+export function UsersPage() {
+  const navigate = useNavigate();
+  const showError = useErrorToast();
+  const showSuccess = useSuccessToast();
+
+  // State
+  const [users, setUsers] = useState<User[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [total, setTotal] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
+  const [nextCursor, setNextCursor] = useState<string | undefined>();
+  const [currentCursor, setCurrentCursor] = useState<string | undefined>();
+
+  // Filters
+  const [query, setQuery] = useState('');
+  const [roleFilter, setRoleFilter] = useState<string>('');
+  const [statusFilter, setStatusFilter] = useState<string>('');
+  const [sortBy, setSortBy] = useState<string>('created_at');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
+
+  // Load users
+  const loadUsers = useCallback(async (cursor?: string, reset = false) => {
+    try {
+      setLoading(true);
+      
+      const params = {
+        query: query || undefined,
+        role: roleFilter || undefined,
+        is_active: statusFilter ? statusFilter === 'active' : undefined,
+        limit: 20,
+        cursor,
+      };
+
+      const response: UserListResponse = await adminApi.getUsers(params);
+      
+      if (reset) {
+        setUsers(response.users);
+        setCurrentCursor(undefined);
+      } else {
+        setUsers(prev => [...prev, ...response.users]);
+      }
+      
+      setTotal(response.total);
+      setHasMore(response.has_more);
+      setNextCursor(response.next_cursor);
+    } catch (error) {
+      console.error('Failed to load users:', error);
+      showError('Failed to load users. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  }, [query, roleFilter, statusFilter, showError]);
+
+  // Load more users
+  const loadMore = useCallback(() => {
+    if (hasMore && nextCursor && !loading) {
+      setCurrentCursor(nextCursor);
+      loadUsers(nextCursor, false);
+    }
+  }, [hasMore, nextCursor, loading, loadUsers]);
+
+  // Refresh users
+  const refreshUsers = useCallback(() => {
+    loadUsers(undefined, true);
+  }, [loadUsers]);
+
+  // Handle search
+  const handleSearch = useCallback(() => {
+    loadUsers(undefined, true);
+  }, [loadUsers]);
+
+  // Handle sort
+  const handleSort = useCallback((column: string, order: 'asc' | 'desc') => {
+    setSortBy(column);
+    setSortOrder(order);
+    loadUsers(undefined, true);
+  }, [loadUsers]);
+
+  // Handle user actions
+  const handleToggleUserStatus = useCallback(async (user: User) => {
+    try {
+      await adminApi.updateUser(user.id, { is_active: !user.is_active });
+      showSuccess(`User ${user.login} ${user.is_active ? 'deactivated' : 'activated'} successfully`);
+      refreshUsers();
+    } catch (error) {
+      console.error('Failed to toggle user status:', error);
+      showError('Failed to update user status. Please try again.');
+    }
+  }, [showSuccess, showError, refreshUsers]);
+
+  const handleDeleteUser = useCallback(async (user: User) => {
+    if (!window.confirm(`Are you sure you want to deactivate user ${user.login}?`)) {
+      return;
+    }
+
+    try {
+      await adminApi.deleteUser(user.id);
+      showSuccess(`User ${user.login} deactivated successfully`);
+      refreshUsers();
+    } catch (error) {
+      console.error('Failed to delete user:', error);
+      showError('Failed to deactivate user. Please try again.');
+    }
+  }, [showSuccess, showError, refreshUsers]);
+
+  // Load users on mount and when filters change
+  useEffect(() => {
+    loadUsers(undefined, true);
+  }, [loadUsers]);
+
+  // Table columns
+  const columns: TableColumn<User>[] = [
+    {
+      key: 'login',
+      title: 'Login',
+      dataIndex: 'login',
+      sortable: true,
+      render: (value, record) => (
+        <Link 
+          to={`/admin/users/${record.id}`}
+          className="text-primary hover:text-primary-dark font-medium"
+        >
+          {value}
+        </Link>
+      ),
+    },
+    {
+      key: 'role',
+      title: 'Role',
+      dataIndex: 'role',
+      sortable: true,
+      render: (value) => <RoleBadge role={value as any} />,
+    },
+    {
+      key: 'email',
+      title: 'Email',
+      dataIndex: 'email',
+      render: (value) => value || <span className="text-text-tertiary">—</span>,
+    },
+    {
+      key: 'is_active',
+      title: 'Status',
+      dataIndex: 'is_active',
+      sortable: true,
+      render: (value) => <StatusBadge active={value} />,
+    },
+    {
+      key: 'created_at',
+      title: 'Created',
+      dataIndex: 'created_at',
+      sortable: true,
+      render: (value) => new Date(value).toLocaleDateString(),
+    },
+    {
+      key: 'actions',
+      title: 'Actions',
+      render: (_, record) => (
+        <div className="flex gap-2">
+          <Button
+            size="small"
+            variant="outline"
+            onClick={() => navigate(`/admin/users/${record.id}`)}
+          >
+            View
+          </Button>
+          <Button
+            size="small"
+            variant="outline"
+            onClick={() => handleToggleUserStatus(record)}
+          >
+            {record.is_active ? 'Deactivate' : 'Activate'}
+          </Button>
+          <Button
+            size="small"
+            variant="danger"
+            onClick={() => handleDeleteUser(record)}
+          >
+            Delete
+          </Button>
+        </div>
+      ),
+    },
+  ];
+
+  return (
+    <div className={styles.page}>
+      <div className={styles.pageHeader}>
+        <h1 className={styles.pageTitle}>Users</h1>
+        <div className={styles.pageActions}>
+          <Button onClick={refreshUsers} variant="outline">
+            Refresh
+          </Button>
+          <Button onClick={() => navigate('/admin/users/new')}>
+            Create User
+          </Button>
+        </div>
+      </div>
+
+      <div className={styles.filters}>
+        <div className={styles.filterGroup}>
+          <label className={styles.filterLabel}>Search</label>
+          <Input
+            placeholder="Search by login or email..."
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyPress={(e) => e.key === 'Enter' && handleSearch()}
+          />
+        </div>
+
+        <div className={styles.filterGroup}>
+          <label className={styles.filterLabel}>Role</label>
+          <Select
+            value={roleFilter}
+            onChange={(e) => setRoleFilter(e.target.value)}
+          >
+            <option value="">All Roles</option>
+            <option value="admin">Admin</option>
+            <option value="editor">Editor</option>
+            <option value="reader">Reader</option>
+          </Select>
+        </div>
+
+        <div className={styles.filterGroup}>
+          <label className={styles.filterLabel}>Status</label>
+          <Select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+          >
+            <option value="">All Status</option>
+            <option value="active">Active</option>
+            <option value="inactive">Inactive</option>
+          </Select>
+        </div>
+
+        <div className={styles.filterActions}>
+          <Button onClick={handleSearch} variant="outline">
+            Search
+          </Button>
+          <Button 
+            onClick={() => {
+              setQuery('');
+              setRoleFilter('');
+              setStatusFilter('');
+              loadUsers(undefined, true);
+            }}
+            variant="outline"
+          >
+            Clear
+          </Button>
+        </div>
+      </div>
+
+      <div className={styles.tableContainer}>
+        <div className={styles.tableHeader}>
+          <h2 className={styles.tableTitle}>Users List</h2>
+          <div className={styles.tableStats}>
+            {loading ? (
+              <Skeleton width={100} />
+            ) : (
+              `Showing ${users.length} of ${total} users`
+            )}
+          </div>
+        </div>
+
+        <div className={styles.tableContent}>
+          {loading && users.length === 0 ? (
+            <div className={styles.loadingState}>
+              <div className={styles.loadingSpinner} />
+              <p>Loading users...</p>
+            </div>
+          ) : (
+            <Table
+              columns={columns}
+              data={users}
+              loading={loading}
+              onSort={handleSort}
+              sortBy={sortBy}
+              sortOrder={sortOrder}
+              emptyText="No users found"
+              emptyIcon="👥"
+            />
+          )}
+        </div>
+
+        {hasMore && (
+          <div className={styles.pagination}>
+            <div className={styles.paginationInfo}>
+              Showing {users.length} of {total} users
+            </div>
+            <div className={styles.paginationControls}>
+              <Button
+                onClick={loadMore}
+                disabled={loading}
+                variant="outline"
+              >
+                {loading ? 'Loading...' : 'Load More'}
+              </Button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export default UsersPage;
+
+// ===== app/routes/admin/UserDetailPage.tsx =====
+import React, { useState, useEffect } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
+import { adminApi, type User, type UserToken, type AuditLog, TOKEN_SCOPES } from '../../../shared/api/admin';
+import { RoleBadge, StatusBadge } from '../../../shared/ui/RoleBadge';
+import { Button } from '../../../shared/ui/Button';
+import { Input } from '../../../shared/ui/Input';
+import { Select } from '../../../shared/ui/Select';
+import { Modal } from '../../../shared/ui/Modal';
+import { Skeleton } from '../../../shared/ui/Skeleton';
+import { useErrorToast, useSuccessToast } from '../../../shared/ui/Toast';
+import styles from './UserDetailPage.module.css';
+
+type TabType = 'profile' | 'security' | 'tokens' | 'audit';
+
+export function UserDetailPage() {
+  const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
+  const showError = useErrorToast();
+  const showSuccess = useSuccessToast();
+
+  // State
+  const [user, setUser] = useState<User | null>(null);
+  const [tokens, setTokens] = useState<UserToken[]>([]);
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState<TabType>('profile');
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  // Form state
+  const [formData, setFormData] = useState({
+    role: 'reader' as 'admin' | 'editor' | 'reader',
+    email: '',
+    is_active: true,
+  });
+
+  // Token creation modal
+  const [showTokenModal, setShowTokenModal] = useState(false);
+  const [tokenForm, setTokenForm] = useState({
+    name: '',
+    scopes: [] as string[],
+    expires_at: '',
+  });
+
+  // Load user data
+  useEffect(() => {
+    if (!id) return;
+
+    const loadUserData = async () => {
+      try {
+        setLoading(true);
+        const [userData, tokensData, auditData] = await Promise.all([
+          adminApi.getUser(id),
+          adminApi.getUserTokens(id),
+          adminApi.getAuditLogs({ actor_user_id: id, limit: 10 }),
+        ]);
+
+        setUser(userData);
+        setTokens(tokensData.tokens);
+        setAuditLogs(auditData.logs);
+        setFormData({
+          role: userData.role,
+          email: userData.email || '',
+          is_active: userData.is_active,
+        });
+      } catch (error) {
+        console.error('Failed to load user data:', error);
+        showError('Failed to load user data. Please try again.');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadUserData();
+  }, [id, showError]);
+
+  // Handle form submission
+  const handleSave = async () => {
+    if (!user) return;
+
+    try {
+      setSaving(true);
+      const updatedUser = await adminApi.updateUser(user.id, formData);
+      setUser(updatedUser);
+      setEditing(false);
+      showSuccess('User updated successfully');
+    } catch (error) {
+      console.error('Failed to update user:', error);
+      showError('Failed to update user. Please try again.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Handle password reset
+  const handlePasswordReset = async () => {
+    if (!user) return;
+
+    if (!window.confirm(`Reset password for user ${user.login}?`)) {
+      return;
+    }
+
+    try {
+      const response = await adminApi.resetUserPassword(user.id, {});
+      if (response.password) {
+        showSuccess(`Password reset successfully. New password: ${response.password}`);
+      } else {
+        showSuccess('Password reset email sent successfully');
+      }
+    } catch (error) {
+      console.error('Failed to reset password:', error);
+      showError('Failed to reset password. Please try again.');
+    }
+  };
+
+  // Handle token creation
+  const handleCreateToken = async () => {
+    if (!user) return;
+
+    try {
+      const response = await adminApi.createUserToken(user.id, {
+        name: tokenForm.name,
+        scopes: tokenForm.scopes,
+        expires_at: tokenForm.expires_at || undefined,
+      });
+
+      setTokens(prev => [...prev, response]);
+      setShowTokenModal(false);
+      setTokenForm({ name: '', scopes: [], expires_at: '' });
+      
+      if (response.token_plain_once) {
+        showSuccess(`Token created successfully: ${response.token_plain_once}`);
+      } else {
+        showSuccess('Token created successfully');
+      }
+    } catch (error) {
+      console.error('Failed to create token:', error);
+      showError('Failed to create token. Please try again.');
+    }
+  };
+
+  // Handle token revocation
+  const handleRevokeToken = async (tokenId: string) => {
+    if (!window.confirm('Are you sure you want to revoke this token?')) {
+      return;
+    }
+
+    try {
+      await adminApi.revokeToken(tokenId);
+      setTokens(prev => prev.filter(token => token.id !== tokenId));
+      showSuccess('Token revoked successfully');
+    } catch (error) {
+      console.error('Failed to revoke token:', error);
+      showError('Failed to revoke token. Please try again.');
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className={styles.page}>
+        <div className={styles.loadingState}>
+          <div className={styles.loadingSpinner} />
+          <p>Loading user data...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className={styles.page}>
+        <div className={styles.emptyState}>
+          <div className={styles.emptyStateIcon}>👤</div>
+          <div className={styles.emptyStateTitle}>User not found</div>
+          <div className={styles.emptyStateDescription}>
+            The requested user could not be found.
+          </div>
+          <Button onClick={() => navigate('/admin/users')}>
+            Back to Users
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  const getInitials = (name: string) => {
+    return name
+      .split(' ')
+      .map(word => word[0])
+      .join('')
+      .toUpperCase()
+      .slice(0, 2);
+  };
+
+  return (
+    <div className={styles.page}>
+      <div className={styles.pageHeader}>
+        <h1 className={styles.pageTitle}>User Details</h1>
+        <div className={styles.pageActions}>
+          <Button
+            variant="outline"
+            onClick={() => navigate('/admin/users')}
+          >
+            Back to Users
+          </Button>
+          {editing ? (
+            <>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setEditing(false);
+                  setFormData({
+                    role: user.role,
+                    email: user.email || '',
+                    is_active: user.is_active,
+                  });
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={handleSave}
+                disabled={saving}
+              >
+                {saving ? 'Saving...' : 'Save Changes'}
+              </Button>
+            </>
+          ) : (
+            <Button onClick={() => setEditing(true)}>
+              Edit User
+            </Button>
+          )}
+        </div>
+      </div>
+
+      <div className={styles.userInfo}>
+        <div className={styles.userAvatar}>
+          {getInitials(user.login)}
+        </div>
+        <div className={styles.userDetails}>
+          <h2 className={styles.userName}>{user.login}</h2>
+          <div className={styles.userRole}>
+            <RoleBadge role={user.role} size="large" />
+          </div>
+          <div className={styles.userMeta}>
+            <div className={styles.userMetaItem}>
+              <strong>Status:</strong> <StatusBadge active={user.is_active} />
+            </div>
+            <div className={styles.userMetaItem}>
+              <strong>Email:</strong> {user.email || 'Not provided'}
+            </div>
+            <div className={styles.userMetaItem}>
+              <strong>Created:</strong> {new Date(user.created_at).toLocaleDateString()}
+            </div>
+            <div className={styles.userMetaItem}>
+              <strong>Last Updated:</strong> {new Date(user.updated_at).toLocaleDateString()}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className={styles.tabs}>
+        <button
+          className={`${styles.tab} ${activeTab === 'profile' ? styles.active : ''}`}
+          onClick={() => setActiveTab('profile')}
+        >
+          Profile
+        </button>
+        <button
+          className={`${styles.tab} ${activeTab === 'security' ? styles.active : ''}`}
+          onClick={() => setActiveTab('security')}
+        >
+          Security
+        </button>
+        <button
+          className={`${styles.tab} ${activeTab === 'tokens' ? styles.active : ''}`}
+          onClick={() => setActiveTab('tokens')}
+        >
+          Tokens ({tokens.length})
+        </button>
+        <button
+          className={`${styles.tab} ${activeTab === 'audit' ? styles.active : ''}`}
+          onClick={() => setActiveTab('audit')}
+        >
+          Audit
+        </button>
+      </div>
+
+      {/* Profile Tab */}
+      <div className={`${styles.tabContent} ${activeTab === 'profile' ? styles.active : ''}`}>
+        <div className={styles.section}>
+          <h3 className={styles.sectionTitle}>Profile Information</h3>
+          <div className={styles.sectionContent}>
+            <div className={styles.formGroup}>
+              <label className={styles.formLabel}>Login</label>
+              <Input
+                value={user.login}
+                disabled
+                className={styles.formInput}
+              />
+              <div className={styles.formHelp}>
+                Username cannot be changed after creation.
+              </div>
+            </div>
+
+            <div className={styles.formGroup}>
+              <label className={styles.formLabel}>Email</label>
+              {editing ? (
+                <Input
+                  type="email"
+                  value={formData.email}
+                  onChange={(e) => setFormData(prev => ({ ...prev, email: e.target.value }))}
+                  className={styles.formInput}
+                />
+              ) : (
+                <Input
+                  value={user.email || 'Not provided'}
+                  disabled
+                  className={styles.formInput}
+                />
+              )}
+            </div>
+
+            <div className={styles.formGroup}>
+              <label className={styles.formLabel}>Role</label>
+              {editing ? (
+                <Select
+                  value={formData.role}
+                  onChange={(e) => setFormData(prev => ({ 
+                    ...prev, 
+                    role: e.target.value as any 
+                  }))}
+                  className={styles.formSelect}
+                >
+                  <option value="reader">Reader</option>
+                  <option value="editor">Editor</option>
+                  <option value="admin">Admin</option>
+                </Select>
+              ) : (
+                <div>
+                  <RoleBadge role={user.role} />
+                </div>
+              )}
+            </div>
+
+            <div className={styles.formGroup}>
+              <label className={styles.formLabel}>Status</label>
+              {editing ? (
+                <Select
+                  value={formData.is_active ? 'active' : 'inactive'}
+                  onChange={(e) => setFormData(prev => ({ 
+                    ...prev, 
+                    is_active: e.target.value === 'active' 
+                  }))}
+                  className={styles.formSelect}
+                >
+                  <option value="active">Active</option>
+                  <option value="inactive">Inactive</option>
+                </Select>
+              ) : (
+                <div>
+                  <StatusBadge active={user.is_active} />
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Security Tab */}
+      <div className={`${styles.tabContent} ${activeTab === 'security' ? styles.active : ''}`}>
+        <div className={styles.section}>
+          <h3 className={styles.sectionTitle}>Security Settings</h3>
+          <div className={styles.sectionContent}>
+            <div className={styles.formGroup}>
+              <label className={styles.formLabel}>Password Reset</label>
+              <div className={styles.formHelp}>
+                Reset the user's password. They will be required to change it on next login.
+              </div>
+              <Button
+                variant="outline"
+                onClick={handlePasswordReset}
+              >
+                Reset Password
+              </Button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Tokens Tab */}
+      <div className={`${styles.tabContent} ${activeTab === 'tokens' ? styles.active : ''}`}>
+        <div className={styles.section}>
+          <div className={styles.sectionTitle}>
+            Personal Access Tokens
+            <Button
+              size="small"
+              onClick={() => setShowTokenModal(true)}
+              style={{ marginLeft: 'var(--spacing-md)' }}
+            >
+              Create Token
+            </Button>
+          </div>
+          
+          {tokens.length === 0 ? (
+            <div className={styles.emptyState}>
+              <div className={styles.emptyStateIcon}>🔑</div>
+              <div className={styles.emptyStateTitle}>No tokens</div>
+              <div className={styles.emptyStateDescription}>
+                This user has no personal access tokens.
+              </div>
+            </div>
+          ) : (
+            <div className={styles.tokensList}>
+              {tokens.map((token) => (
+                <div key={token.id} className={styles.tokenItem}>
+                  <div className={styles.tokenInfo}>
+                    <div className={styles.tokenName}>{token.name}</div>
+                    <div className={styles.tokenScopes}>
+                      {token.scopes.map((scope) => (
+                        <span key={scope.scope} className={styles.tokenScope}>
+                          {scope.scope}
+                        </span>
+                      ))}
+                    </div>
+                    <div className={styles.tokenMeta}>
+                      Created: {new Date(token.created_at).toLocaleDateString()}
+                      {token.expires_at && (
+                        <> • Expires: {new Date(token.expires_at).toLocaleDateString()}</>
+                      )}
+                      {token.last_used_at && (
+                        <> • Last used: {new Date(token.last_used_at).toLocaleDateString()}</>
+                      )}
+                      {token.revoked_at && (
+                        <> • Revoked: {new Date(token.revoked_at).toLocaleDateString()}</>
+                      )}
+                    </div>
+                  </div>
+                  <div className={styles.tokenActions}>
+                    {!token.revoked_at && (
+                      <Button
+                        size="small"
+                        variant="danger"
+                        onClick={() => handleRevokeToken(token.id)}
+                      >
+                        Revoke
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Audit Tab */}
+      <div className={`${styles.tabContent} ${activeTab === 'audit' ? styles.active : ''}`}>
+        <div className={styles.section}>
+          <h3 className={styles.sectionTitle}>Recent Activity</h3>
+          
+          {auditLogs.length === 0 ? (
+            <div className={styles.emptyState}>
+              <div className={styles.emptyStateIcon}>📋</div>
+              <div className={styles.emptyStateTitle}>No activity</div>
+              <div className={styles.emptyStateDescription}>
+                No recent activity found for this user.
+              </div>
+            </div>
+          ) : (
+            <div className={styles.auditList}>
+              {auditLogs.map((log) => (
+                <div key={log.id} className={styles.auditItem}>
+                  <div className={styles.auditInfo}>
+                    <div className={styles.auditAction}>{log.action}</div>
+                    <div className={styles.auditDetails}>
+                      {log.object_type && log.object_id && (
+                        <>Object: {log.object_type} ({log.object_id})</>
+                      )}
+                    </div>
+                    <div className={styles.auditMeta}>
+                      {log.ip && <>IP: {log.ip}</>}
+                      {log.user_agent && <> • {log.user_agent}</>}
+                    </div>
+                  </div>
+                  <div className={styles.auditTime}>
+                    {new Date(log.ts).toLocaleString()}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Token Creation Modal */}
+      <Modal
+        isOpen={showTokenModal}
+        onClose={() => setShowTokenModal(false)}
+        title="Create Personal Access Token"
+      >
+        <div className={styles.sectionContent}>
+          <div className={styles.formGroup}>
+            <label className={`${styles.formLabel} ${styles.required}`}>
+              Token Name
+            </label>
+            <Input
+              value={tokenForm.name}
+              onChange={(e) => setTokenForm(prev => ({ ...prev, name: e.target.value }))}
+              placeholder="Enter token name"
+              className={styles.formInput}
+            />
+          </div>
+
+          <div className={styles.formGroup}>
+            <label className={`${styles.formLabel} ${styles.required}`}>
+              Scopes
+            </label>
+            <div className={styles.formHelp}>
+              Select the permissions this token should have.
+            </div>
+            <div style={{ maxHeight: '200px', overflowY: 'auto', border: '1px solid var(--color-border)', borderRadius: 'var(--border-radius)', padding: 'var(--spacing-sm)' }}>
+              {TOKEN_SCOPES.map((scope) => (
+                <label key={scope.scope} className={styles.formCheckbox}>
+                  <input
+                    type="checkbox"
+                    checked={tokenForm.scopes.includes(scope.scope)}
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        setTokenForm(prev => ({ 
+                          ...prev, 
+                          scopes: [...prev.scopes, scope.scope] 
+                        }));
+                      } else {
+                        setTokenForm(prev => ({ 
+                          ...prev, 
+                          scopes: prev.scopes.filter(s => s !== scope.scope) 
+                        }));
+                      }
+                    }}
+                    className={styles.formCheckboxInput}
+                  />
+                  <span className={styles.formCheckboxLabel}>
+                    <strong>{scope.scope}</strong> - {scope.description}
+                  </span>
+                </label>
+              ))}
+            </div>
+          </div>
+
+          <div className={styles.formGroup}>
+            <label className={styles.formLabel}>
+              Expires At
+            </label>
+            <Input
+              type="datetime-local"
+              value={tokenForm.expires_at}
+              onChange={(e) => setTokenForm(prev => ({ ...prev, expires_at: e.target.value }))}
+              className={styles.formInput}
+            />
+            <div className={styles.formHelp}>
+              Leave empty for no expiration.
+            </div>
+          </div>
+        </div>
+
+        <div className={styles.formActions}>
+          <Button
+            variant="outline"
+            onClick={() => setShowTokenModal(false)}
+          >
+            Cancel
+          </Button>
+          <Button
+            onClick={handleCreateToken}
+            disabled={!tokenForm.name || tokenForm.scopes.length === 0}
+          >
+            Create Token
+          </Button>
+        </div>
+      </Modal>
+    </div>
+  );
+}
+
+export default UserDetailPage;
+
+// ===== app/routes/admin/AuditPage.tsx =====
+import React, { useState, useEffect, useCallback } from 'react';
+import { adminApi, type AuditLog, type AuditLogListResponse } from '../../../shared/api/admin';
+import { Button } from '../../../shared/ui/Button';
+import { Input } from '../../../shared/ui/Input';
+import { Select } from '../../../shared/ui/Select';
+import { Skeleton } from '../../../shared/ui/Skeleton';
+import { useErrorToast } from '../../../shared/ui/Toast';
+import styles from './AuditPage.module.css';
+
+export function AuditPage() {
+  const showError = useErrorToast();
+
+  // State
+  const [logs, setLogs] = useState<AuditLog[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [total, setTotal] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
+  const [nextCursor, setNextCursor] = useState<string | undefined>();
+  const [currentCursor, setCurrentCursor] = useState<string | undefined>();
+
+  // Filters
+  const [filters, setFilters] = useState({
+    actor_user_id: '',
+    action: '',
+    object_type: '',
+    start_date: '',
+    end_date: '',
+  });
+
+  // Load audit logs
+  const loadLogs = useCallback(async (cursor?: string, reset = false) => {
+    try {
+      setLoading(true);
+      
+      const params = {
+        actor_user_id: filters.actor_user_id || undefined,
+        action: filters.action || undefined,
+        object_type: filters.object_type || undefined,
+        start_date: filters.start_date || undefined,
+        end_date: filters.end_date || undefined,
+        limit: 50,
+        cursor,
+      };
+
+      const response: AuditLogListResponse = await adminApi.getAuditLogs(params);
+      
+      if (reset) {
+        setLogs(response.logs);
+        setCurrentCursor(undefined);
+      } else {
+        setLogs(prev => [...prev, ...response.logs]);
+      }
+      
+      setTotal(response.total);
+      setHasMore(response.has_more);
+      setNextCursor(response.next_cursor);
+    } catch (error) {
+      console.error('Failed to load audit logs:', error);
+      showError('Failed to load audit logs. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  }, [filters, showError]);
+
+  // Load more logs
+  const loadMore = useCallback(() => {
+    if (hasMore && nextCursor && !loading) {
+      setCurrentCursor(nextCursor);
+      loadLogs(nextCursor, false);
+    }
+  }, [hasMore, nextCursor, loading, loadLogs]);
+
+  // Refresh logs
+  const refreshLogs = useCallback(() => {
+    loadLogs(undefined, true);
+  }, [loadLogs]);
+
+  // Handle search
+  const handleSearch = useCallback(() => {
+    loadLogs(undefined, true);
+  }, [loadLogs]);
+
+  // Handle filter changes
+  const handleFilterChange = (field: string) => (
+    e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>
+  ) => {
+    setFilters(prev => ({ ...prev, [field]: e.target.value }));
+  };
+
+  // Load logs on mount and when filters change
+  useEffect(() => {
+    loadLogs(undefined, true);
+  }, [loadLogs]);
+
+  // Get action badge style
+  const getActionBadgeStyle = (action: string) => {
+    if (action.includes('create') || action.includes('created')) return 'create';
+    if (action.includes('update') || action.includes('updated')) return 'update';
+    if (action.includes('delete') || action.includes('deleted')) return 'delete';
+    if (action.includes('login') || action.includes('auth')) return 'login';
+    return 'default';
+  };
+
+  // Get actor initials
+  const getActorInitials = (actorUserId: string | undefined) => {
+    if (!actorUserId) return 'S';
+    return actorUserId.slice(0, 2).toUpperCase();
+  };
+
+  // Format action name
+  const formatAction = (action: string) => {
+    return action
+      .split('_')
+      .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(' ');
+  };
+
+  return (
+    <div className={styles.page}>
+      <div className={styles.pageHeader}>
+        <h1 className={styles.pageTitle}>Audit Log</h1>
+        <div className={styles.pageActions}>
+          <Button onClick={refreshLogs} variant="outline">
+            Refresh
+          </Button>
+        </div>
+      </div>
+
+      <div className={styles.filters}>
+        <div className={styles.filterGroup}>
+          <label className={styles.filterLabel}>Actor</label>
+          <Input
+            placeholder="User ID or login..."
+            value={filters.actor_user_id}
+            onChange={handleFilterChange('actor_user_id')}
+            className={styles.filterInput}
+          />
+        </div>
+
+        <div className={styles.filterGroup}>
+          <label className={styles.filterLabel}>Action</label>
+          <Input
+            placeholder="Action name..."
+            value={filters.action}
+            onChange={handleFilterChange('action')}
+            className={styles.filterInput}
+          />
+        </div>
+
+        <div className={styles.filterGroup}>
+          <label className={styles.filterLabel}>Object Type</label>
+          <Select
+            value={filters.object_type}
+            onChange={handleFilterChange('object_type')}
+            className={styles.filterSelect}
+          >
+            <option value="">All Types</option>
+            <option value="user">User</option>
+            <option value="token">Token</option>
+            <option value="password">Password</option>
+            <option value="auth">Authentication</option>
+          </Select>
+        </div>
+
+        <div className={styles.filterGroup}>
+          <label className={styles.filterLabel}>Start Date</label>
+          <Input
+            type="datetime-local"
+            value={filters.start_date}
+            onChange={handleFilterChange('start_date')}
+            className={styles.filterInput}
+          />
+        </div>
+
+        <div className={styles.filterGroup}>
+          <label className={styles.filterLabel}>End Date</label>
+          <Input
+            type="datetime-local"
+            value={filters.end_date}
+            onChange={handleFilterChange('end_date')}
+            className={styles.filterInput}
+          />
+        </div>
+
+        <div className={styles.filterActions}>
+          <Button onClick={handleSearch} variant="outline">
+            Search
+          </Button>
+          <Button 
+            onClick={() => {
+              setFilters({
+                actor_user_id: '',
+                action: '',
+                object_type: '',
+                start_date: '',
+                end_date: '',
+              });
+              loadLogs(undefined, true);
+            }}
+            variant="outline"
+          >
+            Clear
+          </Button>
+        </div>
+      </div>
+
+      <div className={styles.tableContainer}>
+        <div className={styles.tableHeader}>
+          <h2 className={styles.tableTitle}>Audit Logs</h2>
+          <div className={styles.tableStats}>
+            {loading ? (
+              <Skeleton width={100} />
+            ) : (
+              `Showing ${logs.length} of ${total} logs`
+            )}
+          </div>
+        </div>
+
+        <div className={styles.tableContent}>
+          {loading && logs.length === 0 ? (
+            <div className={styles.loadingState}>
+              <div className={styles.loadingSpinner} />
+              <p>Loading audit logs...</p>
+            </div>
+          ) : logs.length === 0 ? (
+            <div className={styles.emptyState}>
+              <div className={styles.emptyStateIcon}>📋</div>
+              <div className={styles.emptyStateTitle}>No audit logs</div>
+              <div className={styles.emptyStateDescription}>
+                No audit logs found matching your criteria.
+              </div>
+            </div>
+          ) : (
+            <div>
+              {logs.map((log) => (
+                <div key={log.id} className={styles.auditItem}>
+                  <div className={styles.auditInfo}>
+                    <div className={styles.auditAction}>
+                      <span className={`${styles.actionBadge} ${styles[getActionBadgeStyle(log.action)]}`}>
+                        {formatAction(log.action)}
+                      </span>
+                    </div>
+                    
+                    <div className={styles.auditDetails}>
+                      {log.object_type && log.object_id && (
+                        <>
+                          <span className={styles.objectType}>{log.object_type}</span>
+                          <span className={styles.objectId}> ({log.object_id})</span>
+                        </>
+                      )}
+                    </div>
+                    
+                    <div className={styles.auditMeta}>
+                      <div className={styles.actorInfo}>
+                        <div className={styles.actorAvatar}>
+                          {getActorInitials(log.actor_user_id)}
+                        </div>
+                        <span className={log.actor_user_id ? styles.actorName : styles.systemActor}>
+                          {log.actor_user_id ? `User ${log.actor_user_id.slice(0, 8)}` : 'System'}
+                        </span>
+                      </div>
+                      
+                      {log.ip && (
+                        <>
+                          <span>•</span>
+                          <span>IP: {log.ip}</span>
+                        </>
+                      )}
+                      
+                      {log.user_agent && (
+                        <>
+                          <span>•</span>
+                          <span title={log.user_agent}>
+                            {log.user_agent.length > 50 
+                              ? `${log.user_agent.slice(0, 50)}...` 
+                              : log.user_agent
+                            }
+                          </span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                  
+                  <div className={styles.auditTime}>
+                    {new Date(log.ts).toLocaleString()}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {hasMore && (
+          <div className={styles.pagination}>
+            <div className={styles.paginationInfo}>
+              Showing {logs.length} of {total} logs
+            </div>
+            <div className={styles.paginationControls}>
+              <Button
+                onClick={loadMore}
+                disabled={loading}
+                variant="outline"
+              >
+                {loading ? 'Loading...' : 'Load More'}
+              </Button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export default AuditPage;
+
+// ===== app/routes/admin/AdminLayout.tsx =====
+import React from 'react';
+import { Outlet, useLocation, Link } from 'react-router-dom';
+import styles from './AdminLayout.module.css';
+
+interface AdminLayoutProps {
+  children?: React.ReactNode;
+}
+
+export function AdminLayout({ children }: AdminLayoutProps) {
+  const location = useLocation();
+
+  const navItems = [
+    {
+      group: 'Users',
+      items: [
+        { path: '/admin/users', label: 'Users', icon: '👥' },
+        { path: '/admin/users/new', label: 'New User', icon: '➕' },
+      ],
+    },
+    {
+      group: 'System',
+      items: [
+        { path: '/admin/audit', label: 'Audit Log', icon: '📋' },
+        { path: '/admin/settings/email', label: 'Email Settings', icon: '📧' },
+      ],
+    },
+  ];
+
+  const getBreadcrumb = () => {
+    const pathSegments = location.pathname.split('/').filter(Boolean);
+    const breadcrumbs = [{ label: 'Admin', path: '/admin' }];
+    
+    if (pathSegments.length > 1) {
+      const currentPath = pathSegments.slice(0, 2).join('/');
+      const currentLabel = navItems
+        .flatMap(group => group.items)
+        .find(item => item.path === `/${currentPath}`)?.label || pathSegments[1];
+      
+      breadcrumbs.push({ label: currentLabel, path: `/${currentPath}` });
+    }
+    
+    if (pathSegments.length > 2) {
+      breadcrumbs.push({ label: pathSegments[2], path: location.pathname });
+    }
+    
+    return breadcrumbs;
+  };
+
+  const breadcrumbs = getBreadcrumb();
+
+  return (
+    <div className={styles.layout}>
+      <aside className={styles.sidebar}>
+        <div className={styles.sidebarHeader}>
+          <h1 className={styles.sidebarTitle}>Administration</h1>
+          <p className={styles.sidebarSubtitle}>Manage users and system</p>
+        </div>
+        
+        <nav className={styles.nav}>
+          {navItems.map((group) => (
+            <div key={group.group} className={styles.navGroup}>
+              <div className={styles.navGroupTitle}>{group.group}</div>
+              {group.items.map((item) => (
+                <Link
+                  key={item.path}
+                  to={item.path}
+                  className={`${styles.navItem} ${
+                    location.pathname === item.path ? styles.active : ''
+                  }`}
+                >
+                  <span className={styles.navItemIcon}>{item.icon}</span>
+                  <span className={styles.navItemText}>{item.label}</span>
+                </Link>
+              ))}
+            </div>
+          ))}
+        </nav>
+      </aside>
+      
+      <main className={styles.main}>
+        <header className={styles.header}>
+          <div>
+            <nav className={styles.breadcrumb}>
+              {breadcrumbs.map((crumb, index) => (
+                <React.Fragment key={crumb.path}>
+                  {index > 0 && <span className={styles.breadcrumbSeparator}>/</span>}
+                  {index === breadcrumbs.length - 1 ? (
+                    <span className={styles.breadcrumbCurrent}>{crumb.label}</span>
+                  ) : (
+                    <Link to={crumb.path} className={styles.breadcrumbItem}>
+                      {crumb.label}
+                    </Link>
+                  )}
+                </React.Fragment>
+              ))}
+            </nav>
+            <h1 className={styles.headerTitle}>
+              {breadcrumbs[breadcrumbs.length - 1]?.label || 'Admin'}
+            </h1>
+          </div>
+          
+          <div className={styles.headerActions}>
+            {/* Add header actions here */}
+          </div>
+        </header>
+        
+        <div className={styles.content}>
+          {children || <Outlet />}
+        </div>
+      </main>
+    </div>
+  );
+}
+
+export default AdminLayout;
 
 // ===== app/components/__tests__/ChatTags.test.tsx =====
 import React from 'react'

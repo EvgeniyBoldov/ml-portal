@@ -13,9 +13,11 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 @router.post("/login")
 async def login(request: Request, payload: dict, session: Session = Depends(db_session)):
     # payload: {"login":"...", "password":"..."}
-    await rate_limit(request, "auth_login", limit=10, window_sec=60)
     login_ = (payload or {}).get("login", "").strip()
     password = (payload or {}).get("password", "")
+    
+    # Rate limit by IP + login
+    await rate_limit(request, "auth_login", limit=10, window_sec=60, login=login_)
     if not login_ or not password:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="missing_credentials")
     try:

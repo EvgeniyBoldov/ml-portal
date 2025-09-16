@@ -8,7 +8,7 @@ RUN if [ -f package-lock.json ]; then npm ci --no-audit --no-fund; else npm inst
 COPY frontend/ /app/
 
 # Build-time configuration (no .env usage)
-ARG VITE_API_BASE=http://api:8000
+ARG VITE_API_BASE=http://localhost:8000/api
 ARG VITE_USE_MOCKS=false
 ENV VITE_API_BASE=${VITE_API_BASE}
 ENV VITE_USE_MOCKS=${VITE_USE_MOCKS}

@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # База данных
   postgres:
@@ -13,10 +11,11 @@ services:
     ports:
       - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ml_portal"]
+      test: ["CMD-SHELL", "pg_isready -U ml_portal -d ml_portal"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 30s
 
   # Redis
   redis:
@@ -28,14 +27,22 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 10s
 
   # Qdrant
   qdrant:
     image: qdrant/qdrant:latest
     ports:
       - "6333:6333"
+      - "6334:6334"
     volumes:
       - qdrant_data:/qdrant/storage
+    # healthcheck:
+    #   test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:6333/health"]
+    #   interval: 30s
+    #   timeout: 10s
+    #   retries: 3
+    #   start_period: 30s
 
   # MinIO
   minio:
@@ -54,137 +61,95 @@ services:
       interval: 30s
       timeout: 20s
       retries: 3
+      start_period: 30s
 
-  # API (легкий)
+  # API
   api:
     build:
       context: .
       dockerfile: docker/api/Dockerfile.api
     environment:
+      # Database
       - DATABASE_URL=postgresql://ml_portal:ml_portal@postgres:5432/ml_portal
       - DB_URL=postgresql://ml_portal:ml_portal@postgres:5432/ml_portal
+      
+      # Redis
       - REDIS_URL=redis://redis:6379
+      
+      # Qdrant
       - QDRANT_URL=http://qdrant:6333
+      
+      # MinIO/S3
       - S3_ENDPOINT=http://minio:9000
       - S3_ACCESS_KEY=minioadmin
       - S3_SECRET_KEY=minioadmin
       - S3_BUCKET_RAG=rag
       - S3_BUCKET_ANALYSIS=analysis
+      
+      # Test secrets for local development
+      - JWT_SECRET=test-jwt-secret-key-for-local-development-only
+      - PASSWORD_PEPPER=test-pepper-for-local-development
+      
+      # Email settings (disabled for local)
+      - EMAIL_ENABLED=false
+      
+      # CORS settings
+      - CORS_ENABLED=true
+      - CORS_ORIGINS=["http://localhost:3000", "http://localhost:8080"]
+      - CORS_ALLOW_CREDENTIALS=true
+      
+      # Auth settings
+      - AUTH_MODE=token
+      - COOKIE_AUTH_ENABLED=false
+      
+      # Rate limiting
+      - RATE_LIMIT_LOGIN_ATTEMPTS=10
+      - RATE_LIMIT_LOGIN_WINDOW=60
+      
+      # Password policy
+      - PASSWORD_MIN_LENGTH=8
+      - PASSWORD_REQUIRE_UPPERCASE=true
+      - PASSWORD_REQUIRE_LOWERCASE=true
+      - PASSWORD_REQUIRE_DIGITS=true
+      - PASSWORD_REQUIRE_SPECIAL=true
+      
+      # Debug
+      - DEBUG=true
+      - LOG_LEVEL=INFO
+      
     ports:
       - "8000:8000"
     depends_on:
-      - postgres
-      - redis
-      - qdrant
-      - minio
-
-  # Worker (полный) - 1 экземпляр для тестирования
-  worker:
-    build:
-      context: .
-      dockerfile: docker/worker/Dockerfile.worker
-    environment:
-      - DATABASE_URL=postgresql://ml_portal:ml_portal@postgres:5432/ml_portal
-      - REDIS_URL=redis://redis:6379
-      - QDRANT_URL=http://qdrant:6333
-      - S3_ENDPOINT=http://minio:9000
-      - S3_ACCESS_KEY=minioadmin
-      - S3_SECRET_KEY=minioadmin
-      - S3_BUCKET_RAG=rag
-      - S3_BUCKET_ANALYSIS=analysis
-    depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
       qdrant:
-        condition: service_healthy
+        condition: service_started
       minio:
         condition: service_healthy
-    command: ["celery", "-A", "app.celery_app", "worker", "--loglevel=info", "--concurrency=1"]
-
-  # Embedding Worker - новая система эмбеддингов
-  embedding-worker:
-    build:
-      context: .
-      dockerfile: docker/emb/Dockerfile.emb
-    environment:
-      - DATABASE_URL=postgresql://ml_portal:ml_portal@postgres:5432/ml_portal
-      - REDIS_URL=redis://redis:6379
-      - QDRANT_URL=http://qdrant:6333
-      - S3_ENDPOINT=http://minio:9000
-      - S3_ACCESS_KEY=minioadmin
-      - S3_SECRET_KEY=minioadmin
-      - S3_BUCKET_RAG=rag
-      - S3_BUCKET_ANALYSIS=analysis
-      - MODELS_BUCKET=models
-      - MODELS_CACHE_DIR=/models-cache
-      - EMB_MODEL_ID=sentence-transformers/all-MiniLM-L6-v2
-      - EMB_MODEL_ALIAS=minilm
-      - EMB_MODEL_REV=default
-      - EMB_DIM=384
-      - EMB_MAX_SEQ=256
-      - EMB_DEVICE=cpu
-      - EMB_QUEUES_RT=embed.minilm.rt
-      - EMB_QUEUES_BULK=embed.minilm.bulk
-      - BATCH_MAX_TOKENS_RT=4096
-      - BATCH_MAX_TOKENS_BULK=16384
-      - BATCH_MAX_WAIT_MS_RT=25
-      - BATCH_MAX_WAIT_MS_BULK=200
-      # Используем локальные модели
-      - USE_LOCAL_MODELS=true
-      - LOCAL_MODELS_DIR=/local-models
-    volumes:
-      - models-cache:/models-cache
-      - ./models:/local-models:ro  # Монтируем локальные модели
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      qdrant:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
-    command: ["celery", "-A", "app.celery_app", "worker", "--loglevel=info", "--concurrency=1", "--queues=embed.minilm.rt,embed.minilm.bulk"]
-
-  # Embedding (1 экземпляр)
-  emb:
-    build:
-      context: .
-      dockerfile: docker/emb/Dockerfile.emb
-    environment:
-      - PORT=8001
-    ports:
-      - "8001:8001"
-    depends_on:
-      - api
-
-  # LLM (1 экземпляр)
-  llm:
-    build:
-      context: .
-      dockerfile: docker/llm/Dockerfile.llm
-    environment:
-      - PORT=8002
-      - REAL_LLM_URL=http://localhost:8002  # Для локального тестирования
-    ports:
-      - "8002:8002"
-    depends_on:
-      - api
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
 
   # Frontend
   frontend:
     build:
       context: .
       dockerfile: docker/frontend/Dockerfile
+      args:
+        - VITE_API_BASE=http://localhost:8000/api
+        - VITE_USE_MOCKS=false
     ports:
-      - "3000:3000"
+      - "3000:8080"
     depends_on:
-      - api
+      api:
+        condition: service_healthy
 
 volumes:
   postgres_data:
   qdrant_data:
   minio_data:
-  models-cache:

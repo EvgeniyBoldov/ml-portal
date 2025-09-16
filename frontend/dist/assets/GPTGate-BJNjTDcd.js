@@ -1,1 +1,0 @@
-import{r as s,u as o,j as r}from"./index-BSRK8Mud.js";import{u as c}from"./auth-BYZNxM5B.js";import"./http-BXh0eoWj.js";function p({children:a}){const{user:t,fetchMe:u}=c(),[e,n]=s.useState(!1),f=o();return s.useEffect(()=>{(async()=>{try{await u()}finally{n(!0)}})()},[]),s.useEffect(()=>{e&&!t&&f("/login")},[e,t]),!e||!t?null:r.jsx(r.Fragment,{children:a})}export{p as default};

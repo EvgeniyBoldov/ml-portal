@@ -14,6 +14,13 @@ A comprehensive AI-powered platform for document management, chat interactions, 
 - **🤖 Advanced Embedding System**: Scalable embedding dispatcher with model registry and MinIO caching
 - **📦 Model Management**: Download and manage ML models from HuggingFace
 
+### Admin Panel
+- **👥 User Management**: Create, edit, and manage users with RBAC
+- **🔑 Token Management**: Personal Access Tokens (PAT) with flexible scopes
+- **📋 Audit Logging**: Comprehensive audit trail of all system actions
+- **⚙️ System Settings**: Email configuration and system monitoring
+- **🔐 Role-Based Access Control**: Admin, Editor, Reader roles with proper permissions
+
 ### Technical Features
 - **🌙 Dark/Light Theme**: Automatic theme detection with manual override
 - **📱 Responsive Design**: Mobile-first responsive interface
@@ -54,6 +61,7 @@ frontend/
 │   │   ├── contexts/        # React contexts
 │   │   ├── store/           # State management (Zustand)
 │   │   └── routes/          # Page components
+│   │       └── admin/       # Admin panel pages
 │   ├── shared/              # Shared utilities
 │   │   ├── api/             # API client
 │   │   ├── ui/              # UI components
@@ -106,13 +114,19 @@ frontend/
 
 2. **Start all services**
    ```bash
-   docker compose up -d
+   make up
    ```
 
-3. **Access the application**
-   - Frontend: http://localhost:8080
+3. **Create admin user**
+   ```bash
+   make create-admin
+   ```
+
+4. **Access the application**
+   - Frontend: http://localhost:3000
    - Backend API: http://localhost:8000
    - API Documentation: http://localhost:8000/docs
+   - Admin Panel: http://localhost:3000/admin
 
 ### Local Development
 
@@ -162,6 +176,60 @@ POST /api/auth/login
 }
 ```
 
+### Admin API
+
+#### User Management
+```bash
+# List users
+GET /api/admin/users?query=john&role=admin&is_active=true&limit=20&cursor=abc123
+
+# Create user
+POST /api/admin/users
+{
+  "login": "john_doe",
+  "email": "john@example.com",
+  "role": "editor",
+  "is_active": true,
+  "send_email": true
+}
+
+# Update user
+PATCH /api/admin/users/{user_id}
+{
+  "role": "admin",
+  "is_active": false
+}
+
+# Reset password
+POST /api/admin/users/{user_id}/password
+{
+  "require_change": true
+}
+```
+
+#### Token Management
+```bash
+# List user tokens
+GET /api/admin/users/{user_id}/tokens
+
+# Create token
+POST /api/admin/users/{user_id}/tokens
+{
+  "name": "API Token",
+  "scopes": ["api:read", "api:write"],
+  "expires_at": "2024-12-31T23:59:59Z"
+}
+
+# Revoke token
+DELETE /api/admin/tokens/{token_id}
+```
+
+#### Audit Logs
+```bash
+# Get audit logs
+GET /api/admin/audit-logs?actor_user_id=123&action=user_created&start_date=2024-01-01&limit=50
+```
+
 ### Chats API
 
 #### Create Chat
@@ -180,14 +248,6 @@ POST /api/chats/{chat_id}/messages
   "content": "Hello, AI!",
   "use_rag": false,
   "response_stream": true
-}
-```
-
-#### Update Chat Tags
-```bash
-PUT /api/chats/{chat_id}/tags
-{
-  "tags": ["updated", "tags"]
 }
 ```
 
@@ -210,11 +270,6 @@ POST /api/rag/search
   "top_k": 10,
   "min_score": 0.5
 }
-```
-
-#### List Documents
-```bash
-GET /api/rag/?page=1&size=20&status=ready&search=keyword
 ```
 
 ## 🧪 Testing
@@ -243,14 +298,43 @@ docker compose -f docker-compose.test.yml up --abort-on-container-exit
 
 #### Backend
 ```env
+# Database
 DATABASE_URL=postgresql://user:password@localhost/ml_portal
+
+# Redis
 REDIS_URL=redis://localhost:6379/0
+
+# Storage
 MINIO_ENDPOINT=localhost:9000
 MINIO_ACCESS_KEY=minioadmin
 MINIO_SECRET_KEY=minioadmin
+
+# Vector Database
 QDRANT_URL=http://localhost:6333
+
+# AI Services
 LLM_URL=http://localhost:8001
-SECRET_KEY=your-secret-key
+
+# Security
+JWT_SECRET=your-jwt-secret
+PASSWORD_PEPPER=your-password-pepper
+
+# Email (optional)
+EMAIL_ENABLED=true
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_USER=user@example.com
+SMTP_PASSWORD=password
+SMTP_USE_TLS=true
+FROM_EMAIL=noreply@example.com
+
+# CORS
+CORS_ENABLED=true
+CORS_ORIGINS=http://localhost:3000,https://yourdomain.com
+CORS_ALLOW_CREDENTIALS=true
+
+# Permissions
+ALLOW_READER_UPLOADS=false
 ```
 
 #### Frontend
@@ -258,31 +342,6 @@ SECRET_KEY=your-secret-key
 VITE_API_URL=http://localhost:8000
 VITE_USE_MOCKS=false
 ```
-
-## 📊 Monitoring & Logging
-
-### Structured Logging
-The application uses structured JSON logging with the following format:
-```json
-{
-  "timestamp": "2024-01-01T12:00:00Z",
-  "level": "INFO",
-  "logger": "app.api.routers.chats",
-  "message": "API call: POST /chats",
-  "api_call": {
-    "method": "POST",
-    "endpoint": "/chats",
-    "user_id": "user-123",
-    "status_code": 200,
-    "duration_ms": 45.2
-  }
-}
-```
-
-### Metrics
-- **RAG Metrics**: `/api/rag/metrics` - Document and chunk statistics
-- **Health Check**: `/health` - Service health status
-- **Prometheus**: `/metrics` - Prometheus-compatible metrics
 
 ## 🚀 Deployment
 
@@ -292,7 +351,8 @@ The application uses structured JSON logging with the following format:
    ```bash
    export DATABASE_URL=postgresql://prod_user:password@prod_host/ml_portal
    export REDIS_URL=redis://prod_redis:6379/0
-   export SECRET_KEY=your-production-secret-key
+   export JWT_SECRET=your-production-secret-key
+   export PASSWORD_PEPPER=your-production-pepper
    ```
 
 2. **Database Migration**
@@ -332,8 +392,8 @@ make demo-embedding
 ### Code Generation
 ```bash
 # Generate code files
-make gen-backend    # Backend code in back.txt
-make gen-frontend   # Frontend code in front.txt
+make gen-backend    # Backend code in tests/legacy/back.txt
+make gen-frontend   # Frontend code in tests/legacy/front.txt
 make gen-all        # All code
 make gen-docs       # Architecture documentation
 ```
@@ -373,6 +433,32 @@ make clean          # Clean images and volumes
 # Testing
 make test-local     # Run tests in containers
 ```
+
+## 📊 Monitoring & Logging
+
+### Structured Logging
+The application uses structured JSON logging with the following format:
+```json
+{
+  "timestamp": "2024-01-01T12:00:00Z",
+  "level": "INFO",
+  "logger": "app.api.routers.chats",
+  "message": "API call: POST /chats",
+  "api_call": {
+    "method": "POST",
+    "endpoint": "/chats",
+    "user_id": "user-123",
+    "status_code": 200,
+    "duration_ms": 45.2
+  }
+}
+```
+
+### Metrics
+- **RAG Metrics**: `/api/rag/metrics` - Document and chunk statistics
+- **Health Check**: `/health` - Service health status
+- **Prometheus**: `/metrics` - Prometheus-compatible metrics
+- **Admin Metrics**: `/api/admin/system/status` - System and user statistics
 
 ## 🤝 Contributing
 

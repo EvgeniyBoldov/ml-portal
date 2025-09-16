@@ -113,23 +113,27 @@ def start_ingest_chain(doc_id: str) -> None:
 
 
 def search(session: Session, query: str, top_k: int = 5, *, offset: int = 0, doc_id: Optional[str] = None, tags: Optional[list] = None, sort_by: str = "score_desc") -> Dict[str, Any]:
-    vectors = clients.embed_texts([query])
-    if not vectors:
-        return {"results": [], "next_offset": None}
-    vec = vectors[0]
-    hits = clients.qdrant_search(vec, top_k=top_k, offset=offset, doc_id=doc_id, tags=tags, sort_by=sort_by)
-    out = []
-    for h in hits:
-        payload = h.get("payload") or {}
-        out.append({
-            "score": h["score"],
-            "text": payload.get("text"),
-            "doc_id": payload.get("document_id"),
-            "chunk_idx": payload.get("chunk_idx"),
-            "tags": payload.get("tags") or [],
-        })
-    next_offset = offset + len(out) if len(out) == top_k else None
-    return {"results": out, "next_offset": next_offset}
+    try:
+        vectors = clients.embed_texts([query])
+        if not vectors:
+            return {"results": [], "next_offset": None}
+        vec = vectors[0]
+        hits = clients.qdrant_search(vec, top_k=top_k, offset=offset, doc_id=doc_id, tags=tags, sort_by=sort_by)
+        out = []
+        for h in hits:
+            payload = h.get("payload") or {}
+            out.append({
+                "score": h["score"],
+                "text": payload.get("text"),
+                "doc_id": payload.get("document_id"),
+                "chunk_idx": payload.get("chunk_idx"),
+                "tags": payload.get("tags") or [],
+            })
+        next_offset = offset + len(out) if len(out) == top_k else None
+        return {"results": out, "next_offset": next_offset}
+    except Exception as e:
+        # Если сервисы эмбеддингов недоступны, возвращаем пустой результат
+        return {"results": [], "next_offset": None, "error": "Embedding service unavailable"}
 
 
 def progress(session: Session, doc_id: str) -> Dict[str, Any]:

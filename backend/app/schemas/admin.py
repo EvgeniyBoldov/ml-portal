@@ -48,6 +48,7 @@ class UserResponse(UserBase):
     id: str
     created_at: datetime
     updated_at: datetime
+    require_password_change: bool = False
     
     class Config:
         from_attributes = True

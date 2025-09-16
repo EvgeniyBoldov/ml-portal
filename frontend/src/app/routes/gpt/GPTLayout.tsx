@@ -41,11 +41,16 @@ export default function GPTLayout() {
           </div>
         </nav>
 
-        {/* Right: mocks -> role -> theme -> logout */}
+        {/* Right: mocks -> role -> theme -> admin -> logout */}
         <div className={styles.right}>
           {USE_MOCKS && <span className={styles.mocks}>Mocks ON</span>}
           <span className={styles.user}>{user?.role || ''}</span>
           <ThemeSwitch />
+          {isAdmin && (
+            <Button variant="outline" onClick={() => nav('/admin')}>
+              Админка
+            </Button>
+          )}
           <Button variant="ghost" onClick={async () => { await logout(); nav('/login') }}>Выйти</Button>
         </div>
       </header>

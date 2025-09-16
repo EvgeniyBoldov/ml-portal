@@ -20,6 +20,7 @@ from app.api.routers.rag import router as rag_router
 from app.api.routers.analyze import router as analyze_router
 from app.api.routers.admin import router as admin_router
 from app.api.routers.password_reset import router as password_reset_router
+from app.api.routers.setup import router as setup_router
 
 setup_logging()
 
@@ -63,7 +64,15 @@ async def healthz(deep: int | None = None):
             with engine.connect() as conn:
                 conn.execute(text("SELECT 1"))
             await get_redis().ping()
-            get_qdrant().get_collections()
+            # Qdrant health check - use a simple ping instead of get_collections
+            try:
+                get_qdrant().get_collections()
+            except Exception:
+                # If get_collections fails, try a simple ping
+                import requests
+                response = requests.get(f"{settings.QDRANT_URL}/health", timeout=5)
+                if response.status_code != 200:
+                    raise Exception(f"Qdrant health check failed: {response.status_code}")
             get_minio().list_buckets()
         except Exception as e:
             return {"ok": False, "error": str(e)}
@@ -120,3 +129,4 @@ app.include_router(rag_router, prefix="/api")
 app.include_router(analyze_router, prefix="/api")
 app.include_router(admin_router)
 app.include_router(password_reset_router)
+app.include_router(setup_router)

@@ -63,6 +63,7 @@ class settings:
     PASSWORD_REQUIRE_LOWERCASE = (os.getenv("PASSWORD_REQUIRE_LOWERCASE", "true").lower() in ("1", "true", "yes"))
     PASSWORD_REQUIRE_DIGITS = (os.getenv("PASSWORD_REQUIRE_DIGITS", "true").lower() in ("1", "true", "yes"))
     PASSWORD_REQUIRE_SPECIAL = (os.getenv("PASSWORD_REQUIRE_SPECIAL", "true").lower() in ("1", "true", "yes"))
+    PASSWORD_PEPPER = os.getenv("PASSWORD_PEPPER", "")
     
     # Rate limiting
     RATE_LIMIT_LOGIN_ATTEMPTS = int(os.getenv("RATE_LIMIT_LOGIN_ATTEMPTS", "10"))
