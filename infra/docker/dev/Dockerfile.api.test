@@ -1,0 +1,38 @@
+FROM python:3.11-slim
+
+# Устанавливаем системные зависимости
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libpq-dev \
+    curl \
+    libmagic1 \
+    libmagic-dev \
+ && rm -rf /var/lib/apt/lists/*
+
+# Устанавливаем рабочую директорию
+WORKDIR /app
+
+# Копируем requirements файлы
+COPY infra/docker/api/requirements-core.txt ./requirements-core.txt
+COPY infra/docker/api/requirements-dev.txt ./requirements-dev.txt
+
+# Устанавливаем базовые зависимости
+RUN python -m pip install --upgrade pip && pip install -r requirements-core.txt
+
+# Создаем non-root пользователя
+RUN groupadd -r appuser && useradd -r -g appuser appuser
+RUN chown -R appuser:appuser /app
+
+# Устанавливаем dev зависимости для тестов
+RUN pip install -r requirements-dev.txt
+
+# Переключаемся на non-root пользователя
+USER appuser
+
+# Устанавливаем переменные окружения для тестов
+ENV PYTHONPATH=/app
+ENV TESTING=true
+ENV PYTHONUNBUFFERED=1
+
+# Команда по умолчанию для запуска тестов
+CMD ["python", "-m", "pytest", "apps/api/tests/", "-v", "--tb=short"]

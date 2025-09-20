@@ -1,0 +1,274 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: ml_portal
+      POSTGRES_USER: ml_portal
+      POSTGRES_PASSWORD: ml_portal_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ml_portal"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # MinIO
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin123
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  # Qdrant
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    # healthcheck:
+    #   test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:6333/"]
+    #   interval: 10s
+    #   timeout: 5s
+    #   retries: 5
+
+  # API Service
+  api:
+    build:
+      context: ../../../
+      dockerfile: infra/docker/dev/Dockerfile.api
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../../../apps/api:/app/apps/api
+      - ../../../infra/scripts:/app/infra/scripts
+      - ../../../models:/app/models
+    environment:
+      - DATABASE_URL=postgresql+psycopg://ml_portal:ml_portal_password@postgres:5432/ml_portal
+      - REDIS_URL=redis://redis:6379
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin123
+      - QDRANT_URL=http://qdrant:6333
+      - QDRANT_API_KEY=
+      - JWT_SECRET_KEY=your-secret-key-here
+      - ENVIRONMENT=development
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    command: >
+      sh -c "
+        pip install -r infra/docker/api/requirements-dev.txt &&
+        python infra/scripts/run_migrations.py &&
+        python infra/scripts/bootstrap_minio.py &&
+        python infra/scripts/bootstrap_qdrant.py &&
+        python infra/scripts/create_admin_user.py &&
+        python -m uvicorn apps.api.src.app.main:app --host 0.0.0.0 --port 8000 --reload
+      "
+
+  # Embedding Service
+  emb:
+    build:
+      context: ../../../
+      dockerfile: infra/docker/dev/Dockerfile.emb
+    ports:
+      - "8001:8001"
+    volumes:
+      - ../../../apps/emb:/app/apps/emb
+      - ../../../models:/app/models
+    environment:
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin123
+      - QDRANT_URL=http://qdrant:6333
+      - QDRANT_API_KEY=
+    depends_on:
+      minio:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    command: >
+      sh -c "
+        python -m uvicorn apps.emb.src.app.main:app --host 0.0.0.0 --port 8001 --reload
+      "
+
+  # LLM Service
+  llm:
+    build:
+      context: ../../../
+      dockerfile: infra/docker/dev/Dockerfile.llm
+    ports:
+      - "8002:8002"
+    volumes:
+      - ../../../apps/llm:/app/apps/llm
+      - ../../../models:/app/models
+    environment:
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin123
+    depends_on:
+      minio:
+        condition: service_healthy
+    command: >
+      sh -c "
+        python -m uvicorn apps.llm.src.app.main:app --host 0.0.0.0 --port 8002 --reload
+      "
+
+  # Frontend
+  frontend:
+    build:
+      context: ../../../
+      dockerfile: infra/docker/dev/Dockerfile.frontend
+    ports:
+      - "3000:3000"
+    volumes:
+      - ../../../apps/web:/app
+      - /app/node_modules
+    environment:
+      - NODE_ENV=development
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+    depends_on:
+      - api
+
+  # Worker
+  worker:
+    build:
+      context: ../../../
+      dockerfile: infra/docker/dev/Dockerfile.api
+    volumes:
+      - ../../../apps/api:/app/apps/api
+      - ../../../infra/scripts:/app/infra/scripts
+      - ../../../models:/app/models
+    environment:
+      - DATABASE_URL=postgresql+psycopg://ml_portal:ml_portal_password@postgres:5432/ml_portal
+      - REDIS_URL=redis://redis:6379
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin123
+      - QDRANT_URL=http://qdrant:6333
+      - QDRANT_API_KEY=
+      - JWT_SECRET_KEY=your-secret-key-here
+      - ENVIRONMENT=development
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    command: >
+      sh -c "
+        pip install -r infra/docker/api/requirements-dev.txt &&
+        celery -A apps.api.src.app.celery worker --loglevel=info
+      "
+
+  # Backend Test Runner
+  test-backend:
+    build:
+      context: ../../../
+      dockerfile: infra/docker/dev/Dockerfile.api.test
+    volumes:
+      - ../../../apps/api:/app/apps/api
+      - ../../../infra/scripts:/app/infra/scripts
+      - ../../../infra/docker:/app/infra/docker
+      - ../../../models:/app/models
+    environment:
+      - DATABASE_URL=postgresql+psycopg://ml_portal:ml_portal_password@postgres:5432/ml_portal
+      - REDIS_URL=redis://redis:6379
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin123
+      - QDRANT_URL=http://qdrant:6333
+      - QDRANT_API_KEY=
+      - JWT_SECRET_KEY=your-secret-key-here
+      - ENVIRONMENT=testing
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    command: >
+      sh -c "
+        python /app/infra/scripts/run_migrations.py &&
+        python /app/infra/scripts/bootstrap_minio.py &&
+        python /app/infra/scripts/bootstrap_qdrant.py &&
+        python -m pytest apps/api/tests/ -v --tb=short
+      "
+
+  # Frontend Test Runner
+  test-frontend:
+    build:
+      context: ../../../
+      dockerfile: infra/docker/dev/Dockerfile.frontend.test
+    volumes:
+      - ../../../apps/web:/app
+      - /app/node_modules
+    environment:
+      - NODE_ENV=test
+      - NEXT_TELEMETRY_DISABLED=1
+    command: ["npm", "run", "test"]
+
+  # E2E Test Runner
+  test-e2e:
+    build:
+      context: ../../../
+      dockerfile: infra/docker/dev/Dockerfile.frontend.test
+    volumes:
+      - ../../../apps/web:/app
+      - /app/node_modules
+    environment:
+      - NODE_ENV=test
+      - NEXT_TELEMETRY_DISABLED=1
+    depends_on:
+      - api
+      - frontend
+    command: ["npm", "run", "test:e2e"]
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:
+  qdrant_data:

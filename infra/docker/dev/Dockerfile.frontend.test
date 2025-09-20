@@ -1,0 +1,27 @@
+FROM node:18-alpine
+
+# Устанавливаем рабочую директорию
+WORKDIR /app
+
+# Копируем package.json и package-lock.json
+COPY apps/web/package.json apps/web/package-lock.json ./
+
+# Устанавливаем зависимости
+RUN npm ci
+
+# Копируем исходный код
+COPY apps/web/ ./
+
+# Создаем non-root пользователя
+RUN addgroup -g 1001 -S nodejs
+RUN adduser -S nextjs -u 1001
+
+# Переключаемся на non-root пользователя
+USER nextjs
+
+# Устанавливаем переменные окружения для тестов
+ENV NODE_ENV=test
+ENV NEXT_TELEMETRY_DISABLED=1
+
+# Команда по умолчанию для запуска тестов
+CMD ["npm", "run", "test"]

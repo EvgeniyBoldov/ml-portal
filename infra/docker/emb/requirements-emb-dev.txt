@@ -1,0 +1,11 @@
+# Упрощенные зависимости для dev окружения
+fastapi==0.111.0
+uvicorn[standard]==0.30.1
+pydantic==2.8.2
+numpy==1.24.3
+
+# Минимальные зависимости для работы без ML
+# sentence-transformers==2.2.2
+# torch==2.1.0
+# transformers==4.35.0
+# tokenizers==0.14.1

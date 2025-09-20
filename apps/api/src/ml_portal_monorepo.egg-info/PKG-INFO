@@ -1,0 +1,20 @@
+Metadata-Version: 2.4
+Name: ml-portal-monorepo
+Version: 1.0.0
+Summary: ML Portal Monorepo - AI-powered document processing and chat system
+Author-email: ML Portal Team <team@ml-portal.com>
+License: MIT
+Project-URL: Homepage, https://github.com/your-org/ml-portal
+Project-URL: Repository, https://github.com/your-org/ml-portal.git
+Project-URL: Documentation, https://docs.ml-portal.com
+Classifier: Development Status :: 4 - Beta
+Classifier: Intended Audience :: Developers
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.8
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Requires-Python: >=3.8
+Description-Content-Type: text/markdown

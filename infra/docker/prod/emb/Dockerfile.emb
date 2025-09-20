@@ -1,0 +1,32 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Установка системных зависимостей
+RUN apt-get update && apt-get install -y \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Копирование requirements
+COPY requirements-emb.txt .
+RUN pip install --no-cache-dir -r requirements-emb.txt
+
+# Копирование кода приложения
+COPY . .
+
+# Создание директорий для кэша моделей
+RUN mkdir -p /models-cache /local-models
+
+# Переменные окружения
+ENV PYTHONPATH=/app
+ENV EMB_MODELS=minilm:sentence-transformers/all-MiniLM-L6-v2:default:384:256
+ENV USE_LOCAL_MODELS=true
+ENV LOCAL_MODELS_DIR=/local-models
+ENV MODELS_CACHE_DIR=/models-cache
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# Запуск приложения
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]

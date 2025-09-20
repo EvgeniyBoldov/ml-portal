@@ -339,70 +339,94 @@
 ### 3.1 Базовый репозиторий
 
 #### `apps/api/src/app/repositories/_base.py`
-- **Статус**: ⏳ Планируется
-- **Описание**: Базовый CRUD репозиторий
-- **Зависимости**: `models/`, `db.py`
+- **Статус**: ✅ Готово
+- **Описание**: Базовый CRUD репозиторий с поддержкой sync/async
+- **Зависимости**: `models/`, `db.py`, `logging.py`
 - **Интерфейс**:
   ```python
   class BaseRepository[T]:
-      async def create(self, data: dict) -> T
-      async def get_by_id(self, id: Any) -> Optional[T]
-      async def update(self, id: Any, data: dict) -> Optional[T]
-      async def delete(self, id: Any) -> bool
-      async def list(self, filters: dict = None, limit: int = 100, offset: int = 0) -> List[T]
+      def create(**kwargs) -> T
+      def get_by_id(id: Any) -> Optional[T]
+      def get_by_field(field_name: str, value: Any) -> Optional[T]
+      def update(id: Any, **kwargs) -> Optional[T]
+      def delete(id: Any) -> bool
+      def list(filters: Optional[Dict[str, Any]] = None, order_by: Optional[str] = None, limit: int = 100, offset: int = 0) -> List[T]
+      def count(filters: Optional[Dict[str, Any]] = None) -> int
+      def exists(id: Any) -> bool
+      def search(query: str, search_fields: List[str], limit: int = 100, offset: int = 0) -> List[T]
   ```
 
 ### 3.2 Репозитории пользователей
 
-#### `apps/api/src/app/repositories/users_repo.py`
-- **Статус**: ⏳ Планируется
-- **Описание**: Репозиторий пользователей
-- **Зависимости**: `_base.py`, `models/user.py`
+#### `apps/api/src/app/repositories/users_repo_enhanced.py`
+- **Статус**: ✅ Готово
+- **Описание**: Расширенный репозиторий пользователей с полным функционалом
+- **Зависимости**: `_base.py`, `models/user.py`, `logging.py`
 - **Интерфейс**:
   ```python
   class UsersRepository(BaseRepository[Users]):
-      async def get_by_login(self, login: str) -> Optional[Users]
-      async def get_by_email(self, email: str) -> Optional[Users]
-      async def get_active_users(self) -> List[Users]
+      def get_by_login(login: str) -> Optional[Users]
+      def get_by_email(email: str) -> Optional[Users]
+      def get_active_users() -> List[Users]
+      def get_users_by_role(role: str) -> List[Users]
+      def search_users(query: str, limit: int = 50) -> List[Users]
+      def create_user(login: str, password_hash: str, role: str = "reader", email: Optional[str] = None, is_active: bool = True) -> Users
+      def update_user_role(user_id: str, role: str) -> Optional[Users]
+      def deactivate_user(user_id: str) -> Optional[Users]
+      def activate_user(user_id: str) -> Optional[Users]
+      def change_password(user_id: str, new_password_hash: str) -> Optional[Users]
   ```
 
-#### `apps/api/src/app/repositories/users_repo_sync.py`
-- **Статус**: ⏳ Планируется
-- **Описание**: Синхронная версия репозитория пользователей
-- **Зависимости**: `_base.py`, `models/user.py`
-- **Интерфейс**:
-  ```python
-  class UsersRepositorySync:
-      def get_by_login(self, login: str) -> Optional[Users]
-      def get_by_email(self, email: str) -> Optional[Users]
-      def create(self, data: dict) -> Users
-  ```
+#### `apps/api/src/app/repositories/users_repo.py`
+- **Статус**: ✅ Существует (legacy)
+- **Описание**: Существующий репозиторий пользователей
+- **Зависимости**: `models/user.py`
 
 ### 3.3 Репозитории чатов
 
-#### `apps/api/src/app/repositories/chats_repo.py`
-- **Статус**: ⏳ Планируется
-- **Описание**: Репозиторий чатов
-- **Зависимости**: `_base.py`, `models/chat.py`
+#### `apps/api/src/app/repositories/chats_repo_enhanced.py`
+- **Статус**: ✅ Готово
+- **Описание**: Расширенный репозиторий чатов с полным функционалом
+- **Зависимости**: `_base.py`, `models/chat.py`, `logging.py`
 - **Интерфейс**:
   ```python
   class ChatsRepository(BaseRepository[Chats]):
-      async def get_user_chats(self, user_id: UUID) -> List[Chats]
-      async def get_chat_with_messages(self, chat_id: UUID) -> Optional[Chats]
+      def create_chat(owner_id: str, name: Optional[str] = None, tags: Optional[List[str]] = None) -> Chats
+      def get_user_chats(user_id: str, query: Optional[str] = None, limit: int = 100) -> List[Chats]
+      def get_chat_with_messages(chat_id: str) -> Optional[Chats]
+      def update_chat_name(chat_id: str, name: str) -> Optional[Chats]
+      def update_chat_tags(chat_id: str, tags: List[str]) -> Optional[Chats]
+      def update_last_message_at(chat_id: str) -> Optional[Chats]
+      def get_chats_by_tag(user_id: str, tag: str) -> List[Chats]
+      def search_chats(user_id: str, query: str, limit: int = 50) -> List[Chats]
   ```
+
+#### `apps/api/src/app/repositories/chats_repo.py`
+- **Статус**: ✅ Существует (legacy)
+- **Описание**: Существующий репозиторий чатов
+- **Зависимости**: `models/chat.py`
 
 ### 3.4 RAG репозитории
 
-#### `apps/api/src/app/repositories/rag_repo.py`
-- **Статус**: ⏳ Планируется
-- **Описание**: Репозиторий RAG документов
-- **Зависимости**: `_base.py`, `models/rag.py`
+#### `apps/api/src/app/repositories/rag_repo_enhanced.py`
+- **Статус**: ✅ Готово
+- **Описание**: Расширенный репозиторий RAG документов с полным функционалом
+- **Зависимости**: `_base.py`, `models/rag.py`, `logging.py`
 - **Интерфейс**:
   ```python
-  class RAGRepository(BaseRepository[RAGDocument]):
-      async def get_user_documents(self, user_id: str) -> List[RAGDocument]
-      async def get_document_chunks(self, document_id: str) -> List[RAGChunk]
+  class RAGDocumentsRepository(BaseRepository[RAGDocument]):
+      def create_document(filename: str, title: str, user_id: str, content_type: Optional[str] = None, size: Optional[int] = None, tags: Optional[List[str]] = None) -> RAGDocument
+      def get_user_documents(user_id: str, status: Optional[str] = None, limit: int = 50, offset: int = 0) -> List[RAGDocument]
+      def get_document_by_s3_key(s3_key: str) -> Optional[RAGDocument]
+      def update_document_status(document_id: str, status: str, error_message: Optional[str] = None) -> Optional[RAGDocument]
+      def search_documents(user_id: str, query: str, status: Optional[str] = None, limit: int = 50) -> List[RAGDocument]
+      def get_document_stats(user_id: str) -> Dict[str, int]
   ```
+
+#### `apps/api/src/app/repositories/rag_repo.py`
+- **Статус**: ✅ Существует (legacy)
+- **Описание**: Существующий репозиторий RAG документов
+- **Зависимости**: `models/rag.py`
 
 ---
 
