@@ -74,15 +74,20 @@
 ### 1.2 База данных
 
 #### `apps/api/src/app/core/db.py`
-- **Статус**: ⏳ Планируется
-- **Описание**: Подключение к базе данных
-- **Зависимости**: `config.py`
+- **Статус**: ✅ Готово
+- **Описание**: Подключение к базе данных с поддержкой sync/async
+- **Зависимости**: `config.py`, `logging.py`
 - **Интерфейс**:
   ```python
   class DatabaseManager:
-      def get_session() -> AsyncSession
-      def get_sync_session() -> Session
-      def close_all()
+      def get_session() -> Generator[Session, None, None]
+      def get_async_session() -> AsyncGenerator[AsyncSession, None]
+      def session_scope() -> Generator[Session, None, None]
+      def async_session_scope() -> AsyncGenerator[AsyncSession, None]
+      def close_all() -> None
+      def close_async_all() -> None
+      def health_check() -> bool
+      def async_health_check() -> bool
   ```
 
 #### `apps/api/src/app/migrations/`
@@ -99,43 +104,65 @@
 ### 1.3 Кэш и Redis
 
 #### `apps/api/src/app/core/cache.py`
-- **Статус**: ⏳ Планируется
-- **Описание**: Система кэширования
-- **Зависимости**: `redis.py`
+- **Статус**: ✅ Готово
+- **Описание**: Система кэширования с поддержкой sync/async
+- **Зависимости**: `redis.py`, `logging.py`
 - **Интерфейс**:
   ```python
   class CacheManager:
-      async def get(key: str) -> Any
-      async def set(key: str, value: Any, ttl: int = 3600)
-      async def delete(key: str)
-      async def clear_pattern(pattern: str)
+      # Sync methods
+      def get(key: str) -> Optional[Any]
+      def set(key: str, value: Any, ttl: Optional[int] = None) -> bool
+      def delete(key: str) -> bool
+      def exists(key: str) -> bool
+      def get_or_set(key: str, factory_func: Callable, ttl: Optional[int] = None, *args, **kwargs) -> Any
+      def invalidate_pattern(pattern: str) -> int
+      
+      # Async methods
+      async def get_async(key: str) -> Optional[Any]
+      async def set_async(key: str, value: Any, ttl: Optional[int] = None) -> bool
+      async def delete_async(key: str) -> bool
+      async def exists_async(key: str) -> bool
+      async def get_or_set_async(key: str, factory_func: Callable, ttl: Optional[int] = None, *args, **kwargs) -> Any
+      async def invalidate_pattern_async(pattern: str) -> int
   ```
 
 #### `apps/api/src/app/core/redis.py`
-- **Статус**: ⏳ Планируется
-- **Описание**: Redis подключение
-- **Зависимости**: `config.py`
+- **Статус**: ✅ Готово
+- **Описание**: Redis подключение с поддержкой sync/async
+- **Зависимости**: `config.py`, `logging.py`
 - **Интерфейс**:
   ```python
   class RedisManager:
-      async def get_client() -> Redis
-      async def ping() -> bool
-      async def close()
+      def get_async_redis() -> Redis
+      def get_sync_redis() -> SyncRedis
+      async def ping_async() -> bool
+      def ping_sync() -> bool
+      async def close_async() -> None
+      def close_sync() -> None
+      async def health_check_async() -> bool
+      def health_check_sync() -> bool
   ```
 
 ### 1.4 S3 и файловое хранилище
 
 #### `apps/api/src/app/core/s3.py`
-- **Статус**: ⏳ Планируется
-- **Описание**: S3 клиент
-- **Зависимости**: `config.py`
+- **Статус**: ✅ Готово
+- **Описание**: S3/MinIO клиент с расширенной функциональностью
+- **Зависимости**: `config.py`, `logging.py`
 - **Интерфейс**:
   ```python
   class S3Manager:
-      async def upload_file(file_path: str, s3_key: str) -> str
-      async def download_file(s3_key: str, local_path: str)
-      async def delete_file(s3_key: str)
-      async def get_presigned_url(s3_key: str, expires: int = 3600) -> str
+      def health_check() -> bool
+      def ensure_bucket(bucket: str) -> bool
+      def list_buckets() -> List[Dict[str, Any]]
+      def put_object(bucket: str, key: str, data: Union[bytes, BinaryIO], length: Optional[int] = None, content_type: Optional[str] = None) -> bool
+      def get_object(bucket: str, key: str) -> Optional[BinaryIO]
+      def delete_object(bucket: str, key: str) -> bool
+      def stat_object(bucket: str, key: str) -> Optional[Dict[str, Any]]
+      def presign_put(bucket: str, key: str, expiry_seconds: int = 3600) -> Optional[str]
+      def presign_get(bucket: str, key: str, expiry_seconds: int = 3600) -> Optional[str]
+      def list_objects(bucket: str, prefix: str = "", recursive: bool = True) -> List[Dict[str, Any]]
   ```
 
 #### `apps/api/src/app/storage/`
