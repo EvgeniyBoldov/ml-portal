@@ -435,15 +435,18 @@
 ### 4.1 Базовые сервисы
 
 #### `apps/api/src/app/services/_base.py`
-- **Статус**: ⏳ Планируется
-- **Описание**: Базовый сервис
-- **Зависимости**: `repositories/`
+- **Статус**: ✅ Готово
+- **Описание**: Базовый сервис с общим функционалом и валидацией
+- **Зависимости**: `repositories/`, `logging.py`
 - **Интерфейс**:
   ```python
   class BaseService:
-      def __init__(self, repository: BaseRepository)
-      async def validate_data(self, data: dict) -> dict
-      async def handle_error(self, error: Exception) -> None
+      def _validate_required_fields(self, data: dict, required: list) -> None
+      def _sanitize_string(self, value: str, max_length: int) -> str
+      def _validate_email(self, email: str) -> bool
+      def _validate_uuid(self, value: str) -> bool
+      def _log_operation(self, operation: str, entity_id: str) -> None
+      def _handle_error(self, operation: str, error: Exception, context: dict) -> None
   ```
 
 ### 4.2 Сервисы аутентификации
@@ -475,8 +478,26 @@
 
 ### 4.3 Сервисы пользователей
 
+#### `apps/api/src/app/services/users_service_enhanced.py`
+- **Статус**: ✅ Готово
+- **Описание**: Расширенный сервис управления пользователями с полным функционалом
+- **Зависимости**: `_base.py`, `repositories/users_repo_enhanced.py`, `bcrypt`
+- **Интерфейс**:
+  ```python
+  class UsersService(RepositoryService[Users]):
+      def create_user(self, login: str, password: str, role: str = "reader", email: Optional[str] = None, is_active: bool = True) -> Users
+      def authenticate_user(self, login: str, password: str) -> Optional[Users]
+      def change_password(self, user_id: str, old_password: str, new_password: str) -> bool
+      def reset_password_request(self, email: str) -> bool
+      def reset_password_confirm(self, token: str, new_password: str) -> bool
+      def create_pat_token(self, user_id: str, name: str, scopes: Optional[List[str]] = None, expires_at: Optional[datetime] = None) -> Tuple[UserTokens, str]
+      def revoke_pat_token(self, user_id: str, token_id: str) -> bool
+      def search_users(self, query: str, role: Optional[str] = None, is_active: Optional[bool] = None, limit: int = 50) -> List[Users]
+      def get_user_stats(self, user_id: str) -> Dict[str, Any]
+  ```
+
 #### `apps/api/src/app/services/users_service.py`
-- **Статус**: ⏳ Планируется
+- **Статус**: ✅ Существует (legacy)
 - **Описание**: Управление пользователями
 - **Зависимости**: `users_repo.py`
 - **Интерфейс**:
