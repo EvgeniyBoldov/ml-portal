@@ -72,10 +72,15 @@ class BaseService(ABC):
         log_data = {
             "operation": operation,
             "entity_id": entity_id,
-            "service": self.__class__.__name__
+            "service_name": self.__class__.__name__  # Изменили 'service' на 'service_name'
         }
         if details:
-            log_data.update(details)
+            # Фильтруем конфликтующие поля
+            filtered_details = {k: v for k, v in details.items() 
+                              if k not in ['name', 'filename', 'levelname', 'levelno', 'pathname', 
+                                         'lineno', 'funcName', 'created', 'msecs', 'relativeCreated',
+                                         'thread', 'threadName', 'processName', 'process', 'getMessage']}
+            log_data.update(filtered_details)
         
         self.logger.info(f"Service operation: {operation}", extra=log_data)
     
@@ -149,10 +154,15 @@ class AsyncBaseService(ABC):
         log_data = {
             "operation": operation,
             "entity_id": entity_id,
-            "service": self.__class__.__name__
+            "service_name": self.__class__.__name__  # Изменили 'service' на 'service_name'
         }
         if details:
-            log_data.update(details)
+            # Фильтруем конфликтующие поля
+            filtered_details = {k: v for k, v in details.items() 
+                              if k not in ['name', 'filename', 'levelname', 'levelno', 'pathname', 
+                                         'lineno', 'funcName', 'created', 'msecs', 'relativeCreated',
+                                         'thread', 'threadName', 'processName', 'process', 'getMessage']}
+            log_data.update(filtered_details)
         
         self.logger.info(f"Service operation: {operation}", extra=log_data)
     

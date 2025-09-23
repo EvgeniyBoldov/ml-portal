@@ -24,8 +24,8 @@ def embed_texts(texts: List[str], profile: str = "rt", models: Optional[List[str
     """Эмбеддинг текстов через диспетчер или HTTP fallback"""
     try:
         # Пробуем использовать новый диспетчер
-        from app.services.embedding_dispatcher import embed_texts_dispatcher
-        return embed_texts_dispatcher(texts, profile, models)
+        # Используем HTTP API напрямую
+        pass
     except Exception as e:
         print(f"Dispatcher failed, falling back to HTTP: {e}")
         # Fallback на старый HTTP API

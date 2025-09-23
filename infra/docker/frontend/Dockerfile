@@ -2,10 +2,10 @@
 FROM node:20-alpine AS build
 WORKDIR /app
 
-COPY package*.json ./
+COPY apps/web/package*.json ./
 RUN if [ -f package-lock.json ]; then npm ci --no-audit --no-fund; else npm install --no-audit --no-fund; fi
 
-COPY . /app/
+COPY apps/web/ /app/
 
 # Build-time configuration (no .env usage)
 ARG VITE_API_BASE=http://localhost:8000/api

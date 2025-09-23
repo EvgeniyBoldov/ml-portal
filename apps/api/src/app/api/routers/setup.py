@@ -4,9 +4,9 @@ Setup endpoints for local development
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.orm import Session
 from app.core.db import get_session
-from app.repositories.users_repo import UsersRepo
+from app.repositories.users_repo_enhanced import UsersRepository
 from app.core.security import hash_password
-from app.schemas.admin import UserCreate, UserResponse
+from app.api.schemas.users import UserCreateRequest as UserCreate, UserResponse
 from app.models.user import Users
 import logging
 
@@ -31,7 +31,7 @@ async def create_superuser(
     if not settings.DEBUG:
         raise HTTPException(status_code=403, detail="Setup endpoints only available in debug mode")
     
-    repo = UsersRepo(session)
+    repo = UsersRepository(session)
     
     # Check if admin already exists
     existing_admin = session.query(Users).filter(Users.login == login).first()
@@ -76,7 +76,7 @@ async def setup_status(session: Session = Depends(get_session)):
     if not settings.DEBUG:
         raise HTTPException(status_code=403, detail="Setup endpoints only available in debug mode")
     
-    repo = UsersRepo(session)
+    repo = UsersRepository(session)
     
     # Count admin users
     admin_count = session.query(Users).filter(Users.role == "admin").count()

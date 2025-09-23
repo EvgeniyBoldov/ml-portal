@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import db_session
 from app.core.config import settings
-from app.core.s3_helpers import put_object, presign_get
+from app.core.s3 import s3_manager
 from app.repositories.analyze_repo import AnalyzeRepo
 
 router = APIRouter(prefix="/analyze", tags=["analyze"])
@@ -40,7 +40,7 @@ async def upload_analysis_file(
         status="queued",
     )
     key = f"{doc.id}/origin{ext}"
-    put_object(settings.S3_BUCKET_ANALYSIS, key, file.file, content_type=file.content_type)
+    s3_manager.put_object(settings.S3_BUCKET_ANALYSIS, key, file.file, content_type=file.content_type)
 
     doc.url_file = key
     doc.updated_at = datetime.utcnow()
@@ -103,7 +103,7 @@ def download_analysis_file(
     if not file_key:
         raise HTTPException(status_code=404, detail="File not found")
     
-    url = presign_get(settings.S3_BUCKET_ANALYSIS, file_key, 3600)
+    url = s3_manager.presign_get(settings.S3_BUCKET_ANALYSIS, file_key, expires_in=3600)
     return {"url": url}
 
 @router.delete("/{doc_id}")
@@ -160,8 +160,8 @@ def reanalyze_document(
     
     # Запускаем задачу анализа
     try:
-        from app.tasks.analyze import run as analyze_task
-        analyze_task.delay(str(doc.id))
+        from app.tasks.bg_tasks_enhanced import analyze_document
+        analyze_document.delay(str(doc.id))
     except Exception as e:
         doc.status = "error"
         doc.error = f"Failed to start reanalysis: {str(e)}"

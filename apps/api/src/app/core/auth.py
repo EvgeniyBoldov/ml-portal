@@ -40,10 +40,4 @@ def get_current_user(req: Request) -> UserCtx:
         _unauthorized()
     return UserCtx(id=uid, role=role)
 
-def require_user(user: UserCtx = Depends(get_current_user)) -> UserCtx:
-    return user
-
-def require_admin(user: UserCtx = Depends(get_current_user)) -> UserCtx:
-    if user.role != "admin":
-        _forbidden()
-    return user
+# RBAC functions moved to app.api.deps to avoid duplication

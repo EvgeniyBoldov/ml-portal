@@ -1,24 +1,17 @@
-from __future__ import annotations
-from typing import Optional, List, Dict, Any, Literal
-from pydantic import BaseModel, Field
-from datetime import datetime, date
-
-class RefreshResponse(BaseModel):
-    access_token: Optional[str] = Field(None)
-    refresh_token: Optional[str] = Field(None)
-    token_type: Optional[str] = Field(None)
-    expires_in: Optional[int] = Field(None)
+from pydantic import BaseModel
 
 class LoginRequest(BaseModel):
-    login: str
+    email: str
     password: str
 
-class RefreshRequest(BaseModel):
-    refresh_token: Optional[str] = Field(None)
-
 class LoginResponse(BaseModel):
-    access_token: Optional[str] = Field(None)
-    refresh_token: Optional[str] = Field(None)
-    token_type: Optional[str] = Field(None)
-    expires_in: Optional[int] = Field(None)
-    user: Optional[Dict[str, Any]] = Field(None)
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+
+class RefreshRequest(BaseModel):
+    refresh_token: str
+
+class RefreshResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"

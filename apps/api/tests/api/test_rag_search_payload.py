@@ -1,5 +1,5 @@
 from fastapi.testclient import TestClient
-from app.main import app
+from app.main_enhanced import app
 
 def test_rag_search_payload_shape(monkeypatch):
     from app.services import rag_service

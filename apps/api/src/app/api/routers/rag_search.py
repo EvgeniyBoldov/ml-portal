@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from typing import List, Optional
 from pydantic import BaseModel, Field
 
-from app.core.db import get_db
+from app.core.db import get_session
 from app.core.auth import get_current_user
 from app.core.error_handling import create_error_response
 from app.services.multi_index_search import multi_index_search
@@ -35,7 +35,7 @@ class SearchResponse(BaseModel):
     search_time_ms: float
 
 @router.post("/search", response_model=SearchResponse)
-async def search_documents(request: SearchRequest, current_user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+async def search_documents(request: SearchRequest, current_user: dict = Depends(get_current_user), db: Session = Depends(get_session)):
     import time
     start_time = time.time()
     try:

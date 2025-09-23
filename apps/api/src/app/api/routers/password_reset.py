@@ -8,9 +8,9 @@ from datetime import datetime, timedelta
 
 from app.api.deps import db_session, get_request_id, get_client_ip, get_user_agent, rate_limit
 from app.core.security import hash_password, validate_password_strength
-from app.repositories.users_repo import UsersRepo
+from app.repositories.users_repo_enhanced import UsersRepository
 from app.services.audit_service import AuditService
-from app.schemas.admin import PasswordResetRequest, PasswordResetConfirm, ErrorResponse, AuditAction
+from app.api.schemas.users import PasswordResetRequest, PasswordResetConfirm, ErrorResponse, AuditAction
 
 router = APIRouter(prefix="/auth", tags=["password-reset"])
 
@@ -37,7 +37,7 @@ async def forgot_password(
     # Rate limiting for password reset requests
     await rate_limit(request, "password_reset", limit=5, window_sec=300)  # 5 attempts per 5 minutes
     
-    repo = UsersRepo(session)
+    repo = UsersRepository(session)
     audit = AuditService(session)
     
     # Find user by login or email
@@ -101,7 +101,7 @@ async def reset_password(
     # Rate limiting for password reset attempts
     await rate_limit(request, "password_reset_confirm", limit=10, window_sec=300)  # 10 attempts per 5 minutes
     
-    repo = UsersRepo(session)
+    repo = UsersRepository(session)
     audit = AuditService(session)
     
     # Hash the provided token

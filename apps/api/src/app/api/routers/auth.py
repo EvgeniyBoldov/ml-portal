@@ -5,8 +5,8 @@ import hashlib
 
 from app.api.deps import db_session, rate_limit, get_current_user
 from app.core.security import get_bearer_token
-from app.services.auth_service import login as do_login, refresh as do_refresh, revoke_refresh as do_revoke
-from app.repositories.users_repo import UsersRepo
+from app.services.users_service_enhanced import UsersService
+from app.repositories.users_repo_enhanced import UsersRepository
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -21,11 +21,36 @@ async def login(request: Request, payload: dict, session: Session = Depends(db_s
     if not login_ or not password:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="missing_credentials")
     try:
-        access, refresh, user_id = do_login(session, login_, password)
+        users_repo = UsersRepository(session)
+        users_service = UsersService(users_repo)
+        user = users_service.authenticate_user(login_, password)
+        if not user:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_credentials")
+        
+        # Generate tokens
+        from app.core.security import encode_jwt
+        from datetime import datetime, timedelta
+        
+        access_payload = {
+            "sub": str(user.id),
+            "user_id": str(user.id),
+            "role": user.role,
+            "exp": datetime.utcnow() + timedelta(hours=1)
+        }
+        access = encode_jwt(access_payload, ttl_seconds=3600)
+        
+        refresh_payload = {
+            "sub": str(user.id),
+            "user_id": str(user.id),
+            "role": user.role,
+            "exp": datetime.utcnow() + timedelta(days=30)
+        }
+        refresh = encode_jwt(refresh_payload, ttl_seconds=30*24*3600)
+        
+        user_id = str(user.id)
+        u = user
     except ValueError:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_credentials")
-    # enrich with user for convenience (per OpenAPI)
-    u = UsersRepo(session).get(user_id)
     return {
         "access_token": access,
         "refresh_token": refresh,
@@ -35,12 +60,36 @@ async def login(request: Request, payload: dict, session: Session = Depends(db_s
     }
 
 @router.post("/refresh")
-def refresh(payload: dict, session: Session = Depends(db_session)):
+async def refresh(payload: dict, session: Session = Depends(db_session)):
     rt = (payload or {}).get("refresh_token")
     if not rt:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="missing_refresh_token")
     try:
-        access, maybe_new_refresh = do_refresh(session, rt)
+        from app.core.security import decode_jwt
+        from datetime import datetime, timedelta
+        
+        # Decode refresh token
+        payload = decode_jwt(rt)
+        user_id = payload.get("sub") or payload.get("user_id")
+        if not user_id:
+            raise ValueError("Invalid refresh token")
+        
+        # Get user
+        users_repo = UsersRepository(session)
+        user = users_repo.get_by_id(user_id)
+        if not user or not user.is_active:
+            raise ValueError("User not found or inactive")
+        
+        # Generate new access token
+        access_payload = {
+            "sub": str(user.id),
+            "user_id": str(user.id),
+            "role": user.role,
+            "exp": datetime.utcnow() + timedelta(hours=1)
+        }
+        from app.core.security import encode_jwt
+        access = encode_jwt(access_payload, ttl_seconds=3600)
+        maybe_new_refresh = rt  # Keep the same refresh token
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(e))
     return {
@@ -55,9 +104,11 @@ def me(user = Depends(get_current_user)):
     return user
 
 @router.post("/logout", status_code=204)
-def logout(payload: dict | None = None, session: Session = Depends(db_session)) -> Response:
+async def logout(payload: dict | None = None, session: Session = Depends(db_session)) -> Response:
     # Best-effort: revoke provided refresh token; if absent, just return 204 (contract allows empty body).
     rt = (payload or {}).get("refresh_token") if isinstance(payload, dict) else None
     if rt:
-        do_revoke(session, rt)
+        users_repo = UsersRepository(session)
+        users_service = UsersService(users_repo)
+        await users_service.revoke_token(rt)
     return Response(status_code=204)

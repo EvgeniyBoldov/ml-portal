@@ -6,11 +6,13 @@ from .analyze import AnalysisDocuments, AnalysisChunks
 
 # Создаем алиасы для совместимости с тестами
 User = Users
+Chat = Chats
+ChatMessage = ChatMessages
 RagDocuments = RAGDocument
 RagChunks = RAGChunk
 
 __all__ = [
     "Base", "Users", "UserTokens", "UserRefreshTokens", "Chats", "ChatMessages",
     "RAGDocument", "RAGChunk", "AnalysisDocuments", "AnalysisChunks",
-    "User", "RagDocuments", "RagChunks"
+    "User", "Chat", "ChatMessage", "RagDocuments", "RagChunks"
 ]

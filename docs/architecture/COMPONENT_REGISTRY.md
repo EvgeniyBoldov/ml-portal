@@ -542,6 +542,123 @@
 
 ### 5.1 Базовые компоненты API
 
+#### `apps/api/src/app/api/controllers/_base.py`
+- **Статус**: ✅ Готово
+- **Описание**: Базовый контроллер с общим функционалом
+- **Зависимости**: `services/`, `schemas/`
+- **Интерфейс**:
+  ```python
+  class BaseController:
+      def _generate_request_id(self) -> str
+      def _extract_user_info(self, current_user: Dict[str, Any]) -> Dict[str, Any]
+      def _validate_uuid_param(self, value: str, param_name: str) -> None
+      def _validate_pagination_params(self, limit: int, offset: int) -> None
+      def _create_success_response(self, data: Any, message: str = None, request_id: str = None) -> Dict[str, Any]
+      def _create_error_response(self, code: str, message: str, details: Dict[str, Any] = None, request_id: str = None) -> Dict[str, Any]
+      def _handle_controller_error(self, operation: str, error: Exception, request_id: str = None) -> HTTPException
+      def _log_api_operation(self, operation: str, user_info: Dict[str, Any], request_id: str, context: Dict[str, Any] = None) -> None
+  ```
+
+### 5.2 Схемы API
+
+#### `apps/api/src/app/api/schemas/users.py`
+- **Статус**: ✅ Готово
+- **Описание**: Pydantic схемы для пользователей
+- **Зависимости**: `pydantic`
+- **Интерфейс**:
+  ```python
+  class UserCreateRequest(BaseModel)
+  class UserUpdateRequest(BaseModel)
+  class UserResponse(BaseModel)
+  class UserListResponse(BaseModel)
+  class TokenCreateRequest(BaseModel)
+  class TokenResponse(BaseModel)
+  ```
+
+#### `apps/api/src/app/api/schemas/chats.py`
+- **Статус**: ✅ Готово
+- **Описание**: Pydantic схемы для чатов
+- **Зависимости**: `pydantic`
+- **Интерфейс**:
+  ```python
+  class ChatCreateRequest(BaseModel)
+  class ChatUpdateRequest(BaseModel)
+  class ChatResponse(BaseModel)
+  class ChatMessageCreateRequest(BaseModel)
+  class ChatMessageResponse(BaseModel)
+  ```
+
+#### `apps/api/src/app/api/schemas/rag.py`
+- **Статус**: ✅ Готово
+- **Описание**: Pydantic схемы для RAG
+- **Зависимости**: `pydantic`
+- **Интерфейс**:
+  ```python
+  class RAGDocumentUploadRequest(BaseModel)
+  class RAGDocumentResponse(BaseModel)
+  class RAGChunkCreateRequest(BaseModel)
+  class RAGChunkResponse(BaseModel)
+  ```
+
+### 5.3 Контроллеры
+
+#### `apps/api/src/app/api/controllers/users.py`
+- **Статус**: ✅ Готово
+- **Описание**: Контроллер для управления пользователями
+- **Зависимости**: `_base.py`, `services/users_service_enhanced.py`, `schemas/users.py`
+- **Интерфейс**:
+  ```python
+  class UsersController:
+      async def create_user(self, request: UserCreateRequest, current_user: Dict[str, Any]) -> Dict[str, Any]
+      async def get_user(self, user_id: str, current_user: Dict[str, Any]) -> Dict[str, Any]
+      async def update_user(self, user_id: str, request: UserUpdateRequest, current_user: Dict[str, Any]) -> Dict[str, Any]
+      async def search_users(self, request: UserSearchRequest, current_user: Dict[str, Any]) -> Dict[str, Any]
+  ```
+
+#### `apps/api/src/app/api/controllers/chats.py`
+- **Статус**: ✅ Готово
+- **Описание**: Контроллеры для управления чатами и сообщениями
+- **Зависимости**: `_base.py`, `services/chats_service_enhanced.py`, `schemas/chats.py`
+- **Интерфейс**:
+  ```python
+  class ChatsController:
+      async def create_chat(self, request: ChatCreateRequest, current_user: Dict[str, Any]) -> Dict[str, Any]
+      async def get_chat(self, chat_id: str, current_user: Dict[str, Any]) -> Dict[str, Any]
+      async def update_chat(self, chat_id: str, request: ChatUpdateRequest, current_user: Dict[str, Any]) -> Dict[str, Any]
+      async def get_user_chats(self, request: ChatSearchRequest, current_user: Dict[str, Any]) -> Dict[str, Any]
+  
+  class ChatMessagesController:
+      async def create_message(self, chat_id: str, request: ChatMessageCreateRequest, current_user: Dict[str, Any]) -> Dict[str, Any]
+      async def get_chat_messages(self, chat_id: str, request: ChatMessagesListRequest, current_user: Dict[str, Any]) -> Dict[str, Any]
+  ```
+
+#### `apps/api/src/app/api/controllers/rag.py`
+- **Статус**: ✅ Готово
+- **Описание**: Контроллеры для управления RAG документами и чанками
+- **Зависимости**: `_base.py`, `services/rag_service_enhanced.py`, `schemas/rag.py`
+- **Интерфейс**:
+  ```python
+  class RAGDocumentsController:
+      async def create_document(self, request: RAGDocumentCreateRequest, current_user: Dict[str, Any]) -> Dict[str, Any]
+      async def get_document(self, document_id: str, current_user: Dict[str, Any]) -> Dict[str, Any]
+      async def search_documents(self, request: RAGDocumentSearchRequest, current_user: Dict[str, Any]) -> Dict[str, Any]
+  
+  class RAGChunksController:
+      async def create_chunk(self, document_id: str, request: RAGChunkCreateRequest, current_user: Dict[str, Any]) -> Dict[str, Any]
+      async def get_document_chunks(self, document_id: str, limit: int, current_user: Dict[str, Any]) -> Dict[str, Any]
+      async def search_chunks(self, document_id: str, request: RAGChunkSearchRequest, current_user: Dict[str, Any]) -> Dict[str, Any]
+  ```
+
+### 5.4 Тесты контроллеров
+
+#### `apps/api/tests/test_controllers_enhanced.py`
+- **Статус**: ✅ Готово
+- **Описание**: Тесты для всех контроллеров
+- **Покрытие**: 20 тестов для всех контроллеров
+- **Результат**: Все тесты проходят успешно
+
+### 5.5 Зависимости FastAPI
+
 #### `apps/api/src/app/api/deps.py`
 - **Статус**: ⏳ Планируется
 - **Описание**: Зависимости FastAPI
@@ -553,7 +670,7 @@
   async def get_current_active_user(user: Users = Depends(get_current_user)) -> Users
   ```
 
-### 5.2 Роутеры
+### 5.6 Роутеры
 
 #### `apps/api/src/app/api/routers/auth.py`
 - **Статус**: ⏳ Планируется
@@ -583,33 +700,184 @@
 
 ---
 
-## Этап 6: Фоновые задачи
+## Этап 6: Фоновые задачи ✅ ЗАВЕРШЕН
 
-### 6.1 Celery настройка
+### 6.1 Celery настройка ✅
 
 #### `apps/api/src/app/celery_app.py`
-- **Статус**: ⏳ Планируется
-- **Описание**: Celery приложение
+- **Статус**: ✅ Готово
+- **Описание**: Celery приложение с очередями и маршрутизацией
 - **Зависимости**: `config.py`, `redis.py`
 - **Интерфейс**:
   ```python
-  celery_app = Celery("ml_portal")
-  celery_app.config_from_object("app.core.config")
+  app = Celery("backend", broker=BROKER_URL, backend=RESULT_BACKEND)
+  # Настройка очередей с приоритетами
+  # Маршрутизация задач по очередям
   ```
 
-### 6.2 Задачи
+### 6.2 Улучшенные фоновые задачи ✅
 
-#### `apps/api/src/app/tasks/bg_tasks.py`
-- **Статус**: ⏳ Планируется
-- **Описание**: Фоновые задачи
-- **Зависимости**: `celery_app.py`, `rag_service.py`
+#### `apps/api/src/app/tasks/bg_tasks_enhanced.py`
+- **Статус**: ✅ Готово
+- **Описание**: Улучшенные фоновые задачи с интеграцией новых сервисов
+- **Зависимости**: `celery_app.py`, `rag_service_enhanced.py`, `s3_manager`, `redis_manager`
 - **Интерфейс**:
   ```python
-  @celery_app.task
-  async def process_document(document_id: str) -> bool
+  @shared_task(name="bg_tasks.process_document")
+  def process_document(document_id: str, source_key: Optional[str] = None) -> Dict[str, Any]
   
-  @celery_app.task
-  async def generate_embeddings(chunk_ids: List[str]) -> bool
+  @shared_task(name="bg_tasks.extract_and_normalize_text")
+  def extract_and_normalize_text(document_id: str, source_key: Optional[str] = None) -> Dict[str, Any]
+  
+  @shared_task(name="bg_tasks.chunk_document")
+  def chunk_document(document_id: str, text: str, chunk_size: int = 1000, chunk_overlap: int = 200) -> Dict[str, Any]
+  
+  @shared_task(name="bg_tasks.generate_embeddings")
+  def generate_embeddings(document_id: str, model: str = "minilm", batch_size: int = 8) -> Dict[str, Any]
+  
+  @shared_task(name="bg_tasks.finalize_document")
+  def finalize_document(document_id: str) -> Dict[str, Any]
+  
+  @shared_task(name="bg_tasks.analyze_document")
+  def analyze_document(document_id: str, analysis_type: str = "summary") -> Dict[str, Any]
+  
+  @shared_task(name="bg_tasks.cleanup_old_documents")
+  def cleanup_old_documents(days_old: int = 30) -> Dict[str, Any]
+  ```
+
+### 6.3 Менеджер задач ✅
+
+#### `apps/api/src/app/tasks/task_manager.py`
+- **Статус**: ✅ Готово
+- **Описание**: Менеджер для управления фоновыми задачами
+- **Зависимости**: `celery_app.py`, `redis_manager`, `rag_service_enhanced.py`
+- **Интерфейс**:
+  ```python
+  class TaskManager:
+      async def process_document_async(self, document_id: str, source_key: Optional[str] = None, priority: str = "normal") -> Dict[str, Any]
+      async def analyze_document_async(self, document_id: str, analysis_type: str = "summary", priority: str = "normal") -> Dict[str, Any]
+      async def cleanup_old_documents_async(self, days_old: int = 30, priority: str = "low") -> Dict[str, Any]
+      async def get_task_status(self, task_id: str) -> Dict[str, Any]
+      async def get_document_tasks(self, document_id: str) -> List[Dict[str, Any]]
+      async def cancel_task(self, task_id: str) -> bool
+      async def schedule_document_processing(self, document_ids: List[str], priority: str = "normal", delay_seconds: int = 0) -> List[Dict[str, Any]]
+      async def get_queue_stats(self) -> Dict[str, Any]
+      async def get_worker_stats(self) -> Dict[str, Any]
+  ```
+
+### 6.4 Периодические задачи ✅
+
+#### `apps/api/src/app/tasks/periodic_tasks.py`
+- **Статус**: ✅ Готово
+- **Описание**: Периодические задачи, выполняемые по расписанию
+- **Зависимости**: `celery_app.py`, `bg_tasks_enhanced.py`, `task_manager.py`
+- **Интерфейс**:
+  ```python
+  @shared_task(name="periodic_tasks.cleanup_old_documents_daily")
+  def cleanup_old_documents_daily() -> Dict[str, Any]
+  
+  @shared_task(name="periodic_tasks.system_health_check")
+  def system_health_check() -> Dict[str, Any]
+  
+  @shared_task(name="periodic_tasks.update_system_statistics")
+  def update_system_statistics() -> Dict[str, Any]
+  
+  @shared_task(name="periodic_tasks.cleanup_temp_files")
+  def cleanup_temp_files() -> Dict[str, Any]
+  
+  @shared_task(name="periodic_tasks.reindex_failed_documents")
+  def reindex_failed_documents() -> Dict[str, Any]
+  
+  @shared_task(name="periodic_tasks.monitor_queue_health")
+  def monitor_queue_health() -> Dict[str, Any]
+  ```
+
+### 6.5 Тесты фоновых задач ✅
+
+#### `apps/api/tests/test_bg_tasks_enhanced.py`
+- **Статус**: ✅ Готово
+- **Описание**: Тесты для всех фоновых задач
+- **Покрытие**: 17 тестов для всех компонентов
+- **Результат**: Все тесты проходят успешно
+
+---
+
+## Скрипты проверки
+
+### 8.1 Главный скрипт проверки ✅
+#### `apps/api/full_check.py`
+- **Статус**: ✅ Готово
+- **Описание**: Главный скрипт для полной проверки системы
+- **Зависимости**: `subprocess`, `sys`, `os`, `time`
+- **Интерфейс**:
+  ```python
+  # Запуск всех проверок
+  # Статистика выполнения
+  # Итоговый отчет
+  ```
+
+### 8.2 Скрипт тестирования ✅
+#### `apps/api/run_all_tests.py`
+- **Статус**: ✅ Готово
+- **Описание**: Запуск всех тестов системы
+- **Зависимости**: `subprocess`, `sys`, `os`
+- **Интерфейс**:
+  ```python
+  # 141 тест (все компоненты)
+  # Группировка по типам
+  # Детальная статистика
+  ```
+
+### 8.3 Скрипт проверки линтеров ✅
+#### `apps/api/check_linters.py`
+- **Статус**: ✅ Готово
+- **Описание**: Проверка синтаксиса и импортов
+- **Зависимости**: `subprocess`, `sys`, `os`
+- **Интерфейс**:
+  ```python
+  # Проверка синтаксиса Python
+  # Проверка импортов
+  # Проверка циклических зависимостей
+  ```
+
+### 8.4 Скрипт проверки производительности ✅
+#### `apps/api/check_performance.py`
+- **Статус**: ✅ Готово
+- **Описание**: Тестирование производительности всех компонентов
+- **Зависимости**: `asyncio`, `time`, `sys`, `os`
+- **Интерфейс**:
+  ```python
+  # Тесты БД, Redis, S3
+  # Тесты сервисов
+  # Тесты API
+  # Измерение времени выполнения
+  ```
+
+### 8.5 Скрипт проверки безопасности ✅
+#### `apps/api/check_security.py`
+- **Статус**: ✅ Готово
+- **Описание**: Проверка безопасности системы
+- **Зависимости**: `subprocess`, `sys`, `os`
+- **Интерфейс**:
+  ```python
+  # Безопасность паролей
+  # Безопасность JWT
+  # Валидация входных данных
+  # Защита от SQL инъекций
+  # Безопасность файлов
+  ```
+
+### 8.6 Документация скриптов ✅
+#### `apps/api/README_SCRIPTS.md`
+- **Статус**: ✅ Готово
+- **Описание**: Документация по всем скриптам проверки
+- **Зависимости**: Markdown
+- **Интерфейс**:
+  ```markdown
+  # Описание всех скриптов
+  # Инструкции по использованию
+  # Устранение неполадок
+  # Автоматизация
   ```
 
 ---

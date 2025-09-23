@@ -301,20 +301,22 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       use_rag: !!useRag,
     });
     const userMsg: ChatMessage = {
-      id: res.message_id,
+      id: res.id,
       chat_id: chatId,
       role: 'user',
       content,
+      created_at: new Date().toISOString(),
     };
     dispatch({ type: 'ADD_MESSAGE', payload: { chatId, item: userMsg } });
     const assistantMsg: ChatMessage = {
       id: crypto.randomUUID(),
       chat_id: chatId,
       role: 'assistant',
-      content: res.answer,
+      content: typeof res.content === 'string' ? res.content : JSON.stringify(res.content),
+      created_at: res.created_at,
     };
     dispatch({ type: 'ADD_MESSAGE', payload: { chatId, item: assistantMsg } });
-    return res.message_id;
+    return res.id;
   }
 
   async function sendMessageStream(

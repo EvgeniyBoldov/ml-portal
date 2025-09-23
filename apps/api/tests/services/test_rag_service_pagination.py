@@ -1,4 +1,4 @@
-from app.services import rag_service
+from app.services.rag_service_enhanced import RAGDocumentsService
 
 def test_next_offset_and_sort(monkeypatch):
     # monkeypatch clients: embed_texts -> fixed vector; qdrant_search -> fake hits
@@ -12,8 +12,9 @@ def test_next_offset_and_sort(monkeypatch):
         return list(reversed(base)) if sort_by=="score_asc" else base
     monkeypatch.setattr(clients, "qdrant_search", fake_search)
     class S: pass
-    out = rag_service.search(S(), "q", top_k=2, offset=10, sort_by="score_desc")
+    service = RAGDocumentsService(S())
+    out = service.search("q", top_k=2, offset=10, sort_by="score_desc")
     assert out["next_offset"] == 12
     assert out["results"][0]["score"] == 0.9
-    out2 = rag_service.search(S(), "q", top_k=2, offset=10, sort_by="score_asc")
+    out2 = service.search("q", top_k=2, offset=10, sort_by="score_asc")
     assert out2["results"][0]["score"] == 0.8

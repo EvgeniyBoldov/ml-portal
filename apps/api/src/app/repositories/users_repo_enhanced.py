@@ -18,6 +18,10 @@ class UsersRepository(BaseRepository[Users]):
     def __init__(self, session: Session):
         super().__init__(session, Users)
     
+    def get(self, user_id: str) -> Optional[Users]:
+        """Get user by ID"""
+        return self.get_by_id(user_id)
+    
     def get_by_login(self, login: str) -> Optional[Users]:
         """Get user by login"""
         return self.get_by_field('login', login)
@@ -72,6 +76,10 @@ class UsersRepository(BaseRepository[Users]):
         """Change user password"""
         return self.update(user_id, password_hash=new_password_hash)
     
+    def update_user(self, user_id: str, **kwargs) -> Optional[Users]:
+        """Update an existing user."""
+        return self.update(user_id, **kwargs)
+    
     def list_users_paginated(self, query: Optional[str] = None, role: Optional[str] = None,
                             is_active: Optional[bool] = None, limit: int = 50,
                             cursor: Optional[str] = None) -> Tuple[List[Users], bool, Optional[str]]:
@@ -96,6 +104,53 @@ class UsersRepository(BaseRepository[Users]):
             next_cursor = None
         
         return users, has_more, next_cursor
+    
+    def count_users(self, query: Optional[str] = None, role: Optional[str] = None,
+                   is_active: Optional[bool] = None) -> int:
+        """Count users with filters"""
+        filters = {}
+        if role:
+            filters['role'] = role
+        if is_active is not None:
+            filters['is_active'] = is_active
+        
+        # Apply text search
+        if query:
+            users = self.search(query, ['login', 'email'], limit=1000)
+            return len(users)
+        else:
+            return len(self.list(filters=filters))
+    
+    # Token management methods
+    def create_token(self, user_id: str, token_hash: str, name: str,
+                    scopes: Optional[List[str]] = None, expires_at: Optional[datetime] = None) -> UserTokens:
+        """Create a new PAT token"""
+        token_repo = UserTokensRepository(self.session)
+        return token_repo.create_token(user_id, token_hash, name, scopes, expires_at)
+    
+    def list_user_tokens(self, user_id: str, include_revoked: bool = False) -> List[UserTokens]:
+        """Get all tokens for a user"""
+        token_repo = UserTokensRepository(self.session)
+        return token_repo.get_user_tokens(user_id, include_revoked)
+    
+    def revoke_token(self, token_id: str) -> bool:
+        """Revoke a token"""
+        token_repo = UserTokensRepository(self.session)
+        return token_repo.revoke_token(token_id)
+    
+    # Audit logs methods
+    def create_audit_log(self, actor_user_id: str, action: str, object_type: str, object_id: str, 
+                        meta: dict, ip: str, user_agent: str, request_id: str) -> AuditLogs:
+        """Create an audit log entry"""
+        audit_repo = AuditLogsRepository(self.session)
+        return audit_repo.create_log(actor_user_id, action, object_type, object_id, meta, ip, user_agent, request_id)
+    
+    def list_audit_logs(self, skip: int = 0, limit: int = 100, user_id: Optional[str] = None,
+                        action: Optional[str] = None, object_type: Optional[str] = None) -> List[AuditLogs]:
+        """List audit logs with pagination and filters"""
+        audit_repo = AuditLogsRepository(self.session)
+        logs, _, _ = audit_repo.get_logs_paginated(user_id, action, object_type, limit, None)
+        return logs
 
 
 class UserTokensRepository(BaseRepository[UserTokens]):

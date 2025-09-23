@@ -1,367 +1,143 @@
-# ML Portal Monorepo Management
+# ML Portal Makefile
 
-.PHONY: help build-local build-prod up-local up-prod down-local down-prod clean
-.PHONY: install-frontend install-backend test-frontend test-backend lint-frontend lint-backend
-.PHONY: format-frontend format-backend type-check-frontend type-check-backend
+.PHONY: help build up down test test-backend test-frontend test-frontend-local test-frontend-watch test-frontend-e2e test-frontend-type-check build-frontend install-frontend test-functional test-all test-build test-run clean clean-all logs
 
-# Переменные
-COMPOSE_LOCAL = infra/compose/docker-compose.local.yml
-COMPOSE_PROD = infra/compose/docker-compose.prod.yml
-FRONTEND_DIR = apps/web
-BACKEND_DIR = apps/api
-SCRIPTS_DIR = infra/scripts
-
-help: ## Показать справку
-	@echo "ML Portal Monorepo Management"
-	@echo "============================="
+# Default target
+help:
+	@echo "ML Portal - Available commands:"
 	@echo ""
-	@echo "🚀 Разработка:"
-	@echo "  make install-all        - Установить все зависимости"
-	@echo "  make dev                - Запустить dev серверы"
-	@echo "  make build-all          - Собрать все приложения"
+	@echo "Development:"
+	@echo "  build          - Build all Docker images"
+	@echo "  dev            - Start development environment"
+	@echo "  prod           - Start production environment"
+	@echo "  down           - Stop all services"
+	@echo "  logs           - Show logs for all services"
 	@echo ""
-	@echo "🐳 Docker:"
-	@echo "  make build-local        - Собрать образы для локальной разработки"
-	@echo "  make up-local           - Запустить локальный стек (с nginx)"
-	@echo "  make down-local         - Остановить локальный стек"
-	@echo "  make build-prod         - Собрать образы для продакшна"
-	@echo "  make up-prod            - Запустить продакшн стек (с nginx)"
-	@echo "  make down-prod          - Остановить продакшн стек"
-	@echo "  make nginx-logs         - Показать логи nginx"
-	@echo "  make nginx-reload       - Перезагрузить nginx"
+	@echo "Testing:"
+	@echo "  test           - Run all tests"
+	@echo "  test-backend   - Run backend tests only"
+	@echo "  test-frontend  - Run frontend tests only"
+	@echo "  test-frontend-local - Run frontend tests locally"
+	@echo "  test-frontend-type-check - Check TypeScript types"
+	@echo "  test-functional - Run functional tests with ML models"
+	@echo "  test-all       - Run backend + frontend tests together"
+	@echo "  test-build     - Build test images"
+	@echo "  test-run       - Run tests with auto-cleanup"
 	@echo ""
-	@echo "🧪 Тестирование:"
-	@echo "  make test-all           - Запустить все тесты"
-	@echo "  make test-frontend      - Тесты фронтенда"
-	@echo "  make test-backend       - Тесты бэкенда"
-	@echo "  make test-e2e           - E2E тесты"
-	@echo "  make test-quick         - Быстрый тест системы"
+	@echo "Frontend:"
+	@echo "  build-frontend - Build frontend for production"
+	@echo "  install-frontend - Install frontend dependencies"
 	@echo ""
-	@echo "🔍 Качество кода:"
-	@echo "  make lint-all           - Линтинг всего проекта"
-	@echo "  make format-all         - Форматирование всего проекта"
-	@echo "  make type-check-all     - Проверка типов"
-	@echo ""
-	@echo "🧹 Очистка:"
-	@echo "  make clean              - Очистить все образы и volumes"
-	@echo "  make clean-cache        - Очистить кэш и временные файлы"
-	@echo "  make clean-all          - Полная очистка"
-	@echo ""
-	@echo "📊 Мониторинг:"
-	@echo "  make logs               - Показать логи всех сервисов"
-	@echo "  make status             - Показать статус сервисов"
-	@echo ""
-	@echo "🗄️ База данных:"
-	@echo "  make run-migrations     - Запустить миграции БД"
-	@echo "  make create-superuser   - Создать суперпользователя"
-	@echo "  make reset-db           - Сбросить БД и создать суперпользователя"
-	@echo ""
-	@echo "🤖 Модели:"
-	@echo "  make download-models    - Скачать модели из HuggingFace"
-	@echo "  make list-models        - Показать скачанные модели"
-	@echo ""
-	@echo "🔧 Утилиты:"
-	@echo "  make gen-structure      - Генерировать структуру проекта в текстовом виде"
-	@echo "  make gen-tree           - Показать дерево файлов проекта"
-	@echo "  make gen-content        - Генерировать полное содержимое проекта (apps.txt, infra.txt)"
-	@echo "  make gen-openapi        - Генерировать OpenAPI SDK"
-	@echo "  make gen-docs           - Генерировать документацию"
+	@echo "Maintenance:"
+	@echo "  clean          - Clean up containers and volumes"
+	@echo "  clean-all      - Clean up everything including images"
 
-# Установка зависимостей
-install-all: install-frontend install-backend ## Установить все зависимости
+# Build all images
+build:
+	docker-compose -f docker-compose.dev.yml build
 
-install-frontend: ## Установить зависимости фронтенда
-	@echo "📦 Установка зависимостей фронтенда..."
-	cd $(FRONTEND_DIR) && npm install
+# Start development environment
+dev:
+	docker-compose -f docker-compose.dev.yml up -d
 
-install-backend: ## Установить зависимости бэкенда
-	@echo "📦 Установка зависимостей бэкенда..."
-	cd $(BACKEND_DIR) && pip install -r requirements.txt
-	cd $(BACKEND_DIR) && pip install -r requirements-test.txt
+# Start production environment
+prod:
+	docker-compose -f docker-compose.prod.yml up -d
 
-# Разработка
-dev: ## Запустить dev серверы
-	@echo "🚀 Запуск dev серверов..."
-	@echo "Frontend: http://localhost:3000"
-	@echo "Backend: http://localhost:8000"
-	@echo "Используйте Ctrl+C для остановки"
-	@echo ""
-	@echo "Запуск фронтенда в фоне..."
-	cd $(FRONTEND_DIR) && npm run dev &
-	@echo "Запуск бэкенда в фоне..."
-	cd $(BACKEND_DIR) && uvicorn src.app.main:app --reload --host 0.0.0.0 --port 8000 &
-	@echo "✅ Dev серверы запущены"
+# Stop all services
+down:
+	docker-compose -f docker-compose.dev.yml down
+	docker-compose -f docker-compose.prod.yml down
 
-# Сборка
-build-all: build-frontend build-backend ## Собрать все приложения
+# Show logs
+logs:
+	docker-compose -f docker-compose.dev.yml logs -f
 
-build-frontend: ## Собрать фронтенд
-	@echo "🔨 Сборка фронтенда..."
-	cd $(FRONTEND_DIR) && npm run build
+# Run all tests
+test: test-backend test-frontend
 
-build-backend: ## Собрать бэкенд (проверка типов)
-	@echo "🔨 Проверка типов бэкенда..."
-	cd $(BACKEND_DIR) && mypy src/
+# Build test images
+test-build:
+	docker-compose -f docker-compose.test.yml build
 
-# Docker
-build-local: ## Собрать образы для локальной разработки
-	@echo "🐳 Сборка образов для локальной разработки..."
-	docker-compose -f $(COMPOSE_LOCAL) build
+# Run tests with auto-cleanup
+test-run:
+	docker-compose -f docker-compose.test.yml up --build --abort-on-container-exit
+	docker-compose -f docker-compose.test.yml down
 
-up-local: ## Запустить локальный стек
-	@echo "🐳 Запуск локального стека..."
-	docker-compose -f $(COMPOSE_LOCAL) up -d
+# Run backend tests
+test-backend:
+	docker-compose -f docker-compose.test.yml up --build --abort-on-container-exit backend-test
+	docker-compose -f docker-compose.test.yml down
 
-down-local: ## Остановить локальный стек
-	@echo "🐳 Остановка локального стека..."
-	docker-compose -f $(COMPOSE_LOCAL) down
+# Run frontend tests
+test-frontend:
+	docker-compose -f docker-compose.test.yml up --build --abort-on-container-exit frontend-test
+	docker-compose -f docker-compose.test.yml down
 
-build-prod: ## Собрать образы для продакшна
-	@echo "🐳 Сборка образов для продакшна..."
-	docker-compose -f $(COMPOSE_PROD) build
+# Run frontend tests locally (for development)
+test-frontend-local:
+	cd apps/web && npm test -- --run
 
-up-prod: ## Запустить продакшн стек
-	@echo "🐳 Запуск продакшн стека..."
-	docker-compose -f $(COMPOSE_PROD) up -d
+test-frontend-watch:
+	cd apps/web && npm test
 
-down-prod: ## Остановить продакшн стек
-	@echo "🐳 Остановка продакшн стека..."
-	docker-compose -f $(COMPOSE_PROD) down
+test-frontend-e2e:
+	cd apps/web && npx playwright test
 
-# Тестирование
-test-all: test-frontend test-backend ## Запустить все тесты
+test-frontend-type-check:
+	cd apps/web && npm run type-check
 
-test-frontend: ## Тесты фронтенда
-	@echo "🧪 Запуск тестов фронтенда..."
-	cd $(FRONTEND_DIR) && npm test
+# Build frontend
+build-frontend:
+	cd apps/web && npm run build
 
-test-backend: ## Тесты бэкенда
-	@echo "🧪 Запуск тестов бэкенда..."
-	cd $(BACKEND_DIR) && python -m pytest
+# Install frontend dependencies
+install-frontend:
+	cd apps/web && npm install
 
-test-e2e: ## E2E тесты
-	@echo "🧪 Запуск E2E тестов..."
-	cd $(BACKEND_DIR) && python -m pytest tests/e2e/ -v
+# Run functional tests with ML models
+test-functional:
+	docker-compose -f docker-compose.test.yml up --build --abort-on-container-exit functional-test
+	docker-compose -f docker-compose.test.yml down
 
-test-quick: ## Быстрый тест системы
-	@echo "🧪 Быстрый тест системы..."
-	@echo "1. Проверка API..."
-	@curl -f http://localhost:8000/healthz || echo "❌ API недоступен"
-	@echo "2. Проверка фронтенда..."
-	@curl -f http://localhost:3000 || echo "❌ Frontend недоступен"
-	@echo "✅ Быстрый тест завершен"
+# Run all tests (backend + frontend)
+test-all:
+	docker-compose -f docker-compose.test.yml up --build --abort-on-container-exit backend-test frontend-test
+	docker-compose -f docker-compose.test.yml down
 
-# Качество кода
-lint-all: lint-frontend lint-backend ## Линтинг всего проекта
-
-lint-frontend: ## Линтинг фронтенда
-	@echo "🔍 Линтинг фронтенда..."
-	cd $(FRONTEND_DIR) && npm run lint
-
-lint-backend: ## Линтинг бэкенда
-	@echo "🔍 Линтинг бэкенда..."
-	cd $(BACKEND_DIR) && flake8 src/
-	cd $(BACKEND_DIR) && black --check src/
-	cd $(BACKEND_DIR) && isort --check-only src/
-
-format-all: format-frontend format-backend ## Форматирование всего проекта
-
-format-frontend: ## Форматирование фронтенда
-	@echo "🎨 Форматирование фронтенда..."
-	cd $(FRONTEND_DIR) && npm run format
-
-format-backend: ## Форматирование бэкенда
-	@echo "🎨 Форматирование бэкенда..."
-	cd $(BACKEND_DIR) && black src/
-	cd $(BACKEND_DIR) && isort src/
-
-type-check-all: type-check-frontend type-check-backend ## Проверка типов всего проекта
-
-type-check-frontend: ## Проверка типов фронтенда
-	@echo "🔍 Проверка типов фронтенда..."
-	cd $(FRONTEND_DIR) && npm run type-check
-
-type-check-backend: ## Проверка типов бэкенда
-	@echo "🔍 Проверка типов бэкенда..."
-	cd $(BACKEND_DIR) && mypy src/
-
-# Очистка
-clean: ## Очистить все образы и volumes
-	@echo "🧹 Очистка образов и volumes..."
-	docker-compose -f $(COMPOSE_LOCAL) down -v --remove-orphans
-	docker-compose -f $(COMPOSE_PROD) down -v --remove-orphans
+# Clean up containers and volumes
+clean:
+	docker-compose -f docker-compose.dev.yml down -v
+	docker-compose -f docker-compose.prod.yml down -v
+	docker-compose -f docker-compose.test.yml down -v
 	docker system prune -f
-	docker volume prune -f
 
-clean-cache: ## Очистить кэш и временные файлы
-	@echo "🧹 Очистка кэша и временных файлов..."
-	@echo "Очистка Python кэша..."
-	find . -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
-	find . -name "*.pyc" -type f -delete 2>/dev/null || true
-	find . -name "*.pyo" -type f -delete 2>/dev/null || true
-	find . -name "*.pyd" -type f -delete 2>/dev/null || true
-	@echo "Очистка Node.js кэша..."
-	cd $(FRONTEND_DIR) && rm -rf node_modules/.cache 2>/dev/null || true
-	cd $(FRONTEND_DIR) && rm -rf dist 2>/dev/null || true
-	@echo "Очистка TypeScript кэша..."
-	find . -name "*.tsbuildinfo" -type f -delete 2>/dev/null || true
-	@echo "✅ Кэш очищен"
+# Clean up everything including images
+clean-all: clean
+	docker-compose -f docker-compose.dev.yml down --rmi all
+	docker-compose -f docker-compose.prod.yml down --rmi all
+	docker-compose -f docker-compose.test.yml down --rmi all
+	docker system prune -af
 
-clean-all: clean clean-cache ## Полная очистка
-	@echo "✅ Полная очистка завершена"
+# Development helpers
+dev-backend:
+	docker-compose -f docker-compose.dev.yml up -d postgres redis qdrant minio rabbitmq
+	cd apps/api && python -m uvicorn src.app.main:app --reload --host 0.0.0.0 --port 8000
 
-# Мониторинг
-logs: ## Показать логи всех сервисов
-	@echo "📊 Логи сервисов:"
-	docker-compose -f $(COMPOSE_LOCAL) logs -f
+dev-frontend:
+	cd apps/web && npm run dev
 
-status: ## Показать статус сервисов
-	@echo "📊 Статус сервисов:"
-	docker-compose -f $(COMPOSE_LOCAL) ps
+# Database management
+db-migrate:
+	docker-compose -f docker-compose.dev.yml exec api python infra/scripts/run_migrations.py
 
-# База данных
-run-migrations: ## Запустить миграции БД
-	@echo "🗄️ Запуск миграций БД..."
-	docker-compose -f $(COMPOSE_LOCAL) exec api python -m alembic upgrade head
+db-reset:
+	docker-compose -f docker-compose.dev.yml exec api python infra/scripts/run_migrations.py
 
-create-superuser: ## Создать суперпользователя
-	@echo "🔐 Создание суперпользователя..."
-	@read -p "Введите логин: " login; \
-	read -s -p "Введите пароль (мин. 12 символов): " password; \
-	echo; \
-	read -p "Введите email (опционально): " email; \
-	cd $(BACKEND_DIR) && python scripts/create_superuser.py --login "$$login" --password "$$password" --email "$$email"
-
-reset-db: run-migrations create-superuser ## Сбросить БД и создать суперпользователя
-	@echo "✅ БД сброшена и суперпользователь создан"
-
-# Модели
-download-models: ## Скачать модели из HuggingFace
-	@echo "🤖 Скачивание моделей из HuggingFace..."
-	@echo "Используйте: python $(SCRIPTS_DIR)/download_models.py <model_id> [опции]"
-	@echo "Примеры:"
-	@echo "  python $(SCRIPTS_DIR)/download_models.py sentence-transformers/all-MiniLM-L6-v2 --test"
-	@echo "  python $(SCRIPTS_DIR)/download_models.py sentence-transformers/all-mpnet-base-v2 --info"
-
-download-model: ## Скачать конкретную модель
-	@echo "🤖 Скачивание конкретной модели..."
-	@if [ -z "$(MODEL_ID)" ]; then \
-		echo "❌ Не указан MODEL_ID"; \
-		echo "Используйте: make download-model MODEL_ID=<model_id>"; \
-		echo "Например: make download-model MODEL_ID=BAAI/bge-3m"; \
-	else \
-		python3 $(SCRIPTS_DIR)/download_model.py $(MODEL_ID) $(ARGS); \
-	fi
-
-list-models: ## Показать скачанные модели
-	@echo "🤖 Скачанные модели:"
-	@if [ -d "models" ]; then \
-		echo "📁 Директория models:"; \
-		ls -la models/ 2>/dev/null || echo "  (пустая)"; \
-	else \
-		echo "❌ Директория models не найдена"; \
-		echo "Используйте: make download-models"; \
-	fi
-
-# Утилиты
-gen-structure: ## Генерировать структуру проекта в текстовом виде
-	@echo "📁 Генерация структуры проекта..."
-	@echo ""
-	@echo "ML Portal Monorepo Structure"
-	@echo "============================"
-	@echo ""
-	@echo "📁 ml-portal/"
-	@echo "├── 📄 package.json              # Monorepo workspace management"
-	@echo "├── 📄 Makefile                  # Общие команды"
-	@echo "├── 📄 README.md                 # Документация"
-	@echo "├── 📄 env.example               # Пример переменных окружения"
-	@echo "├── 📁 apps/                     # Приложения"
-	@echo "│   ├── 📁 api/                  # Backend (FastAPI)"
-	@echo "│   │   ├── 📄 pyproject.toml    # Python конфигурация"
-	@echo "│   │   ├── 📄 requirements.txt  # Python зависимости"
-	@echo "│   │   ├── 📄 requirements-test.txt # Тестовые зависимости"
-	@echo "│   │   ├── 📁 src/app/          # Исходный код приложения"
-	@echo "│   │   │   ├── 📁 api/          # HTTP endpoints"
-	@echo "│   │   │   ├── 📁 core/         # Конфигурация, логирование"
-	@echo "│   │   │   ├── 📁 services/     # Бизнес-логика"
-	@echo "│   │   │   ├── 📁 repositories/ # Доступ к данным"
-	@echo "│   │   │   ├── 📁 tasks/        # Celery задачи"
-	@echo "│   │   │   └── 📁 workers/      # Celery workers"
-	@echo "│   │   ├── 📁 tests/            # Тесты"
-	@echo "│   │   ├── 📁 scripts/          # Утилиты"
-	@echo "│   │   └── 📁 migrations/       # Alembic миграции"
-	@echo "│   └── 📁 web/                  # Frontend (React/Vite)"
-	@echo "│       ├── 📄 package.json      # Node.js конфигурация"
-	@echo "│       ├── 📄 tsconfig.json     # TypeScript конфигурация"
-	@echo "│       ├── 📄 vite.config.ts    # Vite конфигурация"
-	@echo "│       ├── 📁 src/              # Исходный код"
-	@echo "│       │   ├── 📁 app/          # Инициализация, роутер, провайдеры"
-	@echo "│       │   ├── 📁 pages/        # Страницы (admin, gpt)"
-	@echo "│       │   ├── 📁 widgets/      # Составные виджеты"
-	@echo "│       │   ├── 📁 features/     # Функциональности"
-	@echo "│       │   ├── 📁 entities/     # Сущности (zustand stores)"
-	@echo "│       │   └── 📁 shared/       # Общие компоненты"
-	@echo "│       └── 📁 public/           # Статические файлы"
-	@echo "├── 📁 infra/                    # Инфраструктура"
-	@echo "│   ├── 📁 compose/              # Docker Compose конфигурации"
-	@echo "│   ├── 📁 docker/               # Docker файлы"
-	@echo "│   ├── 📁 k8s/                  # Kubernetes манифесты"
-	@echo "│   ├── 📁 nginx/                # Nginx конфигурации"
-	@echo "│   └── 📁 scripts/              # Утилиты инфраструктуры"
-	@echo "├── 📁 docs/                     # Документация"
-	@echo "│   ├── 📄 API.md                # API документация"
-	@echo "│   ├── 📁 architecture/         # Архитектурная документация"
-	@echo "│   └── 📁 guides/               # Руководства"
-	@echo "└── 📁 models/                   # ML модели"
-	@echo "    ├── 📁 microsoft--DialoGPT-small/"
-	@echo "    └── 📁 sentence-transformers--all-MiniLM-L6-v2/"
-	@echo ""
-	@echo "🏗️ Архитектурные принципы:"
-	@echo "• Frontend: Feature-Sliced Design (FSD)"
-	@echo "• Backend: Clean Architecture"
-	@echo "• Monorepo: Workspace management"
-	@echo "• Docker: Multi-stage builds"
-	@echo "• Testing: Unit + E2E tests"
-
-gen-tree: ## Показать дерево файлов проекта
-	@echo "🌳 Дерево файлов проекта:"
-	@echo ""
-	@tree -I 'node_modules|__pycache__|*.pyc|.git|.venv|.pytest_cache|dist|*.tsbuildinfo' -a || find . -type f -not -path './node_modules/*' -not -path './__pycache__/*' -not -path './.git/*' -not -path './.venv/*' -not -path './.pytest_cache/*' -not -path './dist/*' -not -path './*.tsbuildinfo' | head -50
-
-gen-content: ## Генерировать полное содержимое проекта (apps.txt, infra.txt)
-	@echo "📄 Генерация полного содержимого проекта..."
-	@echo "Создание apps.txt и infra.txt с содержимым всех файлов..."
-	python3 $(SCRIPTS_DIR)/generate_project_content.py
-	@echo "✅ Сгенерированы файлы:"
-	@echo "  📄 docs/generated/apps.txt - Содержимое всех файлов из apps/"
-	@echo "  📄 docs/generated/infra.txt - Содержимое всех файлов из infra/"
-
-gen-openapi: ## Генерировать OpenAPI SDK
-	@echo "🔧 Генерация OpenAPI SDK..."
-	@echo "TODO: Реализовать генерацию OpenAPI SDK"
-	@echo "Будущий путь: packages/openapi-sdk/"
-
-gen-docs: ## Генерировать документацию
-	@echo "📚 Генерация документации..."
-	@echo "TODO: Реализовать генерацию документации"
-	@echo "Будущий путь: docs/"
-
-# Развертывание
-deploy: build-prod up-prod ## Полное развертывание (сборка + запуск)
-	@echo "🚀 Развертывание завершено!"
-
-# Откат
-rollback: ## Откат к предыдущей версии
-	@echo "🔄 Откат к предыдущей версии..."
-	docker service update --rollback ml-portal_api
-	docker service update --rollback ml-portal_worker-mixed
-	docker service update --rollback ml-portal_worker-rag
-
-# Nginx команды
-nginx-logs: ## Показать логи nginx
-	@echo "📊 Логи nginx:"
-	docker-compose -f $(COMPOSE_LOCAL) logs nginx
-
-nginx-reload: ## Перезагрузить nginx
-	@echo "🔄 Перезагрузка nginx..."
-	docker-compose -f $(COMPOSE_LOCAL) exec nginx nginx -s reload
+# Health checks
+health:
+	@echo "Checking service health..."
+	@curl -f http://localhost:8000/health || echo "Backend not healthy"
+	@curl -f http://localhost:3000 || echo "Frontend not healthy"
+	@curl -f http://localhost:80 || echo "Nginx not healthy"

@@ -1,0 +1,128 @@
+version: '3.8'
+
+services:
+  # PostgreSQL для тестов
+  postgres-test:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: ml_portal_test
+      POSTGRES_USER: ml_portal_test
+      POSTGRES_PASSWORD: ml_portal_test_password
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ml_portal_test"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Redis для тестов
+  redis-test:
+    image: redis:7-alpine
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Qdrant для тестов
+  qdrant-test:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6335:6333"
+    environment:
+      QDRANT__SERVICE__HTTP_PORT: 6333
+
+  # MinIO для тестов
+  minio-test:
+    image: minio/minio:latest
+    ports:
+      - "9002:9000"
+      - "9003:9001"
+    environment:
+      MINIO_ROOT_USER: testadmin
+      MINIO_ROOT_PASSWORD: testadmin123
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Backend тесты
+  backend-test:
+    build:
+      context: .
+      dockerfile: infra/docker/api/Dockerfile.test
+    volumes:
+      # Монтируем код как volume для быстрой итерации
+      - ./apps/api/src/app:/app/app
+      - ./apps/api/tests:/app/tests
+      - ./models:/app/models:ro
+    environment:
+      - DB_URL=postgresql://ml_portal_test:ml_portal_test_password@postgres-test:5432/ml_portal_test
+      - REDIS_URL=redis://redis-test:6379
+      - QDRANT_URL=http://qdrant-test:6333
+      - S3_ENDPOINT=http://minio-test:9000
+      - S3_ACCESS_KEY=testadmin
+      - S3_SECRET_KEY=testadmin123
+      - S3_BUCKET_RAG=test-rag-documents
+      - PYTEST_ASYNCIO_MODE=auto
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+      redis-test:
+        condition: service_healthy
+      qdrant-test:
+        condition: service_started
+      minio-test:
+        condition: service_healthy
+    command: ["pytest", "tests/", "-v", "--tb=short", "--asyncio-mode=auto"]
+
+  # Frontend тесты
+  frontend-test:
+    build:
+      context: .
+      dockerfile: infra/docker/frontend/Dockerfile.test
+    volumes:
+      # Монтируем код как volume для быстрой итерации
+      - ./apps/web:/app
+      - /app/node_modules  # Исключаем node_modules из volume
+    environment:
+      - NODE_ENV=test
+      - VITE_API_BASE=http://backend-test:8000/api
+    depends_on:
+      - backend-test
+    command: ["npm", "test", "--", "--run", "--reporter=verbose"]
+
+  # Функциональные тесты с легкими ML моделями
+  functional-test:
+    build:
+      context: .
+      dockerfile: infra/docker/api/Dockerfile.test
+    volumes:
+      - ./apps/api/src/app:/app/app
+      - ./apps/api/tests:/app/tests
+      - ./models:/app/models:ro
+    environment:
+      - DB_URL=postgresql://ml_portal_test:ml_portal_test_password@postgres-test:5432/ml_portal_test
+      - REDIS_URL=redis://redis-test:6379
+      - QDRANT_URL=http://qdrant-test:6333
+      - S3_ENDPOINT=http://minio-test:9000
+      - S3_ACCESS_KEY=testadmin
+      - S3_SECRET_KEY=testadmin123
+      - S3_BUCKET_RAG=test-rag-documents
+      - ML_MODEL_PATH=/app/models
+      - USE_LIGHTWEIGHT_MODELS=true
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+      redis-test:
+        condition: service_healthy
+      qdrant-test:
+        condition: service_started
+      minio-test:
+        condition: service_healthy
+    command: ["pytest", "tests/functional/", "-v", "--tb=short", "--asyncio-mode=auto"]

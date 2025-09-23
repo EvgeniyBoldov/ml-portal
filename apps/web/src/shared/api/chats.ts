@@ -6,7 +6,7 @@ import type {
   ChatCreateRequest,
   ChatUpdateRequest,
   ChatTagsUpdateRequest,
-  ChatMessageRequest,
+  ChatMessageCreateRequest,
   ChatMessageResponse,
   ChatMessage,
 } from './types';
@@ -41,7 +41,7 @@ export async function listMessages(
   );
 }
 
-export async function sendMessage(chat_id: string, body: ChatMessageRequest) {
+export async function sendMessage(chat_id: string, body: ChatMessageCreateRequest) {
   return apiRequest<ChatMessageResponse>(`/chats/${chat_id}/messages`, {
     method: 'POST',
     body: JSON.stringify(body),

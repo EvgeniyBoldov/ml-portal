@@ -6,10 +6,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from app.api.deps import db_session, get_current_user
-from app.repositories.chats_repo import ChatsRepo
-from app.schemas.chat_schemas import (
-    ChatCreateRequest, ChatUpdateRequest, ChatTagsUpdateRequest,
-    ChatMessageRequest, ChatMessageResponse, ChatOut, ChatMessageOut
+from app.repositories.chats_repo_enhanced import ChatsRepository
+from app.api.schemas.chats import (
+    ChatCreateRequest, ChatUpdateRequest, ChatSearchRequest,
+    ChatMessageCreateRequest, ChatMessageResponse, ChatResponse,
+    ChatTagsUpdateRequest
 )
 from app.services.clients import llm_chat
 
@@ -43,7 +44,7 @@ def list_chats(
     session: Session = Depends(db_session),
     user: Dict[str, Any] = Depends(get_current_user),
 ):
-    repo = ChatsRepo(session)
+    repo = ChatsRepository(session)
     items = repo.list_chats(user["id"], q=q, limit=limit)
     return {"items": [_ser_chat(c) for c in items], "next_cursor": None}
 
@@ -53,7 +54,7 @@ def create_chat(
     session: Session = Depends(db_session),
     user: Dict[str, Any] = Depends(get_current_user),
 ):
-    repo = ChatsRepo(session)
+    repo = ChatsRepository(session)
     chat = repo.create_chat(user["id"], request.name, request.tags)
     return {"chat_id": str(chat.id)}
 
@@ -64,7 +65,7 @@ def rename_chat(
     session: Session = Depends(db_session),
     user: Dict[str, Any] = Depends(get_current_user),
 ):
-    repo = ChatsRepo(session)
+    repo = ChatsRepository(session)
     chat = repo.get(chat_id)
     if not chat or str(chat.owner_id) != str(user["id"]):
         raise HTTPException(status_code=404, detail="not_found")
@@ -79,7 +80,7 @@ def update_tags(
     session: Session = Depends(db_session),
     user: Dict[str, Any] = Depends(get_current_user),
 ):
-    repo = ChatsRepo(session)
+    repo = ChatsRepository(session)
     chat = repo.get(chat_id)
     if not chat or str(chat.owner_id) != str(user["id"]):
         raise HTTPException(status_code=404, detail="not_found")
@@ -94,7 +95,7 @@ def list_messages(
     session: Session = Depends(db_session),
     user: Dict[str, Any] = Depends(get_current_user),
 ):
-    repo = ChatsRepo(session)
+    repo = ChatsRepository(session)
     chat = repo.get(chat_id)
     if not chat or str(chat.owner_id) != str(user["id"]):
         raise HTTPException(status_code=404, detail="not_found")
@@ -105,11 +106,11 @@ def list_messages(
 @router.post("/{chat_id}/messages")
 async def post_message(
     chat_id: str,
-    request: ChatMessageRequest,
+    request: ChatMessageCreateRequest,
     session: Session = Depends(db_session),
     user: Dict[str, Any] = Depends(get_current_user),
 ):
-    repo = ChatsRepo(session)
+    repo = ChatsRepository(session)
     chat = repo.get(chat_id)
     if not chat or str(chat.owner_id) != str(user["id"]):
         raise HTTPException(status_code=404, detail="not_found")
@@ -171,7 +172,7 @@ def delete_chat(
     session: Session = Depends(db_session),
     user: Dict[str, Any] = Depends(get_current_user),
 ):
-    repo = ChatsRepo(session)
+    repo = ChatsRepository(session)
     chat = repo.get(chat_id)
     if not chat or str(chat.owner_id) != str(user["id"]):
         raise HTTPException(status_code=404, detail="not_found")

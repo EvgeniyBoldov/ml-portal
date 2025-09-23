@@ -53,17 +53,22 @@ export interface ChatTagsUpdateRequest {
   tags: string[];
 }
 
-export interface ChatMessageRequest {
+export interface ChatMessageCreateRequest {
   content: string;
   use_rag?: boolean;
   response_stream?: boolean;
 }
 
 export interface ChatMessageResponse {
-  message_id: string;
-  content: string;
-  answer: string;
-  message?: string;
+  id: string;
+  chat_id: string;
+  role: 'user' | 'assistant' | 'system';
+  content: string | Record<string, any>;
+  model?: string;
+  tokens_in?: number;
+  tokens_out?: number;
+  meta?: Record<string, any>;
+  created_at: string;
 }
 
 export interface User {

@@ -86,29 +86,29 @@ def metrics():
 def rag_metrics():
     from app.api.deps import db_session
     from sqlalchemy import func
-    from app.models.rag import RagDocuments, RagChunks
+    from app.models.rag import RAGDocument, RAGChunk
     
     session = next(db_session())
     try:
         # Подсчитываем документы по статусам
         status_counts = session.query(
-            RagDocuments.status,
-            func.count(RagDocuments.id)
-        ).group_by(RagDocuments.status).all()
+            RAGDocument.status,
+            func.count(RAGDocument.id)
+        ).group_by(RAGDocument.status).all()
         
         # Общее количество документов
-        total_documents = session.query(func.count(RagDocuments.id)).scalar()
+        total_documents = session.query(func.count(RAGDocument.id)).scalar()
         
         # Количество чанков
-        total_chunks = session.query(func.count(RagChunks.id)).scalar()
+        total_chunks = session.query(func.count(RAGChunk.id)).scalar()
         
         # Количество документов в обработке
-        processing_documents = session.query(func.count(RagDocuments.id)).filter(
-            RagDocuments.status.in_(['uploaded', 'normalizing', 'chunking', 'embedding', 'indexing'])
+        processing_documents = session.query(func.count(RAGDocument.id)).filter(
+            RAGDocument.status.in_(['uploaded', 'normalizing', 'chunking', 'embedding', 'indexing'])
         ).scalar()
         
         # Размер хранилища (приблизительно)
-        storage_size = session.query(func.sum(RagDocuments.size_bytes)).scalar() or 0
+        storage_size = session.query(func.sum(RAGDocument.size_bytes)).scalar() or 0
         
         return {
             "total_documents": total_documents,
@@ -127,6 +127,6 @@ app.include_router(auth_router, prefix="/api")
 app.include_router(chats_router, prefix="/api")
 app.include_router(rag_router, prefix="/api")
 app.include_router(analyze_router, prefix="/api")
-app.include_router(admin_router)
-app.include_router(password_reset_router)
-app.include_router(setup_router)
+app.include_router(admin_router, prefix="/api")
+app.include_router(password_reset_router, prefix="/api")
+app.include_router(setup_router, prefix="/api")

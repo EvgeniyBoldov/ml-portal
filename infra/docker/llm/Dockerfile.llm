@@ -13,9 +13,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY infra/docker/llm/requirements-llm.txt ./requirements.txt
 RUN python -m pip install --upgrade pip && pip install -r requirements.txt
 
-# Копируем только необходимые файлы
-COPY src/app/ ./app/
-COPY src/adapters/ ./adapters/
+# Копируем код приложения из apps/llm/src/app в /app
+COPY apps/llm/src/app/ ./app/
 COPY infra/docker/llm/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 

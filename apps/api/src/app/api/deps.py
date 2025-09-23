@@ -10,8 +10,9 @@ from app.core.db import get_session
 from app.core.redis import get_redis
 from app.core.security import get_bearer_token, decode_jwt
 from app.core.config import settings
-from app.repositories.users_repo import UsersRepo
-from app.schemas.admin import UserRole
+from app.repositories.users_repo_enhanced import UsersRepository
+from app.api.schemas.users import UserRole
+from app.core.auth import UserCtx
 
 def db_session():
     """Real DB session dependency."""
@@ -50,26 +51,26 @@ def _ensure_access(payload: Dict[str, Any]) -> None:
     if payload.get("typ") != "access":
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_token_type")
 
-def get_current_user(token: str = Depends(get_bearer_token), session: Session = Depends(db_session)) -> Dict[str, Any]:
+def get_current_user(token: str = Depends(get_bearer_token), session: Session = Depends(db_session)) -> UserCtx:
     """Resolve user from Bearer access JWT and DB."""
     payload = decode_jwt(token)
     _ensure_access(payload)
     sub = payload.get("sub")
     if not sub:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_token")
-    repo = UsersRepo(session)
+    repo = UsersRepository(session)
     user = repo.get(sub)
     if not user or getattr(user, "is_active", True) is False:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="user_not_found_or_inactive")
-    return {"id": str(user.id), "login": user.login, "role": user.role, "fio": getattr(user, "fio", None)}
+    return UserCtx(id=str(user.id), role=user.role)
 
 
 def require_roles(*roles: Union[str, UserRole]) -> callable:
     """RBAC dependency factory. Returns a dependency that requires specific roles."""
     role_values = [r.value if isinstance(r, UserRole) else r for r in roles]
     
-    def check_roles(current_user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
-        user_role = current_user.get("role")
+    def check_roles(current_user: UserCtx = Depends(get_current_user)) -> UserCtx:
+        user_role = current_user.role
         if user_role not in role_values:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -80,13 +81,25 @@ def require_roles(*roles: Union[str, UserRole]) -> callable:
     return check_roles
 
 
-def require_admin(current_user: Dict[str, Any] = Depends(require_roles(UserRole.ADMIN))) -> Dict[str, Any]:
+def require_admin(current_user: UserCtx = Depends(require_roles(UserRole.ADMIN))) -> UserCtx:
     """Require admin role."""
     return current_user
 
-def require_upload_permission(current_user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
+def require_user(current_user: UserCtx = Depends(get_current_user)) -> UserCtx:
+    """Require any authenticated user."""
+    return current_user
+
+def require_editor_or_admin(current_user: UserCtx = Depends(require_roles(UserRole.EDITOR, UserRole.ADMIN))) -> UserCtx:
+    """Require editor or admin role for write operations."""
+    return current_user
+
+def require_reader_or_above(current_user: UserCtx = Depends(require_roles(UserRole.READER, UserRole.EDITOR, UserRole.ADMIN))) -> UserCtx:
+    """Require reader role or above for read operations."""
+    return current_user
+
+def require_upload_permission(current_user: UserCtx = Depends(get_current_user)) -> UserCtx:
     """Require upload permission (editor, admin, or reader if enabled)."""
-    user_role = current_user.get("role")
+    user_role = current_user.role
     
     # Admin and editor always have upload permission
     if user_role in ["admin", "editor"]:

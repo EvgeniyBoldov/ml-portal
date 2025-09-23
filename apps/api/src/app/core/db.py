@@ -1,7 +1,7 @@
 from __future__ import annotations
 from contextlib import asynccontextmanager, contextmanager
 from typing import AsyncGenerator, Generator, Optional
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -78,7 +78,7 @@ class DatabaseManager:
         finally:
             db.close()
     
-    def get_async_session(self) -> AsyncGenerator[AsyncSession, None]:
+    async def get_async_session(self) -> AsyncGenerator[AsyncSession, None]:
         """Get async database session (FastAPI dependency)"""
         async with self._async_session_factory() as session:
             try:
@@ -134,8 +134,8 @@ class DatabaseManager:
     def health_check(self) -> bool:
         """Check database connection health"""
         try:
-            with self.session_scope() as session:
-                session.execute("SELECT 1")
+            with self._session_factory() as session:
+                session.execute(text("SELECT 1"))
                 return True
         except Exception as e:
             logger.error(f"Database health check failed: {e}")
@@ -144,8 +144,8 @@ class DatabaseManager:
     async def async_health_check(self) -> bool:
         """Check async database connection health"""
         try:
-            async with self.async_session_scope() as session:
-                await session.execute("SELECT 1")
+            async with self._async_session_factory() as session:
+                await session.execute(text("SELECT 1"))
                 return True
         except Exception as e:
             logger.error(f"Async database health check failed: {e}")
@@ -159,9 +159,10 @@ def get_session() -> Generator[Session, None, None]:
     """Get sync database session (FastAPI dependency)"""
     return db_manager.get_session()
 
-def get_async_session() -> AsyncGenerator[AsyncSession, None]:
+async def get_async_session() -> AsyncGenerator[AsyncSession, None]:
     """Get async database session (FastAPI dependency)"""
-    return db_manager.get_async_session()
+    async for session in db_manager.get_async_session():
+        yield session
 
 @contextmanager
 def session_scope() -> Generator[Session, None, None]:

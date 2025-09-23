@@ -15,22 +15,12 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, Body, Form
 from sqlalchemy.orm import Session
 
-from app.api.deps import db_session, require_roles, get_current_user
-from app.schemas.admin import UserRole
-
-# RBAC helpers
-def require_editor_or_admin():
-    """Require editor or admin role for write operations."""
-    return require_roles(UserRole.EDITOR, UserRole.ADMIN)
-
-def require_reader_or_above():
-    """Require reader role or above for read operations."""
-    return require_roles(UserRole.READER, UserRole.EDITOR, UserRole.ADMIN)
+from app.api.deps import db_session, require_editor_or_admin, require_reader_or_above, get_current_user
 from app.core.config import settings
-from app.core.s3_helpers import put_object, presign_get
-from app.repositories.rag_repo import RagRepo
-from app.services.rag_service import progress, stats, search, reprocess_document
-from app.models.rag import RagDocuments
+from app.core.s3 import s3_manager
+from app.repositories.rag_repo_enhanced import RAGDocumentsRepository
+from app.services.rag_service_enhanced import RAGDocumentsService
+from app.models.rag import RAGDocument
 
 router = APIRouter(prefix="/rag", tags=["rag"])
 
@@ -47,7 +37,7 @@ async def upload_rag_file(
     file: UploadFile = File(...),
     tags: str = Form("[]"),  # JSON string of tags
     session: Session = Depends(db_session),
-    current_user: dict = Depends(require_editor_or_admin()),
+    current_user: dict = Depends(require_editor_or_admin),
 ):
     # Валидация размера файла (50MB)
     MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB
@@ -55,7 +45,7 @@ async def upload_rag_file(
         raise HTTPException(status_code=413, detail="File too large. Maximum size is 50MB")
     
     # Валидация типа файла
-    repo = RagRepo(session)
+    repo = RAGDocumentsRepository(session)
     ext = _safe_ext(file.filename)
     if file.filename and not ext:
         raise HTTPException(status_code=400, detail=f"Unsupported file type. Allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}")
@@ -75,7 +65,7 @@ async def upload_rag_file(
     
     try:
         # 1) создаём документ (UUID генерится в базе)
-        doc = repo.create_document(
+        doc = repo.create(
             name=file.filename,
             uploaded_by=None,
             status="uploaded",
@@ -85,7 +75,7 @@ async def upload_rag_file(
         # 2) ключ origin.{ext} под UUID
         key = f"{doc.id}/origin{ext}"
         # 3) сохраняем в MinIO
-        put_object(settings.S3_BUCKET_RAG, key, file.file, content_type=file.content_type)
+        s3_manager.put_object(settings.S3_BUCKET_RAG, key, file.file, content_type=file.content_type)
         # 4) метаданные в БД
         doc.url_file = key
         doc.updated_at = datetime.utcnow()
@@ -110,18 +100,18 @@ def list_rag_documents(
     status: Optional[str] = Query(None, description="Filter by status"),
     search: Optional[str] = Query(None, description="Search in document names"),
     session: Session = Depends(db_session),
-    current_user: dict = Depends(require_reader_or_above()),
+    current_user: dict = Depends(require_reader_or_above),
 ):
-    repo = RagRepo(session)
+    repo = RAGDocumentsRepository(session)
     
     # Применяем фильтры
-    query = session.query(RagDocuments)
+    query = session.query(RAGDocument)
     
     if status:
-        query = query.filter(RagDocuments.status == status)
+        query = query.filter(RAGDocument.status == status)
     
     if search:
-        query = query.filter(RagDocuments.name.ilike(f"%{search}%"))
+        query = query.filter(RAGDocument.name.ilike(f"%{search}%"))
     
     # Подсчитываем общее количество
     total = query.count()
@@ -151,9 +141,9 @@ def list_rag_documents(
 def get_rag_document(
     doc_id: str,
     session: Session = Depends(db_session),
-    current_user: dict = Depends(require_reader_or_above()),
+    current_user: dict = Depends(require_reader_or_above),
 ):
-    doc = RagRepo(session).get(doc_id)
+    doc = RAGDocumentsRepository(session).get_by_id(doc_id)
     if not doc:
         raise HTTPException(status_code=404, detail="not_found")
     return {"id": str(doc.id), "name": doc.name, "status": doc.status, "date_upload": doc.date_upload, "url_file": doc.url_file, "url_canonical_file": doc.url_canonical_file, "tags": doc.tags, "progress": None, "updated_at": doc.updated_at}
@@ -161,12 +151,12 @@ def get_rag_document(
 @router.get("/{doc_id}/download")
 def download_rag_file(
     doc_id: str,
-    kind: str = Query("original", regex="^(original|canonical)$"),
+    kind: str = Query("original", pattern="^(original|canonical)$"),
     session: Session = Depends(db_session),
-    current_user: dict = Depends(require_reader_or_above()),
+    current_user: dict = Depends(require_reader_or_above),
 ):
-    repo = RagRepo(session)
-    doc = repo.get(doc_id)
+    repo = RAGDocumentsRepository(session)
+    doc = repo.get_by_id(doc_id)
     if not doc:
         raise HTTPException(status_code=404, detail="not_found")
 
@@ -184,34 +174,55 @@ def download_rag_file(
         download_name = f"{base}.txt"
         mime = "text/plain"
 
-    url = presign_get(bucket, key, download_name=download_name, mime=mime)
+    url = s3_manager.presign_get(bucket, key, download_name=download_name, mime=mime)
     return {"url": url}
 
 @router.get("/{doc_id}/progress")
 def get_rag_progress(
     doc_id: str,
     session: Session = Depends(db_session),
-    current_user: dict = Depends(require_reader_or_above()),
+    current_user: dict = Depends(require_reader_or_above),
 ):
     """Получить прогресс обработки RAG документа"""
-    return progress(session, doc_id)
+    repo = RAGDocumentsRepository(session)
+    doc = repo.get_by_id(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    # Return progress information based on document status
+    progress_data = {
+        "status": doc.status,
+        "progress": 0
+    }
+    
+    if doc.status == "processed":
+        progress_data["progress"] = 100
+    elif doc.status == "processing":
+        progress_data["progress"] = 50
+    elif doc.status == "failed":
+        progress_data["progress"] = 0
+        progress_data["error"] = doc.error_message
+    
+    return progress_data
 
 
 @router.get("/stats")
 def get_rag_stats(
     session: Session = Depends(db_session),
-    current_user: dict = Depends(require_reader_or_above()),
+    current_user: dict = Depends(require_reader_or_above),
 ):
     """Получить статистику RAG документов"""
-    return stats(session)
+    repo = RAGDocumentsRepository(session)
+    user_id = str(current_user.id)
+    return repo.get_document_stats(user_id)
 
 @router.post("/{doc_id}/archive")
 def archive_rag_document(
     doc_id: str,
     session: Session = Depends(db_session),
-    current_user: dict = Depends(require_editor_or_admin()),
+    current_user: dict = Depends(require_editor_or_admin),
 ):
-    doc = RagRepo(session).get(doc_id)
+    doc = RAGDocumentsRepository(session).get_by_id(doc_id)
     if not doc:
         raise HTTPException(status_code=404, detail="not_found")
     
@@ -226,9 +237,9 @@ def update_rag_document_tags(
     doc_id: str,
     tags: list = Body(...),
     session: Session = Depends(db_session),
-    current_user: dict = Depends(require_editor_or_admin()),
+    current_user: dict = Depends(require_editor_or_admin),
 ):
-    doc = RagRepo(session).get(doc_id)
+    doc = RAGDocumentsRepository(session).get_by_id(doc_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
     
@@ -242,9 +253,9 @@ def update_rag_document_tags(
 def delete_rag_document(
     doc_id: str,
     session: Session = Depends(db_session),
-    current_user: dict = Depends(require_editor_or_admin()),
+    current_user: dict = Depends(require_editor_or_admin),
 ):
-    doc = RagRepo(session).get(doc_id)
+    doc = RAGDocumentsRepository(session).get_by_id(doc_id)
     if not doc:
         raise HTTPException(status_code=404, detail="not_found")
     
@@ -278,7 +289,7 @@ def search_rag(
     min_score: float = Body(0.0, ge=0.0, le=1.0),
     offset: int = Body(0, ge=0),
     session: Session = Depends(db_session),
-    current_user: dict = Depends(require_reader_or_above()),
+    current_user: dict = Depends(require_reader_or_above),
 ):
     """Поиск в RAG документах"""
     results = search(session, query, top_k=top_k, offset=offset)
@@ -293,11 +304,11 @@ def search_rag(
 def reindex_rag_document(
     doc_id: str,
     session: Session = Depends(db_session),
-    current_user: dict = Depends(require_editor_or_admin()),
+    current_user: dict = Depends(require_editor_or_admin),
 ):
     """Переиндексация RAG документа"""
-    repo = RagRepo(session)
-    doc = repo.get(doc_id)
+    repo = RAGDocumentsRepository(session)
+    doc = repo.get_by_id(doc_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
     
@@ -310,11 +321,11 @@ def reindex_rag_document(
 @router.post("/reindex")
 def reindex_all_rag_documents(
     session: Session = Depends(db_session),
-    current_user: dict = Depends(require_editor_or_admin()),
+    current_user: dict = Depends(require_editor_or_admin),
 ):
     """Массовая переиндексация всех RAG документов"""
     # Получаем все документы со статусом ready
-    docs = session.query(RagDocuments).filter(RagDocuments.status == "ready").all()
+    docs = session.query(RAGDocument).filter(RAGDocument.status == "ready").all()
     
     reindexed_count = 0
     for doc in docs:
