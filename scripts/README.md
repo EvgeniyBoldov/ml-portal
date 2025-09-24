@@ -30,27 +30,26 @@ make git-push MSG="your commit message"
 make git-push MSG="fix: resolve authentication issue in login flow"
 ```
 
-### 📄 Code Generation (`generate_code.py`)
+### 🤖 Auto Git Commit (`git-auto-commit.sh`)
 
-Generates a comprehensive single-file documentation of the entire project codebase.
+Automatically commits changes with intelligent commit messages based on file analysis.
 
 **Usage:**
 ```bash
 # Direct usage
-python3 scripts/generate_code.py
+./scripts/git-auto-commit.sh
 
 # Via Makefile
-make gen-code
+make git-auto
 ```
 
-**Output:** `docs/generated/full_code.txt`
-
 **Features:**
-- ✅ Categorizes code by type (Infra, Backend, Frontend, Tests, etc.)
-- ✅ Includes file metadata (size, type, lines)
-- ✅ Provides project statistics
-- ✅ Excludes generated files and cache directories
-- ✅ Auto-deletes old generated files
+- ✅ Analyzes file changes automatically
+- ✅ Generates smart commit messages with type and scope
+- ✅ Categorizes changes (backend, frontend, tests, docs, etc.)
+- ✅ Includes file counts and timestamps
+- ✅ Adds all changes, commits, and pushes automatically
+- ✅ Colorized output with detailed summary
 
 ## Repository Cleanup
 
@@ -100,9 +99,7 @@ make test-frontend    # Run frontend tests only
 
 # Git Operations
 make git-push MSG="message"  # Quick git add, commit, push
-
-# Code Generation
-make gen-code         # Generate full project code documentation
+make git-auto               # Auto commit with smart message
 
 # Maintenance
 make clean            # Clean up containers and volumes
