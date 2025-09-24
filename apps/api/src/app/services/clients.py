@@ -3,7 +3,7 @@ import os, time, httpx
 from typing import List, Dict, Any, Optional
 from app.core.qdrant import get_qdrant
 from app.core.metrics import external_request_total, external_request_seconds
-from qdrant_client.http.models import Filter, FieldCondition, MatchValue
+from qdrant_client.http.models import Filter, FieldCondition, MatchValue, MatchAny
 
 EMB_URL = os.getenv("EMBEDDINGS_URL", "http://emb:8001")
 LLM_URL = os.getenv("LLM_URL", "http://llm:8002")
@@ -107,7 +107,12 @@ def qdrant_search(vector: List[float], top_k: int, offset: Optional[int] = None,
     if doc_id:
         must.append(FieldCondition(key="document_id", match=MatchValue(value=doc_id)))
     if tags:
-        must.append(FieldCondition(key="tags", match=MatchValue(value=tags)))
+        # For tags, we need to check if any of the provided tags match
+        # Using MatchAny for multiple tag values
+        if len(tags) == 1:
+            must.append(FieldCondition(key="tags", match=MatchValue(value=tags[0])))
+        else:
+            must.append(FieldCondition(key="tags", match=MatchAny(any=tags)))
     f = Filter(must=must) if must else None
     with _timed("qdrant.search"):
         hits = client.search(collection_name=COLLECTION, query_vector=vector, limit=top_k, offset=offset or 0, with_payload=True, query_filter=f)

@@ -89,7 +89,7 @@ class TestDatabasePerformance:
         start_time = time.time()
         
         # Mock chat messages list
-        with patch.object(self.chats_repo, 'get_chat_messages') as mock_get:
+        with patch('app.repositories.chats_repo_enhanced.ChatsRepository.get_chat_messages') as mock_get:
             mock_get.return_value = []
             
             self.chats_repo.get_chat_messages("chat123", limit=50)

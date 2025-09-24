@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 
 from app.api.deps import db_session, get_request_id, get_client_ip, get_user_agent, rate_limit
 from app.core.security import hash_password, validate_password_strength
-from app.repositories.users_repo_enhanced import UsersRepository
+from app.repositories.users_repo_enhanced import UsersRepository, PasswordResetTokensRepository
 from app.services.audit_service import AuditService
 from app.api.schemas.users import PasswordResetRequest, PasswordResetConfirm, ErrorResponse, AuditAction
 
@@ -19,7 +19,7 @@ def create_error_response(code: str, message: str, request_id: str,
                          details: Optional[dict] = None) -> ErrorResponse:
     """Create standardized error response."""
     return ErrorResponse(
-        code=code,
+        error=code,
         message=message,
         request_id=request_id,
         details=details
@@ -102,13 +102,14 @@ async def reset_password(
     await rate_limit(request, "password_reset_confirm", limit=10, window_sec=300)  # 10 attempts per 5 minutes
     
     repo = UsersRepository(session)
+    reset_repo = PasswordResetTokensRepository(session)
     audit = AuditService(session)
     
     # Hash the provided token
     token_hash = hashlib.sha256(request_data.token.encode()).hexdigest()
     
     # Find valid reset token
-    reset_token = repo.get_password_reset_token(token_hash)
+    reset_token = reset_repo.get_by_hash(token_hash)
     if not reset_token:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -136,7 +137,7 @@ async def reset_password(
     repo.update_user(str(reset_token.user_id), password_hash=password_hash)
     
     # Mark token as used
-    repo.use_password_reset_token(token_hash)
+    reset_repo.use_token(token_hash)
     
     # Revoke all refresh tokens for security
     user = repo.get(str(reset_token.user_id))

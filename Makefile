@@ -1,6 +1,6 @@
 # ML Portal Makefile
 
-.PHONY: help build up down test test-backend test-frontend test-frontend-local test-frontend-watch test-frontend-e2e test-frontend-type-check build-frontend install-frontend test-functional test-all test-build test-run clean clean-all logs
+.PHONY: help build up down test test-backend test-frontend test-frontend-local test-frontend-watch test-frontend-e2e test-frontend-type-check build-frontend install-frontend test-functional test-all test-build test-run clean clean-all logs gen-code
 
 # Default target
 help:
@@ -31,6 +31,9 @@ help:
 	@echo "Maintenance:"
 	@echo "  clean          - Clean up containers and volumes"
 	@echo "  clean-all      - Clean up everything including images"
+	@echo ""
+	@echo "Code Generation:"
+	@echo "  gen-code       - Generate full project code in one txt file"
 
 # Build all images
 build:
@@ -141,3 +144,8 @@ health:
 	@curl -f http://localhost:8000/health || echo "Backend not healthy"
 	@curl -f http://localhost:3000 || echo "Frontend not healthy"
 	@curl -f http://localhost:80 || echo "Nginx not healthy"
+
+# Code generation
+gen-code:
+	@echo "Generating full project code..."
+	python3 scripts/generate_code.py

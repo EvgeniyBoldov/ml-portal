@@ -103,6 +103,8 @@ class ChatMessageCreateRequest(BaseModel):
     tokens_in: Optional[int] = Field(None, ge=0, description="Input tokens")
     tokens_out: Optional[int] = Field(None, ge=0, description="Output tokens")
     meta: Optional[Dict[str, Any]] = Field(None, description="Additional metadata")
+    response_stream: Optional[bool] = Field(False, description="Enable streaming response")
+    use_rag: Optional[bool] = Field(False, description="Use RAG for context")
     
     @field_validator('content')
     @classmethod

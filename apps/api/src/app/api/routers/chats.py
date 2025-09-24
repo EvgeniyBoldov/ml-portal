@@ -10,7 +10,7 @@ from app.repositories.chats_repo_enhanced import ChatsRepository
 from app.api.schemas.chats import (
     ChatCreateRequest, ChatUpdateRequest, ChatSearchRequest,
     ChatMessageCreateRequest, ChatMessageResponse, ChatResponse,
-    ChatTagsUpdateRequest
+    ChatTagsUpdateRequest, MessageRole
 )
 from app.services.clients import llm_chat
 
@@ -164,7 +164,13 @@ async def post_message(
         messages.append({"role": "user", "content": request.content})
         answer = llm_chat(messages)
         repo.add_message(chat_id, "assistant", {"text": answer})
-        return ChatMessageResponse(message_id=str(user_msg.id), content=request.content, answer=answer)
+        return ChatMessageResponse(
+            id=str(user_msg.id),
+            chat_id=chat_id,
+            role=MessageRole.USER,
+            content=request.content,
+            created_at=user_msg.created_at
+        )
 
 @router.delete("/{chat_id}")
 def delete_chat(

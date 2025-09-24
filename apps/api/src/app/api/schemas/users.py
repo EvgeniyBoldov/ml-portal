@@ -90,7 +90,7 @@ class PasswordChangeRequest(BaseModel):
 
 class PasswordResetRequest(BaseModel):
     """Password reset request"""
-    email: EmailStr = Field(..., description="User email")
+    login_or_email: str = Field(..., description="User login or email")
 
 class PasswordResetConfirmRequest(BaseModel):
     """Password reset confirmation request"""

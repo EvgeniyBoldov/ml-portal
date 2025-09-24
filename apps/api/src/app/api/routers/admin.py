@@ -13,6 +13,7 @@ from app.core.security import hash_password, verify_password, validate_password_
 from app.core.pat_validation import validate_scopes, check_scope_permission
 from app.repositories.users_repo_enhanced import UsersRepository, UserTokensRepository
 from app.services.audit_service import AuditService
+from app.core.config import settings
 from app.api.schemas.users import (
     UserCreateRequest as UserCreate, 
     UserUpdateRequest as UserUpdate, 
