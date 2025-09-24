@@ -1,6 +1,6 @@
 # ML Portal Makefile
 
-.PHONY: help build up down test test-backend test-frontend test-frontend-local test-frontend-watch test-frontend-e2e test-frontend-type-check build-frontend install-frontend test-functional test-all test-build test-run clean clean-all logs gen-code
+.PHONY: help build up down test test-backend test-frontend test-frontend-local test-frontend-watch test-frontend-e2e test-frontend-type-check build-frontend install-frontend test-functional test-all test-build test-run clean clean-all logs gen-code git-push
 
 # Default target
 help:
@@ -34,6 +34,9 @@ help:
 	@echo ""
 	@echo "Code Generation:"
 	@echo "  gen-code       - Generate full project code in one txt file"
+	@echo ""
+	@echo "Git:"
+	@echo "  git-push MSG   - Quick git add, commit and push (MSG=commit message)"
 
 # Build all images
 build:
@@ -149,3 +152,13 @@ health:
 gen-code:
 	@echo "Generating full project code..."
 	python3 scripts/generate_code.py
+
+# Git quick push
+git-push:
+	@if [ -z "$(MSG)" ]; then \
+		echo "❌ Error: Please provide commit message"; \
+		echo "Usage: make git-push MSG=\"your commit message\""; \
+		exit 1; \
+	fi
+	@echo "🚀 Quick Git Push..."
+	@./scripts/git-quick-push.sh "$(MSG)"
