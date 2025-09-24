@@ -1,0 +1,284 @@
+
+openapi: 3.0.3
+info:
+  title: ML-Portal API
+  version: 1.0.0
+servers:
+  - url: /api/v1
+tags:
+  - name: health
+  - name: auth
+  - name: chat
+  - name: rag
+  - name: models
+  - name: tenants
+  - name: documents
+paths:
+  /health:
+    get:
+      tags: [health]
+      summary: Health check
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, enum: [ok] }
+                  version: { type: string }
+  /tenants:
+    get:
+      tags: [tenants]
+      summary: List tenants
+      responses: { '200': { description: OK } }
+    post:
+      tags: [tenants]
+      summary: Create tenant
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/TenantCreate' }}}}
+      responses: { '201': { description: Created } }
+  /tenants/{tenant_id}:
+    parameters:
+      - in: path
+        name: tenant_id
+        schema: { type: string }
+        required: true
+    get:
+      tags: [tenants]
+      summary: Get tenant
+      responses: { '200': { description: OK } }
+    patch:
+      tags: [tenants]
+      summary: Update tenant
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/TenantUpdate' }}}}
+      responses: { '200': { description: Updated } }
+    delete:
+      tags: [tenants]
+      summary: Delete tenant
+      responses: { '204': { description: Deleted } }
+  /models/llm:
+    get:
+      tags: [models]
+      summary: List available LLM models
+      responses: { '200': { description: OK } }
+  /models/embeddings:
+    get:
+      tags: [models]
+      summary: List available embedding models
+      responses: { '200': { description: OK } }
+  /chat:
+    post:
+      tags: [chat]
+      summary: Classic chat (non-RAG)
+      description: Non-streaming chat completion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ChatRequest' }
+      responses:
+        '200':
+          description: Chat response
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ChatResponse' }
+  /chat/stream:
+    post:
+      tags: [chat]
+      summary: Classic chat (SSE stream)
+      description: Server-Sent Events streaming for chat
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ChatRequest' }
+      responses:
+        '200':
+          description: text/event-stream
+          content:
+            text/event-stream:
+              schema: { type: string }
+  /rag/chat:
+    post:
+      tags: [rag]
+      summary: RAG chat (non-stream)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RagChatRequest' }
+      responses:
+        '200':
+          description: Chat response with citations
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ChatResponse' }
+  /rag/chat/stream:
+    post:
+      tags: [rag]
+      summary: RAG chat (SSE stream)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RagChatRequest' }
+      responses:
+        '200':
+          description: text/event-stream
+          content:
+            text/event-stream:
+              schema: { type: string }
+  /rag/sources:
+    get:
+      tags: [rag]
+      summary: List RAG sources
+      responses: { '200': { description: OK } }
+    post:
+      tags: [rag]
+      summary: Register new source (url or file-meta)
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/SourceCreate' }}}}
+      responses: { '201': { description: Created } }
+  /rag/sources/{source_id}:
+    parameters:
+      - in: path
+        name: source_id
+        schema: { type: string }
+        required: true
+    get:
+      tags: [rag]
+      summary: Get source
+      responses: { '200': { description: OK } }
+    delete:
+      tags: [rag]
+      summary: Remove source (and its vectors)
+      responses: { '204': { description: Deleted } }
+  /rag/documents:
+    post:
+      tags: [documents]
+      summary: Upload a document (multipart or by URL)
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: { type: string, format: binary }
+                tenant_id: { type: string }
+                source_id: { type: string }
+          application/json:
+            schema: { $ref: '#/components/schemas/DocumentIngest' }
+      responses: { '202': { description: Accepted } }
+  /rag/documents/{doc_id}:
+    parameters:
+      - in: path
+        name: doc_id
+        schema: { type: string }
+        required: true
+    get:
+      tags: [documents]
+      summary: Get document meta & status
+      responses: { '200': { description: OK } }
+    delete:
+      tags: [documents]
+      summary: Delete document and vectors
+      responses: { '204': { description: Deleted } }
+  /rag/analyze:
+    post:
+      tags: [documents]
+      summary: Analyze a document with RAG (Q&A over doc)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AnalyzeRequest' }
+      responses:
+        '200':
+          description: Analysis result
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnalyzeResponse' }
+
+components:
+  schemas:
+    TenantCreate:
+      type: object
+      properties:
+        name: { type: string }
+    TenantUpdate:
+      type: object
+      properties:
+        name: { type: string }
+        disabled: { type: boolean }
+    ChatMessage:
+      type: object
+      properties:
+        role: { type: string, enum: [system,user,assistant,tool] }
+        content: { type: string }
+    ChatRequest:
+      type: object
+      required: [tenant_id, model, messages]
+      properties:
+        tenant_id: { type: string }
+        model: { type: string }
+        temperature: { type: number, default: 0.7 }
+        top_p: { type: number, default: 1.0 }
+        messages:
+          type: array
+          items: { $ref: '#/components/schemas/ChatMessage' }
+    RagChatRequest:
+      allOf:
+        - $ref: '#/components/schemas/ChatRequest'
+        - type: object
+          properties:
+            k: { type: integer, default: 5, minimum: 1, maximum: 50 }
+            embeddings_model: { type: string }
+            rerank: { type: boolean, default: false }
+    ChatResponse:
+      type: object
+      properties:
+        text: { type: string }
+        citations:
+          type: array
+          items:
+            type: object
+            properties:
+              doc_id: { type: string }
+              page: { type: integer }
+              score: { type: number }
+    SourceCreate:
+      type: object
+      properties:
+        kind: { type: string, enum: [url, file, s3] }
+        uri: { type: string }
+        meta: { type: object, additionalProperties: true }
+    DocumentIngest:
+      type: object
+      required: [tenant_id, source_id, uri]
+      properties:
+        tenant_id: { type: string }
+        source_id: { type: string }
+        uri: { type: string }
+        overwrite: { type: boolean, default: false }
+    AnalyzeRequest:
+      type: object
+      required: [tenant_id, doc_id, question]
+      properties:
+        tenant_id: { type: string }
+        doc_id: { type: string }
+        question: { type: string }
+        k: { type: integer, default: 5 }
+        embeddings_model: { type: string }
+    AnalyzeResponse:
+      type: object
+      properties:
+        answer: { type: string }
+        citations:
+          type: array
+          items:
+            type: object
+            properties:
+              doc_id: { type: string }
+              page: { type: integer }
+              score: { type: number }

@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from uuid import uuid4
 
 # Импорты для тестирования
-from app.main_enhanced import app
+from app.main import app
 from app.core.db import db_manager
 from app.core.redis import redis_manager
 from app.core.s3 import s3_manager
@@ -26,28 +26,21 @@ class TestIntegrationEnhanced:
     @pytest.fixture
     def mock_services(self):
         """Моки для всех сервисов"""
-        with patch('app.main_enhanced.db_manager') as mock_db, \
-             patch('app.main_enhanced.redis_manager') as mock_redis, \
-             patch('app.main_enhanced.s3_manager') as mock_s3, \
-             patch('app.main_enhanced.task_manager') as mock_task_manager:
+        with patch('app.main.db_manager') as mock_db, \
+             patch('app.main.redis_manager') as mock_redis, \
+             patch('app.main.s3_manager') as mock_s3:
             
             # Настраиваем моки
-            mock_db.health_check_async = AsyncMock(return_value=True)
+            mock_db.async_health_check = AsyncMock(return_value=True)
             mock_db.get_async_session = AsyncMock()
             mock_redis.ping_async = AsyncMock(return_value=True)
             mock_redis.get_async = AsyncMock(return_value=None)
-            mock_s3.health_check_async = AsyncMock(return_value=True)
-            mock_task_manager.get_queue_stats = AsyncMock(return_value={"queues": {}})
-            mock_task_manager.get_worker_stats = AsyncMock(return_value={"workers": {}})
-            mock_task_manager.process_document_async = AsyncMock(return_value={"task_id": "test_task"})
-            mock_task_manager.get_task_status = AsyncMock(return_value={"status": "SUCCESS"})
-            mock_task_manager.cancel_task = AsyncMock(return_value=True)
+            mock_s3.health_check = Mock(return_value=True)
             
             yield {
                 "db": mock_db,
                 "redis": mock_redis,
-                "s3": mock_s3,
-                "task_manager": mock_task_manager
+                "s3": mock_s3
             }
     
     def test_health_check_success(self, client, mock_services):
@@ -69,8 +62,8 @@ class TestIntegrationEnhanced:
     
     def test_health_check_deep_failure(self, client):
         """Тест глубокой проверки здоровья с ошибкой"""
-        with patch('app.main_enhanced.db_manager') as mock_db:
-            mock_db.health_check_async = AsyncMock(side_effect=Exception("DB connection failed"))
+        with patch('app.main.db_manager') as mock_db:
+            mock_db.async_health_check = AsyncMock(side_effect=Exception("DB connection failed"))
             
             response = client.get("/health?deep=true")
             assert response.status_code == 200
