@@ -16,6 +16,11 @@
   },
   {
     "method": "GET",
+    "path": "/api/v2/status",
+    "file": "apps/api/src/app/main.py"
+  },
+  {
+    "method": "GET",
     "path": "/api/rag/metrics",
     "file": "apps/api/src/app/main.py"
   },
