@@ -1,103 +1,8 @@
 [
   {
     "method": "GET",
-    "path": "/healthz",
-    "file": "apps/api/src/app/main.py"
-  },
-  {
-    "method": "GET",
     "path": "/health",
     "file": "apps/api/src/app/main.py"
-  },
-  {
-    "method": "GET",
-    "path": "/metrics",
-    "file": "apps/api/src/app/main.py"
-  },
-  {
-    "method": "GET",
-    "path": "/api/v2/status",
-    "file": "apps/api/src/app/main.py"
-  },
-  {
-    "method": "GET",
-    "path": "/api/rag/metrics",
-    "file": "apps/api/src/app/main.py"
-  },
-  {
-    "method": "GET",
-    "path": "/healthz",
-    "file": "apps/api/src/app/main_enhanced.py"
-  },
-  {
-    "method": "GET",
-    "path": "/health",
-    "file": "apps/api/src/app/main_enhanced.py"
-  },
-  {
-    "method": "GET",
-    "path": "/metrics",
-    "file": "apps/api/src/app/main_enhanced.py"
-  },
-  {
-    "method": "GET",
-    "path": "/api/v2/status",
-    "file": "apps/api/src/app/main_enhanced.py"
-  },
-  {
-    "method": "POST",
-    "path": "/api/v2/users",
-    "file": "apps/api/src/app/main_enhanced.py"
-  },
-  {
-    "method": "GET",
-    "path": "/api/v2/users/{user_id}",
-    "file": "apps/api/src/app/main_enhanced.py"
-  },
-  {
-    "method": "POST",
-    "path": "/api/v2/chats",
-    "file": "apps/api/src/app/main_enhanced.py"
-  },
-  {
-    "method": "GET",
-    "path": "/api/v2/chats/{chat_id}",
-    "file": "apps/api/src/app/main_enhanced.py"
-  },
-  {
-    "method": "POST",
-    "path": "/api/v2/rag/documents",
-    "file": "apps/api/src/app/main_enhanced.py"
-  },
-  {
-    "method": "GET",
-    "path": "/api/v2/rag/documents/{document_id}",
-    "file": "apps/api/src/app/main_enhanced.py"
-  },
-  {
-    "method": "POST",
-    "path": "/api/v2/tasks/process-document",
-    "file": "apps/api/src/app/main_enhanced.py"
-  },
-  {
-    "method": "GET",
-    "path": "/api/v2/tasks/{task_id}",
-    "file": "apps/api/src/app/main_enhanced.py"
-  },
-  {
-    "method": "POST",
-    "path": "/api/v2/tasks/{task_id}/cancel",
-    "file": "apps/api/src/app/main_enhanced.py"
-  },
-  {
-    "method": "GET",
-    "path": "/api/v2/tasks/queues/stats",
-    "file": "apps/api/src/app/main_enhanced.py"
-  },
-  {
-    "method": "GET",
-    "path": "/api/rag/metrics",
-    "file": "apps/api/src/app/main_enhanced.py"
   },
   {
     "method": "POST",
@@ -121,6 +26,66 @@
   },
   {
     "method": "POST",
+    "path": "/",
+    "file": "apps/api/src/app/api/routers/users.py"
+  },
+  {
+    "method": "GET",
+    "path": "/{user_id}",
+    "file": "apps/api/src/app/api/routers/users.py"
+  },
+  {
+    "method": "PUT",
+    "path": "/{user_id}",
+    "file": "apps/api/src/app/api/routers/users.py"
+  },
+  {
+    "method": "DELETE",
+    "path": "/{user_id}",
+    "file": "apps/api/src/app/api/routers/users.py"
+  },
+  {
+    "method": "POST",
+    "path": "/search",
+    "file": "apps/api/src/app/api/routers/users.py"
+  },
+  {
+    "method": "GET",
+    "path": "/{user_id}/stats",
+    "file": "apps/api/src/app/api/routers/users.py"
+  },
+  {
+    "method": "POST",
+    "path": "/{user_id}/change-password",
+    "file": "apps/api/src/app/api/routers/users.py"
+  },
+  {
+    "method": "POST",
+    "path": "/reset-password",
+    "file": "apps/api/src/app/api/routers/users.py"
+  },
+  {
+    "method": "POST",
+    "path": "/reset-password/confirm",
+    "file": "apps/api/src/app/api/routers/users.py"
+  },
+  {
+    "method": "POST",
+    "path": "/pat-tokens",
+    "file": "apps/api/src/app/api/routers/users.py"
+  },
+  {
+    "method": "GET",
+    "path": "/pat-tokens",
+    "file": "apps/api/src/app/api/routers/users.py"
+  },
+  {
+    "method": "DELETE",
+    "path": "/pat-tokens/{token_id}",
+    "file": "apps/api/src/app/api/routers/users.py"
+  },
+  {
+    "method": "POST",
     "path": "/password/forgot",
     "file": "apps/api/src/app/api/routers/password_reset.py"
   },
@@ -138,16 +103,6 @@
     "method": "GET",
     "path": "/status",
     "file": "apps/api/src/app/api/routers/setup.py"
-  },
-  {
-    "method": "POST",
-    "path": "/search",
-    "file": "apps/api/src/app/api/routers/rag_search.py"
-  },
-  {
-    "method": "GET",
-    "path": "/models",
-    "file": "apps/api/src/app/api/routers/rag_search.py"
   },
   {
     "method": "GET",
@@ -313,171 +268,6 @@
     "method": "POST",
     "path": "/{doc_id}/reanalyze",
     "file": "apps/api/src/app/api/routers/analyze.py"
-  },
-  {
-    "method": "POST",
-    "path": "/",
-    "file": "apps/api/src/app/api/controllers/users.py"
-  },
-  {
-    "method": "GET",
-    "path": "/{user_id}",
-    "file": "apps/api/src/app/api/controllers/users.py"
-  },
-  {
-    "method": "PUT",
-    "path": "/{user_id}",
-    "file": "apps/api/src/app/api/controllers/users.py"
-  },
-  {
-    "method": "DELETE",
-    "path": "/{user_id}",
-    "file": "apps/api/src/app/api/controllers/users.py"
-  },
-  {
-    "method": "POST",
-    "path": "/search",
-    "file": "apps/api/src/app/api/controllers/users.py"
-  },
-  {
-    "method": "GET",
-    "path": "/{user_id}/stats",
-    "file": "apps/api/src/app/api/controllers/users.py"
-  },
-  {
-    "method": "POST",
-    "path": "/{user_id}/change-password",
-    "file": "apps/api/src/app/api/controllers/users.py"
-  },
-  {
-    "method": "POST",
-    "path": "/reset-password",
-    "file": "apps/api/src/app/api/controllers/users.py"
-  },
-  {
-    "method": "POST",
-    "path": "/reset-password/confirm",
-    "file": "apps/api/src/app/api/controllers/users.py"
-  },
-  {
-    "method": "POST",
-    "path": "/pat-tokens",
-    "file": "apps/api/src/app/api/controllers/users.py"
-  },
-  {
-    "method": "GET",
-    "path": "/pat-tokens",
-    "file": "apps/api/src/app/api/controllers/users.py"
-  },
-  {
-    "method": "DELETE",
-    "path": "/pat-tokens/{token_id}",
-    "file": "apps/api/src/app/api/controllers/users.py"
-  },
-  {
-    "method": "POST",
-    "path": "/documents",
-    "file": "apps/api/src/app/api/controllers/rag.py"
-  },
-  {
-    "method": "GET",
-    "path": "/documents/{document_id}",
-    "file": "apps/api/src/app/api/controllers/rag.py"
-  },
-  {
-    "method": "PUT",
-    "path": "/documents/{document_id}",
-    "file": "apps/api/src/app/api/controllers/rag.py"
-  },
-  {
-    "method": "DELETE",
-    "path": "/documents/{document_id}",
-    "file": "apps/api/src/app/api/controllers/rag.py"
-  },
-  {
-    "method": "POST",
-    "path": "/documents/search",
-    "file": "apps/api/src/app/api/controllers/rag.py"
-  },
-  {
-    "method": "GET",
-    "path": "/documents",
-    "file": "apps/api/src/app/api/controllers/rag.py"
-  },
-  {
-    "method": "GET",
-    "path": "/documents/stats",
-    "file": "apps/api/src/app/api/controllers/rag.py"
-  },
-  {
-    "method": "POST",
-    "path": "/documents/{document_id}/upload-url",
-    "file": "apps/api/src/app/api/controllers/rag.py"
-  },
-  {
-    "method": "POST",
-    "path": "/documents/{document_id}/chunks",
-    "file": "apps/api/src/app/api/controllers/rag.py"
-  },
-  {
-    "method": "GET",
-    "path": "/documents/{document_id}/chunks",
-    "file": "apps/api/src/app/api/controllers/rag.py"
-  },
-  {
-    "method": "POST",
-    "path": "/documents/{document_id}/chunks/search",
-    "file": "apps/api/src/app/api/controllers/rag.py"
-  },
-  {
-    "method": "GET",
-    "path": "/documents/{document_id}/chunks/stats",
-    "file": "apps/api/src/app/api/controllers/rag.py"
-  },
-  {
-    "method": "POST",
-    "path": "/",
-    "file": "apps/api/src/app/api/controllers/chats.py"
-  },
-  {
-    "method": "GET",
-    "path": "/{chat_id}",
-    "file": "apps/api/src/app/api/controllers/chats.py"
-  },
-  {
-    "method": "PUT",
-    "path": "/{chat_id}",
-    "file": "apps/api/src/app/api/controllers/chats.py"
-  },
-  {
-    "method": "DELETE",
-    "path": "/{chat_id}",
-    "file": "apps/api/src/app/api/controllers/chats.py"
-  },
-  {
-    "method": "POST",
-    "path": "/search",
-    "file": "apps/api/src/app/api/controllers/chats.py"
-  },
-  {
-    "method": "GET",
-    "path": "/{chat_id}/stats",
-    "file": "apps/api/src/app/api/controllers/chats.py"
-  },
-  {
-    "method": "POST",
-    "path": "/{chat_id}/messages",
-    "file": "apps/api/src/app/api/controllers/chats.py"
-  },
-  {
-    "method": "GET",
-    "path": "/{chat_id}/messages",
-    "file": "apps/api/src/app/api/controllers/chats.py"
-  },
-  {
-    "method": "POST",
-    "path": "/{chat_id}/messages/search",
-    "file": "apps/api/src/app/api/controllers/chats.py"
   },
   {
     "method": "GET",

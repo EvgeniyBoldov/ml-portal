@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 from unittest.mock import patch
 import json
 
-from app.main_enhanced import app
+from app.main import app
 from app.core.config import settings
 
 client = TestClient(app)

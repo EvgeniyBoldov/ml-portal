@@ -8,7 +8,7 @@ sys.path.insert(0, '/app')
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from app.main_enhanced import app
+from app.main import app
 from app.core.db import SessionLocal
 from app.models.base import Base
 from app.core.config import settings

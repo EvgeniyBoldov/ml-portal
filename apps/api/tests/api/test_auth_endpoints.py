@@ -10,7 +10,7 @@ import os
 # Add src to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', 'src'))
 
-from app.main_enhanced import app
+from app.main import app
 
 
 class TestAuthEndpoints:

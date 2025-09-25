@@ -3,7 +3,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 from unittest.mock import patch
 
-from app.main_enhanced import app
+from app.main import app
 from app.core.security import hash_password
 from app.repositories.users_repo_enhanced import UsersRepository
 from app.api.schemas.users import UserRole
