@@ -1,18 +1,26 @@
-
 openapi: 3.0.3
 info:
   title: ML-Portal API
   version: 1.0.0
+  description: >
+    Stable contract for MVP: classic chat, RAG chat, RAG ingestion, document analysis, multi-tenant,
+    local HF models (no internet in prod). No path rewriting by proxy — the API is served under /api/v1.
 servers:
   - url: /api/v1
 tags:
   - name: health
   - name: auth
+  - name: users
+  - name: tenants
+  - name: models
   - name: chat
   - name: rag
-  - name: models
-  - name: tenants
-  - name: documents
+  - name: analyze
+  - name: jobs
+  - name: artifacts
+externalDocs:
+  description: API usage notes
+  url: https://example.invalid/docs  # replace in repo if needed
 paths:
   /health:
     get:
@@ -28,50 +36,297 @@ paths:
                 properties:
                   status: { type: string, enum: [ok] }
                   version: { type: string }
+  /auth/login:
+    post:
+      tags: [auth]
+      summary: Obtain JWT access/refresh tokens
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, format: password }
+      responses:
+        '200':
+          description: Tokens
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  access_token: { type: string }
+                  refresh_token: { type: string }
+                  token_type: { type: string, example: Bearer }
+        '401':
+          $ref: '#/components/responses/Error'
+  /auth/refresh:
+    post:
+      tags: [auth]
+      summary: Refresh access token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                refresh_token: { type: string }
+      responses:
+        '200':
+          description: New access token
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  access_token: { type: string }
+                  token_type: { type: string, example: Bearer }
+        '401':
+          $ref: '#/components/responses/Error'
+  /users/me:
+    get:
+      tags: [users]
+      security:
+        - bearerAuth: []
+        - PAT: []
+      summary: Current user
+      responses:
+        '200':
+          description: Me
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Error'
+  /users:
+    get:
+      tags: [users]
+      security: [ { bearerAuth: [] } ]
+      summary: List users (admin)
+      parameters:
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/cursor'
+      responses:
+        '200':
+          description: List
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/User' }
+                  next_cursor: { type: string, nullable: true }
+    post:
+      tags: [users]
+      security: [ { bearerAuth: [] } ]
+      summary: Create user (admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserCreate'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+        '409':
+          $ref: '#/components/responses/Error'
+  /users/{user_id}:
+    parameters:
+      - $ref: '#/components/parameters/user_id'
+    get:
+      tags: [users]
+      security: [ { bearerAuth: [] } ]
+      summary: Get user (admin)
+      responses:
+        '200':
+          description: User
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+        '404':
+          $ref: '#/components/responses/Error'
+    patch:
+      tags: [users]
+      security: [ { bearerAuth: [] } ]
+      summary: Update user (admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UserUpdate' }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+    delete:
+      tags: [users]
+      security: [ { bearerAuth: [] } ]
+      summary: Delete user (admin)
+      responses:
+        '204':
+          description: Deleted
+  /tokens/pat:
+    get:
+      tags: [auth]
+      security: [ { bearerAuth: [] } ]
+      summary: List personal access tokens (PAT)
+      responses:
+        '200':
+          description: List of tokens
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PAT'
+    post:
+      tags: [auth]
+      security: [ { bearerAuth: [] } ]
+      summary: Create PAT
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, expires_at]
+              properties:
+                name: { type: string }
+                expires_at: { type: string, format: date-time }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PAT' }
+    delete:
+      tags: [auth]
+      security: [ { bearerAuth: [] } ]
+      summary: Revoke PAT
+      parameters:
+        - name: token_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '204':
+          description: Revoked
   /tenants:
     get:
       tags: [tenants]
-      summary: List tenants
-      responses: { '200': { description: OK } }
+      security: [ { bearerAuth: [] } ]
+      summary: List tenants (admin)
+      responses:
+        '200':
+          description: List
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Tenant' }
     post:
       tags: [tenants]
-      summary: Create tenant
-      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/TenantCreate' }}}}
-      responses: { '201': { description: Created } }
+      security: [ { bearerAuth: [] } ]
+      summary: Create tenant (admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TenantCreate' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Tenant' }
   /tenants/{tenant_id}:
     parameters:
-      - in: path
-        name: tenant_id
-        schema: { type: string }
-        required: true
+      - $ref: '#/components/parameters/tenant_id'
     get:
       tags: [tenants]
-      summary: Get tenant
-      responses: { '200': { description: OK } }
+      security: [ { bearerAuth: [] } ]
+      summary: Get tenant (admin)
+      responses:
+        '200':
+          description: Tenant
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Tenant' }
     patch:
       tags: [tenants]
-      summary: Update tenant
-      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/TenantUpdate' }}}}
-      responses: { '200': { description: Updated } }
+      security: [ { bearerAuth: [] } ]
+      summary: Update tenant (admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TenantUpdate' }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Tenant' }
     delete:
       tags: [tenants]
-      summary: Delete tenant
-      responses: { '204': { description: Deleted } }
+      security: [ { bearerAuth: [] } ]
+      summary: Delete tenant (admin)
+      responses:
+        '204':
+          description: Deleted
   /models/llm:
     get:
       tags: [models]
+      security:
+        - bearerAuth: []
+        - PAT: []
       summary: List available LLM models
-      responses: { '200': { description: OK } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/ModelLLM' }
   /models/embeddings:
     get:
       tags: [models]
+      security:
+        - bearerAuth: []
+        - PAT: []
       summary: List available embedding models
-      responses: { '200': { description: OK } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/ModelEmbedding' }
   /chat:
     post:
       tags: [chat]
+      security:
+        - bearerAuth: []
+        - PAT: []
       summary: Classic chat (non-RAG)
-      description: Non-streaming chat completion
+      parameters:
+        - $ref: '#/components/parameters/X-Tenant-Id'
+        - $ref: '#/components/parameters/Idempotency-Key'
       requestBody:
         required: true
         content:
@@ -83,11 +338,17 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ChatResponse' }
+        '429':
+          $ref: '#/components/responses/Error'
   /chat/stream:
     post:
       tags: [chat]
+      security:
+        - bearerAuth: []
+        - PAT: []
       summary: Classic chat (SSE stream)
-      description: Server-Sent Events streaming for chat
+      parameters:
+        - $ref: '#/components/parameters/X-Tenant-Id'
       requestBody:
         required: true
         content:
@@ -95,68 +356,73 @@ paths:
             schema: { $ref: '#/components/schemas/ChatRequest' }
       responses:
         '200':
-          description: text/event-stream
+          description: SSE stream of tokens
           content:
             text/event-stream:
-              schema: { type: string }
-  /rag/chat:
-    post:
-      tags: [rag]
-      summary: RAG chat (non-stream)
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/RagChatRequest' }
-      responses:
-        '200':
-          description: Chat response with citations
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/ChatResponse' }
-  /rag/chat/stream:
-    post:
-      tags: [rag]
-      summary: RAG chat (SSE stream)
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/RagChatRequest' }
-      responses:
-        '200':
-          description: text/event-stream
-          content:
-            text/event-stream:
-              schema: { type: string }
+              schema:
+                type: string
   /rag/sources:
     get:
       tags: [rag]
-      summary: List RAG sources
-      responses: { '200': { description: OK } }
+      security: [ { bearerAuth: [] } ]
+      summary: List registered RAG sources
+      parameters:
+        - $ref: '#/components/parameters/X-Tenant-Id'
+      responses:
+        '200':
+          description: List
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Source' }
     post:
       tags: [rag]
-      summary: Register new source (url or file-meta)
-      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/SourceCreate' }}}}
-      responses: { '201': { description: Created } }
+      security: [ { bearerAuth: [] } ]
+      summary: Register new source (url/file/s3)
+      parameters:
+        - $ref: '#/components/parameters/X-Tenant-Id'
+        - $ref: '#/components/parameters/Idempotency-Key'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SourceCreate' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Source' }
   /rag/sources/{source_id}:
     parameters:
-      - in: path
-        name: source_id
-        schema: { type: string }
-        required: true
+      - $ref: '#/components/parameters/source_id'
+      - $ref: '#/components/parameters/X-Tenant-Id'
     get:
       tags: [rag]
+      security: [ { bearerAuth: [] } ]
       summary: Get source
-      responses: { '200': { description: OK } }
+      responses:
+        '200':
+          description: Source
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Source' }
     delete:
       tags: [rag]
-      summary: Remove source (and its vectors)
-      responses: { '204': { description: Deleted } }
+      security: [ { bearerAuth: [] } ]
+      summary: Remove source (and optionally vectors)
+      responses:
+        '204':
+          description: Deleted
   /rag/documents:
     post:
-      tags: [documents]
-      summary: Upload a document (multipart or by URL)
+      tags: [rag]
+      security: [ { bearerAuth: [] } ]
+      summary: Upload a document or register by URL
+      parameters:
+        - $ref: '#/components/parameters/X-Tenant-Id'
+        - $ref: '#/components/parameters/Idempotency-Key'
       requestBody:
         required: true
         content:
@@ -165,45 +431,368 @@ paths:
               type: object
               properties:
                 file: { type: string, format: binary }
-                tenant_id: { type: string }
                 source_id: { type: string }
           application/json:
-            schema: { $ref: '#/components/schemas/DocumentIngest' }
-      responses: { '202': { description: Accepted } }
+            schema:
+              type: object
+              required: [uri, source_id]
+              properties:
+                uri: { type: string }
+                source_id: { type: string }
+                overwrite: { type: boolean, default: false }
+      responses:
+        '202':
+          description: Accepted for ingestion
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  doc_id: { type: string }
   /rag/documents/{doc_id}:
     parameters:
-      - in: path
-        name: doc_id
-        schema: { type: string }
-        required: true
+      - $ref: '#/components/parameters/doc_id'
+      - $ref: '#/components/parameters/X-Tenant-Id'
     get:
-      tags: [documents]
+      tags: [rag]
+      security: [ { bearerAuth: [] } ]
       summary: Get document meta & status
-      responses: { '200': { description: OK } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Document' }
     delete:
-      tags: [documents]
+      tags: [rag]
+      security: [ { bearerAuth: [] } ]
       summary: Delete document and vectors
-      responses: { '204': { description: Deleted } }
-  /rag/analyze:
+      responses:
+        '204':
+          description: Deleted
+  /rag/search:
     post:
-      tags: [documents]
-      summary: Analyze a document with RAG (Q&A over doc)
+      tags: [rag]
+      security:
+        - bearerAuth: []
+        - PAT: []
+      summary: Semantic/Hybrid search over ingested chunks
+      parameters:
+        - $ref: '#/components/parameters/X-Tenant-Id'
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/AnalyzeRequest' }
+            schema:
+              type: object
+              required: [query]
+              properties:
+                query: { type: string }
+                k: { type: integer, default: 5, minimum: 1, maximum: 50 }
+                embeddings_model: { type: string }
+                rerank: { type: boolean, default: false }
+                filter:
+                  type: object
+                  additionalProperties: true
+      responses:
+        '200':
+          description: Hits
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  hits:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        doc_id: { type: string }
+                        chunk_id: { type: string }
+                        score: { type: number }
+                        snippet: { type: string }
+  /rag/chat:
+    post:
+      tags: [rag]
+      security:
+        - bearerAuth: []
+        - PAT: []
+      summary: RAG-augmented chat (non-stream)
+      parameters:
+        - $ref: '#/components/parameters/X-Tenant-Id'
+        - $ref: '#/components/parameters/Idempotency-Key'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RagChatRequest' }
+      responses:
+        '200':
+          description: Response with citations
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ChatResponse' }
+  /rag/chat/stream:
+    post:
+      tags: [rag]
+      security:
+        - bearerAuth: []
+        - PAT: []
+      summary: RAG-augmented chat (SSE stream)
+      parameters:
+        - $ref: '#/components/parameters/X-Tenant-Id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RagChatRequest' }
+      responses:
+        '200':
+          description: SSE stream
+          content:
+            text/event-stream:
+              schema: { type: string }
+  /analyze:
+    post:
+      tags: [analyze]
+      security: [ { bearerAuth: [] } ]
+      summary: Analyze a document (sync)
+      parameters:
+        - $ref: '#/components/parameters/X-Tenant-Id'
+        - $ref: '#/components/parameters/Idempotency-Key'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [doc_id, question]
+              properties:
+                doc_id: { type: string }
+                question: { type: string }
+                k: { type: integer, default: 5 }
+                model: { type: string }
       responses:
         '200':
           description: Analysis result
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AnalyzeResponse' }
-
+  /analyze/stream:
+    post:
+      tags: [analyze]
+      security: [ { bearerAuth: [] } ]
+      summary: Analyze a document (SSE stream)
+      parameters:
+        - $ref: '#/components/parameters/X-Tenant-Id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [doc_id, question]
+              properties:
+                doc_id: { type: string }
+                question: { type: string }
+                k: { type: integer, default: 5 }
+                model: { type: string }
+      responses:
+        '200':
+          description: SSE stream
+          content:
+            text/event-stream:
+              schema: { type: string }
+  /jobs:
+    post:
+      tags: [jobs]
+      security: [ { bearerAuth: [] } ]
+      summary: Create a long-running job (e.g., ingest/reindex/analyze-large)
+      parameters:
+        - $ref: '#/components/parameters/X-Tenant-Id'
+        - $ref: '#/components/parameters/Idempotency-Key'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JobCreate'
+      responses:
+        '202':
+          description: Accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  job_id: { type: string }
+  /jobs/{job_id}:
+    parameters:
+      - $ref: '#/components/parameters/job_id'
+      - $ref: '#/components/parameters/X-Tenant-Id'
+    get:
+      tags: [jobs]
+      security: [ { bearerAuth: [] } ]
+      summary: Get job status/result
+      responses:
+        '200':
+          description: Status
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Job' }
+  /artifacts/{artifact_id}:
+    parameters:
+      - $ref: '#/components/parameters/artifact_id'
+      - $ref: '#/components/parameters/X-Tenant-Id'
+    get:
+      tags: [artifacts]
+      security:
+        - bearerAuth: []
+        - PAT: []
+      summary: Download/stream an artifact
+      responses:
+        '200':
+          description: OK (stream or signed url)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  uri: { type: string }
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    PAT:
+      type: apiKey
+      in: header
+      name: X-API-Key
+  parameters:
+    limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 200, default: 20 }
+    cursor:
+      name: cursor
+      in: query
+      schema: { type: string, nullable: true }
+    user_id:
+      name: user_id
+      in: path
+      required: true
+      schema: { type: string }
+    tenant_id:
+      name: tenant_id
+      in: path
+      required: true
+      schema: { type: string }
+    source_id:
+      name: source_id
+      in: path
+      required: true
+      schema: { type: string }
+    doc_id:
+      name: doc_id
+      in: path
+      required: true
+      schema: { type: string }
+    job_id:
+      name: job_id
+      in: path
+      required: true
+      schema: { type: string }
+    artifact_id:
+      name: artifact_id
+      in: path
+      required: true
+      schema: { type: string }
+    X-Tenant-Id:
+      name: X-Tenant-Id
+      in: header
+      required: false
+      description: Tenant context (falls back to user's default tenant)
+      schema: { type: string }
+    Idempotency-Key:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: Idempotency key to deduplicate POSTs
+      schema: { type: string, minLength: 1, maxLength: 128 }
+  responses:
+    Error:
+      description: Error response
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Problem'
   schemas:
+    Problem:
+      type: object
+      description: RFC7807-like problem details
+      properties:
+        type: { type: string, example: about:blank }
+        title: { type: string }
+        status: { type: integer }
+        code:
+          type: string
+          enum:
+            - VALIDATION_ERROR
+            - AUTH_REQUIRED
+            - FORBIDDEN
+            - NOT_FOUND
+            - CONFLICT
+            - RATE_LIMITED
+            - PROVIDER_ERROR
+            - INTERNAL
+        detail: { type: string }
+        trace_id: { type: string }
+    User:
+      type: object
+      properties:
+        id: { type: string }
+        email: { type: string, format: email }
+        role: { type: string, enum: [viewer, editor, admin, tenant_admin] }
+        tenant_ids:
+          type: array
+          items: { type: string }
+        created_at: { type: string, format: date-time }
+    UserCreate:
+      type: object
+      required: [email, role]
+      properties:
+        email: { type: string, format: email }
+        role: { type: string }
+        password: { type: string }
+        tenant_ids:
+          type: array
+          items: { type: string }
+    UserUpdate:
+      type: object
+      properties:
+        role: { type: string }
+        tenant_ids:
+          type: array
+          items: { type: string }
+    PAT:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        created_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+        last_used_at: { type: string, format: date-time, nullable: true }
+    Tenant:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        created_at: { type: string, format: date-time }
+        disabled: { type: boolean, default: false }
     TenantCreate:
       type: object
+      required: [name]
       properties:
         name: { type: string }
     TenantUpdate:
@@ -211,19 +800,41 @@ components:
       properties:
         name: { type: string }
         disabled: { type: boolean }
-    ChatMessage:
+    ModelLLM:
       type: object
       properties:
-        role: { type: string, enum: [system,user,assistant,tool] }
+        id: { type: string }
+        name: { type: string }
+        provider: { type: string, example: local-hf }
+        version: { type: string }
+        context_window: { type: integer }
+        dtype: { type: string }
+        device: { type: string, example: cpu }
+        capabilities:
+          type: array
+          items: { type: string, example: [chat, tools] }
+    ModelEmbedding:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        provider: { type: string }
+        dimension: { type: integer }
+        version: { type: string }
+    ChatMessage:
+      type: object
+      required: [role, content]
+      properties:
+        role: { type: string, enum: [system, user, assistant, tool] }
         content: { type: string }
     ChatRequest:
       type: object
-      required: [tenant_id, model, messages]
+      required: [messages, model]
       properties:
-        tenant_id: { type: string }
         model: { type: string }
         temperature: { type: number, default: 0.7 }
-        top_p: { type: number, default: 1.0 }
+        top_p: { type: number, default: 1 }
+        max_tokens: { type: integer, nullable: true }
         messages:
           type: array
           items: { $ref: '#/components/schemas/ChatMessage' }
@@ -235,6 +846,9 @@ components:
             k: { type: integer, default: 5, minimum: 1, maximum: 50 }
             embeddings_model: { type: string }
             rerank: { type: boolean, default: false }
+            filter:
+              type: object
+              additionalProperties: true
     ChatResponse:
       type: object
       properties:
@@ -245,31 +859,35 @@ components:
             type: object
             properties:
               doc_id: { type: string }
-              page: { type: integer }
+              page: { type: integer, nullable: true }
               score: { type: number }
+              snippet: { type: string, nullable: true }
+    Source:
+      type: object
+      properties:
+        id: { type: string }
+        kind: { type: string, enum: [url, file, s3] }
+        uri: { type: string }
+        meta:
+          type: object
+          additionalProperties: true
     SourceCreate:
       type: object
+      required: [kind, uri]
       properties:
         kind: { type: string, enum: [url, file, s3] }
         uri: { type: string }
-        meta: { type: object, additionalProperties: true }
-    DocumentIngest:
+        meta:
+          type: object
+          additionalProperties: true
+    Document:
       type: object
-      required: [tenant_id, source_id, uri]
       properties:
-        tenant_id: { type: string }
+        id: { type: string }
         source_id: { type: string }
-        uri: { type: string }
-        overwrite: { type: boolean, default: false }
-    AnalyzeRequest:
-      type: object
-      required: [tenant_id, doc_id, question]
-      properties:
-        tenant_id: { type: string }
-        doc_id: { type: string }
-        question: { type: string }
-        k: { type: integer, default: 5 }
-        embeddings_model: { type: string }
+        status: { type: string, enum: [queued, parsing, embedding, indexing, ready, failed] }
+        error: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
     AnalyzeResponse:
       type: object
       properties:
@@ -280,5 +898,30 @@ components:
             type: object
             properties:
               doc_id: { type: string }
-              page: { type: integer }
+              page: { type: integer, nullable: true }
               score: { type: number }
+              snippet: { type: string, nullable: true }
+    JobCreate:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [ingest, reindex, analyze]
+        payload:
+          type: object
+          additionalProperties: true
+    Job:
+      type: object
+      properties:
+        id: { type: string }
+        type: { type: string }
+        status: { type: string, enum: [queued, running, done, failed] }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        result_ref:
+          type: object
+          additionalProperties: true
+        error: { type: string, nullable: true }
+security:
+  - bearerAuth: []
