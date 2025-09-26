@@ -160,3 +160,4 @@ git-push:
 git-auto:
 	@echo "🤖 Auto Git Commit..."
 	@./scripts/git-auto-commit.sh
+	@ git push
