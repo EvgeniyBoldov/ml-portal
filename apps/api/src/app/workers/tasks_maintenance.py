@@ -11,7 +11,7 @@ from celery import shared_task
 from celery.schedules import crontab
 
 from app.celery_app import app as celery_app
-from app.core.config import settings
+from app.core.config import get_settings
 from app.core.db import get_async_session
 from app.core.redis import redis_manager
 from app.services.rag_service import RAGDocumentsService, RAGChunksService
@@ -73,7 +73,8 @@ def cleanup_old_documents_daily(self) -> Dict[str, Any]:
             logger.info("Starting daily cleanup of old documents")
             
             # Получаем настройки из конфигурации
-            days_old = getattr(settings, 'CLEANUP_DAYS_OLD', 30)
+            s = get_settings()
+            days_old = getattr(s, 'CLEANUP_DAYS_OLD', 30)
             
             # Запускаем очистку
             result = cleanup_old_documents.delay(days_old)

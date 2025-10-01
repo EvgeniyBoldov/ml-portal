@@ -1,13 +1,15 @@
+from typing import Any, Dict, Optional
 
-import uuid
-from ...core.config import get_settings
+class NoopQueue:
+    """No-op queue adapter used for local/dev.
 
-class NoopQueueClient:
-    def enqueue(self, task: str, payload: dict) -> str:
-        task_id = str(uuid.uuid4())
-        # here we would publish to Celery/RabbitMQ; left as stub
-        return task_id
+    Provides the same interface as real queue adapters but does nothing.
+    """
 
-    def cancel(self, task_id: str) -> None:
-        # noop
-        return None
+    async def publish(self, topic: str, payload: Dict[str, Any], key: Optional[str] = None) -> None:
+        return
+
+    async def subscribe(self, topic: str):
+        if False:
+            yield None  # pragma: no cover
+        return

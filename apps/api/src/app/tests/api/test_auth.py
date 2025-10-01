@@ -6,7 +6,7 @@ import jwt
 from datetime import datetime, timedelta
 from fastapi.testclient import TestClient
 from tests.conftest import assert_problem
-from app.core.config import settings
+from app.core.config import get_settings
 
 
 def test_login_success(client: TestClient):
@@ -30,10 +30,11 @@ def test_login_success(client: TestClient):
         
         # Verify JWT structure and expiration
         access_token = data["access_token"]
+        s = get_settings()
         decoded = jwt.decode(
             access_token, 
-            settings.JWT_SECRET, 
-            algorithms=[settings.JWT_ALGORITHM],
+            s.JWT_SECRET, 
+            algorithms=[s.JWT_ALGORITHM],
             options={"verify_exp": False}  # Don't verify expiration in test
         )
         assert "exp" in decoded
@@ -92,8 +93,8 @@ def test_refresh_token_expired(client: TestClient):
     }
     expired_token = jwt.encode(
         expired_payload, 
-        settings.JWT_SECRET, 
-        algorithm=settings.JWT_ALGORITHM
+        s.JWT_SECRET, 
+        algorithm=s.JWT_ALGORITHM
     )
     
     response = client.post("/api/v1/auth/refresh", json={
@@ -106,8 +107,9 @@ def test_refresh_token_expired(client: TestClient):
 def test_jwt_algorithm_from_settings(client: TestClient):
     """Test JWT uses algorithm from settings, not hardcoded"""
     # Verify that JWT_ALGORITHM is read from settings
-    assert hasattr(settings, 'JWT_ALGORITHM')
-    assert settings.JWT_ALGORITHM in ['HS256', 'HS384', 'HS512', 'RS256']
+    s = get_settings()
+    assert hasattr(s, 'JWT_ALGORITHM')
+    assert s.JWT_ALGORITHM in ['HS256', 'HS384', 'HS512', 'RS256']
 
 
 def test_logout_success(client: TestClient):

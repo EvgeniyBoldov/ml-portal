@@ -12,7 +12,7 @@ from app.core.security import (
     get_bearer_token,
     validate_password_strength
 )
-from app.core.config import settings
+from app.core.config import get_settings
 
 
 def test_hash_password():
@@ -142,13 +142,15 @@ def test_password_policy_from_settings():
     """Test password policy uses settings"""
     # Should use settings for policy configuration
     assert hasattr(settings, 'PASSWORD_MIN_LENGTH')
-    assert settings.PASSWORD_MIN_LENGTH >= 8
+    s = get_settings()
+    assert s.PASSWORD_MIN_LENGTH >= 8
 
 
 def test_jwt_secret_from_settings():
     """Test JWT secret comes from settings"""
-    assert hasattr(settings, 'JWT_SECRET')
-    assert len(settings.JWT_SECRET) > 0
+    s = get_settings()
+    assert hasattr(s, 'JWT_SECRET')
+    assert len(s.JWT_SECRET) > 0
 
 
 def test_password_pepper():

@@ -1,24 +1,29 @@
-from __future__ import annotations
+"""
+app/api/v1/router.py
+Mounts v1 routers. Auth is required; others are optional.
+"""
 from fastapi import APIRouter
+from importlib import import_module
 
-router = APIRouter()
+api_v1 = APIRouter()
 
-# Compose only from `api/v1/routers/*` to avoid duplicates.
-# Each module is optional; missing ones are ignored gracefully.
-def _include(mname: str, *, prefix: str | None = None):
+from app.api.routes import security as security_router  # type: ignore
+api_v1.include_router(security_router.router, prefix="/auth", tags=["auth"])
+
+_optional = [
+    ("app.api.routes.users", "router", "/users", ["users"]),
+    ("app.api.routes.rag", "router", "/rag", ["rag"]),
+    ("app.api.routes.analyze", "router", "/analyze", ["analyze"]),
+    ("app.api.routes.chat", "router", "/chat", ["chat"]),
+    ("app.api.routes.admin", "router", "/admin", ["admin"]),
+    ("app.api.routes.artifacts", "router", "/artifacts", ["artifacts"]),
+]
+
+for module_path, attr, prefix, tags in _optional:
     try:
-        mod = __import__(f"app.api.v1.routers.{mname}", fromlist=["router"])
-        r = getattr(mod, "router", None)
-        if r is not None:
-            router.include_router(r, prefix=prefix or "")
+        mod = import_module(module_path)
+        router = getattr(mod, attr, None)
+        if router is not None:
+            api_v1.include_router(router, prefix=prefix, tags=tags)
     except Exception:
-        # module absent or invalid; we ignore to keep composition robust
         pass
-
-_include("auth", prefix="")
-_include("users", prefix="")
-_include("admin", prefix="")
-_include("chat", prefix="")
-_include("analyze", prefix="")
-_include("artifacts", prefix="")
-_include("health", prefix="")

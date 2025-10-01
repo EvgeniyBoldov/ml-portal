@@ -9,7 +9,7 @@ from starlette.responses import JSONResponse, StreamingResponse
 import hashlib
 import json
 import time
-from app.core.config import settings
+from app.core.config import get_settings
 from app.core.redis import get_redis
 from app.core.errors import format_problem_payload
 from app.core.middleware import get_request_id
@@ -19,9 +19,10 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
     
     def __init__(self, app):
         super().__init__(app)
-        self.ttl_hours = getattr(settings, 'IDEMP_TTL_HOURS', 24)
-        self.max_bytes = getattr(settings, 'IDEMPOTENCY_MAX_BYTES', 1024 * 1024)  # 1MB
-        self.enabled = getattr(settings, 'IDEMPOTENCY_ENABLED', True)
+        s = get_settings()
+        self.ttl_hours = getattr(s, 'IDEMP_TTL_HOURS', 24)
+        self.max_bytes = getattr(s, 'IDEMPOTENCY_MAX_BYTES', 1024 * 1024)  # 1MB
+        self.enabled = getattr(s, 'IDEMPOTENCY_ENABLED', True)
     
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         """Process request with idempotency handling"""

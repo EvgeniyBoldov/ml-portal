@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from argon2 import PasswordHasher
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from app.core.config import settings
+from app.core.config import get_settings
 import uuid
 
 class UserCtx(BaseModel):
@@ -21,16 +21,18 @@ http_bearer = HTTPBearer(auto_error=False)
 def hash_password(password: str) -> str:
     """Hash password with Argon2id and pepper"""
     # Add pepper if configured
-    if hasattr(settings, 'PASSWORD_PEPPER') and settings.PASSWORD_PEPPER:
-        password = password + settings.PASSWORD_PEPPER
+    s = get_settings()
+    if hasattr(s, 'PASSWORD_PEPPER') and s.PASSWORD_PEPPER:
+        password = password + s.PASSWORD_PEPPER
     return ph.hash(password)
 
 def verify_password(password: str, password_hash: str) -> bool:
     """Verify password with Argon2id and pepper"""
     try:
         # Add pepper if configured
-        if hasattr(settings, 'PASSWORD_PEPPER') and settings.PASSWORD_PEPPER:
-            password = password + settings.PASSWORD_PEPPER
+        s = get_settings()
+        if hasattr(s, 'PASSWORD_PEPPER') and s.PASSWORD_PEPPER:
+            password = password + s.PASSWORD_PEPPER
         return ph.verify(password_hash, password)
     except Exception:
         return False
@@ -38,20 +40,21 @@ def verify_password(password: str, password_hash: str) -> bool:
 def validate_password_strength(password: str) -> tuple[bool, str]:
     """Validate password strength according to policy"""
     errors = []
+    s = get_settings()
     
-    if len(password) < settings.PASSWORD_MIN_LENGTH:
-        errors.append(f"Password must be at least {settings.PASSWORD_MIN_LENGTH} characters long")
+    if len(password) < s.PASSWORD_MIN_LENGTH:
+        errors.append(f"Password must be at least {s.PASSWORD_MIN_LENGTH} characters long")
     
-    if settings.PASSWORD_REQUIRE_UPPERCASE and not re.search(r'[A-Z]', password):
+    if s.PASSWORD_REQUIRE_UPPERCASE and not re.search(r'[A-Z]', password):
         errors.append("Password must contain at least one uppercase letter")
     
-    if settings.PASSWORD_REQUIRE_LOWERCASE and not re.search(r'[a-z]', password):
+    if s.PASSWORD_REQUIRE_LOWERCASE and not re.search(r'[a-z]', password):
         errors.append("Password must contain at least one lowercase letter")
     
-    if settings.PASSWORD_REQUIRE_DIGITS and not re.search(r'\d', password):
+    if s.PASSWORD_REQUIRE_DIGITS and not re.search(r'\d', password):
         errors.append("Password must contain at least one digit")
     
-    if settings.PASSWORD_REQUIRE_SPECIAL and not re.search(r'[!@#$%^&*(),.?":{}|<>]', password):
+    if s.PASSWORD_REQUIRE_SPECIAL and not re.search(r'[!@#$%^&*(),.?":{}|<>]', password):
         errors.append("Password must contain at least one special character")
     
     if errors:
@@ -62,11 +65,13 @@ def validate_password_strength(password: str) -> tuple[bool, str]:
 def encode_jwt(payload: Dict[str, Any], *, ttl_seconds: int) -> str:
     now = int(time.time())
     to_encode = {"iat": now, "exp": now + ttl_seconds, **payload}
-    return jwt.encode(to_encode, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM)
+    s = get_settings()
+    return jwt.encode(to_encode, s.JWT_SECRET, algorithm=s.JWT_ALGORITHM)
 
 def decode_jwt(token: str) -> Dict[str, Any]:
     try:
-        return jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM])
+        s = get_settings()
+        return jwt.decode(token, s.JWT_SECRET, algorithms=[s.JWT_ALGORITHM])
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="token_expired")
     except jwt.InvalidTokenError:
@@ -77,13 +82,15 @@ def get_jwt_secret() -> str:
     """Get current JWT secret with rotation support"""
     # TODO: Implement key rotation logic
     # For now, return the configured secret
-    return settings.JWT_SECRET
+    s = get_settings()
+    return s.JWT_SECRET
 
 def get_jwt_secret_with_rotation(token_payload: Dict[str, Any]) -> str:
     """Get JWT secret considering key rotation based on token timestamp"""
     # TODO: Implement key rotation based on token iat/exp
     # For now, return the configured secret
-    return settings.JWT_SECRET
+    s = get_settings()
+    return s.JWT_SECRET
 
 # FastAPI dependency
 def get_bearer_token(credentials: HTTPAuthorizationCredentials | None = Depends(http_bearer)) -> str:

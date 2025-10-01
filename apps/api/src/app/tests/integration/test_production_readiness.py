@@ -16,7 +16,7 @@ from app.core.message_content import (
     UnifiedMessageContent, MessageContentType, MessageContentPart,
     MessageContentConverter, MessageContentValidator, MessageContentMigration
 )
-from app.core.config import settings
+from app.core.config import get_settings
 
 
 class TestCeleryTaskRouting:

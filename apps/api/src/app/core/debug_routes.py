@@ -6,7 +6,7 @@ from typing import List, Dict, Any
 from fastapi import FastAPI, HTTPException, status
 from fastapi.responses import JSONResponse
 
-from app.core.config import settings
+from app.core.config import get_settings
 from app.schemas.common import Problem
 
 
@@ -44,7 +44,8 @@ class DebugRoutesManager:
     @classmethod
     def check_debug_access(cls, path: str) -> None:
         """Check if DEBUG endpoint is accessible"""
-        if cls.is_debug_endpoint(path) and not settings.DEBUG:
+        s = get_settings()
+        if cls.is_debug_endpoint(path) and not s.DEBUG:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=Problem(
@@ -59,8 +60,9 @@ class DebugRoutesManager:
     @classmethod
     def get_debug_endpoints_info(cls) -> Dict[str, Any]:
         """Get information about DEBUG endpoints"""
+        s = get_settings()
         return {
-            "debug_mode": settings.DEBUG,
+            "debug_mode": s.DEBUG,
             "debug_prefixes": cls.DEBUG_PREFIXES,
             "debug_endpoints": cls.DEBUG_ENDPOINTS,
             "total_debug_endpoints": len(cls.DEBUG_PREFIXES) + len(cls.DEBUG_ENDPOINTS)
@@ -107,7 +109,8 @@ def setup_debug_routes(app: FastAPI) -> None:
     @app.get("/api/debug/health")
     async def debug_health():
         """DEBUG health check with detailed info"""
-        if not settings.DEBUG:
+        s = get_settings()
+        if not s.DEBUG:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=Problem(
@@ -122,7 +125,7 @@ def setup_debug_routes(app: FastAPI) -> None:
         return {
             "status": "ok",
             "debug_mode": True,
-            "environment": settings.ENV,
+            "environment": s.ENV,
             "debug_endpoints": DebugRoutesManager.get_debug_endpoints_info()
         }
 
@@ -132,7 +135,8 @@ def validate_debug_endpoints() -> List[str]:
     issues = []
     
     # Check if DEBUG mode is properly configured
-    if not hasattr(settings, 'DEBUG'):
+    s = get_settings()
+    if not hasattr(s, 'DEBUG'):
         issues.append("DEBUG setting not found in settings")
     
     # Check if DEBUG endpoints are properly marked

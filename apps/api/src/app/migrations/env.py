@@ -9,7 +9,7 @@ import sys
 # Add the app directory to Python path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from app.core.config import settings
+from app.core.config import get_settings
 from app.models.base import Base  # provides Base.metadata
 # Don't import models to avoid ENUM creation conflicts
 
@@ -22,7 +22,8 @@ target_metadata = Base.metadata
 
 def get_url() -> str:
     # Use application settings (supports DB_URL or DB.URL env names)
-    return settings.DB_URL
+    s = get_settings()
+    return s.DB_URL
 
 def run_migrations_offline() -> None:
     url = get_url()

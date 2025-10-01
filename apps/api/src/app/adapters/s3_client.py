@@ -5,7 +5,7 @@ from typing import Optional, Literal
 from minio import Minio
 from minio.error import S3Error
 
-from app.core.config import settings
+from app.core.config import get_settings
 
 @dataclass
 class PresignOptions:
@@ -16,21 +16,13 @@ class PresignOptions:
 class S3Manager:
     """Canonical S3/MinIO manager used by routers/services and s3_links."""
     def __init__(self) -> None:
-        endpoint = getattr(settings, "S3_ENDPOINT", "http://minio:9000")
-        endpoint = endpoint.replace("http://", "").replace("https://", "")
-        access_key = getattr(settings, "S3_ACCESS_KEY", "minioadmin")
-        secret_key = getattr(settings, "S3_SECRET_KEY", "minioadmin")
-        # IMPORTANT: use S3_SECURE (not S3_SSL) to align with Settings
-        secure = bool(getattr(settings, "S3_SECURE", getattr(settings, "S3_SSL", False)))
-        self._client = Minio(endpoint, access_key, secret_key, secure=secure)
-
-    # -------- Bucket utilities
+        s = get_settings()
+        endpoint = s.S3_ENDPOINT.replace("http://", "").replace("https://", "")
+        self._client = Minio(endpoint, s.S3_ACCESS_KEY, s.S3_SECRET_KEY, secure=bool(s.S3_SECURE))
 
     def ensure_bucket(self, name: str) -> None:
         if not self._client.bucket_exists(name):
             self._client.make_bucket(name)
-
-    # -------- Object utilities
 
     def exists(self, bucket: str, key: str) -> bool:
         try:
@@ -50,7 +42,6 @@ class S3Manager:
             raise
 
     def get_object_metadata(self, bucket: str, key: str) -> dict:
-        """Lightweight metadata wrapper (maps Minio stat to dict)."""
         s = self._client.stat_object(bucket, key)
         return {
             "size": getattr(s, "size", None),
@@ -72,15 +63,7 @@ class S3Manager:
                 pass
         return data
 
-    # -------- Presigned URLs
-
-    def generate_presigned_url(
-        self,
-        *,
-        bucket: str,
-        key: str,
-        options: PresignOptions,
-    ) -> str:
+    def generate_presigned_url(self, *, bucket: str, key: str, options: PresignOptions) -> str:
         self.ensure_bucket(bucket)
         if options.operation == "get":
             return self._client.get_presigned_url("GET", bucket, key, expires=options.expiry_seconds)
@@ -89,5 +72,4 @@ class S3Manager:
             return self._client.get_presigned_url("PUT", bucket, key, expires=options.expiry_seconds, response_headers=headers)
         raise ValueError("Unsupported operation for presign")
 
-# Singleton instance for DI-by-import
 s3_manager = S3Manager()

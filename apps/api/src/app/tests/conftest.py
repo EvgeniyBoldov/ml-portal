@@ -12,7 +12,7 @@ from sqlalchemy.orm import sessionmaker
 from unittest.mock import patch
 
 from app.main import app
-from app.core.config import settings
+from app.core.config import get_settings
 from app.core.db import get_async_session
 
 
@@ -71,8 +71,9 @@ async def async_client() -> AsyncGenerator[AsyncClient, None]:
 async def db_session() -> AsyncGenerator[AsyncSession, None]:
     """Database session for tests"""
     # Create test engine
+    s = get_settings()
     engine = create_async_engine(
-        settings.ASYNC_DB_URL,
+        s.ASYNC_DB_URL,
         echo=False,
         pool_pre_ping=True
     )

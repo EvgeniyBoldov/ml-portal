@@ -4,7 +4,7 @@ import json
 import pickle
 from redis.asyncio import Redis
 from redis import Redis as SyncRedis
-from app.core.config import settings
+from app.core.config import get_settings
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -23,8 +23,9 @@ class RedisManager:
     def get_async_redis(self) -> Redis:
         """Get async Redis client"""
         if self._async_redis is None:
+            s = get_settings()
             self._async_redis = Redis.from_url(
-                settings.REDIS_URL,
+                s.REDIS_URL,
                 decode_responses=True,
                 retry_on_timeout=True,
                 socket_keepalive=True,
@@ -35,8 +36,9 @@ class RedisManager:
     def get_sync_redis(self) -> SyncRedis:
         """Get sync Redis client"""
         if self._sync_redis is None:
+            s = get_settings()
             self._sync_redis = SyncRedis.from_url(
-                settings.REDIS_URL,
+                s.REDIS_URL,
                 decode_responses=True,
                 retry_on_timeout=True,
                 socket_keepalive=True,

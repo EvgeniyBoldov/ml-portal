@@ -1,7 +1,6 @@
 from __future__ import annotations
-from typing import Optional
 from app.adapters.s3_client import s3_manager
-from app.core.config import settings
+from app.core.config import get_settings
 
 def object_exists(bucket: str, key: str) -> bool:
     return s3_manager.exists(bucket, key)
@@ -16,7 +15,8 @@ def build_rag_key(doc_id: str) -> str:
     return f"docs/{doc_id}"
 
 def ensure_rag_document_present(doc_id: str) -> dict:
-    bucket = settings.S3_BUCKET_RAG
+    s = get_settings()
+    bucket = s.S3_BUCKET_RAG
     key = build_rag_key(doc_id)
     if not object_exists(bucket, key):
         return {"ok": False, "reason": "missing"}

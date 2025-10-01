@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import db_session, get_current_user, require_admin
 from app.repositories.users_repo import UsersRepository
 from app.services.users_service import UsersService
+from app.schemas.common import ProblemDetails
 
 router = APIRouter(tags=["users"])
 
@@ -51,11 +52,19 @@ def create_user(
     session: Session = Depends(db_session),
 ):
     """Create user (admin only) - DEBUG only"""
-    from app.core.config import settings
+    from app.core.config import get_settings
     
     # Only allow in DEBUG mode
-    if not settings.DEBUG:
-        raise HTTPException(status_code=403, detail="User creation only available in debug mode")
+    s = get_settings()
+    if not s.DEBUG:
+        raise HTTPException(
+            status_code=403, 
+            detail=ProblemDetails(
+                title="Debug Endpoint Disabled",
+                status=403,
+                detail="User creation only available in debug mode"
+            ).model_dump()
+        )
     
     # For now, skip authentication to allow validation testing
     # TODO: Add proper authentication after tests pass
@@ -71,7 +80,14 @@ def create_user(
     tenant_ids = user_data.get("tenant_ids", [])
     
     if not email:
-        raise HTTPException(status_code=422, detail="email_required")
+        raise HTTPException(
+            status_code=422, 
+            detail=ProblemDetails(
+                title="Validation Error",
+                status=422,
+                detail="email_required"
+            ).model_dump()
+        )
     
     try:
         user = service.create_user(email, password, role, tenant_ids)
@@ -84,9 +100,23 @@ def create_user(
         }
     except ValueError as e:
         if "duplicate" in str(e).lower() or "already exists" in str(e).lower():
-            raise HTTPException(status_code=409, detail=str(e))
+            raise HTTPException(
+                status_code=409, 
+                detail=ProblemDetails(
+                    title="Conflict",
+                    status=409,
+                    detail=str(e)
+                ).model_dump()
+            )
         else:
-            raise HTTPException(status_code=422, detail=str(e))
+            raise HTTPException(
+                status_code=422, 
+                detail=ProblemDetails(
+                    title="Validation Error",
+                    status=422,
+                    detail=str(e)
+                ).model_dump()
+            )
 
 @router.get("/users/{user_id}")
 def get_user(
@@ -98,7 +128,14 @@ def get_user(
     repo = UsersRepository(session)
     user = repo.get_by_id(user_id)
     if not user:
-        raise HTTPException(status_code=404, detail="not_found")
+        raise HTTPException(
+            status_code=404, 
+            detail=ProblemDetails(
+                title="Not Found",
+                status=404,
+                detail="not_found"
+            ).model_dump()
+        )
     
     return {
         "id": str(user.id),
@@ -121,7 +158,14 @@ def update_user(
     
     user = repo.get_by_id(user_id)
     if not user:
-        raise HTTPException(status_code=404, detail="not_found")
+        raise HTTPException(
+            status_code=404, 
+            detail=ProblemDetails(
+                title="Not Found",
+                status=404,
+                detail="not_found"
+            ).model_dump()
+        )
     
     try:
         updated_user = service.update_user(user_id, user_data)
@@ -133,7 +177,14 @@ def update_user(
             "created_at": updated_user.created_at.isoformat() if updated_user.created_at else None
         }
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(
+            status_code=400, 
+            detail=ProblemDetails(
+                title="Bad Request",
+                status=400,
+                detail=str(e)
+            ).model_dump()
+        )
 
 @router.delete("/users/{user_id}")
 def delete_user(
@@ -147,7 +198,14 @@ def delete_user(
     
     user = repo.get_by_id(user_id)
     if not user:
-        raise HTTPException(status_code=404, detail="not_found")
+        raise HTTPException(
+            status_code=404, 
+            detail=ProblemDetails(
+                title="Not Found",
+                status=404,
+                detail="not_found"
+            ).model_dump()
+        )
     
     service.delete_user(user_id)
     return {"deleted": True}

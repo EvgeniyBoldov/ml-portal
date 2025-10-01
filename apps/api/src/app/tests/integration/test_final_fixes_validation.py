@@ -378,7 +378,7 @@ class TestAdminSetupEndpoint:
                 content = f.read()
                 
                 # Check that endpoint checks DEBUG mode
-                assert "settings.DEBUG" in content or "DEBUG" in content
+                assert "s.DEBUG" in content or "DEBUG" in content
     
     def test_create_superuser_uses_pydantic_schemas(self):
         """Test that create-superuser uses Pydantic schemas"""

@@ -3,7 +3,7 @@ Unit tests for core/config.py
 """
 import pytest
 import os
-from app.core.config import settings
+from app.core.config import get_settings
 
 
 def test_settings_attributes():
@@ -35,80 +35,80 @@ def test_settings_attributes():
 
 def test_api_prefix():
     """Test API_BASE_PATH is set correctly"""
-    assert settings.API_BASE_PATH == "/api/v1"
+    assert s.API_BASE_PATH == "/api/v1"
 
 
 def test_request_id_header():
     """Test REQUEST_ID_HEADER is set correctly"""
-    assert settings.REQUEST_ID_HEADER == "X-Request-Id"
+    assert s.REQUEST_ID_HEADER == "X-Request-Id"
 
 
 def test_tenant_header():
     """Test TENANT_HEADER is set correctly"""
-    assert settings.TENANT_HEADER == "X-Tenant-Id"
+    assert s.TENANT_HEADER == "X-Tenant-Id"
 
 
 def test_jwt_algorithm():
     """Test JWT_ALGORITHM is set correctly"""
-    assert settings.JWT_ALGORITHM in ['HS256', 'HS384', 'HS512', 'RS256']
+    assert s.JWT_ALGORITHM in ['HS256', 'HS384', 'HS512', 'RS256']
 
 
 def test_separate_db_urls():
     """Test separate DB URLs are configured"""
-    assert settings.SYNC_DB_URL != settings.ASYNC_DB_URL
-    assert "postgresql://" in settings.SYNC_DB_URL
-    assert "postgresql+asyncpg://" in settings.ASYNC_DB_URL
+    assert s.SYNC_DB_URL != s.ASYNC_DB_URL
+    assert "postgresql://" in s.SYNC_DB_URL
+    assert "postgresql+asyncpg://" in s.ASYNC_DB_URL
 
 
 def test_redis_url():
     """Test Redis URL is configured"""
-    assert settings.REDIS_URL.startswith("redis://")
+    assert s.REDIS_URL.startswith("redis://")
 
 
 def test_s3_config():
     """Test S3 configuration"""
-    assert settings.S3_ENDPOINT is not None
-    assert settings.S3_ACCESS_KEY is not None
-    assert settings.S3_SECRET_KEY is not None
-    assert settings.S3_BUCKET_RAG is not None
+    assert s.S3_ENDPOINT is not None
+    assert s.S3_ACCESS_KEY is not None
+    assert s.S3_SECRET_KEY is not None
+    assert s.S3_BUCKET_RAG is not None
 
 
 def test_qdrant_url():
     """Test Qdrant URL is configured"""
-    assert settings.QDRANT_URL.startswith("http://")
+    assert s.QDRANT_URL.startswith("http://")
 
 
 def test_rate_limit_proxy_header():
     """Test rate limit trusted proxy header"""
-    assert settings.RATE_LIMIT_TRUSTED_PROXY_HEADER in [
+    assert s.RATE_LIMIT_TRUSTED_PROXY_HEADER in [
         "X-Forwarded-For", "X-Real-IP", "X-Client-IP"
     ]
 
 
 def test_debug_mode():
     """Test DEBUG mode configuration"""
-    assert isinstance(settings.DEBUG, bool)
+    assert isinstance(s.DEBUG, bool)
 
 
 def test_env_mode():
     """Test ENV mode configuration"""
-    assert settings.ENV in ['development', 'testing', 'production']
+    assert s.ENV in ['development', 'testing', 'production']
 
 
 def test_password_policy():
     """Test password policy settings"""
     assert hasattr(settings, 'PASSWORD_MIN_LENGTH')
-    assert settings.PASSWORD_MIN_LENGTH >= 8
+    assert s.PASSWORD_MIN_LENGTH >= 8
 
 
 def test_jwt_secret_not_empty():
     """Test JWT secret is not empty"""
-    assert len(settings.JWT_SECRET) > 0
+    assert len(s.JWT_SECRET) > 0
 
 
 def test_password_pepper_not_empty():
     """Test password pepper is not empty"""
-    assert len(settings.PASSWORD_PEPPER) > 0
+    assert len(s.PASSWORD_PEPPER) > 0
 
 
 def test_settings_from_env():
@@ -121,5 +121,5 @@ def test_settings_from_env():
 def test_no_hardcoded_values():
     """Test no hardcoded values in settings"""
     # Verify critical values come from environment or have defaults
-    assert settings.API_BASE_PATH == "/api/v1"  # Should be configurable
-    assert settings.REQUEST_ID_HEADER == "X-Request-Id"  # Should be configurable
+    assert s.API_BASE_PATH == "/api/v1"  # Should be configurable
+    assert s.REQUEST_ID_HEADER == "X-Request-Id"  # Should be configurable

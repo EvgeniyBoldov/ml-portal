@@ -5,14 +5,15 @@ from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.pool import StaticPool
-from app.core.config import settings
+from app.core.config import get_settings
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
 # Sync engine and session
+s = get_settings()
 engine = create_engine(
-    settings.DB_URL,
+    s.DB_URL,
     pool_pre_ping=True,
     future=True,
     pool_size=10,
@@ -37,8 +38,9 @@ def get_async_engine():
     global async_engine
     if async_engine is None:
         try:
+            s = get_settings()
             async_engine = create_async_engine(
-                settings.ASYNC_DB_URL,
+                s.ASYNC_DB_URL,
                 pool_pre_ping=True,
                 future=True,
                 pool_size=10,

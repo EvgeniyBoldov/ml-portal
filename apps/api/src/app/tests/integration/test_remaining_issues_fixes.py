@@ -11,7 +11,7 @@ from app.api.v1.password_reset import router as password_reset_router
 from app.api.v1.chat import router as chat_router
 from app.api.v1.rag import router as rag_router
 from app.api.v1.router import router as v1_router
-from app.core.config import settings
+from app.core.config import get_settings
 from app.services.idempotency_service import IdempotencyService
 from app.core.middleware.idempotency import IdempotencyMiddleware
 from app.core.middleware.rate_limit import RateLimitHeadersMiddleware
