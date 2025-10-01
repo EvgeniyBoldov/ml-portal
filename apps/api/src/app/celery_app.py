@@ -12,8 +12,8 @@ app = Celery(
     backend=RESULT_BACKEND,
     include=[
         # Новые улучшенные задачи
-        "app.tasks.bg_tasks_enhanced",
-        "app.tasks.periodic_tasks",
+        # "app.tasks.bg_tasks_enhanced",
+        "app.workers.tasks_maintenance",
     ],
 )
 
@@ -41,7 +41,7 @@ app.conf.task_queues = (
 
 # Маршрутизация задач по очередям
 app.conf.task_routes = {
-    # Новые улучшенные задачи
+    # Новые улучшенные задачи из bg_tasks_enhanced
     "bg_tasks.process_document": {"queue": "upload_high", "priority": 8},
     "bg_tasks.extract_and_normalize_text": {"queue": "upload_high", "priority": 8},
     "bg_tasks.chunk_document": {"queue": "upload_high", "priority": 8},
@@ -50,7 +50,7 @@ app.conf.task_routes = {
     "bg_tasks.analyze_document": {"queue": "analyze_medium", "priority": 5},
     "bg_tasks.cleanup_old_documents": {"queue": "cleanup_low", "priority": 1},
     
-    # Периодические задачи
+    # Периодические задачи из periodic_tasks
     "periodic_tasks.cleanup_old_documents_daily": {"queue": "cleanup_low", "priority": 1},
     "periodic_tasks.system_health_check": {"queue": "chat_critical", "priority": 10},
     "periodic_tasks.update_system_statistics": {"queue": "rag_low", "priority": 2},

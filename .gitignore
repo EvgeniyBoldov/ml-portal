@@ -182,3 +182,7 @@ cython_debug/
 
 # Local development
 *.local
+/code-docs-frontend.txt
+/code-docs-backend.txt
+/code-docs-infrastructure.txt
+/code-docs-tests.txt

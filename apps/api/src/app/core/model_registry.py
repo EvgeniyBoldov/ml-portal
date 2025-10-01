@@ -7,7 +7,7 @@ import json
 import os
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, asdict
-from app.core.redis import get_redis
+from app.core.redis import get_sync_redis
 
 @dataclass
 class ModelConfig:
@@ -34,7 +34,7 @@ class ModelRegistry:
     """Реестр моделей в Redis"""
     
     def __init__(self):
-        self.redis = get_redis()
+        self.redis = get_sync_redis()
         self._default_models = self._load_default_models()
     
     def _load_default_models(self) -> Dict[str, ModelConfig]:

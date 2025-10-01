@@ -1,114 +1,56 @@
-# Scripts Directory
+# Генерация документации кода
 
-This directory contains utility scripts for the ML Portal project.
+## Описание
 
-## Available Scripts
+Скрипт `scripts/generate-code-docs.py` автоматически генерирует подробную документацию всего кода проекта, разделенную по направлениям:
 
-### 🚀 Git Quick Push (`git-quick-push.sh`)
+- **Backend** - Python код (apps/api, apps/emb, apps/llm)
+- **Frontend** - TypeScript/JavaScript код (apps/web)  
+- **Infrastructure** - Конфигурационные файлы (infra, docker-compose, Makefile и др.)
 
-A convenient script for quickly adding, committing, and pushing changes to the repository.
+## Использование
 
-**Usage:**
+### Через Makefile (рекомендуется)
 ```bash
-# Direct usage
-./scripts/git-quick-push.sh "your commit message"
-
-# Via Makefile
-make git-push MSG="your commit message"
+make gen-all
 ```
 
-**Features:**
-- ✅ Adds all changes automatically
-- ✅ Commits with your message
-- ✅ Pushes to origin/main
-- ✅ Colorized output
-- ✅ Error handling
-- ✅ Status checking
-
-**Example:**
+### Напрямую через Python
 ```bash
-make git-push MSG="fix: resolve authentication issue in login flow"
+python3 scripts/generate-code-docs.py
 ```
 
-### 🤖 Auto Git Commit (`git-auto-commit.sh`)
+## Результат
 
-Automatically commits changes with intelligent commit messages based on file analysis.
+Команда создает в корне проекта три файла:
 
-**Usage:**
-```bash
-# Direct usage
-./scripts/git-auto-commit.sh
+- `code-docs-backend.txt` - Документация backend кода
+- `code-docs-frontend.txt` - Документация frontend кода  
+- `code-docs-infrastructure.txt` - Документация инфраструктуры
 
-# Via Makefile
-make git-auto
-```
+## Структура файлов
 
-**Features:**
-- ✅ Analyzes file changes automatically
-- ✅ Generates smart commit messages with type and scope
-- ✅ Categorizes changes (backend, frontend, tests, docs, etc.)
-- ✅ Includes file counts and timestamps
-- ✅ Adds all changes, commits, and pushes automatically
-- ✅ Colorized output with detailed summary
+Каждый файл содержит:
 
-## Repository Cleanup
+1. **Заголовок** с информацией о категории и корне проекта
+2. **Разделы по директориям** с полным списком файлов
+3. **Для каждого файла:**
+   - Имя файла
+   - Полный путь от корня проекта
+   - Размер в KB
+   - **Полное содержимое файла** (реальный код)
+4. **Итоговая статистика** - количество файлов и общий размер
 
-The repository has been cleaned up to remove:
+## Особенности
 
-### ❌ Removed Files:
-- **IDE artifacts**: `.idea/`, `.vscode/`
-- **OS files**: `.DS_Store`, `Thumbs.db`
-- **Python cache**: `__pycache__/`, `*.pyc`, `*.pyo`
-- **Build artifacts**: `dist/`, `build/`, `coverage/`
-- **Temporary files**: `*.log`, `*.tmp`, `*~`
-- **Environment files**: `.env` (removed from tracking)
+- Автоматически исключает служебные файлы (__pycache__, node_modules, .git и др.)
+- **Показывает полное содержимое каждого файла** (реальный код)
+- Поддерживает различные типы файлов (Python, TypeScript, конфигурационные)
+- Сортирует файлы по путям для удобной навигации
+- Ограничивает размер больших файлов (показывает первые 200 строк для файлов >10KB)
 
-### ✅ Updated `.gitignore`:
-- Local environment files (`.env*`)
-- Python virtual environments (`venv/`, `env/`)
-- Testing artifacts (`.pytest_cache/`, `.coverage`)
-- Build artifacts (`dist/`, `build/`, `*.egg-info`)
-- IDE files (`.vscode/`, `.idea/`)
-- OS files (`.DS_Store`, `Thumbs.db`)
-- Node.js artifacts (`node_modules/`, `*.log`)
-- TypeScript build info (`*.tsbuildinfo`)
-- Temporary files (`*.tmp`, `*.temp`, `*~`)
+## Примеры содержимого
 
-## Security Check
-
-The repository has been scanned for potential secrets:
-
-```bash
-git grep -n "SECRET\|API_KEY\|PASSWORD\|TOKEN"
-```
-
-✅ **No real secrets found** - only configuration variables and test passwords.
-
-## Quick Commands Reference
-
-```bash
-# Development
-make dev              # Start development environment
-make prod             # Start production environment
-make down             # Stop all services
-
-# Testing
-make test             # Run all tests
-make test-backend     # Run backend tests only
-make test-frontend    # Run frontend tests only
-
-# Git Operations
-make git-push MSG="message"  # Quick git add, commit, push
-make git-auto               # Auto commit with smart message
-
-# Maintenance
-make clean            # Clean up containers and volumes
-make clean-all        # Clean up everything including images
-```
-
-## Repository Status
-
-- **Repository**: https://github.com/EvgeniyBoldov/ml-portal
-- **Branch**: `main`
-- **Status**: ✅ Clean and secure
-- **Last cleanup**: Repository sanitized and optimized
+- **Python файлы**: Полный исходный код с комментариями и docstrings
+- **TypeScript файлы**: Полный исходный код с типами и интерфейсами
+- **Конфигурационные файлы**: Полное содержимое конфигураций

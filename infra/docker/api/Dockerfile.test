@@ -25,7 +25,7 @@ COPY apps/api/src/app/ ./app/
 COPY apps/api/alembic.ini ./
 
 # Копируем тесты
-COPY apps/api/tests/ ./tests/
+COPY apps/api/src/app/tests/ ./tests/
 
 # Создаем non-root пользователя
 RUN groupadd -r appuser && useradd -r -g appuser appuser

@@ -36,21 +36,10 @@ class BaseController(ABC):
         return datetime.now(timezone.utc)
     
     def _create_success_response(self, data: Any, message: Optional[str] = None, 
-                                request_id: Optional[str] = None) -> Dict[str, Any]:
-        """Create standardized success response"""
-        response = {
-            "success": True,
-            "data": data,
-            "timestamp": self._get_current_time().isoformat()
-        }
-        
-        if message:
-            response["message"] = message
-        
-        if request_id:
-            response["request_id"] = request_id
-        
-        return response
+                                request_id: Optional[str] = None) -> Any:
+        """Create success response - return data directly (no envelope)"""
+        # Return data directly as per contract - no envelope
+        return data
     
     def _create_error_response(self, error_code: str, message: str, 
                               details: Optional[Dict[str, Any]] = None,
@@ -86,34 +75,26 @@ class BaseController(ABC):
         
         self.logger.error(f"Controller error in {operation}: {error}", extra=error_data)
         
-        # Map common errors to HTTP status codes
+        # Map common errors to HTTP status codes - use Problem format
         if isinstance(error, ValueError):
             return HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=self._create_error_response(
-                    "validation_error", str(error), request_id=request_id
-                )
+                detail=str(error)  # Let middleware handle Problem format
             )
         elif isinstance(error, PermissionError):
             return HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=self._create_error_response(
-                    "access_denied", "Access denied", request_id=request_id
-                )
+                detail="Access denied"  # Let middleware handle Problem format
             )
         elif isinstance(error, FileNotFoundError):
             return HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=self._create_error_response(
-                    "not_found", "Resource not found", request_id=request_id
-                )
+                detail="Resource not found"  # Let middleware handle Problem format
             )
         else:
             return HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=self._create_error_response(
-                    "internal_error", "Internal server error", request_id=request_id
-                )
+                detail="Internal server error"  # Let middleware handle Problem format
             )
     
     def _validate_pagination_params(self, limit: int, offset: int) -> None:
@@ -173,21 +154,10 @@ class AsyncBaseController(ABC):
         return datetime.now(timezone.utc)
     
     def _create_success_response(self, data: Any, message: Optional[str] = None, 
-                                request_id: Optional[str] = None) -> Dict[str, Any]:
-        """Create standardized success response"""
-        response = {
-            "success": True,
-            "data": data,
-            "timestamp": self._get_current_time().isoformat()
-        }
-        
-        if message:
-            response["message"] = message
-        
-        if request_id:
-            response["request_id"] = request_id
-        
-        return response
+                                request_id: Optional[str] = None) -> Any:
+        """Create success response - return data directly (no envelope)"""
+        # Return data directly as per contract - no envelope
+        return data
     
     def _create_error_response(self, error_code: str, message: str, 
                               details: Optional[Dict[str, Any]] = None,
@@ -223,34 +193,26 @@ class AsyncBaseController(ABC):
         
         self.logger.error(f"Controller error in {operation}: {error}", extra=error_data)
         
-        # Map common errors to HTTP status codes
+        # Map common errors to HTTP status codes - use Problem format
         if isinstance(error, ValueError):
             return HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=self._create_error_response(
-                    "validation_error", str(error), request_id=request_id
-                )
+                detail=str(error)  # Let middleware handle Problem format
             )
         elif isinstance(error, PermissionError):
             return HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=self._create_error_response(
-                    "access_denied", "Access denied", request_id=request_id
-                )
+                detail="Access denied"  # Let middleware handle Problem format
             )
         elif isinstance(error, FileNotFoundError):
             return HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=self._create_error_response(
-                    "not_found", "Resource not found", request_id=request_id
-                )
+                detail="Resource not found"  # Let middleware handle Problem format
             )
         else:
             return HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=self._create_error_response(
-                    "internal_error", "Internal server error", request_id=request_id
-                )
+                detail="Internal server error"  # Let middleware handle Problem format
             )
     
     def _validate_pagination_params(self, limit: int, offset: int) -> None:

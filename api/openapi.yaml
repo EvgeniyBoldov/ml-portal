@@ -22,7 +22,7 @@ externalDocs:
   description: API usage notes
   url: https://example.invalid/docs  # replace in repo if needed
 paths:
-  /health:
+  /healthz:
     get:
       tags: [health]
       summary: Health check
@@ -35,7 +35,35 @@ paths:
                 type: object
                 properties:
                   status: { type: string, enum: [ok] }
+  /readyz:
+    get:
+      tags: [health]
+      summary: Readiness check
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, enum: [ok] }
+  /version:
+    get:
+      tags: [health]
+      summary: Version information
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
                   version: { type: string }
+                  commit: { type: string }
+                  build: { type: string }
+                  time: { type: string, format: date-time }
   /auth/login:
     post:
       tags: [auth]
@@ -87,6 +115,103 @@ paths:
                   token_type: { type: string, example: Bearer }
         '401':
           $ref: '#/components/responses/Error'
+  /auth/me:
+    get:
+      tags: [auth]
+      security:
+        - bearerAuth: []
+        - PAT: []
+      summary: Get current user
+      responses:
+        '200':
+          description: Current user
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+                  email: { type: string }
+                  role: { type: string }
+                  tenant_ids: { type: array, items: { type: string } }
+                  created_at: { type: string, format: date-time }
+        '401':
+          $ref: '#/components/responses/Error'
+  /auth/logout:
+    post:
+      tags: [auth]
+      security: [ { bearerAuth: [] } ]
+      summary: Logout user
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                refresh_token: { type: string }
+      responses:
+        '204':
+          description: Logged out
+  /tokens/pat:
+    get:
+      tags: [auth]
+      security: [ { bearerAuth: [] } ]
+      summary: List personal access tokens
+      responses:
+        '200':
+          description: List of PATs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id: { type: string }
+                    name: { type: string }
+                    created_at: { type: string, format: date-time }
+                    expires_at: { type: string, format: date-time }
+                    last_used_at: { type: string, format: date-time, nullable: true }
+    post:
+      tags: [auth]
+      security: [ { bearerAuth: [] } ]
+      summary: Create PAT
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, expires_at]
+              properties:
+                name: { type: string }
+                expires_at: { type: string, format: date-time }
+      responses:
+        '201':
+          description: PAT created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+                  name: { type: string }
+                  token: { type: string }
+                  created_at: { type: string, format: date-time }
+                  expires_at: { type: string, format: date-time }
+    delete:
+      tags: [auth]
+      security: [ { bearerAuth: [] } ]
+      summary: Revoke PAT
+      parameters:
+        - name: token_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '204':
+          description: PAT revoked
   /users/me:
     get:
       tags: [users]
@@ -361,6 +486,161 @@ paths:
             text/event-stream:
               schema:
                 type: string
+  /chats:
+    get:
+      tags: [chat]
+      security:
+        - bearerAuth: []
+        - PAT: []
+      summary: List chats
+      parameters:
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/cursor'
+      responses:
+        '200':
+          description: List of chats
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        chat_id: { type: string }
+                        title: { type: string }
+                        created_at: { type: string, format: date-time }
+                        updated_at: { type: string, format: date-time }
+                  next_cursor: { type: string, nullable: true }
+    post:
+      tags: [chat]
+      security:
+        - bearerAuth: []
+        - PAT: []
+      summary: Create chat
+      parameters:
+        - $ref: '#/components/parameters/Idempotency-Key'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title: { type: string }
+      responses:
+        '201':
+          description: Chat created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  chat_id: { type: string }
+                  title: { type: string }
+                  created_at: { type: string, format: date-time }
+                  updated_at: { type: string, format: date-time }
+  /chats/{chat_id}:
+    parameters:
+      - name: chat_id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      tags: [chat]
+      security:
+        - bearerAuth: []
+        - PAT: []
+      summary: Get chat
+      responses:
+        '200':
+          description: Chat details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  chat_id: { type: string }
+                  title: { type: string }
+                  created_at: { type: string, format: date-time }
+                  updated_at: { type: string, format: date-time }
+        '404':
+          $ref: '#/components/responses/Error'
+  /chats/{chat_id}/messages:
+    parameters:
+      - name: chat_id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      tags: [chat]
+      security:
+        - bearerAuth: []
+        - PAT: []
+      summary: List chat messages
+      parameters:
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/cursor'
+      responses:
+        '200':
+          description: List of messages
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string }
+                        role: { type: string, enum: [user, assistant, system] }
+                        content: { type: string }
+                        created_at: { type: string, format: date-time }
+                  next_cursor: { type: string, nullable: true }
+    post:
+      tags: [chat]
+      security:
+        - bearerAuth: []
+        - PAT: []
+      summary: Send message to chat
+      parameters:
+        - $ref: '#/components/parameters/Idempotency-Key'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [content]
+              properties:
+                content: { type: string }
+                params:
+                  type: object
+                  properties:
+                    max_tokens: { type: integer }
+                    temperature: { type: number }
+      responses:
+        '200':
+          description: Message response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+                  chat_id: { type: string }
+                  role: { type: string }
+                  content: { type: string }
+                  created_at: { type: string, format: date-time }
+        '200':
+          description: SSE stream
+          content:
+            text/event-stream:
+              schema: { type: string }
   /rag/sources:
     get:
       tags: [rag]
@@ -552,6 +832,129 @@ paths:
           content:
             text/event-stream:
               schema: { type: string }
+  /rag/upload:
+    post:
+      tags: [rag]
+      security: [ { bearerAuth: [] } ]
+      summary: Upload document for RAG
+      parameters:
+        - $ref: '#/components/parameters/X-Tenant-Id'
+        - $ref: '#/components/parameters/Idempotency-Key'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: { type: string, format: binary }
+                tags: { type: string }
+      responses:
+        '201':
+          description: Document uploaded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  source_id: { type: string }
+                  status: { type: string }
+                  tags: { type: array, items: { type: string } }
+  /rag/{source_id}/ingest:
+    parameters:
+      - name: source_id
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      tags: [rag]
+      security: [ { bearerAuth: [] } ]
+      summary: Start ingest pipeline
+      parameters:
+        - $ref: '#/components/parameters/X-Tenant-Id'
+        - $ref: '#/components/parameters/Idempotency-Key'
+      responses:
+        '202':
+          description: Ingest started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  job_id: { type: string }
+                  status: { type: string }
+  /rag/{source_id}/tags:
+    parameters:
+      - name: source_id
+        in: path
+        required: true
+        schema: { type: string }
+    put:
+      tags: [rag]
+      security: [ { bearerAuth: [] } ]
+      summary: Update source tags
+      parameters:
+        - $ref: '#/components/parameters/X-Tenant-Id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                tags: { type: array, items: { type: string } }
+      responses:
+        '200':
+          description: Tags updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+  /rag/{source_id}/reindex:
+    parameters:
+      - name: source_id
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      tags: [rag]
+      security: [ { bearerAuth: [] } ]
+      summary: Reindex source
+      parameters:
+        - $ref: '#/components/parameters/X-Tenant-Id'
+      responses:
+        '202':
+          description: Reindex started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  job_id: { type: string }
+                  status: { type: string }
+  /rag/{source_id}:
+    parameters:
+      - name: source_id
+        in: path
+        required: true
+        schema: { type: string }
+    delete:
+      tags: [rag]
+      security: [ { bearerAuth: [] } ]
+      summary: Delete source
+      parameters:
+        - $ref: '#/components/parameters/X-Tenant-Id'
+      responses:
+        '200':
+          description: Source deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  archived: { type: boolean }
   /analyze:
     post:
       tags: [analyze]
@@ -603,6 +1006,85 @@ paths:
           content:
             text/event-stream:
               schema: { type: string }
+  /analyze/upload:
+    post:
+      tags: [analyze]
+      security: [ { bearerAuth: [] } ]
+      summary: Upload document for analysis
+      parameters:
+        - $ref: '#/components/parameters/X-Tenant-Id'
+        - $ref: '#/components/parameters/Idempotency-Key'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        '201':
+          description: Document uploaded for analysis
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  analyze_id: { type: string }
+                  upload:
+                    type: object
+                    properties:
+                      url: { type: string }
+                      headers: { type: object }
+  /analyze/{analyze_id}/run:
+    parameters:
+      - name: analyze_id
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      tags: [analyze]
+      security: [ { bearerAuth: [] } ]
+      summary: Start analysis job
+      parameters:
+        - $ref: '#/components/parameters/X-Tenant-Id'
+      responses:
+        '202':
+          description: Analysis started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  job_id: { type: string }
+                  status: { type: string }
+  /analyze/{analyze_id}:
+    parameters:
+      - name: analyze_id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      tags: [analyze]
+      security: [ { bearerAuth: [] } ]
+      summary: Get analysis status
+      parameters:
+        - $ref: '#/components/parameters/X-Tenant-Id'
+      responses:
+        '200':
+          description: Analysis status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  analyze_id: { type: string }
+                  status: { type: string, enum: [ready, processing, failed] }
+                  artifact:
+                    type: object
+                    properties:
+                      url: { type: string }
+                      expires_at: { type: string, format: date-time }
   /jobs:
     post:
       tags: [jobs]
@@ -626,6 +1108,38 @@ paths:
                 type: object
                 properties:
                   job_id: { type: string }
+  /jobs:
+    get:
+      tags: [jobs]
+      security: [ { bearerAuth: [] } ]
+      summary: List jobs
+      parameters:
+        - name: status
+          in: query
+          schema: { type: string, enum: [running, queued, failed] }
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/cursor'
+        - $ref: '#/components/parameters/X-Tenant-Id'
+      responses:
+        '200':
+          description: List of jobs
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        job_id: { type: string }
+                        type: { type: string, enum: [ingest, analyze, reindex] }
+                        status: { type: string, enum: [running, queued, failed] }
+                        progress: { type: number }
+                        created_at: { type: string, format: date-time }
+                        updated_at: { type: string, format: date-time }
+                  next_cursor: { type: string, nullable: true }
   /jobs/{job_id}:
     parameters:
       - $ref: '#/components/parameters/job_id'
@@ -640,6 +1154,40 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Job' }
+    post:
+      tags: [jobs]
+      security: [ { bearerAuth: [] } ]
+      summary: Cancel job
+      parameters:
+        - $ref: '#/components/parameters/X-Tenant-Id'
+      responses:
+        '200':
+          description: Job canceled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string }
+        '409':
+          $ref: '#/components/responses/Error'
+  /jobs/{job_id}/retry:
+    parameters:
+      - $ref: '#/components/parameters/job_id'
+      - $ref: '#/components/parameters/X-Tenant-Id'
+    post:
+      tags: [jobs]
+      security: [ { bearerAuth: [] } ]
+      summary: Retry job
+      responses:
+        '202':
+          description: Job retried
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string }
   /artifacts/{artifact_id}:
     parameters:
       - $ref: '#/components/parameters/artifact_id'
@@ -659,6 +1207,54 @@ paths:
                 type: object
                 properties:
                   uri: { type: string }
+  /admin/status:
+    get:
+      tags: [admin]
+      security: [ { bearerAuth: [] } ]
+      summary: Get system status
+      responses:
+        '200':
+          description: System status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  services:
+                    type: object
+                    properties:
+                      api: { type: string }
+                      workers: { type: string }
+                      qdrant: { type: string }
+                      minio: { type: string }
+                  metrics:
+                    type: object
+                    properties:
+                      sse_active: { type: integer }
+                      queue_depth: { type: integer }
+  /admin/mode:
+    post:
+      tags: [admin]
+      security: [ { bearerAuth: [] } ]
+      summary: Set maintenance mode
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                readonly: { type: boolean }
+                message: { type: string }
+      responses:
+        '200':
+          description: Mode set
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
 components:
   securitySchemes:
     bearerAuth:

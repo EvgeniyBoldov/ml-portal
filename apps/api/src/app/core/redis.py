@@ -4,8 +4,8 @@ import json
 import pickle
 from redis.asyncio import Redis
 from redis import Redis as SyncRedis
-from .config import settings
-from .logging import get_logger
+from app.core.config import settings
+from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -109,6 +109,10 @@ def get_redis() -> Redis:
 def get_sync_redis() -> SyncRedis:
     """Get sync Redis client"""
     return redis_manager.get_sync_redis()
+
+def get_async_redis() -> Redis:
+    """Get async Redis client"""
+    return redis_manager.get_async_redis()
 
 # Utility functions for common Redis operations
 class RedisUtils:

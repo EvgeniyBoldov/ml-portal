@@ -5,8 +5,8 @@ from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.pool import StaticPool
-from .config import settings
-from .logging import get_logger
+from app.core.config import settings
+from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -28,24 +28,44 @@ SessionLocal = sessionmaker(
     future=True
 )
 
-# Async engine and session
-async_engine = create_async_engine(
-    settings.DB_URL.replace("postgresql://", "postgresql+asyncpg://"),
-    pool_pre_ping=True,
-    future=True,
-    pool_size=10,
-    max_overflow=20,
-    pool_recycle=3600,
-    echo=False
-)
+# Async engine and session (lazy initialization)
+async_engine = None
+AsyncSessionLocal = None
 
-AsyncSessionLocal = async_sessionmaker(
-    bind=async_engine,
-    autoflush=False,
-    autocommit=False,
-    future=True,
-    class_=AsyncSession
-)
+def get_async_engine():
+    """Get async engine with lazy initialization"""
+    global async_engine
+    if async_engine is None:
+        try:
+            async_engine = create_async_engine(
+                settings.ASYNC_DB_URL,
+                pool_pre_ping=True,
+                future=True,
+                pool_size=10,
+                max_overflow=20,
+                pool_recycle=3600,
+                echo=False
+            )
+        except Exception as e:
+            logger.warning(f"Failed to create async engine: {e}")
+            # Fallback to sync engine for development
+            return None
+    return async_engine
+
+def get_async_session_local():
+    """Get async session maker with lazy initialization"""
+    global AsyncSessionLocal
+    if AsyncSessionLocal is None:
+        engine = get_async_engine()
+        if engine:
+            AsyncSessionLocal = async_sessionmaker(
+                bind=engine,
+                autoflush=False,
+                autocommit=False,
+                future=True,
+                class_=AsyncSession
+            )
+    return AsyncSessionLocal
 
 # Connection event listeners
 @event.listens_for(engine, "connect")
@@ -61,9 +81,9 @@ class DatabaseManager:
     
     def __init__(self):
         self._engine = engine
-        self._async_engine = async_engine
+        self._async_engine = None  # Lazy initialization
         self._session_factory = SessionLocal
-        self._async_session_factory = AsyncSessionLocal
+        self._async_session_factory = None  # Lazy initialization
     
     def get_session(self) -> Generator[Session, None, None]:
         """Get sync database session (FastAPI dependency)"""
@@ -80,6 +100,12 @@ class DatabaseManager:
     
     async def get_async_session(self) -> AsyncGenerator[AsyncSession, None]:
         """Get async database session (FastAPI dependency)"""
+        if self._async_session_factory is None:
+            self._async_session_factory = get_async_session_local()
+        
+        if self._async_session_factory is None:
+            raise RuntimeError("Async database not available")
+        
         async with self._async_session_factory() as session:
             try:
                 yield session
@@ -106,6 +132,12 @@ class DatabaseManager:
     @asynccontextmanager
     async def async_session_scope(self) -> AsyncGenerator[AsyncSession, None]:
         """Provide a transactional scope around a series of operations (async)"""
+        if self._async_session_factory is None:
+            self._async_session_factory = get_async_session_local()
+        
+        if self._async_session_factory is None:
+            raise RuntimeError("Async database not available")
+        
         async with self._async_session_factory() as session:
             try:
                 yield session

@@ -2,6 +2,7 @@ from __future__ import annotations
 from sqlalchemy.orm import DeclarativeBase, declared_attr, Mapped, mapped_column
 from sqlalchemy import MetaData, func
 from datetime import datetime
+from pydantic import BaseModel
 
 # Naming convention for Alembic-friendly constraints
 metadata = MetaData(

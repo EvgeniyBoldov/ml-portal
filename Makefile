@@ -1,6 +1,6 @@
 # ML Portal Makefile
 
-.PHONY: help build up down test test-backend test-frontend test-frontend-local test-frontend-watch test-frontend-e2e test-frontend-type-check build-frontend install-frontend test-functional test-all test-build test-run clean clean-all logs git-push git-auto
+.PHONY: help build up down test test-backend test-frontend test-frontend-local test-frontend-watch test-frontend-e2e test-frontend-type-check build-frontend install-frontend test-functional test-all test-build test-run clean clean-all logs git-push git-auto gen-all
 
 # Default target
 help:
@@ -35,6 +35,9 @@ help:
 	@echo "Git:"
 	@echo "  git-push MSG   - Quick git add, commit and push (MSG=commit message)"
 	@echo "  git-auto       - Auto commit with smart message based on changes"
+	@echo ""
+	@echo "Documentation:"
+	@echo "  gen-all        - Generate code documentation files (backend, frontend, infrastructure)"
 
 # Build all images
 build:
@@ -161,3 +164,13 @@ git-auto:
 	@echo "🤖 Auto Git Commit..."
 	@./scripts/git-auto-commit.sh
 	@ git push
+
+# Generate code documentation
+gen-all:
+	@echo "📚 Генерация документации кода..."
+	@python3 scripts/generate-code-docs.py
+	@echo "✅ Документация создана в корне проекта:"
+	@echo "   - code-docs-backend.txt"
+	@echo "   - code-docs-tests.txt"
+	@echo "   - code-docs-frontend.txt" 
+	@echo "   - code-docs-infrastructure.txt"

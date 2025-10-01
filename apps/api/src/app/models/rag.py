@@ -3,6 +3,7 @@ RAG Document Model
 """
 from sqlalchemy import Column, String, DateTime, Integer, JSON, Text, Index
 from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import Mapped, mapped_column
 from datetime import datetime, timezone
 import uuid
 
@@ -13,13 +14,13 @@ class RAGDocument(Base):
     """RAG документ"""
     __tablename__ = "rag_documents"
     
-    id = Column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()))
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     filename = Column(String(255), nullable=False)
     title = Column(String(255), nullable=False)
     status = Column(String(50), nullable=False, default="uploading")  # uploading, processing, processed, failed, archived
     
     # Метаданные
-    user_id = Column(UUID(as_uuid=False), nullable=False, index=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
     content_type = Column(String(100), nullable=True)
     size = Column(Integer, nullable=True)  # Размер в байтах
     tags = Column(JSON, nullable=True, default=list)  # Список тегов
@@ -70,8 +71,8 @@ class RAGChunk(Base):
     """RAG чанк документа"""
     __tablename__ = "rag_chunks"
     
-    id = Column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()))
-    document_id = Column(UUID(as_uuid=False), nullable=False, index=True)
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    document_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
     content = Column(Text, nullable=False)
     chunk_index = Column(Integer, nullable=False, default=0)
     

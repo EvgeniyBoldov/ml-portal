@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from fastapi import Request
 
 from app.models.user import AuditLogs
-from app.api.schemas.users import AuditAction
+from app.schemas.users import AuditAction
 
 
 class AuditService:

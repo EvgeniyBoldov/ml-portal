@@ -15,7 +15,7 @@ class Users(Base):
     __tablename__ = "users"
 
     __table_args__ = (
-        CheckConstraint("role IN ('admin', 'editor', 'reader', 'user')", name="ck_users_role"),
+        CheckConstraint("role IN ('admin', 'editor', 'reader')", name="ck_users_role"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

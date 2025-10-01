@@ -1,44 +1,43 @@
-# Consolidated FastAPI entrypoint: routers-only, no controllers imports.
 from __future__ import annotations
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+from app.api.v1.router import router as v1_router
+from app.core.middleware import RequestIDMiddleware
+from app.core.middleware_rate_limit_headers import RateLimitHeadersMiddleware
+from app.core.exception_handlers import setup_exception_handlers
+from app.core.metrics import MetricsMiddleware, mount_metrics_endpoint
+from app.core.di import cleanup_clients
+from app.core.config import settings
 
-app = FastAPI(title="ML-Portal API")
+def create_app() -> FastAPI:
+    app = FastAPI(title="ml-portal api")
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+    # Middlewares
+    app.add_middleware(RequestIDMiddleware)
+    app.add_middleware(RateLimitHeadersMiddleware)
+    app.add_middleware(MetricsMiddleware)
 
-@app.get("/health")
-def health():
-    return {"status": "ok", "version": "v1"}
+    # Routers
+    app.include_router(v1_router, prefix="")
 
-try:
-    from prometheus_fastapi_instrumentator import Instrumentator  # type: ignore
-    Instrumentator().instrument(app).expose(app)
-except Exception:
-    pass
+    # Exception handlers -> ProblemDetails JSON
+    setup_exception_handlers(app)
 
-def _include_router_safe(module_path: str, attr: str = "router", prefix: str | None = None) -> None:
-    try:
-        module = __import__(module_path, fromlist=[attr])
-        router = getattr(module, attr, None)
-        if router is not None:
-            if prefix:
-                app.include_router(router, prefix=prefix)
-            else:
-                app.include_router(router)
-    except Exception as e:
-        print(f"[main] skip {module_path}: {e}")
+    # /metrics endpoint (Prometheus)
+    mount_metrics_endpoint(app, path="/metrics")
 
-# Routers only
-_include_router_safe("app.api.routers.auth")
-_include_router_safe("app.api.routers.admin")
-_include_router_safe("app.api.routers.chats")
-_include_router_safe("app.api.routers.rag")
-_include_router_safe("app.api.routers.analyze")
-_include_router_safe("app.api.routers.users")
+    # Shutdown cleanup
+    @app.on_event("shutdown")
+    async def _shutdown():
+        await cleanup_clients()
+
+    # Optional: debug-only routes hook (only if such function exists)
+    if getattr(settings, "DEBUG", False):
+        try:
+            from app.core.debug_routes import setup_debug_routes  # type: ignore
+            setup_debug_routes(app)  # only if implemented in your codebase
+        except Exception:
+            pass
+
+    return app
+
+app = create_app()

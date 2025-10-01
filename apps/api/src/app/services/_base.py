@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
-from app.repositories._base import BaseRepository, AsyncBaseRepository
+from app.repositories.base import TenantRepository, AsyncTenantRepository
 
 logger = get_logger(__name__)
 
