@@ -2,398 +2,423 @@ from __future__ import annotations
 from typing import Optional, List, Dict, Any, Tuple
 from sqlalchemy.orm import Session
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, and_, or_, desc
+from sqlalchemy import select, func, and_, or_, desc, tuple_
 from datetime import datetime, timezone
 import uuid
+import base64
+import json
 
 from app.models.user import Users, UserTokens, UserRefreshTokens, PasswordResetTokens, AuditLogs
-from app.repositories.base import TenantRepository, AsyncTenantRepository, Repository, AsyncRepository
+from app.models.tenant import UserTenants, Tenants
+from app.repositories.base import Repository, AsyncRepository
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
-class UsersRepository(TenantRepository[Users]):
-    """Enhanced users repository with comprehensive user management"""
+
+class UsersRepository(Repository[Users]):
+    """Users repository without tenant isolation - handles M2M tenant relationships"""
     
-    def __init__(self, session: Session, tenant_id: uuid.UUID, user_id: Optional[uuid.UUID] = None):
-        super().__init__(session, Users, tenant_id, user_id)
+    def __init__(self, session: Session):
+        super().__init__(session, Users)
     
-    def execute(self, query):
-        """Execute a query"""
-        return self.session.execute(query)
-    
-    def add(self, instance):
-        """Add instance to session"""
-        self.session.add(instance)
-    
-    def rollback(self):
-        """Rollback session"""
-        self.session.rollback()
-    
-    def commit(self):
-        """Commit session"""
-        self.session.commit()
-    
-    def flush(self):
-        """Flush session"""
-        self.session.flush()
-    
-    def refresh(self, instance):
-        """Refresh instance"""
-        self.session.refresh(instance)
-    
-    def get(self, user_id: str) -> Optional[Users]:
-        """Get user by ID"""
-        return self.get_by_id(user_id)
-    
-    def get_by_login(self, login: str) -> Optional[Users]:
-        """Get user by login"""
-        return self.get_by_field('login', login)
-    
-    def get_by_email(self, email: str) -> Optional[Users]:
-        """Get user by email"""
-        return self.get_by_field('email', email)
-    
-    def by_login(self, login: str) -> Optional[Users]:
-        """Get user by login (alias for get_by_login)"""
-        return self.get_by_login(login)
-    
-    def by_email(self, email: str) -> Optional[Users]:
-        """Get user by email (alias for get_by_email)"""
-        return self.get_by_email(email)
-    
-    def get_active_users(self) -> List[Users]:
-        """Get all active users"""
-        return self.list(filters={'is_active': True})
-    
-    def get_users_by_role(self, role: str) -> List[Users]:
-        """Get users by role"""
-        return self.list(filters={'role': role})
-    
-    def search_users(self, query: str, limit: int = 50) -> List[Users]:
-        """Search users by login or email"""
-        return self.search(query, ['login', 'email'], limit)
-    
-    def create_user(self, login: str, password_hash: str, role: str = "reader",
-                   email: Optional[str] = None, is_active: bool = True) -> Users:
-        """Create a new user with validation"""
-        # Check if user already exists
-        if self.get_by_login(login):
-            raise ValueError(f"User with login '{login}' already exists")
+    def add_to_tenant(self, user_id: uuid.UUID, tenant_id: uuid.UUID, is_default: bool = False) -> UserTenants:
+        """Add user to tenant"""
+        # If setting as default, unset other defaults for this user
+        if is_default:
+            existing_defaults = self.session.execute(
+                select(UserTenants).where(
+                    and_(
+                        UserTenants.user_id == user_id,
+                        UserTenants.is_default == True
+                    )
+                )
+            ).scalars().all()
+            for ut in existing_defaults:
+                ut.is_default = False
         
-        if email and self.get_by_email(email):
-            raise ValueError(f"User with email '{email}' already exists")
-        
-        return self.create(
-            login=login,
-            password_hash=password_hash,
-            role=role,
-            email=email,
-            is_active=is_active
+        # Create new user-tenant link
+        user_tenant = UserTenants(
+            user_id=user_id,
+            tenant_id=tenant_id,
+            is_default=is_default
         )
+        self.session.add(user_tenant)
+        self.session.flush()
+        return user_tenant
     
-    def update_user_role(self, user_id: str, role: str) -> Optional[Users]:
-        """Update user role"""
-        return self.update(user_id, role=role)
-    
-    def deactivate_user(self, user_id: str) -> Optional[Users]:
-        """Deactivate user"""
-        return self.update(user_id, is_active=False)
-    
-    def activate_user(self, user_id: str) -> Optional[Users]:
-        """Activate user"""
-        return self.update(user_id, is_active=True)
-    
-    def change_password(self, user_id: str, new_password_hash: str) -> Optional[Users]:
-        """Change user password"""
-        return self.update(user_id, password_hash=new_password_hash)
-    
-    def update_user(self, user_id: str, **kwargs) -> Optional[Users]:
-        """Update an existing user."""
-        return self.update(user_id, **kwargs)
-    
-    def list_users_paginated(self, query: Optional[str] = None, role: Optional[str] = None,
-                            is_active: Optional[bool] = None, limit: int = 50,
-                            cursor: Optional[str] = None) -> Tuple[List[Users], bool, Optional[str]]:
-        """List users with pagination and filters"""
-        filters = {}
-        if role:
-            filters['role'] = role
-        if is_active is not None:
-            filters['is_active'] = is_active
+    def set_default_tenant(self, user_id: uuid.UUID, tenant_id: uuid.UUID) -> None:
+        """Set default tenant for user (unset others)"""
+        # Unset all current defaults
+        self.session.execute(
+            select(UserTenants).where(
+                and_(
+                    UserTenants.user_id == user_id,
+                    UserTenants.is_default == True
+                )
+            )
+        ).scalars().all()
+        for ut in self.session.execute(
+            select(UserTenants).where(
+                and_(
+                    UserTenants.user_id == user_id,
+                    UserTenants.is_default == True
+                )
+            )
+        ).scalars().all():
+            ut.is_default = False
         
-        # Apply text search
-        if query:
-            users = self.search(query, ['login', 'email'], limit + 1)
+        # Set new default
+        user_tenant = self.session.execute(
+            select(UserTenants).where(
+                and_(
+                    UserTenants.user_id == user_id,
+                    UserTenants.tenant_id == tenant_id
+                )
+            )
+        ).scalar_one_or_none()
+        
+        if user_tenant:
+            user_tenant.is_default = True
         else:
-            users = self.list(filters=filters, limit=limit + 1)
+            # Create link if it doesn't exist
+            self.add_to_tenant(user_id, tenant_id, is_default=True)
+    
+    def get_default_tenant(self, user_id: uuid.UUID) -> Optional[uuid.UUID]:
+        """Get default tenant for user"""
+        user_tenant = self.session.execute(
+            select(UserTenants).where(
+                and_(
+                    UserTenants.user_id == user_id,
+                    UserTenants.is_default == True
+                )
+            )
+        ).scalar_one_or_none()
         
-        has_more = len(users) > limit
-        if has_more:
-            users = users[:-1]
-            next_cursor = users[-1].created_at.isoformat() if users else None
-        else:
-            next_cursor = None
+        return user_tenant.tenant_id if user_tenant else None
+    
+    def list_by_tenant(self, tenant_id: uuid.UUID, *, limit: int = 50, cursor: Optional[str] = None) -> Tuple[List[Users], Optional[str]]:
+        """List users by tenant with seek-based pagination"""
+        # Validate limit
+        if not (1 <= limit <= 100):
+            raise ValueError("limit_out_of_range")
         
-        return users, has_more, next_cursor
-    
-    def count_users(self, query: Optional[str] = None, role: Optional[str] = None,
-                   is_active: Optional[bool] = None) -> int:
-        """Count users with filters"""
-        filters = {}
-        if role:
-            filters['role'] = role
-        if is_active is not None:
-            filters['is_active'] = is_active
+        # Build query with join to user_tenants
+        query = (
+            select(Users)
+            .join(UserTenants, Users.id == UserTenants.user_id)
+            .where(UserTenants.tenant_id == tenant_id)
+            .order_by(desc(Users.created_at), desc(Users.id))
+            .limit(limit + 1)  # Get one extra to determine if there's a next page
+        )
         
-        # Apply text search
-        if query:
-            users = self.search(query, ['login', 'email'], limit=1000)
-            return len(users)
-        else:
-            return len(self.list(filters=filters))
+        # Apply cursor filter if provided
+        if cursor:
+            try:
+                cursor_data = self._decode_cursor(cursor)
+                query = query.where(
+                    tuple_(Users.created_at, Users.id) < (cursor_data["created_at"], cursor_data["id"])
+                )
+            except Exception:
+                raise ValueError("invalid_cursor")
+        
+        # Execute query
+        results = self.session.execute(query).scalars().all()
+        
+        # Determine pagination
+        has_next = len(results) > limit
+        if has_next:
+            results = results[:limit]  # Remove the extra item
+        
+        # Generate next cursor
+        next_cursor = None
+        if has_next and results:
+            last_user = results[-1]
+            next_cursor = self._encode_cursor({
+                "created_at": last_user.created_at.isoformat(),
+                "id": str(last_user.id)
+            })
+        
+        return results, next_cursor
     
-    # Token management methods
-    def create_token(self, user_id: str, token_hash: str, name: str,
-                    scopes: Optional[List[str]] = None, expires_at: Optional[datetime] = None) -> UserTokens:
-        """Create a new PAT token"""
-        token_repo = UserTokensRepository(self.session)
-        return token_repo.create_token(user_id, token_hash, name, scopes, expires_at)
+    def _encode_cursor(self, data: Dict[str, Any]) -> str:
+        """Encode cursor data to base64 JSON string"""
+        json_str = json.dumps(data)
+        return base64.b64encode(json_str.encode()).decode()
     
-    def list_user_tokens(self, user_id: str, include_revoked: bool = False) -> List[UserTokens]:
-        """Get all tokens for a user"""
-        token_repo = UserTokensRepository(self.session)
-        return token_repo.get_user_tokens(user_id, include_revoked)
+    def _decode_cursor(self, cursor: str) -> Dict[str, Any]:
+        """Decode cursor from base64 JSON string"""
+        try:
+            json_str = base64.b64decode(cursor.encode()).decode()
+            data = json.loads(json_str)
+            
+            # Validate required fields
+            if "id" not in data or "created_at" not in data:
+                raise ValueError("invalid_cursor")
+            
+            # Convert string UUID back to UUID object
+            data["id"] = uuid.UUID(data["id"])
+            
+            # Convert ISO string back to datetime
+            data["created_at"] = datetime.fromisoformat(data["created_at"].replace('Z', '+00:00'))
+            
+            return data
+        except Exception as e:
+            raise ValueError("invalid_cursor") from e
     
-    def revoke_token(self, token_id: str) -> bool:
-        """Revoke a token"""
-        token_repo = UserTokensRepository(self.session)
-        return token_repo.revoke_token(token_id)
+    def is_user_in_tenant(self, user_id: uuid.UUID, tenant_id: uuid.UUID) -> bool:
+        """Check if user belongs to tenant"""
+        result = self.session.execute(
+            select(UserTenants).where(
+                and_(
+                    UserTenants.user_id == user_id,
+                    UserTenants.tenant_id == tenant_id
+                )
+            )
+        ).scalar_one_or_none()
+        
+        return result is not None
     
-    # Audit logs methods
-    def create_audit_log(self, actor_user_id: str, action: str, object_type: str, object_id: str, 
-                        meta: dict, ip: str, user_agent: str, request_id: str) -> AuditLogs:
-        """Create an audit log entry"""
-        audit_repo = AuditLogsRepository(self.session)
-        return audit_repo.create_log(actor_user_id, action, object_type, object_id, meta, ip, user_agent, request_id)
+    def get_user_tenants(self, user_id: uuid.UUID) -> List[Tenants]:
+        """Get all tenants for a user"""
+        result = self.session.execute(
+            select(Tenants)
+            .join(UserTenants, Tenants.id == UserTenants.tenant_id)
+            .where(UserTenants.user_id == user_id)
+        ).scalars().all()
+        
+        return result
     
-    def list_audit_logs(self, skip: int = 0, limit: int = 100, user_id: Optional[str] = None,
-                        action: Optional[str] = None, object_type: Optional[str] = None) -> List[AuditLogs]:
-        """List audit logs with pagination and filters"""
-        audit_repo = AuditLogsRepository(self.session)
-        logs, _, _ = audit_repo.get_logs_paginated(user_id, action, object_type, limit, None)
-        return logs
+    def remove_from_tenant(self, user_id: uuid.UUID, tenant_id: uuid.UUID) -> bool:
+        """Remove user from tenant"""
+        user_tenant = self.session.execute(
+            select(UserTenants).where(
+                and_(
+                    UserTenants.user_id == user_id,
+                    UserTenants.tenant_id == tenant_id
+                )
+            )
+        ).scalar_one_or_none()
+        
+        if user_tenant:
+            self.session.delete(user_tenant)
+            return True
+        return False
 
 
 class UserTokensRepository(Repository[UserTokens]):
-    """User tokens repository"""
+    """Repository for user tokens"""
     
     def __init__(self, session: Session):
         super().__init__(session, UserTokens)
-    
-    def get_by_hash(self, token_hash: str) -> Optional[UserTokens]:
-        """Get token by hash"""
-        return self.get_by_field('token_hash', token_hash)
-    
-    def get_user_tokens(self, user_id: str, include_revoked: bool = False) -> List[UserTokens]:
-        """Get all tokens for a user"""
-        filters = {'user_id': user_id}
-        if not include_revoked:
-            filters['revoked_at'] = None
-        return self.list(filters=filters, order_by='-created_at')
-    
-    def create_token(self, user_id: str, token_hash: str, name: str,
-                    scopes: Optional[List[str]] = None, expires_at: Optional[datetime] = None) -> UserTokens:
-        """Create a new PAT token"""
-        return self.create(
-            user_id=user_id,
-            token_hash=token_hash,
-            name=name,
-            scopes=scopes,
-            expires_at=expires_at
-        )
-    
-    def revoke_token(self, token_id: str) -> bool:
-        """Revoke a token"""
-        return self.update(token_id, revoked_at=datetime.now(timezone.utc)) is not None
-    
-    def is_token_valid(self, token_hash: str) -> bool:
-        """Check if token is valid (not revoked and not expired)"""
-        token = self.get_by_hash(token_hash)
-        if not token:
-            return False
-        
-        if token.revoked_at:
-            return False
-        
-        if token.expires_at and token.expires_at < datetime.now(timezone.utc):
-            return False
-        
-        return True
 
 
 class UserRefreshTokensRepository(Repository[UserRefreshTokens]):
-    """User refresh tokens repository"""
+    """Repository for user refresh tokens"""
     
     def __init__(self, session: Session):
         super().__init__(session, UserRefreshTokens)
-    """Repository for user refresh tokens"""
-    
-    def __init__(self, session: Session, tenant_id: uuid.UUID, user_id: Optional[uuid.UUID] = None):
-        super().__init__(session, UserRefreshTokens, tenant_id, user_id)
-    
-    def get_by_hash(self, refresh_hash: str) -> Optional[UserRefreshTokens]:
-        """Get refresh token by hash"""
-        return self.get_by_field('refresh_hash', refresh_hash)
-    
-    def create_refresh_token(self, user_id: str, refresh_hash: str, expires_at: datetime) -> UserRefreshTokens:
-        """Create a new refresh token"""
-        return self.create(
-            user_id=user_id,
-            refresh_hash=refresh_hash,
-            expires_at=expires_at
-        )
-    
-    def revoke_token(self, refresh_hash: str) -> bool:
-        """Revoke a refresh token"""
-        return self.update(refresh_hash, revoked=True) is not None
-    
-    def is_token_valid(self, refresh_hash: str) -> bool:
-        """Check if refresh token is valid"""
-        token = self.get_by_hash(refresh_hash)
-        if not token:
-            return False
-        
-        if token.revoked:
-            return False
-        
-        if token.expires_at < datetime.now(timezone.utc):
-            return False
-        
-        return True
 
 
 class PasswordResetTokensRepository(Repository[PasswordResetTokens]):
-    """Password reset tokens repository"""
+    """Repository for password reset tokens"""
     
     def __init__(self, session: Session):
         super().__init__(session, PasswordResetTokens)
-    """Repository for password reset tokens"""
-    
-    def __init__(self, session: Session, tenant_id: uuid.UUID, user_id: Optional[uuid.UUID] = None):
-        super().__init__(session, PasswordResetTokens, tenant_id, user_id)
-    
-    def get_by_hash(self, token_hash: str) -> Optional[PasswordResetTokens]:
-        """Get password reset token by hash"""
-        token = self.get_by_field('token_hash', token_hash)
-        if not token:
-            return None
-        
-        # Check if token is expired or already used
-        if token.used_at or token.expires_at < datetime.now(timezone.utc):
-            return None
-        
-        return token
-    
-    def create_token(self, user_id: str, token_hash: str, expires_at: datetime) -> PasswordResetTokens:
-        """Create a password reset token"""
-        return self.create(
-            user_id=user_id,
-            token_hash=token_hash,
-            expires_at=expires_at
-        )
-    
-    def use_token(self, token_hash: str) -> bool:
-        """Mark token as used"""
-        return self.update(token_hash, used_at=datetime.now(timezone.utc)) is not None
 
 
 class AuditLogsRepository(Repository[AuditLogs]):
-    """Audit logs repository"""
+    """Repository for audit logs"""
     
     def __init__(self, session: Session):
         super().__init__(session, AuditLogs)
-    """Repository for audit logs"""
-    
-    def __init__(self, session: Session, tenant_id: uuid.UUID, user_id: Optional[uuid.UUID] = None):
-        super().__init__(session, AuditLogs, tenant_id, user_id)
-    
-    def create_log(self, actor_user_id: Optional[str], action: str,
-                  object_type: Optional[str] = None, object_id: Optional[str] = None,
-                  meta: Optional[Dict[str, Any]] = None, ip: Optional[str] = None,
-                  user_agent: Optional[str] = None, request_id: Optional[str] = None) -> AuditLogs:
-        """Create an audit log entry"""
-        return self.create(
-            actor_user_id=actor_user_id,
-            action=action,
-            object_type=object_type,
-            object_id=object_id,
-            meta=meta,
-            ip=ip,
-            user_agent=user_agent,
-            request_id=request_id
-        )
-    
-    def get_logs_paginated(self, actor_user_id: Optional[str] = None, action: Optional[str] = None,
-                          object_type: Optional[str] = None, limit: int = 50,
-                          cursor: Optional[str] = None) -> Tuple[List[AuditLogs], bool, Optional[str]]:
-        """Get audit logs with pagination"""
-        filters = {}
-        if actor_user_id:
-            filters['actor_user_id'] = actor_user_id
-        if action:
-            filters['action'] = action
-        if object_type:
-            filters['object_type'] = object_type
-        
-        logs = self.list(filters=filters, order_by='-ts', limit=limit + 1)
-        
-        has_more = len(logs) > limit
-        if has_more:
-            logs = logs[:-1]
-            next_cursor = logs[-1].ts.isoformat() if logs else None
-        else:
-            next_cursor = None
-        
-        return logs, has_more, next_cursor
 
 
-# Async versions
 class AsyncUsersRepository(AsyncRepository[Users]):
     """Async users repository"""
     
     def __init__(self, session: AsyncSession):
         super().__init__(session, Users)
     
-    async def get_by_login(self, login: str) -> Optional[Users]:
-        """Get user by login"""
-        return await self.get_by_field('login', login)
-    
-    async def get_by_email(self, email: str) -> Optional[Users]:
-        """Get user by email"""
-        return await self.get_by_field('email', email)
-    
-    async def get_active_users(self) -> List[Users]:
-        """Get all active users"""
-        return await self.list(filters={'is_active': True})
-    
-    async def create_user(self, login: str, password_hash: str, role: str = "reader",
-                         email: Optional[str] = None, is_active: bool = True) -> Users:
-        """Create a new user with validation"""
-        # Check if user already exists
-        if await self.get_by_login(login):
-            raise ValueError(f"User with login '{login}' already exists")
+    async def add_to_tenant(self, user_id: uuid.UUID, tenant_id: uuid.UUID, is_default: bool = False) -> UserTenants:
+        """Add user to tenant"""
+        # If setting as default, unset other defaults for this user
+        if is_default:
+            existing_defaults = await self.session.execute(
+                select(UserTenants).where(
+                    and_(
+                        UserTenants.user_id == user_id,
+                        UserTenants.is_default == True
+                    )
+                )
+            )
+            for ut in existing_defaults.scalars().all():
+                ut.is_default = False
         
-        if email and await self.get_by_email(email):
-            raise ValueError(f"User with email '{email}' already exists")
-        
-        return await self.create(
-            login=login,
-            password_hash=password_hash,
-            role=role,
-            email=email,
-            is_active=is_active
+        # Create new user-tenant link
+        user_tenant = UserTenants(
+            user_id=user_id,
+            tenant_id=tenant_id,
+            is_default=is_default
         )
+        self.session.add(user_tenant)
+        await self.session.flush()
+        return user_tenant
+    
+    async def set_default_tenant(self, user_id: uuid.UUID, tenant_id: uuid.UUID) -> None:
+        """Set default tenant for user (unset others)"""
+        # Unset all current defaults
+        existing_defaults = await self.session.execute(
+            select(UserTenants).where(
+                and_(
+                    UserTenants.user_id == user_id,
+                    UserTenants.is_default == True
+                )
+            )
+        )
+        for ut in existing_defaults.scalars().all():
+            ut.is_default = False
+        
+        # Set new default
+        user_tenant_result = await self.session.execute(
+            select(UserTenants).where(
+                and_(
+                    UserTenants.user_id == user_id,
+                    UserTenants.tenant_id == tenant_id
+                )
+            )
+        )
+        user_tenant = user_tenant_result.scalar_one_or_none()
+        
+        if user_tenant:
+            user_tenant.is_default = True
+        else:
+            # Create link if it doesn't exist
+            await self.add_to_tenant(user_id, tenant_id, is_default=True)
+    
+    async def get_default_tenant(self, user_id: uuid.UUID) -> Optional[uuid.UUID]:
+        """Get default tenant for user"""
+        result = await self.session.execute(
+            select(UserTenants).where(
+                and_(
+                    UserTenants.user_id == user_id,
+                    UserTenants.is_default == True
+                )
+            )
+        )
+        user_tenant = result.scalar_one_or_none()
+        
+        return user_tenant.tenant_id if user_tenant else None
+    
+    async def list_by_tenant(self, tenant_id: uuid.UUID, *, limit: int = 50, cursor: Optional[str] = None) -> Tuple[List[Users], Optional[str]]:
+        """List users by tenant with seek-based pagination"""
+        # Validate limit
+        if not (1 <= limit <= 100):
+            raise ValueError("limit_out_of_range")
+        
+        # Build query with join to user_tenants
+        query = (
+            select(Users)
+            .join(UserTenants, Users.id == UserTenants.user_id)
+            .where(UserTenants.tenant_id == tenant_id)
+            .order_by(desc(Users.created_at), desc(Users.id))
+            .limit(limit + 1)  # Get one extra to determine if there's a next page
+        )
+        
+        # Apply cursor filter if provided
+        if cursor:
+            try:
+                cursor_data = self._decode_cursor(cursor)
+                query = query.where(
+                    tuple_(Users.created_at, Users.id) < (cursor_data["created_at"], cursor_data["id"])
+                )
+            except Exception:
+                raise ValueError("invalid_cursor")
+        
+        # Execute query
+        result = await self.session.execute(query)
+        results = result.scalars().all()
+        
+        # Determine pagination
+        has_next = len(results) > limit
+        if has_next:
+            results = results[:limit]  # Remove the extra item
+        
+        # Generate next cursor
+        next_cursor = None
+        if has_next and results:
+            last_user = results[-1]
+            next_cursor = self._encode_cursor({
+                "created_at": last_user.created_at.isoformat(),
+                "id": str(last_user.id)
+            })
+        
+        return results, next_cursor
+    
+    async def is_user_in_tenant(self, user_id: uuid.UUID, tenant_id: uuid.UUID) -> bool:
+        """Check if user belongs to tenant"""
+        result = await self.session.execute(
+            select(UserTenants).where(
+                and_(
+                    UserTenants.user_id == user_id,
+                    UserTenants.tenant_id == tenant_id
+                )
+            )
+        )
+        
+        return result.scalar_one_or_none() is not None
+    
+    async def get_user_tenants(self, user_id: uuid.UUID) -> List[Tenants]:
+        """Get all tenants for a user"""
+        result = await self.session.execute(
+            select(Tenants)
+            .join(UserTenants, Tenants.id == UserTenants.tenant_id)
+            .where(UserTenants.user_id == user_id)
+        )
+        
+        return result.scalars().all()
+    
+    async def remove_from_tenant(self, user_id: uuid.UUID, tenant_id: uuid.UUID) -> bool:
+        """Remove user from tenant"""
+        result = await self.session.execute(
+            select(UserTenants).where(
+                and_(
+                    UserTenants.user_id == user_id,
+                    UserTenants.tenant_id == tenant_id
+                )
+            )
+        )
+        user_tenant = result.scalar_one_or_none()
+        
+        if user_tenant:
+            await self.session.delete(user_tenant)
+            return True
+        return False
+    
+    def _encode_cursor(self, data: Dict[str, Any]) -> str:
+        """Encode cursor data to base64 JSON string"""
+        json_str = json.dumps(data)
+        return base64.b64encode(json_str.encode()).decode()
+    
+    def _decode_cursor(self, cursor: str) -> Dict[str, Any]:
+        """Decode cursor from base64 JSON string"""
+        try:
+            json_str = base64.b64decode(cursor.encode()).decode()
+            data = json.loads(json_str)
+            
+            # Validate required fields
+            if "id" not in data or "created_at" not in data:
+                raise ValueError("invalid_cursor")
+            
+            # Convert string UUID back to UUID object
+            data["id"] = uuid.UUID(data["id"])
+            
+            # Convert ISO string back to datetime
+            data["created_at"] = datetime.fromisoformat(data["created_at"].replace('Z', '+00:00'))
+            
+            return data
+        except Exception as e:
+            raise ValueError("invalid_cursor") from e
 
 
 # Factory functions for easy instantiation

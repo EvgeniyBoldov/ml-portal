@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from app.api.deps_idempotency import idempotency_guard
 from app.core.s3_links import S3LinkFactory
 
-router = APIRouter(prefix="/api/v1/artifacts", tags=["artifacts"])
+router = APIRouter(tags=["artifacts"])
 
 @router.post("/presign", dependencies=[Depends(lambda request: idempotency_guard(request, scope="artifacts:put"))])
 async def presign_artifact(request: Request, body: dict[str, Any]) -> dict:

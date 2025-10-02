@@ -1,6 +1,6 @@
 # ML Portal Makefile
 
-.PHONY: help build up down test test-backend test-frontend test-frontend-local test-frontend-watch test-frontend-e2e test-frontend-type-check build-frontend install-frontend test-functional test-all test-build test-run clean clean-all logs git-push git-auto gen-all
+.PHONY: help build up down test test-backend test-unit test-integration test-frontend test-frontend-local test-frontend-watch test-frontend-e2e test-frontend-type-check build-frontend install-frontend test-functional test-all test-build test-run clean clean-all logs git-push git-auto gen-all
 
 # Default target
 help:
@@ -16,6 +16,13 @@ help:
 	@echo "Testing:"
 	@echo "  test           - Run all tests"
 	@echo "  test-backend   - Run backend tests only"
+	@echo "  test-unit      - Run unit tests only"
+	@echo "  test-integration-database - Run database integration tests"
+	@echo "  test-integration-redis   - Run Redis integration tests"
+	@echo "  test-integration-minio   - Run MinIO integration tests"
+	@echo "  test-integration-qdrant  - Run Qdrant integration tests"
+	@echo "  test-integration-api     - Run API integration tests"
+	@echo "  test-integration-rag     - Run RAG system integration tests"
 	@echo "  test-frontend  - Run frontend tests only"
 	@echo "  test-frontend-local - Run frontend tests locally"
 	@echo "  test-frontend-type-check - Check TypeScript types"
@@ -102,6 +109,32 @@ build-frontend:
 # Install frontend dependencies
 install-frontend:
 	cd apps/web && npm install
+
+# Run unit tests only
+test-unit:
+	docker-compose -f docker-compose.test.yml run --rm backend-test pytest tests/unit/ -v --tb=short
+
+# Run integration tests only
+test-integration:
+	docker-compose -f docker-compose.test.yml run --rm backend-test pytest tests/integration/ -v --tb=short -c tests/pytest-integration.ini
+
+test-integration-database:
+	docker-compose -f docker-compose.test.yml run --rm backend-test pytest tests/integration/test_database.py -v --tb=short -c tests/pytest-integration.ini
+
+test-integration-redis:
+	docker-compose -f docker-compose.test.yml run --rm backend-test pytest tests/integration/test_redis.py -v --tb=short -c tests/pytest-integration.ini
+
+test-integration-minio:
+	docker-compose -f docker-compose.test.yml run --rm backend-test pytest tests/integration/test_minio.py -v --tb=short -c tests/pytest-integration.ini
+
+test-integration-qdrant:
+	docker-compose -f docker-compose.test.yml run --rm backend-test pytest tests/integration/test_qdrant.py -v --tb=short -c tests/pytest-integration.ini
+
+test-integration-api:
+	docker-compose -f docker-compose.test.yml run --rm backend-test pytest tests/integration/test_api.py -v --tb=short -c tests/pytest-integration.ini
+
+test-integration-rag:
+	docker-compose -f docker-compose.test.yml run --rm backend-test pytest tests/integration/test_rag_system.py -v --tb=short -c tests/pytest-integration.ini
 
 # Run functional tests with ML models
 test-functional:

@@ -67,3 +67,28 @@ def get_bearer_token(authorization: Optional[str] = Header(None)) -> Optional[st
     if not authorization: return None
     scheme, _, token = authorization.partition(" ")
     return token if scheme.lower() == "bearer" and token else None
+
+# --- Auth dependencies ---
+from pydantic import BaseModel
+
+class UserCtx(BaseModel):
+    """User context for testing"""
+    id: str = "test-user"
+    role: str = "user"
+    scopes: list = []
+
+    class Config:
+        arbitrary_types_allowed = True
+
+def get_current_user(token: Optional[str] = None) -> UserCtx:
+    """Get current user from token (stub for testing)"""
+    return UserCtx(id="test-user", role="user")
+
+def require_admin(user: UserCtx = None) -> UserCtx:
+    """Require admin role (stub for testing)"""
+    if user is None:
+        user = UserCtx(id="admin-user", role="admin")
+    if user.role != "admin":
+        from fastapi import HTTPException
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return user

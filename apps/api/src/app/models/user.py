@@ -16,6 +16,7 @@ class Users(Base):
 
     __table_args__ = (
         CheckConstraint("role IN ('admin', 'editor', 'reader')", name="ck_users_role"),
+        Index("idx_users_created_id", "created_at", "id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -46,6 +47,11 @@ class Users(Base):
     )
     audit_logs: Mapped[List["AuditLogs"]] = relationship(
         back_populates="actor_user",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    user_tenants: Mapped[List["UserTenants"]] = relationship(
+        back_populates="user",
         cascade="all, delete-orphan",
         passive_deletes=True,
     )

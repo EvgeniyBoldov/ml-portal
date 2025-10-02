@@ -1,209 +1,60 @@
 from __future__ import annotations
 from contextlib import asynccontextmanager, contextmanager
-from typing import AsyncGenerator, Generator, Optional
-from sqlalchemy import create_engine, event, text
+from typing import AsyncGenerator, Generator
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
-from sqlalchemy.pool import StaticPool
-from app.core.config import get_settings
-from app.core.logging import get_logger
+from .config import get_settings
+from .logging import get_logger
 
 logger = get_logger(__name__)
-
-# Sync engine and session
 s = get_settings()
-engine = create_engine(
-    s.DB_URL,
-    pool_pre_ping=True,
-    future=True,
-    pool_size=10,
-    max_overflow=20,
-    pool_recycle=3600,
-    echo=False
-)
 
-SessionLocal = sessionmaker(
-    bind=engine,
-    autoflush=False,
-    autocommit=False,
-    future=True
-)
+engine = create_engine(s.DB_URL, future=True, pool_pre_ping=True)
+SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
 
-# Async engine and session (lazy initialization)
-async_engine = None
-AsyncSessionLocal = None
+_async_engine = None
+_AsyncSessionLocal = None
 
-def get_async_engine():
-    """Get async engine with lazy initialization"""
-    global async_engine
-    if async_engine is None:
+def _ensure_async():
+    global _async_engine, _AsyncSessionLocal
+    if _async_engine is None:
         try:
-            s = get_settings()
-            async_engine = create_async_engine(
-                s.ASYNC_DB_URL,
-                pool_pre_ping=True,
-                future=True,
-                pool_size=10,
-                max_overflow=20,
-                pool_recycle=3600,
-                echo=False
-            )
+            _async_engine = create_async_engine(s.ASYNC_DB_URL, future=True, pool_pre_ping=True)
+            _AsyncSessionLocal = async_sessionmaker(bind=_async_engine, class_=AsyncSession, autoflush=False, autocommit=False, future=True)
         except Exception as e:
-            logger.warning(f"Failed to create async engine: {e}")
-            # Fallback to sync engine for development
-            return None
-    return async_engine
-
-def get_async_session_local():
-    """Get async session maker with lazy initialization"""
-    global AsyncSessionLocal
-    if AsyncSessionLocal is None:
-        engine = get_async_engine()
-        if engine:
-            AsyncSessionLocal = async_sessionmaker(
-                bind=engine,
-                autoflush=False,
-                autocommit=False,
-                future=True,
-                class_=AsyncSession
-            )
-    return AsyncSessionLocal
-
-# Connection event listeners
-@event.listens_for(engine, "connect")
-def set_sqlite_pragma(dbapi_connection, connection_record):
-    """Set SQLite pragmas for better performance"""
-    if "sqlite" in str(dbapi_connection):
-        cursor = dbapi_connection.cursor()
-        cursor.execute("PRAGMA foreign_keys=ON")
-        cursor.close()
-
-class DatabaseManager:
-    """Database connection manager with both sync and async support"""
-    
-    def __init__(self):
-        self._engine = engine
-        self._async_engine = None  # Lazy initialization
-        self._session_factory = SessionLocal
-        self._async_session_factory = None  # Lazy initialization
-    
-    def get_session(self) -> Generator[Session, None, None]:
-        """Get sync database session (FastAPI dependency)"""
-        db = self._session_factory()
-        try:
-            yield db
-            db.commit()
-        except Exception as e:
-            logger.error(f"Database session error: {e}")
-            db.rollback()
-            raise
-        finally:
-            db.close()
-    
-    async def get_async_session(self) -> AsyncGenerator[AsyncSession, None]:
-        """Get async database session (FastAPI dependency)"""
-        if self._async_session_factory is None:
-            self._async_session_factory = get_async_session_local()
-        
-        if self._async_session_factory is None:
-            raise RuntimeError("Async database not available")
-        
-        async with self._async_session_factory() as session:
-            try:
-                yield session
-                await session.commit()
-            except Exception as e:
-                logger.error(f"Async database session error: {e}")
-                await session.rollback()
-                raise
-    
-    @contextmanager
-    def session_scope(self) -> Generator[Session, None, None]:
-        """Provide a transactional scope around a series of operations (sync)"""
-        db = self._session_factory()
-        try:
-            yield db
-            db.commit()
-        except Exception as e:
-            logger.error(f"Database session scope error: {e}")
-            db.rollback()
-            raise
-        finally:
-            db.close()
-    
-    @asynccontextmanager
-    async def async_session_scope(self) -> AsyncGenerator[AsyncSession, None]:
-        """Provide a transactional scope around a series of operations (async)"""
-        if self._async_session_factory is None:
-            self._async_session_factory = get_async_session_local()
-        
-        if self._async_session_factory is None:
-            raise RuntimeError("Async database not available")
-        
-        async with self._async_session_factory() as session:
-            try:
-                yield session
-                await session.commit()
-            except Exception as e:
-                logger.error(f"Async database session scope error: {e}")
-                await session.rollback()
-                raise
-    
-    def close_all(self) -> None:
-        """Close all database connections"""
-        try:
-            self._engine.dispose()
-            logger.info("Sync database engine disposed")
-        except Exception as e:
-            logger.error(f"Error disposing sync engine: {e}")
-    
-    async def close_async_all(self) -> None:
-        """Close all async database connections"""
-        try:
-            await self._async_engine.dispose()
-            logger.info("Async database engine disposed")
-        except Exception as e:
-            logger.error(f"Error disposing async engine: {e}")
-    
-    def health_check(self) -> bool:
-        """Check database connection health"""
-        try:
-            with self._session_factory() as session:
-                session.execute(text("SELECT 1"))
-                return True
-        except Exception as e:
-            logger.error(f"Database health check failed: {e}")
-            return False
-    
-    async def async_health_check(self) -> bool:
-        """Check async database connection health"""
-        try:
-            async with self._async_session_factory() as session:
-                await session.execute(text("SELECT 1"))
-                return True
-        except Exception as e:
-            logger.error(f"Async database health check failed: {e}")
-            return False
-
-# Global database manager instance
-db_manager = DatabaseManager()
-
-# Convenience functions for backward compatibility
-def get_session() -> Generator[Session, None, None]:
-    """Get sync database session (FastAPI dependency)"""
-    return db_manager.get_session()
-
-async def get_async_session() -> AsyncGenerator[AsyncSession, None]:
-    """Get async database session (FastAPI dependency)"""
-    async for session in db_manager.get_async_session():
-        yield session
+            logger.warning(f"Failed to init async engine: {e}")
 
 @contextmanager
-def session_scope() -> Generator[Session, None, None]:
-    """Provide a transactional scope around a series of operations (sync)"""
-    return db_manager.session_scope()
+def get_session() -> Generator[Session, None, None]:
+    db = SessionLocal()
+    try:
+        yield db
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
 
 @asynccontextmanager
-async def async_session_scope() -> AsyncGenerator[AsyncSession, None]:
-    """Provide a transactional scope around a series of operations (async)"""
-    return db_manager.async_session_scope()
+async def get_async_session() -> AsyncGenerator[AsyncSession, None]:
+    _ensure_async()
+    if _AsyncSessionLocal is None:
+        raise RuntimeError("Async DB is not available")
+    async with _AsyncSessionLocal() as session:
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+
+def health_check() -> bool:
+    try:
+        with SessionLocal() as s:
+            s.execute(text("SELECT 1"))
+        return True
+    except Exception as e:
+        logger.error(f"DB health_check failed: {e}")
+        return False

@@ -1,71 +1,46 @@
 from __future__ import annotations
-from enum import Enum
 from dataclasses import dataclass
 from typing import Optional, Dict, Any
+from minio import Minio
+from .config import get_settings
 
-from app.adapters.s3_client import S3Manager, s3_manager, PresignOptions
-from app.core.config import get_settings
-
-class S3ContentType(str, Enum):
+class S3ContentType:
+    OCTET = "application/octet-stream"
     PDF = "application/pdf"
     PNG = "image/png"
-    JPG = "image/jpeg"
-    JSON = "application/json"
-    OCTET = "application/octet-stream"
-
-class S3ExpiryPolicy(int, Enum):
-    UPLOAD = 15 * 60         # 15 minutes
-    DOWNLOAD = 60 * 60       # 1 hour
-    ARTIFACT = 24 * 60 * 60  # 24 hours
+    JPEG = "image/jpeg"
 
 @dataclass
 class S3Link:
+    url: str
     bucket: str
     key: str
-    url: str
-    content_type: Optional[str]
+    content_type: str
     expires_in: int
-    meta: Dict[str, Any] | None = None
-
-def _validate_mime_and_size(content_type: Optional[str]) -> None:
-    s = get_settings()
-    allowed = set([m.strip() for m in s.UPLOAD_ALLOWED_MIME.split(",") if m.strip()])
-    if content_type and content_type not in allowed:
-        raise ValueError("unsupported_media_type")
+    meta: Dict[str, Any]
 
 class S3LinkFactory:
-    def __init__(self, manager: S3Manager | None = None) -> None:
-        self.s3_manager = manager or s3_manager
+    def __init__(self) -> None:
         s = get_settings()
-        self.documents_bucket = s.S3_BUCKET_RAG
-        self.artifacts_bucket = s.S3_BUCKET_ARTIFACTS
-        self.max_bytes = s.UPLOAD_MAX_BYTES
+        endpoint = s.S3_ENDPOINT.replace("http://", "").replace("https://", "")
+        self._client = Minio(endpoint, s.S3_ACCESS_KEY, s.S3_SECRET_KEY, secure=bool(s.S3_SECURE))
+        self._s = s
 
-    def for_document_upload(self, *, doc_id: str, tenant_id: str, content_type: str | None = None) -> S3Link:
-        _validate_mime_and_size(content_type)
+    def _presign(self, method: str, bucket: str, key: str, *, content_type: Optional[str] = None, expires: int = 3600) -> str:
+        if not self._client.bucket_exists(bucket):
+            self._client.make_bucket(bucket)
+        if method == "PUT":
+            headers = {"Content-Type": content_type} if content_type else None
+            return self._client.get_presigned_url("PUT", bucket, key, expires=expires, response_headers=headers)
+        return self._client.get_presigned_url("GET", bucket, key, expires=expires)
+
+    def for_document_upload(self, *, doc_id: str, tenant_id: str, content_type: str = S3ContentType.OCTET, expires_in: int = 3600) -> S3Link:
         key = f"tenants/{tenant_id}/docs/{doc_id}"
-        url = self.s3_manager.generate_presigned_url(
-            bucket=self.documents_bucket,
-            key=key,
-            options=PresignOptions(operation="put", expiry_seconds=int(S3ExpiryPolicy.UPLOAD), content_type=content_type),
-        )
-        return S3Link(bucket=self.documents_bucket, key=key, url=url, content_type=content_type, expires_in=int(S3ExpiryPolicy.UPLOAD), meta={"intent":"upload","max_bytes":self.max_bytes})
+        url = self._presign("PUT", self._s.S3_BUCKET_RAG, key, content_type=content_type, expires=expires_in)
+        return S3Link(url=url, bucket=self._s.S3_BUCKET_RAG, key=key, content_type=content_type, expires_in=expires_in, meta={"max_bytes": self._s.UPLOAD_MAX_BYTES})
 
-    def for_document_download(self, *, doc_id: str, tenant_id: str) -> S3Link:
-        key = f"tenants/{tenant_id}/docs/{doc_id}"
-        url = self.s3_manager.generate_presigned_url(
-            bucket=self.documents_bucket,
-            key=key,
-            options=PresignOptions(operation="get", expiry_seconds=int(S3ExpiryPolicy.DOWNLOAD)),
-        )
-        return S3Link(bucket=self.documents_bucket, key=key, url=url, content_type=S3ContentType.OCTET, expires_in=int(S3ExpiryPolicy.DOWNLOAD), meta={"intent":"download"})
-
-    def for_artifact(self, *, job_id: str, filename: str, tenant_id: str, content_type: str | None = None) -> S3Link:
-        _validate_mime_and_size(content_type)
-        key = f"tenants/{tenant_id}/jobs/{job_id}/{filename}"
-        url = self.s3_manager.generate_presigned_url(
-            bucket=self.artifacts_bucket,
-            key=key,
-            options=PresignOptions(operation="put", expiry_seconds=int(S3ExpiryPolicy.ARTIFACT), content_type=content_type),
-        )
-        return S3Link(bucket=self.artifacts_bucket, key=key, url=url, content_type=content_type, expires_in=int(S3ExpiryPolicy.ARTIFACT), meta={"intent":"artifact","max_bytes":self.max_bytes})
+    def for_artifact(self, *, job_id: str, filename: str, tenant_id: str, content_type: Optional[str] = None, expires_in: int = 3600) -> S3Link:
+        key = f"tenants/{tenant_id}/artifacts/{job_id}/{filename}"
+        ct = content_type or S3ContentType.OCTET
+        url = self._presign("PUT", self._s.S3_BUCKET_ARTIFACTS, key, content_type=ct, expires=expires_in)
+        return S3Link(url=url, bucket=self._s.S3_BUCKET_ARTIFACTS, key=key, content_type=ct, expires_in=expires_in, meta={"max_bytes": self._s.UPLOAD_MAX_BYTES})

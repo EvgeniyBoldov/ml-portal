@@ -9,7 +9,7 @@ import uuid
 from datetime import datetime, timezone, timedelta
 
 from app.repositories.idempotency_repo import IdempotencyRepository
-from app.schemas.common import Problem
+from app.schemas.common import ProblemDetails
 from app.core.exceptions import DuplicateError
 
 

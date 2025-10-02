@@ -11,7 +11,7 @@ from app.core.s3_links import S3LinkFactory, S3ContentType
 from app.core.sse_utils import sse_response
 from app.schemas.common import ProblemDetails
 
-router = APIRouter(prefix="/api/v1/analyze", tags=["analyze"])
+router = APIRouter(tags=["analyze"])
 
 @router.post("/ingest/presign", dependencies=[Depends(lambda request: idempotency_guard(request, scope="analyze:ingest"))])
 async def presign_ingest(request: Request, body: dict[str, Any]) -> dict:

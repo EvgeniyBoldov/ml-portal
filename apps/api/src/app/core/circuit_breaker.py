@@ -1,8 +1,7 @@
 from __future__ import annotations
 import time
 from dataclasses import dataclass
-from typing import Optional
-from app.core.domain_exceptions import ExternalServiceCircuitBreakerOpen
+from .domain_exceptions import ExternalServiceCircuitBreakerOpen
 
 class CircuitBreakerState(str):
     CLOSED = "closed"
@@ -16,7 +15,7 @@ class CircuitBreakerConfig:
     half_open_max_calls: int = 1
 
 class CircuitBreaker:
-    def __init__(self, name: str, config: Optional[CircuitBreakerConfig] = None):
+    def __init__(self, name: str, config: CircuitBreakerConfig | None = None):
         self.name = name
         self.cfg = config or CircuitBreakerConfig()
         self._state = CircuitBreakerState.CLOSED

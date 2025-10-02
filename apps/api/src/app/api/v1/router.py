@@ -7,16 +7,17 @@ from importlib import import_module
 
 api_v1 = APIRouter()
 
-from app.api.routes import security as security_router  # type: ignore
+from app.api.v1.routers import security as security_router  # type: ignore
 api_v1.include_router(security_router.router, prefix="/auth", tags=["auth"])
 
 _optional = [
-    ("app.api.routes.users", "router", "/users", ["users"]),
-    ("app.api.routes.rag", "router", "/rag", ["rag"]),
-    ("app.api.routes.analyze", "router", "/analyze", ["analyze"]),
-    ("app.api.routes.chat", "router", "/chat", ["chat"]),
-    ("app.api.routes.admin", "router", "/admin", ["admin"]),
-    ("app.api.routes.artifacts", "router", "/artifacts", ["artifacts"]),
+    ("app.api.v1.routers.auth", "router", "/auth", ["auth"]),
+    ("app.api.v1.routers.users", "router", "/users", ["users"]),
+    ("app.api.v1.routers.rag", "router", "/rag", ["rag"]),
+    ("app.api.v1.routers.analyze", "router", "/analyze", ["analyze"]),
+    ("app.api.v1.routers.chat", "router", "/chat", ["chat"]),
+    ("app.api.v1.routers.admin", "router", "/admin", ["admin"]),
+    ("app.api.v1.routers.artifacts", "router", "/artifacts", ["artifacts"]),
 ]
 
 for module_path, attr, prefix, tags in _optional:

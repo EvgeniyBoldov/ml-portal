@@ -54,9 +54,9 @@ class RepositoryFactory:
         return self._repositories['rag_chunks']
     
     def get_users_repository(self) -> UsersRepository:
-        """Get users repository"""
+        """Get users repository without tenant isolation"""
         if 'users' not in self._repositories:
-            self._repositories['users'] = UsersRepository(self.session, self.tenant_id, self.user_id)
+            self._repositories['users'] = UsersRepository(self.session)
         return self._repositories['users']
     
     def get_analyze_repository(self) -> AnalyzeRepo:

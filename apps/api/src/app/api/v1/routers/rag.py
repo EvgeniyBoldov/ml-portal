@@ -5,7 +5,7 @@ from app.adapters.s3_client import s3_manager, PresignOptions
 from app.core.config import get_settings
 from app.core.s3_links import S3ContentType
 
-router = APIRouter(prefix="/api/v1/rag", tags=["rag"])
+router = APIRouter(tags=["rag"])
 
 @router.post("/upload/presign")
 def presign_rag_upload(body: dict[str, Any]) -> dict:
