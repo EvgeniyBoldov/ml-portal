@@ -1,22 +1,22 @@
 """
-Unit tests for UsersRepository cursor encoding/decoding
+Unit tests for AsyncUsersRepository cursor encoding/decoding
 """
 import pytest
 import uuid
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
-from app.repositories.users_repo import UsersRepository
+from app.repositories.users_repo import AsyncUsersRepository
 
 
-class TestUsersRepositoryCursor:
+class TestAsyncUsersRepositoryCursor:
     """Test cursor encoding/decoding functionality"""
 
     @pytest.fixture
     def users_repo(self):
-        """Create UsersRepository with mock session"""
+        """Create AsyncUsersRepository with mock session"""
         mock_session = MagicMock()
-        return UsersRepository(mock_session)
+        return AsyncUsersRepository(mock_session)
 
     def test_encode_cursor_basic(self, users_repo):
         """Test basic cursor encoding"""

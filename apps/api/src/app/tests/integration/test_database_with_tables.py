@@ -197,6 +197,15 @@ class TestDatabaseIntegration:
 
         async with async_session() as session:
             try:
+                # Cleanup any existing data
+                try:
+                    await session.execute(
+                        delete(Users).where(Users.login == "unique_test")
+                    )
+                    await session.commit()
+                except:
+                    await session.rollback()
+                
                 # Create first user
                 user1 = Users(**user1_data)
                 session.add(user1)
@@ -207,8 +216,14 @@ class TestDatabaseIntegration:
                 session.add(user2)
                 
                 # This should raise an exception due to unique constraint
-                with pytest.raises(Exception):  # IntegrityError
+                error_raised = False
+                try:
                     await session.commit()
+                except Exception:
+                    error_raised = True
+                    await session.rollback()
+                
+                assert error_raised, "Expected IntegrityError for duplicate login"
                     
             finally:
                 # Cleanup

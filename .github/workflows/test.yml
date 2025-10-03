@@ -59,7 +59,7 @@ jobs:
     - name: Run backend tests
       run: |
         cd apps/api
-        pytest tests/ -v --cov=src --cov-report=xml --cov-report=html
+        pytest tests/ -v --cov=app --cov-report=xml --cov-report=html --cov-report=term-missing
       env:
         DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
         REDIS_URL: redis://localhost:6379/0
@@ -71,6 +71,16 @@ jobs:
         file: apps/api/coverage.xml
         flags: backend
         name: backend-coverage
+    
+    - name: Upload test results
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: backend-test-results
+        path: |
+          apps/api/coverage.xml
+          apps/api/htmlcov/
+          apps/api/.coverage
 
   frontend-tests:
     runs-on: ubuntu-latest
@@ -111,6 +121,15 @@ jobs:
         file: apps/web/coverage/lcov.info
         flags: frontend
         name: frontend-coverage
+    
+    - name: Upload test results
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: frontend-test-results
+        path: |
+          apps/web/coverage/
+          apps/web/test-results/
 
   e2e-tests:
     runs-on: ubuntu-latest

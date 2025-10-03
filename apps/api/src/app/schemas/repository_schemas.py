@@ -4,7 +4,7 @@ Pydantic schemas for repository operations - replacing Dict[str, Any]
 from __future__ import annotations
 from typing import Optional, List, Dict, Any, Union
 from datetime import datetime
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 import uuid
 
 from app.schemas.chats import MessageRole
@@ -13,9 +13,10 @@ from app.schemas.chats import MessageRole
 class ChatCreateRequest(BaseModel):
     """Schema for creating a chat"""
     name: str = Field(..., min_length=1, max_length=255)
-    tags: Optional[List[str]] = Field(default=None, max_items=10)
+    tags: Optional[List[str]] = Field(default=None, max_length=10)
     
-    @validator('tags')
+    @field_validator('tags')
+    @classmethod
     def validate_tags(cls, v):
         if v is not None:
             for tag in v:
@@ -29,7 +30,8 @@ class ChatMessageCreateRequest(BaseModel):
     role: MessageRole
     content: Union[str, Dict[str, Any]] = Field(...)
     
-    @validator('content')
+    @field_validator('content')
+    @classmethod
     def validate_content(cls, v):
         if isinstance(v, str):
             return {"text": v}
@@ -88,10 +90,11 @@ class IdempotencyKeyCreateRequest(BaseModel):
 class ChatUpdateRequest(BaseModel):
     """Schema for updating a chat"""
     name: Optional[str] = Field(default=None, min_length=1, max_length=255)
-    tags: Optional[List[str]] = Field(default=None, max_items=10)
+    tags: Optional[List[str]] = Field(default=None, max_length=10)
     last_message_at: Optional[datetime] = Field(default=None)
     
-    @validator('tags')
+    @field_validator('tags')
+    @classmethod
     def validate_tags(cls, v):
         if v is not None:
             for tag in v:
@@ -133,9 +136,10 @@ class SearchRequest(BaseModel):
 
 class BulkCreateRequest(BaseModel):
     """Schema for bulk create operations"""
-    items: List[Dict[str, Any]] = Field(..., min_items=1, max_items=1000)
+    items: List[Dict[str, Any]] = Field(..., min_length=1, max_length=1000)
     
-    @validator('items')
+    @field_validator('items')
+    @classmethod
     def validate_items(cls, v):
         if len(v) > 1000:
             raise ValueError('Too many items for bulk operation')
@@ -144,9 +148,10 @@ class BulkCreateRequest(BaseModel):
 
 class BulkUpdateRequest(BaseModel):
     """Schema for bulk update operations"""
-    updates: List[Dict[str, Any]] = Field(..., min_items=1, max_items=1000)
+    updates: List[Dict[str, Any]] = Field(..., min_length=1, max_length=1000)
     
-    @validator('updates')
+    @field_validator('updates')
+    @classmethod
     def validate_updates(cls, v):
         if len(v) > 1000:
             raise ValueError('Too many updates for bulk operation')

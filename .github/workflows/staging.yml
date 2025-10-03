@@ -1,0 +1,89 @@
+name: Staging Environment Tests
+
+on:
+  push:
+    branches: [ develop ]
+  workflow_dispatch:
+
+jobs:
+  staging-tests:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        cd apps/api
+        pip install -r requirements.txt
+        pip install -r requirements-test.txt
+    
+    - name: Run staging smoke tests
+      run: |
+        cd apps/api
+        pytest tests/staging/ -v --tb=short
+      env:
+        DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+        REDIS_URL: ${{ secrets.STAGING_REDIS_URL }}
+        API_BASE_URL: ${{ secrets.STAGING_API_URL }}
+        ENVIRONMENT: staging
+    
+    - name: Run staging integration tests
+      run: |
+        cd apps/api
+        pytest tests/integration/ -v --tb=short -k "not qdrant"
+      env:
+        DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+        REDIS_URL: ${{ secrets.STAGING_REDIS_URL }}
+        API_BASE_URL: ${{ secrets.STAGING_API_URL }}
+        ENVIRONMENT: staging
+    
+    - name: Upload staging test results
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: staging-test-results
+        path: |
+          apps/api/test-results/
+          apps/api/coverage.xml
+
+  production-smoke-tests:
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        cd apps/api
+        pip install -r requirements.txt
+        pip install -r requirements-test.txt
+    
+    - name: Run production smoke tests
+      run: |
+        cd apps/api
+        pytest tests/production/ -v --tb=short
+      env:
+        DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+        REDIS_URL: ${{ secrets.PRODUCTION_REDIS_URL }}
+        API_BASE_URL: ${{ secrets.PRODUCTION_API_URL }}
+        ENVIRONMENT: production
+    
+    - name: Upload production test results
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: production-smoke-results
+        path: |
+          apps/api/test-results/

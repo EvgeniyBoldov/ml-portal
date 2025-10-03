@@ -259,7 +259,7 @@ async def test_user_multiple_tenants():
         # Get all tenants for user
         user_tenants = await users_repo.get_user_tenants(user.id)
         assert len(user_tenants) == 2
-        tenant_ids = {t.id for t in user_tenants}
+        tenant_ids = {t.tenant_id for t in user_tenants}
         assert tenant_1.id in tenant_ids
         assert tenant_2.id in tenant_ids
         
@@ -359,7 +359,7 @@ async def test_default_tenant_management():
 
 
 @pytest.mark.asyncio
-async def test_cursor_stability_with_equal_timestamps():
+async def test_cursor_stability_with_equal_timestamps(unique_tenant_name):
     """Test cursor stability when users have equal created_at timestamps"""
     from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
     from sqlalchemy.orm import sessionmaker
@@ -377,7 +377,7 @@ async def test_cursor_stability_with_equal_timestamps():
         # Create tenant
         tenant = Tenants(
             id=uuid.uuid4(),
-            name="test_tenant_stability",
+            name=f"{unique_tenant_name}_stability",
             is_active=True
         )
         session.add(tenant)
@@ -545,11 +545,8 @@ async def test_empty_tenant_operations():
         assert next_cursor is None
         
         # Test with cursor (should still return empty)
-        fake_cursor = users_repo._encode_cursor({
-            "created_at": "2024-01-01T12:00:00+00:00",
-            "id": str(uuid.uuid4())
-        })
-        users, next_cursor = await users_repo.list_by_tenant(empty_tenant.id, limit=10, cursor=fake_cursor)
+        fake_cursor_id = uuid.uuid4()
+        users, next_cursor = await users_repo.list_by_tenant(empty_tenant.id, limit=10, cursor=fake_cursor_id)
         assert len(users) == 0
         assert next_cursor is None
         

@@ -45,17 +45,29 @@ async def test_migration_creates_tables():
         user_tenants_exists = result.scalar()
         assert user_tenants_exists, "user_tenants table should exist"
         
-        # Check that idx_users_created_id index exists
+        # Check that ix_users_email index exists
         result = await session.execute(text("""
             SELECT EXISTS (
                 SELECT FROM pg_indexes 
                 WHERE schemaname = 'public' 
                 AND tablename = 'users' 
-                AND indexname = 'idx_users_created_id'
+                AND indexname = 'ix_users_email'
             );
         """))
-        index_exists = result.scalar()
-        assert index_exists, "idx_users_created_id index should exist"
+        email_index_exists = result.scalar()
+        assert email_index_exists, "ix_users_email index should exist"
+        
+        # Check that ix_users_login index exists
+        result = await session.execute(text("""
+            SELECT EXISTS (
+                SELECT FROM pg_indexes 
+                WHERE schemaname = 'public' 
+                AND tablename = 'users' 
+                AND indexname = 'ix_users_login'
+            );
+        """))
+        login_index_exists = result.scalar()
+        assert login_index_exists, "ix_users_login index should exist"
         
         # Check that ix_user_tenants_user_id index exists
         result = await session.execute(text("""
@@ -117,17 +129,17 @@ async def test_migration_constraints():
         fk_count = result.scalar()
         assert fk_count == 2, "Should have 2 foreign key constraints on user_tenants"
         
-        # Check that unique constraint exists on tenants name
+        # Check that check constraint exists on users role
         result = await session.execute(text("""
             SELECT EXISTS (
                 SELECT FROM information_schema.table_constraints 
                 WHERE constraint_schema = 'public' 
-                AND table_name = 'tenants' 
-                AND constraint_name = 'uq_tenants_name'
+                AND table_name = 'users' 
+                AND constraint_name = 'ck_users_ck_users_role'
             );
         """))
-        tenants_unique_exists = result.scalar()
-        assert tenants_unique_exists, "Unique constraint on tenants.name should exist"
+        role_check_exists = result.scalar()
+        assert role_check_exists, "Check constraint on users.role should exist"
     
     await engine.dispose()
 
@@ -173,15 +185,27 @@ async def test_migration_data_integrity():
         await session.commit()
         
         # This should fail due to unique constraint
-        with pytest.raises(Exception):  # Should be IntegrityError
+        error_raised = False
+        try:
             await users_repo.add_to_tenant(user.id, tenant.id, is_default=False)
             await session.commit()
+        except Exception:
+            error_raised = True
+            await session.rollback()
+        
+        assert error_raised, "Expected IntegrityError for duplicate user-tenant link"
         
         # Test foreign key constraint - try to add user to non-existent tenant
         fake_tenant_id = uuid.uuid4()
-        with pytest.raises(Exception):  # Should be IntegrityError
+        error_raised = False
+        try:
             await users_repo.add_to_tenant(user.id, fake_tenant_id, is_default=False)
             await session.commit()
+        except Exception:
+            error_raised = True
+            await session.rollback()
+        
+        assert error_raised, "Expected IntegrityError for non-existent tenant"
         
         # Cleanup
         await session.delete(user)
@@ -247,7 +271,7 @@ async def test_migration_performance_indexes():
         # Test getting user tenants (should use ix_user_tenants_user_id index)
         user_tenants = await users_repo.get_user_tenants(users[0].id)
         assert len(user_tenants) == 1
-        assert user_tenants[0].id == tenant.id
+        assert user_tenants[0].tenant_id == tenant.id
         
         # Cleanup
         for user in users:

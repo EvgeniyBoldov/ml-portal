@@ -65,7 +65,7 @@ class TestQdrantIntegration:
             
             for i, vector in enumerate(vectors):
                 point = PointStruct(
-                    id=str(i),
+                    id=i,  # Use integer ID instead of string
                     vector=vector,
                     payload={
                         "text": f"Document {i}",
@@ -93,7 +93,7 @@ class TestQdrantIntegration:
             )
             
             assert len(search_results) == 3
-            assert search_results[0].id == "0"  # Should find itself first
+            assert search_results[0].id == 0  # Should find itself first
             
             # Verify payload
             assert search_results[0].payload["text"] == "Document 0"
@@ -109,11 +109,23 @@ class TestQdrantIntegration:
     @pytest.mark.asyncio
     async def test_filtered_search(self, qdrant_client, clean_qdrant, test_collection_name):
         """Тест поиска с фильтрами."""
-        # Create collection
-        qdrant_client.create_collection(
-            collection_name=test_collection_name,
-            vectors_config=VectorParams(size=64, distance=Distance.COSINE)
-        )
+        import time
+        
+        # Create collection with retry logic
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                qdrant_client.create_collection(
+                    collection_name=test_collection_name,
+                    vectors_config=VectorParams(size=64, distance=Distance.COSINE)
+                )
+                break
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    time.sleep(2)
+                    continue
+                else:
+                    raise e
         
         try:
             # Insert points with different categories
@@ -123,7 +135,7 @@ class TestQdrantIntegration:
             for i in range(5):
                 vector = np.random.rand(64).tolist()
                 point = PointStruct(
-                    id=str(i),
+                    id=i,  # Use integer ID
                     vector=vector,
                     payload={
                         "text": f"Document {i}",
@@ -200,10 +212,10 @@ class TestQdrantIntegration:
         
         try:
             # Insert single point
-            point_id = "test_point_1"
+            point_id = 1  # Use integer ID
             vector = np.random.rand(32).tolist()
             payload = {"text": "Test document", "category": "test"}
-            
+
             qdrant_client.upsert(
                 collection_name=test_collection_name,
                 points=[PointStruct(id=point_id, vector=vector, payload=payload)]
@@ -277,7 +289,7 @@ class TestQdrantIntegration:
             for i in range(100):
                 vector = np.random.rand(64).tolist()
                 point = PointStruct(
-                    id=str(i),
+                    id=i,  # Use integer ID
                     vector=vector,
                     payload={
                         "text": f"Batch document {i}",
@@ -309,7 +321,7 @@ class TestQdrantIntegration:
             assert len(search_results) == 10
             
             # Batch delete
-            ids_to_delete = [str(i) for i in range(50)]  # Delete first 50 points
+            ids_to_delete = list(range(50))  # Delete first 50 points
             qdrant_client.delete(
                 collection_name=test_collection_name,
                 points_selector=models.PointIdsList(points=ids_to_delete)
@@ -341,17 +353,17 @@ class TestQdrantIntegration:
             # Simulate RAG document chunks
             documents = [
                 {
-                    "id": "doc_1_chunk_1",
+                    "id": 1,  # Use integer ID
                     "content": "Machine learning is a subset of artificial intelligence.",
                     "metadata": {"document_id": "doc_1", "chunk_index": 0, "page": 1}
                 },
                 {
-                    "id": "doc_1_chunk_2", 
+                    "id": 2,  # Use integer ID
                     "content": "Deep learning uses neural networks with multiple layers.",
                     "metadata": {"document_id": "doc_1", "chunk_index": 1, "page": 1}
                 },
                 {
-                    "id": "doc_2_chunk_1",
+                    "id": 3,  # Use integer ID
                     "content": "Natural language processing helps computers understand text.",
                     "metadata": {"document_id": "doc_2", "chunk_index": 0, "page": 1}
                 }
@@ -442,11 +454,11 @@ class TestQdrantIntegration:
             async def insert_point(point_id: int):
                 vector = np.random.rand(32).tolist()
                 point = PointStruct(
-                    id=str(point_id),
+                    id=point_id,  # Use integer ID
                     vector=vector,
                     payload={"concurrent_id": point_id, "type": "concurrent_test"}
                 )
-                
+
                 qdrant_client.upsert(
                     collection_name=test_collection_name,
                     points=[point]

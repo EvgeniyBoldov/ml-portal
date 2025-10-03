@@ -1,7 +1,7 @@
 from __future__ import annotations
 from functools import lru_cache
 from pydantic_settings import BaseSettings
-from pydantic import Field
+from pydantic import Field, ConfigDict
 
 class Settings(BaseSettings):
     ENV: str = Field(default="local")
@@ -64,9 +64,10 @@ class Settings(BaseSettings):
 
     CORS_ALLOW_ORIGINS: str = Field(default="*")
 
-    class Config:
-        env_file = ".env"
-        case_sensitive = False
+    model_config = ConfigDict(
+        env_file=".env",
+        case_sensitive=False
+    )
 
 @lru_cache()
 def get_settings() -> Settings:

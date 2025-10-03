@@ -5,9 +5,9 @@ import pytest
 import asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
-from app.core.db import Base
-from app.models.user import User
-from app.models.chat import Chat, ChatMessage
+from app.models.base import Base
+from app.models.user import Users
+from app.models.chat import Chats, ChatMessages
 
 
 @pytest.fixture(scope="session")
@@ -56,7 +56,7 @@ async def sample_user(test_db_session):
         "is_superuser": False
     }
     
-    user = User(**user_data)
+    user = Users(**user_data)
     test_db_session.add(user)
     await test_db_session.commit()
     await test_db_session.refresh(user)
@@ -84,7 +84,7 @@ async def sample_users(test_db_session):
     
     users = []
     for user_data in users_data:
-        user = User(**user_data)
+        user = Users(**user_data)
         test_db_session.add(user)
         users.append(user)
     
@@ -110,7 +110,7 @@ async def sample_chat(test_db_session, sample_user):
         "created_at": "2024-01-01T00:00:00Z"
     }
     
-    chat = Chat(**chat_data)
+    chat = Chats(**chat_data)
     test_db_session.add(chat)
     await test_db_session.commit()
     await test_db_session.refresh(chat)
@@ -142,7 +142,7 @@ async def sample_messages(test_db_session, sample_chat):
     
     messages = []
     for message_data in messages_data:
-        message = ChatMessage(**message_data)
+        message = ChatMessages(**message_data)
         test_db_session.add(message)
         messages.append(message)
     

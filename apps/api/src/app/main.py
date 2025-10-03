@@ -1,38 +1,21 @@
-from __future__ import annotations
+
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from app.api.v1.router import router as v1_router
-from app.core.middleware import RequestContextMiddleware
-from app.core.exception_handlers import setup_exception_handlers
-from app.core.di import cleanup_clients
-from app.core.config import get_settings
+from app.api.v1.router import api_v1
 
-def create_app() -> FastAPI:
-    s = get_settings()
-    app = FastAPI(title="ml-portal api")
+app = FastAPI(title="ML-Portal API")
 
-    # CORS
-    allow_origins = [o.strip() for o in s.CORS_ALLOW_ORIGINS.split(",") if o.strip()]
-    app.add_middleware(CORSMiddleware, allow_origins=allow_origins, allow_credentials=False, allow_methods=["*"], allow_headers=["*"], expose_headers=["X-Request-ID","X-API-Version","X-RateLimit-Limit","X-RateLimit-Remaining","X-RateLimit-Reset","Retry-After"])
+# health endpoints without /api/v1 for infra health checks
+@app.get("/healthz")
+async def healthz():
+    return {"status": "healthy"}
 
-    # Middlewares
-    app.add_middleware(RequestContextMiddleware)
+@app.get("/readyz")
+async def readyz():
+    return {"status": "ready", "dependencies": {}}
 
-    # Routers with /api/v1 prefix
-    app.include_router(v1_router, prefix="/api/v1")
+@app.get("/version")
+async def version():
+    return {"version": "0.0.0", "build_time": "", "git_commit": ""}
 
-    # Exception handlers -> ProblemDetails JSON
-    setup_exception_handlers(app)
-
-    # Startup guard: fail if staging/prod with DEBUG=True
-    if s.ENV in {"staging","prod"} and s.DEBUG:
-        raise RuntimeError("DEBUG must be False in staging/prod")
-
-    # Shutdown cleanup
-    @app.on_event("shutdown")
-    async def _shutdown():
-        await cleanup_clients()
-
-    return app
-
-app = create_app()
+# Versioned API
+app.include_router(api_v1, prefix="/api/v1")

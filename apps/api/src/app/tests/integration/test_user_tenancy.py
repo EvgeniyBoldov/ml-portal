@@ -8,7 +8,7 @@ from typing import List
 
 from app.models.user import Users
 from app.models.tenant import Tenants, UserTenants
-from app.repositories.users_repo import UsersRepository
+from app.repositories.users_repo import AsyncUsersRepository
 
 
 class TestUserTenancyIntegration:
@@ -35,7 +35,7 @@ class TestUserTenancyIntegration:
     @pytest.fixture
     async def test_users(self, db_session, test_tenant):
         """Create multiple test users with different creation times"""
-        users_repo = UsersRepository(db_session)
+        users_repo = AsyncUsersRepository(db_session)
         users = []
         
         # Create users with staggered creation times
@@ -74,7 +74,7 @@ class TestUserTenancyIntegration:
 
     async def test_add_user_to_tenant(self, db_session, test_tenant):
         """Test adding user to tenant"""
-        users_repo = UsersRepository(db_session)
+        users_repo = AsyncUsersRepository(db_session)
         
         # Create user
         user = Users(
@@ -110,7 +110,7 @@ class TestUserTenancyIntegration:
 
     async def test_set_default_tenant(self, db_session, test_tenant):
         """Test setting default tenant"""
-        users_repo = UsersRepository(db_session)
+        users_repo = AsyncUsersRepository(db_session)
         
         # Create another tenant
         tenant2 = Tenants(
@@ -162,7 +162,7 @@ class TestUserTenancyIntegration:
 
     async def test_list_by_tenant_pagination(self, db_session, test_tenant, test_users):
         """Test pagination functionality"""
-        users_repo = UsersRepository(db_session)
+        users_repo = AsyncUsersRepository(db_session)
         
         # Test first page with limit=2
         users_page1, next_cursor = users_repo.list_by_tenant(test_tenant.id, limit=2)
@@ -194,7 +194,7 @@ class TestUserTenancyIntegration:
 
     async def test_pagination_cursor_roundtrip(self, db_session, test_tenant, test_users):
         """Test cursor encoding/decoding"""
-        users_repo = UsersRepository(db_session)
+        users_repo = AsyncUsersRepository(db_session)
         
         # Get first page
         users_page1, next_cursor = users_repo.list_by_tenant(test_tenant.id, limit=2)
@@ -215,7 +215,7 @@ class TestUserTenancyIntegration:
 
     async def test_pagination_limit_validation(self, db_session, test_tenant):
         """Test limit validation"""
-        users_repo = UsersRepository(db_session)
+        users_repo = AsyncUsersRepository(db_session)
         
         # Test invalid limits
         with pytest.raises(ValueError, match="limit_out_of_range"):
@@ -226,7 +226,7 @@ class TestUserTenancyIntegration:
 
     async def test_pagination_invalid_cursor(self, db_session, test_tenant):
         """Test invalid cursor handling"""
-        users_repo = UsersRepository(db_session)
+        users_repo = AsyncUsersRepository(db_session)
         
         # Test invalid cursor
         with pytest.raises(ValueError, match="invalid_cursor"):
@@ -234,7 +234,7 @@ class TestUserTenancyIntegration:
 
     async def test_tenant_isolation(self, db_session):
         """Test tenant isolation - users in tenant A don't appear in tenant B"""
-        users_repo = UsersRepository(db_session)
+        users_repo = AsyncUsersRepository(db_session)
         
         # Create two tenants
         tenant_a = Tenants(
@@ -302,7 +302,7 @@ class TestUserTenancyIntegration:
 
     async def test_empty_tenant_pagination(self, db_session):
         """Test pagination with empty tenant"""
-        users_repo = UsersRepository(db_session)
+        users_repo = AsyncUsersRepository(db_session)
         
         # Create empty tenant
         empty_tenant = Tenants(

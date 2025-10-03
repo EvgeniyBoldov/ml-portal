@@ -22,11 +22,10 @@ class TestTenantsService:
     @pytest.fixture
     def tenants_service(self, mock_session, mock_repo):
         """Создает экземпляр TenantsService с моками."""
-        with patch('app.services.tenants_service.TenantsRepository') as mock_repo_class:
-            mock_repo_class.return_value = mock_repo
-            
-            from app.services.tenants_service import TenantsService
-            return TenantsService(mock_session)
+        from app.services.tenants_service import TenantsService
+        service = TenantsService(mock_session)
+        service.repo = mock_repo
+        return service
 
     def test_tenants_service_initialization(self, tenants_service, mock_session, mock_repo):
         """Тест инициализации TenantsService."""

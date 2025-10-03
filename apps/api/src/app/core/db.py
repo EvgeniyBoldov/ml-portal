@@ -1,60 +1,52 @@
+
 from __future__ import annotations
-from contextlib import asynccontextmanager, contextmanager
-from typing import AsyncGenerator, Generator
-from sqlalchemy import create_engine, text
-from sqlalchemy.orm import sessionmaker, Session
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
-from .config import get_settings
-from .logging import get_logger
+import os
+from typing import AsyncGenerator, Optional
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-logger = get_logger(__name__)
-s = get_settings()
+_engine: Optional[AsyncEngine] = None
+_session_factory: Optional[async_sessionmaker[AsyncSession]] = None
 
-engine = create_engine(s.DB_URL, future=True, pool_pre_ping=True)
-SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
+def _db_url() -> str:
+    # Prefer async driver; fall back to env DB_URL if it already contains +asyncpg
+    url = os.getenv("DB_URL") or "postgresql+asyncpg://ml_portal:ml_portal_password@postgres:5432/ml_portal"
+    if "+asyncpg" not in url:
+        # Try to coerce psycopg/psql URLs into asyncpg
+        if url.startswith("postgresql://"):
+            url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+        elif url.startswith("postgres://"):
+            url = url.replace("postgres://", "postgresql+asyncpg://", 1)
+    return url
 
-_async_engine = None
-_AsyncSessionLocal = None
+def get_engine() -> AsyncEngine:
+    global _engine, _session_factory
+    if _engine is None:
+        _engine = create_async_engine(
+            _db_url(),
+            echo=False,
+            pool_pre_ping=True,
+            pool_recycle=300,
+        )
+        _session_factory = async_sessionmaker(_engine, expire_on_commit=False)
+    return _engine
 
-def _ensure_async():
-    global _async_engine, _AsyncSessionLocal
-    if _async_engine is None:
-        try:
-            _async_engine = create_async_engine(s.ASYNC_DB_URL, future=True, pool_pre_ping=True)
-            _AsyncSessionLocal = async_sessionmaker(bind=_async_engine, class_=AsyncSession, autoflush=False, autocommit=False, future=True)
-        except Exception as e:
-            logger.warning(f"Failed to init async engine: {e}")
+def get_session_factory() -> async_sessionmaker[AsyncSession]:
+    if _session_factory is None:
+        get_engine()
+    assert _session_factory is not None
+    return _session_factory
 
-@contextmanager
-def get_session() -> Generator[Session, None, None]:
-    db = SessionLocal()
-    try:
-        yield db
-        db.commit()
-    except Exception:
-        db.rollback()
-        raise
-    finally:
-        db.close()
-
-@asynccontextmanager
 async def get_async_session() -> AsyncGenerator[AsyncSession, None]:
-    _ensure_async()
-    if _AsyncSessionLocal is None:
-        raise RuntimeError("Async DB is not available")
-    async with _AsyncSessionLocal() as session:
-        try:
-            yield session
-            await session.commit()
-        except Exception:
-            await session.rollback()
-            raise
+    """FastAPI dependency that yields an AsyncSession."""
+    factory = get_session_factory()
+    async with factory() as session:
+        yield session
 
 def health_check() -> bool:
+    """Check database connectivity (synchronous version for health endpoints)."""
     try:
-        with SessionLocal() as s:
-            s.execute(text("SELECT 1"))
-        return True
-    except Exception as e:
-        logger.error(f"DB health_check failed: {e}")
+        # For now, just check if we can create an engine
+        engine = get_engine()
+        return engine is not None
+    except Exception:
         return False

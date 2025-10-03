@@ -1,15 +1,12 @@
 from typing import AsyncGenerator, Dict, Any, List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse, JSONResponse
-from app.api.v1.routers.utils import (
-    format_sse, 
-    wrap_sse_stream,
-    EVENT_DONE,
-)
+from app.core.sse import format_sse, wrap_sse_stream
+from app.core.sse_protocol import EVENT_DONE
 from app.api.deps import get_llm_client
-from app.clients.interfaces import LLMClientProtocol
+from app.core.http.clients import LLMClientProtocol
 
-router = APIRouter(prefix="/chat", tags=["chat"])
+router = APIRouter(tags=["chat"])
 
 @router.post("/stream")
 async def chat_stream(

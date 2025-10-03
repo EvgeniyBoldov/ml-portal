@@ -4,7 +4,7 @@ Unit тесты для сервисов.
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 from app.services.auth_service import AuthService
-from app.services.users_service import UsersService
+from app.services.users_service import AsyncUsersService
 
 
 class TestAuthService:
@@ -55,65 +55,80 @@ class TestAuthService:
         assert result is True
 
 
-class TestUsersService:
-    """Unit тесты для UsersService."""
+class TestAsyncUsersService:
+    """Unit тесты для AsyncUsersService."""
 
     @pytest.fixture
-    def mock_session(self):
-        """Создает мок сессии."""
+    def mock_repo(self):
+        """Создает мок репозитория."""
         return AsyncMock()
 
     @pytest.fixture
-    def users_service(self, mock_session):
-        """Создает экземпляр UsersService с моками."""
+    def users_service(self, mock_repo):
+        """Создает экземпляр AsyncUsersService с моками."""
+        return AsyncUsersService(mock_repo)
+
+    @pytest.mark.asyncio
+    async def test_authenticate_user_success(self, users_service, mock_repo):
+        """Тест успешной аутентификации пользователя."""
+        # Arrange
+        from app.models.user import Users
         import uuid
-        # Создаем мок для UsersRepository с правильными параметрами
-        with patch('app.services.users_service.create_users_repository') as mock_repo_factory:
-            mock_repo = MagicMock()
-            mock_repo_factory.return_value = mock_repo
-            
-            # Создаем мок для других репозиториев
-            with patch('app.services.users_service.create_user_tokens_repository'), \
-                 patch('app.services.users_service.create_user_refresh_tokens_repository'), \
-                 patch('app.services.users_service.create_password_reset_tokens_repository'), \
-                 patch('app.services.users_service.create_audit_logs_repository'):
-                return UsersService(mock_session)
+        from unittest.mock import patch
+        
+        user = Users(
+            id=uuid.uuid4(),
+            login="testuser",
+            email="test@example.com",
+            password_hash="hashed_password",
+            is_active=True
+        )
+        mock_repo.get_by_login.return_value = user
+        mock_repo.get_by_email.return_value = None
 
-    def test_get_required_fields(self, users_service):
-        """Тест получения обязательных полей."""
         # Act
-        required_fields = users_service._get_required_fields()
+        with patch('bcrypt.checkpw', return_value=True):
+            result = await users_service.authenticate_user("testuser", "password")
 
         # Assert
-        assert "login" in required_fields
-        assert "password_hash" in required_fields
+        assert result is not None
+        assert result.login == "testuser"
+        mock_repo.get_by_login.assert_called_once_with("testuser")
 
-    def test_process_create_data(self, users_service):
-        """Тест обработки данных для создания пользователя."""
+    @pytest.mark.asyncio
+    async def test_authenticate_user_wrong_password(self, users_service, mock_repo):
+        """Тест аутентификации с неправильным паролем."""
         # Arrange
-        data = {
-            "login": "TESTUSER",
-            "email": "TEST@EXAMPLE.COM",
-            "password_hash": "hashed_password"
-        }
+        from app.models.user import Users
+        import uuid
+        
+        user = Users(
+            id=uuid.uuid4(),
+            login="testuser",
+            email="test@example.com",
+            password_hash="$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewdBPj4J/8QzK8q2",  # bcrypt hash for "password"
+            is_active=True
+        )
+        mock_repo.get_by_login.return_value = user
 
         # Act
-        processed = users_service._process_create_data(data)
+        result = await users_service.authenticate_user("testuser", "wrongpassword")
 
         # Assert
-        assert processed["login"] == "testuser"  # Должно быть в нижнем регистре
-        assert processed["email"] == "test@example.com"  # Должно быть в нижнем регистре
-        assert processed["password_hash"] == "hashed_password"
+        assert result is None
+        mock_repo.get_by_login.assert_called_once_with("testuser")
 
-    def test_sanitize_string(self, users_service):
-        """Тест санитизации строки."""
+    @pytest.mark.asyncio
+    async def test_authenticate_user_not_found(self, users_service, mock_repo):
+        """Тест аутентификации несуществующего пользователя."""
         # Arrange
-        test_string = "  Test String  "
-        max_length = 10
+        mock_repo.get_by_login.return_value = None
+        mock_repo.get_by_email.return_value = None
 
         # Act
-        result = users_service._sanitize_string(test_string, max_length)
+        result = await users_service.authenticate_user("nonexistent", "password")
 
         # Assert
-        assert result == "Test Strin"  # Обрезано до max_length
-        assert len(result) <= max_length
+        assert result is None
+        mock_repo.get_by_login.assert_called_once_with("nonexistent")
+        mock_repo.get_by_email.assert_called_once_with("nonexistent")

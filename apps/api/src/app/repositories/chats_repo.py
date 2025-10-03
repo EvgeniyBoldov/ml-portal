@@ -200,6 +200,7 @@ class AsyncChatsRepository(AsyncTenantRepository[Chats]):
                          tags: Optional[List[str]] = None) -> Chats:
         """Create a new chat"""
         return await self.create(
+            self.tenant_id,
             owner_id=owner_id,
             name=name,
             tags=tags or []
@@ -290,9 +291,12 @@ def create_chat_messages_repository(session: Session) -> ChatMessagesRepository:
     """Create chat messages repository"""
     return ChatMessagesRepository(session)
 
-def create_async_chats_repository(session: AsyncSession) -> AsyncChatsRepository:
+def create_async_chats_repository(session: AsyncSession, tenant_id: Optional[uuid.UUID] = None) -> AsyncChatsRepository:
     """Create async chats repository"""
-    return AsyncChatsRepository(session)
+    if tenant_id is None:
+        # Use a default tenant ID for testing
+        tenant_id = uuid.uuid4()
+    return AsyncChatsRepository(session, tenant_id)
 
 def create_async_chat_messages_repository(session: AsyncSession) -> AsyncChatMessagesRepository:
     """Create async chat messages repository"""

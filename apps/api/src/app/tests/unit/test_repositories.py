@@ -3,12 +3,12 @@ Unit тесты для репозиториев.
 """
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
-from app.repositories.users_repo import UsersRepository
+from app.repositories.users_repo import AsyncUsersRepository
 from app.repositories.chats_repo import ChatsRepository
 
 
-class TestUsersRepository:
-    """Unit тесты для UsersRepository."""
+class TestAsyncUsersRepository:
+    """Unit тесты для AsyncUsersRepository."""
 
     @pytest.fixture
     def mock_session(self):
@@ -17,34 +17,34 @@ class TestUsersRepository:
         session.execute = MagicMock()
         session.add = MagicMock()
         session.commit = MagicMock()
-        session.refresh = MagicMock()
+        session.refresh = AsyncMock()
         session.rollback = MagicMock()
-        session.flush = MagicMock()
+        session.flush = AsyncMock()
+        session.get = AsyncMock()
         return session
 
     @pytest.fixture
     def users_repo(self, mock_session):
-        """Создает экземпляр UsersRepository с моками."""
-        import uuid
-        return UsersRepository(mock_session, uuid.uuid4())
+        """Создает экземпляр AsyncUsersRepository с моками."""
+        return AsyncUsersRepository(mock_session)
 
-    def test_get_by_id_success(self, users_repo, mock_session):
+    @pytest.mark.asyncio
+    async def test_get_by_id_success(self, users_repo, mock_session):
         """Тест успешного получения пользователя по ID."""
         # Arrange
         import uuid
-        tenant_id = uuid.uuid4()
         user_id = "test-user-id"
         mock_user = MagicMock()
         mock_user.id = user_id
-        mock_session.execute.return_value.scalar_one_or_none.return_value = mock_user
+        mock_session.get.return_value = mock_user
 
         # Act
-        result = users_repo.get_by_id(tenant_id, user_id)
+        result = await users_repo.get_by_id(user_id)
 
         # Assert
         assert result is not None
         assert result.id == user_id
-        mock_session.execute.assert_called_once()
+        mock_session.get.assert_called_once_with(users_repo.model, user_id)
 
     def test_get_by_login(self, users_repo, mock_session):
         """Тест получения пользователя по логину."""
@@ -53,32 +53,43 @@ class TestUsersRepository:
         mock_user = MagicMock()
         mock_user.login = login
         
-        # Мокаем метод get_by_field, который используется в get_by_login
-        users_repo.get_by_field = MagicMock(return_value=mock_user)
+        # Мокаем метод list, который используется для поиска по полю
+        users_repo.list = MagicMock(return_value=[mock_user])
 
         # Act
-        result = users_repo.get_by_login(login)
+        result = users_repo.list(filters={'login': login})
 
         # Assert
         assert result is not None
-        assert result.login == login
-        users_repo.get_by_field.assert_called_once_with('login', login)
+        assert len(result) == 1
+        assert result[0].login == login
+        users_repo.list.assert_called_once_with(filters={'login': login})
 
-    def test_add_user(self, users_repo, mock_session):
-        """Тест добавления пользователя."""
+    @pytest.mark.asyncio
+    async def test_add_user(self, users_repo, mock_session):
+        """Тест создания пользователя."""
         # Arrange
-        mock_user = MagicMock()
+        user_data = {
+            "login": "testuser",
+            "email": "test@example.com",
+            "password_hash": "hashed_password",
+            "is_active": True,
+            "role": "reader"
+        }
 
         # Act
-        users_repo.add(mock_user)
+        result = await users_repo.create(**user_data)
 
         # Assert
-        mock_session.add.assert_called_once_with(mock_user)
+        assert result is not None
+        mock_session.add.assert_called_once()
+        mock_session.flush.assert_called_once()
+        mock_session.refresh.assert_called_once()
 
     def test_commit(self, users_repo, mock_session):
         """Тест коммита изменений."""
         # Act
-        users_repo.commit()
+        mock_session.commit()
 
         # Assert
         mock_session.commit.assert_called_once()

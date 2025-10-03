@@ -12,7 +12,7 @@ from app.repositories.users_repo import AsyncUsersRepository
 
 
 @pytest.mark.asyncio
-async def test_api_user_list_with_tenant_header():
+async def test_api_user_list_with_tenant_header(unique_tenant_name):
     """Test API endpoint for listing users with X-Tenant-Id header"""
     from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
     from sqlalchemy.orm import sessionmaker
@@ -32,7 +32,7 @@ async def test_api_user_list_with_tenant_header():
         # Create tenant
         tenant = Tenants(
             id=uuid.uuid4(),
-            name="api_test_tenant",
+            name=f"{unique_tenant_name}_api_test",
             is_active=True
         )
         session.add(tenant)
@@ -132,7 +132,7 @@ async def test_api_error_handling():
 
 
 @pytest.mark.asyncio
-async def test_api_tenant_membership_validation():
+async def test_api_tenant_membership_validation(unique_tenant_name):
     """Test tenant membership validation for API requests"""
     from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
     from sqlalchemy.orm import sessionmaker
@@ -148,8 +148,8 @@ async def test_api_tenant_membership_validation():
         users_repo = AsyncUsersRepository(session)
         
         # Create two tenants
-        tenant_a = Tenants(id=uuid.uuid4(), name="tenant_a", is_active=True)
-        tenant_b = Tenants(id=uuid.uuid4(), name="tenant_b", is_active=True)
+        tenant_a = Tenants(id=uuid.uuid4(), name=f"{unique_tenant_name}_a", is_active=True)
+        tenant_b = Tenants(id=uuid.uuid4(), name=f"{unique_tenant_name}_b", is_active=True)
         
         session.add(tenant_a)
         session.add(tenant_b)
@@ -194,7 +194,11 @@ async def test_api_tenant_membership_validation():
         default_tenant = await users_repo.get_default_tenant(user.id)
         assert default_tenant == tenant_a.id
         
-        # Cleanup
+        # Cleanup - сначала удаляем связи, потом основные объекты
+        from sqlalchemy import delete
+        await session.execute(
+            delete(UserTenants).where(UserTenants.user_id == user.id)
+        )
         await session.delete(user)
         await session.delete(tenant_a)
         await session.delete(tenant_b)
@@ -204,7 +208,7 @@ async def test_api_tenant_membership_validation():
 
 
 @pytest.mark.asyncio
-async def test_api_pagination_edge_cases():
+async def test_api_pagination_edge_cases(unique_tenant_name):
     """Test edge cases in pagination for API responses"""
     from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
     from sqlalchemy.orm import sessionmaker
@@ -222,7 +226,7 @@ async def test_api_pagination_edge_cases():
         # Create tenant
         tenant = Tenants(
             id=uuid.uuid4(),
-            name="edge_case_tenant",
+            name=f"{unique_tenant_name}_edge_case",
             is_active=True
         )
         session.add(tenant)

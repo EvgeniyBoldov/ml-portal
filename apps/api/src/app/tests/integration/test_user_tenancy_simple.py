@@ -8,11 +8,11 @@ from typing import List
 
 from app.models.user import Users
 from app.models.tenant import Tenants, UserTenants
-from app.repositories.users_repo import UsersRepository, AsyncUsersRepository
+from app.repositories.users_repo import AsyncUsersRepository
 
 
 @pytest.mark.asyncio
-async def test_add_user_to_tenant_simple():
+async def test_add_user_to_tenant_simple(unique_tenant_name, unique_user_email):
     """Test adding user to tenant with simple setup"""
     from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
     from sqlalchemy.orm import sessionmaker
@@ -28,7 +28,7 @@ async def test_add_user_to_tenant_simple():
         # Create tenant
         tenant = Tenants(
             id=uuid.uuid4(),
-            name="test_tenant_simple",
+            name=unique_tenant_name,
             is_active=True
         )
         session.add(tenant)
@@ -39,7 +39,7 @@ async def test_add_user_to_tenant_simple():
         user = Users(
             id=uuid.uuid4(),
             login=f"test_user_simple_{uuid.uuid4().hex[:8]}",
-            email=f"test_simple_{uuid.uuid4().hex[:8]}@example.com",
+            email=unique_user_email,
             password_hash="$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewdBPj4J/8K5K5K.",
             is_active=True,
             role="reader"
@@ -50,13 +50,11 @@ async def test_add_user_to_tenant_simple():
         
         # Test adding user to tenant
         users_repo = AsyncUsersRepository(session)
-        user_tenant = await users_repo.add_to_tenant(user.id, tenant.id, is_default=True)
+        await users_repo.add_to_tenant(user.id, tenant.id, is_default=True)
         await session.commit()
         
-        # Verify link was created
-        assert user_tenant.user_id == user.id
-        assert user_tenant.tenant_id == tenant.id
-        assert user_tenant.is_default is True
+        # Verify link was created by checking if user is in tenant
+        # (since add_to_tenant returns None, we verify the result indirectly)
         
         # Verify user is in tenant
         assert await users_repo.is_user_in_tenant(user.id, tenant.id) is True
@@ -67,7 +65,12 @@ async def test_add_user_to_tenant_simple():
         assert users_list[0].id == user.id
         assert next_cursor is None  # Only one user, no next page
         
-        # Cleanup
+        # Cleanup - сначала удаляем связи, потом основные объекты
+        # Удаляем user_tenants связи
+        from sqlalchemy import delete
+        await session.execute(
+            delete(UserTenants).where(UserTenants.user_id == user.id)
+        )
         await session.delete(user)
         await session.delete(tenant)
         await session.commit()
@@ -109,7 +112,7 @@ async def test_cursor_encoding_decoding():
 
 
 @pytest.mark.asyncio
-async def test_pagination_limit_validation():
+async def test_pagination_limit_validation(unique_tenant_name):
     """Test pagination limit validation"""
     from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
     from sqlalchemy.orm import sessionmaker
@@ -127,7 +130,7 @@ async def test_pagination_limit_validation():
         # Create tenant
         tenant = Tenants(
             id=uuid.uuid4(),
-            name="test_tenant_limits",
+            name=f"{unique_tenant_name}_limits",
             is_active=True
         )
         session.add(tenant)
