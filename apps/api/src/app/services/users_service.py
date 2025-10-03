@@ -23,3 +23,7 @@ class AsyncUsersService:
         except Exception:
             ok = False
         return user if ok else None
+
+    async def get_user_by_id(self, user_id: str):
+        """Get user by ID"""
+        return await self.users_repo.get_by_id(user_id)

@@ -127,21 +127,44 @@ test.describe('Multi-tenant E2E Tests', () => {
     await page.click('button[type="submit"]');
     await page.click('text=Tenant A');
     
-    // Try to access Tenant B data directly via API
-    const response = await page.request.get('/api/v1/tenants/tenant-b-id/chats');
-    
-    // Should get 403 Forbidden
-    expect(response.status()).toBe(403);
-    
-    // Try to create resource with wrong tenant ID
-    const createResponse = await page.request.post('/api/v1/chats', {
-      data: {
-        name: 'Cross Tenant Chat',
-        tenant_id: 'tenant-b-id' // Wrong tenant ID
+    // Test API calls with X-Tenant-Id header
+    const response = await page.request.get('/api/v1/chats', {
+      headers: {
+        'X-Tenant-Id': 'tenant-b-id' // Wrong tenant ID
       }
     });
     
-    // Should get 403 Forbidden
-    expect(createResponse.status()).toBe(403);
+    // Should get 403 Forbidden for cross-tenant access
+    expect(response.status()).toBe(403);
+    
+    // Test API calls without X-Tenant-Id header
+    const noHeaderResponse = await page.request.get('/api/v1/chats');
+    
+    // Should get 400 Bad Request for missing tenant header
+    expect(noHeaderResponse.status()).toBe(400);
+    
+    // Test API calls with invalid tenant ID format
+    const invalidTenantResponse = await page.request.get('/api/v1/chats', {
+      headers: {
+        'X-Tenant-Id': 'invalid-uuid-format'
+      }
+    });
+    
+    // Should get 400 Bad Request for invalid tenant format
+    expect(invalidTenantResponse.status()).toBe(400);
+    
+    // Test creating resource with correct tenant ID
+    const createResponse = await page.request.post('/api/v1/chats', {
+      headers: {
+        'X-Tenant-Id': 'tenant-a-id', // Correct tenant ID
+        'Idempotency-Key': 'test-idempotency-key'
+      },
+      data: {
+        name: 'Valid Tenant Chat'
+      }
+    });
+    
+    // Should succeed with correct tenant ID
+    expect(createResponse.status()).toBe(201);
   });
 });

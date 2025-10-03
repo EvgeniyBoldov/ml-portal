@@ -13,6 +13,4 @@ api_v1 = APIRouter()
 api_v1.include_router(health_router.router, tags=["health"])
 
 # Auth: mount exactly once at '/auth'
-if is_auth_enabled():
-    api_v1.include_router(security_router.router, prefix="/auth", tags=["auth"])
-# else: keep /auth endpoints disabled for now (tests expect 404)
+api_v1.include_router(security_router.router, prefix="/auth", tags=["auth"])

@@ -3,7 +3,13 @@ Unit тесты для утилит.
 """
 import pytest
 from datetime import datetime, timedelta
-from app.core.security import verify_password, hash_password, encode_jwt, decode_jwt
+"""
+Unit тесты для утилит.
+"""
+import pytest
+from datetime import datetime, timedelta
+from app.core.security import verify_password, hash_password, create_access_token, create_refresh_token, decode_jwt
+from app.utils.sse import sse_response
 from app.utils.sse import sse_response
 
 
@@ -52,13 +58,30 @@ class TestSecurityUtils:
 class TestJWTUtils:
     """Unit тесты для JWT утилит."""
 
-    def test_encode_jwt(self):
-        """Тест кодирования JWT токена."""
+    def test_create_access_token(self):
+        """Тест создания access токена."""
         # Arrange
-        payload = {"sub": "test@example.com", "user_id": 1}
+        user_id = "test-user-id"
+        email = "test@example.com"
+        role = "user"
+        tenant_ids = ["tenant-1"]
+        scopes = ["read", "write"]
 
         # Act
-        token = encode_jwt(payload)
+        token = create_access_token(user_id, email, role, tenant_ids, scopes)
+
+        # Assert
+        assert token is not None
+        assert isinstance(token, str)
+        assert len(token) > 0
+
+    def test_create_refresh_token(self):
+        """Тест создания refresh токена."""
+        # Arrange
+        user_id = "test-user-id"
+
+        # Act
+        token = create_refresh_token(user_id)
 
         # Assert
         assert token is not None
@@ -68,16 +91,23 @@ class TestJWTUtils:
     def test_decode_jwt_success(self):
         """Тест успешного декодирования токена."""
         # Arrange
-        payload = {"sub": "test@example.com", "user_id": 1}
-        token = encode_jwt(payload)
+        user_id = "test-user-id"
+        email = "test@example.com"
+        role = "user"
+        tenant_ids = ["tenant-1"]
+        scopes = ["read", "write"]
+        token = create_access_token(user_id, email, role, tenant_ids, scopes)
 
         # Act
         result = decode_jwt(token)
 
         # Assert
         assert result is not None
-        assert result["sub"] == "test@example.com"
-        assert result["user_id"] == 1
+        assert result["sub"] == user_id
+        assert result["email"] == email
+        assert result["role"] == role
+        assert result["tenant_ids"] == tenant_ids
+        assert result["scopes"] == scopes
 
     def test_decode_jwt_invalid(self):
         """Тест декодирования невалидного токена."""

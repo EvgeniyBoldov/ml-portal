@@ -65,30 +65,64 @@ test.describe('Comprehensive Authentication E2E Tests', () => {
     await page.fill('input[name="password"]', 'TestPassword123!');
     await page.click('button[type="submit"]');
     
-    // Verify tokens are stored
-    const accessToken = await page.evaluate(() => localStorage.getItem('access_token'));
-    const refreshToken = await page.evaluate(() => localStorage.getItem('refresh_token'));
-    expect(accessToken).toBeTruthy();
-    expect(refreshToken).toBeTruthy();
-    
-    // Simulate token expiry
-    await page.evaluate(() => {
-      localStorage.setItem('access_token', 'expired-token');
+    // Verify tokens are stored with correct structure
+    const tokenData = await page.evaluate(() => {
+      const accessToken = localStorage.getItem('access_token');
+      const refreshToken = localStorage.getItem('refresh_token');
+      const tokenType = localStorage.getItem('token_type');
+      const expiresIn = localStorage.getItem('expires_in');
+      return { accessToken, refreshToken, tokenType, expiresIn };
     });
     
-    // Make API call that should trigger refresh
-    await page.evaluate(async () => {
-      const response = await fetch('/api/v1/users/me', {
+    expect(tokenData.accessToken).toBeTruthy();
+    expect(tokenData.refreshToken).toBeTruthy();
+    expect(tokenData.tokenType).toBe('Bearer');
+    expect(tokenData.expiresIn).toBeTruthy();
+    
+    // Test /auth/me endpoint
+    const meResponse = await page.evaluate(async () => {
+      const response = await fetch('/api/v1/auth/me', {
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('access_token')}`
         }
       });
-      return response.status;
+      return { status: response.status, data: await response.json() };
     });
     
-    // Verify new token is stored
-    const newAccessToken = await page.evaluate(() => localStorage.getItem('access_token'));
-    expect(newAccessToken).not.toBe('expired-token');
+    expect(meResponse.status).toBe(200);
+    expect(meResponse.data).toHaveProperty('id');
+    expect(meResponse.data).toHaveProperty('email');
+    expect(meResponse.data).toHaveProperty('role');
+    
+    // Test refresh token endpoint
+    const refreshResponse = await page.evaluate(async () => {
+      const response = await fetch('/api/v1/auth/refresh', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          refresh_token: localStorage.getItem('refresh_token')
+        })
+      });
+      return { status: response.status, data: await response.json() };
+    });
+    
+    expect(refreshResponse.status).toBe(200);
+    expect(refreshResponse.data).toHaveProperty('access_token');
+    expect(refreshResponse.data).toHaveProperty('refresh_token');
+    expect(refreshResponse.data).toHaveProperty('token_type', 'Bearer');
+    expect(refreshResponse.data).toHaveProperty('expires_in');
+    
+    // Test JWKS endpoint
+    const jwksResponse = await page.evaluate(async () => {
+      const response = await fetch('/api/v1/auth/.well-known/jwks.json');
+      return { status: response.status, data: await response.json() };
+    });
+    
+    expect(jwksResponse.status).toBe(200);
+    expect(jwksResponse.data).toHaveProperty('keys');
+    expect(Array.isArray(jwksResponse.data.keys)).toBe(true);
     
     // Verify user is still authenticated
     await expect(page.locator('text=Welcome')).toBeVisible();
@@ -137,7 +171,7 @@ test.describe('Comprehensive Authentication E2E Tests', () => {
   });
 
   test('Error Handling: Invalid Input → Network Errors → Server Errors → Recovery', async ({ page }) => {
-    // Test invalid email format
+    // Test invalid email format (should return 422)
     await page.goto('/login');
     await page.fill('input[name="email"]', 'invalid-email');
     await page.fill('input[name="password"]', 'password');
@@ -145,6 +179,14 @@ test.describe('Comprehensive Authentication E2E Tests', () => {
     
     // Should show validation error
     await expect(page.locator('text=Please enter a valid email address')).toBeVisible();
+    
+    // Test invalid credentials (should return 401)
+    await page.fill('input[name="email"]', 'nonexistent@example.com');
+    await page.fill('input[name="password"]', 'wrongpassword');
+    await page.click('button[type="submit"]');
+    
+    // Should show authentication error
+    await expect(page.locator('text=Invalid credentials')).toBeVisible();
     
     // Test network error
     await page.route('**/api/v1/auth/login', route => route.abort());
@@ -155,7 +197,7 @@ test.describe('Comprehensive Authentication E2E Tests', () => {
     // Should show network error
     await expect(page.locator('text=Network error. Please check your connection')).toBeVisible();
     
-    // Test server error
+    // Test server error (500)
     await page.unroute('**/api/v1/auth/login');
     await page.route('**/api/v1/auth/login', route => {
       route.fulfill({
@@ -169,6 +211,14 @@ test.describe('Comprehensive Authentication E2E Tests', () => {
     
     // Should show server error
     await expect(page.locator('text=Server error. Please try again later')).toBeVisible();
+    
+    // Test unauthorized access to protected endpoint (401)
+    const unauthorizedResponse = await page.evaluate(async () => {
+      const response = await fetch('/api/v1/auth/me');
+      return { status: response.status, data: await response.json() };
+    });
+    
+    expect(unauthorizedResponse.status).toBe(401);
     
     // Test recovery
     await page.unroute('**/api/v1/auth/login');

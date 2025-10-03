@@ -161,38 +161,36 @@ class AsyncRepositoryFactory:
 
 
 # Dependency injection functions
-# def get_repository_factory(
-#     session: Session = Depends(db_session),
-#     user: UserCtx = Depends(get_current_user)
-# ) -> RepositoryFactory:
-#     """Get repository factory with tenant isolation from current user"""
-#     # Extract tenant_id from user context - CRITICAL: no defaults in production
-#     tenant_id = _extract_tenant_id_from_user(user)
-#     
-#     return RepositoryFactory(session, tenant_id, user.id)
+def get_repository_factory(
+    session: Session = Depends(db_session),
+    user: UserCtx = Depends(get_current_user)
+) -> RepositoryFactory:
+    """Get repository factory with tenant isolation from current user"""
+    # Extract tenant_id from user context - CRITICAL: no defaults in production
+    tenant_id = _extract_tenant_id_from_user(user)
+    
+    return RepositoryFactory(session, tenant_id, user.id)
 
 
-# def get_async_repository_factory(
-#     session: AsyncSession = Depends(get_async_db_session),
-#     user: UserCtx = Depends(get_current_user)
-# ) -> AsyncRepositoryFactory:
-#     """Get async repository factory with tenant isolation from current user"""
-#     # Extract tenant_id from user context - CRITICAL: no defaults in production
-#     tenant_id = _extract_tenant_id_from_user(user)
-#     
-#     return AsyncRepositoryFactory(session, tenant_id, user.id)
+def get_async_repository_factory(
+    session: AsyncSession = Depends(db_session),
+    user: UserCtx = Depends(get_current_user)
+) -> AsyncRepositoryFactory:
+    """Get async repository factory with tenant isolation from current user"""
+    # Extract tenant_id from user context - CRITICAL: no defaults in production
+    tenant_id = _extract_tenant_id_from_user(user)
+    
+    return AsyncRepositoryFactory(session, tenant_id, user.id)
 
 
 def _extract_tenant_id_from_user(user: UserCtx) -> uuid.UUID:
     """Extract tenant_id from user context with validation"""
-    # Check if user has tenant_id attribute
-    if hasattr(user, 'tenant_id') and user.tenant_id is not None:
-        return user.tenant_id
-    
     # Check if user has tenant_ids list
-    if hasattr(user, 'tenant_ids') and user.tenant_ids:
-        if isinstance(user.tenant_ids, list) and len(user.tenant_ids) > 0:
-            return user.tenant_ids[0]  # Use first tenant
+    if user.tenant_ids and len(user.tenant_ids) > 0:
+        try:
+            return uuid.UUID(user.tenant_ids[0])  # Use first tenant
+        except ValueError:
+            raise ValueError(f"Invalid tenant_id format: {user.tenant_ids[0]}")
     
     # CRITICAL: In production, this should never happen
     # All users must have a valid tenant_id

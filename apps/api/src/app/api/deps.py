@@ -2,7 +2,7 @@
 import os
 from typing import AsyncGenerator
 from sqlalchemy.ext.asyncio import AsyncSession
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, status, Request
 from app.core.db import get_async_session
 from app.core.di import get_llm_client, get_emb_client
 from app.core.security import UserCtx
@@ -20,11 +20,37 @@ def get_llm_client_mock():
     """Mock LLM client for testing"""
     return get_llm_client()
 
-# Authentication dependencies (stubs for now)
-def get_current_user() -> UserCtx:
-    """Get current user from request (stub implementation)"""
-    # This is a stub - in real implementation would extract from JWT token
-    return UserCtx(id="test-user-id", role="reader", tenant_ids=["test-tenant"])
+# Authentication dependencies
+def get_current_user(request: Request) -> UserCtx:
+    """Get current user from JWT token in Authorization header"""
+    from app.core.security import decode_jwt
+    
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing or invalid authorization header",
+            headers={"WWW-Authenticate": "Bearer"}
+        )
+    
+    token = auth_header.split(" ")[1]
+    payload = decode_jwt(token)
+    
+    # Validate token type
+    if payload.get("type") != "access":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token type",
+            headers={"WWW-Authenticate": "Bearer"}
+        )
+    
+    return UserCtx(
+        id=payload["sub"],
+        email=payload.get("email"),
+        role=payload.get("role", "reader"),
+        tenant_ids=payload.get("tenant_ids", []),
+        scopes=payload.get("scopes", [])
+    )
 
 def require_admin(user: UserCtx = Depends(get_current_user)) -> UserCtx:
     """Require admin role"""
@@ -34,6 +60,20 @@ def require_admin(user: UserCtx = Depends(get_current_user)) -> UserCtx:
             detail="Admin access required"
         )
     return user
+
+def get_tenant_id(request: Request) -> str | None:
+    """Get tenant_id from request state (set by middleware)"""
+    return getattr(request.state, "tenant_id", None)
+
+def require_tenant(request: Request) -> str:
+    """Require tenant_id to be present"""
+    tenant_id = get_tenant_id(request)
+    if not tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Tenant ID required"
+        )
+    return tenant_id
 
 # Rate limiting (stub)
 def rate_limit():
