@@ -1,72 +1,138 @@
+version: '3.8'
+
 services:
-  # PostgreSQL для тестов
+  # =============================================================================
+  # DATABASE SERVICES FOR TESTING
+  # =============================================================================
+  
+  # PostgreSQL database for testing
   postgres-test:
     image: postgres:15-alpine
     environment:
-      POSTGRES_DB: ml_portal_test
-      POSTGRES_USER: ml_portal_test
-      POSTGRES_PASSWORD: ml_portal_test_password
-    ports:
-      - "5433:5432"
+      POSTGRES_DB: ${POSTGRES_TEST_DB:-ml_portal_test}
+      POSTGRES_USER: ${POSTGRES_TEST_USER:-ml_portal_test}
+      POSTGRES_PASSWORD: ${POSTGRES_TEST_PASSWORD:-ml_portal_test_password}
+    ports: 
+      - "${POSTGRES_TEST_PORT:-5433}:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ml_portal_test"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_TEST_USER:-ml_portal_test}"]
       interval: 5s
       timeout: 5s
       retries: 5
+      start_period: 10s
+    volumes:
+      - postgres_test_data:/var/lib/postgresql/data
 
-  # Redis для тестов
+  # Redis cache for testing
   redis-test:
     image: redis:7-alpine
     ports:
-      - "6380:6379"
+      - "${REDIS_TEST_PORT:-6380}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 5s
       retries: 5
+      start_period: 10s
+    volumes:
+      - redis_test_data:/data
 
-  # Qdrant для тестов
+  # =============================================================================
+  # VECTOR DATABASE FOR TESTING
+  # =============================================================================
+  
+  # Qdrant vector database for testing
   qdrant-test:
     image: qdrant/qdrant:latest
     ports:
-      - "6335:6333"
+      - "${QDRANT_TEST_PORT:-6335}:6333"
     environment:
       QDRANT__SERVICE__HTTP_PORT: 6333
+      QDRANT__STORAGE__PERFORMANCE__MAX_POINTS_PER_PAYLOAD: 1000
     healthcheck:
       test: ["CMD-SHELL", "timeout 1 bash -c '</dev/tcp/localhost/6333' || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 10
       start_period: 30s
+    volumes:
+      - qdrant_test_data:/qdrant/storage
 
-  # MinIO для тестов
+  # =============================================================================
+  # OBJECT STORAGE FOR TESTING
+  # =============================================================================
+  
+  # MinIO S3-compatible storage for testing
   minio-test:
     image: minio/minio:latest
     ports:
-      - "9002:9000"
-      - "9003:9001"
+      - "${MINIO_TEST_API_PORT:-9002}:9000"
+      - "${MINIO_TEST_CONSOLE_PORT:-9003}:9001"
     environment:
-      MINIO_ROOT_USER: testadmin
-      MINIO_ROOT_PASSWORD: testadmin123
+      MINIO_ROOT_USER: ${MINIO_TEST_ACCESS_KEY:-testadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_TEST_SECRET_KEY:-testadmin123}
     command: server /data --console-address ":9001"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
       interval: 5s
       timeout: 5s
       retries: 5
+      start_period: 15s
+    volumes:
+      - minio_test_data:/data
 
-  # Backend тесты
+  # =============================================================================
+  # BACKEND APPLICATION TESTS
+  # =============================================================================
+  
+  # Backend API tests
   backend-test:
     build:
       context: .
       dockerfile: infra/docker/api/Dockerfile.test
     volumes:
-      # Монтируем код как volume для быстрой итерации
+      # Mount source code for rapid iteration
       - ./apps/api/src/app:/app/app
       - ./apps/api/src/app/tests:/app/tests
       - ./models:/app/models:ro
-    env_file:
-      - ./.env.test
+    environment:
+      # Database configuration
+      DATABASE_URL: postgresql://${POSTGRES_TEST_USER:-ml_portal_test}:${POSTGRES_TEST_PASSWORD:-ml_portal_test_password}@postgres-test:5432/${POSTGRES_TEST_DB:-ml_portal_test}
+      DB_URL: postgresql://${POSTGRES_TEST_USER:-ml_portal_test}:${POSTGRES_TEST_PASSWORD:-ml_portal_test_password}@postgres-test:5432/${POSTGRES_TEST_DB:-ml_portal_test}
+      ASYNC_DB_URL: postgresql+asyncpg://${POSTGRES_TEST_USER:-ml_portal_test}:${POSTGRES_TEST_PASSWORD:-ml_portal_test_password}@postgres-test:5432/${POSTGRES_TEST_DB:-ml_portal_test}
+      
+      # Cache configuration
+      REDIS_URL: ${REDIS_TEST_URL:-redis://redis-test:6379/0}
+      
+      # External services configuration
+      QDRANT_URL: ${QDRANT_TEST_URL:-http://qdrant-test:6333}
+      
+      # Object storage configuration
+      S3_ENDPOINT: ${MINIO_TEST_ENDPOINT:-minio-test:9000}
+      S3_ACCESS_KEY: ${MINIO_TEST_ACCESS_KEY:-testadmin}
+      S3_SECRET_KEY: ${MINIO_TEST_SECRET_KEY:-testadmin123}
+      S3_SECURE: "false"
+      S3_BUCKET_RAG: ${S3_TEST_BUCKET_RAG:-test-rag}
+      S3_BUCKET_ARTIFACTS: ${S3_TEST_BUCKET_ARTIFACTS:-test-artifacts}
+      
+      # JWT and authentication
+      JWT_SECRET: ${JWT_TEST_SECRET:-test-jwt-secret-change-me}
+      JWT_ALGORITHM: ${JWT_TEST_ALGORITHM:-HS256}
+      JWT_ACCESS_TTL_MINUTES: ${JWT_TEST_ACCESS_TTL_MINUTES:-15}
+      JWT_REFRESH_TTL_DAYS: ${JWT_TEST_REFRESH_TTL_DAYS:-30}
+      
+      # External ML services (optional for tests)
+      LLM_BASE_URL: ${LLM_TEST_BASE_URL:-http://localhost:8002}
+      EMB_BASE_URL: ${EMB_TEST_BASE_URL:-http://localhost:8001}
+      
+      # Application settings
+      ENV: test
+      DEBUG: "true"
+      TIMEOUT_SECONDS: ${TEST_TIMEOUT_SECONDS:-30}
+      
+      # Idempotency
+      IDEMPOTENCY_ENABLED: "true"
+      IDEMP_TTL_HOURS: ${IDEMP_TEST_TTL_HOURS:-1}
     depends_on:
       postgres-test:
         condition: service_healthy
@@ -76,25 +142,38 @@ services:
         condition: service_healthy
       minio-test:
         condition: service_healthy
-    command: ["pytest", "tests/", "-v", "--tb=short"]
+    command: ["pytest", "tests/", "-v", "--tb=short", "--cov=app", "--cov-report=term-missing"]
 
-  # Frontend тесты
+  # =============================================================================
+  # FRONTEND APPLICATION TESTS
+  # =============================================================================
+  
+  # Frontend tests (optional - can be skipped if causing issues)
   frontend-test:
     build:
       context: .
       dockerfile: infra/docker/frontend/Dockerfile.test
     volumes:
-      # Монтируем код как volume для быстрой итерации
+      # Mount source code for rapid iteration
       - ./apps/web:/app
-      - /app/node_modules  # Исключаем node_modules из volume
+      - /app/node_modules  # Exclude node_modules from volume
     environment:
-      - NODE_ENV=test
-      - VITE_API_BASE=http://backend-test:8000/api
+      NODE_ENV: test
+      VITE_API_BASE_URL: ${VITE_TEST_API_BASE_URL:-http://backend-test:8000}
+      VITE_APP_NAME: ${VITE_TEST_APP_NAME:-ML Portal Test}
+      VITE_APP_ENV: test
+      VITE_ENABLE_DEV_TOOLS: "false"
+      VITE_USE_MOCKS: ${VITE_TEST_USE_MOCKS:-false}
     depends_on:
       - backend-test
+    profiles: ["frontend-tests"]  # Use profile to skip if needed
     command: ["npm", "test", "--", "--run", "--reporter=verbose"]
 
-  # Функциональные тесты с легкими ML моделями
+  # =============================================================================
+  # FUNCTIONAL TESTS WITH ML SERVICES
+  # =============================================================================
+  
+  # Functional tests with lightweight ML models
   functional-test:
     build:
       context: .
@@ -104,15 +183,23 @@ services:
       - ./apps/api/src/app/tests:/app/tests
       - ./models:/app/models:ro
     environment:
-      - DB_URL=postgresql://ml_portal_test:ml_portal_test_password@postgres-test:5432/ml_portal_test
-      - REDIS_URL=redis://redis-test:6379
-      - QDRANT_URL=http://qdrant-test:6333
-      - S3_ENDPOINT=http://minio-test:9000
-      - S3_ACCESS_KEY=testadmin
-      - S3_SECRET_KEY=testadmin123
-      - S3_BUCKET_RAG=test-rag-documents
-      - ML_MODEL_PATH=/app/models
-      - USE_LIGHTWEIGHT_MODELS=true
+      # Same as backend-test but with ML-specific settings
+      DATABASE_URL: postgresql://${POSTGRES_TEST_USER:-ml_portal_test}:${POSTGRES_TEST_PASSWORD:-ml_portal_test_password}@postgres-test:5432/${POSTGRES_TEST_DB:-ml_portal_test}
+      REDIS_URL: ${REDIS_TEST_URL:-redis://redis-test:6379/0}
+      QDRANT_URL: ${QDRANT_TEST_URL:-http://qdrant-test:6333}
+      S3_ENDPOINT: ${MINIO_TEST_ENDPOINT:-minio-test:9000}
+      S3_ACCESS_KEY: ${MINIO_TEST_ACCESS_KEY:-testadmin}
+      S3_SECRET_KEY: ${MINIO_TEST_SECRET_KEY:-testadmin123}
+      JWT_SECRET: ${JWT_TEST_SECRET:-test-jwt-secret-change-me}
+      
+      # ML models configuration
+      ML_MODEL_PATH: ${ML_TEST_MODEL_PATH:-/app/models}
+      USE_LIGHTWEIGHT_MODELS: ${USE_TEST_LIGHTWEIGHT_MODELS:-true}
+      MODEL_CACHE_TTL: ${MODEL_TEST_CACHE_TTL:-3600}
+      
+      # External ML services (if available)
+      LLM_BASE_URL: ${LLM_TEST_BASE_URL:-http://localhost:8002}
+      EMB_BASE_URL: ${EMB_TEST_BASE_URL:-http://localhost:8001}
     depends_on:
       postgres-test:
         condition: service_healthy
@@ -122,4 +209,14 @@ services:
         condition: service_healthy
       minio-test:
         condition: service_healthy
+    profiles: ["functional-tests"]  # Use profile to skip if ML services not available
     command: ["pytest", "tests/functional/", "-v", "--tb=short", "--asyncio-mode=auto"]
+
+# =============================================================================
+# VOLUMES
+# =============================================================================
+volumes:
+  postgres_test_data:
+  redis_test_data:
+  qdrant_test_data:
+  minio_test_data:

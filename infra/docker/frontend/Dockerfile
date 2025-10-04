@@ -1,24 +1,87 @@
-# --- Build stage ---
+# =============================================================================
+# ML Portal Frontend Dockerfile
+# =============================================================================
+
+# =============================================================================
+# BUILD STAGE
+# =============================================================================
 FROM node:20-alpine AS build
+
+# =============================================================================
+# WORK DIRECTORY
+# =============================================================================
 WORKDIR /app
 
+# =============================================================================
+# DEPENDENCIES INSTALLATION
+# =============================================================================
+# Copy package files
 COPY apps/web/package*.json ./
-RUN if [ -f package-lock.json ]; then npm ci --no-audit --no-fund; else npm install --no-audit --no-fund; fi
 
+# Install dependencies with legacy peer deps for compatibility
+RUN if [ -f package-lock.json ]; then \
+        npm ci --no-audit --no-fund --legacy-peer-deps; \
+    else \
+        npm install --no-audit --no-fund --legacy-peer-deps; \
+    fi
+
+# =============================================================================
+# SOURCE CODE COPY
+# =============================================================================
+# Copy frontend source code
 COPY apps/web/ /app/
 
-# Build-time configuration (no .env usage)
-ARG VITE_API_BASE=http://localhost:8000/api
-ARG VITE_USE_MOCKS=false
-ENV VITE_API_BASE=${VITE_API_BASE}
-ENV VITE_USE_MOCKS=${VITE_USE_MOCKS}
+# =============================================================================
+# BUILD-TIME CONFIGURATION
+# =============================================================================
+# These args can be overridden at build time
+ARG VITE_API_BASE_URL=http://localhost:8000
+ARG VITE_APP_NAME=ML Portal
+ARG NODE_ENV=production
 
+# Set environment variables for Vite
+ENV VITE_API_BASE_URL=${VITE_API_BASE_URL} \
+    VITE_APP_ENV=${NODE_ENV} \
+    VITE_APP_NAME=${VITE_APP_NAME} \
+    NODE_ENV=${NODE_ENV}
+
+# =============================================================================
+# BUILD APPLICATION
+# =============================================================================
 RUN npm run build
 
-# --- Run stage ---
-FROM node:20-alpine AS run
+# =============================================================================
+# PRODUCTION STAGE
+# =============================================================================
+FROM node:20-alpine AS production
+
+# =============================================================================
+# WORK DIRECTORY
+# =============================================================================
 WORKDIR /srv
+
+# =============================================================================
+# INSTALL SERVE
+# =============================================================================
 RUN npm i -g serve
+
+# =============================================================================
+# COPY BUILD ARTIFACTS
+# =============================================================================
 COPY --from=build /app/dist/ /srv/dist/
-EXPOSE 8080
-CMD ["serve", "-s", "dist", "-l", "8080"]
+
+# =============================================================================
+# EXPOSE PORT
+# =============================================================================
+EXPOSE 3000
+
+# =============================================================================
+# HEALTH CHECK
+# =============================================================================
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD wget --no-verbose --tries=1 --spider http://localhost:3000/ || exit 1
+
+# =============================================================================
+# STARTUP COMMAND
+# =============================================================================
+CMD ["serve", "-s", "dist", "-l", "3000"]

@@ -9,7 +9,7 @@ from pydantic import ValidationError
 
 from app.schemas.users import UserBase, UserCreate, UserUpdate, UserResponse, UserRole
 from app.schemas.repository_schemas import ChatCreateRequest, ChatMessageCreateRequest, PaginatedResponse
-from app.schemas.rag import RAGUploadRequest, RAGSearchRequest
+from app.schemas.rag import RAGDocumentCreate, RAGSearchRequest
 from app.schemas.common import ProblemDetails
 
 
@@ -196,23 +196,27 @@ class TestRAGSchemas:
     """Тесты для RAG схем."""
 
     def test_rag_upload_request_valid_data(self):
-        """Тест загрузки RAG документа с валидными данными."""
+        """Тест создания RAG документа с валидными данными."""
         # Arrange
         upload_data = {
-            "name": "test.pdf",
-            "mime": "application/pdf",
+            "filename": "test.pdf",
+            "title": "Test Document",
+            "content_type": "application/pdf",
             "size": 1024,
-            "tags": ["test", "document"]
+            "tags": ["test", "document"],
+            "scope": "local"
         }
 
         # Act
-        upload_request = RAGUploadRequest(**upload_data)
+        upload_request = RAGDocumentCreate(**upload_data)
 
         # Assert
-        assert upload_request.name == "test.pdf"
-        assert upload_request.mime == "application/pdf"
+        assert upload_request.filename == "test.pdf"
+        assert upload_request.title == "Test Document"
+        assert upload_request.content_type == "application/pdf"
         assert upload_request.size == 1024
         assert upload_request.tags == ["test", "document"]
+        assert upload_request.scope == "local"
 
     def test_rag_search_request_valid_data(self):
         """Тест поиска RAG с валидными данными."""

@@ -1,0 +1,52 @@
+# =============================================================================
+# ML Portal API Requirements
+# =============================================================================
+# Web Framework and ASGI Server
+fastapi==0.111.0
+uvicorn[standard]==0.30.1
+starlette==0.37.2
+
+# Data Validation and Settings
+pydantic==2.8.2
+pydantic-settings==2.4.0
+
+# Database ORM and Migrations
+SQLAlchemy==2.0.32
+alembic==1.13.2
+psycopg[binary]==3.2.1
+
+# Cache and Task Queue
+redis==5.0.7
+celery[redis]==5.4.0
+
+# HTTP Client for External Services
+httpx==0.27.0
+
+# Authentication and Security
+PyJWT==2.9.0
+argon2-cffi==23.1.0
+bcrypt==4.1.2
+
+# File Upload and Processing
+python-multipart==0.0.9
+python-magic>=0.4.27
+
+# CLI Tools
+typer>=0.9.0
+
+# Logging and Observability
+structlog>=23.1.0
+prometheus-client==0.20.0
+
+# Cloud Storage (AWS S3 Compatible)
+boto3>=1.34.0
+minio==7.2.7
+
+# Vector Database
+qdrant-client==1.9.1
+
+# Development only dependencies (commented for production)
+# pytest==7.4.4
+# pytest-asyncio==0.23.2
+# pytest-cov==4.1.0
+# pytest-mock==3.12.0

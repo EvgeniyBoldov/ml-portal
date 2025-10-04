@@ -1,7 +1,10 @@
 version: '3.8'
 
 services:
-  # PostgreSQL Database
+  # =============================================================================
+  # DATABASE SERVICES
+  # =============================================================================
+  
   postgres:
     image: postgres:15-alpine
     environment:
@@ -18,7 +21,6 @@ services:
       timeout: 5s
       retries: 5
 
-  # Redis
   redis:
     image: redis:7-alpine
     ports:
@@ -31,7 +33,6 @@ services:
       timeout: 5s
       retries: 5
 
-  # MinIO
   minio:
     image: minio/minio:latest
     command: server /data --console-address ":9001"
@@ -49,36 +50,10 @@ services:
       timeout: 20s
       retries: 3
 
-  # Qdrant
-  qdrant:
-    image: qdrant/qdrant:latest
-    ports:
-      - "6333:6333"
-      - "6334:6334"
-    volumes:
-      - qdrant_data:/qdrant/storage
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:6333/health"]
-      interval: 30s
-      timeout: 20s
-      retries: 3
-
-  # RabbitMQ
-  rabbitmq:
-    image: rabbitmq:3-management-alpine
-    ports:
-      - "5672:5672"
-      - "15672:15672"
-    environment:
-      RABBITMQ_DEFAULT_USER: admin
-      RABBITMQ_DEFAULT_PASS: admin123
-    healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  # API Service
+  # =============================================================================
+  # BACKEND API SERVICE
+  # =============================================================================
+  
   api:
     build:
       context: .
@@ -86,9 +61,12 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      # Только модели монтируем как volume
+      - ./apps/api/src/app:/app:ro
+      - ./apps/api/alembic.ini:/app/alembic.ini:ro
       - ./models:/app/models:ro
+      - ./infra/scripts:/app/infra/scripts:ro
     environment:
+      - PYTHONPATH=/app
       - DATABASE_URL=postgresql://ml_portal:ml_portal_password@postgres:5432/ml_portal
       - REDIS_URL=redis://redis:6379
       - MINIO_ENDPOINT=minio:9000
@@ -96,9 +74,10 @@ services:
       - MINIO_SECRET_KEY=minioadmin123
       - QDRANT_URL=http://qdrant:6333
       - QDRANT_API_KEY=
-      - RABBITMQ_URL=amqp://admin:admin123@rabbitmq:5672
-      - JWT_SECRET_KEY=dev-secret-key
+      - JWT_SECRET=dev-jwt-secret-minimum-256-bits-for-development-use-only
       - ENVIRONMENT=development
+      - DEBUG=true
+      - IDEMPOTENCY_ENABLED=false
     depends_on:
       postgres:
         condition: service_healthy
@@ -106,134 +85,43 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
-      qdrant:
-        condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
     command: >
       sh -c "
-        python infra/scripts/run_migrations.py &&
+        echo 'Starting API setup...' &&
+        python infra/scripts/simple_setup.py &&
         python infra/scripts/bootstrap_minio.py &&
-        python infra/scripts/bootstrap_qdrant.py &&
         python infra/scripts/create_superuser.py --login admin --password admin123 &&
-        uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+        echo 'Starting uvicorn server...' &&
+        uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir /app
       "
 
-  # Embedding Service
-  emb:
-    build:
-      context: .
-      dockerfile: infra/docker/emb/Dockerfile.emb
-    ports:
-      - "8001:8001"
-    volumes:
-      # Только модели монтируем как volume
-      - ./models:/app/models:ro
-    environment:
-      - MINIO_ENDPOINT=minio:9000
-      - MINIO_ACCESS_KEY=minioadmin
-      - MINIO_SECRET_KEY=minioadmin123
-      - QDRANT_URL=http://qdrant:6333
-      - QDRANT_API_KEY=
-    depends_on:
-      minio:
-        condition: service_healthy
-      qdrant:
-        condition: service_healthy
-    command: >
-      sh -c "
-        uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload
-      "
-
-  # LLM Service
-  llm:
-    build:
-      context: .
-      dockerfile: infra/docker/llm/Dockerfile.llm
-    ports:
-      - "8002:8002"
-    volumes:
-      # Только модели монтируем как volume
-      - ./models:/app/models:ro
-    environment:
-      - MINIO_ENDPOINT=minio:9000
-      - MINIO_ACCESS_KEY=minioadmin
-      - MINIO_SECRET_KEY=minioadmin123
-    depends_on:
-      minio:
-        condition: service_healthy
-    command: >
-      sh -c "
-        uvicorn app.main:app --host 0.0.0.0 --port 8002 --reload
-      "
-
-  # Frontend
+  # =============================================================================
+  # FRONTEND DEVELOPMENT SERVICE  
+  # =============================================================================
+  
   frontend:
-    build:
-      context: .
-      dockerfile: infra/docker/frontend/Dockerfile
+    image: node:20-alpine
     ports:
-      - "3000:3000"
+      - "5173:5173"
+    volumes:
+      - ./apps/web:/app
+      - /app/node_modules
+    working_dir: /app
     environment:
       - NODE_ENV=development
-      - NEXT_PUBLIC_API_URL=http://localhost:8000
-    depends_on:
-      - api
-
-  # Worker
-  worker:
-    build:
-      context: .
-      dockerfile: infra/docker/api/Dockerfile.api
-    volumes:
-      # Только модели монтируем как volume
-      - ./models:/app/models:ro
-    environment:
-      - DATABASE_URL=postgresql://ml_portal:ml_portal_password@postgres:5432/ml_portal
-      - REDIS_URL=redis://redis:6379
-      - MINIO_ENDPOINT=minio:9000
-      - MINIO_ACCESS_KEY=minioadmin
-      - MINIO_SECRET_KEY=minioadmin123
-      - QDRANT_URL=http://qdrant:6333
-      - QDRANT_API_KEY=
-      - RABBITMQ_URL=amqp://admin:admin123@rabbitmq:5672
-      - JWT_SECRET_KEY=dev-secret-key
-      - ENVIRONMENT=development
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
-      qdrant:
-        condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
+      - VITE_API_BASE_URL=http://localhost:8000
+      - VITE_PORT=5173
     command: >
       sh -c "
-        celery -A app.celery_app worker --loglevel=info
+        echo 'Installing dependencies...' &&
+        npm install --legacy-peer-deps &&
+        echo 'Starting Vite dev server...' &&
+        npm run dev -- --host 0.0.0.0
       "
-
-  # Nginx Reverse Proxy
-  nginx:
-    build:
-      context: .
-      dockerfile: infra/docker/nginx/Dockerfile
-    ports:
-      - "80:80"
     depends_on:
       - api
-      - frontend
-    healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
 
 volumes:
   postgres_data:
   redis_data:
   minio_data:
-  qdrant_data:
