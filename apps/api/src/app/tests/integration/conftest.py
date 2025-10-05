@@ -106,3 +106,66 @@ async def auth_headers(test_user):
     # В реальном приложении здесь был бы JWT токен
     user = await test_user
     return {"Authorization": f"Bearer test-token-{user.id}"}
+
+
+@pytest.fixture
+async def user_token(test_user):
+    """Создает JWT токен для обычного пользователя."""
+    from app.core.security import create_access_token
+    
+    user = await test_user
+    token = create_access_token(data={"sub": str(user.id), "role": user.role})
+    return token
+
+
+@pytest.fixture
+async def admin_token(db_session: AsyncSession, test_tenant_id: str):
+    """Создает JWT токен для админа."""
+    from app.core.security import create_access_token
+    from app.models.user import Users
+    from app.models.tenant import Tenants, UserTenants
+    from app.repositories.users_repo import AsyncUsersRepository
+    
+    # Create tenant first
+    tenant = Tenants(
+        id=test_tenant_id,
+        name="admin_tenant",
+        is_active=True
+    )
+    db_session.add(tenant)
+    await db_session.commit()
+    await db_session.refresh(tenant)
+    
+    # Create admin user
+    admin_id = str(uuid.uuid4())
+    admin_data = {
+        "id": admin_id,
+        "login": "admin_user",
+        "email": "admin@example.com",
+        "password_hash": "$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewdBPj4J/8K5K5K.",  # "testpassword"
+        "is_active": True,
+        "role": "admin"
+    }
+    
+    admin_user = Users(**admin_data)
+    db_session.add(admin_user)
+    await db_session.commit()
+    await db_session.refresh(admin_user)
+    
+    # Link admin to tenant
+    users_repo = AsyncUsersRepository(db_session)
+    await users_repo.add_to_tenant(admin_user.id, tenant.id, is_default=True)
+    await db_session.commit()
+    
+    # Create token
+    token = create_access_token(data={"sub": str(admin_user.id), "role": admin_user.role})
+    
+    yield token
+    
+    # Cleanup
+    try:
+        await db_session.delete(admin_user)
+        await db_session.delete(tenant)
+        await db_session.commit()
+    except:
+        pass
