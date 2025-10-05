@@ -12,7 +12,7 @@ from app.repositories.base import TenantRepository, AsyncTenantRepository
 from app.repositories.chats_repo import ChatsRepository, ChatMessagesRepository, AsyncChatsRepository, AsyncChatMessagesRepository
 from app.repositories.idempotency_repo import IdempotencyRepository, AsyncIdempotencyRepository
 from app.repositories.rag_repo import RAGDocumentsRepository, RAGChunksRepository, AsyncRAGDocumentsRepository, AsyncRAGChunksRepository
-from app.repositories.users_repo import UsersRepository
+from app.repositories.users_repo import AsyncUsersRepository
 from app.repositories.analyze_repo import AnalyzeRepo
 from app.core.security import UserCtx
 from app.core.logging import get_logger
@@ -53,10 +53,10 @@ class RepositoryFactory:
             self._repositories['rag_chunks'] = RAGChunksRepository(self.session, self.tenant_id, self.user_id)
         return self._repositories['rag_chunks']
     
-    def get_users_repository(self) -> UsersRepository:
+    def get_users_repository(self) -> AsyncUsersRepository:
         """Get users repository without tenant isolation"""
         if 'users' not in self._repositories:
-            self._repositories['users'] = UsersRepository(self.session)
+            self._repositories['users'] = AsyncUsersRepository(self.session)
         return self._repositories['users']
     
     def get_analyze_repository(self) -> AnalyzeRepo:

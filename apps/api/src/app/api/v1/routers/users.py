@@ -3,16 +3,16 @@ Users endpoints for API v1
 """
 from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import db_session, get_current_user, require_admin
-from app.repositories.users_repo import UsersRepository
-from app.services.users_service import UsersService
+from app.repositories.users_repo import AsyncUsersRepository
+from app.services.users_service import AsyncUsersService
 from app.schemas.common import ProblemDetails
 
 router = APIRouter(tags=["users"])
 
 @router.get("/users/me")
-def get_current_user_info(user = Depends(get_current_user)):
+async def get_current_user_info(user = Depends(get_current_user)):
     """Get current user information"""
     return {
         "id": str(user.id),
@@ -23,15 +23,15 @@ def get_current_user_info(user = Depends(get_current_user)):
     }
 
 @router.get("/users")
-def list_users(
+async def list_users(
     limit: int = Query(20, ge=1, le=100),
     cursor: str | None = None,
-    session: Session = Depends(db_session),
+    session: AsyncSession = Depends(db_session),
     admin_user = Depends(require_admin),
 ):
     """List users (admin only)"""
-    repo = UsersRepository(session)
-    users = repo.list_users(limit=limit, cursor=cursor)
+    repo = AsyncUsersRepository(session)
+    users = await repo.list_users(limit=limit, cursor=cursor)
     return {
         "items": [
             {
@@ -47,9 +47,9 @@ def list_users(
     }
 
 @router.post("/users")
-def create_user(
+async def create_user(
     user_data: dict,
-    session: Session = Depends(db_session),
+    session: AsyncSession = Depends(db_session),
 ):
     """Create user (admin only) - DEBUG only"""
     from app.core.config import get_settings
@@ -70,8 +70,8 @@ def create_user(
     # TODO: Add proper authentication after tests pass
     current_user = None
     
-    repo = UsersRepository(session)
-    service = UsersService(repo)
+    repo = AsyncUsersRepository(session)
+    service = AsyncUsersService(repo)
     
     # Extract user data
     email = user_data.get("email")
@@ -90,7 +90,7 @@ def create_user(
         )
     
     try:
-        user = service.create_user(email, password, role, tenant_ids)
+        user = await service.create_user(email, password, role, tenant_ids)
         return {
             "id": str(user.id),
             "email": user.email,
@@ -119,14 +119,14 @@ def create_user(
             )
 
 @router.get("/users/{user_id}")
-def get_user(
+async def get_user(
     user_id: str,
-    session: Session = Depends(db_session),
+    session: AsyncSession = Depends(db_session),
     admin_user = Depends(require_admin),
 ):
     """Get user by ID (admin only)"""
-    repo = UsersRepository(session)
-    user = repo.get_by_id(user_id)
+    repo = AsyncUsersRepository(session)
+    user = await repo.get_by_id(user_id)
     if not user:
         raise HTTPException(
             status_code=404, 
@@ -146,17 +146,17 @@ def get_user(
     }
 
 @router.patch("/users/{user_id}")
-def update_user(
+async def update_user(
     user_id: str,
     user_data: dict,
-    session: Session = Depends(db_session),
+    session: AsyncSession = Depends(db_session),
     admin_user = Depends(require_admin),
 ):
     """Update user (admin only)"""
-    repo = UsersRepository(session)
-    service = UsersService(repo)
+    repo = AsyncUsersRepository(session)
+    service = AsyncUsersService(repo)
     
-    user = repo.get_by_id(user_id)
+    user = await repo.get_by_id(user_id)
     if not user:
         raise HTTPException(
             status_code=404, 
@@ -168,7 +168,7 @@ def update_user(
         )
     
     try:
-        updated_user = service.update_user(user_id, user_data)
+        updated_user = await service.update_user(user_id, user_data)
         return {
             "id": str(updated_user.id),
             "email": updated_user.email,
@@ -187,16 +187,16 @@ def update_user(
         )
 
 @router.delete("/users/{user_id}")
-def delete_user(
+async def delete_user(
     user_id: str,
-    session: Session = Depends(db_session),
+    session: AsyncSession = Depends(db_session),
     admin_user = Depends(require_admin),
 ):
     """Delete user (admin only)"""
-    repo = UsersRepository(session)
-    service = UsersService(repo)
+    repo = AsyncUsersRepository(session)
+    service = AsyncUsersService(repo)
     
-    user = repo.get_by_id(user_id)
+    user = await repo.get_by_id(user_id)
     if not user:
         raise HTTPException(
             status_code=404, 
@@ -207,5 +207,5 @@ def delete_user(
             ).model_dump()
         )
     
-    service.delete_user(user_id)
+    await service.delete_user(user_id)
     return {"deleted": True}

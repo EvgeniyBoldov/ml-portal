@@ -72,6 +72,7 @@ class TestUserTenancyIntegration:
             except:
                 pass
 
+    @pytest.mark.asyncio
     async def test_add_user_to_tenant(self, db_session, test_tenant):
         """Test adding user to tenant"""
         users_repo = AsyncUsersRepository(db_session)
@@ -108,6 +109,7 @@ class TestUserTenancyIntegration:
         except:
             pass
 
+    @pytest.mark.asyncio
     async def test_set_default_tenant(self, db_session, test_tenant):
         """Test setting default tenant"""
         users_repo = AsyncUsersRepository(db_session)
@@ -160,6 +162,7 @@ class TestUserTenancyIntegration:
         except:
             pass
 
+    @pytest.mark.asyncio
     async def test_list_by_tenant_pagination(self, db_session, test_tenant, test_users):
         """Test pagination functionality"""
         users_repo = AsyncUsersRepository(db_session)
@@ -192,6 +195,7 @@ class TestUserTenancyIntegration:
         # Verify we got all users
         assert len(all_user_ids) == 5
 
+    @pytest.mark.asyncio
     async def test_pagination_cursor_roundtrip(self, db_session, test_tenant, test_users):
         """Test cursor encoding/decoding"""
         users_repo = AsyncUsersRepository(db_session)
@@ -213,6 +217,7 @@ class TestUserTenancyIntegration:
         })
         assert reencoded_cursor == next_cursor
 
+    @pytest.mark.asyncio
     async def test_pagination_limit_validation(self, db_session, test_tenant):
         """Test limit validation"""
         users_repo = AsyncUsersRepository(db_session)
@@ -224,6 +229,7 @@ class TestUserTenancyIntegration:
         with pytest.raises(ValueError, match="limit_out_of_range"):
             users_repo.list_by_tenant(test_tenant.id, limit=101)
 
+    @pytest.mark.asyncio
     async def test_pagination_invalid_cursor(self, db_session, test_tenant):
         """Test invalid cursor handling"""
         users_repo = AsyncUsersRepository(db_session)
@@ -232,6 +238,7 @@ class TestUserTenancyIntegration:
         with pytest.raises(ValueError, match="invalid_cursor"):
             users_repo.list_by_tenant(test_tenant.id, cursor="invalid_cursor")
 
+    @pytest.mark.asyncio
     async def test_tenant_isolation(self, db_session):
         """Test tenant isolation - users in tenant A don't appear in tenant B"""
         users_repo = AsyncUsersRepository(db_session)
@@ -300,6 +307,7 @@ class TestUserTenancyIntegration:
         except:
             pass
 
+    @pytest.mark.asyncio
     async def test_empty_tenant_pagination(self, db_session):
         """Test pagination with empty tenant"""
         users_repo = AsyncUsersRepository(db_session)

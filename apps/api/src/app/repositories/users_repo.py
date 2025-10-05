@@ -186,12 +186,31 @@ class AsyncUsersRepository:
             .values(is_default=True)
         )
     
-    async def get_user_tenants(self, user_id: uuid.UUID):
-        """Get all tenants for user"""
-        result = await self.session.execute(
-            select(UserTenants).where(UserTenants.user_id == user_id)
-        )
-        return result.scalars().all()
+    async def list_users(self, limit: int = 10, cursor: Optional[str] = None):
+        """List all users with pagination"""
+        # Validate limit
+        if limit <= 0 or limit > 100:
+            raise ValueError("limit_out_of_range")
+        
+        # Validate and decode cursor if provided
+        cursor_id = None
+        if cursor is not None:
+            try:
+                cursor_id = uuid.UUID(str(cursor))
+            except ValueError:
+                raise ValueError("invalid_cursor")
+        
+        query = select(Users)
+        
+        if cursor_id:
+            query = query.where(Users.id > cursor_id)
+        
+        query = query.order_by(Users.id).limit(limit)
+        
+        result = await self.session.execute(query)
+        users = result.scalars().all()
+        
+        return users
     
     async def remove_from_tenant(self, user_id: uuid.UUID, tenant_id: uuid.UUID) -> bool:
         """Remove user from tenant"""

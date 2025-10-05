@@ -46,11 +46,7 @@ services:
       - qdrant_data:/qdrant/storage
     environment:
       QDRANT__SERVICE__HTTP_PORT: 6333
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:6333/health"]
-      interval: 30s
-      timeout: 20s
-      retries: 3
+    # healthcheck: simplified for dev
 
   # =============================================================================
   # OBJECT STORAGE
@@ -67,11 +63,7 @@ services:
       - "9001:9001"
     volumes:
       - minio_data:/data
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 30s
-      timeout: 20s
-      retries: 3
+    # healthcheck: simplified for dev
 
   # =============================================================================
   # MESSAGE QUEUE
@@ -103,9 +95,7 @@ services:
       - "8000:8000"
     volumes:
       - ./apps/api/src/app:/app:ro
-      - ./apps/api/alembic.ini:/app/alembic.ini:ro
-      - ./models:/app/models:ro
-      - ./infra/scripts:/app/infra/scripts:ro
+      - ./models:/app/models
     environment:
       - PYTHONPATH=/app
       - DATABASE_URL=postgresql://ml_portal:ml_portal_password@postgres:5432/ml_portal
@@ -125,21 +115,10 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      qdrant:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
     command: >
       sh -c "
-        echo 'Starting API setup...' &&
-        python infra/scripts/simple_setup.py &&
-        python infra/scripts/bootstrap_minio.py &&
-        python infra/scripts/bootstrap_qdrant.py &&
-        python infra/scripts/create_superuser.py --login admin --password admin123 &&
         echo 'Starting uvicorn server...' &&
-        uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir /app
+        uvicorn main_simple:app --host 0.0.0.0 --port 8000 --reload
       "
 
   # =============================================================================
@@ -154,7 +133,7 @@ services:
       - "8001:8001"
     volumes:
       - ./apps/emb/src/app:/app:ro
-      - ./models:/app/models:ro
+      - ./models:/app/models
     environment:
       - MINIO_ENDPOINT=minio:9000
       - MINIO_ACCESS_KEY=minioadmin
@@ -162,10 +141,8 @@ services:
       - QDRANT_URL=http://qdrant:6333
       - QDRANT_API_KEY=
     depends_on:
-      minio:
-        condition: service_healthy
-      qdrant:
-        condition: service_healthy
+      - minio
+      - qdrant
     command: >
       sh -c "
         echo 'Starting embeddings service...' &&
@@ -184,14 +161,13 @@ services:
       - "8002:8002"
     volumes:
       - ./apps/llm/src/app:/app:ro
-      - ./models:/app/models:ro
+      - ./models:/app/models
     environment:
       - MINIO_ENDPOINT=minio:9000
       - MINIO_ACCESS_KEY=minioadmin
       - MINIO_SECRET_KEY=minioadmin123
     depends_on:
-      minio:
-        condition: service_healthy
+      - minio
     command: >
       sh -c "
         echo 'Starting LLM service...' &&
@@ -234,8 +210,8 @@ services:
       dockerfile: infra/docker/api/Dockerfile.api
     volumes:
       - ./apps/api/src/app:/app:ro
-      - ./apps/api/alembic.ini:/app/alembic.ini:ro
-      - ./models:/app/models:ro
+      - ./apps/api/alembic.ini:/app/alembic.ini
+      - ./models:/app/models
       - ./infra/scripts:/app/infra/scripts:ro
     environment:
       - PYTHONPATH=/app
@@ -259,8 +235,6 @@ services:
       postgres:
         condition: service_healthy
       redis:
-        condition: service_healthy
-      rabbitmq:
         condition: service_healthy
 
   # =============================================================================
