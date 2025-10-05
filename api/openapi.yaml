@@ -4,7 +4,12 @@ info:
   version: 1.0.0
   description: >
     Stable contract for MVP: classic chat, RAG chat, RAG ingestion, document analysis, multi-tenant,
-    local HF models (no internet in prod). No path rewriting by proxy — the API is served under /api/v1.
+    local HF models (no internet in prod). 
+    
+    API FIXES APPLIED:
+    - Chat endpoints simplified: /api/v1/chats (was /api/v1/chat/chats)
+    - Nginx proxy configured to pass-through all paths without manipulation
+    - All endpoints now work correctly through proxy without path rewriting
 servers:
   - url: /api/v1
 tags:

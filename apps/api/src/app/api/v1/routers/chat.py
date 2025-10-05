@@ -5,20 +5,21 @@ from core.sse import format_sse, wrap_sse_stream
 from core.sse_protocol import EVENT_DONE
 from api.deps import get_llm_client
 from core.http.clients import LLMClientProtocol
+import uuid
 
 router = APIRouter(tags=["chat"])
 
 # Mock data for development
 MOCK_CHATS = [
     {
-        "id": "chat-1",
+        "id": "550e8400-e29b-41d4-a716-446655440001",
         "name": "Test Chat 1",
         "created_at": "2024-01-01T00:00:00Z",
         "updated_at": "2024-01-01T00:00:00Z",
         "tags": ["test", "demo"]
     },
     {
-        "id": "chat-2", 
+        "id": "550e8400-e29b-41d4-a716-446655440002", 
         "name": "Test Chat 2",
         "created_at": "2024-01-02T00:00:00Z",
         "updated_at": "2024-01-02T00:00:00Z",
@@ -27,26 +28,26 @@ MOCK_CHATS = [
 ]
 
 MOCK_MESSAGES = {
-    "chat-1": [
+    "550e8400-e29b-41d4-a716-446655440001": [
         {
             "id": "msg-1",
-            "chat_id": "chat-1",
+            "chat_id": "550e8400-e29b-41d4-a716-446655440001",
             "role": "user",
             "content": "Hello!",
             "created_at": "2024-01-01T00:00:00Z"
         },
         {
             "id": "msg-2",
-            "chat_id": "chat-1", 
+            "chat_id": "550e8400-e29b-41d4-a716-446655440001", 
             "role": "assistant",
             "content": "Hi there! How can I help you?",
             "created_at": "2024-01-01T00:01:00Z"
         }
     ],
-    "chat-2": [
+    "550e8400-e29b-41d4-a716-446655440002": [
         {
             "id": "msg-3",
-            "chat_id": "chat-2",
+            "chat_id": "550e8400-e29b-41d4-a716-446655440002",
             "role": "user", 
             "content": "What's the weather like?",
             "created_at": "2024-01-02T00:00:00Z"
@@ -54,7 +55,7 @@ MOCK_MESSAGES = {
     ]
 }
 
-@router.get("/chats")
+@router.get("")
 async def list_chats(
     limit: int = Query(100, ge=1, le=1000),
     cursor: Optional[str] = Query(None),
@@ -84,7 +85,7 @@ async def list_chats(
         "has_more": end_idx < len(chats)
     }
 
-@router.post("/chats")
+@router.post("")
 async def create_chat(
     body: Dict[str, Any]
 ):
@@ -93,7 +94,7 @@ async def create_chat(
     tags = body.get("tags", [])
     
     new_chat = {
-        "id": f"chat-{len(MOCK_CHATS) + 1}",
+        "id": str(uuid.uuid4()),
         "name": name,
         "created_at": "2024-01-01T00:00:00Z",
         "updated_at": "2024-01-01T00:00:00Z", 
@@ -103,7 +104,7 @@ async def create_chat(
     MOCK_CHATS.append(new_chat)
     return {"chat_id": new_chat["id"]}
 
-@router.get("/chats/{chat_id}/messages")
+@router.get("/{chat_id}/messages")
 async def list_messages(
     chat_id: str,
     limit: int = Query(100, ge=1, le=1000),
@@ -129,7 +130,7 @@ async def list_messages(
         "has_more": end_idx < len(messages)
     }
 
-@router.post("/chats/{chat_id}/messages")
+@router.post("/{chat_id}/messages")
 async def send_message(
     chat_id: str,
     body: Dict[str, Any]
@@ -141,7 +142,7 @@ async def send_message(
     
     # Add user message
     user_message = {
-        "id": f"msg-{len(MOCK_MESSAGES.get(chat_id, [])) + 1}",
+        "id": str(uuid.uuid4()),
         "chat_id": chat_id,
         "role": "user",
         "content": content,
@@ -154,7 +155,7 @@ async def send_message(
     
     # Generate assistant response
     assistant_message = {
-        "id": f"msg-{len(MOCK_MESSAGES[chat_id]) + 1}",
+        "id": str(uuid.uuid4()),
         "chat_id": chat_id,
         "role": "assistant", 
         "content": f"Response to: {content}",
@@ -173,7 +174,7 @@ async def send_message(
     else:
         return assistant_message
 
-@router.patch("/chats/{chat_id}")
+@router.patch("/{chat_id}")
 async def update_chat(
     chat_id: str,
     body: Dict[str, Any]
@@ -189,7 +190,7 @@ async def update_chat(
     
     raise HTTPException(status_code=404, detail="Chat not found")
 
-@router.put("/chats/{chat_id}/tags")
+@router.put("/{chat_id}/tags")
 async def update_chat_tags(
     chat_id: str,
     body: Dict[str, Any]
@@ -205,7 +206,7 @@ async def update_chat_tags(
     
     raise HTTPException(status_code=404, detail="Chat not found")
 
-@router.delete("/chats/{chat_id}")
+@router.delete("/{chat_id}")
 async def delete_chat(chat_id: str):
     """Delete a chat"""
     for i, chat in enumerate(MOCK_CHATS):

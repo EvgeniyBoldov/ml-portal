@@ -5,7 +5,7 @@ services:
   api:
     build:
       context: .
-      dockerfile: infra/docker/prod/api/Dockerfile.api
+      dockerfile: infra/docker/api/Dockerfile.prod
     deploy:
       replicas: 1
       placement:
@@ -41,7 +41,7 @@ services:
   worker-rag:
     build:
       context: .
-      dockerfile: infra/docker/prod/worker/Dockerfile.worker
+      dockerfile: infra/docker/worker/Dockerfile.prod
     deploy:
       replicas: 1
       placement:
@@ -76,7 +76,7 @@ services:
   worker-mixed:
     build:
       context: .
-      dockerfile: infra/docker/prod/worker/Dockerfile.worker
+      dockerfile: infra/docker/worker/Dockerfile.prod
     deploy:
       replicas: 4  # 2 на каждой тяжелой ВМ
       placement:
@@ -111,7 +111,7 @@ services:
   emb:
     build:
       context: .
-      dockerfile: infra/docker/prod/emb/Dockerfile.emb
+      dockerfile: infra/docker/emb/Dockerfile.prod
     deploy:
       replicas: 2  # 1 на каждой тяжелой ВМ
       placement:
@@ -139,7 +139,7 @@ services:
   llm:
     build:
       context: .
-      dockerfile: infra/docker/prod/llm/Dockerfile.llm
+      dockerfile: infra/docker/llm/Dockerfile.prod
     deploy:
       replicas: 2  # 1 на каждой тяжелой ВМ
       placement:
@@ -274,7 +274,7 @@ services:
   frontend:
     build:
       context: .
-      dockerfile: infra/docker/prod/frontend/Dockerfile
+      dockerfile: infra/docker/frontend/Dockerfile.prod
     deploy:
       replicas: 1
       placement:
@@ -296,7 +296,7 @@ services:
   nginx:
     build:
       context: .
-      dockerfile: infra/docker/prod/nginx/Dockerfile
+      dockerfile: infra/docker/nginx/Dockerfile.prod
     deploy:
       replicas: 1
       placement:

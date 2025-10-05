@@ -1,5 +1,5 @@
 # =============================================================================
-# ML Portal API - Test Dockerfile
+# ML Portal API - Production Dockerfile
 # =============================================================================
 FROM python:3.11-slim
 
@@ -21,18 +21,9 @@ COPY infra/docker/api/requirements.txt ./requirements.txt
 RUN python -m pip install --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# Install test dependencies as additional layer
-RUN pip install --no-cache-dir \
-    pytest==7.4.4 \
-    pytest-asyncio==0.23.2 \
-    pytest-cov==4.1.0 \
-    pytest-mock==3.12.0 \
-    pytest-xdist==3.5.0
-
 # Copy application code
 COPY apps/api/src/app/ ./app/
 COPY apps/api/alembic.ini ./
-COPY apps/api/pytest.ini ./
 
 # Create non-root user
 RUN groupadd -r appuser && useradd -r -g appuser appuser && \
@@ -44,5 +35,9 @@ USER appuser
 # Expose port
 EXPOSE 8000
 
-# Default command for tests
-CMD ["pytest", "app/tests/", "-v", "--cov=app", "--cov-report=html"]
+# Health check
+HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8000/healthz || exit 1
+
+# Start the application
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -65,11 +65,13 @@ class S3Manager:
 
     def generate_presigned_url(self, *, bucket: str, key: str, options: PresignOptions) -> str:
         self.ensure_bucket(bucket)
+        from datetime import timedelta
+        expires = timedelta(seconds=options.expiry_seconds)
         if options.operation == "get":
-            return self._client.get_presigned_url("GET", bucket, key, expires=options.expiry_seconds)
+            return self._client.get_presigned_url("GET", bucket, key, expires=expires)
         if options.operation == "put":
             headers = {"Content-Type": options.content_type} if options.content_type else None
-            return self._client.get_presigned_url("PUT", bucket, key, expires=options.expiry_seconds, response_headers=headers)
+            return self._client.get_presigned_url("PUT", bucket, key, expires=expires, response_headers=headers)
         raise ValueError("Unsupported operation for presign")
 
 s3_manager = S3Manager()

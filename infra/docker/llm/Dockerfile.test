@@ -1,5 +1,5 @@
 # =============================================================================
-# ML Portal API - Test Dockerfile
+# ML Portal LLM - Test Dockerfile
 # =============================================================================
 FROM python:3.11-slim
 
@@ -9,15 +9,12 @@ WORKDIR /app
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
-    libpq-dev \
     curl \
-    libmagic1 \
-    libmagic-dev \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
 # Copy requirements and install Python dependencies
-COPY infra/docker/api/requirements.txt ./requirements.txt
+COPY infra/docker/llm/requirements.txt ./requirements.txt
 RUN python -m pip install --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
@@ -26,13 +23,14 @@ RUN pip install --no-cache-dir \
     pytest==7.4.4 \
     pytest-asyncio==0.23.2 \
     pytest-cov==4.1.0 \
-    pytest-mock==3.12.0 \
-    pytest-xdist==3.5.0
+    pytest-mock==3.12.0
 
 # Copy application code
-COPY apps/api/src/app/ ./app/
-COPY apps/api/alembic.ini ./
-COPY apps/api/pytest.ini ./
+COPY apps/llm/src/app/ ./app/
+
+# Copy entrypoint
+COPY infra/docker/llm/entrypoint.sh ./entrypoint.sh
+RUN chmod +x ./entrypoint.sh
 
 # Create non-root user
 RUN groupadd -r appuser && useradd -r -g appuser appuser && \
@@ -42,7 +40,7 @@ RUN groupadd -r appuser && useradd -r -g appuser appuser && \
 USER appuser
 
 # Expose port
-EXPOSE 8000
+EXPOSE 8002
 
 # Default command for tests
-CMD ["pytest", "app/tests/", "-v", "--cov=app", "--cov-report=html"]
+CMD ["pytest", "app/", "-v", "--cov=app", "--cov-report=html"]

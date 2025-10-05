@@ -34,7 +34,7 @@ api_v1.include_router(analyze_router.router, prefix="/analyze", tags=["analyze"]
 api_v1.include_router(artifacts_router.router, prefix="/artifacts", tags=["artifacts"])
 
 # Chat endpoints
-api_v1.include_router(chat_router.router, prefix="/chat", tags=["chat"])
+api_v1.include_router(chat_router.router, prefix="/chats", tags=["chat"])
 
 # RAG endpoints
 api_v1.include_router(rag_router.router, prefix="/rag", tags=["rag"])

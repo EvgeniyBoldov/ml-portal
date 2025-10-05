@@ -44,9 +44,4 @@ minio==7.2.7
 
 # Vector Database
 qdrant-client==1.9.1
-
-# Development only dependencies (commented for production)
-# pytest==7.4.4
-# pytest-asyncio==0.23.2
-# pytest-cov==4.1.0
-# pytest-mock==3.12.0
+asyncpg

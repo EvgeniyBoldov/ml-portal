@@ -1,34 +1,45 @@
 .page {
   max-width: 600px;
   margin: 0 auto;
+  padding: 16px;
+  background: var(--bg);
+  min-height: 100vh;
 }
 
 .pageHeader {
-  margin-bottom: var(--spacing-xl);
+  margin-bottom: 32px;
+  text-align: center;
+  padding: 32px 0;
+  border-bottom: 1px solid var(--color-border);
 }
 
 .pageTitle {
-  font-size: var(--font-size-2xl);
+  font-size: 28px;
   font-weight: 700;
-  color: var(--color-text);
-  margin: 0 0 var(--spacing-sm) 0;
+  color: var(--text);
+  margin: 0 0 12px 0;
 }
 
 .pageDescription {
-  font-size: var(--font-size-lg);
-  color: var(--color-text-secondary);
+  font-size: 16px;
+  color: var(--muted);
   margin: 0;
+  max-width: 500px;
+  margin-left: auto;
+  margin-right: auto;
+  line-height: 1.6;
 }
 
 .form {
-  background: var(--color-background);
-  border-radius: var(--border-radius);
+  background: var(--panel);
+  border-radius: var(--radius);
   border: 1px solid var(--color-border);
-  padding: var(--spacing-xl);
+  padding: 32px;
+  box-shadow: var(--shadow);
 }
 
 .formSection {
-  margin-bottom: var(--spacing-xl);
+  margin-bottom: 32px;
 }
 
 .formSection:last-child {
@@ -36,24 +47,24 @@
 }
 
 .sectionTitle {
-  font-size: var(--font-size-lg);
-  font-weight: 600;
-  color: var(--color-text);
-  margin: 0 0 var(--spacing-lg) 0;
-  padding-bottom: var(--spacing-sm);
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text);
+  margin: 0 0 24px 0;
+  padding-bottom: 12px;
   border-bottom: 1px solid var(--color-border);
 }
 
 .formGrid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: var(--spacing-lg);
+  gap: 24px;
 }
 
 .formGroup {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-sm);
+  gap: 12px;
 }
 
 .formGroup.fullWidth {
@@ -61,14 +72,17 @@
 }
 
 .formLabel {
-  font-size: var(--font-size-sm);
-  font-weight: 500;
-  color: var(--color-text);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
 
 .formLabel.required::after {
   content: ' *';
-  color: var(--color-danger);
+  color: var(--danger);
+  font-weight: 700;
 }
 
 .formInput {
@@ -81,71 +95,96 @@
 
 .formTextarea {
   width: 100%;
-  min-height: 100px;
+  min-height: 120px;
   resize: vertical;
 }
 
 .formCheckbox {
   display: flex;
   align-items: center;
-  gap: var(--spacing-sm);
+  gap: 12px;
   cursor: pointer;
+  padding: 8px;
+  border-radius: 10px;
+  transition: background-color 0.2s ease;
+}
+
+.formCheckbox:hover {
+  background: var(--color-bg-secondary);
 }
 
 .formCheckboxInput {
-  width: 16px;
-  height: 16px;
+  width: 20px;
+  height: 20px;
   cursor: pointer;
+  accent-color: var(--primary);
 }
 
 .formCheckboxLabel {
-  font-size: var(--font-size-sm);
-  color: var(--color-text);
+  font-size: 14px;
+  color: var(--text);
   cursor: pointer;
+  font-weight: 500;
 }
 
 .formHelp {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-secondary);
-  margin-top: var(--spacing-xs);
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 8px;
+  line-height: 1.5;
 }
 
 .formError {
-  font-size: var(--font-size-xs);
-  color: var(--color-danger);
-  margin-top: var(--spacing-xs);
+  font-size: 12px;
+  color: var(--danger);
+  margin-top: 8px;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.formError::before {
+  content: '⚠';
+  font-size: 14px;
 }
 
 .passwordToggle {
   display: flex;
   align-items: center;
-  gap: var(--spacing-sm);
-  margin-top: var(--spacing-sm);
-  padding: var(--spacing-sm);
-  background: var(--color-surface);
-  border-radius: var(--border-radius);
+  gap: 16px;
+  margin-top: 24px;
+  padding: 16px;
+  background: var(--panel-alt);
+  border-radius: var(--radius);
   border: 1px solid var(--color-border);
+  transition: all 0.2s ease;
+}
+
+.passwordToggle:hover {
+  border-color: var(--primary);
 }
 
 .passwordToggleLabel {
-  font-size: var(--font-size-sm);
-  color: var(--color-text);
+  font-size: 14px;
+  color: var(--text);
   cursor: pointer;
   flex: 1;
+  font-weight: 500;
 }
 
 .passwordToggleSwitch {
   position: relative;
-  width: 44px;
-  height: 24px;
+  width: 52px;
+  height: 28px;
   background: var(--color-border);
-  border-radius: 12px;
+  border-radius: 14px;
   cursor: pointer;
-  transition: background-color 0.2s ease;
+  transition: all 0.3s ease;
 }
 
 .passwordToggleSwitch.active {
-  background: var(--color-primary);
+  background: var(--primary);
 }
 
 .passwordToggleSwitch::after {
@@ -153,43 +192,46 @@
   position: absolute;
   top: 2px;
   left: 2px;
-  width: 20px;
-  height: 20px;
+  width: 24px;
+  height: 24px;
   background: white;
   border-radius: 50%;
-  transition: transform 0.2s ease;
+  transition: all 0.3s ease;
 }
 
 .passwordToggleSwitch.active::after {
-  transform: translateX(20px);
+  transform: translateX(24px);
 }
 
 .passwordField {
-  margin-top: var(--spacing-md);
+  margin-top: 24px;
 }
 
 .formActions {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: var(--spacing-md);
-  padding-top: var(--spacing-lg);
+  gap: 16px;
+  padding-top: 24px;
   border-top: 1px solid var(--color-border);
+  margin-top: 24px;
 }
 
 .passwordPolicy {
-  background: var(--color-surface);
+  background: var(--panel-alt);
   border: 1px solid var(--color-border);
-  border-radius: var(--border-radius);
-  padding: var(--spacing-md);
-  margin-top: var(--spacing-sm);
+  border-radius: var(--radius);
+  padding: 16px;
+  margin-top: 16px;
 }
 
 .passwordPolicyTitle {
-  font-size: var(--font-size-sm);
-  font-weight: 600;
-  color: var(--color-text);
-  margin: 0 0 var(--spacing-sm) 0;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text);
+  margin: 0 0 12px 0;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
 
 .passwordPolicyList {
@@ -198,73 +240,71 @@
   margin: 0;
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: var(--spacing-xs);
+  gap: 8px;
 }
 
 .passwordPolicyItem {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-secondary);
+  font-size: 12px;
+  color: var(--muted);
   display: flex;
   align-items: center;
-  gap: var(--spacing-xs);
+  gap: 8px;
+  padding: 6px;
+  border-radius: 8px;
+  transition: all 0.2s ease;
+}
+
+.passwordPolicyItem:hover {
+  background: var(--panel);
 }
 
 .passwordPolicyItem.valid {
-  color: var(--color-success);
+  color: var(--primary);
+  font-weight: 600;
 }
 
 .passwordPolicyItem.invalid {
-  color: var(--color-danger);
+  color: var(--danger);
+  font-weight: 600;
 }
 
 .passwordPolicyIcon {
-  width: 12px;
-  height: 12px;
+  width: 16px;
+  height: 16px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 10px;
-}
-
-/* Dark mode */
-@media (prefers-color-scheme: dark) {
-  .form {
-    background: var(--color-background-dark);
-    border-color: var(--color-border-dark);
-  }
-
-  .sectionTitle {
-    border-color: var(--color-border-dark);
-  }
-
-  .passwordToggle {
-    background: var(--color-surface-dark);
-    border-color: var(--color-border-dark);
-  }
-
-  .passwordPolicy {
-    background: var(--color-surface-dark);
-    border-color: var(--color-border-dark);
-  }
-
-  .formActions {
-    border-color: var(--color-border-dark);
-  }
+  font-size: 12px;
+  font-weight: bold;
 }
 
 /* Mobile */
 @media (max-width: 768px) {
   .page {
-    max-width: none;
+    padding: 12px;
+  }
+
+  .pageHeader {
+    padding: 24px 0;
+  }
+
+  .pageTitle {
+    font-size: 24px;
   }
 
   .form {
-    padding: var(--spacing-lg);
+    padding: 24px;
   }
 
   .formGrid {
     grid-template-columns: 1fr;
-    gap: var(--spacing-md);
+    gap: 20px;
+  }
+
+  .passwordToggle {
+    flex-direction: column;
+    gap: 12px;
+    text-align: center;
   }
 
   .passwordPolicyList {
@@ -274,5 +314,6 @@
   .formActions {
     flex-direction: column;
     align-items: stretch;
+    gap: 12px;
   }
 }

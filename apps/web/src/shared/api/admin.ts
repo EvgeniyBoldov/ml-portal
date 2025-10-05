@@ -130,31 +130,31 @@ export const adminApi = {
     if (params.limit) searchParams.set('limit', String(params.limit));
     if (params.cursor) searchParams.set('cursor', params.cursor);
 
-    return apiFetch(`/api/admin/users?${searchParams.toString()}`);
+    return apiFetch(`/admin/users?${searchParams.toString()}`);
   },
 
   async getUser(id: string): Promise<User> {
-    return apiFetch(`/api/admin/users/${id}`);
+    return apiFetch(`/admin/users/${id}`);
   },
 
   async createUser(
     user: UserCreate
   ): Promise<{ user: User; password?: string }> {
-    return apiFetch('/api/admin/users', {
+    return apiFetch('/admin/users', {
       method: 'POST',
       body: JSON.stringify(user),
     });
   },
 
   async updateUser(id: string, user: UserUpdate): Promise<User> {
-    return apiFetch(`/api/admin/users/${id}`, {
+    return apiFetch(`/admin/users/${id}`, {
       method: 'PATCH',
       body: JSON.stringify(user),
     });
   },
 
   async deleteUser(id: string): Promise<void> {
-    return apiFetch(`/api/admin/users/${id}`, {
+    return apiFetch(`/admin/users/${id}`, {
       method: 'DELETE',
     });
   },
@@ -163,7 +163,7 @@ export const adminApi = {
     id: string,
     passwordData: PasswordChange
   ): Promise<{ password?: string }> {
-    return apiFetch(`/api/admin/users/${id}/password`, {
+    return apiFetch(`/admin/users/${id}/password`, {
       method: 'POST',
       body: JSON.stringify(passwordData),
     });
@@ -171,21 +171,21 @@ export const adminApi = {
 
   // Tokens
   async getUserTokens(userId: string): Promise<TokenListResponse> {
-    return apiFetch(`/api/admin/users/${userId}/tokens`);
+    return apiFetch(`/admin/users/${userId}/tokens`);
   },
 
   async createUserToken(
     userId: string,
     token: TokenCreate
   ): Promise<TokenResponse> {
-    return apiFetch(`/api/admin/users/${userId}/tokens`, {
+    return apiFetch(`/admin/users/${userId}/tokens`, {
       method: 'POST',
       body: JSON.stringify(token),
     });
   },
 
   async revokeToken(tokenId: string): Promise<void> {
-    return apiFetch(`/api/admin/tokens/${tokenId}`, {
+    return apiFetch(`/admin/tokens/${tokenId}`, {
       method: 'DELETE',
     });
   },
@@ -212,12 +212,12 @@ export const adminApi = {
     if (params.limit) searchParams.set('limit', String(params.limit));
     if (params.cursor) searchParams.set('cursor', params.cursor);
 
-    return apiFetch(`/api/admin/audit-logs?${searchParams.toString()}`);
+    return apiFetch(`/admin/audit-logs?${searchParams.toString()}`);
   },
 
   // System status
   async getSystemStatus(): Promise<SystemStatus> {
-    return apiFetch('/api/admin/system/status');
+    return apiFetch('/admin/status');
   },
 
   // Password reset

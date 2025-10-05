@@ -90,7 +90,7 @@ services:
   api:
     build:
       context: .
-      dockerfile: infra/docker/api/Dockerfile.api
+      dockerfile: infra/docker/api/Dockerfile.prod
     ports:
       - "8000:8000"
     volumes:
@@ -128,7 +128,7 @@ services:
   emb:
     build:
       context: .
-      dockerfile: infra/docker/emb/Dockerfile.emb
+      dockerfile: infra/docker/emb/Dockerfile.prod
     ports:
       - "8001:8001"
     volumes:
@@ -156,12 +156,9 @@ services:
   llm:
     build:
       context: .
-      dockerfile: infra/docker/llm/Dockerfile.llm
+      dockerfile: infra/docker/llm/Dockerfile.prod
     ports:
       - "8002:8002"
-    volumes:
-      - ./apps/llm/src/app:/app 
-      - ./models:/app/models
     environment:
       - MINIO_ENDPOINT=minio:9000
       - MINIO_ACCESS_KEY=minioadmin
@@ -171,8 +168,9 @@ services:
     command: >
       sh -c "
         echo 'Starting LLM service...' &&
-        uvicorn app.main:app --host 0.0.0.0 --port 8002 --reload --reload-dir /app
+        python -m uvicorn app.main:app --host 0.0.0.0 --port 8002 --reload
       "
+    entrypoint: []
 
   # =============================================================================
   # FRONTEND DEVELOPMENT SERVICE  
@@ -208,12 +206,7 @@ services:
   worker:
     build:
       context: .
-      dockerfile: infra/docker/api/Dockerfile.api
-    volumes:
-      - ./apps/api/src/app:/app 
-      - ./apps/api/alembic.ini:/app/alembic.ini
-      - ./models:/app/models
-      - ./infra/scripts:/app/infra/scripts 
+      dockerfile: infra/docker/worker/Dockerfile.prod
     environment:
       - PYTHONPATH=/app
       - DATABASE_URL=postgresql://ml_portal:ml_portal_password@postgres:5432/ml_portal
@@ -230,7 +223,7 @@ services:
     command: >
       sh -c "
         echo 'Starting Celery worker...' &&
-        celery -A app.celery_app worker --loglevel=info --reload
+        celery -A app.celery_app worker --loglevel=info
       "
     depends_on:
       postgres:
