@@ -20,18 +20,18 @@ class TestAdminEndpoints:
             assert response.status_code == 401
 
     @pytest.mark.asyncio
-    async def test_get_admin_status_non_admin(self, async_client: AsyncClient, user_token):
+    async def test_get_admin_status_non_admin(self, async_client: AsyncClient, simple_user_token):
         """Тест получения статуса админа с правами обычного пользователя."""
         async for client in async_client:
-            headers = {"Authorization": f"Bearer {user_token}"}
+            headers = {"Authorization": f"Bearer {simple_user_token}"}
             response = await client.get("/api/v1/admin/status", headers=headers)
             assert response.status_code == 403
 
     @pytest.mark.asyncio
-    async def test_get_admin_status_admin(self, async_client: AsyncClient, admin_token):
+    async def test_get_admin_status_admin(self, async_client: AsyncClient, simple_admin_token):
         """Тест получения статуса админа с правами админа."""
         async for client in async_client:
-            headers = {"Authorization": f"Bearer {admin_token}"}
+            headers = {"Authorization": f"Bearer {simple_admin_token}"}
             response = await client.get("/api/v1/admin/status", headers=headers)
             assert response.status_code == 200
             data = response.json()
@@ -63,19 +63,19 @@ class TestAdminEndpoints:
             assert response.status_code == 401
 
     @pytest.mark.asyncio
-    async def test_set_admin_mode_non_admin(self, async_client: AsyncClient, user_token):
+    async def test_set_admin_mode_non_admin(self, async_client: AsyncClient, simple_user_token):
         """Тест установки режима админа с правами обычного пользователя."""
         async for client in async_client:
-            headers = {"Authorization": f"Bearer {user_token}"}
+            headers = {"Authorization": f"Bearer {simple_user_token}"}
             mode_data = {"mode": "maintenance"}
             response = await client.post("/api/v1/admin/mode", json=mode_data, headers=headers)
             assert response.status_code == 403
 
     @pytest.mark.asyncio
-    async def test_set_admin_mode_admin(self, async_client: AsyncClient, admin_token):
+    async def test_set_admin_mode_admin(self, async_client: AsyncClient, simple_admin_token):
         """Тест установки режима админа с правами админа."""
         async for client in async_client:
-            headers = {"Authorization": f"Bearer {admin_token}"}
+            headers = {"Authorization": f"Bearer {simple_admin_token}"}
             mode_data = {"mode": "maintenance"}
             response = await client.post("/api/v1/admin/mode", json=mode_data, headers=headers)
             assert response.status_code == 200
@@ -86,19 +86,19 @@ class TestAdminEndpoints:
             assert data["mode"] == "maintenance"
 
     @pytest.mark.asyncio
-    async def test_set_admin_mode_invalid_mode(self, async_client: AsyncClient, admin_token):
+    async def test_set_admin_mode_invalid_mode(self, async_client: AsyncClient, simple_admin_token):
         """Тест установки неверного режима админа."""
         async for client in async_client:
-            headers = {"Authorization": f"Bearer {admin_token}"}
+            headers = {"Authorization": f"Bearer {simple_admin_token}"}
             mode_data = {"mode": "invalid_mode"}
             response = await client.post("/api/v1/admin/mode", json=mode_data, headers=headers)
             assert response.status_code == 400
 
     @pytest.mark.asyncio
-    async def test_admin_mode_values(self, async_client: AsyncClient, admin_token):
+    async def test_admin_mode_values(self, async_client: AsyncClient, simple_admin_token):
         """Тест различных значений режима админа."""
         async for client in async_client:
-            headers = {"Authorization": f"Bearer {admin_token}"}
+            headers = {"Authorization": f"Bearer {simple_admin_token}"}
             
             valid_modes = ["normal", "maintenance", "readonly"]
             for mode in valid_modes:
@@ -109,10 +109,10 @@ class TestAdminEndpoints:
                 assert data["mode"] == mode
 
     @pytest.mark.asyncio
-    async def test_admin_status_services_status(self, async_client: AsyncClient, admin_token):
+    async def test_admin_status_services_status(self, async_client: AsyncClient, simple_admin_token):
         """Тест статуса сервисов в админ панели."""
         async for client in async_client:
-            headers = {"Authorization": f"Bearer {admin_token}"}
+            headers = {"Authorization": f"Bearer {simple_admin_token}"}
             response = await client.get("/api/v1/admin/status", headers=headers)
             assert response.status_code == 200
             data = response.json()
@@ -122,10 +122,10 @@ class TestAdminEndpoints:
                 assert service_status in ["ready", "not_ready", "error"], f"Invalid status for {service_name}: {service_status}"
 
     @pytest.mark.asyncio
-    async def test_admin_metrics_values(self, async_client: AsyncClient, admin_token):
+    async def test_admin_metrics_values(self, async_client: AsyncClient, simple_admin_token):
         """Тест значений метрик в админ панели."""
         async for client in async_client:
-            headers = {"Authorization": f"Bearer {admin_token}"}
+            headers = {"Authorization": f"Bearer {simple_admin_token}"}
             response = await client.get("/api/v1/admin/status", headers=headers)
             assert response.status_code == 200
             data = response.json()
@@ -139,10 +139,10 @@ class TestAdminEndpoints:
             assert metrics["queue_depth"] >= 0, "Queue depth should be non-negative"
 
     @pytest.mark.asyncio
-    async def test_admin_mode_missing_data(self, async_client: AsyncClient, admin_token):
+    async def test_admin_mode_missing_data(self, async_client: AsyncClient, simple_admin_token):
         """Тест установки режима админа без данных."""
         async for client in async_client:
-            headers = {"Authorization": f"Bearer {admin_token}"}
+            headers = {"Authorization": f"Bearer {simple_admin_token}"}
             response = await client.post("/api/v1/admin/mode", json={}, headers=headers)
             assert response.status_code == 422
 

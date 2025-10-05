@@ -3,9 +3,9 @@ import os
 from typing import AsyncGenerator
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import Depends, HTTPException, status, Request
-from app.core.db import get_async_session
-from app.core.di import get_llm_client, get_emb_client
-from app.core.security import UserCtx
+from core.db import get_async_session
+from core.di import get_llm_client, get_emb_client
+from core.security import UserCtx
 
 # Re-export for routers/services
 async def db_session() -> AsyncGenerator[AsyncSession, None]:
@@ -23,7 +23,7 @@ def get_llm_client_mock():
 # Authentication dependencies
 def get_current_user(request: Request) -> UserCtx:
     """Get current user from JWT token in Authorization header"""
-    from app.core.security import decode_jwt
+    from core.security import decode_jwt
     
     auth_header = request.headers.get("Authorization")
     if not auth_header or not auth_header.startswith("Bearer "):

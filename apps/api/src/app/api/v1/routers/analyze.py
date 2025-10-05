@@ -2,14 +2,14 @@ from __future__ import annotations
 from typing import Any, Mapping
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
-from app.api.deps import get_emb_client
-from app.api.deps_idempotency import idempotency_guard
-from app.core.http.clients import EmbClientProtocol
-from app.core.sse import wrap_sse_stream, format_sse
-from app.core.sse_protocol import EVENT_META, EVENT_TOKEN, EVENT_DONE, sse_error
-from app.core.s3_links import S3LinkFactory, S3ContentType
-from app.core.sse_utils import sse_response
-from app.schemas.common import ProblemDetails
+from api.deps import get_emb_client
+from api.deps_idempotency import idempotency_guard
+from core.http.clients import EmbClientProtocol
+from core.sse import wrap_sse_stream, format_sse
+from core.sse_protocol import EVENT_META, EVENT_TOKEN, EVENT_DONE, sse_error
+from core.s3_links import S3LinkFactory, S3ContentType
+from core.sse_utils import sse_response
+from schemas.common import ProblemDetails
 
 router = APIRouter(tags=["analyze"])
 

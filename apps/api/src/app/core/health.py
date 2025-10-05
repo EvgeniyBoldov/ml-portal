@@ -4,8 +4,8 @@ import time
 from typing import Dict, Any, Optional
 from enum import Enum
 import logging
-from app.core.config import get_settings
-from app.core.resilience import resilience_manager
+from core.config import get_settings
+from core.resilience import resilience_manager
 
 logger = logging.getLogger(__name__)
 

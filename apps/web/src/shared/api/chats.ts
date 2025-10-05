@@ -18,12 +18,12 @@ export async function listChats(
   if (params.limit) qs.set('limit', String(params.limit));
   if (params.cursor) qs.set('cursor', params.cursor);
   if (params.q) qs.set('q', params.q);
-  return apiRequest<PaginatedResponse<Chat>>(`/chats?${qs.toString()}`);
+  return apiRequest<PaginatedResponse<Chat>>(`/chat/chats?${qs.toString()}`);
 }
 
 export async function createChat(name?: string | null, tags?: string[] | null) {
   const body: ChatCreateRequest = { name: name ?? null, tags: tags ?? null };
-  return apiRequest<{ chat_id: string }>('/chats', {
+  return apiRequest<{ chat_id: string }>('/chat/chats', {
     method: 'POST',
     body: JSON.stringify(body),
   });
@@ -37,12 +37,12 @@ export async function listMessages(
   if (params.limit) qs.set('limit', String(params.limit));
   if (params.cursor) qs.set('cursor', params.cursor);
   return apiRequest<PaginatedResponse<ChatMessage>>(
-    `/chats/${chat_id}/messages?${qs.toString()}`
+    `/chat/chats/${chat_id}/messages?${qs.toString()}`
   );
 }
 
 export async function sendMessage(chat_id: string, body: ChatMessageCreateRequest) {
-  return apiRequest<ChatMessageResponse>(`/chats/${chat_id}/messages`, {
+  return apiRequest<ChatMessageResponse>(`/chat/chats/${chat_id}/messages`, {
     method: 'POST',
     body: JSON.stringify(body),
     idempotent: true,
@@ -65,7 +65,7 @@ export async function* sendMessageStream(
   }
 
   const API_BASE = import.meta.env.VITE_API_BASE || '/api';
-  const res = await fetch(`${API_BASE}/chats/${chat_id}/messages`, {
+  const res = await fetch(`${API_BASE}/chat/chats/${chat_id}/messages`, {
     method: 'POST',
     headers,
     body: JSON.stringify({ ...body, response_stream: true }),
@@ -98,7 +98,7 @@ export async function* sendMessageStream(
 
 export async function renameChat(chat_id: string, name: string) {
   const body: ChatUpdateRequest = { name };
-  return apiRequest<Chat>(`/chats/${chat_id}`, {
+  return apiRequest<Chat>(`/chat/chats/${chat_id}`, {
     method: 'PATCH',
     body: JSON.stringify(body),
   });
@@ -106,14 +106,14 @@ export async function renameChat(chat_id: string, name: string) {
 
 export async function updateChatTags(chat_id: string, tags: string[]) {
   const body: ChatTagsUpdateRequest = { tags };
-  return apiRequest<{ id: string; tags: string[] }>(`/chats/${chat_id}/tags`, {
+  return apiRequest<{ id: string; tags: string[] }>(`/chat/chats/${chat_id}/tags`, {
     method: 'PUT',
     body: JSON.stringify(body),
   });
 }
 
 export async function deleteChat(chat_id: string) {
-  return apiRequest<{ id: string; deleted: boolean }>(`/chats/${chat_id}`, {
+  return apiRequest<{ id: string; deleted: boolean }>(`/chat/chats/${chat_id}`, {
     method: 'DELETE',
   });
 }

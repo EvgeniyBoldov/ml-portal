@@ -5,8 +5,8 @@ from __future__ import annotations
 from typing import List, Optional, Dict, Any
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_, desc
-from app.models.base import BaseModel
-from app.core.logging import get_logger
+from models.base import BaseModel
+from core.logging import get_logger
 
 logger = get_logger(__name__)
 

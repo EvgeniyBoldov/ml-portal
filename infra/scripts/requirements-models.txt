@@ -1,0 +1,7 @@
+# Requirements for model downloading script
+huggingface_hub>=0.20.0
+transformers>=4.35.0
+torch>=1.9.0
+safetensors>=0.4.0
+tokenizers>=0.15.0
+numpy>=1.21.0

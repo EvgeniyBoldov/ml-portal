@@ -3,8 +3,8 @@ from typing import Optional
 import time
 from uuid import UUID
 from fastapi import Header, HTTPException, status, Request
-from app.core.redis import get_redis
-from app.core.config import get_settings
+from core.redis import get_redis
+from core.config import get_settings
 
 SENSITIVE_PATHS = {"/api/v1/auth/login", "/api/v1/auth/refresh"}
 

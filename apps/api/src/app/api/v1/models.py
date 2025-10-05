@@ -3,15 +3,15 @@ Models endpoints for API v1
 """
 from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
-from app.api.deps import db_session, get_current_user
-from app.core.security import UserCtx
+from sqlalchemy.ext.asyncio import AsyncSession
+from api.deps import db_session, get_current_user
+from core.security import UserCtx
 
 router = APIRouter(tags=["models"])
 
 @router.get("/models/llm")
-def list_llm_models(
-    session: Session = Depends(db_session),
+async def list_llm_models(
+    session: AsyncSession = Depends(db_session),
     user: UserCtx = Depends(get_current_user),
 ):
     """List available LLM models with role isolation (G4/G5 compliant)"""
@@ -100,8 +100,8 @@ def list_llm_models(
         raise HTTPException(status_code=500, detail=f"Failed to list LLM models: {str(e)}")
 
 @router.get("/models/embeddings")
-def list_embedding_models(
-    session: Session = Depends(db_session),
+async def list_embedding_models(
+    session: AsyncSession = Depends(db_session),
     user: UserCtx = Depends(get_current_user),
 ):
     """List available embedding models with role isolation (G4/G5 compliant)"""

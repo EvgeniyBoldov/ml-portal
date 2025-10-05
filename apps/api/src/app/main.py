@@ -1,12 +1,22 @@
 
 from fastapi import FastAPI
-from app.api.v1.router import api_v1
-# from app.core.middleware import TenantMiddleware
-from app.core.health import health_checker
-# from app.core.observability import TracingMiddleware
-# from app.core.idempotency import IdempotencyMiddleware
+from fastapi.middleware.cors import CORSMiddleware
+from api.v1.router import api_v1
+# from core.middleware import TenantMiddleware
+from core.health import health_checker
+# from core.observability import TracingMiddleware
+# from core.idempotency import IdempotencyMiddleware
 
 app = FastAPI(title="ML-Portal API")
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Add middleware (order matters: tracing -> idempotency -> tenant)
 # app.add_middleware(TracingMiddleware)

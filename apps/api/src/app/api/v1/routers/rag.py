@@ -1,9 +1,9 @@
 from __future__ import annotations
 from typing import Any
 from fastapi import APIRouter, HTTPException
-from app.adapters.s3_client import s3_manager, PresignOptions
-from app.core.config import get_settings
-from app.core.s3_links import S3ContentType
+from adapters.s3_client import s3_manager, PresignOptions
+from core.config import get_settings
+from core.s3_links import S3ContentType
 
 router = APIRouter(tags=["rag"])
 

@@ -4,10 +4,10 @@ Users endpoints for API v1
 from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.api.deps import db_session, get_current_user, require_admin
-from app.repositories.users_repo import AsyncUsersRepository
-from app.services.users_service import AsyncUsersService
-from app.schemas.common import ProblemDetails
+from api.deps import db_session, get_current_user, require_admin
+from repositories.users_repo import AsyncUsersRepository
+from services.users_service import AsyncUsersService
+from schemas.common import ProblemDetails
 
 router = APIRouter(tags=["users"])
 

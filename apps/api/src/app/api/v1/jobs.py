@@ -3,19 +3,19 @@ Jobs endpoints for API v1
 """
 from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query, Body
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime
-from app.api.deps import db_session, get_current_user
-from app.core.security import UserCtx
+from api.deps import db_session, get_current_user
+from core.security import UserCtx
 
 router = APIRouter(tags=["jobs"])
 
 @router.get("/jobs")
-def list_jobs(
+async def list_jobs(
     status: str | None = Query(None, description="Filter by status: running|queued|failed|ready|canceled"),
     limit: int = Query(20, ge=1, le=100),
     cursor: str | None = Query(None, description="Cursor for pagination"),
-    session: Session = Depends(db_session),
+    session: AsyncSession = Depends(db_session),
     user: UserCtx = Depends(get_current_user),
 ):
     """List jobs with cursor pagination (G4/G5 compliant)"""
@@ -66,9 +66,9 @@ def list_jobs(
         raise HTTPException(status_code=500, detail=f"Failed to list jobs: {str(e)}")
 
 @router.get("/jobs/{job_id}")
-def get_job(
+async def get_job(
     job_id: str,
-    session: Session = Depends(db_session),
+    session: AsyncSession = Depends(db_session),
     user: UserCtx = Depends(get_current_user),
 ):
     """Get job status/result with detailed information (G4/G5 compliant)"""
@@ -135,9 +135,9 @@ def get_job(
         raise HTTPException(status_code=500, detail=f"Failed to get job: {str(e)}")
 
 @router.post("/jobs/{job_id}/cancel")
-def cancel_job(
+async def cancel_job(
     job_id: str,
-    session: Session = Depends(db_session),
+    session: AsyncSession = Depends(db_session),
     user: UserCtx = Depends(get_current_user),
 ):
     """Cancel job (G4/G5 compliant)"""
@@ -163,9 +163,9 @@ def cancel_job(
         raise HTTPException(status_code=500, detail=f"Failed to cancel job: {str(e)}")
 
 @router.post("/jobs/{job_id}/retry")
-def retry_job(
+async def retry_job(
     job_id: str,
-    session: Session = Depends(db_session),
+    session: AsyncSession = Depends(db_session),
     user: UserCtx = Depends(get_current_user),
 ):
     """Retry job (G4/G5 compliant)"""

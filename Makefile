@@ -43,6 +43,15 @@ help:
 	@echo "  git-push MSG   - Quick git add, commit and push (MSG=commit message)"
 	@echo "  git-auto       - Auto commit with smart message based on changes"
 	@echo ""
+	@echo "Models:"
+	@echo "  models-download MODEL - Download model from HuggingFace (MODEL=model-id)"
+	@echo "  models-list          - List downloaded models"
+	@echo "  models-test          - Test downloaded models"
+	@echo "  models-clean         - Clean downloaded models"
+	@echo "  models-download-llm  - Download common LLM models"
+	@echo "  models-download-embeddings - Download common embedding models"
+	@echo "  models-download-all  - Download all common models"
+	@echo ""
 	@echo "Documentation:"
 	@echo "  gen-all        - Generate code documentation files (backend, frontend, infrastructure)"
 
@@ -198,12 +207,78 @@ git-auto:
 	@./scripts/git-auto-commit.sh
 	@ git push
 
-# Generate code documentation
-gen-all:
-	@echo "📚 Генерация документации кода..."
-	@python3 scripts/generate-code-docs.py
-	@echo "✅ Документация создана в корне проекта:"
-	@echo "   - code-docs-backend.txt"
-	@echo "   - code-docs-tests.txt"
-	@echo "   - code-docs-frontend.txt" 
-	@echo "   - code-docs-infrastructure.txt"
+# Models management
+models-download:
+	@if [ -z "$(MODEL)" ]; then \
+		echo "❌ Error: Please provide model ID"; \
+		echo "Usage: make models-download MODEL=microsoft/DialoGPT-small"; \
+		echo "Available models:"; \
+		echo "  - microsoft/DialoGPT-small (LLM)"; \
+		echo "  - sentence-transformers/all-MiniLM-L6-v2 (Embeddings)"; \
+		echo "  - microsoft/DialoGPT-medium (LLM)"; \
+		echo "  - sentence-transformers/all-mpnet-base-v2 (Embeddings)"; \
+		exit 1; \
+	fi
+	@echo "📥 Downloading model: $(MODEL)"
+	@if [ -f "venv-models/bin/activate" ]; then \
+		source venv-models/bin/activate && python3 infra/scripts/download_models.py $(MODEL) --output-dir models --test --info; \
+	else \
+		echo "⚠️  Virtual environment not found. Installing dependencies..."; \
+		python3 -m venv venv-models && source venv-models/bin/activate && pip install huggingface_hub transformers safetensors tokenizers numpy && python3 infra/scripts/download_models.py $(MODEL) --output-dir models --test --info; \
+	fi
+
+models-list:
+	@echo "📋 Downloaded models:"
+	@if [ -d "models" ]; then \
+		for model_dir in models/*/; do \
+			if [ -d "$$model_dir" ]; then \
+				model_name=$$(basename "$$model_dir"); \
+				echo "  📦 $$model_name"; \
+				if [ -f "$$model_dir/metadata.json" ]; then \
+					echo "    📊 $$(python3 -c "import json; data=json.load(open('$$model_dir/metadata.json')); print(f\"Size: {data.get('total_size_mb', 0):.1f} MB, Files: {data.get('total_files', 0)}\")")"; \
+				fi; \
+			fi; \
+		done; \
+	else \
+		echo "  No models directory found"; \
+	fi
+
+models-test:
+	@echo "🧪 Testing downloaded models..."
+	@if [ -d "models" ]; then \
+		for model_dir in models/*/; do \
+			if [ -d "$$model_dir" ]; then \
+				model_name=$$(basename "$$model_dir"); \
+				echo "  Testing $$model_name..."; \
+				python3 infra/scripts/download_models.py --test "$$model_name" --output-dir models || true; \
+			fi; \
+		done; \
+	else \
+		echo "  No models directory found"; \
+	fi
+
+models-clean:
+	@echo "🧹 Cleaning downloaded models..."
+	@if [ -d "models" ]; then \
+		echo "  Removing models directory..."; \
+		rm -rf models; \
+		echo "  ✅ Models cleaned"; \
+	else \
+		echo "  No models directory found"; \
+	fi
+
+# Quick model downloads for common models
+models-download-llm:
+	@echo "📥 Downloading common LLM models..."
+	@make models-download MODEL=microsoft/DialoGPT-small
+	@make models-download MODEL=microsoft/DialoGPT-medium
+
+models-download-embeddings:
+	@echo "📥 Downloading common embedding models..."
+	@make models-download MODEL=sentence-transformers/all-MiniLM-L6-v2
+	@make models-download MODEL=sentence-transformers/all-mpnet-base-v2
+
+models-download-all:
+	@echo "📥 Downloading all common models..."
+	@make models-download-llm
+	@make models-download-embeddings

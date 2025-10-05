@@ -1,4 +1,4 @@
-export const API_BASE = (import.meta.env.VITE_API_BASE || '/api') as string;
+export const API_BASE = (import.meta.env.VITE_API_BASE || '/api/v1') as string;
 
 // Re-export admin API
 export * from './admin';

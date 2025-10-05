@@ -25,11 +25,11 @@ class TestArtifactsEndpoints:
             assert response.status_code == 401
 
     @pytest.mark.asyncio
-    async def test_presign_artifact_authorized(self, async_client: AsyncClient, user_token):
+    async def test_presign_artifact_authorized(self, async_client: AsyncClient, simple_user_token):
         """Тест presign artifact с авторизацией."""
         async for client in async_client:
             headers = {
-                "Authorization": f"Bearer {user_token}",
+                "Authorization": f"Bearer {simple_user_token}",
                 "X-Tenant-Id": str(uuid.uuid4()),
                 "Idempotency-Key": str(uuid.uuid4())
             }
@@ -51,11 +51,11 @@ class TestArtifactsEndpoints:
             assert "max_bytes" in result
 
     @pytest.mark.asyncio
-    async def test_presign_artifact_missing_job_id(self, async_client: AsyncClient, user_token):
+    async def test_presign_artifact_missing_job_id(self, async_client: AsyncClient, simple_user_token):
         """Тест presign artifact без job_id."""
         async for client in async_client:
             headers = {
-                "Authorization": f"Bearer {user_token}",
+                "Authorization": f"Bearer {simple_user_token}",
                 "X-Tenant-Id": str(uuid.uuid4()),
                 "Idempotency-Key": str(uuid.uuid4())
             }
@@ -67,11 +67,11 @@ class TestArtifactsEndpoints:
             assert response.status_code == 422
 
     @pytest.mark.asyncio
-    async def test_presign_artifact_missing_filename(self, async_client: AsyncClient, user_token):
+    async def test_presign_artifact_missing_filename(self, async_client: AsyncClient, simple_user_token):
         """Тест presign artifact без filename."""
         async for client in async_client:
             headers = {
-                "Authorization": f"Bearer {user_token}",
+                "Authorization": f"Bearer {simple_user_token}",
                 "X-Tenant-Id": str(uuid.uuid4()),
                 "Idempotency-Key": str(uuid.uuid4())
             }
@@ -83,11 +83,11 @@ class TestArtifactsEndpoints:
             assert response.status_code == 422
 
     @pytest.mark.asyncio
-    async def test_presign_artifact_different_content_types(self, async_client: AsyncClient, user_token):
+    async def test_presign_artifact_different_content_types(self, async_client: AsyncClient, simple_user_token):
         """Тест presign artifact с разными типами контента."""
         async for client in async_client:
             headers = {
-                "Authorization": f"Bearer {user_token}",
+                "Authorization": f"Bearer {simple_user_token}",
                 "X-Tenant-Id": str(uuid.uuid4()),
                 "Idempotency-Key": str(uuid.uuid4())
             }
@@ -112,11 +112,11 @@ class TestArtifactsEndpoints:
                 assert result["content_type"] == content_type
 
     @pytest.mark.asyncio
-    async def test_presign_artifact_different_filenames(self, async_client: AsyncClient, user_token):
+    async def test_presign_artifact_different_filenames(self, async_client: AsyncClient, simple_user_token):
         """Тест presign artifact с разными именами файлов."""
         async for client in async_client:
             headers = {
-                "Authorization": f"Bearer {user_token}",
+                "Authorization": f"Bearer {simple_user_token}",
                 "X-Tenant-Id": str(uuid.uuid4()),
                 "Idempotency-Key": str(uuid.uuid4())
             }
@@ -142,11 +142,11 @@ class TestArtifactsEndpoints:
                 assert filename in result["key"]
 
     @pytest.mark.asyncio
-    async def test_presign_artifact_idempotency(self, async_client: AsyncClient, user_token):
+    async def test_presign_artifact_idempotency(self, async_client: AsyncClient, simple_user_token):
         """Тест идемпотентности presign artifact."""
         async for client in async_client:
             headers = {
-                "Authorization": f"Bearer {user_token}",
+                "Authorization": f"Bearer {simple_user_token}",
                 "X-Tenant-Id": str(uuid.uuid4()),
                 "Idempotency-Key": str(uuid.uuid4())
             }
@@ -171,7 +171,7 @@ class TestArtifactsEndpoints:
             assert result1["key"] == result2["key"]
 
     @pytest.mark.asyncio
-    async def test_presign_artifact_tenant_isolation(self, async_client: AsyncClient, user_token):
+    async def test_presign_artifact_tenant_isolation(self, async_client: AsyncClient, simple_user_token):
         """Тест изоляции tenant в presign artifact."""
         async for client in async_client:
             tenant1 = str(uuid.uuid4())
@@ -185,7 +185,7 @@ class TestArtifactsEndpoints:
             
             # Запрос для первого tenant
             headers1 = {
-                "Authorization": f"Bearer {user_token}",
+                "Authorization": f"Bearer {simple_user_token}",
                 "X-Tenant-Id": tenant1,
                 "Idempotency-Key": str(uuid.uuid4())
             }
@@ -195,7 +195,7 @@ class TestArtifactsEndpoints:
             
             # Запрос для второго tenant
             headers2 = {
-                "Authorization": f"Bearer {user_token}",
+                "Authorization": f"Bearer {simple_user_token}",
                 "X-Tenant-Id": tenant2,
                 "Idempotency-Key": str(uuid.uuid4())
             }
@@ -207,11 +207,11 @@ class TestArtifactsEndpoints:
             assert result1["key"] != result2["key"]
 
     @pytest.mark.asyncio
-    async def test_presign_artifact_expires_in(self, async_client: AsyncClient, user_token):
+    async def test_presign_artifact_expires_in(self, async_client: AsyncClient, simple_user_token):
         """Тест времени истечения presign artifact."""
         async for client in async_client:
             headers = {
-                "Authorization": f"Bearer {user_token}",
+                "Authorization": f"Bearer {simple_user_token}",
                 "X-Tenant-Id": str(uuid.uuid4()),
                 "Idempotency-Key": str(uuid.uuid4())
             }
@@ -230,11 +230,11 @@ class TestArtifactsEndpoints:
             assert 300 <= expires_in <= 3600
 
     @pytest.mark.asyncio
-    async def test_presign_artifact_max_bytes(self, async_client: AsyncClient, user_token):
+    async def test_presign_artifact_max_bytes(self, async_client: AsyncClient, simple_user_token):
         """Тест максимального размера файла."""
         async for client in async_client:
             headers = {
-                "Authorization": f"Bearer {user_token}",
+                "Authorization": f"Bearer {simple_user_token}",
                 "X-Tenant-Id": str(uuid.uuid4()),
                 "Idempotency-Key": str(uuid.uuid4())
             }

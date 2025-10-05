@@ -3,7 +3,8 @@ from __future__ import annotations
 from typing import Optional, List
 import bcrypt
 import uuid
-from app.repositories.users_repo import AsyncUsersRepository
+from repositories.users_repo import AsyncUsersRepository
+from core.security import verify_password
 
 class AsyncUsersService:
     def __init__(self, users_repo: AsyncUsersRepository):
@@ -18,9 +19,9 @@ class AsyncUsersService:
         if user is None or getattr(user, "is_active", True) is False:
             return None
 
-        # Expect password_hash stored as bcrypt hash
+        # Expect password_hash stored as argon2 hash
         try:
-            ok = bcrypt.checkpw(password.encode("utf-8"), user.password_hash.encode("utf-8"))
+            ok = verify_password(password, user.password_hash)
         except Exception:
             ok = False
         return user if ok else None

@@ -20,10 +20,10 @@ class TestTenantsEndpoints:
             assert response.status_code == 401
 
     @pytest.mark.asyncio
-    async def test_list_tenants_admin(self, async_client: AsyncClient, admin_token):
+    async def test_list_tenants_admin(self, async_client: AsyncClient, simple_admin_token):
         """Тест получения списка tenants с админ правами."""
         async for client in async_client:
-            headers = {"Authorization": f"Bearer {admin_token}"}
+            headers = {"Authorization": f"Bearer {simple_admin_token}"}
             response = await client.get("/api/v1/tenants", headers=headers)
             assert response.status_code == 200
             data = response.json()
@@ -31,10 +31,10 @@ class TestTenantsEndpoints:
             assert isinstance(data["items"], list)
 
     @pytest.mark.asyncio
-    async def test_list_tenants_with_pagination(self, async_client: AsyncClient, admin_token):
+    async def test_list_tenants_with_pagination(self, async_client: AsyncClient, simple_admin_token):
         """Тест пагинации списка tenants."""
         async for client in async_client:
-            headers = {"Authorization": f"Bearer {admin_token}"}
+            headers = {"Authorization": f"Bearer {simple_admin_token}"}
             response = await client.get("/api/v1/tenants?limit=5", headers=headers)
             assert response.status_code == 200
             data = response.json()
@@ -53,10 +53,10 @@ class TestTenantsEndpoints:
             assert response.status_code == 401
 
     @pytest.mark.asyncio
-    async def test_create_tenant_admin(self, async_client: AsyncClient, admin_token):
+    async def test_create_tenant_admin(self, async_client: AsyncClient, simple_admin_token):
         """Тест создания tenant с админ правами."""
         async for client in async_client:
-            headers = {"Authorization": f"Bearer {admin_token}"}
+            headers = {"Authorization": f"Bearer {simple_admin_token}"}
             tenant_data = {
                 "name": f"test_tenant_{uuid.uuid4().hex[:8]}",
                 "description": "Test tenant description"
@@ -76,10 +76,10 @@ class TestTenantsEndpoints:
             assert response.status_code == 401
 
     @pytest.mark.asyncio
-    async def test_get_tenant_by_id_admin(self, async_client: AsyncClient, admin_token):
+    async def test_get_tenant_by_id_admin(self, async_client: AsyncClient, simple_admin_token):
         """Тест получения tenant по ID с админ правами."""
         async for client in async_client:
-            headers = {"Authorization": f"Bearer {admin_token}"}
+            headers = {"Authorization": f"Bearer {simple_admin_token}"}
             
             # Сначала создаем tenant
             tenant_data = {
@@ -108,10 +108,10 @@ class TestTenantsEndpoints:
             assert response.status_code == 401
 
     @pytest.mark.asyncio
-    async def test_update_tenant_admin(self, async_client: AsyncClient, admin_token):
+    async def test_update_tenant_admin(self, async_client: AsyncClient, simple_admin_token):
         """Тест обновления tenant с админ правами."""
         async for client in async_client:
-            headers = {"Authorization": f"Bearer {admin_token}"}
+            headers = {"Authorization": f"Bearer {simple_admin_token}"}
             
             # Сначала создаем tenant
             tenant_data = {
@@ -139,10 +139,10 @@ class TestTenantsEndpoints:
             assert response.status_code == 401
 
     @pytest.mark.asyncio
-    async def test_delete_tenant_admin(self, async_client: AsyncClient, admin_token):
+    async def test_delete_tenant_admin(self, async_client: AsyncClient, simple_admin_token):
         """Тест удаления tenant с админ правами."""
         async for client in async_client:
-            headers = {"Authorization": f"Bearer {admin_token}"}
+            headers = {"Authorization": f"Bearer {simple_admin_token}"}
             
             # Сначала создаем tenant
             tenant_data = {
@@ -159,10 +159,10 @@ class TestTenantsEndpoints:
             assert response.status_code == 200
 
     @pytest.mark.asyncio
-    async def test_tenant_not_found(self, async_client: AsyncClient, admin_token):
+    async def test_tenant_not_found(self, async_client: AsyncClient, simple_admin_token):
         """Тест получения несуществующего tenant."""
         async for client in async_client:
-            headers = {"Authorization": f"Bearer {admin_token}"}
+            headers = {"Authorization": f"Bearer {simple_admin_token}"}
             tenant_id = str(uuid.uuid4())
             response = await client.get(f"/api/v1/tenants/{tenant_id}", headers=headers)
             assert response.status_code == 404

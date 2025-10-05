@@ -1,18 +1,18 @@
 
 from fastapi import APIRouter
-from app.api.deps import is_auth_enabled
-from app.api.v1.routers import security as security_router
-from app.api.v1.routers import health as health_router
-from app.api.v1.routers import admin as admin_router
-from app.api.v1.routers import analyze as analyze_router
-from app.api.v1.routers import artifacts as artifacts_router
-from app.api.v1.routers import chat as chat_router
-from app.api.v1.routers import rag as rag_router
-from app.api.v1.routers import users as users_router
-from app.api.v1 import tenants as tenants_router
-from app.api.v1 import jobs as jobs_router
-from app.api.v1 import models as models_router
-# from app.api.v1.routers import auth as deprecated_auth_router  # kept for compat, not mounted
+from api.deps import is_auth_enabled
+from api.v1.routers import security as security_router
+from api.v1.routers import health as health_router
+from api.v1.routers import admin as admin_router
+from api.v1.routers import analyze as analyze_router
+from api.v1.routers import artifacts as artifacts_router
+from api.v1.routers import chat as chat_router
+from api.v1.routers import rag as rag_router
+from api.v1.routers import users as users_router
+from api.v1 import tenants as tenants_router
+from api.v1 import jobs as jobs_router
+from api.v1 import models as models_router
+# from api.v1.routers import auth as deprecated_auth_router  # kept for compat, not mounted
 
 api_v1 = APIRouter()
 

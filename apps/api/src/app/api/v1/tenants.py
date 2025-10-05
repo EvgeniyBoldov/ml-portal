@@ -4,17 +4,17 @@ Tenants endpoints for API v1
 from __future__ import annotations
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from sqlalchemy.orm import Session
-from app.api.deps import db_session, require_admin, get_current_user
-from app.services.tenants_service import TenantsService
+from sqlalchemy.ext.asyncio import AsyncSession
+from api.deps import db_session, require_admin, get_current_user
+from services.tenants_service import TenantsService
 
 router = APIRouter(tags=["tenants"])
 
 @router.get("/tenants")
-def list_tenants(
+async def list_tenants(
     limit: int = Query(20, ge=1, le=100),
     cursor: str | None = Query(None, description="Cursor for pagination"),
-    session: Session = Depends(db_session),
+    session: AsyncSession = Depends(db_session),
     admin_user = Depends(require_admin),
 ):
     """List tenants with cursor pagination (admin only) (G4/G5 compliant)"""
@@ -26,9 +26,9 @@ def list_tenants(
         raise HTTPException(status_code=500, detail=f"Failed to list tenants: {str(e)}")
 
 @router.post("/tenants")
-def create_tenant(
+async def create_tenant(
     tenant_data: dict,
-    session: Session = Depends(db_session),
+    session: AsyncSession = Depends(db_session),
     admin_user = Depends(require_admin),
 ):
     """Create tenant with role isolation (admin only) (G4/G5 compliant)"""
@@ -45,9 +45,9 @@ def create_tenant(
         raise HTTPException(status_code=500, detail=f"Failed to create tenant: {str(e)}")
 
 @router.get("/tenants/{tenant_id}")
-def get_tenant(
+async def get_tenant(
     tenant_id: str,
-    session: Session = Depends(db_session),
+    session: AsyncSession = Depends(db_session),
     admin_user = Depends(require_admin),
 ):
     """Get tenant by ID (admin only)"""
@@ -64,10 +64,10 @@ def get_tenant(
         raise HTTPException(status_code=500, detail=f"Failed to get tenant: {str(e)}")
 
 @router.patch("/tenants/{tenant_id}")
-def update_tenant(
+async def update_tenant(
     tenant_id: str,
     tenant_data: dict,
-    session: Session = Depends(db_session),
+    session: AsyncSession = Depends(db_session),
     admin_user = Depends(require_admin),
 ):
     """Update tenant (admin only)"""
@@ -84,9 +84,9 @@ def update_tenant(
         raise HTTPException(status_code=500, detail=f"Failed to update tenant: {str(e)}")
 
 @router.delete("/tenants/{tenant_id}")
-def delete_tenant(
+async def delete_tenant(
     tenant_id: str,
-    session: Session = Depends(db_session),
+    session: AsyncSession = Depends(db_session),
     admin_user = Depends(require_admin),
 ):
     """Delete tenant (admin only)"""

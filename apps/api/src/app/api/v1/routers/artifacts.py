@@ -1,8 +1,8 @@
 from __future__ import annotations
 from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request
-from app.api.deps_idempotency import idempotency_guard
-from app.core.s3_links import S3LinkFactory
+from api.deps_idempotency import idempotency_guard
+from core.s3_links import S3LinkFactory
 
 router = APIRouter(tags=["artifacts"])
 

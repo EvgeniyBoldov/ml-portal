@@ -7,8 +7,8 @@ import json
 from datetime import datetime
 from sqlalchemy import select, insert
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.models.user import Users
-from app.models.tenant import UserTenants
+from models.user import Users
+from models.tenant import UserTenants
 
 class AsyncUsersRepository:
     def __init__(self, session: AsyncSession):

@@ -4,7 +4,7 @@ import time
 from typing import Any, Callable, Dict, Optional, TypeVar
 from enum import Enum
 import logging
-from app.core.config import get_settings
+from core.config import get_settings
 
 logger = logging.getLogger(__name__)
 

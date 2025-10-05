@@ -4,8 +4,8 @@ Tenants service for tenant management business logic
 from __future__ import annotations
 from typing import List, Optional, Dict, Any
 from sqlalchemy.orm import Session
-from app.repositories.tenants_repo import TenantsRepository, TenantModel
-from app.core.logging import get_logger
+from repositories.tenants_repo import TenantsRepository, TenantModel
+from core.logging import get_logger
 
 logger = get_logger(__name__)
 

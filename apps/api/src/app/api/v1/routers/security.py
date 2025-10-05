@@ -2,15 +2,15 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.api.deps import db_session, get_current_user
-from app.repositories.users_repo import AsyncUsersRepository
-from app.services.users_service import AsyncUsersService
-from app.core.security import create_access_token, create_refresh_token, decode_jwt, UserCtx
+from api.deps import db_session, get_current_user
+from repositories.users_repo import AsyncUsersRepository
+from services.users_service import AsyncUsersService
+from core.security import create_access_token, create_refresh_token, decode_jwt, UserCtx
 
 router = APIRouter(tags=["security"])
 
 class LoginRequest(BaseModel):
-    email: EmailStr
+    login: str
     password: str
 
 class RefreshRequest(BaseModel):
@@ -25,7 +25,7 @@ class TokenPair(BaseModel):
 @router.post("/login", response_model=TokenPair, tags=["auth"])
 async def login(payload: LoginRequest, session: AsyncSession = Depends(db_session)):
     service = AsyncUsersService(AsyncUsersRepository(session))
-    user = await service.authenticate_user(payload.email, payload.password)
+    user = await service.authenticate_user(payload.login, payload.password)
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
     
@@ -34,8 +34,8 @@ async def login(payload: LoginRequest, session: AsyncSession = Depends(db_sessio
         user_id=str(user.id),
         email=user.email,
         role=user.role or "reader",
-        tenant_ids=user.tenant_ids or [],
-        scopes=user.scopes or []
+        tenant_ids=getattr(user, "tenant_ids", []) or [],
+        scopes=getattr(user, "scopes", []) or []
     )
     
     refresh_token = create_refresh_token(str(user.id))
@@ -75,8 +75,8 @@ async def refresh(payload: RefreshRequest, session: AsyncSession = Depends(db_se
             user_id=str(user.id),
             email=user.email,
             role=user.role or "reader",
-            tenant_ids=user.tenant_ids or [],
-            scopes=user.scopes or []
+            tenant_ids=getattr(user, "tenant_ids", []) or [],
+            scopes=getattr(user, "scopes", []) or []
         )
         
         # Create new refresh token

@@ -186,3 +186,5 @@ cython_debug/
 /code-docs-backend.txt
 /code-docs-infrastructure.txt
 /code-docs-tests.txt
+/ml-portal-models.tar.gz
+

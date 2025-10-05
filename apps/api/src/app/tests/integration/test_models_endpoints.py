@@ -20,10 +20,10 @@ class TestModelsEndpoints:
             assert response.status_code == 401
 
     @pytest.mark.asyncio
-    async def test_list_llm_models_reader(self, async_client: AsyncClient, user_token):
+    async def test_list_llm_models_reader(self, async_client: AsyncClient, simple_user_token):
         """Тест получения списка LLM моделей с правами reader."""
         async for client in async_client:
-            headers = {"Authorization": f"Bearer {user_token}"}
+            headers = {"Authorization": f"Bearer {simple_user_token}"}
             response = await client.get("/api/v1/models/llm", headers=headers)
             assert response.status_code == 200
             data = response.json()
@@ -36,10 +36,10 @@ class TestModelsEndpoints:
             assert "llama-2-7b" in model_ids
 
     @pytest.mark.asyncio
-    async def test_list_llm_models_admin(self, async_client: AsyncClient, admin_token):
+    async def test_list_llm_models_admin(self, async_client: AsyncClient, simple_admin_token):
         """Тест получения списка LLM моделей с правами admin."""
         async for client in async_client:
-            headers = {"Authorization": f"Bearer {admin_token}"}
+            headers = {"Authorization": f"Bearer {simple_admin_token}"}
             response = await client.get("/api/v1/models/llm", headers=headers)
             assert response.status_code == 200
             data = response.json()
@@ -57,10 +57,10 @@ class TestModelsEndpoints:
             assert response.status_code == 401
 
     @pytest.mark.asyncio
-    async def test_list_embeddings_models_authorized(self, async_client: AsyncClient, user_token):
+    async def test_list_embeddings_models_authorized(self, async_client: AsyncClient, simple_user_token):
         """Тест получения списка embedding моделей с авторизацией."""
         async for client in async_client:
-            headers = {"Authorization": f"Bearer {user_token}"}
+            headers = {"Authorization": f"Bearer {simple_user_token}"}
             response = await client.get("/api/v1/models/embeddings", headers=headers)
             assert response.status_code == 200
             data = response.json()
@@ -76,17 +76,17 @@ class TestModelsEndpoints:
                 assert "dimensions" in model
 
     @pytest.mark.asyncio
-    async def test_model_role_isolation(self, async_client: AsyncClient, user_token, admin_token):
+    async def test_model_role_isolation(self, async_client: AsyncClient, simple_user_token, simple_admin_token):
         """Тест изоляции моделей по ролям."""
         async for client in async_client:
             # Получаем модели для обычного пользователя
-            headers_user = {"Authorization": f"Bearer {user_token}"}
+            headers_user = {"Authorization": f"Bearer {simple_user_token}"}
             response_user = await client.get("/api/v1/models/llm", headers=headers_user)
             assert response_user.status_code == 200
             user_models = response_user.json()["models"]
             
             # Получаем модели для админа
-            headers_admin = {"Authorization": f"Bearer {admin_token}"}
+            headers_admin = {"Authorization": f"Bearer {simple_admin_token}"}
             response_admin = await client.get("/api/v1/models/llm", headers=headers_admin)
             assert response_admin.status_code == 200
             admin_models = response_admin.json()["models"]
@@ -100,10 +100,10 @@ class TestModelsEndpoints:
             assert user_model_ids.issubset(admin_model_ids)
 
     @pytest.mark.asyncio
-    async def test_model_structure(self, async_client: AsyncClient, user_token):
+    async def test_model_structure(self, async_client: AsyncClient, simple_user_token):
         """Тест структуры модели."""
         async for client in async_client:
-            headers = {"Authorization": f"Bearer {user_token}"}
+            headers = {"Authorization": f"Bearer {simple_user_token}"}
             response = await client.get("/api/v1/models/llm", headers=headers)
             assert response.status_code == 200
             data = response.json()
@@ -124,10 +124,10 @@ class TestModelsEndpoints:
                 assert isinstance(model["available"], bool)
 
     @pytest.mark.asyncio
-    async def test_model_capabilities(self, async_client: AsyncClient, user_token):
+    async def test_model_capabilities(self, async_client: AsyncClient, simple_user_token):
         """Тест возможностей моделей."""
         async for client in async_client:
-            headers = {"Authorization": f"Bearer {user_token}"}
+            headers = {"Authorization": f"Bearer {simple_user_token}"}
             response = await client.get("/api/v1/models/llm", headers=headers)
             assert response.status_code == 200
             data = response.json()
@@ -144,10 +144,10 @@ class TestModelsEndpoints:
                     assert capability in valid_capabilities, f"Invalid capability: {capability}"
 
     @pytest.mark.asyncio
-    async def test_model_availability(self, async_client: AsyncClient, user_token):
+    async def test_model_availability(self, async_client: AsyncClient, simple_user_token):
         """Тест доступности моделей."""
         async for client in async_client:
-            headers = {"Authorization": f"Bearer {user_token}"}
+            headers = {"Authorization": f"Bearer {simple_user_token}"}
             response = await client.get("/api/v1/models/llm", headers=headers)
             assert response.status_code == 200
             data = response.json()
@@ -157,10 +157,10 @@ class TestModelsEndpoints:
             assert len(available_models) > 0, "No available models found"
 
     @pytest.mark.asyncio
-    async def test_embedding_model_dimensions(self, async_client: AsyncClient, user_token):
+    async def test_embedding_model_dimensions(self, async_client: AsyncClient, simple_user_token):
         """Тест размерности embedding моделей."""
         async for client in async_client:
-            headers = {"Authorization": f"Bearer {user_token}"}
+            headers = {"Authorization": f"Bearer {simple_user_token}"}
             response = await client.get("/api/v1/models/embeddings", headers=headers)
             assert response.status_code == 200
             data = response.json()

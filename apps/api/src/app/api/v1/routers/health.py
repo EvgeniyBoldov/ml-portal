@@ -4,9 +4,9 @@ Health and status endpoints for the API
 from __future__ import annotations
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
-from app.api.deps import db_session
-from app.core.config import get_settings
-from app.core.db import health_check
+from api.deps import db_session
+from core.config import get_settings
+from core.db import health_check
 import os
 import subprocess
 from datetime import datetime

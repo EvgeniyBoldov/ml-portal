@@ -24,11 +24,11 @@ class TestAnalyzeEndpoints:
             assert response.status_code == 401
 
     @pytest.mark.asyncio
-    async def test_presign_ingest_authorized(self, async_client: AsyncClient, user_token):
+    async def test_presign_ingest_authorized(self, async_client: AsyncClient, simple_user_token):
         """Тест presign ingest с авторизацией."""
         async for client in async_client:
             headers = {
-                "Authorization": f"Bearer {user_token}",
+                "Authorization": f"Bearer {simple_user_token}",
                 "X-Tenant-Id": str(uuid.uuid4()),
                 "Idempotency-Key": str(uuid.uuid4())
             }
@@ -49,11 +49,11 @@ class TestAnalyzeEndpoints:
             assert "max_bytes" in result
 
     @pytest.mark.asyncio
-    async def test_presign_ingest_missing_document_id(self, async_client: AsyncClient, user_token):
+    async def test_presign_ingest_missing_document_id(self, async_client: AsyncClient, simple_user_token):
         """Тест presign ingest без document_id."""
         async for client in async_client:
             headers = {
-                "Authorization": f"Bearer {user_token}",
+                "Authorization": f"Bearer {simple_user_token}",
                 "X-Tenant-Id": str(uuid.uuid4()),
                 "Idempotency-Key": str(uuid.uuid4())
             }
@@ -64,11 +64,11 @@ class TestAnalyzeEndpoints:
             assert response.status_code == 400
 
     @pytest.mark.asyncio
-    async def test_presign_ingest_missing_tenant(self, async_client: AsyncClient, user_token):
+    async def test_presign_ingest_missing_tenant(self, async_client: AsyncClient, simple_user_token):
         """Тест presign ingest без tenant_id."""
         async for client in async_client:
             headers = {
-                "Authorization": f"Bearer {user_token}",
+                "Authorization": f"Bearer {simple_user_token}",
                 "Idempotency-Key": str(uuid.uuid4())
             }
             data = {
@@ -79,11 +79,11 @@ class TestAnalyzeEndpoints:
             assert response.status_code == 400
 
     @pytest.mark.asyncio
-    async def test_presign_ingest_different_content_types(self, async_client: AsyncClient, user_token):
+    async def test_presign_ingest_different_content_types(self, async_client: AsyncClient, simple_user_token):
         """Тест presign ingest с разными типами контента."""
         async for client in async_client:
             headers = {
-                "Authorization": f"Bearer {user_token}",
+                "Authorization": f"Bearer {simple_user_token}",
                 "X-Tenant-Id": str(uuid.uuid4()),
                 "Idempotency-Key": str(uuid.uuid4())
             }
@@ -117,11 +117,11 @@ class TestAnalyzeEndpoints:
             assert response.status_code == 401
 
     @pytest.mark.asyncio
-    async def test_analyze_stream_authorized(self, async_client: AsyncClient, user_token):
+    async def test_analyze_stream_authorized(self, async_client: AsyncClient, simple_user_token):
         """Тест analyze stream с авторизацией."""
         async for client in async_client:
             headers = {
-                "Authorization": f"Bearer {user_token}",
+                "Authorization": f"Bearer {simple_user_token}",
                 "X-Tenant-Id": str(uuid.uuid4()),
                 "Idempotency-Key": str(uuid.uuid4())
             }
@@ -136,11 +136,11 @@ class TestAnalyzeEndpoints:
             assert response.headers["content-type"] == "text/event-stream"
 
     @pytest.mark.asyncio
-    async def test_analyze_stream_empty_texts(self, async_client: AsyncClient, user_token):
+    async def test_analyze_stream_empty_texts(self, async_client: AsyncClient, simple_user_token):
         """Тест analyze stream с пустыми текстами."""
         async for client in async_client:
             headers = {
-                "Authorization": f"Bearer {user_token}",
+                "Authorization": f"Bearer {simple_user_token}",
                 "X-Tenant-Id": str(uuid.uuid4()),
                 "Idempotency-Key": str(uuid.uuid4())
             }
@@ -152,11 +152,11 @@ class TestAnalyzeEndpoints:
             assert response.status_code == 422
 
     @pytest.mark.asyncio
-    async def test_analyze_stream_missing_texts(self, async_client: AsyncClient, user_token):
+    async def test_analyze_stream_missing_texts(self, async_client: AsyncClient, simple_user_token):
         """Тест analyze stream без текстов."""
         async for client in async_client:
             headers = {
-                "Authorization": f"Bearer {user_token}",
+                "Authorization": f"Bearer {simple_user_token}",
                 "X-Tenant-Id": str(uuid.uuid4()),
                 "Idempotency-Key": str(uuid.uuid4())
             }
@@ -167,11 +167,11 @@ class TestAnalyzeEndpoints:
             assert response.status_code == 422
 
     @pytest.mark.asyncio
-    async def test_analyze_stream_multiple_texts(self, async_client: AsyncClient, user_token):
+    async def test_analyze_stream_multiple_texts(self, async_client: AsyncClient, simple_user_token):
         """Тест analyze stream с несколькими текстами."""
         async for client in async_client:
             headers = {
-                "Authorization": f"Bearer {user_token}",
+                "Authorization": f"Bearer {simple_user_token}",
                 "X-Tenant-Id": str(uuid.uuid4()),
                 "Idempotency-Key": str(uuid.uuid4())
             }
@@ -189,11 +189,11 @@ class TestAnalyzeEndpoints:
             assert response.headers["content-type"] == "text/event-stream"
 
     @pytest.mark.asyncio
-    async def test_analyze_stream_idempotency(self, async_client: AsyncClient, user_token):
+    async def test_analyze_stream_idempotency(self, async_client: AsyncClient, simple_user_token):
         """Тест идемпотентности analyze stream."""
         async for client in async_client:
             headers = {
-                "Authorization": f"Bearer {user_token}",
+                "Authorization": f"Bearer {simple_user_token}",
                 "X-Tenant-Id": str(uuid.uuid4()),
                 "Idempotency-Key": str(uuid.uuid4())
             }
@@ -213,7 +213,7 @@ class TestAnalyzeEndpoints:
             # Должен вернуть тот же результат (или кешированный)
 
     @pytest.mark.asyncio
-    async def test_analyze_stream_tenant_isolation(self, async_client: AsyncClient, user_token):
+    async def test_analyze_stream_tenant_isolation(self, async_client: AsyncClient, simple_user_token):
         """Тест изоляции tenant в analyze stream."""
         async for client in async_client:
             tenant1 = str(uuid.uuid4())
@@ -227,7 +227,7 @@ class TestAnalyzeEndpoints:
             
             # Запрос для первого tenant
             headers1 = {
-                "Authorization": f"Bearer {user_token}",
+                "Authorization": f"Bearer {simple_user_token}",
                 "X-Tenant-Id": tenant1,
                 "Idempotency-Key": str(uuid.uuid4())
             }
@@ -236,7 +236,7 @@ class TestAnalyzeEndpoints:
             
             # Запрос для второго tenant
             headers2 = {
-                "Authorization": f"Bearer {user_token}",
+                "Authorization": f"Bearer {simple_user_token}",
                 "X-Tenant-Id": tenant2,
                 "Idempotency-Key": str(uuid.uuid4())
             }
