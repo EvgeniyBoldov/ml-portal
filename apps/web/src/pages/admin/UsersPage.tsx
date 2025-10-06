@@ -1,17 +1,20 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   adminApi,
   type User,
   type UserListResponse,
 } from '@shared/api/admin';
-import { Table, type TableColumn } from '@shared/ui/Table';
+import { tenantApi, type Tenant } from '@shared/api/tenant';
 import { RoleBadge, StatusBadge } from '@shared/ui/RoleBadge';
 import Button from '@shared/ui/Button';
 import Input from '@shared/ui/Input';
 import Select from '@shared/ui/Select';
+import Badge from '@shared/ui/Badge';
 import { Skeleton } from '@shared/ui/Skeleton';
 import { useErrorToast, useSuccessToast } from '@shared/ui/Toast';
+import { FilterIcon, MoreVerticalIcon } from '@shared/ui/Icon';
+import Popover from '@shared/ui/Popover';
 import styles from './UsersPage.module.css';
 
 export function UsersPage() {
@@ -27,12 +30,32 @@ export function UsersPage() {
   const [nextCursor, setNextCursor] = useState<string | undefined>();
   const [, setCurrentCursor] = useState<string | undefined>();
 
-  // Filters
-  const [query, setQuery] = useState('');
-  const [roleFilter, setRoleFilter] = useState<string>('');
-  const [statusFilter, setStatusFilter] = useState<string>('');
-  const [sortBy, setSortBy] = useState<string>('created_at');
-  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
+  // Tenants
+  const [tenants, setTenants] = useState<Tenant[]>([]);
+  const [tenantsLoading, setTenantsLoading] = useState(true);
+
+  // Filters (like in RAG)
+  const [q, setQ] = useState('');
+  const [filters, setFilters] = useState<Partial<Record<string, string>>>({});
+  const [pop, setPop] = useState<{
+    open: boolean;
+    col?: string;
+    anchor?: { x: number; y: number };
+  }>({ open: false });
+
+  // Load tenants
+  const loadTenants = useCallback(async () => {
+    try {
+      setTenantsLoading(true);
+      const response = await tenantApi.getTenants({ size: 100 });
+      setTenants(response.tenants);
+    } catch (error) {
+      console.error('Failed to load tenants:', error);
+      showError('Failed to load tenants. Please try again.');
+    } finally {
+      setTenantsLoading(false);
+    }
+  }, [showError]);
 
   // Load users
   const loadUsers = useCallback(
@@ -41,9 +64,9 @@ export function UsersPage() {
         setLoading(true);
 
         const params = {
-          query: query || undefined,
-          role: roleFilter || undefined,
-          is_active: statusFilter ? statusFilter === 'active' : undefined,
+          query: q || undefined,
+          role: filters.role || undefined,
+          is_active: filters.status ? filters.status === 'active' : undefined,
           limit: 20,
           cursor,
         };
@@ -67,7 +90,7 @@ export function UsersPage() {
         setLoading(false);
       }
     },
-    [query, roleFilter, statusFilter, showError]
+    [q, filters, showError]
   );
 
   // Load more users
@@ -98,6 +121,44 @@ export function UsersPage() {
     [loadUsers]
   );
 
+  // Get tenant name by ID
+  const getTenantName = useCallback((tenantId: string) => {
+    const tenant = tenants.find(t => t.id === tenantId);
+    return tenant ? tenant.name : tenantId.substring(0, 8) + '...';
+  }, [tenants]);
+
+  // Filter users like in RAG
+  const filteredUsers = useMemo(() => {
+    return users.filter(user => {
+      const text = (
+        (user.login || '') +
+        ' ' +
+        (user.email || '') +
+        ' ' +
+        (user.role || '') +
+        ' ' +
+        (user.created_at || '')
+      ).toLowerCase();
+      
+      if (q.trim() && !text.includes(q.toLowerCase())) return false;
+      if (filters.role && user.role !== filters.role) return false;
+      if (filters.status && user.is_active.toString() !== filters.status) return false;
+      
+      return true;
+    });
+  }, [users, q, filters]);
+
+  // Filter functions like in RAG
+  function openFilter(col: string, el: HTMLElement) {
+    const r = el.getBoundingClientRect();
+    setPop({ open: true, col, anchor: { x: r.left, y: r.bottom + 6 } });
+  }
+
+  function clearAll() {
+    setFilters({});
+    setPop({ open: false });
+  }
+
   // Handle user actions
   const handleToggleUserStatus = useCallback(
     async (user: User) => {
@@ -110,6 +171,23 @@ export function UsersPage() {
       } catch (error) {
         console.error('Failed to toggle user status:', error);
         showError('Failed to update user status. Please try again.');
+      }
+    },
+    [showSuccess, showError, refreshUsers]
+  );
+
+  const handleResetPassword = useCallback(
+    async (user: User) => {
+      const newPassword = window.prompt(`Enter new password for user ${user.login}:`);
+      if (!newPassword) return;
+      
+      try {
+        await adminApi.updateUser(user.id, { password: newPassword });
+        showSuccess(`Password for user ${user.login} updated successfully`);
+        refreshUsers();
+      } catch (error) {
+        console.error('Failed to reset password:', error);
+        showError('Failed to reset password. Please try again.');
       }
     },
     [showSuccess, showError, refreshUsers]
@@ -137,197 +215,185 @@ export function UsersPage() {
     [showSuccess, showError, refreshUsers]
   );
 
-  // Load users on mount and when filters change
+  // Load tenants and users on mount
   useEffect(() => {
+    loadTenants();
     loadUsers(undefined, true);
-  }, [loadUsers]);
-
-  // Table columns
-  const columns: TableColumn<User>[] = [
-    {
-      key: 'login',
-      title: 'Login',
-      dataIndex: 'login',
-      sortable: true,
-      render: (value, record) => (
-        <Link
-          to={`/admin/users/${record.id}`}
-          className="text-primary hover:text-primary-dark font-medium"
-        >
-          {value}
-        </Link>
-      ),
-    },
-    {
-      key: 'role',
-      title: 'Role',
-      dataIndex: 'role',
-      sortable: true,
-      render: value => <RoleBadge role={value as any} />,
-    },
-    {
-      key: 'email',
-      title: 'Email',
-      dataIndex: 'email',
-      render: value => value || <span className="text-text-tertiary">—</span>,
-    },
-    {
-      key: 'is_active',
-      title: 'Status',
-      dataIndex: 'is_active',
-      sortable: true,
-      render: value => <StatusBadge active={value} />,
-    },
-    {
-      key: 'created_at',
-      title: 'Created',
-      dataIndex: 'created_at',
-      sortable: true,
-      render: value => new Date(value).toLocaleDateString(),
-    },
-    {
-      key: 'actions',
-      title: 'Actions',
-      render: (_, record) => (
-        <div className="flex gap-2">
-          <Button
-            size="small"
-            variant="outline"
-            onClick={() => navigate(`/admin/users/${record.id}`)}
-          >
-            View
-          </Button>
-          <Button
-            size="small"
-            variant="outline"
-            onClick={() => handleToggleUserStatus(record)}
-          >
-            {record.is_active ? 'Deactivate' : 'Activate'}
-          </Button>
-          <Button
-            size="small"
-            variant="danger"
-            onClick={() => handleDeleteUser(record)}
-          >
-            Delete
-          </Button>
-        </div>
-      ),
-    },
-  ];
+  }, [loadTenants, loadUsers]);
 
   return (
-    <div className={styles.page}>
-      <div className={styles.pageHeader}>
-        <h1 className={styles.pageTitle}>Users</h1>
-        <div className={styles.pageActions}>
-          <Button onClick={refreshUsers} variant="outline">
-            Refresh
-          </Button>
-          <Button onClick={() => navigate('/admin/users/new')}>
-            Create User
-          </Button>
-        </div>
-      </div>
-
-      <div className={styles.filters}>
-        <div className={styles.filterGroup}>
-          <label className={styles.filterLabel}>Search</label>
-          <Input
-            placeholder="Search by login or email..."
-            value={query}
-            onChange={e => setQuery(e.target.value)}
-            onKeyPress={e => e.key === 'Enter' && handleSearch()}
-          />
-        </div>
-
-        <div className={styles.filterGroup}>
-          <label className={styles.filterLabel}>Role</label>
-          <Select
-            value={roleFilter}
-            onChange={e => setRoleFilter(e.target.value)}
-          >
-            <option value="">All Roles</option>
-            <option value="admin">Admin</option>
-            <option value="editor">Editor</option>
-            <option value="reader">Reader</option>
-          </Select>
-        </div>
-
-        <div className={styles.filterGroup}>
-          <label className={styles.filterLabel}>Status</label>
-          <Select
-            value={statusFilter}
-            onChange={e => setStatusFilter(e.target.value)}
-          >
-            <option value="">All Status</option>
-            <option value="active">Active</option>
-            <option value="inactive">Inactive</option>
-          </Select>
-        </div>
-
-        <div className={styles.filterActions}>
-          <Button onClick={handleSearch} variant="outline">
-            Search
-          </Button>
-          <Button
-            onClick={() => {
-              setQuery('');
-              setRoleFilter('');
-              setStatusFilter('');
-              loadUsers(undefined, true);
-            }}
-            variant="outline"
-          >
-            Clear
-          </Button>
-        </div>
-      </div>
-
-      <div className={styles.tableContainer}>
-        <div className={styles.tableHeader}>
-          <h2 className={styles.tableTitle}>Users List</h2>
-          <div className={styles.tableStats}>
-            {loading ? (
-              <Skeleton width={100} />
-            ) : (
-              `Showing ${users.length} of ${total} users`
-            )}
-          </div>
-        </div>
-
-        <div className={styles.tableContent}>
-          {loading && users.length === 0 ? (
-            <div className={styles.loadingState}>
-              <div className={styles.loadingSpinner} />
-              <p>Loading users...</p>
-            </div>
-          ) : (
-            <Table
-              columns={columns}
-              data={users}
-              loading={loading}
-              onSort={handleSort}
-              sortBy={sortBy}
-              sortOrder={sortOrder}
-              emptyText="No users found"
-              emptyIcon="👥"
+    <div className={styles.wrap}>
+      <div className={styles.card}>
+        <div className={styles.header}>
+          <h1 className={styles.title}>Users</h1>
+          <div className={styles.controls}>
+            <Input
+              placeholder="Search users..."
+              value={q}
+              onChange={e => setQ(e.target.value)}
+              className={styles.search}
             />
-          )}
+            <Button onClick={() => navigate('/admin/users/new')}>
+              Create User
+            </Button>
+          </div>
         </div>
 
-        {hasMore && (
-          <div className={styles.pagination}>
-            <div className={styles.paginationInfo}>
-              Showing {users.length} of {total} users
+        <div className={styles.tableWrap}>
+          <table className={styles.table}>
+            <thead>
+              <tr>
+                <th>
+                  LOGIN
+                  <button
+                    className={styles.icon}
+                    onClick={e => openFilter('login', e.currentTarget)}
+                  >
+                    <FilterIcon />
+                  </button>
+                </th>
+                <th>
+                  ROLE
+                  <button
+                    className={styles.icon}
+                    onClick={e => openFilter('role', e.currentTarget)}
+                  >
+                    <FilterIcon />
+                  </button>
+                </th>
+                <th>EMAIL</th>
+                <th>TENANT</th>
+                <th>
+                  STATUS
+                  <button
+                    className={styles.icon}
+                    onClick={e => openFilter('status', e.currentTarget)}
+                  >
+                    <FilterIcon />
+                  </button>
+                </th>
+                <th>CREATED</th>
+                <th>ACTIONS</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading ? (
+                Array.from({ length: 3 }).map((_, i) => (
+                  <tr key={i}>
+                    <td><Skeleton width={100} /></td>
+                    <td><Skeleton width={80} /></td>
+                    <td><Skeleton width={120} /></td>
+                    <td><Skeleton width={100} /></td>
+                    <td><Skeleton width={60} /></td>
+                    <td><Skeleton width={80} /></td>
+                    <td><Skeleton width={100} /></td>
+                  </tr>
+                ))
+              ) : filteredUsers.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className={styles.emptyState}>
+                    No users found
+                  </td>
+                </tr>
+              ) : (
+                filteredUsers.map(user => (
+                  <tr key={user.id}>
+                    <td>
+                      <span className={styles.loginText}>
+                        {user.login}
+                      </span>
+                    </td>
+                    <td>
+                      <RoleBadge role={user.role as any} size="small" />
+                    </td>
+                    <td>
+                      {user.email || <span className={styles.muted}>—</span>}
+                    </td>
+                    <td>
+                      <Badge tone="info" className={styles.tenantBadge}>
+                        {user.tenant_id ? getTenantName(user.tenant_id) : '—'}
+                      </Badge>
+                    </td>
+                    <td>
+                      <StatusBadge active={user.is_active} size="small" />
+                    </td>
+                    <td>
+                      <span className={styles.muted}>
+                        {new Date(user.created_at).toLocaleDateString()}
+                      </span>
+                    </td>
+                    <td>
+                      <div className={styles.actions}>
+                        <button
+                          className={styles.icon}
+                          onClick={() => handleResetPassword(user)}
+                          title="Reset Password"
+                        >
+                          🔑
+                        </button>
+                        <button
+                          className={styles.icon}
+                          onClick={() => handleToggleUserStatus(user)}
+                          title={user.is_active ? 'Deactivate' : 'Activate'}
+                        >
+                          {user.is_active ? '⏸️' : '▶️'}
+                        </button>
+                        <button
+                          className={styles.icon}
+                          onClick={() => handleDeleteUser(user)}
+                          title="Delete"
+                        >
+                          🗑️
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        <Popover
+          open={pop.open}
+          onOpenChange={setPop}
+          content={
+            <div className={styles.filterPopover}>
+              {pop.col === 'role' && (
+                <div className={styles.filterGroup}>
+                  <label className={styles.filterLabel}>Role</label>
+                  <Select
+                    value={filters.role || ''}
+                    onChange={e => setFilters(prev => ({ ...prev, role: e.target.value }))}
+                  >
+                    <option value="">All Roles</option>
+                    <option value="admin">Admin</option>
+                    <option value="editor">Editor</option>
+                    <option value="reader">Reader</option>
+                  </Select>
+                </div>
+              )}
+              {pop.col === 'status' && (
+                <div className={styles.filterGroup}>
+                  <label className={styles.filterLabel}>Status</label>
+                  <Select
+                    value={filters.status || ''}
+                    onChange={e => setFilters(prev => ({ ...prev, status: e.target.value }))}
+                  >
+                    <option value="">All Status</option>
+                    <option value="true">Active</option>
+                    <option value="false">Inactive</option>
+                  </Select>
+                </div>
+              )}
+              <div className={styles.filterActions}>
+                <Button onClick={clearAll} variant="outline" size="small">
+                  Clear
+                </Button>
+              </div>
             </div>
-            <div className={styles.paginationControls}>
-              <Button onClick={loadMore} disabled={loading} variant="outline">
-                {loading ? 'Loading...' : 'Load More'}
-              </Button>
-            </div>
-          </div>
-        )}
+          }
+        />
       </div>
     </div>
   );

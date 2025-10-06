@@ -11,6 +11,7 @@ export interface User {
   role: 'admin' | 'editor' | 'reader';
   email?: string;
   is_active: boolean;
+  tenant_id: string;
   created_at: string;
   updated_at: string;
 }
@@ -22,6 +23,7 @@ export interface UserCreate {
   is_active?: boolean;
   password?: string;
   send_email?: boolean;
+  tenant_id: string;
 }
 
 export interface UserUpdate {

@@ -69,8 +69,16 @@ export function UserDetailPage() {
           email: userData.email || '',
           is_active: userData.is_active,
         });
-      } catch (error) {
+      } catch (error: any) {
         console.error('Failed to load user data:', error);
+        
+        // If user not found (404), redirect to users list
+        if (error.message?.includes('404') || error.message?.includes('not found')) {
+          showError('User not found. Redirecting to users list.');
+          navigate('/admin/users');
+          return;
+        }
+        
         showError('Failed to load user data. Please try again.');
       } finally {
         setLoading(false);

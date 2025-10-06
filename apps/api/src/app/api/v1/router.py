@@ -9,7 +9,7 @@ from api.v1.routers import artifacts as artifacts_router
 from api.v1.routers import chat as chat_router
 from api.v1.routers import rag as rag_router
 from api.v1.routers import users as users_router
-from api.v1 import tenants as tenants_router
+from api.v1.routers import tenant as tenant_router
 from api.v1 import jobs as jobs_router
 from api.v1 import models as models_router
 # from api.v1.routers import auth as deprecated_auth_router  # kept for compat, not mounted
@@ -43,7 +43,7 @@ api_v1.include_router(rag_router.router, prefix="/rag", tags=["rag"])
 api_v1.include_router(users_router.router, tags=["users"])
 
 # Tenants endpoints
-api_v1.include_router(tenants_router.router, prefix="/tenants", tags=["tenants"])
+api_v1.include_router(tenant_router.router, prefix="/tenants", tags=["tenants"])
 
 # Jobs endpoints
 api_v1.include_router(jobs_router.router, tags=["jobs"])

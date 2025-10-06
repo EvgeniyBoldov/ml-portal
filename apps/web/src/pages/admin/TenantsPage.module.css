@@ -1,0 +1,367 @@
+/* TenantsPage.module.css */
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px;
+  background: var(--bg);
+  min-height: 100vh;
+}
+
+.pageHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding: 16px 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.pageTitle {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--text);
+  margin: 0;
+}
+
+.pageDescription {
+  font-size: 16px;
+  color: var(--muted);
+  margin: 8px 0 0 0;
+}
+
+.pageActions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.filters {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 16px;
+  background: var(--panel);
+  border-radius: var(--radius);
+  border: 1px solid var(--color-border);
+}
+
+.searchForm {
+  display: flex;
+  align-items: end;
+  gap: 16px;
+  flex-wrap: wrap;
+  width: 100%;
+}
+
+.filterGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 200px;
+}
+
+.filterLabel {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.filterInput,
+.filterSelect {
+  width: 100%;
+}
+
+.filterActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 24px;
+}
+
+.tableContainer {
+  background: var(--panel);
+  border-radius: var(--radius);
+  border: 1px solid var(--color-border);
+  overflow: hidden;
+  box-shadow: var(--shadow);
+}
+
+.tableHeader {
+  padding: 16px;
+  border-bottom: 1px solid var(--color-border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--panel-alt);
+}
+
+.tableTitle {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text);
+  margin: 0;
+}
+
+.tableStats {
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.tableContent {
+  overflow-x: auto;
+  background: var(--panel);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.table th {
+  background: var(--panel-alt);
+  color: var(--text);
+  font-weight: 600;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 12px 16px;
+  text-align: left;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.table td {
+  padding: 16px;
+  border-bottom: 1px solid var(--color-border);
+  color: var(--text);
+}
+
+.table tr:hover {
+  background: var(--color-bg-secondary);
+}
+
+.tenantName {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.tenantId {
+  font-size: 12px;
+  color: var(--muted);
+  font-family: monospace;
+}
+
+.tenantDescription {
+  max-width: 300px;
+  color: var(--text);
+  line-height: 1.5;
+}
+
+.noDescription {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.statusActive {
+  background: var(--success-light);
+  color: var(--success);
+}
+
+.statusInactive {
+  background: var(--danger-light);
+  color: var(--danger);
+}
+
+.createdDate {
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px;
+  border-top: 1px solid var(--color-border);
+  background: var(--panel-alt);
+}
+
+.paginationInfo {
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.paginationControls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pageNumber {
+  font-size: 14px;
+  color: var(--text);
+  font-weight: 500;
+}
+
+.emptyState {
+  padding: 48px;
+  text-align: center;
+  color: var(--muted);
+  background: var(--panel);
+}
+
+.emptyStateIcon {
+  font-size: 4rem;
+  margin-bottom: 16px;
+  opacity: 0.3;
+  color: var(--muted);
+}
+
+.emptyStateTitle {
+  font-size: 20px;
+  font-weight: 700;
+  margin-bottom: 8px;
+  color: var(--text);
+}
+
+.emptyStateDescription {
+  font-size: 16px;
+  margin-bottom: 24px;
+  max-width: 400px;
+  margin-left: auto;
+  margin-right: auto;
+  line-height: 1.6;
+}
+
+.loadingState {
+  padding: 48px;
+  text-align: center;
+  background: var(--panel);
+}
+
+.loadingSpinner {
+  width: 2rem;
+  height: 2rem;
+  border: 2px solid var(--color-border);
+  border-top: 2px solid var(--primary);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  margin: 0 auto 16px;
+}
+
+@keyframes spin {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+/* Mobile */
+@media (max-width: 768px) {
+  .page {
+    padding: 12px;
+  }
+
+  .pageHeader {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 16px;
+    padding: 16px 0;
+  }
+
+  .pageTitle {
+    font-size: 20px;
+  }
+
+  .pageActions {
+    justify-content: stretch;
+  }
+
+  .filters {
+    flex-direction: column;
+    align-items: stretch;
+    padding: 16px;
+  }
+
+  .searchForm {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .filterGroup {
+    min-width: auto;
+  }
+
+  .filterActions {
+    margin-top: 16px;
+    justify-content: stretch;
+  }
+
+  .tableHeader {
+    padding: 16px;
+    flex-direction: column;
+    gap: 12px;
+    align-items: stretch;
+  }
+
+  .table {
+    font-size: 14px;
+  }
+
+  .table th,
+  .table td {
+    padding: 8px;
+  }
+
+  .actions {
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .pagination {
+    flex-direction: column;
+    gap: 16px;
+    align-items: stretch;
+    padding: 16px;
+  }
+
+  .paginationControls {
+    justify-content: center;
+  }
+
+  .emptyState {
+    padding: 32px;
+  }
+
+  .emptyStateIcon {
+    font-size: 3rem;
+  }
+
+  .emptyStateTitle {
+    font-size: 18px;
+  }
+}

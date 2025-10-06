@@ -14,6 +14,8 @@ const AdminLayout = lazy(() => import('@pages/admin/AdminLayout'));
 const UsersPage = lazy(() => import('@pages/admin/UsersPage'));
 const CreateUserPage = lazy(() => import('@pages/admin/CreateUserPage'));
 const UserDetailPage = lazy(() => import('@pages/admin/UserDetailPage'));
+const TenantsPage = lazy(() => import('@pages/admin/TenantsPage'));
+const CreateTenantPage = lazy(() => import('@pages/admin/CreateTenantPage'));
 const AuditPage = lazy(() => import('@pages/admin/AuditPage'));
 const EmailSettingsPage = lazy(
   () => import('@pages/admin/EmailSettingsPage')
@@ -43,6 +45,9 @@ const router = createBrowserRouter([
       { path: 'users', element: withSuspense(<UsersPage />) },
       { path: 'users/new', element: withSuspense(<CreateUserPage />) },
       { path: 'users/:id', element: withSuspense(<UserDetailPage />) },
+      { path: 'tenants', element: withSuspense(<TenantsPage />) },
+      { path: 'tenants/new', element: withSuspense(<CreateTenantPage />) },
+      { path: 'tenants/:id/edit', element: withSuspense(<CreateTenantPage />) },
       { path: 'audit', element: withSuspense(<AuditPage />) },
       { path: 'settings/email', element: withSuspense(<EmailSettingsPage />) },
     ],

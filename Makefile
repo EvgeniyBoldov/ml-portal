@@ -282,3 +282,13 @@ models-download-all:
 	@echo "📥 Downloading all common models..."
 	@make models-download-llm
 	@make models-download-embeddings
+
+# Generate code documentation files
+gen-all:
+	@echo "📚 Generating code documentation files..."
+	@python3 scripts/generate-code-docs.py
+	@echo "✅ Generated files:"
+	@echo "  📄 code-docs-backend.txt - Backend code (Python)"
+	@echo "  📄 code-docs-frontend.txt - Frontend code (TypeScript/React)"
+	@echo "  📄 code-docs-infrastructure.txt - Infrastructure (Docker, configs)"
+	@echo "  📄 code-docs-tests.txt - Test code"

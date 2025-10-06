@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { adminApi, type UserCreate } from '@shared/api/admin';
+import { tenantApi, type Tenant } from '@shared/api/tenant';
 import Button from '@shared/ui/Button';
 import Input from '@shared/ui/Input';
 import Select from '@shared/ui/Select';
@@ -15,12 +16,14 @@ interface FormData {
   password: string;
   send_email: boolean;
   require_password_change: boolean;
+  tenant_id: string;
 }
 
 interface FormErrors {
   login?: string;
   email?: string;
   password?: string;
+  tenant_id?: string;
   general?: string;
 }
 
@@ -38,27 +41,46 @@ export function CreateUserPage() {
     password: '',
     send_email: true,
     require_password_change: true,
+    tenant_id: '',
   });
 
   const [errors, setErrors] = useState<FormErrors>({});
   const [loading, setLoading] = useState(false);
   const [emailEnabled, setEmailEnabled] = useState(false);
+  const [tenants, setTenants] = useState<Tenant[]>([]);
+  const [tenantsLoading, setTenantsLoading] = useState(true);
 
-  // Load system status to check if email is enabled
+  // Load system status and tenants
   useEffect(() => {
-    const loadSystemStatus = async () => {
+    const loadData = async () => {
       try {
+        // Load system status
         const status = await adminApi.getSystemStatus();
         setEmailEnabled(status.email_enabled);
         if (!status.email_enabled) {
           setFormData(prev => ({ ...prev, send_email: false }));
         }
+        
+        // Load tenants
+        const tenantsResponse = await tenantApi.getTenants({ size: 100 });
+        setTenants(tenantsResponse.tenants);
+        
+        // Set default tenant if available
+        if (tenantsResponse.tenants.length > 0 && !formData.tenant_id) {
+          setFormData(prev => ({
+            ...prev,
+            tenant_id: tenantsResponse.tenants[0].id
+          }));
+        }
       } catch (error) {
-        console.error('Failed to load system status:', error);
+        console.error('Failed to load data:', error);
+        setEmailEnabled(false);
+      } finally {
+        setTenantsLoading(false);
       }
     };
 
-    loadSystemStatus();
+    loadData();
   }, []);
 
   // Password validation
@@ -99,6 +121,11 @@ export function CreateUserPage() {
       newErrors.email = 'Please enter a valid email address';
     }
 
+    // Tenant ID validation
+    if (!formData.tenant_id.trim()) {
+      newErrors.tenant_id = 'Tenant is required';
+    }
+
     // Password validation
     if (!formData.send_email) {
       if (!formData.password) {
@@ -134,6 +161,7 @@ export function CreateUserPage() {
         role: formData.role,
         is_active: formData.is_active,
         send_email: formData.send_email,
+        tenant_id: formData.tenant_id.trim(),
       };
 
       // Only include password if not sending email
@@ -149,7 +177,7 @@ export function CreateUserPage() {
         }`
       );
 
-      navigate(`/admin/users/${response.user.id}`);
+      navigate('/admin/users');
     } catch (error: any) {
       console.error('Failed to create user:', error);
 
@@ -286,6 +314,39 @@ export function CreateUserPage() {
               </Select>
               <div className={styles.formHelp}>
                 Inactive users cannot log in to the system.
+              </div>
+            </div>
+          </div>
+
+          <div className={styles.formGrid}>
+            <div className={styles.formGroup}>
+              <label className={`${styles.formLabel} ${styles.required}`}>
+                Tenant
+              </label>
+              <Select
+                value={formData.tenant_id}
+                onChange={handleInputChange('tenant_id')}
+                className={styles.formSelect}
+                disabled={tenantsLoading}
+              >
+                {tenantsLoading ? (
+                  <option value="">Loading tenants...</option>
+                ) : (
+                  <>
+                    <option value="">Select a tenant</option>
+                    {tenants.map((tenant) => (
+                      <option key={tenant.id} value={tenant.id}>
+                        {tenant.name} {!tenant.is_active && '(Inactive)'}
+                      </option>
+                    ))}
+                  </>
+                )}
+              </Select>
+              {errors.tenant_id && (
+                <div className={styles.formError}>{errors.tenant_id}</div>
+              )}
+              <div className={styles.formHelp}>
+                Select the tenant organization for this user.
               </div>
             </div>
           </div>

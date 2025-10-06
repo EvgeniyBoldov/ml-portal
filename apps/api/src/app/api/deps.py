@@ -22,18 +22,27 @@ def get_llm_client_mock():
 
 # Authentication dependencies
 def get_current_user(request: Request) -> UserCtx:
-    """Get current user from JWT token in Authorization header"""
+    """Get current user from JWT token in Authorization header or cookies"""
     from core.security import decode_jwt
     
+    token = None
+    
+    # Try to get token from Authorization header first
     auth_header = request.headers.get("Authorization")
-    if not auth_header or not auth_header.startswith("Bearer "):
+    if auth_header and auth_header.startswith("Bearer "):
+        token = auth_header.split(" ")[1]
+    
+    # If no header token, try to get from cookies
+    if not token:
+        token = request.cookies.get("access_token")
+    
+    if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing or invalid authorization header",
+            detail="Missing or invalid authorization",
             headers={"WWW-Authenticate": "Bearer"}
         )
     
-    token = auth_header.split(" ")[1]
     payload = decode_jwt(token)
     
     # Validate token type

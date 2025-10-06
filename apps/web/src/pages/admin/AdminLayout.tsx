@@ -18,6 +18,13 @@ export function AdminLayout({ children }: AdminLayoutProps) {
       ],
     },
     {
+      group: 'Tenants',
+      items: [
+        { path: '/admin/tenants', label: 'Tenants', icon: '🏢' },
+        { path: '/admin/tenants/new', label: 'New Tenant', icon: '➕' },
+      ],
+    },
+    {
       group: 'System',
       items: [
         { path: '/admin/audit', label: 'Audit Log', icon: '📋' },
@@ -112,7 +119,9 @@ export function AdminLayout({ children }: AdminLayoutProps) {
           </div>
 
           <div className={styles.headerActions}>
-            {/* Add header actions here */}
+            <Link to="/gpt/chat" className={styles.backButton}>
+              ← Back to App
+            </Link>
           </div>
         </header>
 

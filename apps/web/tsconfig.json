@@ -24,8 +24,8 @@
       "@features/*": ["src/features/*"],
       "@entities/*": ["src/entities/*"],
       "@shared/*": ["src/shared/*"],
-      "@admin/*": ["src/pages/admin/*"],
-      "@gpt/*": ["src/pages/gpt/*"]
+      "@admin/*": ["src/app/routes/admin/*"],
+      "@gpt/*": ["src/app/routes/gpt/*"]
     },
     "types": ["vitest/globals", "@testing-library/jest-dom"]
   },

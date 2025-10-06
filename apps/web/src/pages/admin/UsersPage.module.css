@@ -1,51 +1,137 @@
-.page {
+/* RAG-style layout */
+.wrap {
+  height: 100%;
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  padding: 16px;
-  background: var(--bg);
-  min-height: 100vh;
 }
 
-.pageHeader {
+.card {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  background: var(--chat-panel-bg, var(--panel-alt, #f4f6ff));
+  border: 1px solid var(--chat-panel-border, rgba(0, 0, 0, 0.08));
+  border-radius: var(--radius);
+  margin-top: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+.header {
+  display: flex;
   justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 16px;
-  padding: 16px 0;
-  border-bottom: 1px solid var(--color-border);
+  align-items: center;
+  gap: 1rem;
 }
 
-.pageTitle {
-  font-size: 24px;
-  font-weight: 700;
-  color: var(--text);
-  margin: 0;
+.title {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--color-text);
 }
 
-.pageActions {
+.controls {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 0.75rem;
 }
 
-.filters {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-  padding: 16px;
-  background: var(--panel);
+.search {
+  min-width: 200px;
+}
+
+.tableWrap {
+  flex: 1;
+  overflow: auto;
   border-radius: var(--radius);
   border: 1px solid var(--color-border);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--color-bg);
+}
+
+.table th {
+  background: var(--color-bg-secondary);
+  padding: 0.75rem;
+  text-align: left;
+  font-weight: 600;
+  color: var(--color-text);
+  border-bottom: 1px solid var(--color-border);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.table td {
+  padding: 0.75rem;
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-text);
+}
+
+.table tr:hover {
+  background: var(--color-bg-secondary);
+}
+
+.table .icon {
+  background: none;
+  border: none;
+  padding: 0.5rem;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  color: var(--color-muted);
+  margin-left: 0.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+}
+
+.table .icon:hover {
+  background: var(--color-bg-secondary);
+  color: var(--color-text);
+}
+
+.muted {
+  color: var(--color-muted);
+}
+
+.loginText {
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.tenantBadge {
+  font-size: 12px;
+  padding: 4px 8px;
+}
+
+.actions {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.emptyState {
+  text-align: center;
+  padding: 2rem;
+  color: var(--color-muted);
+}
+
+.filterPopover {
+  padding: 16px;
+  min-width: 200px;
 }
 
 .filterGroup {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  min-width: 200px;
+  margin-bottom: 16px;
 }
 
 .filterLabel {
@@ -56,221 +142,47 @@
   letter-spacing: 0.05em;
 }
 
-.filterInput {
-  width: 100%;
-}
-
-.filterSelect {
-  width: 100%;
-}
-
 .filterActions {
   display: flex;
-  align-items: center;
   gap: 8px;
-  margin-top: 24px;
+  justify-content: flex-end;
 }
 
-.tableContainer {
-  background: var(--panel);
-  border-radius: var(--radius);
-  border: 1px solid var(--color-border);
-  overflow: hidden;
-  box-shadow: var(--shadow);
-}
-
-.tableHeader {
-  padding: 16px;
-  border-bottom: 1px solid var(--color-border);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  background: var(--panel-alt);
-}
-
-.tableTitle {
-  font-size: 18px;
-  font-weight: 700;
-  color: var(--text);
-  margin: 0;
-}
-
-.tableStats {
-  font-size: 14px;
-  color: var(--muted);
-}
-
-.tableContent {
-  overflow-x: auto;
-  background: var(--panel);
-}
-
-.pagination {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 16px;
-  border-top: 1px solid var(--color-border);
-  background: var(--panel-alt);
-}
-
-.paginationInfo {
-  font-size: 14px;
-  color: var(--muted);
-}
-
-.paginationControls {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.paginationButton {
-  padding: 8px 12px;
-  border: 1px solid var(--color-border);
-  background: var(--panel);
-  color: var(--text);
-  border-radius: 10px;
-  font-size: 14px;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  min-width: 40px;
-  text-align: center;
-}
-
-.paginationButton:hover:not(:disabled) {
-  background: var(--color-bg-secondary);
-  border-color: var(--primary);
-}
-
-.paginationButton:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-.paginationButton.active {
-  background: var(--primary);
-  color: white;
-  border-color: var(--primary);
-}
-
-.emptyState {
-  padding: 48px;
-  text-align: center;
-  color: var(--muted);
-  background: var(--panel);
-}
-
-.emptyStateIcon {
-  font-size: 4rem;
-  margin-bottom: 16px;
-  opacity: 0.3;
-  color: var(--muted);
-}
-
-.emptyStateTitle {
-  font-size: 20px;
-  font-weight: 700;
-  margin-bottom: 8px;
-  color: var(--text);
-}
-
-.emptyStateDescription {
-  font-size: 16px;
-  margin-bottom: 24px;
-  max-width: 400px;
-  margin-left: auto;
-  margin-right: auto;
-  line-height: 1.6;
-}
-
-.loadingState {
-  padding: 48px;
-  text-align: center;
-  background: var(--panel);
-}
-
-.loadingSpinner {
-  width: 2rem;
-  height: 2rem;
-  border: 2px solid var(--color-border);
-  border-top: 2px solid var(--primary);
-  border-radius: 50%;
-  animation: spin 1s linear infinite;
-  margin: 0 auto 16px;
-}
-
-@keyframes spin {
-  0% {
-    transform: rotate(0deg);
-  }
-  100% {
-    transform: rotate(360deg);
-  }
-}
-
-/* Mobile */
+/* Mobile responsive */
 @media (max-width: 768px) {
-  .page {
-    padding: 12px;
-  }
-  
-  .pageHeader {
+  .header {
     flex-direction: column;
     align-items: stretch;
-    gap: 16px;
-    padding: 16px 0;
+    gap: 1rem;
   }
 
-  .pageTitle {
-    font-size: 20px;
-  }
-
-  .pageActions {
-    justify-content: stretch;
-  }
-
-  .filters {
+  .controls {
     flex-direction: column;
-    align-items: stretch;
-    padding: 16px;
+    gap: 0.5rem;
   }
 
-  .filterGroup {
+  .search {
     min-width: auto;
   }
 
-  .filterActions {
-    margin-top: 16px;
+  .tableWrap {
+    overflow-x: auto;
   }
 
-  .tableHeader {
-    padding: 16px;
-    flex-direction: column;
-    gap: 12px;
-    align-items: stretch;
+  .table th,
+  .table td {
+    padding: 0.5rem;
+    font-size: 0.875rem;
   }
 
-  .pagination {
-    flex-direction: column;
-    gap: 16px;
-    align-items: stretch;
-    padding: 16px;
+  .actions {
+    flex-wrap: wrap;
+    gap: 2px;
   }
 
-  .paginationControls {
-    justify-content: center;
-  }
-  
-  .emptyState {
-    padding: 32px;
-  }
-  
-  .emptyStateIcon {
-    font-size: 3rem;
-  }
-  
-  .emptyStateTitle {
-    font-size: 18px;
+  .table .icon {
+    width: 28px;
+    height: 28px;
+    font-size: 12px;
   }
 }

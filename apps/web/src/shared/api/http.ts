@@ -49,7 +49,7 @@ export async function apiRequest<T>(
     if (!headers.has('Idempotency-Key'))
       headers.set('Idempotency-Key', idempotencyKey());
   }
-  const attempt = () => fetch(url, { ...opts, headers });
+  const attempt = () => fetch(url, { ...opts, headers, credentials: 'include' });
   let resp = await attempt();
   if (resp.status === 401 && _tokens?.refresh_token) {
     try {
@@ -57,7 +57,7 @@ export async function apiRequest<T>(
       const retryHeaders = new Headers(headers);
       if (_tokens?.access_token)
         retryHeaders.set('Authorization', `Bearer ${_tokens.access_token}`);
-      resp = await fetch(url, { ...opts, headers: retryHeaders });
+      resp = await fetch(url, { ...opts, headers: retryHeaders, credentials: 'include' });
     } catch {
       // Ignore refresh errors
     }
@@ -82,6 +82,7 @@ export async function refreshAccessToken(): Promise<void> {
         Accept: 'application/json',
       },
       body: JSON.stringify({ refresh_token: _tokens!.refresh_token }),
+      credentials: 'include',
     });
     if (!resp.ok) {
       _refreshPromise = null;
