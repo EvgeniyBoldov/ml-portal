@@ -105,6 +105,11 @@
   padding: 1.5rem;
 }
 
+.uploadButton {
+  margin-top: 1rem;
+  width: 100%;
+}
+
 .documentsList {
   display: flex;
   flex-direction: column;

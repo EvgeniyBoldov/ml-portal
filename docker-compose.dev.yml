@@ -77,11 +77,14 @@ services:
     environment:
       RABBITMQ_DEFAULT_USER: admin
       RABBITMQ_DEFAULT_PASS: admin123
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
   # =============================================================================
   # BACKEND API SERVICE
@@ -122,55 +125,45 @@ services:
       "
 
   # =============================================================================
-  # EMBEDDING SERVICE
+  # ML SERVICES (LLM, EMB, WORKER) - Unified
   # =============================================================================
   
+  
+  # EMB Service
   emb:
     build:
       context: .
-      dockerfile: infra/docker/emb/Dockerfile.prod
+      dockerfile: infra/docker/ml-services/Dockerfile.prod
     ports:
       - "8001:8001"
-    volumes:
-      - ./apps/emb/src/app:/app 
-      - ./models:/app/models
     environment:
+      - SERVICE_TYPE=emb
+      - EMB_PORT=8001
       - MINIO_ENDPOINT=minio:9000
       - MINIO_ACCESS_KEY=minioadmin
       - MINIO_SECRET_KEY=minioadmin123
       - QDRANT_URL=http://qdrant:6333
       - QDRANT_API_KEY=
+    volumes:
+      - ./apps/emb/src/app:/app/emb
+      - ./models:/app/models
     depends_on:
       - minio
       - qdrant
-    command: >
-      sh -c "
-        echo 'Starting embeddings service...' &&
-        uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload --reload-dir /app
-      "
 
-  # =============================================================================
-  # LLM SERVICE
-  # =============================================================================
-  
+  # LLM Service  
   llm:
     build:
       context: .
-      dockerfile: infra/docker/llm/Dockerfile.prod
+      dockerfile: infra/docker/ml-services/Dockerfile.prod
     ports:
       - "8002:8002"
     environment:
-      - MINIO_ENDPOINT=minio:9000
-      - MINIO_ACCESS_KEY=minioadmin
-      - MINIO_SECRET_KEY=minioadmin123
-    depends_on:
-      - minio
-    command: >
-      sh -c "
-        echo 'Starting LLM service...' &&
-        python -m uvicorn app.main:app --host 0.0.0.0 --port 8002 --reload
-      "
-    entrypoint: []
+      - SERVICE_TYPE=llm
+      - LLM_PORT=8002
+    volumes:
+      - ./apps/llm/src/app:/app/llm
+      - ./models:/app/models
 
   # =============================================================================
   # FRONTEND DEVELOPMENT SERVICE  
@@ -182,7 +175,7 @@ services:
       - "5173:5173"
     volumes:
       - ./apps/web:/app
-      - /app/node_modules
+      - frontend_node_modules:/app/node_modules
     working_dir: /app
     environment:
       - NODE_ENV=development
@@ -191,26 +184,28 @@ services:
       - VITE_PORT=5173
     command: >
       sh -c "
-        echo 'Installing dependencies...' &&
-        npm install --legacy-peer-deps &&
+        echo 'Checking dependencies...' &&
+        if [ ! -d 'node_modules' ] || [ ! -f 'node_modules/.package-lock.json' ]; then
+          echo 'Installing dependencies...' &&
+          npm install --legacy-peer-deps
+        else
+          echo 'Dependencies already installed, skipping...'
+        fi &&
         echo 'Starting Vite dev server...' &&
         npm run dev -- --host 0.0.0.0
       "
     depends_on:
       - api
 
-  # =============================================================================
-  # CELERY WORKER
-  # =============================================================================
-  
+  # Worker Service
   worker:
     build:
       context: .
-      dockerfile: infra/docker/worker/Dockerfile.prod
+      dockerfile: infra/docker/ml-services/Dockerfile.prod
     environment:
-      - PYTHONPATH=/app
-      - DATABASE_URL=postgresql://ml_portal:ml_portal_password@postgres:5432/ml_portal
+      - SERVICE_TYPE=worker
       - REDIS_URL=redis://redis:6379
+      - DATABASE_URL=postgresql://ml_portal:ml_portal_password@postgres:5432/ml_portal
       - MINIO_ENDPOINT=minio:9000
       - MINIO_ACCESS_KEY=minioadmin
       - MINIO_SECRET_KEY=minioadmin123
@@ -220,16 +215,14 @@ services:
       - JWT_SECRET=dev-jwt-secret-minimum-256-bits-for-development-use-only
       - ENVIRONMENT=development
       - DEBUG=true
-    command: >
-      sh -c "
-        echo 'Starting Celery worker...' &&
-        celery -A app.celery_app worker --loglevel=info
-      "
+    volumes:
+      - ./apps/api/src/app:/app/worker
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+    command: ["./entrypoint.sh"]
 
   # =============================================================================
   # NGINX REVERSE PROXY (Optional)
@@ -256,3 +249,5 @@ volumes:
   redis_data:
   minio_data:
   qdrant_data:
+  rabbitmq_data:
+  frontend_node_modules:

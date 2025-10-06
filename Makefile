@@ -8,7 +8,9 @@ help:
 	@echo ""
 	@echo "Development:"
 	@echo "  build          - Build all Docker images"
+	@echo "  build-ml       - Build ML services image only"
 	@echo "  dev            - Start development environment"
+	@echo "  dev-frontend   - Start dev environment without ML services (for frontend work)"
 	@echo "  prod           - Start production environment"
 	@echo "  down           - Stop all services"
 	@echo "  logs           - Show logs for all services"
@@ -59,9 +61,17 @@ help:
 build:
 	docker-compose -f docker-compose.dev.yml build
 
+# Build ML services image only
+build-ml:
+	docker-compose -f docker-compose.dev.yml build emb llm worker
+
 # Start development environment
 dev:
 	docker-compose -f docker-compose.dev.yml up -d
+
+# Start dev environment without ML services (for frontend work)
+dev-frontend:
+	docker-compose -f docker-compose.dev.yml up -d postgres redis minio qdrant rabbitmq api frontend nginx
 
 # Start production environment
 prod:
@@ -173,9 +183,6 @@ clean-all: clean
 dev-backend:
 	docker-compose -f docker-compose.dev.yml up -d postgres redis qdrant minio rabbitmq
 	cd apps/api && python -m uvicorn src.app.main:app --reload --host 0.0.0.0 --port 8000
-
-dev-frontend:
-	cd apps/web && npm run dev
 
 # Database management
 db-migrate:

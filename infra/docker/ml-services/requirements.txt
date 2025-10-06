@@ -1,16 +1,29 @@
 # =============================================================================
-# ML Portal Worker Requirements
+# ML Portal ML Services - Unified Requirements
 # =============================================================================
-# Core dependencies
+# Core dependencies for all ML services
+fastapi==0.111.0
+uvicorn[standard]==0.30.1
+pydantic==2.8.2
+httpx==0.27.0
+prometheus-client==0.20.0
+
+# Celery and Redis for worker
 celery[redis]==5.4.0
 redis==5.0.7
-httpx==0.27.0
-pydantic==2.8.2
+
+# Database
 SQLAlchemy==2.0.32
 psycopg[binary]==3.2.1
+
+# Vector database
 qdrant-client==1.9.1
+
+# S3/MinIO client
+boto3>=1.26.0
 minio==7.2.7
-prometheus-client==0.20.0
+
+# Authentication
 PyJWT==2.9.0
 argon2-cffi==23.1.0
 python-multipart==0.0.9
@@ -36,3 +49,4 @@ sentence-transformers>=2.2.0
 scikit-learn>=1.3.0
 numpy>=1.24.0
 torch>=2.0.0
+transformers>=4.30.0

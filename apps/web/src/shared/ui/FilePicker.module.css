@@ -1,12 +1,35 @@
 .wrap {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
+
 .name {
   color: var(--muted);
   font-size: 13px;
 }
+
 .inputHidden {
   display: none;
+}
+
+.fileInfo {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  background: var(--color-bg-secondary);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+}
+
+.fileName {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--color-text);
+}
+
+.fileSize {
+  font-size: 12px;
+  color: var(--color-muted);
 }

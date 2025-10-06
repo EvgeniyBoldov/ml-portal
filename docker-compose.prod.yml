@@ -39,9 +39,7 @@ services:
 
   # Worker-RAG (низкий приоритет) - на легкой ВМ
   worker-rag:
-    build:
-      context: .
-      dockerfile: infra/docker/worker/Dockerfile.prod
+    image: ml-portal-ml-services
     deploy:
       replicas: 1
       placement:
@@ -59,6 +57,7 @@ services:
         delay: 10s
         max_attempts: 3
     environment:
+      - SERVICE_TYPE=worker
       - DATABASE_URL=postgresql://ml_portal:ml_portal@postgres:5432/ml_portal
       - REDIS_URL=redis://redis:6379
       - QDRANT_URL=http://qdrant:6333
@@ -74,9 +73,7 @@ services:
 
   # Worker-Mixed (критический + средний приоритет) - на тяжелых ВМ
   worker-mixed:
-    build:
-      context: .
-      dockerfile: infra/docker/worker/Dockerfile.prod
+    image: ml-portal-ml-services
     deploy:
       replicas: 4  # 2 на каждой тяжелой ВМ
       placement:
@@ -94,6 +91,7 @@ services:
         delay: 5s
         max_attempts: 3
     environment:
+      - SERVICE_TYPE=worker
       - DATABASE_URL=postgresql://ml_portal:ml_portal@postgres:5432/ml_portal
       - REDIS_URL=redis://redis:6379
       - QDRANT_URL=http://qdrant:6333
@@ -107,13 +105,46 @@ services:
     networks:
       - ml-portal-network
 
-  # Embedding (средний приоритет) - на тяжелых ВМ
-  emb:
+  # ML Services (Unified) - на тяжелых ВМ
+  ml-services:
     build:
       context: .
-      dockerfile: infra/docker/emb/Dockerfile.prod
+      dockerfile: infra/docker/ml-services/Dockerfile.prod
     deploy:
       replicas: 2  # 1 на каждой тяжелой ВМ
+      placement:
+        constraints:
+          - node.role == worker
+      resources:
+        limits:
+          cpus: '6'
+          memory: 12G
+        reservations:
+          cpus: '3'
+          memory: 6G
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 3
+    environment:
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin123
+      - QDRANT_URL=http://qdrant:6333
+      - QDRANT_API_KEY=
+      - REDIS_URL=redis://6379
+      - DATABASE_URL=postgresql://ml_portal:ml_portal@postgres:5432/ml_portal
+    ports:
+      - "8001:8001"  # EMB
+      - "8002:8002"  # LLM
+    networks:
+      - ml-portal-network
+
+  # EMB Service
+  emb:
+    image: ml-portal-ml-services
+    deploy:
+      replicas: 2
       placement:
         constraints:
           - node.role == worker
@@ -129,19 +160,19 @@ services:
         delay: 10s
         max_attempts: 3
     environment:
+      - SERVICE_TYPE=emb
+      - EMB_PORT=8001
       - PORT=8001
     ports:
       - "8001:8001"
     networks:
       - ml-portal-network
 
-  # LLM (высокий приоритет) - на тяжелых ВМ
+  # LLM Service
   llm:
-    build:
-      context: .
-      dockerfile: infra/docker/llm/Dockerfile.prod
+    image: ml-portal-ml-services
     deploy:
-      replicas: 2  # 1 на каждой тяжелой ВМ
+      replicas: 2
       placement:
         constraints:
           - node.role == worker
@@ -157,6 +188,8 @@ services:
         delay: 5s
         max_attempts: 3
     environment:
+      - SERVICE_TYPE=llm
+      - LLM_PORT=8002
       - PORT=8002
     ports:
       - "8002:8002"

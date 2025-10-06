@@ -152,7 +152,7 @@ export default function Analyze() {
                   {doc.result && (
                     <div className={styles.resultPreview}>
                       <strong>Результат:</strong>
-                      <pre>{JSON.stringify(doc.result, null, 2)}</pre>
+                      <pre>{typeof doc.result === 'object' ? JSON.stringify(doc.result, null, 2) : String(doc.result)}</pre>
                     </div>
                   )}
                 </div>

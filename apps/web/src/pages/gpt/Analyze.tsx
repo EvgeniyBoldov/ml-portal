@@ -10,6 +10,7 @@ export default function Analyze() {
   const [documents, setDocuments] = useState<AnalyzeDocument[]>([]);
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
 
   useEffect(() => {
     loadDocuments();
@@ -27,10 +28,13 @@ export default function Analyze() {
     }
   };
 
-  const handleFileUpload = async (file: File) => {
+  const handleFileUpload = async () => {
+    if (!selectedFile) return;
+    
     setUploading(true);
     try {
-      await analyze.uploadAnalysisFile(file);
+      await analyze.uploadAnalysisFile(selectedFile);
+      setSelectedFile(null);
       await loadDocuments();
     } catch (error) {
       console.error('Failed to upload file:', error);
@@ -113,11 +117,21 @@ export default function Analyze() {
       <Card className={styles.uploadCard}>
         <h3>Загрузка файла для анализа</h3>
         <FilePicker
-          onFileSelected={file => file && handleFileUpload(file)}
+          onFileSelected={setSelectedFile}
           accept=".txt,.pdf,.doc,.docx,.md,.rtf,.odt"
+          selectedFile={selectedFile}
+          label="Выбрать файл"
           disabled={uploading}
         />
-        {uploading && <p>Загрузка...</p>}
+        {selectedFile && (
+          <Button 
+            onClick={handleFileUpload} 
+            disabled={uploading}
+            className={styles.uploadButton}
+          >
+            {uploading ? 'Загрузка...' : 'Загрузить для анализа'}
+          </Button>
+        )}
       </Card>
 
       <Card className={styles.documentsCard}>
@@ -152,7 +166,7 @@ export default function Analyze() {
                   {doc.result && (
                     <div className={styles.resultPreview}>
                       <strong>Результат:</strong>
-                      <pre>{JSON.stringify(doc.result, null, 2)}</pre>
+                      <pre>{typeof doc.result === 'object' ? JSON.stringify(doc.result, null, 2) : String(doc.result)}</pre>
                     </div>
                   )}
                 </div>

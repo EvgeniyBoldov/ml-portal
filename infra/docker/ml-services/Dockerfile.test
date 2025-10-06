@@ -1,5 +1,5 @@
 # =============================================================================
-# ML Portal Worker - Production Dockerfile
+# ML Portal ML Services - Unified Test Dockerfile
 # =============================================================================
 FROM python:3.11-slim
 
@@ -22,12 +22,31 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean
 
 # Copy requirements and install Python dependencies
-COPY infra/docker/worker/requirements.txt ./requirements.txt
+COPY infra/docker/ml-services/requirements.txt ./requirements.txt
 RUN python -m pip install --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
-COPY apps/api/src/app/ ./app/
+# Install test dependencies
+RUN pip install --no-cache-dir \
+    pytest==7.4.4 \
+    pytest-asyncio==0.23.2 \
+    pytest-cov==4.1.0 \
+    httpx==0.27.0
+
+# Copy all application code
+COPY apps/llm/src/app/ ./llm/
+COPY apps/emb/src/app/ ./emb/
+COPY apps/api/src/app/ ./worker/
+
+# Copy entrypoints
+COPY infra/docker/llm/entrypoint.sh ./llm-entrypoint.sh
+COPY infra/docker/emb/entrypoint.sh ./emb-entrypoint.sh
+
+# Multi-service entrypoint script
+COPY infra/docker/ml-services/entrypoint.sh ./entrypoint.sh
+
+# Set permissions for all scripts
+RUN chmod +x ./llm-entrypoint.sh ./emb-entrypoint.sh ./entrypoint.sh
 
 # Create non-root user
 RUN groupadd -r appuser && useradd -r -g appuser appuser && \
@@ -36,9 +55,10 @@ RUN groupadd -r appuser && useradd -r -g appuser appuser && \
 # Switch to non-root user
 USER appuser
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
-    CMD celery -A app.celery_app inspect ping || exit 1
+# Default environment variables
+ENV SERVICE_TYPE=llm
+ENV LLM_PORT=8002
+ENV EMB_PORT=8001
 
-# Start the worker
-CMD ["celery", "-A", "app.celery_app", "worker", "--loglevel=info"]
+# Start the appropriate service based on environment
+ENTRYPOINT ["./entrypoint.sh"]

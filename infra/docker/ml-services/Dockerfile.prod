@@ -1,0 +1,64 @@
+# =============================================================================
+# ML Portal ML Services - Unified Production Dockerfile
+# =============================================================================
+FROM python:3.11-slim
+
+# Set working directory
+WORKDIR /app
+
+# Install system dependencies including OCR tools
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libpq-dev \
+    curl \
+    libmagic1 \
+    libmagic-dev \
+    tesseract-ocr \
+    tesseract-ocr-rus \
+    poppler-utils \
+    libgl1-mesa-dri \
+    libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Copy requirements and install Python dependencies
+COPY infra/docker/ml-services/requirements.txt ./requirements.txt
+RUN python -m pip install --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
+
+# Install additional missing dependencies
+RUN pip install --no-cache-dir pydantic-settings==2.6.1 alembic==1.13.3 bcrypt==4.1.3
+
+# Copy all application code
+COPY apps/llm/src/app/ ./llm/
+COPY apps/emb/src/app/ ./emb/
+COPY apps/api/src/app/ ./worker/
+
+# Copy entrypoints
+COPY infra/docker/llm/entrypoint.sh ./llm-entrypoint.sh
+COPY infra/docker/emb/entrypoint.sh ./emb-entrypoint.sh
+
+# Multi-service entrypoint script
+COPY infra/docker/ml-services/entrypoint.sh ./entrypoint.sh
+
+# Set permissions for all scripts
+RUN chmod +x ./llm-entrypoint.sh ./emb-entrypoint.sh ./entrypoint.sh
+
+# Create non-root user
+RUN groupadd -r appuser && useradd -r -g appuser appuser && \
+    chown -R appuser:appuser /app
+
+# Switch to non-root user
+USER appuser
+
+# Default environment variables
+ENV SERVICE_TYPE=llm
+ENV LLM_PORT=8002
+ENV EMB_PORT=8001
+
+# Health check (will be overridden by docker-compose)
+HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8002/health || exit 1
+
+# Start the appropriate service based on environment
+ENTRYPOINT ["./entrypoint.sh"]

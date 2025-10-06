@@ -217,7 +217,7 @@ export default function AnalyzePage() {
                       overflow: 'hidden',
                     }}
                   >
-                    {t.result || '—'}
+                    {t.result ? (typeof t.result === 'object' ? JSON.stringify(t.result) : String(t.result)) : '—'}
                   </td>
                   <td className="muted">{t.created_at || '—'}</td>
                 </tr>

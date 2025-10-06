@@ -116,3 +116,29 @@
 .stack button:hover {
   background: var(--color-bg-secondary);
 }
+
+.actionButton {
+  background: none;
+  border: none;
+  padding: 0.5rem 0.75rem;
+  color: var(--color-text);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: all 0.2s ease;
+  width: 100%;
+  text-align: left;
+  font-size: 0.875rem;
+}
+
+.actionButton:hover {
+  background: var(--color-bg-secondary);
+}
+
+.actionButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.actionButton:disabled:hover {
+  background: none;
+}

@@ -109,14 +109,13 @@ export interface AnalyzeDocument {
 
 export interface RagDocument {
   id: string;
-  title: string;
-  content: string;
+  name: string;
+  status: string;
+  scope: 'local' | 'global';
   created_at: string;
   updated_at: string;
-  name?: string;
-  status?: string;
-  progress?: number;
-  date_upload?: string;
   tags?: string[];
-  url_canonical_file?: string;
+  size?: number;
+  content_type?: string;
+  vectorized_models?: string[];
 }

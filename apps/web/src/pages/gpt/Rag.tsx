@@ -13,6 +13,7 @@ import {
   ArchiveIcon,
   TrashIcon,
 } from '@shared/ui/Icon';
+import { useAuth } from '@app/store/auth';
 import Select from '@shared/ui/Select';
 import FilePicker from '@shared/ui/FilePicker';
 import * as rag from '@shared/api/rag';
@@ -22,6 +23,10 @@ import styles from './Rag.module.css';
 type ColKey = 'name' | 'status' | 'created_at' | 'tags';
 
 export default function Rag() {
+  const { user } = useAuth();
+  const isAdmin = (user?.role || '').toLowerCase() === 'admin';
+  const isEditor = (user?.role || '').toLowerCase() === 'editor';
+  
   const [items, setItems] = useState<RagDocument[]>([]);
   const [busy, setBusy] = useState(false);
   const [q, setQ] = useState('');
@@ -34,8 +39,9 @@ export default function Rag() {
   const [openAdd, setOpenAdd] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [uploadTags, setUploadTags] = useState<string[]>([]);
-  const [, setSelectedDoc] = useState<RagDocument | null>(null);
-  const [, setActionMenuOpen] = useState(false);
+  const [selectedDoc, setSelectedDoc] = useState<RagDocument | null>(null);
+  const [actionMenuOpen, setActionMenuOpen] = useState(false);
+  const [actionMenuAnchor, setActionMenuAnchor] = useState<{ x: number; y: number } | null>(null);
 
   async function refresh() {
     const res = await rag.listDocs({ page: 1, size: 100 });
@@ -151,6 +157,65 @@ export default function Rag() {
     }
   };
 
+  const handleScopeChange = async (doc: RagDocument, newScope: 'local' | 'global') => {
+    try {
+      await rag.updateRagDocumentScope(doc.id, newScope);
+      await refresh();
+    } catch (error) {
+      console.error('Scope change failed:', error);
+      alert('Ошибка изменения скоупа');
+    }
+  };
+
+  const handleVectorize = async (doc: RagDocument, model: string) => {
+    try {
+      await rag.vectorizeRagDocument(doc.id, model);
+      await refresh();
+    } catch (error) {
+      console.error('Vectorization failed:', error);
+      alert('Ошибка векторизации');
+    }
+  };
+
+  const handleMerge = async (doc: RagDocument) => {
+    if (!confirm('Объединить чанки документа?')) return;
+    try {
+      await rag.mergeRagDocument(doc.id);
+      await refresh();
+    } catch (error) {
+      console.error('Merge failed:', error);
+      alert('Ошибка объединения');
+    }
+  };
+
+  const handleOptimize = async (doc: RagDocument) => {
+    if (!confirm('Оптимизировать документ?')) return;
+    try {
+      await rag.optimizeRagDocument(doc.id);
+      await refresh();
+    } catch (error) {
+      console.error('Optimization failed:', error);
+      alert('Ошибка оптимизации');
+    }
+  };
+
+  const handleAnalytics = async (doc: RagDocument) => {
+    try {
+      const analytics = await rag.getRagDocumentAnalytics(doc.id);
+      alert(`Аналитика документа:\nПоисков: ${analytics.analytics.search_count}\nСредний скор: ${analytics.analytics.avg_score}\nЧанков: ${analytics.analytics.chunk_count}`);
+    } catch (error) {
+      console.error('Analytics failed:', error);
+      alert('Ошибка получения аналитики');
+    }
+  };
+
+  const openActionMenu = (doc: RagDocument, el: HTMLElement) => {
+    const r = el.getBoundingClientRect();
+    setSelectedDoc(doc);
+    setActionMenuAnchor({ x: r.left, y: r.bottom + 6 });
+    setActionMenuOpen(true);
+  };
+
   const getStatusText = (status: string) => {
     switch (status) {
       case 'queued':
@@ -158,6 +223,7 @@ export default function Rag() {
       case 'processing':
         return 'Обработка';
       case 'ready':
+      case 'processed':
         return 'Готов';
       case 'error':
         return 'Ошибка';
@@ -165,6 +231,17 @@ export default function Rag() {
         return 'Архив';
       default:
         return status;
+    }
+  };
+
+  const getScopeText = (scope: string) => {
+    switch (scope) {
+      case 'local':
+        return 'Локальный';
+      case 'global':
+        return 'Глобальный';
+      default:
+        return scope;
     }
   };
 
@@ -224,6 +301,7 @@ export default function Rag() {
                     <FilterIcon />
                   </button>
                 </th>
+                <th>Скоуп</th>
                 <th>
                   Создано{' '}
                   <button
@@ -258,120 +336,28 @@ export default function Rag() {
                     </Badge>
                   </td>
                   <td>{t.tags?.join(', ') || '—'}</td>
+                  <td>
+                    <Badge tone={t.scope === 'global' ? 'success' : 'neutral'}>
+                      {getScopeText(t.scope)}
+                    </Badge>
+                  </td>
                   <td className="muted">{t.created_at || '—'}</td>
                   <td>
-                    <Popover
-                      trigger={
-                        <button
-                          className="icon"
-                          type="button"
-                          aria-label="Действия"
-                          onClick={() => {
-                            setSelectedDoc(t);
-                            setActionMenuOpen(true);
-                          }}
-                        >
-                          <MoreVerticalIcon />
-                        </button>
-                      }
-                      content={
-                        <div className="stack" style={{ minWidth: 180 }}>
-                          {t.status === 'ready' && (
-                            <>
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                onClick={() => handleDownload(t, 'original')}
-                              >
-                                <span
-                                  style={{
-                                    marginRight: 6,
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                  }}
-                                >
-                                  <DownloadIcon size={12} />
-                                </span>
-                                Скачать документ
-                              </Button>
-                              {t.url_canonical_file && (
-                                <Button
-                                  size="sm"
-                                  variant="ghost"
-                                  onClick={() => handleDownload(t, 'canonical')}
-                                >
-                                  <span
-                                    style={{
-                                      marginRight: 6,
-                                      display: 'inline-flex',
-                                      alignItems: 'center',
-                                    }}
-                                  >
-                                    <DownloadIcon size={12} />
-                                  </span>
-                                  Скачать канонический вид
-                                </Button>
-                              )}
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                onClick={() => handleReindex(t)}
-                              >
-                                <span
-                                  style={{
-                                    marginRight: 6,
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                  }}
-                                >
-                                  <RefreshIcon size={12} />
-                                </span>
-                                Пересчитать
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                onClick={() => handleArchive(t)}
-                              >
-                                <span
-                                  style={{
-                                    marginRight: 6,
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                  }}
-                                >
-                                  <ArchiveIcon size={12} />
-                                </span>
-                                Заархивировать
-                              </Button>
-                            </>
-                          )}
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => handleDelete(t)}
-                          >
-                            <span
-                              style={{
-                                marginRight: 6,
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                              }}
-                            >
-                              <TrashIcon size={12} />
-                            </span>
-                            Удалить
-                          </Button>
-                        </div>
-                      }
-                      align="end"
-                    />
+                    <button
+                      className="icon"
+                      type="button"
+                      aria-label="Действия"
+                      onClick={e => openActionMenu(t, e.currentTarget)}
+                      style={{ cursor: 'pointer' }}
+                    >
+                      <MoreVerticalIcon />
+                    </button>
                   </td>
                 </tr>
               ))}
               {rows.length === 0 && (
                 <tr>
-                  <td colSpan={5} className="muted">
+                  <td colSpan={6} className="muted">
                     Нет записей
                   </td>
                 </tr>
@@ -400,6 +386,8 @@ export default function Rag() {
           <FilePicker
             onFileSelected={setFile}
             accept=".txt,.pdf,.doc,.docx,.md,.rtf,.odt"
+            selectedFile={file}
+            label="Выбрать файл"
           />
           <div>
             <label>Теги (опционально):</label>
@@ -418,6 +406,126 @@ export default function Rag() {
           </div>
         </div>
       </Modal>
+
+      {/* Action Menu Popover */}
+      <Popover
+        open={actionMenuOpen}
+        onOpenChange={setActionMenuOpen}
+        anchor={actionMenuAnchor}
+        content={
+          selectedDoc && (
+            <div style={{ minWidth: 180, padding: '4px 0' }}>
+              {/* Scope Change - Editor/Admin only */}
+              {(isEditor || isAdmin) && (
+                <button
+                  className={styles.actionButton}
+                  onClick={() => {
+                    const newScope = selectedDoc.scope === 'local' ? 'global' : 'local';
+                    handleScopeChange(selectedDoc, newScope);
+                    setActionMenuOpen(false);
+                  }}
+                >
+                  {selectedDoc.scope === 'local' ? 'Перевести в глобальный' : 'Перевести в локальный'}
+                </button>
+              )}
+
+              {/* Download Actions */}
+              {selectedDoc.status === 'ready' && (
+                <button
+                  className={styles.actionButton}
+                  onClick={() => {
+                    handleDownload(selectedDoc, 'original');
+                    setActionMenuOpen(false);
+                  }}
+                >
+                  Скачать документ
+                </button>
+              )}
+
+              {/* Archive - Editor/Admin only */}
+              {(isEditor || isAdmin) && (
+                <button
+                  className={styles.actionButton}
+                  onClick={() => {
+                    handleArchive(selectedDoc);
+                    setActionMenuOpen(false);
+                  }}
+                >
+                  Архивировать
+                </button>
+              )}
+
+              {/* Admin-only Actions */}
+              {isAdmin && (
+                <>
+                  <hr style={{ margin: '8px 0', border: 'none', borderTop: '1px solid var(--color-border)' }} />
+                  <button
+                    className={styles.actionButton}
+                    onClick={() => {
+                      handleReindex(selectedDoc);
+                      setActionMenuOpen(false);
+                    }}
+                  >
+                    Переиндексировать
+                  </button>
+                  <button
+                    className={styles.actionButton}
+                    onClick={() => {
+                      handleVectorize(selectedDoc, 'all-MiniLM-L6-v2');
+                      setActionMenuOpen(false);
+                    }}
+                  >
+                    Векторизовать
+                  </button>
+                  <button
+                    className={styles.actionButton}
+                    onClick={() => {
+                      handleMerge(selectedDoc);
+                      setActionMenuOpen(false);
+                    }}
+                  >
+                    Объединить чанки
+                  </button>
+                  <button
+                    className={styles.actionButton}
+                    onClick={() => {
+                      handleOptimize(selectedDoc);
+                      setActionMenuOpen(false);
+                    }}
+                  >
+                    Оптимизировать
+                  </button>
+                  <button
+                    className={styles.actionButton}
+                    onClick={() => {
+                      handleAnalytics(selectedDoc);
+                      setActionMenuOpen(false);
+                    }}
+                  >
+                    Аналитика
+                  </button>
+                </>
+              )}
+
+              {/* Delete Action - Editor/Admin only */}
+              {(isEditor || isAdmin) && (
+                <>
+                  <hr style={{ margin: '8px 0', border: 'none', borderTop: '1px solid var(--color-border)' }} />
+                  <button
+                    className={styles.actionButton}
+                    onClick={() => {
+                      handleDelete(selectedDoc);
+                      setActionMenuOpen(false);
+                    }}
+                  >
+                    Удалить
+                  </button>
+                </>
+              )}
+            </div>
+          )
+        }
+      />
 
       <Popover
         trigger={<div />}

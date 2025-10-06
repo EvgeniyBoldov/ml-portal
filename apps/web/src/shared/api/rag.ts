@@ -23,7 +23,7 @@ export async function listDocs(
       has_next: boolean;
       has_prev: boolean;
     };
-  }>(`/rag/?${qs.toString()}`);
+  }>(`/rag?${qs.toString()}`);
 }
 
 export async function uploadFile(file: File, name?: string, tags?: string[]) {
@@ -105,4 +105,61 @@ export async function reindexAllRagDocuments() {
     '/rag/reindex',
     { method: 'POST' }
   );
+}
+
+export async function updateRagDocumentScope(docId: string, scope: 'local' | 'global') {
+  const fd = new FormData();
+  fd.set('scope', scope);
+  return apiRequest<{ id: string; scope: string; message: string }>(
+    `/rag/${docId}/scope`,
+    {
+      method: 'PUT',
+      body: fd,
+    }
+  );
+}
+
+export async function vectorizeRagDocument(docId: string, model: string = 'all-MiniLM-L6-v2') {
+  const fd = new FormData();
+  fd.set('model', model);
+  return apiRequest<{ id: string; model: string; message: string }>(
+    `/rag/${docId}/vectorize`,
+    {
+      method: 'POST',
+      body: fd,
+    }
+  );
+}
+
+export async function getRagDocumentModels(docId: string) {
+  return apiRequest<{
+    id: string;
+    vectorized_models: string[];
+    available_models: string[];
+  }>(`/rag/${docId}/models`);
+}
+
+export async function mergeRagDocument(docId: string) {
+  return apiRequest<{ id: string; message: string }>(`/rag/${docId}/merge`, {
+    method: 'POST',
+  });
+}
+
+export async function optimizeRagDocument(docId: string) {
+  return apiRequest<{ id: string; message: string }>(`/rag/${docId}/optimize`, {
+    method: 'POST',
+  });
+}
+
+export async function getRagDocumentAnalytics(docId: string) {
+  return apiRequest<{
+    id: string;
+    analytics: {
+      search_count: number;
+      last_searched: string;
+      avg_score: number;
+      chunk_count: number;
+      popularity_score: number;
+    };
+  }>(`/rag/${docId}/analytics`);
 }
