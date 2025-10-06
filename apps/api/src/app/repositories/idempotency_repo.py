@@ -11,8 +11,8 @@ import uuid
 import hashlib
 import json
 
-from app.repositories.base import TenantRepository, AsyncTenantRepository
-from app.core.logging import get_logger
+from repositories.base import TenantRepository, AsyncTenantRepository
+from core.logging import get_logger
 
 logger = get_logger(__name__)
 

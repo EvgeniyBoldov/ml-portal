@@ -21,9 +21,15 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 
 def get_url() -> str:
-    # Use application settings (supports DB_URL or DB.URL env names)
+    # Use environment variable first, then application settings
+    url = os.getenv('DATABASE_URL')
+    if url:
+        # Convert psycopg2 URL to psycopg URL
+        if url.startswith('postgresql://'):
+            url = url.replace('postgresql://', 'postgresql+psycopg://')
+        return url
     s = get_settings()
-    return s.DB_URL
+    return s.ASYNC_DB_URL
 
 def run_migrations_offline() -> None:
     url = get_url()

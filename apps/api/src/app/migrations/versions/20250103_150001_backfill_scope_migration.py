@@ -1,7 +1,7 @@
 """Backfill existing documents with scope migration
 
 Revision ID: 20250103_150001
-Revises: 20250103_150000_add_rbac_scope_migration
+Revises: 20250103_150000
 Create Date: 2025-01-03 15:00:01.000000
 
 """
@@ -11,7 +11,7 @@ from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision = '20250103_150001'
-down_revision = '20250103_150000_add_rbac_scope_migration'
+down_revision = '20250103_150000'
 branch_labels = None
 depends_on = None
 

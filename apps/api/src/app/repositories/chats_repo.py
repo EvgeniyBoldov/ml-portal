@@ -7,9 +7,9 @@ from sqlalchemy.dialects.postgresql import JSONB
 from datetime import datetime, timezone
 import uuid
 
-from app.models.chat import Chats, ChatMessages
-from app.repositories.base import TenantRepository, AsyncTenantRepository
-from app.core.logging import get_logger
+from models.chat import Chats, ChatMessages
+from repositories.base import TenantRepository, AsyncTenantRepository
+from core.logging import get_logger
 
 logger = get_logger(__name__)
 

@@ -74,4 +74,28 @@ class S3Manager:
             return self._client.get_presigned_url("PUT", bucket, key, expires=expires, response_headers=headers)
         raise ValueError("Unsupported operation for presign")
 
+    async def upload_file(self, bucket: str, key: str, file_obj, content_type: Optional[str] = None) -> None:
+        """Upload file to S3/MinIO"""
+        self.ensure_bucket(bucket)
+        from io import BytesIO
+        
+        # Read file content
+        if hasattr(file_obj, 'read'):
+            content = file_obj.read()
+        else:
+            content = file_obj
+        
+        # Upload to S3/MinIO
+        self._client.put_object(
+            bucket_name=bucket,
+            object_name=key,
+            data=BytesIO(content),
+            length=len(content),
+            content_type=content_type
+        )
+
+    async def delete_file(self, bucket: str, key: str) -> None:
+        """Delete file from S3/MinIO"""
+        self.delete_object(bucket, key)
+
 s3_manager = S3Manager()

@@ -5,8 +5,8 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision = "20250102_120000_add_user_tenants_m2m"
-down_revision = "20250115_120000_fix_schema"
+revision = "20250102_120000"
+down_revision = "20250910_175628_initial"
 branch_labels = None
 depends_on = None
 

@@ -1,7 +1,7 @@
 """Add RBAC scope functionality
 
 Revision ID: 20250103_150000
-Revises: 20250115_120000_fix_user_tokens_and_users_schema
+Revises: 20250102_120000_add_user_tenants_m2m
 Create Date: 2025-01-03 15:00:00.000000
 
 """
@@ -11,7 +11,7 @@ from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision = '20250103_150000'
-down_revision = '20250115_120000_fix_user_tokens_and_users_schema'
+down_revision = '20250102_120000'
 branch_labels = None
 depends_on = None
 
@@ -43,25 +43,25 @@ def upgrade():
     # =============================================================================
     
     # Add scope column with default 'local'
-    op.add_column('rag_documents', 
+    op.add_column('ragdocuments', 
         sa.Column('scope', scope_enum, nullable=False, server_default='local'))
     
     # Add tenant_id column (nullable for global docs)
-    op.add_column('rag_documents', 
+    op.add_column('ragdocuments', 
         sa.Column('tenant_id', postgresql.UUID(as_uuid=True), nullable=True))
     
     # Add versioning fields for global documents
-    op.add_column('rag_documents',
+    op.add_column('ragdocuments',
         sa.Column('global_version', sa.Integer(), nullable=True))
     
-    op.add_column('rag_documents',
+    op.add_column('ragdocuments',
         sa.Column('published_at', sa.DateTime(timezone=True), nullable=True))
         
-    op.add_column('rag_documents',
+    op.add_column('ragdocuments',
         sa.Column('published_by', postgresql.UUID(as_uuid=True), nullable=True))
     
     # Update status column to use new enum type
-    op.alter_column('rag_documents', 'status',
+    op.alter_column('ragdocuments', 'status',
         type_=status_enum,
         postgresql_using='status::documentstatus')
     
@@ -110,10 +110,10 @@ def upgrade():
     # =============================================================================
     
     # RAG Documents indexes
-    op.create_index('idx_rag_documents_tenant_scope', 'rag_documents', ['tenant_id', 'scope'])
-    op.create_index('idx_rag_documents_scope_status', 'rag_documents', ['scope', 'status'])
-    op.create_index('idx_rag_documents_global_version', 'rag_documents', ['global_version'])
-    op.create_index('idx_rag_documents_scope_tenant_lookup', 'rag_documents', ['scope', 'tenant_id'])
+    op.create_index('idx_rag_documents_tenant_scope', 'ragdocuments', ['tenant_id', 'scope'])
+    op.create_index('idx_rag_documents_scope_status', 'ragdocuments', ['scope', 'status'])
+    op.create_index('idx_rag_documents_global_version', 'ragdocuments', ['global_version'])
+    op.create_index('idx_rag_documents_scope_tenant_lookup', 'ragdocuments', ['scope', 'tenant_id'])
     
     # RAG Chunks indexes
     op.create_index('idx_rag_chunks_tenant_scope', 'rag_chunks', ['tenant_id', 'scope'])
@@ -178,11 +178,11 @@ def downgrade():
     # =============================================================================
     
     # Drop RAG Documents columns
-    op.drop_column('rag_documents', 'published_by')
-    op.drop_column('rag_documents', 'published_at')
-    op.drop_column('rag_documents', 'global_version')
-    op.drop_column('rag_documents', 'tenant_id')
-    op.drop_column('rag_documents', 'scope')
+    op.drop_column('ragdocuments', 'published_by')
+    op.drop_column('ragdocuments', 'published_at')
+    op.drop_column('ragdocuments', 'global_version')
+    op.drop_column('ragdocuments', 'tenant_id')
+    op.drop_column('ragdocuments', 'scope')
     
     # Drop RAG Chunks columns
     op.drop_column('rag_chunks', 'tenant_id')

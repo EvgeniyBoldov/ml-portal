@@ -16,7 +16,7 @@ from datetime import datetime
 import uuid
 import base64
 import json
-from app.core.logging import get_logger
+from core.logging import get_logger
 
 logger = get_logger(__name__)
 

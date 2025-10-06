@@ -2,7 +2,7 @@ from __future__ import annotations
 from typing import List, Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import select
-from app.models.analyze import AnalysisDocuments, AnalysisChunks
+from models.analyze import AnalysisDocuments, AnalysisChunks
 
 class AnalyzeRepo:
     def __init__(self, session: Session):

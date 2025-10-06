@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 import uuid
 import enum
 
-from app.models.base import Base
+from models.base import Base
 
 
 class DocumentScope(str, enum.Enum):
@@ -28,7 +28,7 @@ class DocumentStatus(str, enum.Enum):
 
 class RAGDocument(Base):
     """RAG документ с поддержкой scope и RBAC"""
-    __tablename__ = "rag_documents"
+    __tablename__ = "ragdocuments"
     
     # Основные поля
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

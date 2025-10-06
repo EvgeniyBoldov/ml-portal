@@ -1,9 +1,14 @@
 from __future__ import annotations
 from typing import Any, Optional
-from fastapi import APIRouter, HTTPException, Query, UploadFile, File, Form
+from fastapi import APIRouter, HTTPException, Query, UploadFile, File, Form, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
 from adapters.s3_client import s3_manager, PresignOptions
 from core.config import get_settings
 from core.s3_links import S3ContentType
+from api.deps import db_session, get_current_user
+from core.security import UserCtx
+from repositories.factory import get_async_repository_factory, AsyncRepositoryFactory
+from models.rag import RAGDocument, DocumentStatus, DocumentScope
 import uuid
 import json
 from datetime import datetime
@@ -43,75 +48,118 @@ async def list_rag_documents(
     page: int = Query(1, ge=1),
     size: int = Query(100, ge=1, le=1000),
     status: Optional[str] = Query(None),
-    search: Optional[str] = Query(None)
+    search: Optional[str] = Query(None),
+    session: AsyncSession = Depends(db_session),
+    user: UserCtx = Depends(get_current_user),
+    repo_factory: AsyncRepositoryFactory = Depends(get_async_repository_factory)
 ):
     """List RAG documents with pagination and search"""
-    # Filter by status if provided
-    filtered_docs = MOCK_RAG_DOCUMENTS
-    if status:
-        filtered_docs = [doc for doc in filtered_docs if doc["status"] == status]
-    
-    # Filter by search if provided
-    if search:
-        filtered_docs = [doc for doc in filtered_docs if search.lower() in doc["name"].lower()]
-    
-    # Calculate pagination
-    total = len(filtered_docs)
-    start_idx = (page - 1) * size
-    end_idx = start_idx + size
-    items = filtered_docs[start_idx:end_idx]
-    
-    return {
-        "items": items,
-        "pagination": {
-            "page": page,
-            "size": size,
-            "total": total,
-            "total_pages": (total + size - 1) // size,
-            "has_next": end_idx < total,
-            "has_prev": page > 1
+    try:
+        # Get documents from database
+        documents = await repo_factory.get_rag_documents(
+            user_id=user.id,
+            status=status,
+            search=search,
+            limit=size,
+            offset=(page - 1) * size
+        )
+        
+        # Get total count for pagination
+        total_count = await repo_factory.count_rag_documents(
+            user_id=user.id,
+            status=status,
+            search=search
+        )
+        
+        # Convert to response format
+        items = []
+        for doc in documents:
+            items.append({
+                "id": str(doc.id),
+                "name": doc.filename,
+                "status": doc.status.value,
+                "scope": doc.scope.value,
+                "created_at": doc.created_at.isoformat() + "Z",
+                "updated_at": doc.updated_at.isoformat() + "Z",
+                "tags": doc.tags or [],
+                "size": doc.size,
+                "content_type": doc.content_type,
+                "vectorized_models": []  # TODO: implement when worker is ready
+            })
+        
+        return {
+            "items": items,
+            "pagination": {
+                "page": page,
+                "size": size,
+                "total": total_count,
+                "total_pages": (total_count + size - 1) // size,
+                "has_next": page * size < total_count,
+                "has_prev": page > 1
+            }
         }
-    }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to list documents: {str(e)}")
 
 @router.post("/upload")
 async def upload_rag_file(
     file: UploadFile = File(...),
     name: Optional[str] = Form(None),
-    tags: Optional[str] = Form(None)
+    tags: Optional[str] = Form(None),
+    session: AsyncSession = Depends(db_session),
+    user: UserCtx = Depends(get_current_user),
+    repo_factory: AsyncRepositoryFactory = Depends(get_async_repository_factory)
 ):
     """Upload a RAG file"""
     if not file:
         raise HTTPException(status_code=400, detail="No file provided")
     
-    doc_id = str(uuid.uuid4())
-    doc_name = name or file.filename or f"Document {len(MOCK_RAG_DOCUMENTS) + 1}"
-    
-    # Parse tags from JSON string
-    doc_tags = []
-    if tags:
-        try:
-            doc_tags = json.loads(tags)
-        except json.JSONDecodeError:
-            # Fallback: treat as comma-separated string
-            doc_tags = [tag.strip() for tag in tags.split(',') if tag.strip()]
-    
-    now = datetime.utcnow().isoformat() + "Z"
-    
-    new_doc = {
-        "id": doc_id,
-        "name": doc_name,
-        "status": "processing",
-        "scope": "local",  # Default to local scope
-        "created_at": now,
-        "updated_at": now,
-        "tags": doc_tags,
-        "size": file.size or 0,
-        "content_type": file.content_type or "application/octet-stream",
-        "vectorized_models": []
-    }
-    
-    MOCK_RAG_DOCUMENTS.append(new_doc)
-    return {"id": doc_id, "status": "processing", "message": "File uploaded successfully"}
+    try:
+        # Generate document ID and prepare metadata
+        doc_id = uuid.uuid4()
+        doc_name = name or file.filename or f"Document {doc_id}"
+        
+        # Parse tags from JSON string
+        doc_tags = []
+        if tags:
+            try:
+                doc_tags = json.loads(tags)
+            except json.JSONDecodeError:
+                # Fallback: treat as comma-separated string
+                doc_tags = [tag.strip() for tag in tags.split(',') if tag.strip()]
+        
+        # Upload file to MinIO
+        settings = get_settings()
+        s3_key = f"rag/documents/{doc_id}/{file.filename}"
+        
+        # Upload file to S3/MinIO
+        await s3_manager.upload_file(
+            bucket=settings.S3_BUCKET_RAG,
+            key=s3_key,
+            file_obj=file.file,
+            content_type=file.content_type
+        )
+        
+        # Create document record in database
+        document = await repo_factory.create_rag_document(
+            uploaded_by=user.id,
+            name=doc_name,
+            filename=file.filename or doc_name,
+            content_type=file.content_type,
+            size=file.size,
+            tags=doc_tags,
+            s3_key_raw=s3_key,
+            status=DocumentStatus.UPLOADING.value
+        )
+        
+        return {
+            "id": str(document.id), 
+            "status": document.status.value, 
+            "message": "File uploaded successfully"
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to upload file: {str(e)}")
 
 @router.put("/{doc_id}/tags")
 async def update_rag_document_tags(doc_id: str, tags: list[str]):
@@ -165,35 +213,94 @@ async def get_rag_metrics():
 @router.get("/{doc_id}/download")
 async def download_rag_file(
     doc_id: str,
-    kind: str = Query("original", regex="^(original|canonical)$")
+    kind: str = Query("original", regex="^(original|canonical)$"),
+    session: AsyncSession = Depends(db_session),
+    user: UserCtx = Depends(get_current_user),
+    repo_factory: AsyncRepositoryFactory = Depends(get_async_repository_factory)
 ):
     """Download RAG file"""
-    for doc in MOCK_RAG_DOCUMENTS:
-        if doc["id"] == doc_id:
-            return {"url": f"http://localhost:9000/rag/docs/{doc_id}"}
-    
-    raise HTTPException(status_code=404, detail="Document not found")
+    try:
+        document = await repo_factory.get_rag_document_by_id(uuid.UUID(doc_id))
+        if not document:
+            raise HTTPException(status_code=404, detail="Document not found")
+        
+        # Determine S3 key based on kind
+        s3_key = document.s3_key_raw if kind == "original" else document.s3_key_processed
+        if not s3_key:
+            raise HTTPException(status_code=404, detail="File not found")
+        
+        # Generate presigned URL for download
+        settings = get_settings()
+        url = await s3_manager.generate_presigned_url(
+            bucket=settings.S3_BUCKET_RAG,
+            key=s3_key,
+            options=PresignOptions(operation="get", expiry_seconds=3600)
+        )
+        
+        return {"url": url}
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid document ID")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to generate download URL: {str(e)}")
 
 @router.post("/{doc_id}/archive")
-async def archive_rag_document(doc_id: str):
+async def archive_rag_document(
+    doc_id: str,
+    session: AsyncSession = Depends(db_session),
+    user: UserCtx = Depends(get_current_user),
+    repo_factory: AsyncRepositoryFactory = Depends(get_async_repository_factory)
+):
     """Archive RAG document"""
-    for doc in MOCK_RAG_DOCUMENTS:
-        if doc["id"] == doc_id:
-            doc["status"] = "archived"
-            doc["updated_at"] = "2024-01-01T00:00:00Z"
-            return {"id": doc_id, "archived": True}
-    
-    raise HTTPException(status_code=404, detail="Document not found")
+    try:
+        document = await repo_factory.get_rag_document_by_id(uuid.UUID(doc_id))
+        if not document:
+            raise HTTPException(status_code=404, detail="Document not found")
+        
+        # Update status to archived
+        document.status = DocumentStatus.ARCHIVED
+        document.updated_at = datetime.utcnow()
+        
+        await session.commit()
+        
+        return {"id": doc_id, "archived": True}
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid document ID")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to archive document: {str(e)}")
 
 @router.delete("/{doc_id}")
-async def delete_rag_document(doc_id: str):
+async def delete_rag_document(
+    doc_id: str,
+    session: AsyncSession = Depends(db_session),
+    user: UserCtx = Depends(get_current_user),
+    repo_factory: AsyncRepositoryFactory = Depends(get_async_repository_factory)
+):
     """Delete RAG document"""
-    for i, doc in enumerate(MOCK_RAG_DOCUMENTS):
-        if doc["id"] == doc_id:
-            MOCK_RAG_DOCUMENTS.pop(i)
-            return {"id": doc_id, "deleted": True}
-    
-    raise HTTPException(status_code=404, detail="Document not found")
+    try:
+        document = await repo_factory.get_rag_document_by_id(uuid.UUID(doc_id))
+        if not document:
+            raise HTTPException(status_code=404, detail="Document not found")
+        
+        # Delete file from MinIO if exists
+        if document.s3_key_raw:
+            settings = get_settings()
+            try:
+                await s3_manager.delete_file(
+                    bucket=settings.S3_BUCKET_RAG,
+                    key=document.s3_key_raw
+                )
+            except Exception as e:
+                # Log error but don't fail the deletion
+                print(f"Failed to delete file from S3: {e}")
+        
+        # Delete document from database
+        await repo_factory.delete_rag_document(uuid.UUID(doc_id))
+        
+        return {"id": doc_id, "deleted": True}
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid document ID")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete document: {str(e)}")
 
 @router.post("/search")
 async def rag_search(payload: dict[str, Any]):
@@ -246,19 +353,35 @@ async def reindex_all_rag_documents():
 @router.put("/{doc_id}/scope")
 async def update_rag_document_scope(
     doc_id: str,
-    scope: str = Form(...)
+    scope: str = Form(...),
+    session: AsyncSession = Depends(db_session),
+    user: UserCtx = Depends(get_current_user),
+    repo_factory: AsyncRepositoryFactory = Depends(get_async_repository_factory)
 ):
     """Update RAG document scope (local/global)"""
     if scope not in ["local", "global"]:
         raise HTTPException(status_code=400, detail="Scope must be 'local' or 'global'")
     
-    for doc in MOCK_RAG_DOCUMENTS:
-        if doc["id"] == doc_id:
-            doc["scope"] = scope
-            doc["updated_at"] = datetime.utcnow().isoformat() + "Z"
-            return {"id": doc_id, "scope": scope, "message": f"Document scope updated to {scope}"}
-    
-    raise HTTPException(status_code=404, detail="Document not found")
+    try:
+        document = await repo_factory.get_rag_document_by_id(uuid.UUID(doc_id))
+        if not document:
+            raise HTTPException(status_code=404, detail="Document not found")
+        
+        # Update scope
+        document.scope = DocumentScope(scope)
+        document.updated_at = datetime.utcnow()
+        
+        await session.commit()
+        
+        return {
+            "id": doc_id, 
+            "scope": scope, 
+            "message": f"Document scope updated to {scope}"
+        }
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid document ID")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to update scope: {str(e)}")
 
 @router.post("/{doc_id}/vectorize")
 async def vectorize_rag_document(
