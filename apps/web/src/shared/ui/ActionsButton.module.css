@@ -1,0 +1,59 @@
+.menuButton {
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  color: var(--muted);
+  cursor: pointer;
+  padding: 6px 12px;
+  border-radius: var(--radius);
+  font-size: 16px;
+  font-weight: bold;
+  min-width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+}
+
+.menuButton:hover {
+  background: var(--primary);
+  color: white;
+  border-color: var(--primary);
+}
+
+.popoverContent {
+  padding: 8px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 150px;
+}
+
+.actionButton {
+  background: none;
+  border: none;
+  padding: 8px 16px;
+  text-align: left;
+  cursor: pointer;
+  color: var(--color-text);
+  font-size: 14px;
+  transition: background-color 0.2s;
+  width: 100%;
+}
+
+.actionButton:hover:not(:disabled) {
+  background: var(--color-bg-secondary);
+}
+
+.actionButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.dangerButton {
+  color: var(--danger) !important;
+}
+
+.dangerButton:hover:not(:disabled) {
+  background: var(--danger-bg) !important;
+}

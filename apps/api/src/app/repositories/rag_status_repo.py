@@ -1,0 +1,157 @@
+"""
+RAG Status Repository for managing document status nodes
+"""
+from __future__ import annotations
+from typing import List, Optional, Dict, Any
+from uuid import UUID
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, update, delete
+from sqlalchemy.orm import selectinload
+from datetime import datetime, timezone
+
+from app.models.rag_ingest import RAGStatus
+from app.repositories.base import AsyncRepository
+
+
+class AsyncRAGStatusRepository(AsyncRepository):
+    """Async repository for RAGStatus model operations"""
+    
+    def __init__(self, session: AsyncSession, tenant_id: Optional[UUID] = None, user_id: Optional[UUID] = None):
+        super().__init__(session, RAGStatus)
+        self.tenant_id = tenant_id
+        self.user_id = user_id
+    
+    async def get_nodes_by_doc_id(self, doc_id: UUID) -> List[RAGStatus]:
+        """Get all status nodes for a document"""
+        result = await self.session.execute(
+            select(RAGStatus).where(RAGStatus.doc_id == doc_id)
+            .order_by(RAGStatus.node_type, RAGStatus.node_key)
+        )
+        return result.scalars().all()
+    
+    async def get_node(self, doc_id: UUID, node_type: str, node_key: str) -> Optional[RAGStatus]:
+        """Get specific status node"""
+        result = await self.session.execute(
+            select(RAGStatus).where(
+                RAGStatus.doc_id == doc_id,
+                RAGStatus.node_type == node_type,
+                RAGStatus.node_key == node_key
+            )
+        )
+        return result.scalar_one_or_none()
+    
+    async def upsert_node(
+        self, 
+        doc_id: UUID, 
+        node_type: str, 
+        node_key: str, 
+        status: str,
+        model_version: Optional[str] = None,
+        modality: Optional[str] = None,
+        error_short: Optional[str] = None,
+        metrics_json: Optional[Dict[str, Any]] = None,
+        started_at: Optional[datetime] = None,
+        finished_at: Optional[datetime] = None
+    ) -> RAGStatus:
+        """Create or update status node"""
+        existing = await self.get_node(doc_id, node_type, node_key)
+        
+        if existing:
+            # Update existing node
+            existing.status = status
+            existing.model_version = model_version
+            existing.modality = modality
+            existing.error_short = error_short
+            existing.metrics_json = metrics_json
+            if started_at:
+                existing.started_at = started_at
+            if finished_at:
+                existing.finished_at = finished_at
+            existing.updated_at = datetime.now(timezone.utc)
+            await self.session.flush()
+            return existing
+        else:
+            # Create new node
+            new_node = RAGStatus(
+                doc_id=doc_id,
+                node_type=node_type,
+                node_key=node_key,
+                status=status,
+                model_version=model_version,
+                modality=modality,
+                error_short=error_short,
+                metrics_json=metrics_json,
+                started_at=started_at,
+                finished_at=finished_at
+            )
+            self.session.add(new_node)
+            await self.session.flush()
+            return new_node
+    
+    async def delete_nodes_by_doc_id(self, doc_id: UUID) -> int:
+        """Delete all status nodes for a document"""
+        result = await self.session.execute(
+            delete(RAGStatus).where(RAGStatus.doc_id == doc_id)
+        )
+        return result.rowcount
+    
+    async def get_pipeline_nodes(self, doc_id: UUID) -> List[RAGStatus]:
+        """Get pipeline nodes (upload, extract, chunk, index)"""
+        result = await self.session.execute(
+            select(RAGStatus).where(
+                RAGStatus.doc_id == doc_id,
+                RAGStatus.node_type == 'pipeline'
+            ).order_by(RAGStatus.node_key)
+        )
+        return result.scalars().all()
+    
+    async def get_embedding_nodes(self, doc_id: UUID) -> List[RAGStatus]:
+        """Get embedding nodes (by model)"""
+        result = await self.session.execute(
+            select(RAGStatus).where(
+                RAGStatus.doc_id == doc_id,
+                RAGStatus.node_type == 'embedding'
+            ).order_by(RAGStatus.node_key)
+        )
+        return result.scalars().all()
+
+    async def get_index_nodes(self, doc_id: UUID) -> List[RAGStatus]:
+        """Get index nodes (by model)"""
+        result = await self.session.execute(
+            select(RAGStatus).where(
+                RAGStatus.doc_id == doc_id,
+                RAGStatus.node_type == 'index'
+            ).order_by(RAGStatus.node_key)
+        )
+        return result.scalars().all()
+    
+    async def get_nodes_by_status(self, status: str) -> List[RAGStatus]:
+        """Get all nodes with specific status"""
+        result = await self.session.execute(
+            select(RAGStatus).where(RAGStatus.status == status)
+        )
+        return result.scalars().all()
+    
+    async def update_node_status(
+        self, 
+        doc_id: UUID, 
+        node_type: str, 
+        node_key: str, 
+        status: str,
+        error_short: Optional[str] = None,
+        metrics_json: Optional[Dict[str, Any]] = None
+    ) -> bool:
+        """Update node status and related fields"""
+        result = await self.session.execute(
+            update(RAGStatus).where(
+                RAGStatus.doc_id == doc_id,
+                RAGStatus.node_type == node_type,
+                RAGStatus.node_key == node_key
+            ).values(
+                status=status,
+                error_short=error_short,
+                metrics_json=metrics_json,
+                updated_at=datetime.now(timezone.utc)
+            )
+        )
+        return result.rowcount > 0

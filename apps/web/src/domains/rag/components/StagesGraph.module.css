@@ -1,0 +1,14 @@
+.graph {
+  width: 100%;
+  height: 100%;
+  padding: 8px;
+  overflow: auto;
+}
+
+.grid {
+  display: grid;
+  align-items: stretch;
+  gap: 4px;
+  min-width: max-content;
+  min-height: 100%;
+}

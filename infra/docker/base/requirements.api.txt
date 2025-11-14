@@ -1,0 +1,32 @@
+# =============================================================================
+# ML Portal API Base Requirements (Heavy Dependencies)
+# =============================================================================
+
+# Database Drivers
+psycopg[binary]==3.2.1
+asyncpg==0.30.0
+
+# Cloud Storage (AWS S3 Compatible)
+boto3>=1.34.0
+minio==7.2.7
+
+# Vector Database
+qdrant-client==1.9.1
+
+# OpenAI Client
+openai==1.12.0
+
+# HTTP Client
+httpx==0.25.2
+
+# Authentication and Security
+PyJWT==2.9.0
+argon2-cffi==23.1.0
+bcrypt==4.1.2
+
+# File Processing
+python-magic>=0.4.27
+
+# Logging and Observability
+structlog>=23.1.0
+prometheus-client==0.20.0

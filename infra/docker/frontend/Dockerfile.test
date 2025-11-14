@@ -1,0 +1,22 @@
+FROM node:18-alpine
+
+WORKDIR /app
+
+# Копируем package.json и устанавливаем зависимости
+COPY apps/web/package*.json ./
+RUN npm install
+
+# Копируем конфигурационные файлы
+COPY apps/web/tsconfig*.json ./
+COPY apps/web/vite.config.* ./
+COPY apps/web/vitest.config.ts ./
+
+# Создаем директории для исходного кода (будут перезаписаны volume)
+RUN mkdir -p src public
+
+# Устанавливаем переменные окружения для тестов
+ENV NODE_ENV=test
+ENV VITE_API_BASE=http://backend-test:8000/api
+
+# Команда по умолчанию для запуска тестов
+CMD ["npm", "test", "--", "--run", "--reporter=verbose"]

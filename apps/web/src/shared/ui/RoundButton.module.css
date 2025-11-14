@@ -1,0 +1,142 @@
+/* RoundButton.module.css */
+.roundButton {
+  border-radius: 50%;
+  font-weight: bold;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  outline: none;
+}
+
+.roundButton:hover {
+  /* Removed scale transform on hover */
+  opacity: 0.9;
+}
+
+/* Sizes */
+.small {
+  width: 12px;
+  height: 12px;
+  font-size: 0.75rem;
+}
+
+.medium {
+  width: 36px;
+  height: 36px;
+  font-size: 1.5rem;
+}
+
+.large {
+  width: 24px;
+  height: 24px;
+  font-size: 1.125rem;
+}
+
+/* Colors */
+.green {
+  background-color: #10b981;
+  color: white;
+}
+
+.green:hover {
+  background-color: #059669;
+}
+
+.blue {
+  background-color: #3b82f6;
+  color: white;
+}
+
+.blue:hover {
+  background-color: #2563eb;
+}
+
+.red {
+  background-color: #ef4444;
+  color: white;
+}
+
+.red:hover {
+  background-color: #dc2626;
+}
+
+.yellow {
+  background-color: #f59e0b;
+  color: white;
+}
+
+.yellow:hover {
+  background-color: #d97706;
+}
+
+.gray {
+  background-color: #e5e7eb;
+  border: 2px solid #9ca3af;
+  color: #374151;
+}
+
+.gray:hover {
+  background-color: #d1d5db;
+}
+
+/* Animation for blue buttons */
+.spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid white;
+  border-top: 2px solid transparent;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+/* Actions Dropdown Styles - matching project theme */
+.popoverContent {
+  padding: 8px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 220px;
+  background: var(--panel);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.actionButton {
+  background: none;
+  border: none;
+  padding: 8px 16px;
+  text-align: left;
+  cursor: pointer;
+  color: var(--color-text);
+  font-size: 14px;
+  transition: background-color 0.2s;
+  width: 100%;
+}
+
+.actionButton:hover:not(:disabled) {
+  background: var(--color-bg-secondary);
+}
+
+.actionButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.disabledText {
+  text-decoration: line-through;
+}

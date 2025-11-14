@@ -1,0 +1,346 @@
+"""
+RAG Jobs API - управление задачами (cancel/kill/reset/restart)
+"""
+from __future__ import annotations
+from typing import Optional
+from fastapi import APIRouter, HTTPException, Depends, Body
+from starlette.requests import Request
+from sqlalchemy.ext.asyncio import AsyncSession
+from pydantic import BaseModel
+from uuid import UUID
+
+from app.api.deps import db_session, get_current_user
+from app.core.security import UserCtx
+from app.repositories.factory import get_async_repository_factory, AsyncRepositoryFactory
+from app.services.job_manager import JobManager
+from app.celery_app import app as celery_app
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
+
+router = APIRouter(tags=["rag-jobs"])
+
+
+class ResetRequest(BaseModel):
+    """Request for reset operation"""
+    step: str  # extract|normalize|split|embed|commit
+    reason: Optional[str] = None
+
+
+class KillRequest(BaseModel):
+    """Request for kill operation"""
+    task_id: str
+    reason: Optional[str] = None
+
+
+@router.post("/{doc_id}/cancel", status_code=202)
+async def cancel_document(
+    doc_id: str,
+    session: AsyncSession = Depends(db_session),
+    user: UserCtx = Depends(get_current_user),
+    repo_factory: AsyncRepositoryFactory = Depends(get_async_repository_factory)
+):
+    """
+    Отменить все активные задачи документа.
+    
+    Статус остается 'processing', задачи переходят в 'canceled'.
+    """
+    try:
+        doc_uuid = UUID(doc_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid document ID format")
+    
+    # Проверить существование документа
+    document = await repo_factory.get_rag_document_by_id(doc_uuid)
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    # Инициализировать JobManager
+    job_manager = JobManager(session, repo_factory, celery_app)
+    
+    # Отменить задачи
+    canceled_count = await job_manager.cancel_document_jobs(
+        document_id=doc_uuid,
+        reason="Canceled by user",
+        actor=str(user.user_id)
+    )
+    
+    await session.commit()
+    
+    return {
+        "document_id": doc_id,
+        "action": "cancel",
+        "canceled_jobs": canceled_count,
+        "message": f"Canceled {canceled_count} jobs"
+    }
+
+
+@router.post("/jobs/kill", status_code=202)
+async def kill_task(
+    request: KillRequest,
+    req: Request,
+    session: AsyncSession = Depends(db_session),
+    user: UserCtx = Depends(get_current_user),
+    repo_factory: AsyncRepositoryFactory = Depends(get_async_repository_factory)
+):
+    """
+    Убить задачу (revoke с terminate=True).
+    
+    Эскалация SIGTERM → SIGKILL по таймауту.
+    """
+    from app.api.deps_idempotency import idempotency_guard
+    
+    await idempotency_guard(
+        request=req,
+        scope=f"rag:jobs:kill:{request.task_id}"
+    )
+    
+    job_manager = JobManager(session, repo_factory, celery_app)
+    
+    success = await job_manager.kill_task(
+        task_id=request.task_id,
+        reason=request.reason or "Killed by user",
+        timeout=5
+    )
+    
+    if not success:
+        raise HTTPException(status_code=404, detail="Task not found or already finished")
+    
+    await session.commit()
+    
+    return {
+        "task_id": request.task_id,
+        "action": "kill",
+        "status": "killed"
+    }
+
+
+@router.get("/jobs")
+async def get_jobs(
+    document_id: Optional[str] = None,
+    state: Optional[str] = None,
+    limit: int = 100,
+    session: AsyncSession = Depends(db_session),
+    user: UserCtx = Depends(get_current_user),
+    repo_factory: AsyncRepositoryFactory = Depends(get_async_repository_factory)
+):
+    """
+    Получить список задач из таблицы jobs (или Celery backend).
+    
+    Args:
+        document_id: Фильтр по document_id
+        state: Фильтр по состоянию (pending|running|completed|failed|killed|canceled)
+        limit: Лимит результатов
+    """
+    from app.models.state_engine import Job
+    from sqlalchemy import select
+    
+    query = select(Job)
+    
+    # Фильтр по tenant_id (RLS)
+    query = query.where(Job.tenant_id == repo_factory.tenant_id)
+    
+    if document_id:
+        try:
+            doc_uuid = UUID(document_id)
+            query = query.where(Job.document_id == doc_uuid)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid document_id format")
+    
+    if state:
+        query = query.where(Job.state == state)
+    
+    query = query.order_by(Job.updated_at.desc()).limit(limit)
+    
+    result = await session.execute(query)
+    jobs = result.scalars().all()
+    
+    # Преобразовать в dict для ответа
+    jobs_list = []
+    for job in jobs:
+        from celery.result import AsyncResult
+        celery_result = None
+        
+        if job.celery_task_id:
+            celery_result = AsyncResult(job.celery_task_id, app=celery_app)
+        
+        jobs_list.append({
+            "id": str(job.id),
+            "document_id": str(job.document_id),
+            "step": job.step,
+            "celery_task_id": job.celery_task_id,
+            "state": job.state,
+            "retries": job.retries,
+            "started_at": job.started_at.isoformat() if job.started_at else None,
+            "finished_at": job.finished_at.isoformat() if job.finished_at else None,
+            "error_json": job.error_json,
+            "updated_at": job.updated_at.isoformat(),
+            "celery_state": celery_result.state if celery_result else None,
+        })
+    
+    return {
+        "jobs": jobs_list,
+        "total": len(jobs_list)
+    }
+
+
+@router.post("/{doc_id}/reset", status_code=202)
+async def reset_document(
+    doc_id: str,
+    request: ResetRequest,
+    session: AsyncSession = Depends(db_session),
+    user: UserCtx = Depends(get_current_user),
+    repo_factory: AsyncRepositoryFactory = Depends(get_async_repository_factory)
+):
+    """
+    Откатить документ к указанному шагу.
+    
+    Очищает артефакты ниже шага и возвращает статус.
+    """
+    try:
+        doc_uuid = UUID(doc_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid document ID format")
+    
+    # Проверить существование документа
+    document = await repo_factory.get_rag_document_by_id(doc_uuid)
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    # Валидация шага
+    valid_steps = ['extract', 'normalize', 'split', 'embed', 'commit']
+    if request.step not in valid_steps:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid step. Must be one of: {valid_steps}"
+        )
+    
+    # Инициализировать JobManager
+    job_manager = JobManager(session, repo_factory, celery_app)
+    
+    # Выполнить reset
+    success = await job_manager.reset_document(
+        document_id=doc_uuid,
+        step=request.step,
+        reason=request.reason or f"Reset to step {request.step}",
+        actor=str(user.user_id)
+    )
+    
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to reset document")
+    
+    await session.commit()
+    
+    return {
+        "document_id": doc_id,
+        "action": "reset",
+        "step": request.step,
+        "message": f"Document reset to step {request.step}"
+    }
+
+
+@router.post("/{doc_id}/restart", status_code=202)
+async def restart_document(
+    doc_id: str,
+    request: ResetRequest,
+    session: AsyncSession = Depends(db_session),
+    user: UserCtx = Depends(get_current_user),
+    repo_factory: AsyncRepositoryFactory = Depends(get_async_repository_factory)
+):
+    """
+    Перезапустить пайплайн с указанного шага.
+    
+    Эквивалент reset(step) + запуск пайплайна.
+    """
+    try:
+        doc_uuid = UUID(doc_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid document ID format")
+    
+    # Проверить существование документа
+    document = await repo_factory.get_rag_document_by_id(doc_uuid)
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    # Валидация шага
+    valid_steps = ['extract', 'normalize', 'split', 'embed', 'commit']
+    if request.step not in valid_steps:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid step. Must be one of: {valid_steps}"
+        )
+    
+    # Инициализировать JobManager
+    job_manager = JobManager(session, repo_factory, celery_app)
+    
+    # Выполнить restart
+    success = await job_manager.restart_document(
+        document_id=doc_uuid,
+        step=request.step,
+        reason=request.reason or f"Restart from step {request.step}",
+        actor=str(user.user_id)
+    )
+    
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to restart document")
+    
+    await session.commit()
+    
+    return {
+        "document_id": doc_id,
+        "action": "restart",
+        "step": request.step,
+        "message": f"Document restarted from step {request.step}"
+    }
+
+
+@router.get("/tasks/running")
+async def get_running_tasks(
+    session: AsyncSession = Depends(db_session),
+    user: UserCtx = Depends(get_current_user),
+    repo_factory: AsyncRepositoryFactory = Depends(get_async_repository_factory)
+):
+    import asyncio
+
+    async def fetch():
+        def _inspect():
+            i = celery_app.control.inspect()
+            return {
+                "active": i.active() or {},
+                "reserved": i.reserved() or {},
+                "scheduled": i.scheduled() or {},
+            }
+
+        return await asyncio.to_thread(_inspect)
+
+    data = await fetch()
+
+    def flatten(kind: str):
+        items = []
+        per_worker = data.get(kind) or {}
+        for worker, tasks in (per_worker.items() if isinstance(per_worker, dict) else []):
+            for t in tasks or []:
+                items.append({
+                    "worker": worker,
+                    "id": t.get("id"),
+                    "name": t.get("name"),
+                    "args": t.get("args"),
+                    "kwargs": t.get("kwargs"),
+                    "time_start": t.get("time_start") or t.get("time_startup"),
+                    "kind": kind,
+                })
+        return items
+
+    active = flatten("active")
+    reserved = flatten("reserved")
+    scheduled = flatten("scheduled")
+
+    return {
+        "workers": data,
+        "summary": active + reserved + scheduled,
+        "counts": {
+            "active": len(active),
+            "reserved": len(reserved),
+            "scheduled": len(scheduled),
+        },
+    }

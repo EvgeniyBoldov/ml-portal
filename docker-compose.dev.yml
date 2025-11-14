@@ -1,0 +1,319 @@
+services:
+  # =============================================================================
+  # DATABASE SERVICES
+  # =============================================================================
+  
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: ml_portal
+      POSTGRES_USER: ml_portal
+      POSTGRES_PASSWORD: ml_portal_password
+    # volumes:
+    #   - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ml_portal"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # =============================================================================
+  # VECTOR DATABASE
+  # =============================================================================
+  
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    # volumes:
+    #   - qdrant_data:/qdrant/storage
+    environment:
+      QDRANT__SERVICE__HTTP_PORT: 6333
+
+  # =============================================================================
+  # OBJECT STORAGE
+  # =============================================================================
+  
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin123
+      MINIO_DOMAIN: files.localhost
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    # volumes:
+    #   - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # =============================================================================
+  # MESSAGE QUEUE
+  # =============================================================================
+  
+#  rabbitmq:
+#    image: rabbitmq:3-management-alpine
+#    ports:
+#      - "5672:5672"
+#      - "15672:15672"
+#    environment:
+#      RABBITMQ_DEFAULT_USER: admin
+#      RABBITMQ_DEFAULT_PASS: admin123
+#    volumes:
+#      - rabbitmq_data:/var/lib/rabbitmq
+#    healthcheck:
+#      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+#      interval: 30s
+#      timeout: 10s
+#      retries: 3
+#      start_period: 30s
+
+  # =============================================================================
+  # BACKEND API SERVICE
+  # =============================================================================
+  
+  api:
+    build:
+      context: .
+      dockerfile: infra/docker/api/Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./apps/api/src/app:/app/app
+      - ./models_llm:/app/models_llm
+    environment:
+      - PYTHONPATH=/app
+      - DATABASE_URL=postgresql://ml_portal:ml_portal_password@postgres:5432/ml_portal
+      - REDIS_URL=redis://redis:6379
+      - S3_ENDPOINT=http://minio:9000
+      - S3_ACCESS_KEY=minioadmin
+      - S3_SECRET_KEY=minioadmin123
+      - S3_BUCKET_RAG=rag
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin123
+      - QDRANT_URL=http://qdrant:6333
+      - QDRANT_API_KEY=
+      - RABBITMQ_URL=amqp://admin:admin123@rabbitmq:5672
+      - JWT_SECRET=dev-jwt-secret-minimum-256-bits-for-development-use-only
+      - ENVIRONMENT=development
+      - DEBUG=true
+      - IDEMPOTENCY_ENABLED=false
+      # LLM Configuration (Universal OpenAI-compatible)
+      - LLM_PROVIDER=${LLM_PROVIDER:-groq}
+      - LLM_BASE_URL=${LLM_BASE_URL:-https://api.groq.com/openai/v1}
+      - LLM_API_KEY=${LLM_API_KEY}
+      - LLM_DEFAULT_MODEL=${LLM_DEFAULT_MODEL:-llama-3.1-8b-instant}
+      - LLM_TIMEOUT=${LLM_TIMEOUT:-30}
+      - EMB_BASE_URL=http://emb:8001
+      - EMB_MODELS=all-MiniLM-L6-v2,multilingual-e5-small,bge-large-en
+      - MODELS_ROOT=/app/models_llm
+      - EMB_OFFLINE=true
+      - DEFAULT_ADMIN_LOGIN=admin
+      - DEFAULT_ADMIN_PASSWORD=admin123
+      - DEFAULT_ADMIN_EMAIL=admin@example.com
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: >
+      sh -c "
+        echo 'Running DB migrations...' &&
+        alembic upgrade heads &&
+        echo 'Creating default admin user...' &&
+        python infra/scripts/create_default_admin.py &&
+        echo 'Starting uvicorn server...' &&
+        uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+      "
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # =============================================================================
+  # FRONTEND DEVELOPMENT SERVICE  
+  # =============================================================================
+  
+  frontend:
+    image: node:20-alpine
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./apps/web:/app
+      - frontend_node_modules:/app/node_modules
+    working_dir: /app
+    environment:
+      - NODE_ENV=development
+      - VITE_API_BASE=http://localhost/api/v1
+      - VITE_API_PROXY_TARGET=http://api:8000
+      - VITE_PORT=5173
+    command: >
+      sh -c "
+        echo 'Checking dependencies...' &&
+        if [ ! -d 'node_modules' ] || [ ! -f 'node_modules/.package-lock.json' ] || [ ! -f 'package-lock.json' ] || [ ! -d 'node_modules/react-markdown' ]; then
+          echo 'Installing dependencies...' &&
+          npm install --legacy-peer-deps
+        else
+          echo 'Dependencies already installed, skipping...'
+        fi &&
+        echo 'Starting Vite dev server...' &&
+        npm run dev -- --host 0.0.0.0
+      "
+    depends_on:
+      - api
+
+  # =============================================================================
+  # EMBEDDING SERVICE
+  # =============================================================================
+  
+  emb:
+    build:
+      context: .
+      dockerfile: infra/docker/emb/Dockerfile
+    ports:
+      - "8001:8001"
+    environment:
+      - EMB_MODELS=all-MiniLM-L6-v2,multilingual-e5-small,bge-large-en
+      - EMB_MODEL_all-MiniLM-L6-v2_PATH=/models_llm/sentence-transformers--all-MiniLM-L6-v2
+      - EMB_MODEL_multilingual-e5-small_PATH=/models_llm/multilingual-e5-small
+      - EMB_MODEL_bge-large-en_PATH=/models_llm/bge-large-en
+      - EMB_BATCH_SIZE=128
+      - EMB_MAX_WAIT_MS=8
+      - EMB_PARALLELISM_all-MiniLM-L6-v2=2
+      - EMB_PARALLELISM_multilingual-e5-small=2
+      - EMB_PARALLELISM_bge-large-en=1
+    volumes:
+      - ./models_llm:/models_llm
+    depends_on:
+      - qdrant
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # =============================================================================
+  # CELERY WORKER
+  # =============================================================================
+  
+  worker:
+    build:
+      context: .
+      dockerfile: infra/docker/worker/Dockerfile
+    volumes:
+      - ./apps/api/src/app:/app/app
+      - ./models_llm:/models_llm
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql://ml_portal:ml_portal_password@postgres:5432/ml_portal
+      - ASYNC_DB_URL=postgresql+asyncpg://ml_portal:ml_portal_password@postgres:5432/ml_portal
+      - S3_ENDPOINT=http://minio:9000
+      - S3_ACCESS_KEY=minioadmin
+      - S3_SECRET_KEY=minioadmin123
+      - S3_SECURE=false
+      - S3_BUCKET_RAG=rag
+      - QDRANT_URL=http://qdrant:6333
+      - EMB_BASE_URL=http://emb:8001
+      - JWT_SECRET=dev-jwt-secret-minimum-256-bits-for-development-use-only
+      - ENV=local
+      - DEBUG=true
+      - LOG_LEVEL=INFO
+      # Presigned URL configuration
+      - PUBLIC_FILES_HOST=files.localhost
+      - MINIO_ENDPOINT_INTERNAL=minio:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin123
+      - MINIO_SECURE=false
+      - PRESIGNED_TTL_SECONDS=60
+      - MINIO_BUCKET_DEFAULT=rag
+      # LLM Configuration (Universal OpenAI-compatible)
+      - LLM_PROVIDER=${LLM_PROVIDER:-groq}
+      - LLM_BASE_URL=${LLM_BASE_URL:-https://api.groq.com/openai/v1}
+      - LLM_API_KEY=${LLM_API_KEY}
+      - LLM_DEFAULT_MODEL=${LLM_DEFAULT_MODEL:-llama-3.1-8b-instant}
+      - LLM_TIMEOUT=${LLM_TIMEOUT:-30}
+      # Python path configuration
+      - PYTHONPATH=/app
+    working_dir: /app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    command: ["celery", "-A", "app.celery_app", "worker", "--loglevel=info", "--concurrency=4"]
+
+  flower:
+    image: mher/flower:2.0.1
+    ports:
+      - "5555:5555"
+    environment:
+      FLOWER_BASIC_AUTH: admin:admin123
+      FLOWER_PORT: 5555
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+    depends_on:
+      redis:
+        condition: service_healthy
+      worker:
+        condition: service_started
+
+  # =============================================================================
+  # NGINX REVERSE PROXY + FILES SERVER
+  # =============================================================================
+  
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+      - "8080:8080"
+      - "8443:443"
+    volumes:
+      - ./infra/nginx/dev.conf:/etc/nginx/nginx.conf
+      - ./infra/nginx/files.conf:/etc/nginx/conf.d/files.conf
+      - ./infra/ssl:/etc/ssl/certs:ro
+    depends_on:
+      - api
+      - frontend
+      - minio
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://api:8000/api/v1/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  # postgres_data:
+  redis_data:
+  # minio_data:
+  # qdrant_data:
+  rabbitmq_data:
+  frontend_node_modules:

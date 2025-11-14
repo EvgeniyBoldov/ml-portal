@@ -1,0 +1,25 @@
+.shell {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  gap: 12px;
+  align-items: stretch;
+  /* КРИТИЧНО: фиксированная высота для скролла */
+  height: calc(100vh - 120px); /* Вычитаем header + padding */
+  min-height: 400px;
+  overflow: hidden;
+}
+.main {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+
+@media (max-width: 980px) {
+  .shell {
+    grid-template-columns: 1fr;
+    height: calc(100vh - 24px);
+    max-height: calc(100vh - 24px);
+  }
+}
