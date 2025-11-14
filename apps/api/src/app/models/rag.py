@@ -46,7 +46,7 @@ class RAGDocument(Base):
     status: Mapped[str] = mapped_column(
         ENUM(
             'uploaded', 'uploading', 'processing', 'processed', 'ready', 'failed', 'archived', 'queued',
-            name="documentstatus", create_type=True
+            name="documentstatus", create_type=False
         ),
         nullable=False,
         server_default="uploaded",
