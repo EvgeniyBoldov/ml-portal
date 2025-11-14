@@ -52,7 +52,7 @@ class RAGDocument(Base):
         server_default="uploaded",
     )
     scope: Mapped[str] = mapped_column(
-        ENUM('local', 'global', name="documentscope", create_type=False),
+        String(20),
         nullable=False,
         server_default="local",
     )  # local or global

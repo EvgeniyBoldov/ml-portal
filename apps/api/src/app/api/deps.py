@@ -72,13 +72,16 @@ def get_current_user_optional(request: Request) -> UserCtx | None:
         token = request.cookies.get("access_token")
     
     if not token:
-        # For SSE or dev mode, return mock user (anonymous SSE)
+        # Fix #8: In production, return None instead of fake admin
+        # For dev/local only, return limited mock user (reader, not admin)
+        if settings.ENV == "production":
+            return None
         return UserCtx(
             id="dev-user",
             email="dev@localhost",
-            role="admin",
-            tenant_ids=["*"],
-            scopes=["*"]
+            role="reader",  # Changed from admin to reader for safety
+            tenant_ids=["fb983a10-c5f8-4840-a9d3-856eea0dc729"],  # Use default dev tenant
+            scopes=["read"]  # Limited scopes
         )
     
     try:

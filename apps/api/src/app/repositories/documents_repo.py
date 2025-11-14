@@ -131,12 +131,7 @@ class AsyncRAGChunksRepository(AsyncTenantRepository[RAGChunk]):
     async def get_by_document_id(self, document_id: uuid.UUID) -> List[RAGChunk]:
         """Get chunks by document ID"""
         result = await self.session.execute(
-            select(RAGChunk).where(
-                and_(
-                    RAGChunk.document_id == document_id,
-                    RAGChunk.tenant_id == self.tenant_id
-                )
-            )
+            select(RAGChunk).where(RAGChunk.document_id == document_id)
         )
         return result.scalars().all()
     
@@ -146,8 +141,7 @@ class AsyncRAGChunksRepository(AsyncTenantRepository[RAGChunk]):
             select(RAGChunk).where(
                 and_(
                     RAGChunk.document_id == document_id,
-                    RAGChunk.chunk_index == chunk_index,
-                    RAGChunk.tenant_id == self.tenant_id
+                    RAGChunk.chunk_idx == chunk_index
                 )
             )
         )

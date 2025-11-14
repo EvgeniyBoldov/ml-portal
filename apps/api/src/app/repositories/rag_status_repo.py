@@ -10,34 +10,42 @@ from sqlalchemy.orm import selectinload
 from datetime import datetime, timezone
 
 from app.models.rag_ingest import RAGStatus
+from app.models.rag import RAGDocument
 from app.repositories.base import AsyncRepository
 
 
 class AsyncRAGStatusRepository(AsyncRepository):
-    """Async repository for RAGStatus model operations"""
+    """Async repository for RAGStatus model operations with tenant isolation"""
     
     def __init__(self, session: AsyncSession, tenant_id: Optional[UUID] = None, user_id: Optional[UUID] = None):
         super().__init__(session, RAGStatus)
         self.tenant_id = tenant_id
         self.user_id = user_id
     
+    def _build_tenant_filter(self, stmt):
+        """Add tenant isolation via join to ragdocuments"""
+        if self.tenant_id:
+            stmt = stmt.join(RAGDocument, RAGStatus.doc_id == RAGDocument.id)
+            stmt = stmt.where(RAGDocument.tenant_id == self.tenant_id)
+        return stmt
+    
     async def get_nodes_by_doc_id(self, doc_id: UUID) -> List[RAGStatus]:
-        """Get all status nodes for a document"""
-        result = await self.session.execute(
-            select(RAGStatus).where(RAGStatus.doc_id == doc_id)
-            .order_by(RAGStatus.node_type, RAGStatus.node_key)
-        )
+        """Get all status nodes for a document with tenant isolation"""
+        stmt = select(RAGStatus).where(RAGStatus.doc_id == doc_id)
+        stmt = self._build_tenant_filter(stmt)
+        stmt = stmt.order_by(RAGStatus.node_type, RAGStatus.node_key)
+        result = await self.session.execute(stmt)
         return result.scalars().all()
     
     async def get_node(self, doc_id: UUID, node_type: str, node_key: str) -> Optional[RAGStatus]:
-        """Get specific status node"""
-        result = await self.session.execute(
-            select(RAGStatus).where(
-                RAGStatus.doc_id == doc_id,
-                RAGStatus.node_type == node_type,
-                RAGStatus.node_key == node_key
-            )
+        """Get specific status node with tenant isolation"""
+        stmt = select(RAGStatus).where(
+            RAGStatus.doc_id == doc_id,
+            RAGStatus.node_type == node_type,
+            RAGStatus.node_key == node_key
         )
+        stmt = self._build_tenant_filter(stmt)
+        result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
     
     async def upsert_node(
@@ -96,33 +104,36 @@ class AsyncRAGStatusRepository(AsyncRepository):
         return result.rowcount
     
     async def get_pipeline_nodes(self, doc_id: UUID) -> List[RAGStatus]:
-        """Get pipeline nodes (upload, extract, chunk, index)"""
-        result = await self.session.execute(
-            select(RAGStatus).where(
-                RAGStatus.doc_id == doc_id,
-                RAGStatus.node_type == 'pipeline'
-            ).order_by(RAGStatus.node_key)
+        """Get pipeline nodes (upload, extract, chunk, index) with tenant isolation"""
+        stmt = select(RAGStatus).where(
+            RAGStatus.doc_id == doc_id,
+            RAGStatus.node_type == 'pipeline'
         )
+        stmt = self._build_tenant_filter(stmt)
+        stmt = stmt.order_by(RAGStatus.node_key)
+        result = await self.session.execute(stmt)
         return result.scalars().all()
     
     async def get_embedding_nodes(self, doc_id: UUID) -> List[RAGStatus]:
-        """Get embedding nodes (by model)"""
-        result = await self.session.execute(
-            select(RAGStatus).where(
-                RAGStatus.doc_id == doc_id,
-                RAGStatus.node_type == 'embedding'
-            ).order_by(RAGStatus.node_key)
+        """Get embedding nodes (by model) with tenant isolation"""
+        stmt = select(RAGStatus).where(
+            RAGStatus.doc_id == doc_id,
+            RAGStatus.node_type == 'embedding'
         )
+        stmt = self._build_tenant_filter(stmt)
+        stmt = stmt.order_by(RAGStatus.node_key)
+        result = await self.session.execute(stmt)
         return result.scalars().all()
 
     async def get_index_nodes(self, doc_id: UUID) -> List[RAGStatus]:
-        """Get index nodes (by model)"""
-        result = await self.session.execute(
-            select(RAGStatus).where(
-                RAGStatus.doc_id == doc_id,
-                RAGStatus.node_type == 'index'
-            ).order_by(RAGStatus.node_key)
+        """Get index nodes (by model) with tenant isolation"""
+        stmt = select(RAGStatus).where(
+            RAGStatus.doc_id == doc_id,
+            RAGStatus.node_type == 'index'
         )
+        stmt = self._build_tenant_filter(stmt)
+        stmt = stmt.order_by(RAGStatus.node_key)
+        result = await self.session.execute(stmt)
         return result.scalars().all()
     
     async def get_nodes_by_status(self, status: str) -> List[RAGStatus]:

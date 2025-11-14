@@ -73,10 +73,11 @@ async def stream_rag_status(
     
     # Определяем параметры подписки
     is_admin = user.role == 'admin'
-    tenant_id = None if is_admin else user.tenant_id
+    # Fix: use tenant_ids[0] instead of non-existent tenant_id attribute
+    tenant_id = None if is_admin else (user.tenant_ids[0] if user.tenant_ids else None)
     
     async def event_generator() -> AsyncGenerator[str, None]:
-        """Генератор SSE событий"""
+        """Генератор SSE событий с heartbeat"""
         subscriber = RAGEventSubscriber(
             redis_client=redis,
             tenant_id=tenant_id,
@@ -85,18 +86,24 @@ async def stream_rag_status(
         
         try:
             await subscriber.subscribe()
-            
-            # Отправляем heartbeat каждые 30 секунд
-            heartbeat_task = asyncio.create_task(_send_heartbeat())
-            
             logger.info(f"User {user.id} ({user.role}) subscribed to RAG status stream (tenant={tenant_id})")
             
+            # Merge event stream with heartbeat
+            last_heartbeat = asyncio.get_event_loop().time()
+            heartbeat_interval = 30  # seconds
+            
             async for event in subscriber.listen():
-                # Форматируем в SSE
+                # Send event
                 yield format_sse(
                     data=event,
                     event=event.get('event_type', 'status_update')
                 )
+                
+                # Check if we need to send heartbeat
+                current_time = asyncio.get_event_loop().time()
+                if current_time - last_heartbeat >= heartbeat_interval:
+                    yield ": ping\n\n"
+                    last_heartbeat = current_time
             
         except asyncio.CancelledError:
             logger.info(f"User {user.id} disconnected from RAG status stream")
@@ -108,8 +115,6 @@ async def stream_rag_status(
             )
         finally:
             await subscriber.unsubscribe()
-            if 'heartbeat_task' in locals():
-                heartbeat_task.cancel()
     
     return StreamingResponse(
         event_generator(),
@@ -120,12 +125,6 @@ async def stream_rag_status(
             "X-Accel-Buffering": "no",  # Для nginx
         }
     )
-
-
-async def _send_heartbeat():
-    """Периодический таймер для поддержки соединения (без генерации событий)."""
-    while True:
-        await asyncio.sleep(30)
 
 
 @router.get("/{document_id}/status")
@@ -169,7 +168,8 @@ async def get_document_status(
         raise HTTPException(status_code=404, detail="Document not found")
     
     # Проверка tenant_id для editor
-    if user.role == 'editor' and document.tenant_id != user.tenant_id:
+    user_tenant_id = user.tenant_ids[0] if user.tenant_ids else None
+    if user.role == 'editor' and str(document.tenant_id) != user_tenant_id:
         raise HTTPException(status_code=403, detail="Access denied")
     
     # Получаем статус
@@ -218,7 +218,8 @@ async def start_ingest(
         raise HTTPException(status_code=404, detail="Document not found")
     
     # Проверка tenant_id для editor
-    if user.role == 'editor' and document.tenant_id != user.tenant_id:
+    user_tenant_id = user.tenant_ids[0] if user.tenant_ids else None
+    if user.role == 'editor' and str(document.tenant_id) != user_tenant_id:
         raise HTTPException(status_code=403, detail="Access denied")
     
     # Запускаем инжест
@@ -320,7 +321,8 @@ async def stop_ingest(
         raise HTTPException(status_code=404, detail="Document not found")
     
     # Проверка tenant_id для editor
-    if user.role == 'editor' and document.tenant_id != user.tenant_id:
+    user_tenant_id = user.tenant_ids[0] if user.tenant_ids else None
+    if user.role == 'editor' and str(document.tenant_id) != user_tenant_id:
         raise HTTPException(status_code=403, detail="Access denied")
     
     # Останавливаем этап
@@ -387,7 +389,8 @@ async def retry_ingest(
         raise HTTPException(status_code=404, detail="Document not found")
     
     # Проверка tenant_id для editor
-    if user.role == 'editor' and document.tenant_id != user.tenant_id:
+    user_tenant_id = user.tenant_ids[0] if user.tenant_ids else None
+    if user.role == 'editor' and str(document.tenant_id) != user_tenant_id:
         raise HTTPException(status_code=403, detail="Access denied")
     
     # Перезапускаем этап (толерантно к текущему статусу)

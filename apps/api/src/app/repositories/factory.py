@@ -124,7 +124,6 @@ class AsyncRepositoryFactory:
         """Get RAG documents with filtering"""
         rag_repo = self.get_rag_documents_repository()
         return await rag_repo.get_user_documents(
-            self.tenant_id,
             user_id,
             status,
             search,
@@ -137,7 +136,6 @@ class AsyncRepositoryFactory:
         """Count RAG documents with filtering"""
         rag_repo = self.get_rag_documents_repository()
         return await rag_repo.count_user_documents(
-            self.tenant_id,
             user_id,
             status,
             search

@@ -207,7 +207,7 @@ class AsyncEmbStatusRepository(AsyncRepository):
                 EmbStatus.model_alias == model_alias
             ).values(done_count=done_count)
         )
-        await self.session.commit()
+        # Fix #9: Remove commit from repository - let UoW handle it
         return result.rowcount > 0
     
     async def is_source_ready(self, source_id: UUID) -> bool:
