@@ -79,9 +79,9 @@ def get_current_user_optional(request: Request) -> UserCtx | None:
         return UserCtx(
             id="dev-user",
             email="dev@localhost",
-            role="reader",  # Changed from admin to reader for safety
-            tenant_ids=["fb983a10-c5f8-4840-a9d3-856eea0dc729"],  # Use default dev tenant
-            scopes=["read"]  # Limited scopes
+            role="reader",
+            tenant_ids=[],
+            scopes=["read"]
         )
     
     try:
@@ -136,6 +136,54 @@ def get_current_user(request: Request) -> UserCtx:
             headers={"WWW-Authenticate": "Bearer"}
         )
     
+    return UserCtx(
+        id=payload["sub"],
+        email=payload.get("email"),
+        role=payload.get("role", "reader"),
+        tenant_ids=payload.get("tenant_ids", []),
+        scopes=payload.get("scopes", [])
+    )
+
+
+async def get_current_user_sse(request: Request) -> UserCtx:
+    """Auth dependency for SSE endpoints.
+    
+    Accepts token from:
+    1. Authorization header (Bearer token)
+    2. httpOnly cookie (access_token)
+    
+    EventSource automatically sends cookies with credentials: 'include'.
+    DO NOT use query params for tokens - they leak in logs and browser history.
+    """
+    from app.core.security import decode_jwt
+
+    token = None
+
+    # 1) Authorization header
+    auth_header = request.headers.get("Authorization")
+    if auth_header and auth_header.startswith("Bearer "):
+        token = auth_header.split(" ")[1]
+
+    # 2) httpOnly cookie (preferred for SSE)
+    if not token:
+        token = request.cookies.get("access_token")
+
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing or invalid authorization. Use httpOnly cookie or Authorization header.",
+            headers={"WWW-Authenticate": "Bearer"}
+        )
+
+    payload = decode_jwt(token)
+
+    if payload.get("type") != "access":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token type",
+            headers={"WWW-Authenticate": "Bearer"}
+        )
+
     return UserCtx(
         id=payload["sub"],
         email=payload.get("email"),

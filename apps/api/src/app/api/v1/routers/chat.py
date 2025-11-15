@@ -181,12 +181,10 @@ async def send_message_stream(
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid chat ID")
     
-    # Compute tenant UUID (fallback tenant for local dev only)
-    tenant_id = (
-        uuid.UUID(str(current_user.tenant_ids[0]))
-        if current_user.tenant_ids
-        else uuid.UUID("fb983a10-c5f8-4840-a9d3-856eea0dc729")
-    )
+    # Require tenant_id from user context (no dev fallback)
+    if not current_user.tenant_ids:
+        raise HTTPException(status_code=400, detail="Tenant ID is required")
+    tenant_id = uuid.UUID(str(current_user.tenant_ids[0]))
 
     # Use repository factory bound to the current request's DB session
     repo_factory = AsyncRepositoryFactory(session, tenant_id, current_user.id)
@@ -364,8 +362,10 @@ async def chat_stream_deprecated(
         try:
             from app.services.rag_search_service import RagSearchService
             
-            # Get tenant_id from user
-            tenant_id = current_user.tenant_ids[0] if current_user.tenant_ids else "fb983a10-c5f8-4840-a9d3-856eea0dc729"
+            # Get tenant_id from user (required)
+            if not current_user.tenant_ids:
+                raise HTTPException(status_code=400, detail="Tenant ID is required")
+            tenant_id = current_user.tenant_ids[0]
             
             # Search for relevant documents
             search_service = RagSearchService()

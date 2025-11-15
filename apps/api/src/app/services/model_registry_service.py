@@ -118,8 +118,8 @@ class ModelRegistryService:
                 await self.repo.update(model.id, {"state": "disabled"})
                 scan_result.disabled.append(model.model)
         
-        # Commit all changes
-        await self.session.commit()
+        # Flush all changes (commit handled by UoW)
+        await self.session.flush()
         logger.info(f"Scan complete: {len(scan_result.added)} added, {len(scan_result.updated)} updated, {len(scan_result.disabled)} disabled, {len(scan_result.errors)} errors")
         
         return scan_result
@@ -193,7 +193,7 @@ class ModelRegistryService:
         if not model:
             return None
         
-        await self.session.commit()
+        await self.session.flush()  # Flush state update
         
         tenant_count = await self.repo.count_tenants_using(model.model)
         return {
@@ -232,7 +232,7 @@ class ModelRegistryService:
         if not model:
             return None
         
-        await self.session.commit()
+        await self.session.flush()  # Flush model update
         
         tenant_count = await self.repo.count_tenants_using(model.model)
         return {

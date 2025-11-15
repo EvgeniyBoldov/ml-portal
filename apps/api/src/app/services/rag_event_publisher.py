@@ -15,15 +15,11 @@ logger = get_logger(__name__)
 class RAGEventPublisher:
     """
     Публикатор событий статусов RAG документов
-    
-    Использует ОДИН глобальный канал Redis для всех событий.
-    Фильтрация происходит на стороне SSE endpoint по tenant_id и role.
-    
-    Это предотвращает рост количества каналов и упрощает архитектуру.
     """
     
-    # Единый канал для всех RAG событий
-    CHANNEL_NAME = "rag:status:updates"
+    CHANNEL_LEGACY = "rag:status:updates"
+    CHANNEL_ADMIN = "rag:status:admin"
+    CHANNEL_TENANT_FMT = "rag:status:tenant:{tenant_id}"
     
     def __init__(self, redis_client: Optional[Any] = None):
         """
@@ -73,11 +69,11 @@ class RAGEventPublisher:
         }
         
         try:
-            # Публикуем в единый канал
-            await self.redis.publish(
-                self.CHANNEL_NAME,
-                json.dumps(event)
-            )
+            tenant_channel = self.CHANNEL_TENANT_FMT.format(tenant_id=str(tenant_id))
+            payload = json.dumps(event)
+            await self.redis.publish(self.CHANNEL_ADMIN, payload)
+            await self.redis.publish(tenant_channel, payload)
+            await self.redis.publish(self.CHANNEL_LEGACY, payload)
             logger.debug(f"Published status update: {doc_id} - {stage} -> {status}")
         except Exception as e:
             logger.error(f"Failed to publish status update: {e}")
@@ -108,10 +104,11 @@ class RAGEventPublisher:
         }
         
         try:
-            await self.redis.publish(
-                self.CHANNEL_NAME,
-                json.dumps(event)
-            )
+            tenant_channel = self.CHANNEL_TENANT_FMT.format(tenant_id=str(tenant_id))
+            payload = json.dumps(event)
+            await self.redis.publish(self.CHANNEL_ADMIN, payload)
+            await self.redis.publish(tenant_channel, payload)
+            await self.redis.publish(self.CHANNEL_LEGACY, payload)
             logger.debug(f"Published status initialized: {doc_id}")
         except Exception as e:
             logger.error(f"Failed to publish status initialized: {e}")
@@ -142,10 +139,11 @@ class RAGEventPublisher:
         }
         
         try:
-            await self.redis.publish(
-                self.CHANNEL_NAME,
-                json.dumps(event)
-            )
+            tenant_channel = self.CHANNEL_TENANT_FMT.format(tenant_id=str(tenant_id))
+            payload = json.dumps(event)
+            await self.redis.publish(self.CHANNEL_ADMIN, payload)
+            await self.redis.publish(tenant_channel, payload)
+            await self.redis.publish(self.CHANNEL_LEGACY, payload)
             logger.debug(f"Published ingest started: {doc_id}")
         except Exception as e:
             logger.error(f"Failed to publish ingest started: {e}")
@@ -176,10 +174,11 @@ class RAGEventPublisher:
         }
         
         try:
-            await self.redis.publish(
-                self.CHANNEL_NAME,
-                json.dumps(event)
-            )
+            tenant_channel = self.CHANNEL_TENANT_FMT.format(tenant_id=str(tenant_id))
+            payload = json.dumps(event)
+            await self.redis.publish(self.CHANNEL_ADMIN, payload)
+            await self.redis.publish(tenant_channel, payload)
+            await self.redis.publish(self.CHANNEL_LEGACY, payload)
             logger.debug(f"Published document {'archived' if archived else 'unarchived'}: {doc_id}")
         except Exception as e:
             logger.error(f"Failed to publish document archive event: {e}")
@@ -203,12 +202,18 @@ class RAGEventSubscriber:
         self.tenant_id = str(tenant_id) if tenant_id else None
         self.is_admin = is_admin
         self.pubsub = None
+        if self.is_admin:
+            self.channel = RAGEventPublisher.CHANNEL_ADMIN
+        else:
+            if not self.tenant_id:
+                raise ValueError("tenant_id is required for non-admin subscriber")
+            self.channel = RAGEventPublisher.CHANNEL_TENANT_FMT.format(tenant_id=self.tenant_id)
     
     async def subscribe(self):
         """Подписаться на канал событий"""
         self.pubsub = self.redis.pubsub()
-        await self.pubsub.subscribe(RAGEventPublisher.CHANNEL_NAME)
-        logger.info(f"Subscribed to {RAGEventPublisher.CHANNEL_NAME} (tenant={self.tenant_id}, admin={self.is_admin})")
+        await self.pubsub.subscribe(self.channel)
+        logger.info(f"Subscribed to {self.channel} (tenant={self.tenant_id}, admin={self.is_admin})")
     
     async def listen(self):
         """
@@ -226,13 +231,6 @@ class RAGEventSubscriber:
             
             try:
                 event = json.loads(message['data'])
-                
-                # Фильтрация по tenant_id
-                if not self.is_admin:
-                    # Editor видит только события своего тенанта
-                    if event.get('tenant_id') != self.tenant_id:
-                        continue
-                
                 yield event
                 
             except json.JSONDecodeError as e:
@@ -243,6 +241,6 @@ class RAGEventSubscriber:
     async def unsubscribe(self):
         """Отписаться от канала"""
         if self.pubsub:
-            await self.pubsub.unsubscribe(RAGEventPublisher.CHANNEL_NAME)
+            await self.pubsub.unsubscribe(self.channel)
             await self.pubsub.close()
-            logger.info(f"Unsubscribed from {RAGEventPublisher.CHANNEL_NAME}")
+            logger.info(f"Unsubscribed from {self.channel}")

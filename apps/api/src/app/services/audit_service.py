@@ -64,7 +64,7 @@ class AuditService:
         )
         
         self.session.add(audit_log)
-        await self.session.commit()
+        await self.session.flush()
         await self.session.refresh(audit_log)
         
         logger.info(

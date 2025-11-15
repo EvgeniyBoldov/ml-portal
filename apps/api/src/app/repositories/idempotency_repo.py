@@ -87,7 +87,7 @@ class AsyncIdempotencyRepository(AsyncTenantRepository[IdempotencyKey]):
         for key in expired_keys:
             await self.session.delete(key)
         
-        await self.session.commit()
+        await self.session.flush()
         return len(expired_keys)
     
     async def get_stats(self) -> Dict[str, Any]:

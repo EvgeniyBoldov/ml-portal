@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
 from uuid import UUID
 
-from app.api.deps import db_session, get_current_user
+from app.api.deps import db_uow, get_current_user
 from app.core.security import UserCtx
 from app.repositories.factory import get_async_repository_factory, AsyncRepositoryFactory
 from app.services.job_manager import JobManager
@@ -36,7 +36,7 @@ class KillRequest(BaseModel):
 @router.post("/{doc_id}/cancel", status_code=202)
 async def cancel_document(
     doc_id: str,
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_uow),
     user: UserCtx = Depends(get_current_user),
     repo_factory: AsyncRepositoryFactory = Depends(get_async_repository_factory)
 ):
@@ -65,7 +65,7 @@ async def cancel_document(
         actor=str(user.user_id)
     )
     
-    await session.commit()
+    # Commit handled by db_uow
     
     return {
         "document_id": doc_id,
@@ -79,7 +79,7 @@ async def cancel_document(
 async def kill_task(
     request: KillRequest,
     req: Request,
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_uow),
     user: UserCtx = Depends(get_current_user),
     repo_factory: AsyncRepositoryFactory = Depends(get_async_repository_factory)
 ):
@@ -106,7 +106,7 @@ async def kill_task(
     if not success:
         raise HTTPException(status_code=404, detail="Task not found or already finished")
     
-    await session.commit()
+    # Commit handled by db_uow
     
     return {
         "task_id": request.task_id,
@@ -120,7 +120,7 @@ async def get_jobs(
     document_id: Optional[str] = None,
     state: Optional[str] = None,
     limit: int = 100,
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_uow),
     user: UserCtx = Depends(get_current_user),
     repo_factory: AsyncRepositoryFactory = Depends(get_async_repository_factory)
 ):
@@ -188,7 +188,7 @@ async def get_jobs(
 async def reset_document(
     doc_id: str,
     request: ResetRequest,
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_uow),
     user: UserCtx = Depends(get_current_user),
     repo_factory: AsyncRepositoryFactory = Depends(get_async_repository_factory)
 ):
@@ -243,7 +243,7 @@ async def reset_document(
 async def restart_document(
     doc_id: str,
     request: ResetRequest,
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_uow),
     user: UserCtx = Depends(get_current_user),
     repo_factory: AsyncRepositoryFactory = Depends(get_async_repository_factory)
 ):
@@ -296,7 +296,7 @@ async def restart_document(
 
 @router.get("/tasks/running")
 async def get_running_tasks(
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_uow),
     user: UserCtx = Depends(get_current_user),
     repo_factory: AsyncRepositoryFactory = Depends(get_async_repository_factory)
 ):

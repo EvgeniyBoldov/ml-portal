@@ -92,7 +92,7 @@ def chunk_document(self: Task, normalize_result: Dict[str, Any], tenant_id: str,
                         new_status=StageStatus.PROCESSING,
                         celery_task_id=self.request.id
                     )
-                    await session.commit()  # Commit immediately to send status update via SSE
+                    await session.flush()  # Flush to send status update via SSE
                     
                     source_repo = AsyncSourceRepository(session, uuid.UUID(tenant_id))
                     chunk_repo = AsyncChunkRepository(session, uuid.UUID(tenant_id))
@@ -127,7 +127,7 @@ def chunk_document(self: Task, normalize_result: Dict[str, Any], tenant_id: str,
                             new_status=StageStatus.COMPLETED,
                             metrics={'status': 'already_processed', 'cached': True}
                         )
-                        await session.commit()
+                        await session.flush()  # Flush for SSE
                         return {"status": "already_processed", "source_id": source_id}
 
                     # Chunk the text
@@ -164,7 +164,7 @@ def chunk_document(self: Task, normalize_result: Dict[str, Any], tenant_id: str,
 
                 # Save chunks to database
                     await chunk_repo.bulk_upsert(chunks)
-                    await session.commit()  # Commit the chunks
+                    await session.flush()  # Flush chunks to DB
 
                 # Calculate checksum for chunks content
                     from app.storage.paths import calculate_text_checksum
@@ -182,9 +182,6 @@ def chunk_document(self: Task, normalize_result: Dict[str, Any], tenant_id: str,
                         content_type="application/jsonl"
                     )
 
-                # Update source status
-                    await source_repo.update_status(uuid.UUID(source_id), 'chunked')
-                
                 # Mark chunk stage as completed
                     await status_manager.transition_stage(
                         doc_id=uuid.UUID(source_id),
@@ -221,7 +218,7 @@ def chunk_document(self: Task, normalize_result: Dict[str, Any], tenant_id: str,
                                 last_error=None
                             )
                 
-                    await session.commit()  # Commit the status update + outbox events
+                    await session.flush()  # Flush status update + outbox events
 
                     # Store idempotency result
                     await redis_client.setex(idem_key, 86400, json.dumps({"status": "completed", "chunks_count": len(chunks)}))

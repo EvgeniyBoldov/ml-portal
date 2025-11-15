@@ -124,11 +124,11 @@ class AsyncRepositoryFactory:
         """Get RAG documents with filtering"""
         rag_repo = self.get_rag_documents_repository()
         return await rag_repo.get_user_documents(
-            user_id,
-            status,
-            search,
-            limit,
-            offset
+            user_id=user_id,
+            status=status,
+            search=search,
+            limit=limit,
+            offset=offset
         )
     
     async def count_rag_documents(self, user_id: uuid.UUID, status: Optional[str] = None, 
@@ -136,15 +136,16 @@ class AsyncRepositoryFactory:
         """Count RAG documents with filtering"""
         rag_repo = self.get_rag_documents_repository()
         return await rag_repo.count_user_documents(
-            user_id,
-            status,
-            search
+            user_id=user_id,
+            status=status,
+            search=search
         )
     
     async def get_rag_document_by_id(self, doc_id: uuid.UUID) -> Optional[Any]:
         """Get RAG document by ID with tenant isolation"""
         rag_repo = self.get_rag_documents_repository()
-        return await rag_repo.get_by_id(self.tenant_id, doc_id)
+        # AsyncTenantRepository.get_by_id expects (tenant_id, id)
+        return await rag_repo.get_by_id(tenant_id=self.tenant_id, id=doc_id)
     
     async def delete_rag_document(self, doc_id: uuid.UUID) -> bool:
         """Delete RAG document and clean up all related data"""
@@ -155,7 +156,7 @@ class AsyncRepositoryFactory:
             
             # Then delete the document itself
             rag_repo = self.get_rag_documents_repository()
-            success = await rag_repo.delete(self.tenant_id, doc_id)
+            success = await rag_repo.delete(tenant_id=self.tenant_id, id=doc_id)
             
             return success
         except Exception as e:

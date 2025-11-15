@@ -65,8 +65,8 @@ class AsyncUsersService:
                 is_default=index == 0,
             )
         
-        # Commit the transaction
-        await self.users_repo.session.commit()
+        # Flush changes (commit handled by UoW)
+        await self.users_repo.session.flush()
         
         return user
 
@@ -97,7 +97,7 @@ class AsyncUsersService:
         # Flush changes to trigger onupdate
         await self.users_repo.session.flush()
         await self.users_repo.session.refresh(user)
-        await self.users_repo.session.commit()
+        # Commit handled by UoW
         return user
 
     async def delete_user(self, user_id: str):
@@ -107,4 +107,4 @@ class AsyncUsersService:
             raise ValueError("User not found")
         
         await self.users_repo.session.delete(user)
-        await self.users_repo.session.commit()
+        await self.users_repo.session.flush()  # Flush deletion

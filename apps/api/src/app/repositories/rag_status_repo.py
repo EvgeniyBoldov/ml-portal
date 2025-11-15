@@ -97,10 +97,24 @@ class AsyncRAGStatusRepository(AsyncRepository):
             return new_node
     
     async def delete_nodes_by_doc_id(self, doc_id: UUID) -> int:
-        """Delete all status nodes for a document"""
-        result = await self.session.execute(
-            delete(RAGStatus).where(RAGStatus.doc_id == doc_id)
-        )
+        """Delete all status nodes for a document with tenant isolation"""
+        # Build delete with tenant filter via subquery
+        if self.tenant_id:
+            # Delete only if doc belongs to tenant
+            subq = select(RAGDocument.id).where(
+                RAGDocument.id == doc_id,
+                RAGDocument.tenant_id == self.tenant_id
+            )
+            result = await self.session.execute(
+                delete(RAGStatus).where(
+                    RAGStatus.doc_id == doc_id,
+                    RAGStatus.doc_id.in_(subq)
+                )
+            )
+        else:
+            result = await self.session.execute(
+                delete(RAGStatus).where(RAGStatus.doc_id == doc_id)
+            )
         return result.rowcount
     
     async def get_pipeline_nodes(self, doc_id: UUID) -> List[RAGStatus]:
@@ -137,10 +151,10 @@ class AsyncRAGStatusRepository(AsyncRepository):
         return result.scalars().all()
     
     async def get_nodes_by_status(self, status: str) -> List[RAGStatus]:
-        """Get all nodes with specific status"""
-        result = await self.session.execute(
-            select(RAGStatus).where(RAGStatus.status == status)
-        )
+        """Get all nodes with specific status and tenant isolation"""
+        stmt = select(RAGStatus).where(RAGStatus.status == status)
+        stmt = self._build_tenant_filter(stmt)
+        result = await self.session.execute(stmt)
         return result.scalars().all()
     
     async def update_node_status(

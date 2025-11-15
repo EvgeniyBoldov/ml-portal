@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, func
 from datetime import datetime, timezone
 
-from app.models.state_engine import EventOutbox
+from app.models.events import EventOutbox
 from app.repositories.base import AsyncRepository
 
 

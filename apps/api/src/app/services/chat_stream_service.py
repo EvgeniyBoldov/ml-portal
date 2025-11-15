@@ -149,13 +149,14 @@ class ChatStreamService:
             return
         
         try:
+            yield {"type": "status", "stage": "saving_user_message"}
             # 3. Save user message
             user_message = await self.messages_repo.create_message(
                 chat_id=chat_id,
                 role="user",
                 content={"text": content}
             )
-            await self.session.commit()
+            await self.session.flush()  # Flush message
             
             user_message_id = str(user_message.id)
             logger.info(f"User message created: {user_message_id}")
@@ -163,6 +164,7 @@ class ChatStreamService:
             yield {"type": "user_message", "message_id": user_message_id}
             
             # 4. Load context
+            yield {"type": "status", "stage": "loading_context"}
             context = await self.load_chat_context(chat_id, limit=20)
             
             # Add current message to context
@@ -171,6 +173,7 @@ class ChatStreamService:
             # Add RAG context if use_rag=True
             if use_rag:
                 try:
+                    yield {"type": "status", "stage": "rag_search_started"}
                     # Get tenant_id from chat
                     chat = await self.chats_repo.get_chat_by_id(chat_id)
                     if chat:
@@ -187,6 +190,7 @@ class ChatStreamService:
                         )
                         
                         if search_results:
+                            yield {"type": "status", "stage": "rag_search_done", "hits": len(search_results)}
                             # Format RAG context with better structure
                             rag_context = "# Контекст из базы знаний\n\n"
                             rag_context += "Используй следующую информацию для ответа. При цитировании указывай источник.\n\n"
@@ -216,6 +220,7 @@ class ChatStreamService:
                             
                             logger.info(f"✓ Added RAG context with {len(search_results)} results to LLM prompt")
                         else:
+                            yield {"type": "status", "stage": "rag_no_results"}
                             logger.warning(f"RAG search returned no results for query: '{content[:100]}...'")
                             # Optionally notify user that RAG found nothing
                             yield {
@@ -224,6 +229,7 @@ class ChatStreamService:
                                 "message": "База знаний не содержит релевантной информации"
                             }
                 except Exception as e:
+                    yield {"type": "status", "stage": "rag_error"}
                     logger.error(f"✗ Error in RAG search: {e}", exc_info=True)
                     # Continue without RAG if search fails
                     yield {
@@ -233,6 +239,7 @@ class ChatStreamService:
                     }
             
             # 6. Stream LLM response
+            yield {"type": "status", "stage": "generating_answer_started"}
             assistant_content = ""
             llm_error = None
             try:
@@ -251,7 +258,7 @@ class ChatStreamService:
                     role="assistant",
                     content={"text": assistant_content}
                 )
-                await self.session.commit()
+                await self.session.flush()  # Flush message
                 
                 assistant_message_id = str(assistant_message.id)
                 logger.info(f"Assistant message saved: {assistant_message_id}")
@@ -265,6 +272,7 @@ class ChatStreamService:
                     )
                 
                 yield {"type": "final", "message_id": assistant_message_id}
+                yield {"type": "status", "stage": "generating_answer_finished"}
             elif not llm_error:
                 # Only report empty response if there was no LLM error
                 yield {"type": "error", "error": "Empty response from LLM"}

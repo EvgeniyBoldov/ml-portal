@@ -32,50 +32,16 @@ class AsyncSourceRepository(AsyncTenantRepository):
         )
         return result.scalar_one_or_none()
     
-    async def create(self, source_id: UUID, status: str = "uploaded", meta: Dict[str, Any] = None) -> Source:
+    async def create(self, source_id: UUID, meta: Dict[str, Any] = None) -> Source:
         """Create new source"""
         source = Source(
             source_id=source_id,
             tenant_id=self.tenant_id,
-            status=status,
             meta=meta or {}
         )
         self.session.add(source)
         await self.session.flush()
         return source
-    
-    async def update_status(self, source_id: UUID, status: str) -> bool:
-        """Update source status only if it's different"""
-        # First check current status
-        result = await self.session.execute(
-            select(Source.status).where(
-                Source.source_id == source_id,
-                Source.tenant_id == self.tenant_id
-            )
-        )
-        current_status = result.scalar_one_or_none()
-        
-        # Only update if status is different
-        if current_status == status:
-            return True  # No change needed
-        
-        result = await self.session.execute(
-            update(Source).where(
-                Source.source_id == source_id,
-                Source.tenant_id == self.tenant_id
-            ).values(status=status)
-        )
-        return result.rowcount > 0
-    
-    async def list_by_status(self, status: str) -> List[Source]:
-        """List sources by status"""
-        result = await self.session.execute(
-            select(Source).where(
-                Source.status == status,
-                Source.tenant_id == self.tenant_id
-            )
-        )
-        return result.scalars().all()
 
 
 class AsyncChunkRepository(AsyncTenantRepository):

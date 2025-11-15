@@ -82,7 +82,7 @@ def extract_document(self: Task, source_id: str, tenant_id: str) -> Dict[str, An
                         new_status=StageStatus.PROCESSING,
                         celery_task_id=self.request.id
                     )
-                    await session.commit()
+                    await session.flush()  # Flush for SSE
                     
                     source_repo = AsyncSourceRepository(session, uuid.UUID(tenant_id))
 
@@ -125,7 +125,7 @@ def extract_document(self: Task, source_id: str, tenant_id: str) -> Dict[str, An
                             new_status=StageStatus.COMPLETED,
                             metrics={'status': 'already_processed', 'cached': True}
                         )
-                        await session.commit()
+                        await session.flush()  # Flush for SSE
                         
                         return {
                             "status": "already_processed", 
@@ -174,7 +174,7 @@ def extract_document(self: Task, source_id: str, tenant_id: str) -> Dict[str, An
                         metrics=metrics
                     )
                     
-                    await session.commit()  # Commit the status update
+                    await session.flush()  # Flush for SSE  # Commit the status update
 
                     # Store idempotency result
                     await redis_client.setex(idem_key, 86400, json.dumps({"status": "completed", "text_length": len(extracted_text)}))

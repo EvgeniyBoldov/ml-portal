@@ -113,14 +113,14 @@ def embed_chunks_model(self: Task, chunk_result: Dict[str, Any], tenant_id: str,
                                 new_status=StageStatus.PROCESSING,
                                 celery_task_id=self.request.id
                             )
-                            await session.commit()
+                            await session.flush()  # Flush for SSE
                             await status_manager.transition_stage(
                                 doc_id=uuid.UUID(source_id),
                                 stage=f'embed.{model_alias}',
                                 new_status=StageStatus.COMPLETED,
                                 metrics={'status': 'already_processed', 'cached': True}
                             )
-                            await session.commit()
+                            await session.flush()  # Flush for SSE
                             return {"status": "already_processed", "source_id": source_id}
 
                         # Get chunks
@@ -135,7 +135,7 @@ def embed_chunks_model(self: Task, chunk_result: Dict[str, Any], tenant_id: str,
                             new_status=StageStatus.PROCESSING,
                             celery_task_id=self.request.id
                         )
-                        await session.commit()
+                        await session.flush()  # Flush for SSE
                         
                         # Get embedding service
                         embedding_service = EmbeddingServiceFactory.get_service(model_alias)
@@ -149,7 +149,7 @@ def embed_chunks_model(self: Task, chunk_result: Dict[str, Any], tenant_id: str,
                             total_count=len(chunks),
                             model_version=model_info.version
                         )
-                        await session.commit()
+                        await session.flush()  # Flush for DB consistency
 
                         # Generate embeddings in batches
                         batch_size = 32
@@ -201,7 +201,7 @@ def embed_chunks_model(self: Task, chunk_result: Dict[str, Any], tenant_id: str,
                                 total=total_chunks,
                                 last_error=None
                             )
-                            await session.commit()  # Commit to send SSE events immediately
+                            await session.flush()  # Flush to send SSE events immediately
 
                         # Save embeddings to S3 (optional, for debugging/maintenance)
                         if settings.SAVE_EMB_TO_S3:
@@ -247,8 +247,8 @@ def embed_chunks_model(self: Task, chunk_result: Dict[str, Any], tenant_id: str,
                             last_error=None
                         )
                         
-                        # Commit all changes including outbox events
-                        await session.commit()
+                        # Flush all changes including outbox events
+                        await session.flush()
 
                         # Store idempotency result
                         await redis_client.setex(

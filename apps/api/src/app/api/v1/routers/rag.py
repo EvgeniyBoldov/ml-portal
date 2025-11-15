@@ -7,13 +7,13 @@ from pydantic import BaseModel
 from app.adapters.s3_client import s3_manager, PresignOptions
 from app.core.config import get_settings
 from app.core.s3_links import S3ContentType
-from app.api.deps import db_session, get_current_user, get_current_user_optional
+from app.api.deps import db_uow, get_current_user, get_current_user_optional
 from app.core.security import UserCtx
 from app.repositories.factory import get_async_repository_factory, AsyncRepositoryFactory
 from app.models.rag import RAGDocument, DocumentStatus, DocumentScope
 import uuid
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from app.services.rag_status_manager import RAGStatusManager
 from app.services.status_aggregator import calculate_aggregate_status
 from app.core.logging import get_logger
@@ -69,7 +69,7 @@ class StatusGraphResponse(BaseModel):
 @router.get("/{doc_id}")
 async def get_rag_document(
     doc_id: str,
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_uow),
     user: UserCtx = Depends(get_current_user),
     repo_factory: AsyncRepositoryFactory = Depends(get_async_repository_factory)
 ):
@@ -135,7 +135,7 @@ async def list_rag_documents(
     size: int = Query(100, ge=1, le=1000),
     status: Optional[str] = Query(None),
     search: Optional[str] = Query(None),
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_uow),
     user: UserCtx = Depends(get_current_user),
     repo_factory: AsyncRepositoryFactory = Depends(get_async_repository_factory)
 ):
@@ -226,7 +226,7 @@ async def upload_rag_file(
     file: UploadFile = File(...),
     name: Optional[str] = Form(None),
     tags: Optional[str] = Form(None),
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_uow),
     user: UserCtx = Depends(get_current_user),
     repo_factory: AsyncRepositoryFactory = Depends(get_async_repository_factory)
 ):
@@ -284,7 +284,7 @@ async def upload_rag_file(
 async def update_rag_document_tags(
     doc_id: str,
     tags: list[str],
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_uow),
     user: UserCtx = Depends(get_current_user),
     repo_factory: AsyncRepositoryFactory = Depends(get_async_repository_factory)
 ):
@@ -309,7 +309,7 @@ async def update_rag_document_tags(
         
         # Update tags
         document.tags = sanitized_tags
-        document.updated_at = datetime.utcnow()
+        document.updated_at = datetime.now(timezone.utc)
         
         # Emit event for SSE
         from app.services.outbox_helper import emit_tags_updated
@@ -319,8 +319,6 @@ async def update_rag_document_tags(
             document_id=doc_uuid,
             tags=sanitized_tags
         )
-        
-        await session.commit()
         
         return {"id": doc_id, "tags": sanitized_tags}
         
@@ -336,7 +334,7 @@ async def update_rag_document_tags(
 async def download_rag_file(
     doc_id: str,
     kind: str = Query("original", regex="^(original|canonical)$"),
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_uow),
     user: UserCtx = Depends(get_current_user),
     repo_factory: AsyncRepositoryFactory = Depends(get_async_repository_factory)
 ):
@@ -368,7 +366,7 @@ async def download_rag_file(
 @router.post("/{doc_id}/archive")
 async def archive_rag_document(
     doc_id: str,
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_uow),
     user: UserCtx = Depends(get_current_user),
     repo_factory: AsyncRepositoryFactory = Depends(get_async_repository_factory)
 ):
@@ -391,7 +389,7 @@ async def archive_rag_document(
         
         # Update document status
         document.status = "archived"
-        document.updated_at = datetime.utcnow()
+        document.updated_at = datetime.now(timezone.utc)
         
         # Publish event
         await event_publisher.publish_document_archived(
@@ -399,8 +397,6 @@ async def archive_rag_document(
             tenant_id=document.tenant_id,
             archived=True
         )
-        
-        await session.commit()
         
         return {"id": doc_id, "archived": True}
     except ValueError:
@@ -411,7 +407,7 @@ async def archive_rag_document(
 @router.post("/{doc_id}/unarchive")
 async def unarchive_rag_document(
     doc_id: str,
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_uow),
     user: UserCtx = Depends(get_current_user),
     repo_factory: AsyncRepositoryFactory = Depends(get_async_repository_factory)
 ):
@@ -442,8 +438,6 @@ async def unarchive_rag_document(
             archived=False
         )
         
-        await session.commit()
-        
         return {"id": doc_id, "archived": False}
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid document ID")
@@ -453,7 +447,7 @@ async def unarchive_rag_document(
 @router.delete("/{doc_id}")
 async def delete_rag_document(
     doc_id: str,
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_uow),
     user: UserCtx = Depends(get_current_user),
     repo_factory: AsyncRepositoryFactory = Depends(get_async_repository_factory)
 ):
@@ -488,7 +482,7 @@ async def delete_rag_document(
 async def update_rag_document_scope(
     doc_id: str,
     scope: str = Form(...),
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_uow),
     user: UserCtx = Depends(get_current_user),
     repo_factory: AsyncRepositoryFactory = Depends(get_async_repository_factory)
 ):
@@ -520,15 +514,13 @@ async def update_rag_document_scope(
         
         # Update scope
         document.scope = DocumentScope(scope)
-        document.updated_at = datetime.utcnow()
+        document.updated_at = datetime.now(timezone.utc)
         
         # If changing to global, set published fields
         if scope == "global":
-            document.published_at = datetime.utcnow()
+            document.published_at = datetime.now(timezone.utc)
             document.published_by = user.id
             document.global_version = 1
-        
-        await session.commit()
         
         return {
             "id": doc_id, 
@@ -543,7 +535,7 @@ async def update_rag_document_scope(
 @router.get("/{doc_id}/status-graph")
 async def get_status_graph(
     doc_id: str,
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_uow),
     user: UserCtx = Depends(get_current_user),
     repo_factory: AsyncRepositoryFactory = Depends(get_async_repository_factory)
 ):
@@ -601,7 +593,7 @@ async def get_status_graph(
                     metrics=None,
                     started_at=None,
                     finished_at=None,
-                    updated_at=datetime.utcnow().isoformat()
+                    updated_at=datetime.now(timezone.utc).isoformat()
                 ))
         
         # Build embedding models - show all existing embedding nodes, not just target_models
@@ -631,7 +623,7 @@ async def get_status_graph(
                     metrics=None,
                     started_at=None,
                     finished_at=None,
-                    updated_at=datetime.utcnow().isoformat()
+                    updated_at=datetime.now(timezone.utc).isoformat()
                 ))
         
         # Build index models array
@@ -669,7 +661,7 @@ async def get_status_graph(
 @router.get("/{doc_id}/models")
 async def get_rag_document_models(
     doc_id: str,
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_uow),
     user: UserCtx = Depends(get_current_user),
     repo_factory: AsyncRepositoryFactory = Depends(get_async_repository_factory)
 ):

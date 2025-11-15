@@ -2,7 +2,7 @@
 Model Registry SQLAlchemy model
 """
 from sqlalchemy.orm import Mapped, mapped_column
-from sqlalchemy import String, Boolean, Integer, Text, DateTime
+from sqlalchemy import String, Boolean, Integer, Text, DateTime, func
 from sqlalchemy.dialects.postgresql import UUID, ARRAY
 import uuid
 from datetime import datetime
@@ -23,5 +23,5 @@ class ModelRegistry(Base):
     path: Mapped[str] = mapped_column(String(500))  # full path to model directory
     default_for_new: Mapped[bool] = mapped_column(Boolean, default=False)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

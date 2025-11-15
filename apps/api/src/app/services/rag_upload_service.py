@@ -93,7 +93,7 @@ class RAGUploadService:
         # Инициализируем статусы
         await self._initialize_statuses(doc_id)
         
-        await self.session.commit()
+        await self.session.flush()  # Flush document creation
         
         return {
             "id": str(document.id),
@@ -167,7 +167,6 @@ class RAGUploadService:
         source = Source(
             source_id=doc_id,
             tenant_id=self.repo_factory.tenant_id,
-            status="uploaded",
             created_at=datetime.utcnow(),
             updated_at=datetime.utcnow(),
             meta={

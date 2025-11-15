@@ -1,13 +1,8 @@
-#ПРОВЕРЕНО
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1.router import api_v1
 from app.core.db import lifespan
 from app.core.health import health_checker
-#TODO Разобраться с включением и почему в комментах
-# from core.observability import TracingMiddleware
-# from core.idempotency import IdempotencyMiddleware
-# from core.middleware import TenantMiddleware
 
 app = FastAPI(title="ML-Portal API", lifespan=lifespan)
 
@@ -35,11 +30,6 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type", "Idempotency-Key", "X-Tenant-Id", "X-Request-ID", "Last-Event-ID"],
     expose_headers=["X-Total-Count", "X-Page", "X-Page-Size"],
 )
-#TODO Разобраться с включением и почему в комментах
-# Add middleware (order matters: tracing -> idempotency -> tenant)
-# app.add_middleware(TracingMiddleware)
-# app.add_middleware(IdempotencyMiddleware)
-# app.add_middleware(TenantMiddleware)
 
 
 @app.get("/healthz")

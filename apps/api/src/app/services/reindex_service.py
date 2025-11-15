@@ -209,7 +209,7 @@ class ReindexService:
                 # Here you would update Qdrant vector database
                 # await self._update_qdrant_chunk(chunk)
                 
-                await self.session.commit()
+                await self.session.flush()  # Flush chunk reindex
                 
             except Exception as e:
                 logger.error(f"Failed to reindex chunk {chunk.id}: {e}")

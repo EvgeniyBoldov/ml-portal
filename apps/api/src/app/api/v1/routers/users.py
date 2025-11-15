@@ -4,7 +4,7 @@ Users endpoints for API v1
 from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.api.deps import db_session, get_current_user, require_admin
+from app.api.deps import db_session, db_uow, get_current_user, require_admin
 from app.repositories.users_repo import AsyncUsersRepository
 from app.services.users_service import AsyncUsersService
 from app.schemas.common import ProblemDetails
@@ -19,7 +19,7 @@ async def list_users(
     query: str | None = None,
     role: str | None = None,
     is_active: bool | None = None,
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_uow),
     admin_user = Depends(require_admin),
 ):
     """List users (admin only)"""
@@ -57,7 +57,7 @@ async def list_users(
 @router.post("")
 async def create_user(
     user_data: dict,
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_uow),
     admin_user = Depends(require_admin),
 ):
     """Create user (admin only) - DEBUG only"""

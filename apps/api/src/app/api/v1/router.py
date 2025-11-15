@@ -1,4 +1,3 @@
-#ПРОВЕРЕН
 from fastapi import APIRouter
 from app.api.deps import is_auth_enabled
 from app.api.v1.routers import security as security_router
@@ -10,7 +9,6 @@ from app.api.v1.routers import chat as chat_router
 from app.api.v1.routers import rag as rag_router
 from app.api.v1.routers import users as users_router
 from app.api.v1.routers import rag_search as rag_search_router
-from app.api.v1.routers import rag_jobs as rag_jobs_router
 from app.api.v1.routers import tenants as tenants_router
 from app.api.v1.routers import models as models_router
 from app.api.v1.routers import rag_status_stream as rag_status_router
@@ -19,8 +17,6 @@ from app.api.v1.routers import rag_status_stream as rag_status_router
 
 api_v1 = APIRouter()
 
-# Mount core routers here (health, users, chats, rag, etc.)
-#TODO а нужно ли тут эта ручка?
 # Health endpoints - always available
 api_v1.include_router(health_router.router, tags=["health"])
 
@@ -50,9 +46,6 @@ api_v1.include_router(rag_router.router, prefix="/rag", tags=["rag"])
 
 # RAG search endpoints
 api_v1.include_router(rag_search_router.router, prefix="/rag", tags=["rag-search"])
-
-# RAG jobs endpoints (cancel/kill/reset/restart)
-api_v1.include_router(rag_jobs_router.router, prefix="/rag", tags=["rag-jobs"])
 
 # RAG status stream endpoints (SSE for real-time updates)
 api_v1.include_router(rag_status_router.router, prefix="/rag/status", tags=["rag-status"])

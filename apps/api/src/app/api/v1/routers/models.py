@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.api.deps import db_session, get_current_user, require_admin
+from app.api.deps import db_uow, get_current_user, require_admin
 from app.core.security import UserCtx
 from app.services.model_registry_service import ModelRegistryService
 from app.schemas.model_registry import (
@@ -27,7 +27,7 @@ async def list_models(
     search: Optional[str] = Query(None, description="Search by model id or version"),
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_uow),
     user: UserCtx = Depends(get_current_user),
     admin_user = Depends(require_admin),
 ):
@@ -52,7 +52,7 @@ async def list_models(
 
 @router.post("/scan", response_model=ScanResult)
 async def scan_models(
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_uow),
     user: UserCtx = Depends(get_current_user),
     admin_user = Depends(require_admin),
 ):
@@ -67,7 +67,7 @@ async def scan_models(
 @router.get("/{model_id}", response_model=ModelRegistrySchema)
 async def get_model(
     model_id: str,
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_uow),
     user: UserCtx = Depends(get_current_user),
     admin_user = Depends(require_admin),
 ):
@@ -101,7 +101,7 @@ async def get_model(
 async def update_model(
     model_id: str,
     payload: ModelRegistryUpdate,
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_uow),
     user: UserCtx = Depends(get_current_user),
     admin_user = Depends(require_admin),
 ):
@@ -124,7 +124,7 @@ async def update_model(
 async def retire_model(
     model_id: str,
     request: RetireRequest,
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_uow),
     user: UserCtx = Depends(get_current_user),
     admin_user = Depends(require_admin),
 ):
@@ -132,16 +132,14 @@ async def retire_model(
     try:
         service = ModelRegistryService(session)
         result = await service.retire_model(model_id, request)
-        await session.commit()
         return result
     except Exception as e:
-        await session.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to retire model: {str(e)}")
 
 @router.delete("/{model_id}")
 async def delete_model(
     model_id: str,
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_uow),
     user: UserCtx = Depends(get_current_user),
     admin_user = Depends(require_admin),
 ):
@@ -152,18 +150,16 @@ async def delete_model(
         ok = await repo.delete(uuid.UUID(model_id))
         if not ok:
             raise HTTPException(status_code=404, detail="Model not found")
-        await session.commit()
         return {"message": "Model deleted"}
     except HTTPException:
         raise
     except Exception as e:
-        await session.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to delete model: {str(e)}")
 
 @router.get("/{model_id}/tenants")
 async def get_model_tenants(
     model_id: str,
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_uow),
     user: UserCtx = Depends(get_current_user),
     admin_user = Depends(require_admin),
 ):

@@ -82,7 +82,7 @@ def normalize_document(self: Task, extract_result: Dict[str, Any], tenant_id: st
                         new_status=StageStatus.PROCESSING,
                         celery_task_id=self.request.id
                     )
-                    await session.commit()
+                    await session.flush()  # Flush for SSE
                     
                     # Check idempotency
                     idem_key = get_idempotency_key(
@@ -110,7 +110,7 @@ def normalize_document(self: Task, extract_result: Dict[str, Any], tenant_id: st
                                 new_status=StageStatus.COMPLETED,
                                 metrics={'status': 'already_processed', 'cached': True}
                             )
-                            await session.commit()
+                            await session.flush()  # Flush for SSE
                             return {
                                 "status": "already_processed",
                                 "source_id": source_id,
@@ -154,7 +154,7 @@ def normalize_document(self: Task, extract_result: Dict[str, Any], tenant_id: st
                             new_status=StageStatus.COMPLETED,
                             metrics={'status': 'recreated_from_cache', 'cached': True}
                         )
-                        await session.commit()
+                        await session.flush()  # Flush for SSE
                         return {
                             "status": "recreated",
                             "source_id": source_id,
@@ -197,9 +197,6 @@ def normalize_document(self: Task, extract_result: Dict[str, Any], tenant_id: st
                         content_type="application/jsonl"
                     )
                     
-                    # Update source status
-                    await source_repo.update_status(uuid.UUID(source_id), 'normalized')
-                    
                     # Mark normalize stage as completed
                     await status_manager.transition_stage(
                         doc_id=uuid.UUID(source_id),
@@ -211,7 +208,7 @@ def normalize_document(self: Task, extract_result: Dict[str, Any], tenant_id: st
                         }
                     )
                     
-                    await session.commit()
+                    await session.flush()  # Flush for SSE
                     
                     # Store idempotency
                     await redis_client.setex(idem_key, 86400, json.dumps({"status": "completed"}))

@@ -83,7 +83,7 @@ def index_model(self: Task, embed_result: Dict[str, Any], tenant_id: str) -> Dic
                             new_status=StageStatus.PROCESSING,
                             celery_task_id=self.request.id
                         )
-                        await session.commit()
+                        await session.flush()  # Flush for SSE
                         
                         # Check idempotency
                         idem_key = get_idempotency_key(
@@ -99,7 +99,7 @@ def index_model(self: Task, embed_result: Dict[str, Any], tenant_id: str) -> Dic
                                 new_status=StageStatus.COMPLETED,
                                 metrics={'status': 'already_processed', 'cached': True}
                             )
-                            await session.commit()
+                            await session.flush()  # Flush for SSE
                             return {"status": "already_processed", "source_id": source_id, "model_alias": model_alias}
                         
                         # If embed_result is idempotent and contains no embeddings, treat as cached no-op
@@ -111,7 +111,7 @@ def index_model(self: Task, embed_result: Dict[str, Any], tenant_id: str) -> Dic
                                 new_status=StageStatus.COMPLETED,
                                 metrics={'status': 'already_processed', 'cached': True, 'no_op': True}
                             )
-                            await session.commit()
+                            await session.flush()  # Flush for SSE
                             await redis_client.setex(
                                 idem_key,
                                 86400,
@@ -190,7 +190,7 @@ def index_model(self: Task, embed_result: Dict[str, Any], tenant_id: str) -> Dic
                             }
                         )
                         
-                        await session.commit()
+                        await session.flush()  # Flush index completion
                         
                         # Store idempotency
                         await redis_client.setex(
@@ -275,15 +275,9 @@ def commit_source(self: Task, embed_result: Dict[str, Any], tenant_id: str, mode
                     if emb_status.done_count == emb_status.total_count:
                         completed_models.append(emb_status.model_alias)
                 
-                # Update source status to ready only if all embeddings are done
+                # Update aggregate status via status manager if embeddings complete
                 if completed_models:
-                    await source_repo.update_status(uuid.UUID(source_id), 'ready')
-                    
-                    # Агрегированный статус обновится автоматически через RAGStatusManager
-                    # который уже используется в embed_chunks_model задаче
                     logger.info(f"Archive complete for {source_id}, models: {completed_models}")
-                    
-                    await session.commit()
                     logger.info(f"Source {source_id} marked as ready with completed models: {completed_models}")
                 else:
                     logger.warning(f"Source {source_id} embeddings not completed yet")

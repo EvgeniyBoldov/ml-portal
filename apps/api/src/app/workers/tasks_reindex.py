@@ -13,6 +13,8 @@ from celery.exceptions import Retry
 from app.celery_app import app as celery_app
 from app.core.db import get_session_factory
 from app.repositories.factory import AsyncRepositoryFactory
+from sqlalchemy import select
+from app.models.rag import RAGDocument
 from app.workers.schemas import ReindexIn
 from app.workers.tasks_rag_ingest import (
     extract_document, normalize_document, chunk_document, 
@@ -40,29 +42,31 @@ async def reindex_source(self: Task, source_id: str, models: List[str] = None) -
         if models is None:
             models = ["modelA", "modelB"]  # Default models
         
-        # Check if document exists
+        # Resolve tenant_id by loading document directly, then build repo factory
         session_factory = get_session_factory()
         async with session_factory() as session:
-            repo_factory = AsyncRepositoryFactory(session, uuid.UUID("00000000-0000-0000-0000-000000000000"))
-            document = await repo_factory.get_rag_document_by_id(uuid.UUID(source_id), "admin")
+            doc_uuid = uuid.UUID(source_id)
+            result = await session.execute(select(RAGDocument).where(RAGDocument.id == doc_uuid))
+            document = result.scalars().first()
             
             if not document:
                 raise ValueError(f"Document {source_id} not found")
             
             # Update status to reindexing
-            await repo_factory.update_rag_document_status(uuid.UUID(source_id), "reindexing")
-            await session.commit()
+            repo_factory = AsyncRepositoryFactory(session, document.tenant_id)
+            await repo_factory.update_rag_document_status(doc_uuid, "reindexing")
+            await session.flush()  # Flush status update
         
         # Soft delete old vectors (in production, implement proper cleanup)
         await _soft_delete_old_vectors(source_id, models)
         
         # Start reindexing pipeline
         # Step 1: Extract
-        extract_result = extract_document.delay(source_id, tenant_id)
+        extract_result = extract_document.delay(source_id, str(document.tenant_id))
         extract_data = extract_result.get()
         
         # Step 2: Normalize
-        normalize_result = normalize_document.delay(extract_data, tenant_id)
+        normalize_result = normalize_document.delay(extract_data, str(document.tenant_id))
         canonical_key = normalize_result.get()["canonical_key"]
         
         # Step 2: Chunk document
@@ -108,10 +112,14 @@ async def reindex_source(self: Task, source_id: str, models: List[str] = None) -
         try:
             session_factory = get_session_factory()
             async with session_factory() as session:
-                repo_factory = AsyncRepositoryFactory(session, uuid.UUID("00000000-0000-0000-0000-000000000000"))
-                await repo_factory.update_rag_document_status(uuid.UUID(source_id), "failed")
-                await repo_factory.update_rag_document_error(uuid.UUID(source_id), str(exc))
-                await session.commit()
+                doc_uuid = uuid.UUID(source_id)
+                result = await session.execute(select(RAGDocument).where(RAGDocument.id == doc_uuid))
+                document = result.scalars().first()
+                if document:
+                    repo_factory = AsyncRepositoryFactory(session, document.tenant_id)
+                    await repo_factory.update_rag_document_status(doc_uuid, "failed")
+                    await repo_factory.update_rag_document_error(doc_uuid, str(exc))
+                await session.flush()  # Flush status update
         except Exception as update_exc:
             logger.error(f"Failed to update document status: {update_exc}")
         

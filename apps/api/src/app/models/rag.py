@@ -55,7 +55,7 @@ class RAGDocument(Base):
         String(20),
         nullable=False,
         server_default="local",
-    )  # local or global
+    )
     
     content_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
     source_mime: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -73,7 +73,6 @@ class RAGDocument(Base):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     
     global_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    # current_version_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("document_versions.id", ondelete="SET NULL"), nullable=True)  # TODO: add via migration if needed
     
     date_upload: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())

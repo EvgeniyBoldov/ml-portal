@@ -16,15 +16,16 @@ class Settings(BaseSettings):
     # Redis
     REDIS_URL: str = Field(default="redis://localhost:6379/0")
 
-    # JWT
-    JWT_SECRET: str = Field(default="change-me-in-production")
-    JWT_ALGORITHM: str = Field(default="HS256")
+    # JWT - Asymmetric (RSA) for production, symmetric (HS256) for dev
+    JWT_SECRET: str = Field(default="change-me-in-production", description="Symmetric secret for HS256 (dev only)")
+    JWT_ALGORITHM: str = Field(default="HS256", description="HS256 for dev, RS256 for production")
+    JWT_PRIVATE_KEY: str | None = Field(default=None, description="RSA private key (PEM format) for RS256")
+    JWT_PUBLIC_KEY: str | None = Field(default=None, description="RSA public key (PEM format) for RS256")
     JWT_ISSUER: str = Field(default="urn:ml-portal")
     JWT_AUDIENCE: str = Field(default="urn:ml-portal:api")
     JWT_ACCESS_TTL_MINUTES: int = Field(default=15)
     JWT_REFRESH_TTL_DAYS: int = Field(default=30)
-    JWT_JWKS_JSON: str | None = Field(default=None)
-    JWT_KID: str | None = Field(default=None)
+    JWT_KID: str | None = Field(default=None, description="Key ID for key rotation")
 
     # Authentication
     PAT_ENABLED: bool = Field(default=True)
@@ -42,14 +43,6 @@ class Settings(BaseSettings):
     LLM_API_KEY: str | None = Field(default=None, description="API key for LLM provider")
     LLM_DEFAULT_MODEL: str = Field(default="llama-3.1-8b-instant", description="Default model to use")
     LLM_TIMEOUT: int = Field(default=30, description="Request timeout in seconds")
-    
-    # Legacy Groq variables (deprecated, use LLM_* instead)
-    GROQ_BASE_URL: str | None = Field(default=None, description="[DEPRECATED] Use LLM_BASE_URL")
-    GROQ_API_KEY: str | None = Field(default=None, description="[DEPRECATED] Use LLM_API_KEY")
-    GROQ_DEFAULT_MODEL: str | None = Field(default=None, description="[DEPRECATED] Use LLM_DEFAULT_MODEL")
-    
-    # Legacy LLM_TOKEN (deprecated)
-    LLM_TOKEN: str | None = Field(default=None, description="[DEPRECATED] Use LLM_API_KEY")
     
     # Embedding
     EMB_BASE_URL: str = Field(default="http://localhost:8001")
@@ -126,16 +119,7 @@ class Settings(BaseSettings):
     @validator("LLM_API_KEY", always=True)
     def validate_llm_api_key(cls, v, values):
         """Ensure LLM API key is set (except in local/dev)"""
-        # Get ENV from environment or values
         env = os.getenv("ENV", values.get("ENV", "local"))
-        
-        # Fallback to legacy variables if LLM_API_KEY not set
-        if not v:
-            # Try GROQ_API_KEY (legacy)
-            v = os.getenv("GROQ_API_KEY") or values.get("GROQ_API_KEY")
-            # Try LLM_TOKEN (legacy)
-            if not v:
-                v = os.getenv("LLM_TOKEN") or values.get("LLM_TOKEN")
         
         # Allow empty in local/dev, require in production
         if not v and env not in ["local", "development"]:

@@ -4,7 +4,7 @@ Status Aggregator for calculating document aggregate status
 from __future__ import annotations
 from typing import List, Tuple, Dict, Any, Optional
 from uuid import UUID
-from datetime import datetime
+from datetime import datetime, timezone
 
 from app.models.rag_ingest import RAGStatus
 
@@ -55,7 +55,7 @@ def calculate_aggregate_status(
             'embedding': {},
             'policy': 'pipeline_error',
             'last_error': _get_last_pipeline_error(pipeline_nodes),
-            'updated_at': datetime.utcnow().isoformat()
+            'updated_at': datetime.now(timezone.utc).isoformat()
         }
     
     # Special case: uploaded (upload=completed, others=pending)
@@ -65,7 +65,7 @@ def calculate_aggregate_status(
             'pipeline': pipeline_statuses,
             'embedding': {},
             'policy': 'uploaded',
-            'updated_at': datetime.utcnow().isoformat()
+            'updated_at': datetime.now(timezone.utc).isoformat()
         }
     
     # If any pipeline stage is pending, queued or processing → processing
@@ -74,7 +74,7 @@ def calculate_aggregate_status(
             'pipeline': pipeline_statuses,
             'embedding': {},
             'policy': 'pipeline_running',
-            'updated_at': datetime.utcnow().isoformat()
+            'updated_at': datetime.now(timezone.utc).isoformat()
         }
     
     # Pipeline is complete: анализируем индексные статусы (fallback к embedding только для деталей)
@@ -153,7 +153,7 @@ def calculate_aggregate_status(
             'missing': missing_models,
         },
         'target_models': target_models,
-        'updated_at': datetime.utcnow().isoformat()
+        'updated_at': datetime.now(timezone.utc).isoformat()
     }
     
     # Add last error if any

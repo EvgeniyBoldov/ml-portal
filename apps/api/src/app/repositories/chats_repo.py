@@ -73,7 +73,7 @@ class AsyncChatsRepository(AsyncTenantRepository[Chats]):
                 if hasattr(chat, key):
                     setattr(chat, key, value)
             chat.updated_at = datetime.now(timezone.utc)
-            await self.session.commit()
+            await self.session.flush()
         return chat
     
     async def delete_chat(self, chat_id: str) -> bool:
@@ -81,7 +81,7 @@ class AsyncChatsRepository(AsyncTenantRepository[Chats]):
         chat = await self.get_chat_by_id(chat_id)
         if chat:
             await self.session.delete(chat)
-            await self.session.commit()
+            await self.session.flush()
             return True
         return False
 
@@ -163,7 +163,7 @@ class AsyncChatMessagesRepository(AsyncTenantRepository[ChatMessages]):
                 if hasattr(message, key):
                     setattr(message, key, value)
             message.updated_at = datetime.now(timezone.utc)
-            await self.session.commit()
+            await self.session.flush()
         return message
     
     async def delete_message(self, message_id: str) -> bool:
@@ -171,6 +171,6 @@ class AsyncChatMessagesRepository(AsyncTenantRepository[ChatMessages]):
         message = await self.get_message_by_id(message_id)
         if message:
             await self.session.delete(message)
-            await self.session.commit()
+            await self.session.flush()
             return True
         return False

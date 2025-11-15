@@ -1,6 +1,6 @@
 
 from sqlalchemy.orm import Mapped, mapped_column
-from sqlalchemy import String, Boolean, ForeignKey, DateTime
+from sqlalchemy import String, Boolean, ForeignKey, DateTime, func
 from sqlalchemy.dialects.postgresql import UUID, ARRAY
 import uuid
 from datetime import datetime
@@ -17,8 +17,8 @@ class Tenants(Base):
     rerank_model: Mapped[str | None] = mapped_column(String(255), nullable=True)
     ocr: Mapped[bool] = mapped_column(Boolean, default=False)
     layout: Mapped[bool] = mapped_column(Boolean, default=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 class UserTenants(Base):
     __tablename__ = "user_tenants"

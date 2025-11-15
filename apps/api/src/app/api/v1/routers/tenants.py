@@ -3,14 +3,12 @@
 Tenants API router with real database operations
 """
 from __future__ import annotations
-from typing import List, Optional
+from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.api.deps import db_session, require_admin
+from app.api.deps import db_uow, require_admin
 from app.schemas.tenant import Tenant, TenantCreate, TenantUpdate, TenantListResponse
 from app.services.tenants_service import AsyncTenantsService
-import uuid
-import logging
 
 router = APIRouter(tags=["tenants"])
 
@@ -20,7 +18,7 @@ async def list_tenants(
     size: int = Query(20, ge=1, le=100),
     search: Optional[str] = Query(None),
     is_active: Optional[bool] = Query(None),
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_uow),
     admin_user = Depends(require_admin),
 ):
     """List tenants with pagination and filtering (admin only)"""
@@ -59,7 +57,7 @@ async def list_tenants(
 @router.post("", response_model=Tenant)
 async def create_tenant(
     tenant_data: TenantCreate,
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_uow),
     admin_user = Depends(require_admin),
 ):
     """Create a new tenant (admin only)"""
@@ -73,8 +71,6 @@ async def create_tenant(
         if not tenant:
             raise HTTPException(status_code=500, detail="Failed to create tenant")
         
-        await session.commit()
-        
         return Tenant(**tenant)
         
     except ValueError as e:
@@ -82,13 +78,12 @@ async def create_tenant(
     except HTTPException:
         raise
     except Exception as e:
-        await session.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to create tenant: {str(e)}")
 
 @router.get("/{tenant_id}", response_model=Tenant)
 async def get_tenant(
     tenant_id: str,
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_uow),
     admin_user = Depends(require_admin),
 ):
     """Get tenant by ID (admin only)"""
@@ -112,7 +107,7 @@ async def get_tenant(
 async def update_tenant(
     tenant_id: str,
     tenant_data: TenantUpdate,
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_uow),
     admin_user = Depends(require_admin),
 ):
     """Update tenant (admin only)"""
@@ -126,8 +121,6 @@ async def update_tenant(
         if not tenant:
             raise HTTPException(status_code=404, detail="Tenant not found")
         
-        await session.commit()
-        
         return Tenant(**tenant)
         
     except ValueError as e:
@@ -135,13 +128,12 @@ async def update_tenant(
     except HTTPException:
         raise
     except Exception as e:
-        await session.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to update tenant: {str(e)}")
 
 @router.get("/{tenant_id}/models/resolve")
 async def get_tenant_active_models(
     tenant_id: str,
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_uow),
     admin_user = Depends(require_admin),
 ):
     """Get active models for a tenant"""
@@ -160,7 +152,7 @@ async def get_tenant_active_models(
 @router.delete("/{tenant_id}")
 async def delete_tenant(
     tenant_id: str,
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_uow),
     admin_user = Depends(require_admin),
 ):
     """Delete tenant (admin only)"""
@@ -171,8 +163,6 @@ async def delete_tenant(
         if not success:
             raise HTTPException(status_code=404, detail="Tenant not found")
         
-        await session.commit()
-        
         return {"message": "Tenant deleted successfully"}
         
     except ValueError:
@@ -180,5 +170,4 @@ async def delete_tenant(
     except HTTPException:
         raise
     except Exception as e:
-        await session.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to delete tenant: {str(e)}")

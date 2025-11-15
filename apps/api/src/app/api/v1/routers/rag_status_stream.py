@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user, db_session
+from app.api.deps import get_current_user, get_current_user_sse, db_session
 from app.core.security import UserCtx
 from app.core.sse import format_sse
 from app.services.rag_event_publisher import RAGEventSubscriber
@@ -26,8 +26,9 @@ from app.api.deps import get_redis_client as redis_dependency
 
 @router.get("/events")
 async def stream_rag_status(
-    user: UserCtx = Depends(get_current_user),
-    redis = Depends(redis_dependency)
+    user: UserCtx = Depends(get_current_user_sse),
+    redis = Depends(redis_dependency),
+    document_id: str | None = None,
 ):
     """
     SSE endpoint для получения обновлений статусов RAG документов
@@ -93,6 +94,9 @@ async def stream_rag_status(
             heartbeat_interval = 30  # seconds
             
             async for event in subscriber.listen():
+                # Optional per-document filter to reduce client work
+                if document_id and event.get("document_id") != document_id:
+                    continue
                 # Send event
                 yield format_sse(
                     data=event,
@@ -269,8 +273,6 @@ async def start_ingest(
     # Полный пайплайн: extract → normalize → chunk → group(embed→index per model)
     pipeline = chain(extract_task, normalize_task, chunk_task, group(embedding_index_chains))
     pipeline.apply_async()
-    
-    await session.commit()
     
     return {
         'status': 'success',

@@ -36,7 +36,7 @@ async def notify_stage_error(source_id: str, tenant_id: str, stage: str, error: 
                 new_status=StageStatus.FAILED,
                 error=str(error)[:500],  # limit error size
             )
-            await session.commit()
+            await session.flush()  # Flush error status
     except Exception as notify_error:
         logger.error(f"notify_stage_error failed for {source_id}:{stage}: {notify_error}")
 
@@ -90,6 +90,6 @@ async def notify_embed_error(source_id: str, tenant_id: str, model_alias: str, e
                 last_error=str(error),
             )
 
-            await session.commit()
+            await session.flush()  # Flush error status
     except Exception as notify_error:
         logger.error(f"notify_embed_error failed for {source_id}:{model_alias}: {notify_error}")

@@ -11,12 +11,14 @@ import uuid
 from .base import Base
 
 class Source(Base):
-    """Таблица sources для отслеживания статуса обработки документов"""
+    """Таблица sources для хранения метаданных документов в ingest pipeline
+    
+    Статус документа хранится в RAGDocument.status, не здесь.
+    """
     __tablename__ = 'sources'
     
     source_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id = Column(UUID(as_uuid=True), ForeignKey('tenants.id', ondelete='CASCADE'), nullable=False)
-    status = Column(String, nullable=False)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
     meta = Column(JSONB, nullable=True)
@@ -27,11 +29,6 @@ class Source(Base):
     
     # Ограничения
     __table_args__ = (
-        CheckConstraint(
-            "status IN ('uploaded','normalized','chunked','embedding','ready','failed','reindexing')",
-            name='ck_sources_status'
-        ),
-        Index('ix_sources_status', 'status'),
         Index('ix_sources_updated_at', 'updated_at'),
         Index('ix_sources_tenant_id', 'tenant_id'),
     )
