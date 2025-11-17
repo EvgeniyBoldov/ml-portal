@@ -57,7 +57,7 @@ function transformMessageToRagEvent(msg: SSEMessage): RagEvent | null {
   const data = msg.data;
 
   // Extract doc_id from data or metadata
-  const doc_id = data.doc_id || data.id;
+  const doc_id = data.doc_id || data.document_id || data.id;
   if (!doc_id) {
     console.warn('SSE message missing doc_id:', msg);
     return null;
@@ -77,7 +77,10 @@ function transformMessageToRagEvent(msg: SSEMessage): RagEvent | null {
       return {
         ...base,
         type: 'rag.status',
-        data: { status: data.status, details: data.agg_details_json },
+        data: {
+          status: data.status || data.agg_status || data.new_status,
+          details: data.agg_details || data.agg_details_json || data.details,
+        },
       };
 
     case 'rag.embed.progress':
@@ -153,6 +156,9 @@ function applyStatusEvent(
     { queryKey: ['rag', 'detail'], exact: false },
     old => {
     if (!old) return undefined;
+    if ((old as any).doc_id && (old as any).doc_id !== doc_id) {
+      return old;
+    }
 
     // Idempotency check: ignore if event is older than cached data
     const lastSeq = getLastSequence(old);
@@ -184,10 +190,20 @@ function applyStatusEvent(
     data => {
       if (!data) return undefined;
 
+      const itemExists = data.items.some(item => item.id === doc_id);
+      
+      // If document doesn't exist in list, invalidate to fetch it
+      if (!itemExists) {
+        queryClient.invalidateQueries({ queryKey: ['rag', 'list'], exact: false });
+        return data;
+      }
+
       const updatedItems = data.items.map(item => {
         if (item.id === doc_id) {
           return {
             ...item,
+            // Update both fields to keep UI in sync regardless of which one it reads
+            status: status as RagDocument['agg_status'],
             agg_status: status as RagDocument['agg_status'],
             updated_at: event.timestamp,
           };
@@ -259,6 +275,9 @@ function applyEmbedProgressEvent(
     { queryKey: ['rag', 'detail'], exact: false },
     old => {
     if (!old) return undefined;
+    if ((old as any).doc_id && (old as any).doc_id !== doc_id) {
+      return old;
+    }
 
     const lastSeq = getLastSequence(old);
     if (event.seq <= lastSeq) {

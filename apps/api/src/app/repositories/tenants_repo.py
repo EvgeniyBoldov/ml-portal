@@ -83,15 +83,8 @@ class AsyncTenantsRepository:
         return True
 
     async def get_tenants_by_model(self, model: str) -> List[Tenants]:
-        """Get tenants using a specific model"""
-        from sqlalchemy import or_
+        """Get tenants using a specific model as extra embedding"""
         result = await self.session.execute(
-            select(Tenants)
-            .where(
-                or_(
-                    Tenants.embed_models.contains([model]),
-                    Tenants.rerank_model == model
-                )
-            )
+            select(Tenants).where(Tenants.extra_embed_model == model)
         )
         return result.scalars().all()

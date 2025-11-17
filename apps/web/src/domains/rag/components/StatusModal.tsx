@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { qk } from '@shared/api/keys';
 import { useRagDocument } from '@shared/api/hooks/useRagDocuments';
@@ -9,6 +9,9 @@ import Modal from '@shared/ui/Modal';
 import { useToast } from '@shared/ui/Toast';
 import { idempotencyKey } from '@shared/lib/idempotency';
 import { apiRequest } from '@shared/api/http';
+import { config } from '@shared/config';
+import { openSSE, SSEMessage } from '@shared/lib/sse';
+import { applyRagEvents } from '@/app/providers/applyRagEvents';
 import styles from './StatusModal.module.css';
 
 interface StatusModalProps {
@@ -18,12 +21,27 @@ interface StatusModalProps {
 
 export function StatusModal({ docId, onClose }: StatusModalProps) {
   const queryClient = useQueryClient();
+  const sseRef = useRef<ReturnType<typeof openSSE> | null>(null);
   const { showToast } = useToast();
   const [selectedStage, setSelectedStage] = useState<StageKey | null>(null);
   const [selectedModelId, setSelectedModelId] = useState<string | undefined>(undefined);
 
   // Ensure we actually fetch document detail when modal opens
   const { data: docStatus, isLoading, error } = useRagDocument(docId);
+
+  useEffect(() => {
+    const url = `${config.ragEventsUrl}?document_id=${encodeURIComponent(docId)}`;
+    const client = openSSE(url, (events: SSEMessage[]) => {
+      applyRagEvents(events, queryClient);
+    });
+    sseRef.current = client;
+    return () => {
+      if (sseRef.current) {
+        sseRef.current.disconnect();
+        sseRef.current = null;
+      }
+    };
+  }, [docId, queryClient]);
 
   // Не выбираем этап автоматически — детали откроются только после выбора кружка
 

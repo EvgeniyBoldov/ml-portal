@@ -21,90 +21,124 @@ import os
 from pathlib import Path
 from datetime import datetime
 from sqlalchemy import text
-from typing import Dict
+from typing import Any, Dict, List, Optional
 
 
-async def ensure_models_exist(session_factory) -> list[str]:
+async def ensure_models_exist(session_factory) -> Dict[str, Any]:
     """Проверяет наличие моделей в файловой системе и создает записи в БД"""
     models_dir = Path("/app/models_llm")
-    available_models = []
-    
-    # Список ожидаемых моделей
-    expected_models = [
+    expected_models: List[Dict[str, Any]] = [
         {
             "model": "all-MiniLM-L6-v2",
             "version": "latest",
             "modality": "text",
             "vector_dim": 384,
             "path": str(models_dir / "sentence-transformers--all-MiniLM-L6-v2"),
-            "default_for_new": True
+            "is_global": True,
         },
         {
-            "model": "multilingual-e5-small", 
+            "model": "multilingual-e5-small",
             "version": "latest",
             "modality": "text",
             "vector_dim": 384,
             "path": str(models_dir / "multilingual-e5-small"),
-            "default_for_new": True
+            "is_global": False,
         },
         {
             "model": "bge-large-en",
-            "version": "latest", 
+            "version": "latest",
             "modality": "text",
             "vector_dim": 1024,
             "path": str(models_dir / "bge-large-en"),
-            "default_for_new": False
-        }
+            "is_global": False,
+        },
     ]
-    
+
+    available_text_models: List[str] = []
+    available_rerank_models: List[str] = []
+    global_text_model: Optional[str] = None
+    global_rerank_model: Optional[str] = None
+
     async with session_factory() as session:
         try:
             model_repo = AsyncModelRegistryRepository(session)
-            
+
             for model_info in expected_models:
                 model_path = Path(model_info["path"])
-                
-                # Проверяем, существует ли модель в файловой системе
-                if model_path.exists() and model_path.is_dir():
-                    print(f"✅ Найдена модель: {model_info['model']}")
-                    
-                    # Проверяем, есть ли уже запись в БД
-                    existing_model = await model_repo.get_by_model(model_info["model"])
-                    
-                    if not existing_model:
-                        # Создаем запись в БД
-                        await model_repo.create({
-                            "id": uuid.uuid4(),
-                            "model": model_info["model"],
-                            "version": model_info["version"],
-                            "modality": model_info["modality"],
-                            "state": "active",
-                            "vector_dim": model_info["vector_dim"],
-                            "path": model_info["path"],
-                            "default_for_new": model_info["default_for_new"],
-                            "notes": f"Auto-created from {model_path}"
-                        })
-                        print(f"   📝 Создана запись в БД: {model_info['model']}")
-                    else:
-                        print(f"   📝 Запись уже существует: {model_info['model']}")
-                    
-                    available_models.append(model_info["model"])
-                else:
+
+                if not model_path.exists() or not model_path.is_dir():
                     print(f"⚠️  Модель не найдена: {model_info['model']} (путь: {model_path})")
-            
+                    continue
+
+                print(f"✅ Найдена модель: {model_info['model']}")
+                existing_model = await model_repo.get_by_model(model_info["model"])
+
+                payload = {
+                    "version": model_info["version"],
+                    "modality": model_info["modality"],
+                    "state": "active",
+                    "vector_dim": model_info.get("vector_dim"),
+                    "path": model_info["path"],
+                    "is_global": model_info.get("is_global", False),
+                    "notes": f"Auto-created from {model_path}",
+                }
+
+                if existing_model:
+                    update_data = {
+                        key: value
+                        for key, value in payload.items()
+                        if getattr(existing_model, key) != value
+                    }
+
+                    if update_data:
+                        await model_repo.update(existing_model.id, update_data)
+                        print(f"   🔄 Обновлена запись в БД: {model_info['model']}")
+                    else:
+                        print(f"   📝 Запись уже актуальна: {model_info['model']}")
+                else:
+                    create_payload = {
+                        "id": uuid.uuid4(),
+                        "model": model_info["model"],
+                        **payload,
+                    }
+                    await model_repo.create(create_payload)
+                    print(f"   📝 Создана запись в БД: {model_info['model']}")
+
+                if model_info["modality"] == "text":
+                    available_text_models.append(model_info["model"])
+                    if model_info.get("is_global"):
+                        global_text_model = model_info["model"]
+                elif model_info["modality"] == "rerank":
+                    available_rerank_models.append(model_info["model"])
+                    if model_info.get("is_global"):
+                        global_rerank_model = model_info["model"]
+
             await session.commit()
-            return available_models
-            
+            return {
+                "available_text_models": available_text_models or None,
+                "global_text_model": global_text_model,
+                "available_rerank_models": available_rerank_models or None,
+                "global_rerank_model": global_rerank_model,
+            }
+
         except Exception as e:
             print(f"❌ Ошибка при проверке моделей: {e}")
             await session.rollback()
-            return []
+            return {
+                "available_text_models": None,
+                "global_text_model": None,
+                "available_rerank_models": None,
+                "global_rerank_model": None,
+            }
 
 
-async def create_default_tenant(session_factory, available_models: list[str]) -> uuid.UUID:
-    """Создает тенант по умолчанию с доступными моделями"""
+async def create_default_tenant(session_factory, models_info: Dict[str, Any]) -> uuid.UUID:
+    """Создает тенант по умолчанию с привязкой к доступным моделям"""
     tenant_name = "admins"
-    
+    global_text_model = models_info.get("global_text_model")
+    text_models = models_info.get("available_text_models") or []
+    extra_embed_model = next((m for m in text_models if m != global_text_model), None)
+
     async with session_factory() as session:
         try:
             tenants_repo = AsyncTenantsRepository(session)
@@ -114,47 +148,33 @@ async def create_default_tenant(session_factory, available_models: list[str]) ->
             
             if existing_tenant:
                 print(f"✅ Тенант {tenant_name} уже существует (ID: {existing_tenant.id})")
+                should_commit = False
+                if extra_embed_model and existing_tenant.extra_embed_model != extra_embed_model:
+                    print("   🔄 Обновляем extra_embed_model для существующего тенанта")
+                    existing_tenant.extra_embed_model = extra_embed_model
+                    should_commit = True
+                if should_commit:
+                    await session.commit()
                 return existing_tenant.id
             
             # Создаем тенант
             print(f"🏢 Создаем тенант {tenant_name}...")
             
-            # Берем первые 2 модели для embed_models (максимум 2)
-            embed_models = available_models[:2] if available_models else []
-            
-            # Создаем тенант через сырой SQL
-            tenant_id = uuid.uuid4()
-            await session.execute(
-                text("""
-                    INSERT INTO tenants (id, name, is_active, embed_models, rerank_model, ocr, layout, created_at, updated_at)
-                    VALUES (:id, :name, :is_active, :embed_models, :rerank_model, :ocr, :layout, :created_at, :updated_at)
-                """),
-                {
-                    "id": tenant_id,
-                    "name": tenant_name,
-                    "is_active": True,
-                    "embed_models": embed_models,
-                    "rerank_model": None,
-                    "ocr": False,
-                    "layout": False,
-                    "created_at": datetime.utcnow(),
-                    "updated_at": datetime.utcnow()
-                }
+            tenant = await tenants_repo.create(
+                name=tenant_name,
+                is_active=True,
+                description="Default administrators tenant",
+                extra_embed_model=extra_embed_model,
+                ocr=False,
+                layout=False,
             )
-            
-            # Получаем созданный тенант
-            result = await session.execute(
-                text("SELECT id, name FROM tenants WHERE id = :id"),
-                {"id": tenant_id}
-            )
-            tenant_row = result.fetchone()
-            tenant = type('Tenant', (), {'id': tenant_row[0], 'name': tenant_row[1]})()
-            
+
             await session.commit()
-            
+
             print(f"✅ Тенант {tenant_name} создан!")
             print(f"   🆔 ID: {tenant.id}")
-            print(f"   🤖 Embed модели: {embed_models}")
+            print(f"   🤖 Global embed: {global_text_model}")
+            print(f"   ➕ Extra embed: {extra_embed_model}")
             
             return tenant.id
             
@@ -217,11 +237,15 @@ async def create_default_admin():
         try:
             # 1. Проверяем и создаем модели в БД
             print("🤖 Проверяем наличие моделей...")
-            available_models = await ensure_models_exist(session_factory)
+            models_info = await ensure_models_exist(session_factory)
+            available_text_models = models_info.get("available_text_models") or []
+            global_text_model = models_info.get("global_text_model")
+            if not global_text_model:
+                print("⚠️  Не удалось определить глобальную текстовую модель. Проверьте файлы моделей.")
             
             # 2. Создаем тенант по умолчанию
             print("🏢 Создаем тенант по умолчанию...")
-            tenant_id = await create_default_tenant(session_factory, available_models)
+            tenant_id = await create_default_tenant(session_factory, models_info)
             
             # 3. Создаем или находим admin пользователя
             from sqlalchemy import text
@@ -298,7 +322,12 @@ async def create_default_admin():
                     async with session_factory() as _s2:
                         mr = AsyncModelRegistryRepository(_s2)
                         vector_store = QdrantVectorStore()
-                        for model_alias in available_models:
+                        target_models = sorted(
+                            set(available_text_models + ([global_text_model] if global_text_model else []))
+                        )
+                        for model_alias in target_models:
+                            if not model_alias:
+                                continue
                             m = await mr.get_by_model(model_alias)
                             if m and getattr(m, "vector_dim", None):
                                 collection_name = f"{tenant_id}__{model_alias}"

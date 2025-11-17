@@ -61,6 +61,7 @@ def index_model(self: Task, embed_result: Dict[str, Any], tenant_id: str) -> Dic
             
             # Get Redis client for distributed lock
             import redis.asyncio as redis
+            from redis.exceptions import LockError as RedisLockError
             redis_client = redis.from_url(settings.REDIS_URL, decode_responses=True)
             
             # Distributed lock to prevent parallel execution
@@ -83,7 +84,7 @@ def index_model(self: Task, embed_result: Dict[str, Any], tenant_id: str) -> Dic
                             new_status=StageStatus.PROCESSING,
                             celery_task_id=self.request.id
                         )
-                        await session.flush()  # Flush for SSE
+                        await session.flush()  # Trigger SSE
                         
                         # Check idempotency
                         idem_key = get_idempotency_key(
@@ -99,7 +100,8 @@ def index_model(self: Task, embed_result: Dict[str, Any], tenant_id: str) -> Dic
                                 new_status=StageStatus.COMPLETED,
                                 metrics={'status': 'already_processed', 'cached': True}
                             )
-                            await session.flush()  # Flush for SSE
+                            await session.flush()  # Trigger SSE
+                            await session.commit()  # Commit before return
                             return {"status": "already_processed", "source_id": source_id, "model_alias": model_alias}
                         
                         # If embed_result is idempotent and contains no embeddings, treat as cached no-op
@@ -111,12 +113,13 @@ def index_model(self: Task, embed_result: Dict[str, Any], tenant_id: str) -> Dic
                                 new_status=StageStatus.COMPLETED,
                                 metrics={'status': 'already_processed', 'cached': True, 'no_op': True}
                             )
-                            await session.flush()  # Flush for SSE
+                            await session.flush()  # Trigger SSE
                             await redis_client.setex(
                                 idem_key,
                                 86400,
                                 json.dumps({"status": "completed", "indexed_count": 0, "cached": True})
                             )
+                            await session.commit()  # Commit before return
                             return {"status": "already_processed", "source_id": source_id, "model_alias": model_alias}
 
                         # Get chunks for metadata
@@ -190,7 +193,7 @@ def index_model(self: Task, embed_result: Dict[str, Any], tenant_id: str) -> Dic
                             }
                         )
                         
-                        await session.flush()  # Flush index completion
+                        await session.flush()  # Trigger SSE
                         
                         # Store idempotency
                         await redis_client.setex(
@@ -199,13 +202,15 @@ def index_model(self: Task, embed_result: Dict[str, Any], tenant_id: str) -> Dic
                             json.dumps({"status": "completed", "indexed_count": indexed_count})
                         )
                         
+                        await session.commit()  # Final commit
+                        
                         return {
                             "source_id": source_id,
                             "model_alias": model_alias,
                             "indexed_count": indexed_count,
                             "status": "completed"
                         }
-            except redis.exceptions.LockError as lock_err:
+            except RedisLockError as lock_err:
                 logger.warning(f"Could not acquire lock for {source_id}:{model_alias}, task may be running: {lock_err}")
                 raise
             except Exception as e:

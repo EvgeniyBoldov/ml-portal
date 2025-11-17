@@ -15,13 +15,9 @@ export default function Chat() {
   const { state, loadMessages, setCurrentChat, sendMessageStream } = useChat();
 
   const [text, setText] = useState('');
-  const [busy, setBusy] = useState(false);
   const [useRag, setUseRag] = useState(false);
-  const [streamText, setStreamText] = useState('');
+  const [busy, setBusy] = useState(false);
   const [streamError, setStreamError] = useState<string | null>(null);
-
-  // Throttled версия setStreamText для плавности
-  const throttledSetStreamText = useThrottle(setStreamText, 16); // ~60fps
 
   // Ref для контейнера истории сообщений
   const historyRef = useRef<HTMLDivElement>(null);
@@ -39,10 +35,10 @@ export default function Chat() {
     }
   };
 
-  // Автоскролл при изменении сообщений или стрима
+  // Автоскролл при изменении сообщений
   useEffect(() => {
     scrollToBottom();
-  }, [messages.length, streamText]);
+  }, [messages.length]);
 
   useEffect(() => {
     if (!chatId) return;
@@ -51,8 +47,9 @@ export default function Chat() {
     if (!state.messagesByChat[chatId]?.loaded) {
       loadMessages(chatId).catch(console.error);
     }
-    // cleanup stream text on chat switch
-    setStreamText('');
+    // cleanup on chat switch
+    setBusy(false);
+    setStreamError(null);
   }, [chatId]);
 
   if (!chatId) {
@@ -70,7 +67,6 @@ export default function Chat() {
   async function onSend() {
     if (!text.trim()) return;
     setBusy(true);
-    setStreamText('');
     setStreamError(null);
     const toSend = text;
     setText('');
@@ -79,7 +75,7 @@ export default function Chat() {
         chatId || '',
         toSend,
         useRag,
-        delta => throttledSetStreamText(delta),
+        () => {}, // onChunk not needed - context updates messages
         (err: string) => setStreamError(err)
       );
     } catch (e: any) {
@@ -87,7 +83,6 @@ export default function Chat() {
       setStreamError(e?.message || 'Ошибка при отправке сообщения');
     } finally {
       setBusy(false);
-      setStreamText('');
     }
   }
 
@@ -113,36 +108,39 @@ export default function Chat() {
     <div className={styles.main}>
       <Card className={styles.card}>
         <div className={styles.history} ref={historyRef}>
-          {messages.map(m => {
+          {messages.map((m, idx) => {
             const contentText = normalizeContent(m.content);
+            const isLastAssistant = m.role === 'assistant' && idx === messages.length - 1;
+            const showStatus = isLastAssistant && state.streamStatus;
+            
             return (
-              <div
-                key={m.id}
-                className={
-                  m.role === 'user' ? styles.userMsg : styles.assistantMsg
-                }
-              >
-                <div className={styles.body}>
-                  {m.role === 'assistant' ? (
-                    <MarkdownRenderer content={contentText} />
-                  ) : (
-                    contentText
-                  )}
+              <div key={m.id}>
+                {showStatus && (
+                  <div className={styles.streamStatus} aria-live="polite" aria-busy="true">
+                    {state.streamStatus}
+                  </div>
+                )}
+                <div
+                  className={
+                    m.role === 'user' ? styles.userMsg : styles.assistantMsg
+                  }
+                >
+                  <div className={styles.body}>
+                    {m.role === 'assistant' ? (
+                      contentText ? (
+                        <MarkdownRenderer content={contentText} />
+                      ) : (
+                        <span style={{ opacity: 0.7 }}>Загрузка...</span>
+                      )
+                    ) : (
+                      contentText
+                    )}
+                  </div>
                 </div>
               </div>
             );
           })}
-          {streamText && (
-            <div className={styles.assistantMsg}>
-              <div className={styles.body}>
-                <MarkdownRenderer
-                  content={streamText}
-                  enableSyntaxHighlighting={false}
-                />
-              </div>
-            </div>
-          )}
-          {messages.length === 0 && !state.isLoading && !streamText && (
+          {messages.length === 0 && !state.isLoading && (
             <div style={{ opacity: 0.7 }}>Сообщений пока нет.</div>
           )}
           {streamError && (

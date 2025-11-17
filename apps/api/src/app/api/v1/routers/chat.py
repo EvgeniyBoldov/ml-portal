@@ -181,10 +181,28 @@ async def send_message_stream(
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid chat ID")
     
-    # Require tenant_id from user context (no dev fallback)
-    if not current_user.tenant_ids:
-        raise HTTPException(status_code=400, detail="Tenant ID is required")
-    tenant_id = uuid.UUID(str(current_user.tenant_ids[0]))
+    # Resolve tenant_id: prefer from user token; fallback to chat's tenant
+    tenant_id: Optional[uuid.UUID] = None
+    if current_user.tenant_ids:
+        try:
+            tenant_id = uuid.UUID(str(current_user.tenant_ids[0]))
+        except Exception:
+            tenant_id = None
+    if tenant_id is None:
+        # Fallback: fetch chat to derive tenant_id
+        try:
+            from sqlalchemy import select
+            from app.models.chat import Chats
+            result = await session.execute(select(Chats).where(Chats.id == chat_uuid))
+            chat_row = result.scalar_one_or_none()
+            if chat_row and chat_row.tenant_id:
+                tenant_id = uuid.UUID(str(chat_row.tenant_id))
+            else:
+                raise HTTPException(status_code=400, detail="Tenant ID is required")
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(status_code=400, detail="Tenant ID is required")
 
     # Use repository factory bound to the current request's DB session
     repo_factory = AsyncRepositoryFactory(session, tenant_id, current_user.id)
@@ -217,9 +235,25 @@ async def send_message_stream(
                     data = json.dumps({"message_id": event["message_id"]})
                     yield f"event: user_message\ndata: {data}\n\n"
                 
+                elif event_type == "status":
+                    # Stream status updates
+                    data = json.dumps({"stage": event.get("stage", "")})
+                    yield f"event: status\ndata: {data}\n\n"
+                
                 elif event_type == "delta":
-                    # Stream content chunk
-                    yield f"event: delta\ndata: {event['content']}\n\n"
+                    # Stream content chunk preserving newlines per SSE spec
+                    try:
+                        yield "event: delta\n"
+                        chunk_text = str(event.get('content', ''))
+                        for line in chunk_text.splitlines():
+                            yield f"data: {line}\n"
+                        # Preserve trailing newline
+                        if chunk_text.endswith("\n"):
+                            yield "data:\n"
+                        yield "\n"
+                    except Exception:
+                        # Fallback: single data line
+                        yield f"event: delta\ndata: {event.get('content','')}\n\n"
                 
                 elif event_type == "final":
                     # Send final message ID

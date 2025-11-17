@@ -3,7 +3,7 @@ Model Registry Pydantic schemas
 """
 from __future__ import annotations
 from typing import List, Optional, Dict, Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from datetime import datetime
 
 
@@ -15,8 +15,15 @@ class ModelRegistryBase(BaseModel):
     state: str = Field(default="active", description="Model state: active|archived|retired|disabled")
     vector_dim: Optional[int] = Field(None, description="Vector dimension for embedding models")
     path: str = Field(..., description="Full path to model directory")
-    default_for_new: bool = Field(default=False, description="Use as default for new tenants")
+    is_global: bool = Field(
+        default=False,
+        alias="global",
+        serialization_alias="global",
+        description="Mark as global model for modality",
+    )
     notes: Optional[str] = Field(None, description="Additional notes about the model")
+
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class ModelRegistryCreate(ModelRegistryBase):
@@ -27,8 +34,15 @@ class ModelRegistryCreate(ModelRegistryBase):
 class ModelRegistryUpdate(BaseModel):
     """Schema for updating a model registry entry"""
     state: Optional[str] = Field(None, description="Model state: active|archived|retired|disabled")
-    default_for_new: Optional[bool] = Field(None, description="Use as default for new tenants")
+    is_global: Optional[bool] = Field(
+        None,
+        alias="global",
+        serialization_alias="global",
+        description="Mark as global model for modality",
+    )
     notes: Optional[str] = Field(None, description="Additional notes about the model")
+
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class ModelRegistry(ModelRegistryBase):

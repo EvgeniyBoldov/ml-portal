@@ -41,6 +41,24 @@ export async function getRagDocuments(
  * Exported for use in React Query select
  */
 export function adaptStatusGraphToDocStatus(graph: StatusGraph): DocStatus {
+  // Map backend status -> frontend StageState
+  const mapState = (s: string | undefined): StageState => {
+    switch (s) {
+      case 'completed':
+        return 'ok';
+      case 'failed':
+        return 'error';
+      case 'processing':
+        return 'running';
+      case 'cancelled':
+        return 'skipped';
+      case 'queued':
+      case 'pending':
+        return s as StageState;
+      default:
+        return 'idle';
+    }
+  };
   // Map pipeline nodes to stages
   const stages: Record<StageKey, StageStatus> = {} as Record<StageKey, StageStatus>;
   
@@ -48,7 +66,7 @@ export function adaptStatusGraphToDocStatus(graph: StatusGraph): DocStatus {
     const stageKey = node.key as StageKey;
     stages[stageKey] = {
       stage: stageKey,
-      state: node.status as StageState,
+      state: mapState(node.status),
       started_at: node.started_at,
       finished_at: node.finished_at,
       error: node.error,
@@ -60,7 +78,7 @@ export function adaptStatusGraphToDocStatus(graph: StatusGraph): DocStatus {
   const embed_models: IndexModelStatus[] = graph.embeddings.map((emb) => ({
     id: emb.model,
     name: emb.model,
-    state: emb.status as StageState,
+    state: mapState(emb.status),
     started_at: emb.started_at,
     finished_at: emb.finished_at,
     error: emb.error,
@@ -71,7 +89,7 @@ export function adaptStatusGraphToDocStatus(graph: StatusGraph): DocStatus {
     ? graph.index.map((idx) => ({
         id: idx.model,
         name: idx.model,
-        state: idx.status as StageState,
+        state: mapState(idx.status),
         started_at: idx.started_at,
         finished_at: idx.finished_at,
         error: idx.error,

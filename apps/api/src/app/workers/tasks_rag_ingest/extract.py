@@ -64,6 +64,7 @@ def extract_document(self: Task, source_id: str, tenant_id: str) -> Dict[str, An
             )
             session_factory = async_sessionmaker(engine, expire_on_commit=False)
             
+            redis_client = None
             try:
                 async with session_factory() as session:
                     # Initialize repositories and status manager
@@ -82,7 +83,7 @@ def extract_document(self: Task, source_id: str, tenant_id: str) -> Dict[str, An
                         new_status=StageStatus.PROCESSING,
                         celery_task_id=self.request.id
                     )
-                    await session.flush()  # Flush for SSE
+                    await session.flush()  # Trigger SSE
                     
                     source_repo = AsyncSourceRepository(session, uuid.UUID(tenant_id))
 
@@ -125,7 +126,8 @@ def extract_document(self: Task, source_id: str, tenant_id: str) -> Dict[str, An
                             new_status=StageStatus.COMPLETED,
                             metrics={'status': 'already_processed', 'cached': True}
                         )
-                        await session.flush()  # Flush for SSE
+                        await session.flush()  # Trigger SSE
+                        await session.commit()  # Commit before return
                         
                         return {
                             "status": "already_processed", 
@@ -173,18 +175,35 @@ def extract_document(self: Task, source_id: str, tenant_id: str) -> Dict[str, An
                         new_status=StageStatus.COMPLETED,
                         metrics=metrics
                     )
-                    
-                    await session.flush()  # Flush for SSE  # Commit the status update
+                    await session.flush()  # Trigger SSE
 
                     # Store idempotency result
                     await redis_client.setex(idem_key, 86400, json.dumps({"status": "completed", "text_length": len(extracted_text)}))
+                    
+                    await session.commit()  # Final commit
 
                     return {
                         "source_id": source_id,
                         "extracted_text": extracted_text,
                         "status": "completed"
                     }
+            except Exception as e:
+                # Notify within same loop to avoid loop mismatch
+                try:
+                    await notify_stage_error(source_id, tenant_id, 'extract', e)
+                except Exception as notify_error:
+                    logger.error(f"Failed to notify status router about error: {notify_error}")
+                raise
             finally:
+                if redis_client:
+                    try:
+                        await redis_client.close()
+                    except Exception:
+                        pass
+                    try:
+                        await redis_client.connection_pool.disconnect()
+                    except Exception:
+                        pass
                 # Dispose engine after use
                 await engine.dispose()
 
@@ -192,9 +211,4 @@ def extract_document(self: Task, source_id: str, tenant_id: str) -> Dict[str, An
 
     except Exception as e:
         logger.error(f"Error in extract_document for {source_id}: {e}")
-        import asyncio
-        try:
-            asyncio.run(notify_stage_error(source_id, tenant_id, 'extract', e))
-        except Exception as notify_error:
-            logger.error(f"Failed to notify status router about error: {notify_error}")
         raise self.retry(exc=e, countdown=60, max_retries=3)

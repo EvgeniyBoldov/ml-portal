@@ -38,36 +38,32 @@ class RagSearchService:
     
     async def _get_tenant_models(self, tenant_id: str) -> List[str]:
         """
-        Получить активные модели эмбеддингов для тенанта
-        
-        Args:
-            tenant_id: ID тенанта
-            
-        Returns:
-            Список алиасов моделей
+        Получить активные модели эмбеддингов для тенанта: глобальный + дополнительный (если есть)
         """
         from uuid import UUID
         from app.repositories.tenants_repo import AsyncTenantsRepository
-        from app.core.config import get_embedding_models
+        from sqlalchemy import select
+        from app.models.model_registry import ModelRegistry
         
-        try:
-            session_factory = get_session_factory()
-            async with session_factory() as session:
-                tenants_repo = AsyncTenantsRepository(session)
-                tenant = await tenants_repo.get_by_id(UUID(tenant_id))
-                
-                if tenant and tenant.embed_models:
-                    logger.info(f"Using tenant-specific models: {tenant.embed_models}")
-                    return tenant.embed_models
-                else:
-                    # Fallback to global config
-                    default_models = get_embedding_models()
-                    logger.info(f"Tenant has no specific models, using default: {default_models}")
-                    return default_models
-        except Exception as e:
-            logger.error(f"Error getting tenant models: {e}, falling back to global config")
-            from app.core.config import get_embedding_models
-            return get_embedding_models()
+        session_factory = get_session_factory()
+        async with session_factory() as session:
+            tenants_repo = AsyncTenantsRepository(session)
+            tenant = await tenants_repo.get_by_id(UUID(tenant_id))
+            
+            # global embedding
+            result = await session.execute(
+                select(ModelRegistry).where((ModelRegistry.is_global == True) & (ModelRegistry.modality == "text"))
+            )
+            global_embed = result.scalars().first()
+            models: List[str] = []
+            if global_embed and global_embed.state in ("active", "archived"):
+                models.append(global_embed.model)
+            
+            # extra embedding (if any)
+            if tenant and tenant.extra_embed_model and tenant.extra_embed_model not in models:
+                models.append(tenant.extra_embed_model)
+            
+            return models
     
     async def search(
         self, 
@@ -106,7 +102,7 @@ class RagSearchService:
             search_filter = RBACValidator.build_search_filters(user)
             logger.info(f"Using RBAC filters: {search_filter}")
         
-        # Генерируем эмбеддинг для запроса (используем первую модель)
+        # Генерируем эмбеддинг для запроса (используем глобальную модель = первая в списке)
         embedding_service = EmbeddingServiceFactory.get_service(models[0])
         query_embedding = await asyncio.to_thread(embedding_service.embed_texts, [query])
         query_embedding = query_embedding[0]

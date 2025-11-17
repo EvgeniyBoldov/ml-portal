@@ -9,7 +9,9 @@ export interface RagDocument {
     | 'embedding'
     | 'ready'
     | 'failed'
-    | 'archived';
+    | 'archived'
+    | 'partial'
+    | 'missing';
   agg_details_json?: Record<string, unknown>;
   scope: 'local' | 'global';
   created_at: string;

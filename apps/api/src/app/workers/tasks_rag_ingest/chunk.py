@@ -92,7 +92,7 @@ def chunk_document(self: Task, normalize_result: Dict[str, Any], tenant_id: str,
                         new_status=StageStatus.PROCESSING,
                         celery_task_id=self.request.id
                     )
-                    await session.flush()  # Flush to send status update via SSE
+                    await session.flush()  # Trigger SSE
                     
                     source_repo = AsyncSourceRepository(session, uuid.UUID(tenant_id))
                     chunk_repo = AsyncChunkRepository(session, uuid.UUID(tenant_id))
@@ -127,7 +127,8 @@ def chunk_document(self: Task, normalize_result: Dict[str, Any], tenant_id: str,
                             new_status=StageStatus.COMPLETED,
                             metrics={'status': 'already_processed', 'cached': True}
                         )
-                        await session.flush()  # Flush for SSE
+                        await session.flush()  # Trigger SSE
+                        await session.commit()  # Commit before return
                         return {"status": "already_processed", "source_id": source_id}
 
                     # Chunk the text
@@ -218,10 +219,12 @@ def chunk_document(self: Task, normalize_result: Dict[str, Any], tenant_id: str,
                                 last_error=None
                             )
                 
-                    await session.flush()  # Flush status update + outbox events
+                    await session.flush()  # Trigger SSE + outbox events
 
                     # Store idempotency result
                     await redis_client.setex(idem_key, 86400, json.dumps({"status": "completed", "chunks_count": len(chunks)}))
+                    
+                    await session.commit()  # Final commit
 
                     return {
                         "source_id": source_id,

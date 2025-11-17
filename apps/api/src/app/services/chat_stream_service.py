@@ -157,6 +157,8 @@ class ChatStreamService:
                 content={"text": content}
             )
             await self.session.flush()  # Flush message
+            # Commit to persist user message early so it is visible on reloads
+            await self.session.commit()
             
             user_message_id = str(user_message.id)
             logger.info(f"User message created: {user_message_id}")
@@ -259,6 +261,8 @@ class ChatStreamService:
                     content={"text": assistant_content}
                 )
                 await self.session.flush()  # Flush message
+                # Commit to persist assistant message as soon as it is saved
+                await self.session.commit()
                 
                 assistant_message_id = str(assistant_message.id)
                 logger.info(f"Assistant message saved: {assistant_message_id}")

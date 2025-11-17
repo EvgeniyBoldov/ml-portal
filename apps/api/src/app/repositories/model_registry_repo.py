@@ -100,33 +100,16 @@ class AsyncModelRegistryRepository:
         return True
     
     async def count_tenants_using(self, model: str) -> int:
-        """Count tenants using a specific model"""
-        # Count tenants using this model as embed_model
-        embed_count = await self.session.execute(
-            select(func.count(Tenants.id))
-            .where(Tenants.embed_models.contains([model]))
+        """Count tenants using a specific model as extra embedding"""
+        result = await self.session.execute(
+            select(func.count(Tenants.id)).where(Tenants.extra_embed_model == model)
         )
-        embed_result = embed_count.scalar() or 0
-        
-        # Count tenants using this model as rerank_model
-        rerank_count = await self.session.execute(
-            select(func.count(Tenants.id))
-            .where(Tenants.rerank_model == model)
-        )
-        rerank_result = rerank_count.scalar() or 0
-        
-        return embed_result + rerank_result
+        return result.scalar() or 0
     
     async def get_tenants_by_model(self, model: str) -> List[Tenants]:
-        """Get tenants using a specific model"""
+        """Get tenants using a specific model as extra embedding"""
         result = await self.session.execute(
-            select(Tenants)
-            .where(
-                or_(
-                    Tenants.embed_models.contains([model]),
-                    Tenants.rerank_model == model
-                )
-            )
+            select(Tenants).where(Tenants.extra_embed_model == model)
         )
         return result.scalars().all()
     
@@ -137,12 +120,21 @@ class AsyncModelRegistryRepository:
         )
         return result.scalars().all()
     
-    async def get_default_models(self) -> List[ModelRegistry]:
-        """Get models marked as default for new tenants"""
+    async def get_global_models(self) -> List[ModelRegistry]:
+        """Get models marked as global"""
         result = await self.session.execute(
-            select(ModelRegistry).where(ModelRegistry.default_for_new == True)
+            select(ModelRegistry).where(ModelRegistry.is_global == True)
         )
         return result.scalars().all()
+
+    async def get_global_by_modality(self, modality: str) -> Optional[ModelRegistry]:
+        """Get the global model for a given modality if configured"""
+        result = await self.session.execute(
+            select(ModelRegistry).where(
+                (ModelRegistry.is_global == True) & (ModelRegistry.modality == modality)
+            )
+        )
+        return result.scalars().first()
     
     async def count_total(self) -> int:
         """Get total count of models"""

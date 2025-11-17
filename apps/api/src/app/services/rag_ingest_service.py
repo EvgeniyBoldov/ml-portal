@@ -13,6 +13,7 @@ from app.workers.tasks_rag_ingest import (
     normalize_document,
     chunk_document,
     embed_chunks_model,
+    index_model,
 )
 from celery import chain, group
 from app.core.logging import get_logger
@@ -101,13 +102,16 @@ class RAGIngestService:
         # chunk_document(signature): (normalize_result, tenant_id)
         chunk_task = chunk_document.s(str(self.repo_factory.tenant_id))
 
-        # parallel embed per model
-        embedding_tasks = [
-            embed_chunks_model.s(str(self.repo_factory.tenant_id), model_alias)
+        # parallel (embed -> index) per model
+        embedding_index_chains = [
+            chain(
+                embed_chunks_model.s(str(self.repo_factory.tenant_id), model_alias),
+                index_model.s(str(self.repo_factory.tenant_id)),
+            )
             for model_alias in embedding_models
         ]
 
-        pipeline = chain(extract_task, normalize_task, chunk_task, group(embedding_tasks))
+        pipeline = chain(extract_task, normalize_task, chunk_task, group(embedding_index_chains))
         
         # Start the pipeline
         pipeline.apply_async()
@@ -164,11 +168,14 @@ class RAGIngestService:
             extract_task = extract_document.s(str(document_id), str(self.repo_factory.tenant_id))
             normalize_task = normalize_document.s(str(self.repo_factory.tenant_id))
             chunk_task = chunk_document.s(str(self.repo_factory.tenant_id))
-            embedding_tasks = [
-                embed_chunks_model.s(str(self.repo_factory.tenant_id), m)
+            embedding_index_chains = [
+                chain(
+                    embed_chunks_model.s(str(self.repo_factory.tenant_id), m),
+                    index_model.s(str(self.repo_factory.tenant_id)),
+                )
                 for m in embedding_models
             ]
-            task = chain(extract_task, normalize_task, chunk_task, group(embedding_tasks)).apply_async()
+            task = chain(extract_task, normalize_task, chunk_task, group(embedding_index_chains)).apply_async()
         elif step == Step.EMBED:
             if not model_alias:
                 raise ValueError("Model alias required for embed step")

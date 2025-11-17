@@ -21,8 +21,7 @@ export interface TenantCreate {
   name: string;
   description?: string;
   is_active?: boolean;
-  embed_models?: string[];
-  rerank_model?: string;
+  extra_embed_model?: string;
   ocr?: boolean;
   layout?: boolean;
 }
@@ -31,8 +30,7 @@ export interface TenantUpdate {
   name?: string;
   description?: string;
   is_active?: boolean;
-  embed_models?: string[];
-  rerank_model?: string;
+  extra_embed_model?: string | null;
   ocr?: boolean;
   layout?: boolean;
 }

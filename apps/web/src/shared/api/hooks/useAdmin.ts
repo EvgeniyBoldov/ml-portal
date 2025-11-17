@@ -18,6 +18,7 @@ import {
   type Tenant,
   type EmailSettings,
   type EmailSettingsUpdate,
+  type ModelRegistry,
 } from '../admin';
 import { qk } from '@shared/api/keys';
 
@@ -60,6 +61,27 @@ export function useCreateUser() {
       queryClient.invalidateQueries({ queryKey: qk.admin.users() });
     },
   });
+}
+
+export function useUpdateModel() {
+  const queryClient = useQueryClient();
+
+  return useMutation<ModelRegistry, Error, { id: string; data: Partial<ModelRegistry> }>(
+    {
+      mutationFn: ({ id, data }: { id: string; data: Partial<ModelRegistry> }) =>
+        adminApi.updateModel(id, data),
+      retry: false,
+      onSuccess: (
+        _model: ModelRegistry,
+        variables: { id: string; data: Partial<ModelRegistry> }
+      ) => {
+        queryClient.invalidateQueries({ queryKey: qk.admin.models() });
+        queryClient.invalidateQueries({
+          queryKey: ['admin', 'models', variables.id, 'tenants'],
+        });
+      },
+    }
+  );
 }
 
 export function useUpdateUser() {

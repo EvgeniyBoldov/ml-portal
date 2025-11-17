@@ -23,8 +23,8 @@ export function calculateAggregateStatus(
     pipelineStatuses[stage.key] = stage.status;
   }
 
-  // 1. If any pipeline stage has error → failed
-  if (Object.values(pipelineStatuses).some(status => status === 'error')) {
+  // 1. If any pipeline stage has failed → failed
+  if (Object.values(pipelineStatuses).some(status => status === 'failed')) {
     return {
       status: 'failed',
       details: {
@@ -36,9 +36,9 @@ export function calculateAggregateStatus(
     };
   }
 
-  // 2. Special case: uploaded (upload=ok, others=pending)
+  // 2. Special case: uploaded (upload=completed, others=pending)
   if (
-    pipelineStatuses['upload'] === 'ok' &&
+    pipelineStatuses['upload'] === 'completed' &&
     Object.entries(pipelineStatuses)
       .filter(([key]) => key !== 'upload')
       .every(([, status]) => status === 'pending')
@@ -54,10 +54,10 @@ export function calculateAggregateStatus(
     };
   }
 
-  // 3. If any pipeline stage is pending or running → processing
+  // 3. If any pipeline stage is pending/queued/processing → processing
   if (
     Object.values(pipelineStatuses).some(
-      status => status === 'pending' || status === 'running'
+      status => status === 'pending' || status === 'queued' || status === 'processing'
     )
   ) {
     return {
@@ -81,13 +81,12 @@ export function calculateAggregateStatus(
   const N = targetModels.length || embeddings.length; // Total target models
   const R =
     targetModels.length > 0
-      ? targetModels.filter(model => embeddingStatuses[model] === 'ok').length
-      : embeddings.filter(emb => emb.status === 'ok').length;
+      ? targetModels.filter(model => embeddingStatuses[model] === 'completed').length
+      : embeddings.filter(emb => emb.status === 'completed').length;
   const E =
     targetModels.length > 0
-      ? targetModels.filter(model => embeddingStatuses[model] === 'error')
-          .length
-      : embeddings.filter(emb => emb.status === 'error').length;
+      ? targetModels.filter(model => embeddingStatuses[model] == 'failed').length
+      : embeddings.filter(emb => emb.status == 'failed').length;
   const MISSING = N - (R + E);
 
   // Calculate aggregate status
@@ -96,10 +95,10 @@ export function calculateAggregateStatus(
 
   if (N === 0) {
     // No target models - check if pipeline completed successfully
-    if (Object.values(pipelineStatuses).every(s => s === 'ok')) {
+    if (Object.values(pipelineStatuses).every(s => s === 'completed')) {
       if (embeddings.length > 0) {
-        const successful = embeddings.filter(emb => emb.status === 'ok').length;
-        const error = embeddings.filter(emb => emb.status === 'error').length;
+        const successful = embeddings.filter(emb => emb.status === 'completed').length;
+        const error = embeddings.filter(emb => emb.status === 'failed').length;
 
         if (successful > 0) {
           if (error === 0) {

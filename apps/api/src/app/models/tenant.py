@@ -1,7 +1,7 @@
 
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy import String, Boolean, ForeignKey, DateTime, func
-from sqlalchemy.dialects.postgresql import UUID, ARRAY
+from sqlalchemy.dialects.postgresql import UUID
 import uuid
 from datetime import datetime
 from .base import Base
@@ -13,8 +13,7 @@ class Tenants(Base):
     description: Mapped[str | None] = mapped_column(String(500), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     # Model-related fields
-    embed_models: Mapped[list[str] | None] = mapped_column(ARRAY(String), nullable=True)  # max 2 models
-    rerank_model: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    extra_embed_model: Mapped[str | None] = mapped_column(String(255), ForeignKey("model_registry.model"), nullable=True)
     ocr: Mapped[bool] = mapped_column(Boolean, default=False)
     layout: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

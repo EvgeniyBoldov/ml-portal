@@ -26,12 +26,15 @@ class AsyncTenantsService:
         if not tenant:
             return None
         
-        return self._format_tenant_response(tenant)
+        return await self._build_tenant_response(tenant)
     
     async def list_tenants(self, limit: int = 100) -> List[Dict[str, Any]]:
         """List all tenants"""
         tenants = await self.repo.list(limit=limit)
-        return [self._format_tenant_response(tenant) for tenant in tenants]
+        results: List[Dict[str, Any]] = []
+        for t in tenants:
+            results.append(await self._build_tenant_response(t))
+        return results
     
     async def create_tenant(self, tenant_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Create new tenant"""
@@ -40,113 +43,116 @@ class AsyncTenantsService:
             raise ValueError("Tenant name is required")
         
         # Validate models if provided
-        if tenant_data.get("embed_models") or tenant_data.get("rerank_model"):
-            await self.validate_tenant_models(
-                tenant_data.get("embed_models"),
-                tenant_data.get("rerank_model")
-            )
+        if "extra_embed_model" in tenant_data:
+            await self.validate_tenant_models(tenant_data.get("extra_embed_model"))
         
         tenant = await self.repo.create(**tenant_data)
-        return self._format_tenant_response(tenant)
+        return await self._build_tenant_response(tenant)
     
     async def update_tenant(self, tenant_id: str, update_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Update tenant"""
         # Validate models if provided
-        if update_data.get("embed_models") is not None or update_data.get("rerank_model") is not None:
-            await self.validate_tenant_models(
-                update_data.get("embed_models"),
-                update_data.get("rerank_model")
-            )
+        if "extra_embed_model" in update_data:
+            await self.validate_tenant_models(update_data.get("extra_embed_model"))
         
         tenant = await self.repo.update(uuid.UUID(tenant_id), **update_data)
         if not tenant:
             return None
-        
-        return self._format_tenant_response(tenant)
+
+        return await self._build_tenant_response(tenant)
     
     async def delete_tenant(self, tenant_id: str) -> bool:
         """Delete tenant"""
         return await self.repo.delete(uuid.UUID(tenant_id))
     
-    async def validate_tenant_models(self, embed_models: Optional[List[str]], rerank_model: Optional[str]) -> None:
-        """Validate tenant model selections"""
-        if embed_models:
-            if len(embed_models) > 2:
-                raise ValueError("Maximum 2 embedding models allowed")
-            
-            # Validate each embed model
-            for model_id in embed_models:
-                model = await self.model_repo.get_by_model(model_id)
-                if not model:
-                    raise ValueError(f"Embedding model '{model_id}' not found")
-                if model.modality != "text":
-                    raise ValueError(f"Model '{model_id}' is not a text embedding model")
-                if model.state not in ["active", "archived"]:
-                    raise ValueError(f"Model '{model_id}' is not available (state: {model.state})")
-        
-        if rerank_model:
-            model = await self.model_repo.get_by_model(rerank_model)
-            if not model:
-                raise ValueError(f"Rerank model '{rerank_model}' not found")
-            if model.modality != "rerank":
-                raise ValueError(f"Model '{rerank_model}' is not a rerank model")
-            if model.state not in ["active", "archived"]:
-                raise ValueError(f"Model '{rerank_model}' is not available (state: {model.state})")
-        
-        # Check if at least one active embed model is selected
-        if embed_models:
-            active_embed_count = 0
-            for model_id in embed_models:
-                model = await self.model_repo.get_by_model(model_id)
-                if model and model.state == "active":
-                    active_embed_count += 1
-            
-            if active_embed_count == 0:
-                raise ValueError("At least one active embedding model is required")
+    async def validate_tenant_models(self, extra_embed_model: Optional[str]) -> None:
+        """Validate tenant's extra embedding model"""
+        if not extra_embed_model:
+            return
+        model = await self.model_repo.get_by_model(extra_embed_model)
+        if not model:
+            raise ValueError(f"Embedding model '{extra_embed_model}' not found")
+        if model.modality != "text":
+            raise ValueError(f"Model '{extra_embed_model}' is not a text embedding model")
+        if model.state not in ["active", "archived"]:
+            raise ValueError(f"Model '{extra_embed_model}' is not available (state: {model.state})")
+        if model.is_global:
+            raise ValueError("Global embedding model is already in use and cannot be selected as extra")
     
     async def get_tenant_active_models(self, tenant_id: str) -> Dict[str, Any]:
-        """Get active models for a tenant"""
+        """Get resolved active models for a tenant: global embedding + optional extra, and global reranker"""
         tenant = await self.repo.get_by_id(uuid.UUID(tenant_id))
         if not tenant:
             raise ValueError("Tenant not found")
         
-        active_embed_models = []
-        if tenant.embed_models:
-            for model_id in tenant.embed_models:
-                model = await self.model_repo.get_by_model(model_id)
-                if model and model.state == "active":
-                    active_embed_models.append({
-                        "model": model.model,
-                        "version": model.version,
-                        "vector_dim": model.vector_dim
-                    })
-        
-        active_rerank_model = None
-        if tenant.rerank_model:
-            model = await self.model_repo.get_by_model(tenant.rerank_model)
-            if model and model.state == "active":
-                active_rerank_model = {
-                    "model": model.model,
-                    "version": model.version
-                }
-        
+        response = await self._build_tenant_response(tenant)
         return {
-            "embed_models": active_embed_models,
-            "rerank_model": active_rerank_model,
-            "ocr": tenant.ocr,
-            "layout": tenant.layout
+            "embed_models": response["embed_models_info"],
+            "rerank_model": response["rerank_model_info"],
+            "ocr": response["ocr"],
+            "layout": response["layout"],
         }
-    
-    def _format_tenant_response(self, tenant) -> Dict[str, Any]:
-        """Format tenant model for API response"""
+
+    async def _build_tenant_response(
+        self,
+        tenant,
+        global_embed=None,
+        global_rerank=None,
+    ) -> Dict[str, Any]:
+        if global_embed is None:
+            global_embed = await self.model_repo.get_global_by_modality("text")
+        if global_rerank is None:
+            global_rerank = await self.model_repo.get_global_by_modality("rerank")
+
+        embed_models: List[str] = []
+        embed_models_info: List[Dict[str, Any]] = []
+
+        if global_embed and global_embed.state == "active":
+            embed_models.append(global_embed.model)
+            embed_models_info.append(
+                {
+                    "model": global_embed.model,
+                    "version": global_embed.version,
+                    "vector_dim": global_embed.vector_dim,
+                    "global": True,
+                }
+            )
+
+        if tenant.extra_embed_model:
+            extra_model = await self.model_repo.get_by_model(tenant.extra_embed_model)
+            if extra_model and extra_model.state in ["active", "archived"]:
+                embed_models.append(extra_model.model)
+                embed_models_info.append(
+                    {
+                        "model": extra_model.model,
+                        "version": extra_model.version,
+                        "vector_dim": extra_model.vector_dim,
+                        "global": False,
+                    }
+                )
+
+        rerank_model = None
+        rerank_model_info = None
+        if global_rerank and global_rerank.state == "active":
+            rerank_model = global_rerank.model
+            rerank_model_info = {
+                "model": global_rerank.model,
+                "version": global_rerank.version,
+                "global": True,
+            }
+
         return {
             "id": str(tenant.id),
             "name": tenant.name,
+            "description": tenant.description,
             "is_active": tenant.is_active,
-            "embed_models": tenant.embed_models or [],
-            "rerank_model": tenant.rerank_model,
+            "embed_models": embed_models,
+            "embed_models_info": embed_models_info,
+            "rerank_model": rerank_model,
+            "rerank_model_info": rerank_model_info,
+            "extra_embed_model": tenant.extra_embed_model,
             "ocr": tenant.ocr,
             "layout": tenant.layout,
             "created_at": tenant.created_at,
-            "updated_at": tenant.updated_at
+            "updated_at": tenant.updated_at,
         }

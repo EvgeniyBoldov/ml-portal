@@ -21,7 +21,7 @@ class ModelRegistry(Base):
     state: Mapped[str] = mapped_column(String(20), default="active")  # active|archived|retired|disabled
     vector_dim: Mapped[int | None] = mapped_column(Integer, nullable=True)
     path: Mapped[str] = mapped_column(String(500))  # full path to model directory
-    default_for_new: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_global: Mapped[bool] = mapped_column("global", Boolean, default=False)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

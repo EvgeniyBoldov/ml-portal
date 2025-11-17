@@ -45,12 +45,12 @@ class StatusTransitionError(Exception):
 
 # Валидные переходы между статусами
 VALID_TRANSITIONS: Dict[StageStatus, Set[StageStatus]] = {
-    StageStatus.PENDING: {StageStatus.QUEUED, StageStatus.CANCELLED},
+    StageStatus.PENDING: {StageStatus.QUEUED, StageStatus.PROCESSING, StageStatus.FAILED, StageStatus.CANCELLED},
     StageStatus.QUEUED: {StageStatus.PROCESSING, StageStatus.CANCELLED},
     StageStatus.PROCESSING: {StageStatus.COMPLETED, StageStatus.FAILED, StageStatus.CANCELLED},
-    StageStatus.COMPLETED: {StageStatus.QUEUED},  # Для reindex
-    StageStatus.FAILED: {StageStatus.QUEUED, StageStatus.CANCELLED},  # Для retry
-    StageStatus.CANCELLED: {StageStatus.QUEUED},  # Для retry
+    StageStatus.COMPLETED: {StageStatus.QUEUED},
+    StageStatus.FAILED: {StageStatus.QUEUED, StageStatus.CANCELLED},
+    StageStatus.CANCELLED: {StageStatus.QUEUED},
 }
 
 
@@ -175,13 +175,25 @@ class RAGStatusManager:
         current_node = await self.status_repo.get_node(doc_id, node_type, node_key)
         
         if current_node:
-            current_status = StageStatus(current_node.status)
+            try:
+                current_status = StageStatus(current_node.status)
+            except Exception:
+                legacy_map = {
+                    'running': StageStatus.PROCESSING,
+                    'ok': StageStatus.COMPLETED,
+                    'error': StageStatus.FAILED,
+                }
+                mapped = legacy_map.get(str(current_node.status))
+                if mapped is None:
+                    current_status = None
+                else:
+                    current_status = mapped
             
-            # Валидация перехода
-            if new_status not in VALID_TRANSITIONS.get(current_status, set()):
-                raise StatusTransitionError(
-                    f"Invalid transition: {current_status} -> {new_status} for stage {stage}"
-                )
+            if current_status is not None:
+                if new_status not in VALID_TRANSITIONS.get(current_status, set()):
+                    raise StatusTransitionError(
+                        f"Invalid transition: {current_status} -> {new_status} for stage {stage}"
+                    )
         
         # Обновляем статус
         update_data = {
@@ -208,7 +220,6 @@ class RAGStatusManager:
         # Публикуем событие
         if self.event_publisher:
             # Получаем tenant_id из документа
-            from sqlalchemy import select
             from app.models.rag import RAGDocument
             
             result = await self.session.execute(
@@ -247,6 +258,17 @@ class RAGStatusManager:
         pipeline_nodes = await self.status_repo.get_pipeline_nodes(doc_id)
         embedding_nodes = await self.status_repo.get_embedding_nodes(doc_id)
         index_nodes = await self.status_repo.get_index_nodes(doc_id)
+        
+        if not pipeline_nodes and not embedding_nodes and not index_nodes:
+            result = await self.session.execute(select(RAGDocument).where(RAGDocument.id == doc_id))
+            document = result.scalar_one_or_none()
+            tenant_id = document.tenant_id if document else None
+            embed_models = await self._get_target_models(doc_id)
+            if tenant_id is not None:
+                await self.initialize_document_statuses(doc_id, tenant_id, embed_models)
+                pipeline_nodes = await self.status_repo.get_pipeline_nodes(doc_id)
+                embedding_nodes = await self.status_repo.get_embedding_nodes(doc_id)
+                index_nodes = await self.status_repo.get_index_nodes(doc_id)
         
         # Переводим в queued
         for node in pipeline_nodes + embedding_nodes + index_nodes:
@@ -314,67 +336,59 @@ class RAGStatusManager:
             stage: Название этапа
         """
         logger.info(f"Retrying stage {stage} for document {doc_id}")
-        
-        # Переводим в queued
+
         await self.transition_stage(
             doc_id=doc_id,
             stage=stage,
-            new_status=StageStatus.QUEUED
+            new_status=StageStatus.QUEUED,
         )
-        
-        # Cascade: сбрасываем последующие этапы в pending
+
+        if stage.startswith('embed.'):
+            model_key = stage.replace('embed.', '')
+            await self._reset_stage_if_needed(
+                doc_id,
+                f'index.{model_key}',
+                StageStatus.PENDING,
+                force=True,
+            )
+            return
+
+        if stage.startswith('index.'):
+            return
+
         await self._cascade_reset_downstream(doc_id, stage, reset_to_pending=True)
-    
+
     async def archive_document(self, doc_id: UUID) -> None:
-        """
-        Архивировать документ (добавить скрытый статус archive)
-        
-        Args:
-            doc_id: ID документа
-        """
+        """Архивировать документ."""
         logger.info(f"Archiving document {doc_id}")
-        
+
         await self.status_repo.upsert_node(
             doc_id=doc_id,
             node_type='archive',
             node_key='archive',
             status=StageStatus.COMPLETED.value,
             started_at=datetime.now(timezone.utc),
-            finished_at=datetime.now(timezone.utc)
+            finished_at=datetime.now(timezone.utc),
         )
-    
+
     async def unarchive_document(self, doc_id: UUID) -> None:
-        """
-        Разархивировать документ (удалить статус archive)
-        
-        Args:
-            doc_id: ID документа
-        """
+        """Разархивировать документ."""
         logger.info(f"Unarchiving document {doc_id}")
-        
-        # Удаляем узел archive
+
         await self.status_repo.delete_node(doc_id, 'archive', 'archive')
-    
+
     async def get_document_status(self, doc_id: UUID) -> Dict[str, Any]:
-        """
-        Получить полный статус документа
-        
-        Args:
-            doc_id: ID документа
-            
-        Returns:
-            Словарь с этапами и их статусами
-        """
+        """Получить полный статус документа."""
         pipeline_nodes = await self.status_repo.get_pipeline_nodes(doc_id)
         embedding_nodes = await self.status_repo.get_embedding_nodes(doc_id)
-        
+
         result = {
             'document_id': str(doc_id),
             'pipeline': {},
             'embeddings': {},
-            'archived': False
+            'archived': False,
         }
-        
+
         for node in pipeline_nodes:
             result['pipeline'][node.node_key] = {
                 'status': node.status,
@@ -382,9 +396,9 @@ class RAGStatusManager:
                 'metrics': node.metrics_json,
                 'started_at': node.started_at.isoformat() if node.started_at else None,
                 'finished_at': node.finished_at.isoformat() if node.finished_at else None,
-                'updated_at': node.updated_at.isoformat()
+                'updated_at': node.updated_at.isoformat(),
             }
-        
+
         for node in embedding_nodes:
             result['embeddings'][node.node_key] = {
                 'status': node.status,
@@ -393,150 +407,175 @@ class RAGStatusManager:
                 'metrics': node.metrics_json,
                 'started_at': node.started_at.isoformat() if node.started_at else None,
                 'finished_at': node.finished_at.isoformat() if node.finished_at else None,
-                'updated_at': node.updated_at.isoformat()
+                'updated_at': node.updated_at.isoformat(),
             }
-        
-        # Проверяем архивный статус
+
         archive_node = await self.status_repo.get_node(doc_id, 'archive', 'archive')
         if archive_node:
             result['archived'] = True
-        
+
         return result
-    
+
     async def _cascade_reset_downstream(
         self,
         doc_id: UUID,
         failed_stage: str,
-        reset_to_pending: bool = False
+        reset_to_pending: bool = False,
     ) -> None:
-        """
-        Сбросить статусы последующих этапов при ошибке/отмене
-        
-        Args:
-            doc_id: ID документа
-            failed_stage: Этап который упал/отменён
-            reset_to_pending: Сбросить в pending (для retry) или cancelled
-        """
+        """Сбросить статусы последующих этапов при ошибке или отмене."""
         target_status = StageStatus.PENDING if reset_to_pending else StageStatus.CANCELLED
-        
-        # Определяем порядок этапов
-        stage_order = ['upload', 'extract', 'chunk']
-        
-        # Если упал pipeline этап
-        if failed_stage in stage_order:
-            failed_index = stage_order.index(failed_stage)
-            
-            # Сбрасываем последующие pipeline этапы
-            for stage in stage_order[failed_index + 1:]:
-                await self._reset_stage_if_needed(doc_id, stage, target_status)
-            
-            # Сбрасываем все embedding этапы
-            embedding_nodes = await self.status_repo.get_embedding_nodes(doc_id)
-            for node in embedding_nodes:
-                await self._reset_stage_if_needed(
-                    doc_id,
-                    f"embed.{node.node_key}",
-                    target_status
-                )
-        
-        # Если упал chunk, сбрасываем только embeddings
-        elif failed_stage == 'chunk':
-            embedding_nodes = await self.status_repo.get_embedding_nodes(doc_id)
-            for node in embedding_nodes:
-                await self._reset_stage_if_needed(
-                    doc_id,
-                    f"embed.{node.node_key}",
-                    target_status
-                )
-        
-        # Если упал embedding - не трогаем другие (они независимы)
-    
+
+        if failed_stage.startswith('embed.'):
+            model = failed_stage.replace('embed.', '')
+            await self._reset_stage_if_needed(
+                doc_id,
+                f'index.{model}',
+                target_status,
+                force=target_status == StageStatus.PENDING,
+            )
+            return
+
+        if failed_stage.startswith('index.'):
+            return
+
+        stage_order = ['upload', 'extract', 'normalize', 'chunk']
+
+        if failed_stage not in stage_order:
+            return
+
+        failed_index = stage_order.index(failed_stage)
+
+        for stage_name in stage_order[failed_index + 1:]:
+            await self._reset_stage_if_needed(
+                doc_id,
+                stage_name,
+                target_status,
+                force=target_status == StageStatus.PENDING,
+            )
+
+        embedding_nodes = await self.status_repo.get_embedding_nodes(doc_id)
+        for node in embedding_nodes:
+            await self._reset_stage_if_needed(
+                doc_id,
+                f'embed.{node.node_key}',
+                target_status,
+                force=target_status == StageStatus.PENDING,
+            )
+            await self._reset_stage_if_needed(
+                doc_id,
+                f'index.{node.node_key}',
+                target_status,
+                force=target_status == StageStatus.PENDING,
+            )
+
     async def _reset_stage_if_needed(
         self,
         doc_id: UUID,
         stage: str,
-        target_status: StageStatus
+        target_status: StageStatus,
+        force: bool = False,
     ) -> None:
-        """Сбросить статус этапа если он не в финальном состоянии"""
-        node_type = 'embedding' if stage.startswith('embed.') else 'pipeline'
-        node_key = stage.replace('embed.', '') if stage.startswith('embed.') else stage
-        
+        """Сбросить статус этапа, если он не в финальном состоянии."""
+        if stage.startswith('embed.'):
+            node_type = 'embedding'
+            node_key = stage.replace('embed.', '')
+        elif stage.startswith('index.'):
+            node_type = 'index'
+            node_key = stage.replace('index.', '')
+        else:
+            node_type = 'pipeline'
+            node_key = stage
+
         current_node = await self.status_repo.get_node(doc_id, node_type, node_key)
-        
-        if current_node and current_node.status not in [
-            StageStatus.COMPLETED.value,
-            StageStatus.CANCELLED.value
-        ]:
+
+        if current_node:
+            if not force and current_node.status in (
+                StageStatus.COMPLETED.value,
+                StageStatus.CANCELLED.value,
+            ):
+                return
+
+            current_node.status = target_status.value
+            if target_status == StageStatus.PENDING:
+                current_node.started_at = None
+                current_node.finished_at = None
+                current_node.error_short = None
+                current_node.metrics_json = None
+            elif target_status == StageStatus.CANCELLED:
+                current_node.finished_at = datetime.now(timezone.utc)
+            current_node.updated_at = datetime.now(timezone.utc)
+            await self.session.flush()
+        else:
             await self.status_repo.upsert_node(
                 doc_id=doc_id,
                 node_type=node_type,
                 node_key=node_key,
-                status=target_status.value
+                status=target_status.value,
+                started_at=None,
+                finished_at=datetime.now(timezone.utc) if target_status == StageStatus.CANCELLED else None,
+                error_short=None,
+                metrics_json=None,
             )
-    
+
     async def _update_aggregate_status(self, doc_id: UUID) -> None:
-        """
-        Пересчитать и обновить агрегированный статус документа
-        
-        Args:
-            doc_id: ID документа
-        """
-        # Получить все статусы этапов
+        """Пересчитать и обновить агрегированный статус документа."""
         pipeline_nodes = await self.status_repo.get_pipeline_nodes(doc_id)
         embedding_nodes = await self.status_repo.get_embedding_nodes(doc_id)
         index_nodes = await self.status_repo.get_index_nodes(doc_id)
-        
-        # Получить target models для тенанта
+
         target_models = await self._get_target_models(doc_id)
-        
-        # Рассчитать агрегированный статус
+
         agg_status, agg_details = calculate_aggregate_status(
             doc_id=doc_id,
             pipeline_nodes=pipeline_nodes,
             embedding_nodes=embedding_nodes,
             target_models=target_models,
-            index_nodes=index_nodes
+            index_nodes=index_nodes,
         )
-        
-        # Обновить документ
+
         await self.session.execute(
             update(RAGDocument)
             .where(RAGDocument.id == doc_id)
             .values(
                 agg_status=agg_status,
-                agg_details_json=agg_details
+                agg_details_json=agg_details,
             )
         )
-        
+
         logger.debug(f"Updated aggregate status for {doc_id}: {agg_status}")
-    
+
     async def _get_target_models(self, doc_id: UUID) -> List[str]:
-        """
-        Получить список target моделей для документа
-        
-        Args:
-            doc_id: ID документа
-            
-        Returns:
-            Список model aliases
-        """
-        # Получить документ
+        """Получить список target-моделей для документа."""
         result = await self.session.execute(
             select(RAGDocument).where(RAGDocument.id == doc_id)
         )
         document = result.scalar_one_or_none()
-        
+
         if not document:
             return []
-        
-        # Получить тенант
+
         from app.models.tenant import Tenants
+
         result = await self.session.execute(
             select(Tenants).where(Tenants.id == document.tenant_id)
         )
         tenant = result.scalar_one_or_none()
-        
-        if not tenant or not tenant.embed_models:
+
+        if not tenant:
             return []
-        
-        return tenant.embed_models
+
+        # Resolve global embedding + optional extra
+        from app.models.model_registry import ModelRegistry
+
+        models: List[str] = []
+        result = await self.session.execute(
+            select(ModelRegistry).where((ModelRegistry.is_global == True) & (ModelRegistry.modality == "text"))
+        )
+        global_embed = result.scalars().first()
+        if global_embed and global_embed.state in ("active", "archived"):
+            models.append(global_embed.model)
+
+        if tenant.extra_embed_model and tenant.extra_embed_model not in models:
+            models.append(tenant.extra_embed_model)
+
+        return models

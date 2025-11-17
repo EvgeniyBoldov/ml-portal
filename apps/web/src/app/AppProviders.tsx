@@ -5,6 +5,7 @@ import { ToastProvider } from '@/shared/ui/Toast';
 import { GlobalConfirmDialog } from './providers/GlobalConfirmDialog';
 import { AuthProvider } from './providers/AuthProvider';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { SSEProvider } from './providers/SSEProvider';
 
 interface AppProvidersProps {
   children: React.ReactNode;
@@ -16,18 +17,21 @@ interface AppProvidersProps {
  * 1. ErrorBoundary (catches all errors)
  * 2. QueryClientProvider (server state)
  * 3. AuthProvider (hydrates user session)
- * 4. ToastProvider (notifications)
- * 5. GlobalConfirmDialog (global modals)
+ * 4. SSEProvider (real-time updates for RAG documents)
+ * 5. ToastProvider (notifications)
+ * 6. GlobalConfirmDialog (global modals)
  */
 export function AppProviders({ children }: AppProvidersProps) {
   return (
     <ErrorBoundary>
       <QueryClientProvider client={queryClient}>
         <AuthProvider>
-          <ToastProvider>
-            <GlobalConfirmDialog />
-            {children}
-          </ToastProvider>
+          <SSEProvider>
+            <ToastProvider>
+              <GlobalConfirmDialog />
+              {children}
+            </ToastProvider>
+          </SSEProvider>
         </AuthProvider>
       </QueryClientProvider>
     </ErrorBoundary>

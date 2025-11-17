@@ -9,6 +9,7 @@ import {
   useScanModels,
   useRetireModel,
   useModelTenants,
+  useUpdateModel,
 } from '@shared/api/hooks/useAdmin';
 import Button from '@shared/ui/Button';
 import Input from '@shared/ui/Input';
@@ -42,7 +43,7 @@ function ModelRow({
       </td>
       <td>{model.modality}</td>
       <td>
-        {model.default_for_new ? (
+        {model.global ? (
           <Badge tone="success">Yes</Badge>
         ) : (
           <span className={styles.muted}>No</span>
@@ -104,6 +105,7 @@ export function ModelsPage() {
   const [selectedModel, setSelectedModel] = useState<ModelRegistry | null>(
     null
   );
+  const [pendingModelId, setPendingModelId] = useState<string | null>(null);
 
   // Debounce search
   React.useEffect(() => {
@@ -127,8 +129,29 @@ export function ModelsPage() {
   const { data, isLoading, error } = useModels(queryParams);
   const scanMutation = useScanModels();
   const retireMutation = useRetireModel();
+  const updateModelMutation = useUpdateModel();
 
   const models = data?.items || [];
+
+  const handleToggleGlobal = async (target: ModelRegistry) => {
+    try {
+      setPendingModelId(target.id);
+      await updateModelMutation.mutateAsync({
+        id: target.id,
+        data: { global: !target.global },
+      });
+      showSuccess(
+        target.global
+          ? `${target.model} is no longer global`
+          : `${target.model} set as global`
+      );
+    } catch (error) {
+      console.error(error);
+      showError('Failed to update global flag');
+    } finally {
+      setPendingModelId(null);
+    }
+  };
 
   // Actions
   const handleScan = async () => {
@@ -158,8 +181,9 @@ export function ModelsPage() {
 
   const getActions = (model: ModelRegistry): ActionItem[] => [
     {
-      label: 'Toggle Default',
-      onClick: () => console.log('Toggle default', model.id),
+      label: model.global ? 'Unset Global' : 'Set Global',
+      onClick: () => handleToggleGlobal(model),
+      disabled: pendingModelId === model.id,
     },
     {
       label: 'View Tenants',
@@ -225,7 +249,7 @@ export function ModelsPage() {
                 <th>VERSION</th>
                 <th>STATE</th>
                 <th>MODALITY</th>
-                <th>DEFAULT</th>
+                <th>GLOBAL</th>
                 <th>TENANTS</th>
                 <th>ACTIONS</th>
               </tr>

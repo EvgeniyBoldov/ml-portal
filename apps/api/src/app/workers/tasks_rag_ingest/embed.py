@@ -72,6 +72,7 @@ def embed_chunks_model(self: Task, chunk_result: Dict[str, Any], tenant_id: str,
             
             # Get Redis client for distributed lock
             import redis.asyncio as redis
+            from redis.exceptions import LockError as RedisLockError
             redis_client = redis.from_url(settings.REDIS_URL, decode_responses=True)
             
             # Distributed lock to prevent parallel execution
@@ -90,13 +91,10 @@ def embed_chunks_model(self: Task, chunk_result: Dict[str, Any], tenant_id: str,
                         chunk_repo = AsyncChunkRepository(session, uuid.UUID(tenant_id))
                         emb_status_repo = AsyncEmbStatusRepository(session, uuid.UUID(tenant_id))
 
-                        # Get source and check status
+                        # Ensure source exists; readiness validated by chunks presence
                         source = await source_repo.get_by_id(uuid.UUID(source_id))
                         if not source:
                             raise ValueError(f"Source {source_id} not found")
-
-                        if source.status != 'chunked':
-                            raise ValueError(f"Source {source_id} is not chunked yet")
 
                         # Check idempotency
                         idem_key = get_idempotency_key(
@@ -113,17 +111,18 @@ def embed_chunks_model(self: Task, chunk_result: Dict[str, Any], tenant_id: str,
                                 new_status=StageStatus.PROCESSING,
                                 celery_task_id=self.request.id
                             )
-                            await session.flush()  # Flush for SSE
+                            await session.flush()  # Trigger SSE
                             await status_manager.transition_stage(
                                 doc_id=uuid.UUID(source_id),
                                 stage=f'embed.{model_alias}',
                                 new_status=StageStatus.COMPLETED,
                                 metrics={'status': 'already_processed', 'cached': True}
                             )
-                            await session.flush()  # Flush for SSE
+                            await session.flush()  # Trigger SSE
+                            await session.commit()  # Commit before return
                             return {"status": "already_processed", "source_id": source_id}
 
-                        # Get chunks
+                        # Get chunks (acts as readiness validation)
                         chunks = await chunk_repo.get_by_source_id(uuid.UUID(source_id))
                         if not chunks:
                             raise ValueError(f"No chunks found for source {source_id}")
@@ -135,7 +134,7 @@ def embed_chunks_model(self: Task, chunk_result: Dict[str, Any], tenant_id: str,
                             new_status=StageStatus.PROCESSING,
                             celery_task_id=self.request.id
                         )
-                        await session.flush()  # Flush for SSE
+                        await session.flush()  # Trigger SSE
                         
                         # Get embedding service
                         embedding_service = EmbeddingServiceFactory.get_service(model_alias)
@@ -201,7 +200,7 @@ def embed_chunks_model(self: Task, chunk_result: Dict[str, Any], tenant_id: str,
                                 total=total_chunks,
                                 last_error=None
                             )
-                            await session.flush()  # Flush to send SSE events immediately
+                            await session.flush()  # Trigger SSE + outbox
 
                         # Save embeddings to S3 (optional, for debugging/maintenance)
                         if settings.SAVE_EMB_TO_S3:
@@ -257,6 +256,8 @@ def embed_chunks_model(self: Task, chunk_result: Dict[str, Any], tenant_id: str,
                             json.dumps({"status": "completed", "embeddings_count": len(embeddings)})
                         )
                         
+                        await session.commit()  # Final commit
+                        
                         return {
                             "source_id": source_id,
                             "model_alias": model_alias,
@@ -266,7 +267,7 @@ def embed_chunks_model(self: Task, chunk_result: Dict[str, Any], tenant_id: str,
                             "model_version": model_info.version,
                             "status": "completed"
                         }
-            except redis.exceptions.LockError as lock_err:
+            except RedisLockError as lock_err:
                 logger.warning(f"Could not acquire lock for {source_id}:{model_alias}, task may be running: {lock_err}")
                 raise
             except Exception as e:

@@ -15,8 +15,7 @@ interface FormData {
   name: string;
   description: string;
   is_active: boolean;
-  embed_models: string[];
-  rerank_model: string;
+  extra_embed_model: string | '';
   ocr: boolean;
   layout: boolean;
 }
@@ -37,8 +36,7 @@ export function CreateTenantPage() {
     name: '',
     description: '',
     is_active: true,
-    embed_models: [],
-    rerank_model: '',
+    extra_embed_model: '',
     ocr: false,
     layout: false,
   });
@@ -49,8 +47,7 @@ export function CreateTenantPage() {
         name: tenantData.name || '',
         description: tenantData.description || '',
         is_active: tenantData.is_active ?? true,
-        embed_models: tenantData.embed_models || [],
-        rerank_model: tenantData.rerank_model || '',
+        extra_embed_model: (tenantData as any).extra_embed_model || '',
         ocr: tenantData.ocr || false,
         layout: tenantData.layout || false,
       });
@@ -65,20 +62,13 @@ export function CreateTenantPage() {
       return;
     }
 
-    // Validate embed models
-    if (formData.embed_models.length > 2) {
-      showError('Maximum 2 embedding models allowed');
-      return;
-    }
-
     try {
       if (isEditing) {
         await tenantApi.updateTenant(id!, {
           name: formData.name,
           description: formData.description,
           is_active: formData.is_active,
-          embed_models: formData.embed_models,
-          rerank_model: formData.rerank_model || undefined,
+          extra_embed_model: formData.extra_embed_model || null,
           ocr: formData.ocr,
           layout: formData.layout,
         });
@@ -88,8 +78,7 @@ export function CreateTenantPage() {
           name: formData.name,
           description: formData.description,
           is_active: formData.is_active,
-          embed_models: formData.embed_models,
-          rerank_model: formData.rerank_model || undefined,
+          extra_embed_model: formData.extra_embed_model || undefined,
           ocr: formData.ocr,
           layout: formData.layout,
         });
@@ -113,14 +102,10 @@ export function CreateTenantPage() {
 
   const models = modelsData?.items || [];
   const textModels = models.filter(
-    m =>
-      m.modality === 'text' && (m.state === 'active' || m.state === 'archived')
+    m => m.modality === 'text' && (m.state === 'active' || m.state === 'archived')
   );
-  const rerankModels = models.filter(
-    m =>
-      m.modality === 'rerank' &&
-      (m.state === 'active' || m.state === 'archived')
-  );
+  const globalEmbed = textModels.find(m => (m as any).global === true);
+  const nonGlobalText = textModels.filter(m => !(m as any).global);
 
   return (
     <div className={styles.wrap}>
@@ -170,35 +155,36 @@ export function CreateTenantPage() {
             </label>
           </div>
 
-          {/* Embedding Models */}
+          {/* Embedding Model: global + one extra */}
           <div className={styles.formGroup}>
-            <label>Embedding Models (max 2)</label>
+            <label>Embedding Model</label>
             <div className={styles.multiSelect}>
-              {textModels.map(model => (
+              {globalEmbed && (
+                <label className={styles.checkboxLabel}>
+                  <input type="checkbox" checked readOnly disabled />
+                  <span>
+                    {globalEmbed.model} ({globalEmbed.version}) — global
+                  </span>
+                </label>
+              )}
+              <div className={styles.formHelp}>Optional extra model:</div>
+              <label className={styles.checkboxLabel}>
+                <input
+                  type="radio"
+                  name="extraEmbed"
+                  checked={formData.extra_embed_model === ''}
+                  onChange={() => setFormData(prev => ({ ...prev, extra_embed_model: '' }))}
+                />
+                <span>None</span>
+              </label>
+              {nonGlobalText.map(model => (
                 <label key={model.model} className={styles.checkboxLabel}>
                   <input
-                    type="checkbox"
-                    checked={formData.embed_models.includes(model.model)}
-                    onChange={(event: React.ChangeEvent<HTMLInputElement>) => {
-                      if (event.target.checked) {
-                        if (formData.embed_models.length < 2) {
-                          setFormData(prev => ({
-                            ...prev,
-                            embed_models: [...prev.embed_models, model.model],
-                          }));
-                        }
-                      } else {
-                        setFormData(prev => ({
-                          ...prev,
-                          embed_models: prev.embed_models.filter(
-                            m => m !== model.model
-                          ),
-                        }));
-                      }
-                    }}
-                    disabled={
-                      formData.embed_models.length >= 2 &&
-                      !formData.embed_models.includes(model.model)
+                    type="radio"
+                    name="extraEmbed"
+                    checked={formData.extra_embed_model === model.model}
+                    onChange={() =>
+                      setFormData(prev => ({ ...prev, extra_embed_model: model.model }))
                     }
                   />
                   <span>
@@ -209,41 +195,11 @@ export function CreateTenantPage() {
               ))}
             </div>
             <div className={styles.formHelp}>
-              Select up to 2 embedding models for text processing.
+              Global model is applied automatically. You can select at most one additional embedding model.
             </div>
           </div>
 
-          {/* Rerank Model */}
-          <div className={styles.formGroup}>
-            <label>Rerank Model</label>
-            <div className={styles.multiSelect}>
-              {rerankModels.map(model => (
-                <label key={model.model} className={styles.checkboxLabel}>
-                  <input
-                    type="checkbox"
-                    checked={formData.rerank_model === model.model}
-                    onChange={(event: React.ChangeEvent<HTMLInputElement>) => {
-                      if (event.target.checked) {
-                        setFormData(prev => ({
-                          ...prev,
-                          rerank_model: model.model,
-                        }));
-                      } else {
-                        setFormData(prev => ({ ...prev, rerank_model: '' }));
-                      }
-                    }}
-                  />
-                  <span>
-                    {model.model} ({model.version})
-                    {model.state === 'archived' && ' (archived)'}
-                  </span>
-                </label>
-              ))}
-            </div>
-            <div className={styles.formHelp}>
-              Optional rerank model for improving search results.
-            </div>
-          </div>
+          {/* Rerank selection removed: rerank is global-only */}
 
           {/* OCR and Layout */}
           <div className={styles.formGroup}>

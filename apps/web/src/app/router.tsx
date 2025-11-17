@@ -1,7 +1,6 @@
 import React, { Suspense, lazy } from 'react';
 import { createBrowserRouter, RouterProvider } from 'react-router-dom';
 import { AdminGuard } from './router/AdminGuard';
-import { SSEProvider } from './providers/SSEProvider';
 import { Skeleton } from '@shared/ui/Skeleton';
 
 // Auth pages
@@ -41,7 +40,7 @@ const router = createBrowserRouter([
     children: [
       { path: 'chat', element: withSuspense(<ChatPage />) },
       { path: 'chat/:chatId', element: withSuspense(<ChatPage />) },
-      { path: 'rag', element: withSuspense(<SSEProvider><RagPage /></SSEProvider>) },
+      { path: 'rag', element: withSuspense(<RagPage />) },
     ],
   },
   {

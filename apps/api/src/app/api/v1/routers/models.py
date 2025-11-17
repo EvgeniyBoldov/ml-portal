@@ -86,7 +86,7 @@ async def get_model(
             "state": details["state"],
             "vector_dim": details.get("vector_dim"),
             "path": details["path"],
-            "default_for_new": details.get("default_for_new", False),
+            "global": details.get("global", False),
             "notes": details.get("notes"),
             "used_by_tenants": details.get("used_by_tenants", 0),
             "created_at": details["created_at"],
@@ -105,10 +105,10 @@ async def update_model(
     user: UserCtx = Depends(get_current_user),
     admin_user = Depends(require_admin),
 ):
-    """Update model registry entry (state/default_for_new/notes)"""
+    """Update model registry entry (state/global/notes)"""
     try:
         service = ModelRegistryService(session)
-        data = payload.model_dump(exclude_unset=True)
+        data = payload.model_dump(exclude_unset=True, by_alias=True)
         updated = await service.update_model(model_id, data)
         if not updated:
             raise HTTPException(status_code=404, detail="Model not found")

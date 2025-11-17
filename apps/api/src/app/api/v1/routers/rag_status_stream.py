@@ -127,6 +127,7 @@ async def stream_rag_status(
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",  # Для nginx
+            "Access-Control-Allow-Credentials": "true",
         }
     )
 
@@ -435,6 +436,7 @@ async def retry_ingest(
             normalize_document,
             chunk_document,
             embed_chunks_model,
+            index_model,
         )
         from celery import chain, group
 
@@ -446,11 +448,19 @@ async def retry_ingest(
         extract_task = extract_document.s(str(doc_uuid), str(document.tenant_id))
         normalize_task = normalize_document.s(str(document.tenant_id))
         chunk_task = chunk_document.s(str(document.tenant_id))
-        embedding_tasks = [
-            embed_chunks_model.s(str(document.tenant_id), model_alias)
+        model_task_chains = [
+            chain(
+                embed_chunks_model.s(str(document.tenant_id), model_alias),
+                index_model.s(str(document.tenant_id))
+            )
             for model_alias in embedding_models
         ]
-        pipeline = chain(extract_task, normalize_task, chunk_task, group(embedding_tasks))
+        pipeline = chain(
+            extract_task,
+            normalize_task,
+            chunk_task,
+            group(model_task_chains)
+        )
         pipeline.apply_async()
 
     elif stage.startswith('embed.'):

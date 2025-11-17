@@ -118,8 +118,7 @@ export interface Tenant {
   name: string;
   description?: string;
   is_active: boolean;
-  embed_models?: string[];
-  rerank_model?: string;
+  extra_embed_model?: string;
   ocr?: boolean;
   layout?: boolean;
   created_at: string;
@@ -130,8 +129,7 @@ export type TenantCreate = {
   name: string;
   description?: string;
   is_active?: boolean;
-  embed_models?: string[];
-  rerank_model?: string;
+  extra_embed_model?: string;
   ocr?: boolean;
   layout?: boolean;
 };
@@ -158,7 +156,7 @@ export interface ModelRegistry {
   state: string;
   vector_dim?: number;
   path: string;
-  default_for_new: boolean;
+  global: boolean;
   notes?: string;
   used_by_tenants: number;
   created_at: string;

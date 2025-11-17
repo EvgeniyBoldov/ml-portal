@@ -121,13 +121,36 @@ def download_model(
         metadata_file = model_dir / "metadata.json"
         with open(metadata_file, "w", encoding="utf-8") as f:
             json.dump(metadata, f, indent=2, ensure_ascii=False)
-        
+
+        # Пишем manifest.json для сканера реестра моделей
+        # Короткое имя модели (alias) — последняя часть после '/'
+        alias = model_id.split("/")[-1]
+        # Простая эвристика модальности: считаем эти модели эмбеддингами текста
+        modality = "text"
+        # Карта известных размерностей
+        vector_dim_map = {
+            "all-MiniLM-L6-v2": 384,
+            "multilingual-e5-small": 384,
+            "bge-large-en": 1024,
+        }
+        vector_dim = vector_dim_map.get(alias, 384)
+
+        manifest = {
+            "model": alias,
+            "version": "latest",
+            "modality": modality,
+            "vector_dim": vector_dim,
+        }
+        manifest_file = model_dir / "manifest.json"
+        with open(manifest_file, "w", encoding="utf-8") as f:
+            json.dump(manifest, f, indent=2, ensure_ascii=False)
+        print(f"🧾 manifest.json создан для {alias} → {manifest_file}")
+
         print(f"📊 Размер модели: {metadata['total_size_mb']:.1f} MB")
         print(f"📄 Файлов: {metadata['total_files']}")
         
         return metadata
 
-    except Exception as e:
         print(f"❌ Ошибка скачивания модели {model_id}: {e}")
         return {}
 

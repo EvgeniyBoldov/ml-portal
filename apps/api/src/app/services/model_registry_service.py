@@ -52,11 +52,80 @@ class ModelRegistryService:
                 fs_model_paths.add(str(item))
                 
                 if not manifest_path.exists():
-                    scan_result.errors.append({
-                        "path": str(item),
-                        "error": "manifest.json not found"
-                    })
-                    continue
+                    # Fallback: try to infer manifest from metadata.json or directory name
+                    inferred: Optional[Dict[str, Any]] = None
+                    try:
+                        meta_path = item / "metadata.json"
+                        alias = item.name.split("--")[-1]
+                        modality = "text"
+                        vector_dim_map = {
+                            "all-MiniLM-L6-v2": 384,
+                            "multilingual-e5-small": 384,
+                            "bge-large-en": 1024,
+                            "bge-base-en": 768,
+                            "bge-small-en": 512,
+                        }
+                        vector_dim = vector_dim_map.get(alias)
+                        if meta_path.exists() and vector_dim is None:
+                            try:
+                                with open(meta_path, 'r', encoding='utf-8') as mf:
+                                    _ = json.load(mf)
+                            except Exception:
+                                pass
+                        if vector_dim is None:
+                            vector_dim = 384
+                        inferred = {
+                            "model": alias,
+                            "version": "latest",
+                            "modality": modality,
+                            "vector_dim": vector_dim,
+                        }
+                        try:
+                            with open(manifest_path, 'w', encoding='utf-8') as wf:
+                                json.dump(inferred, wf, indent=2)
+                        except Exception:
+                            pass
+                    except Exception as _e:
+                        inferred = None
+                    if not inferred:
+                        scan_result.errors.append({
+                            "path": str(item),
+                            "error": "manifest.json not found"
+                        })
+                        continue
+                    else:
+                        manifest_data = inferred
+                        try:
+                            existing_model = await self.repo.get_by_model(manifest_data["model"])
+                            if existing_model:
+                                if existing_model.version != manifest_data["version"]:
+                                    await self.repo.update(existing_model.id, {
+                                        "version": manifest_data["version"],
+                                        "vector_dim": manifest_data.get("vector_dim"),
+                                        "path": str(item),
+                                        "state": "active" if existing_model.state != "retired" else existing_model.state
+                                    })
+                                    scan_result.updated.append(manifest_data["model"])
+                                else:
+                                    if existing_model.path != str(item):
+                                        await self.repo.update(existing_model.id, {"path": str(item)})
+                            else:
+                                await self.repo.create({
+                                    "model": manifest_data["model"],
+                                    "version": manifest_data["version"],
+                                    "modality": manifest_data["modality"],
+                                    "vector_dim": manifest_data.get("vector_dim"),
+                                    "path": str(item),
+                                    "state": "active"
+                                })
+                                scan_result.added.append(manifest_data["model"])
+                        except Exception as e:
+                            logger.error(f"Error processing inferred manifest for {item}: {e}")
+                            scan_result.errors.append({
+                                "path": str(item),
+                                "error": str(e)
+                            })
+                        continue
                 
                 try:
                     # Validate and process manifest
@@ -172,7 +241,7 @@ class ModelRegistryService:
                 "state": model.state,
                 "vector_dim": model.vector_dim,
                 "path": model.path,
-                "default_for_new": model.default_for_new,
+                "global": model.is_global,
                 "notes": model.notes,
                 "used_by_tenants": tenant_count,
                 "created_at": model.created_at,
@@ -204,7 +273,7 @@ class ModelRegistryService:
             "state": model.state,
             "vector_dim": model.vector_dim,
             "path": model.path,
-            "default_for_new": model.default_for_new,
+            "global": model.is_global,
             "notes": model.notes,
             "used_by_tenants": tenant_count,
             "created_at": model.created_at,
@@ -222,12 +291,37 @@ class ModelRegistryService:
                 raise ValueError(f"Invalid state: {update_data['state']}")
         
         # Only allow updating specific fields
-        allowed_fields = {"state", "default_for_new", "notes"}
+        allowed_fields = {"state", "global", "notes"}
         filtered_data = {k: v for k, v in update_data.items() if k in allowed_fields}
-        
+
+        incoming_global = filtered_data.get("global")
+
         if not filtered_data:
             raise ValueError("No valid fields to update")
-        
+
+        # Ensure uniqueness for global flag per modality
+        if incoming_global is True:
+            # Fetch target model to know modality
+            target = await self.repo.get_by_id(uuid.UUID(model_id))
+            if not target:
+                return None
+            # Unset previous global for same modality
+            from sqlalchemy import select, update as sa_update
+            from app.models.model_registry import ModelRegistry
+            existing = await self.session.execute(
+                select(ModelRegistry).where((ModelRegistry.is_global == True) & (ModelRegistry.modality == target.modality))
+            )
+            prev = existing.scalars().first()
+            if prev and str(prev.id) != str(target.id):
+                await self.session.execute(
+                    sa_update(ModelRegistry)
+                    .where(ModelRegistry.id == prev.id)
+                    .values(is_global=False)
+                )
+
+        if "global" in filtered_data:
+            filtered_data["is_global"] = filtered_data.pop("global")
+
         model = await self.repo.update(uuid.UUID(model_id), filtered_data)
         if not model:
             return None
@@ -243,7 +337,7 @@ class ModelRegistryService:
             "state": model.state,
             "vector_dim": model.vector_dim,
             "path": model.path,
-            "default_for_new": model.default_for_new,
+            "global": model.is_global,
             "notes": model.notes,
             "used_by_tenants": tenant_count,
             "created_at": model.created_at,
@@ -317,14 +411,14 @@ class ModelRegistryService:
             "state": model.state,
             "vector_dim": model.vector_dim,
             "path": model.path,
-            "default_for_new": model.default_for_new,
+            "global": model.is_global,
             "notes": model.notes,
             "used_by_tenants": len(tenants),
             "tenants": [
                 {
                     "id": str(t.id),
                     "name": t.name,
-                    "usage_type": "embed" if t.embed_models and model.model in t.embed_models else "rerank"
+                    "usage_type": "embed" if t.extra_embed_model == model.model else "none"
                 }
                 for t in tenants
             ],
