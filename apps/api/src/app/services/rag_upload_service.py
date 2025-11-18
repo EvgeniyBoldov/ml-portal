@@ -191,25 +191,8 @@ class RAGUploadService:
             self.event_publisher
         )
         
-        # Получаем embed models тенанта (global + optional extra)
-        from sqlalchemy import select
-        from app.models.tenant import Tenants
-        from app.models.model_registry import ModelRegistry
-        
-        result = await self.session.execute(
-            select(Tenants).where(Tenants.id == self.repo_factory.tenant_id)
-        )
-        tenant = result.scalar_one_or_none()
-        models: list[str] = []
-        res_global = await self.session.execute(
-            select(ModelRegistry).where((ModelRegistry.is_global == True) & (ModelRegistry.modality == "text"))
-        )
-        global_embed = res_global.scalars().first()
-        if global_embed and global_embed.state in ("active", "archived"):
-            models.append(global_embed.model)
-        if tenant and tenant.extra_embed_model and tenant.extra_embed_model not in models:
-            models.append(tenant.extra_embed_model)
-        embed_models = models
+        # Получаем embed models через статус-менеджер (по документу)
+        embed_models = await status_manager._get_target_models(doc_id)
         
         # Инициализируем все статусы
         await status_manager.initialize_document_statuses(
