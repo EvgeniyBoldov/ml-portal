@@ -4,14 +4,19 @@ RAG Status Repository for managing document status nodes
 from __future__ import annotations
 from typing import List, Optional, Dict, Any
 from uuid import UUID
+from datetime import datetime, timezone
+import logging
+
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, delete
 from sqlalchemy.orm import selectinload
-from datetime import datetime, timezone
 
 from app.models.rag_ingest import RAGStatus
 from app.models.rag import RAGDocument
 from app.repositories.base import AsyncRepository
+
+
+logger = logging.getLogger(__name__)
 
 
 class AsyncRAGStatusRepository(AsyncRepository):
@@ -79,7 +84,22 @@ class AsyncRAGStatusRepository(AsyncRepository):
             await self.session.flush()
             return existing
         else:
-            # Create new node
+            # Create new node only if document exists to avoid FK violations
+            result = await self.session.execute(
+                select(RAGDocument.id).where(RAGDocument.id == doc_id)
+            )
+            doc_exists = result.scalar_one_or_none()
+
+            if not doc_exists:
+                logger.warning(
+                    "Skipping rag_status upsert for non-existent document: %s (node_type=%s, node_key=%s)",
+                    doc_id,
+                    node_type,
+                    node_key,
+                )
+                # Do not create status node if document row is missing
+                return existing
+
             new_node = RAGStatus(
                 doc_id=doc_id,
                 node_type=node_type,

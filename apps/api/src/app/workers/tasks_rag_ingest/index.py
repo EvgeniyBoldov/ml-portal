@@ -6,6 +6,7 @@ from typing import List, Dict, Any
 from datetime import datetime, timezone
 
 from celery import Task
+from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 
 from app.celery_app import app as celery_app
 from app.core.config import get_settings
@@ -52,13 +53,24 @@ def index_model(self: Task, embed_result: Dict[str, Any], tenant_id: str) -> Dic
         import asyncio
         
         async def _index():
-            # Use shared worker session factory
-            from app.workers.session_factory import get_worker_session_factory
+            # Use per-task async engine/session bound to the current event loop
             from app.core.config import get_settings
             
             settings = get_settings()
-            session_factory = get_worker_session_factory()
-            
+            engine = create_async_engine(
+                settings.ASYNC_DB_URL,
+                echo=False,
+                pool_pre_ping=True,
+                pool_recycle=300,
+                pool_size=2,
+                max_overflow=5,
+            )
+            session_factory = async_sessionmaker(
+                engine,
+                expire_on_commit=False,
+                class_=AsyncSession,
+            )
+
             # Get Redis client for distributed lock
             import redis.asyncio as redis
             from redis.exceptions import LockError as RedisLockError
@@ -218,6 +230,17 @@ def index_model(self: Task, embed_result: Dict[str, Any], tenant_id: str) -> Dic
                 logger.error(f"Error in index task for {source_id}:{model_alias}: {e}")
                 await notify_stage_error(source_id, tenant_id, f'index.{model_alias}', e)
                 raise
+            finally:
+                # Clean up Redis client and dispose engine to avoid loop-bound resources leaking
+                try:
+                    await redis_client.close()
+                except Exception:
+                    pass
+                try:
+                    await redis_client.connection_pool.disconnect()
+                except Exception:
+                    pass
+                await engine.dispose()
         
         return asyncio.run(_index())
     
