@@ -1,15 +1,17 @@
 /**
- * ModelsPage - Admin models management
- * Uses TanStack Query for data fetching and Zustand for UI state
+ * ModelsPage - Admin models management (New Architecture)
+ * 
+ * Supports LLM and Embedding models only.
+ * No file scanning - models are added manually via API.
  */
 import React, { useMemo, useState } from 'react';
-import type { ModelRegistry } from '@shared/api/admin';
+import type { Model } from '@shared/api/admin';
 import {
   useModels,
-  useScanModels,
-  useRetireModel,
-  useModelTenants,
+  useCreateModel,
   useUpdateModel,
+  useDeleteModel,
+  useHealthCheckModel,
 } from '@shared/api/hooks/useAdmin';
 import Button from '@shared/ui/Button';
 import Input from '@shared/ui/Input';
@@ -21,48 +23,62 @@ import { ActionsButton, type ActionItem } from '@shared/ui/ActionsButton';
 import { useAppStore } from '@app/store/app.store';
 import styles from './ModelsPage.module.css';
 
-// Component for rendering a single model row with tenants
+// Component for rendering a single model row
 function ModelRow({
   model,
   getActions,
-  getStateColor,
+  getStatusColor,
+  getTypeLabel,
 }: {
-  model: ModelRegistry;
-  getActions: (model: ModelRegistry) => ActionItem[];
-  getStateColor: (state: string) => string;
+  model: Model;
+  getActions: (model: Model) => ActionItem[];
+  getStatusColor: (status: string) => string;
+  getTypeLabel: (type: string) => string;
 }) {
-  const { data: tenantsData } = useModelTenants(model.id);
-  const tenants = tenantsData?.tenants || [];
+  const healthColor = model.health_status === 'healthy' ? 'success' 
+    : model.health_status === 'degraded' ? 'warn'
+    : model.health_status === 'unavailable' ? 'danger'
+    : 'neutral';
 
   return (
     <tr>
-      <td>{model.model}</td>
-      <td>{model.version}</td>
       <td>
-        <Badge tone={getStateColor(model.state)}>{model.state}</Badge>
+        <div>
+          <div style={{ fontWeight: 500 }}>{model.alias}</div>
+          <div style={{ fontSize: '0.85em', color: '#666' }}>{model.name}</div>
+        </div>
       </td>
-      <td>{model.modality}</td>
       <td>
-        {model.global ? (
-          <Badge tone="success">Yes</Badge>
+        <Badge tone={getTypeLabel(model.type) === 'LLM' ? 'info' : 'success'}>
+          {getTypeLabel(model.type)}
+        </Badge>
+      </td>
+      <td>
+        <div>
+          <div style={{ fontWeight: 500 }}>{model.provider}</div>
+          <div style={{ fontSize: '0.85em', color: '#666' }}>{model.provider_model_name}</div>
+        </div>
+      </td>
+      <td>
+        <Badge tone={getStatusColor(model.status)}>{model.status}</Badge>
+      </td>
+      <td>
+        {model.health_status ? (
+          <div>
+            <Badge tone={healthColor} size="small">{model.health_status}</Badge>
+            {model.health_latency_ms && (
+              <span style={{ fontSize: '0.85em', color: '#666', marginLeft: '4px' }}>
+                ({model.health_latency_ms}ms)
+              </span>
+            )}
+          </div>
         ) : (
-          <span className={styles.muted}>No</span>
+          <span className={styles.muted}>—</span>
         )}
       </td>
       <td>
-        {tenants.length > 0 ? (
-          <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
-            {tenants.slice(0, 3).map(tenant => (
-              <Badge key={tenant.id} tone="info" size="small">
-                {tenant.name}
-              </Badge>
-            ))}
-            {tenants.length > 3 && (
-              <Badge tone="neutral" size="small">
-                +{tenants.length - 3}
-              </Badge>
-            )}
-          </div>
+        {model.default_for_type ? (
+          <Badge tone="success" size="small">Default</Badge>
         ) : (
           <span className={styles.muted}>—</span>
         )}
@@ -76,12 +92,6 @@ function ModelRow({
 
 type AppState = ReturnType<typeof useAppStore.getState>;
 
-type ModelTenantInfo = {
-  id: string;
-  name: string;
-  usage_type: string;
-};
-
 export function ModelsPage() {
   const showError = useErrorToast();
   const showSuccess = useSuccessToast();
@@ -90,21 +100,10 @@ export function ModelsPage() {
   const [q, setQ] = useState('');
   const [debouncedQ, setDebouncedQ] = useState('');
   const filters = useAppStore((state: AppState) => state.filters);
-  const retireModalOpen = useAppStore(
-    (state: AppState) => state.modals.retireModal || false
-  );
-
-  const openRetireModal = () => useAppStore.getState().openModal('retireModal');
-  const closeRetireModal = () =>
-    useAppStore.getState().closeModal('retireModal');
-
-  const [retireOptions, setRetireOptions] = useState({
-    dropVectors: false,
-    removeFromTenants: false,
-  });
-  const [selectedModel, setSelectedModel] = useState<ModelRegistry | null>(
-    null
-  );
+  
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [createModalOpen, setCreateModalOpen] = useState(false);
+  const [selectedModel, setSelectedModel] = useState<Model | null>(null);
   const [pendingModelId, setPendingModelId] = useState<string | null>(null);
 
   // Debounce search
@@ -116,102 +115,137 @@ export function ModelsPage() {
   // Query params
   const queryParams = useMemo(
     () => ({
-      state: filters.models_state || undefined,
-      modality: filters.models_modality || undefined,
+      type: filters.models_type || undefined,
+      status: filters.models_status || undefined,
       search: debouncedQ || undefined,
       page: 1,
-      size: 20,
+      size: 50,
     }),
-    [debouncedQ, filters.models_state, filters.models_modality]
+    [debouncedQ, filters.models_type, filters.models_status]
   );
 
   // TanStack Query
   const { data, isLoading, error } = useModels(queryParams);
-  const scanMutation = useScanModels();
-  const retireMutation = useRetireModel();
   const updateModelMutation = useUpdateModel();
+  const deleteModelMutation = useDeleteModel();
+  const healthCheckMutation = useHealthCheckModel();
 
   const models = data?.items || [];
 
-  const handleToggleGlobal = async (target: ModelRegistry) => {
+  const handleToggleDefault = async (target: Model) => {
     try {
       setPendingModelId(target.id);
       await updateModelMutation.mutateAsync({
         id: target.id,
-        data: { global: !target.global },
+        data: { default_for_type: !target.default_for_type },
       });
       showSuccess(
-        target.global
-          ? `${target.model} is no longer global`
-          : `${target.model} set as global`
+        target.default_for_type
+          ? `${target.alias} is no longer default`
+          : `${target.alias} set as default`
       );
     } catch (error) {
       console.error(error);
-      showError('Failed to update global flag');
+      showError('Failed to update default flag');
     } finally {
       setPendingModelId(null);
     }
   };
 
-  // Actions
-  const handleScan = async () => {
+  const handleToggleEnabled = async (target: Model) => {
     try {
-      await scanMutation.mutateAsync();
-      showSuccess('Models scanned successfully');
-    } catch {
-      showError('Failed to scan models');
+      setPendingModelId(target.id);
+      await updateModelMutation.mutateAsync({
+        id: target.id,
+        data: { enabled: !target.enabled },
+      });
+      showSuccess(
+        target.enabled
+          ? `${target.alias} disabled`
+          : `${target.alias} enabled`
+      );
+    } catch (error) {
+      console.error(error);
+      showError('Failed to toggle enabled status');
+    } finally {
+      setPendingModelId(null);
     }
   };
 
-  const handleRetire = async () => {
+  const handleHealthCheck = async (target: Model) => {
+    try {
+      setPendingModelId(target.id);
+      await healthCheckMutation.mutateAsync({ id: target.id, force: true });
+      showSuccess(`Health check completed for ${target.alias}`);
+    } catch (error) {
+      console.error(error);
+      showError('Health check failed');
+    } finally {
+      setPendingModelId(null);
+    }
+  };
+
+  const handleDelete = async () => {
     if (!selectedModel) return;
 
     try {
-      await retireMutation.mutateAsync({
-        id: selectedModel.id,
-        drop_vectors: retireOptions.dropVectors,
-        remove_from_tenants: retireOptions.removeFromTenants,
-      });
-      showSuccess('Model retired successfully');
-      closeRetireModal();
+      await deleteModelMutation.mutateAsync(selectedModel.id);
+      showSuccess('Model deleted successfully');
+      setDeleteModalOpen(false);
+      setSelectedModel(null);
     } catch {
-      showError('Failed to retire model');
+      showError('Failed to delete model');
     }
   };
 
-  const getActions = (model: ModelRegistry): ActionItem[] => [
+  const getActions = (model: Model): ActionItem[] => [
     {
-      label: model.global ? 'Unset Global' : 'Set Global',
-      onClick: () => handleToggleGlobal(model),
+      label: model.enabled ? 'Disable' : 'Enable',
+      onClick: () => handleToggleEnabled(model),
       disabled: pendingModelId === model.id,
     },
     {
-      label: 'View Tenants',
-      onClick: () => {
-        setSelectedModel(model);
-        useAppStore.getState().openModal('tenantsModal');
-      },
+      label: model.default_for_type ? 'Unset Default' : 'Set as Default',
+      onClick: () => handleToggleDefault(model),
+      disabled: pendingModelId === model.id || !model.enabled,
     },
     {
-      label: 'Retire',
+      label: 'Health Check',
+      onClick: () => handleHealthCheck(model),
+      disabled: pendingModelId === model.id || !model.enabled,
+    },
+    {
+      label: 'Delete',
       onClick: () => {
         setSelectedModel(model);
-        openRetireModal();
+        setDeleteModalOpen(true);
       },
       danger: true,
     },
   ];
 
-  const getStateColor = (state: string) => {
-    switch (state) {
-      case 'active':
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case 'available':
         return 'success';
       case 'deprecated':
         return 'warn';
-      case 'disabled':
+      case 'unavailable':
+      case 'maintenance':
         return 'danger';
       default:
         return 'neutral';
+    }
+  };
+
+  const getTypeLabel = (type: string) => {
+    switch (type) {
+      case 'llm_chat':
+        return 'LLM';
+      case 'embedding':
+        return 'Embedding';
+      default:
+        return type;
     }
   };
 
@@ -229,8 +263,8 @@ export function ModelsPage() {
               }
               className={styles.search}
             />
-            <Button onClick={handleScan} disabled={scanMutation.isPending}>
-              {scanMutation.isPending ? 'Scanning...' : 'Scan Models'}
+            <Button onClick={() => setCreateModalOpen(true)}>
+              Add Model
             </Button>
           </div>
         </div>
@@ -245,12 +279,12 @@ export function ModelsPage() {
           <table className={styles.table}>
             <thead>
               <tr>
-                <th>MODEL</th>
-                <th>VERSION</th>
-                <th>STATE</th>
-                <th>MODALITY</th>
-                <th>GLOBAL</th>
-                <th>TENANTS</th>
+                <th>ALIAS / NAME</th>
+                <th>TYPE</th>
+                <th>PROVIDER / MODEL</th>
+                <th>STATUS</th>
+                <th>HEALTH</th>
+                <th>DEFAULT</th>
                 <th>ACTIONS</th>
               </tr>
             </thead>
@@ -258,33 +292,17 @@ export function ModelsPage() {
               {isLoading ? (
                 Array.from({ length: 3 }).map((_, i) => (
                   <tr key={i}>
-                    <td>
-                      <Skeleton width={200} />
-                    </td>
-                    <td>
-                      <Skeleton width={100} />
-                    </td>
-                    <td>
-                      <Skeleton width={80} />
-                    </td>
-                    <td>
-                      <Skeleton width={100} />
-                    </td>
-                    <td>
-                      <Skeleton width={60} />
-                    </td>
-                    <td>
-                      <Skeleton width={150} />
-                    </td>
-                    <td>
-                      <Skeleton width={100} />
-                    </td>
+                    {Array.from({ length: 7 }).map((__, j) => (
+                      <td key={j}>
+                        <Skeleton width={j === 0 ? 200 : j === 2 ? 150 : 100} />
+                      </td>
+                    ))}
                   </tr>
                 ))
               ) : models.length === 0 ? (
                 <tr>
                   <td colSpan={7} className={styles.emptyState}>
-                    No models found
+                    No models found. Click "Add Model" to create one.
                   </td>
                 </tr>
               ) : (
@@ -293,7 +311,8 @@ export function ModelsPage() {
                     key={model.id}
                     model={model}
                     getActions={getActions}
-                    getStateColor={getStateColor}
+                    getStatusColor={getStatusColor}
+                    getTypeLabel={getTypeLabel}
                   />
                 ))
               )}
@@ -302,49 +321,41 @@ export function ModelsPage() {
         </div>
       </div>
 
-      {/* Retire Modal */}
+      {/* Delete Modal */}
       <Modal
-        open={retireModalOpen}
-        onClose={closeRetireModal}
-        title="Retire Model"
+        open={deleteModalOpen}
+        onClose={() => setDeleteModalOpen(false)}
+        title="Delete Model"
         content={
           <div>
-            <p>Are you sure you want to retire {selectedModel?.model}?</p>
-            <label>
-              <input
-                type="checkbox"
-                checked={retireOptions.dropVectors}
-                onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
-                  setRetireOptions(prev => ({
-                    ...prev,
-                    dropVectors: event.target.checked,
-                  }))
-                }
-              />
-              Drop vectors
-            </label>
-            <label>
-              <input
-                type="checkbox"
-                checked={retireOptions.removeFromTenants}
-                onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
-                  setRetireOptions(prev => ({
-                    ...prev,
-                    removeFromTenants: event.target.checked,
-                  }))
-                }
-              />
-              Remove from tenants
-            </label>
+            <p>Are you sure you want to delete <strong>{selectedModel?.alias}</strong>?</p>
+            <p style={{ fontSize: '0.9em', color: '#666', marginTop: '8px' }}>
+              This action cannot be undone. The model will be soft-deleted.
+            </p>
             <div className={styles.modalActions}>
-              <Button onClick={closeRetireModal}>Cancel</Button>
+              <Button onClick={() => setDeleteModalOpen(false)}>Cancel</Button>
               <Button
-                onClick={handleRetire}
+                onClick={handleDelete}
                 variant="danger"
-                disabled={retireMutation.isPending}
+                disabled={deleteModelMutation.isPending}
               >
-                {retireMutation.isPending ? 'Retiring...' : 'Retire'}
+                {deleteModelMutation.isPending ? 'Deleting...' : 'Delete'}
               </Button>
+            </div>
+          </div>
+        }
+      />
+
+      {/* Create Modal - TODO: Implement form */}
+      <Modal
+        open={createModalOpen}
+        onClose={() => setCreateModalOpen(false)}
+        title="Add Model"
+        content={
+          <div>
+            <p>Model creation form coming soon...</p>
+            <div className={styles.modalActions}>
+              <Button onClick={() => setCreateModalOpen(false)}>Close</Button>
             </div>
           </div>
         }
