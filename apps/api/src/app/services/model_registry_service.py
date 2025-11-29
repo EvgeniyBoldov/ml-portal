@@ -1,15 +1,14 @@
-"""
-Model Registry Service for business logic
+"""Model Registry Service
+
+New architecture: models are added manually via API, not scanned from filesystem.
+Service handles CRUD operations and health checks.
 """
 from __future__ import annotations
 from typing import List, Optional, Dict, Any
-import os
-import json
-import asyncio
-from pathlib import Path
+import uuid
+from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.repositories.model_registry_repo import AsyncModelRegistryRepository
-from app.schemas.model_registry import ScanResult, RetireRequest, RetireResponse
 from app.core.config import get_settings
 from app.core.logging import get_logger
 
@@ -17,14 +16,14 @@ logger = get_logger(__name__)
 
 
 class ModelRegistryService:
-    """Service for model registry operations"""
+    """Service for model CRUD operations and health checks"""
     
     def __init__(self, session: AsyncSession):
         self.session = session
         self.repo = AsyncModelRegistryRepository(session)
         self.settings = get_settings()
     
-    async def scan_models_directory(self) -> ScanResult:
+    async def create_model(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Scan MODELS_ROOT directory and sync with database"""
         models_root = Path(self.settings.MODELS_ROOT)
         

@@ -118,7 +118,7 @@ export interface Tenant {
   name: string;
   description?: string;
   is_active: boolean;
-  extra_embed_model?: string;
+  embedding_model_alias?: string;  // Updated: FK to models.alias
   ocr?: boolean;
   layout?: boolean;
   created_at: string;
@@ -129,7 +129,7 @@ export type TenantCreate = {
   name: string;
   description?: string;
   is_active?: boolean;
-  extra_embed_model?: string;
+  embedding_model_alias?: string;  // Updated
   ocr?: boolean;
   layout?: boolean;
 };
@@ -148,46 +148,89 @@ export interface EmailSettings {
 
 export type EmailSettingsUpdate = Partial<EmailSettings>;
 
-export interface ModelRegistry {
+// New Model architecture
+export type ModelType = 'llm_chat' | 'embedding';
+export type ModelStatus = 'available' | 'unavailable' | 'deprecated' | 'maintenance';
+export type HealthStatus = 'healthy' | 'degraded' | 'unavailable';
+
+export interface Model {
   id: string;
-  model: string;
-  version: string;
-  modality: string;
-  state: string;
-  vector_dim?: number;
-  path: string;
-  global: boolean;
-  notes?: string;
-  used_by_tenants: number;
+  alias: string;                      // e.g. "llm.chat.default"
+  name: string;                       // Human-readable name
+  type: ModelType;                    // llm_chat | embedding
+  provider: string;                   // openai, groq, local, etc.
+  provider_model_name: string;        // Model name at provider
+  base_url: string;                   // API base URL
+  api_key_ref?: string | null;        // Reference to secret
+  extra_config?: Record<string, any> | null;  // Provider-specific config
+  status: ModelStatus;                // Availability status
+  enabled: boolean;
+  default_for_type: boolean;          // Is this the default model for its type?
+  model_version?: string | null;      // For tracking changes
+  description?: string | null;
+  last_health_check_at?: string | null;
+  health_status?: HealthStatus | null;
+  health_error?: string | null;
+  health_latency_ms?: number | null;
   created_at: string;
   updated_at: string;
+  deleted_at?: string | null;
 }
 
-export interface ScanResult {
-  added: string[];
-  updated: string[];
-  disabled: string[];
-  errors: Array<{ path: string; error: string }>;
+export interface ModelCreate {
+  alias: string;
+  name: string;
+  type: ModelType;
+  provider: string;
+  provider_model_name: string;
+  base_url: string;
+  api_key_ref?: string;
+  extra_config?: Record<string, any>;
+  status?: ModelStatus;
+  enabled?: boolean;
+  default_for_type?: boolean;
+  model_version?: string;
+  description?: string;
 }
 
-export interface RetireRequest {
-  drop_vectors: boolean;
-  remove_from_tenants: boolean;
+export interface ModelUpdate {
+  name?: string;
+  provider?: string;
+  provider_model_name?: string;
+  base_url?: string;
+  api_key_ref?: string;
+  extra_config?: Record<string, any>;
+  status?: ModelStatus;
+  enabled?: boolean;
+  default_for_type?: boolean;
+  model_version?: string;
+  description?: string;
 }
 
-export interface RetireResponse {
-  success: boolean;
-  affected_tenants: string[];
-  message: string;
-}
-
-export interface ModelRegistryListResponse {
-  items: ModelRegistry[];
+export interface ModelListResponse {
+  items: Model[];
   total: number;
   page: number;
   size: number;
   has_more: boolean;
 }
+
+export interface HealthCheckRequest {
+  force?: boolean;
+}
+
+export interface HealthCheckResponse {
+  model_id: string;
+  alias: string;
+  status: HealthStatus;
+  latency_ms?: number;
+  error?: string;
+  checked_at: string;
+}
+
+// Backward compatibility (will be removed)
+export type ModelRegistry = Model;
+export type ModelRegistryListResponse = ModelListResponse;
 
 export interface TenantListResponse {
   items: Tenant[];
@@ -327,19 +370,21 @@ export const adminApi = {
     });
   },
 
-  // Models
+  // Models (New Architecture)
   async getModels(
     params: {
-      state?: string;
-      modality?: string;
+      type?: string;          // Changed: modality → type
+      status?: string;        // Changed: state → status
+      enabled_only?: boolean; // New
       search?: string;
       page?: number;
       size?: number;
     } = {}
-  ): Promise<ModelRegistryListResponse> {
+  ): Promise<ModelListResponse> {
     const searchParams = new URLSearchParams();
-    if (params.state) searchParams.set('state', params.state);
-    if (params.modality) searchParams.set('modality', params.modality);
+    if (params.type) searchParams.set('type', params.type);
+    if (params.status) searchParams.set('status', params.status);
+    if (params.enabled_only) searchParams.set('enabled_only', 'true');
     if (params.search) searchParams.set('search', params.search);
     if (params.page) searchParams.set('page', String(params.page));
     if (params.size) searchParams.set('size', String(params.size));
@@ -347,47 +392,35 @@ export const adminApi = {
     return apiRequest(`/admin/models?${searchParams.toString()}`);
   },
 
-  async getModel(id: string): Promise<ModelRegistry> {
+  async getModel(id: string): Promise<Model> {
     return apiRequest(`/admin/models/${id}`);
   },
 
-  async scanModels(): Promise<ScanResult> {
-    return apiRequest('/admin/models/scan', {
+  async createModel(data: ModelCreate): Promise<Model> {
+    return apiRequest('/admin/models', {
       method: 'POST',
+      body: JSON.stringify(data),
     });
   },
 
-  async updateModel(
-    id: string,
-    data: Partial<ModelRegistry>
-  ): Promise<ModelRegistry> {
+  async updateModel(id: string, data: ModelUpdate): Promise<Model> {
     return apiRequest(`/admin/models/${id}`, {
       method: 'PATCH',
       body: JSON.stringify(data),
     });
   },
 
-  async retireModel(
-    id: string,
-    request: RetireRequest
-  ): Promise<RetireResponse> {
-    return apiRequest(`/admin/models/${id}:retire`, {
-      method: 'POST',
-      body: JSON.stringify(request),
-    });
-  },
-
-  async deleteModel(id: string): Promise<{ message: string }> {
+  async deleteModel(id: string): Promise<void> {
     return apiRequest(`/admin/models/${id}`, {
       method: 'DELETE',
     });
   },
 
-  async getModelTenants(id: string): Promise<{
-    model: string;
-    tenants: Array<{ id: string; name: string; usage_type: string }>;
-  }> {
-    return apiRequest(`/admin/models/${id}/tenants`);
+  async healthCheckModel(id: string, force = false): Promise<HealthCheckResponse> {
+    return apiRequest(`/admin/models/${id}/health-check`, {
+      method: 'POST',
+      body: JSON.stringify({ force }),
+    });
   },
 
   // Tenants

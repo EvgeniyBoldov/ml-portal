@@ -23,6 +23,7 @@ export const qk = {
     tenants: (params?: { page?: number }) => ['admin', 'tenants', params] as const,
     tenant: (id: string) => ['admin', 'tenant', id] as const,
     models: () => ['admin', 'models'] as const,
+    model: (id: string) => ['admin', 'model', id] as const,
     audit: (params?: { page?: number }) => ['admin', 'audit', params] as const,
   },
   chats: {

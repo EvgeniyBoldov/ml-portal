@@ -19,6 +19,9 @@ import {
   type EmailSettings,
   type EmailSettingsUpdate,
   type ModelRegistry,
+  type Model,
+  type ModelCreate,
+  type ModelUpdate,
 } from '../admin';
 import { qk } from '@shared/api/keys';
 
@@ -66,22 +69,14 @@ export function useCreateUser() {
 export function useUpdateModel() {
   const queryClient = useQueryClient();
 
-  return useMutation<ModelRegistry, Error, { id: string; data: Partial<ModelRegistry> }>(
-    {
-      mutationFn: ({ id, data }: { id: string; data: Partial<ModelRegistry> }) =>
-        adminApi.updateModel(id, data),
-      retry: false,
-      onSuccess: (
-        _model: ModelRegistry,
-        variables: { id: string; data: Partial<ModelRegistry> }
-      ) => {
-        queryClient.invalidateQueries({ queryKey: qk.admin.models() });
-        queryClient.invalidateQueries({
-          queryKey: ['admin', 'models', variables.id, 'tenants'],
-        });
-      },
-    }
-  );
+  return useMutation<Model, Error, { id: string; data: ModelUpdate }>({
+    mutationFn: ({ id, data }: { id: string; data: ModelUpdate }) =>
+      adminApi.updateModel(id, data),
+    retry: false,
+    onSuccess: (_model: Model, variables: { id: string; data: ModelUpdate }) => {
+      queryClient.invalidateQueries({ queryKey: qk.admin.models() });
+    },
+  });
 }
 
 export function useUpdateUser() {
@@ -136,12 +131,13 @@ export function useDeleteUser() {
 }
 
 // ============================================================================
-// Models
+// Models (New Architecture)
 // ============================================================================
 
 export interface UseModelsParams {
-  state?: string;
-  modality?: string;
+  type?: string;           // Changed: modality → type
+  status?: string;         // Changed: state → status
+  enabled_only?: boolean;  // New
   search?: string;
   page?: number;
   size?: number;
@@ -156,38 +152,46 @@ export function useModels(params: UseModelsParams = {}) {
   });
 }
 
-export function useScanModels() {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: () => adminApi.scanModels(),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.admin.models() });
-    },
-  });
-}
-
-export function useRetireModel() {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: (params: {
-      id: string;
-      drop_vectors: boolean;
-      remove_from_tenants: boolean;
-    }) => adminApi.retireModel(params.id, params),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.admin.models() });
-    },
-  });
-}
-
-export function useModelTenants(id: string | undefined) {
+export function useModel(id: string | undefined) {
   return useQuery({
-    queryKey: ['admin', 'models', id, 'tenants'],
-    queryFn: () => adminApi.getModelTenants(id!),
+    queryKey: id ? qk.admin.model(id) : ['admin', 'model', 'undefined'],
+    queryFn: () => adminApi.getModel(id!),
     enabled: !!id,
     staleTime: 30000, // 30 seconds for detail
+  });
+}
+
+export function useCreateModel() {
+  const queryClient = useQueryClient();
+
+  return useMutation<Model, Error, ModelCreate>({
+    mutationFn: (data: ModelCreate) => adminApi.createModel(data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: qk.admin.models() });
+    },
+  });
+}
+
+export function useDeleteModel() {
+  const queryClient = useQueryClient();
+
+  return useMutation<void, Error, string>({
+    mutationFn: (id: string) => adminApi.deleteModel(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: qk.admin.models() });
+    },
+  });
+}
+
+export function useHealthCheckModel() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (params: { id: string; force?: boolean }) =>
+      adminApi.healthCheckModel(params.id, params.force),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: qk.admin.models() });
+    },
   });
 }
 
