@@ -13,7 +13,7 @@ class Tenants(Base):
     description: Mapped[str | None] = mapped_column(String(500), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     # Model-related fields
-    extra_embed_model: Mapped[str | None] = mapped_column(String(255), ForeignKey("model_registry.model"), nullable=True)
+    embedding_model_alias: Mapped[str | None] = mapped_column(String(100), ForeignKey("models.alias"), nullable=True)
     ocr: Mapped[bool] = mapped_column(Boolean, default=False)
     layout: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

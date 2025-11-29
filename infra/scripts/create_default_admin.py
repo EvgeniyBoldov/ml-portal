@@ -6,138 +6,53 @@
 import sys
 import os
 import asyncio
+import uuid
+import bcrypt
 from pathlib import Path
+from sqlalchemy import text
+from typing import Any, Dict, List, Optional
 
 # Добавляем путь к приложению
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "apps" / "api" / "src" / "app"))
 
-from app.core.db import get_session_factory
+from app.core.db import get_session_factory, lifespan
 from app.repositories.users_repo import AsyncUsersRepository
 from app.repositories.tenants_repo import AsyncTenantsRepository
-from app.repositories.model_registry_repo import AsyncModelRegistryRepository
-import bcrypt
-import uuid
-import os
-from pathlib import Path
-from datetime import datetime
-from sqlalchemy import text
-from typing import Any, Dict, List, Optional
+from app.services.model_service import ModelService
+from app.models.model_registry import ModelType
 
 
-async def ensure_models_exist(session_factory) -> Dict[str, Any]:
-    """Проверяет наличие моделей в файловой системе и создает записи в БД"""
-    models_dir = Path("/app/models_llm")
-    expected_models: List[Dict[str, Any]] = [
-        {
-            "model": "all-MiniLM-L6-v2",
-            "version": "latest",
-            "modality": "text",
-            "vector_dim": 384,
-            "path": str(models_dir / "sentence-transformers--all-MiniLM-L6-v2"),
-            "is_global": True,
-        },
-        {
-            "model": "multilingual-e5-small",
-            "version": "latest",
-            "modality": "text",
-            "vector_dim": 384,
-            "path": str(models_dir / "multilingual-e5-small"),
-            "is_global": False,
-        },
-        {
-            "model": "bge-large-en",
-            "version": "latest",
-            "modality": "text",
-            "vector_dim": 1024,
-            "path": str(models_dir / "bge-large-en"),
-            "is_global": False,
-        },
-    ]
-
-    available_text_models: List[str] = []
-    available_rerank_models: List[str] = []
-    global_text_model: Optional[str] = None
-    global_rerank_model: Optional[str] = None
-
+async def check_default_models(session_factory) -> Dict[str, str]:
+    """Проверяет наличие дефолтных моделей (создаются миграцией)"""
+    print("🤖 Проверяем наличие моделей...")
+    
     async with session_factory() as session:
-        try:
-            model_repo = AsyncModelRegistryRepository(session)
-
-            for model_info in expected_models:
-                model_path = Path(model_info["path"])
-
-                if not model_path.exists() or not model_path.is_dir():
-                    print(f"⚠️  Модель не найдена: {model_info['model']} (путь: {model_path})")
-                    continue
-
-                print(f"✅ Найдена модель: {model_info['model']}")
-                existing_model = await model_repo.get_by_model(model_info["model"])
-
-                payload = {
-                    "version": model_info["version"],
-                    "modality": model_info["modality"],
-                    "state": "active",
-                    "vector_dim": model_info.get("vector_dim"),
-                    "path": model_info["path"],
-                    "is_global": model_info.get("is_global", False),
-                    "notes": f"Auto-created from {model_path}",
-                }
-
-                if existing_model:
-                    update_data = {
-                        key: value
-                        for key, value in payload.items()
-                        if getattr(existing_model, key) != value
-                    }
-
-                    if update_data:
-                        await model_repo.update(existing_model.id, update_data)
-                        print(f"   🔄 Обновлена запись в БД: {model_info['model']}")
-                    else:
-                        print(f"   📝 Запись уже актуальна: {model_info['model']}")
-                else:
-                    create_payload = {
-                        "id": uuid.uuid4(),
-                        "model": model_info["model"],
-                        **payload,
-                    }
-                    await model_repo.create(create_payload)
-                    print(f"   📝 Создана запись в БД: {model_info['model']}")
-
-                if model_info["modality"] == "text":
-                    available_text_models.append(model_info["model"])
-                    if model_info.get("is_global"):
-                        global_text_model = model_info["model"]
-                elif model_info["modality"] == "rerank":
-                    available_rerank_models.append(model_info["model"])
-                    if model_info.get("is_global"):
-                        global_rerank_model = model_info["model"]
-
-            await session.commit()
-            return {
-                "available_text_models": available_text_models or None,
-                "global_text_model": global_text_model,
-                "available_rerank_models": available_rerank_models or None,
-                "global_rerank_model": global_rerank_model,
-            }
-
-        except Exception as e:
-            print(f"❌ Ошибка при проверке моделей: {e}")
-            await session.rollback()
-            return {
-                "available_text_models": None,
-                "global_text_model": None,
-                "available_rerank_models": None,
-                "global_rerank_model": None,
-            }
+        service = ModelService(session)
+        
+        # Check LLM
+        llm = await service.get_default_model(ModelType.LLM_CHAT)
+        if llm:
+            print(f"✅ LLM модель: {llm.alias} ({llm.provider})")
+        else:
+            print("⚠️  Нет дефолтной LLM модели!")
+            
+        # Check Embedding
+        embed = await service.get_default_model(ModelType.EMBEDDING)
+        if embed:
+            print(f"✅ Embedding модель: {embed.alias} ({embed.provider})")
+        else:
+            print("⚠️  Нет дефолтной Embedding модели!")
+            
+        return {
+            "llm_alias": llm.alias if llm else None,
+            "embed_alias": embed.alias if embed else None
+        }
 
 
-async def create_default_tenant(session_factory, models_info: Dict[str, Any]) -> uuid.UUID:
-    """Создает тенант по умолчанию с привязкой к доступным моделям"""
+async def create_default_tenant(session_factory, models_info: Dict[str, str]) -> uuid.UUID:
+    """Создает тенант по умолчанию"""
     tenant_name = "admins"
-    global_text_model = models_info.get("global_text_model")
-    text_models = models_info.get("available_text_models") or []
-    extra_embed_model = next((m for m in text_models if m != global_text_model), None)
+    embed_alias = models_info.get("embed_alias")
 
     async with session_factory() as session:
         try:
@@ -149,9 +64,9 @@ async def create_default_tenant(session_factory, models_info: Dict[str, Any]) ->
             if existing_tenant:
                 print(f"✅ Тенант {tenant_name} уже существует (ID: {existing_tenant.id})")
                 should_commit = False
-                if extra_embed_model and existing_tenant.extra_embed_model != extra_embed_model:
-                    print("   🔄 Обновляем extra_embed_model для существующего тенанта")
-                    existing_tenant.extra_embed_model = extra_embed_model
+                if embed_alias and existing_tenant.embedding_model_alias != embed_alias:
+                    print(f"   🔄 Обновляем embedding_model_alias: {embed_alias}")
+                    existing_tenant.embedding_model_alias = embed_alias
                     should_commit = True
                 if should_commit:
                     await session.commit()
@@ -164,7 +79,7 @@ async def create_default_tenant(session_factory, models_info: Dict[str, Any]) ->
                 name=tenant_name,
                 is_active=True,
                 description="Default administrators tenant",
-                extra_embed_model=extra_embed_model,
+                embedding_model_alias=embed_alias,
                 ocr=False,
                 layout=False,
             )
@@ -173,8 +88,7 @@ async def create_default_tenant(session_factory, models_info: Dict[str, Any]) ->
 
             print(f"✅ Тенант {tenant_name} создан!")
             print(f"   🆔 ID: {tenant.id}")
-            print(f"   🤖 Global embed: {global_text_model}")
-            print(f"   ➕ Extra embed: {extra_embed_model}")
+            print(f"   🧠 Embedding: {embed_alias}")
             
             return tenant.id
             
@@ -186,8 +100,6 @@ async def create_default_tenant(session_factory, models_info: Dict[str, Any]) ->
 
 async def link_admin_to_tenant(session_factory, admin_user_id: uuid.UUID, tenant_id: uuid.UUID):
     """Связывает admin пользователя с тенантом"""
-    from sqlalchemy import text
-    
     async with session_factory() as session:
         try:
             # Проверяем, есть ли уже связь
@@ -229,38 +141,29 @@ async def create_default_admin():
     
     print(f"🔍 Проверяем наличие пользователя {admin_login}...")
     
-    # Инициализируем базу данных
-    from app.core.db import lifespan
+    # Инициализируем приложение (БД и прочее)
     async with lifespan(None):
         session_factory = get_session_factory()
         
         try:
-            # 1. Проверяем и создаем модели в БД
-            print("🤖 Проверяем наличие моделей...")
-            models_info = await ensure_models_exist(session_factory)
-            available_text_models = models_info.get("available_text_models") or []
-            global_text_model = models_info.get("global_text_model")
-            if not global_text_model:
-                print("⚠️  Не удалось определить глобальную текстовую модель. Проверьте файлы моделей.")
+            # 1. Проверяем модели
+            models_info = await check_default_models(session_factory)
             
             # 2. Создаем тенант по умолчанию
-            print("🏢 Создаем тенант по умолчанию...")
             tenant_id = await create_default_tenant(session_factory, models_info)
             
             # 3. Создаем или находим admin пользователя
-            from sqlalchemy import text
-            
             async with session_factory() as session:
                 users_repo = AsyncUsersRepository(session)
                 
-                # Проверяем, существует ли пользователь
+                # Проверяем существование пользователя
                 existing_user = await users_repo.get_by_login(admin_login)
                 
                 if existing_user:
                     print(f"✅ Пользователь {admin_login} уже существует (ID: {existing_user.id})")
                     admin_user_id = existing_user.id
                     
-                    # Проверяем, есть ли у пользователя тенант
+                    # Проверяем связь с тенантом
                     result = await session.execute(
                         text("SELECT tenant_id FROM user_tenants WHERE user_id = :user_id"),
                         {"user_id": admin_user_id}
@@ -296,9 +199,10 @@ async def create_default_admin():
                     print(f"   🆔 ID: {user.id}")
                     print(f"   👑 Роль: admin")
                 
-                # 4. Связываем admin пользователя с тенантом
-                print("🔗 Связываем admin пользователя с тенантом...")
-                await link_admin_to_tenant(session_factory, admin_user_id, tenant_id)
+                # 4. Связываем admin пользователя с тенантом (если новый)
+                if not existing_user:
+                    print("🔗 Связываем admin пользователя с тенантом...")
+                    await link_admin_to_tenant(session_factory, admin_user_id, tenant_id)
                 
                 # 5. Инициализация MinIO бакета
                 try:
@@ -315,31 +219,15 @@ async def create_default_admin():
                 except Exception as e:
                     print(f"❌ Ошибка инициализации MinIO: {e}")
                 
-                # 6. Инициализация коллекций Qdrant для доступных моделей
-                try:
-                    from app.repositories.model_registry_repo import AsyncModelRegistryRepository
-                    from app.adapters.impl.qdrant import QdrantVectorStore
-                    async with session_factory() as _s2:
-                        mr = AsyncModelRegistryRepository(_s2)
-                        vector_store = QdrantVectorStore()
-                        target_models = sorted(
-                            set(available_text_models + ([global_text_model] if global_text_model else []))
-                        )
-                        for model_alias in target_models:
-                            if not model_alias:
-                                continue
-                            m = await mr.get_by_model(model_alias)
-                            if m and getattr(m, "vector_dim", None):
-                                collection_name = f"{tenant_id}__{model_alias}"
-                                await vector_store.ensure_collection(collection_name, int(m.vector_dim))
-                                print(f"✅ Qdrant коллекция готова: {collection_name}")
-                except Exception as e:
-                    print(f"❌ Ошибка инициализации Qdrant: {e}")
+                # 6. Инициализация коллекций Qdrant - больше не нужна при старте
+                # Коллекции создаются лениво в RAG ingest pipeline
                 
                 return True
                 
         except Exception as e:
             print(f"❌ Ошибка при создании admin пользователя: {e}")
+            import traceback
+            traceback.print_exc()
             return False
 
 
