@@ -70,20 +70,32 @@ def cleanup_document_artifacts(self: Task, tenant_id: str, source_id: str) -> Di
             # We need to delete by filter source_id
             try:
                 from app.adapters.impl.qdrant import QdrantVectorStore
-                # We don't know which models were used, so we might need to iterate known collections
-                # or use Qdrant's delete_payload mechanism if collections are shared.
-                # Assuming collection name format: {tenant_id}__{model_alias}
+                from app.repositories.rag_status_repo import AsyncRAGStatusRepository
+                from app.schemas.common import EmbeddingModel
+                
+                # Determine which models were used for this document
+                # by querying the RAGStatus table
+                used_models = []
+                session_factory = get_worker_session_factory()
+                
+                try:
+                    async with session_factory() as session:
+                        status_repo = AsyncRAGStatusRepository(session, tenant_id=uuid.UUID(tenant_id))
+                        embedding_nodes = await status_repo.get_embedding_nodes(uuid.UUID(source_id))
+                        used_models = [node.node_key for node in embedding_nodes]
+                except Exception as db_err:
+                    logger.warning(f"Could not fetch used models from DB: {db_err}. Falling back to all known models.")
+                
+                # Fallback if no info found (e.g. status already deleted or never created)
+                if not used_models:
+                    used_models = [m.value for m in EmbeddingModel]
+                
+                logger.info(f"Cleaning up vectors for models: {used_models}")
                 
                 vector_store = QdrantVectorStore()
                 client = await vector_store.get_client()
                 
-                # List all collections for tenant? Or just try common ones.
-                # Better strategy: Since we don't track used models here easily without DB,
-                # we can rely on the fact that we usually use a few standard models.
-                from app.schemas.common import EmbeddingModel
-                known_models = [m.value for m in EmbeddingModel]
-                
-                for model_alias in known_models:
+                for model_alias in used_models:
                     collection_name = f"{tenant_id}__{model_alias}"
                     try:
                         # Qdrant delete by filter
@@ -103,7 +115,8 @@ def cleanup_document_artifacts(self: Task, tenant_id: str, source_id: str) -> Di
                         )
                         logger.info(f"Deleted vectors for {source_id} from {collection_name}")
                     except Exception as q_err:
-                        # Collection might not exist, ignore
+                        # Collection might not exist or other error
+                        logger.warning(f"Failed to delete from {collection_name}: {q_err}")
                         pass
                         
             except Exception as v_err:
@@ -112,7 +125,8 @@ def cleanup_document_artifacts(self: Task, tenant_id: str, source_id: str) -> Di
             return {
                 "source_id": source_id,
                 "status": "completed",
-                "prefix_deleted": prefix
+                "prefix_deleted": prefix,
+                "models_cleaned": used_models if 'used_models' in locals() else []
             }
 
         return asyncio.run(_cleanup())

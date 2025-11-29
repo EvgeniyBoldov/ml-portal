@@ -103,23 +103,108 @@ def index_model(self: Task, embed_result: Dict[str, Any], tenant_id: str) -> Dic
                                 "model_alias": model_alias
                             }
                         
-                        # 3. Read Embeddings from S3
+                        # 3. Read Embeddings from S3 (Stream optimized)
                         if not embeddings_key:
                             raise ValueError(f"No embeddings_key provided for {source_id}")
+
+                        # Use temporary file to avoid loading huge JSONL into memory
+                        import tempfile
+                        import os
+                        
+                        indexed_count = 0
+                        
+                        # 4. Fetch Chunks Metadata from DB
+                        # Loading all chunks metadata might still be heavy if millions of chunks,
+                        # but usually chunks metadata is much smaller than vectors.
+                        # If this becomes a bottleneck, we'd need to paginate chunk fetching too.
+                        chunks = await chunk_repo.get_by_source_id(uuid.UUID(source_id))
+                        chunk_map = {c.chunk_id: c for c in chunks}
+                        
+                        # 5. Prepare Qdrant Client
+                        from app.adapters.impl.qdrant import QdrantVectorStore
+                        vector_store = QdrantVectorStore()
+                        embedding_service = EmbeddingServiceFactory.get_service(model_alias)
+                        model_info = embedding_service.get_model_info()
+                        
+                        collection_name = f"{tenant_id}__{model_alias}"
+                        await vector_store.ensure_collection(collection_name, model_info.dimensions)
+
+                        # Create temp file
+                        fd, tmp_path = tempfile.mkstemp()
+                        os.close(fd)
+                        
+                        try:
+                            # Download to temp file
+                            await s3_manager.download_file(
+                                bucket=settings.S3_BUCKET_RAG, 
+                                key=embeddings_key,
+                                file_path=tmp_path
+                            )
                             
-                        embeddings_content = await s3_manager.get_object(
-                            bucket=settings.S3_BUCKET_RAG, 
-                            key=embeddings_key
-                        )
+                            # Read line by line and batch upsert
+                            batch_size = 100
+                            vectors = []
+                            payloads = []
+                            ids = []
+                            
+                            with open(tmp_path, 'r', encoding='utf-8') as f:
+                                for line in f:
+                                    line = line.strip()
+                                    if not line:
+                                        continue
+                                        
+                                    try:
+                                        record = json.loads(line)
+                                        chunk_id = record['chunk_id']
+                                        chunk = chunk_map.get(chunk_id)
+                                        
+                                        if not chunk:
+                                            # Chunk deleted or not found? Skip
+                                            continue
+                                            
+                                        vectors.append(record['vector'])
+                                        ids.append(str(uuid.uuid4())) # Qdrant Point ID
+                                        
+                                        payload = {
+                                            "tenant_id": tenant_id,
+                                            "source_id": source_id,
+                                            "chunk_id": chunk_id,
+                                            "page": chunk.page or 0,
+                                            "lang": chunk.lang or "en",
+                                            "mime": "text/plain",
+                                            "embed_model_alias": model_alias,
+                                            "version": model_info.version,
+                                            "updated_at": datetime.now(timezone.utc).isoformat(),
+                                            "tags": [],
+                                            "text": chunk.meta.get('text', '') if chunk.meta else ''
+                                        }
+                                        payloads.append(payload)
+                                        
+                                        # Upsert batch if full
+                                        if len(vectors) >= batch_size:
+                                            await vector_store.upsert(collection_name, vectors, payloads, ids)
+                                            indexed_count += len(vectors)
+                                            vectors = []
+                                            payloads = []
+                                            ids = []
+                                            
+                                    except json.JSONDecodeError:
+                                        logger.warning(f"Skipping invalid JSON line in embeddings for {source_id}")
+                                        continue
+                            
+                            # Upsert remaining
+                            if vectors:
+                                await vector_store.upsert(collection_name, vectors, payloads, ids)
+                                indexed_count += len(vectors)
+                                
+                        finally:
+                            # Cleanup temp file
+                            if os.path.exists(tmp_path):
+                                os.unlink(tmp_path)
                         
-                        # Parse JSONL -> list of dicts {chunk_id, vector}
-                        embedding_records = []
-                        for line in embeddings_content.decode('utf-8').splitlines():
-                            if line.strip():
-                                embedding_records.append(json.loads(line))
-                        
-                        if not embedding_records:
-                             logger.warning(f"No embeddings to index for {source_id}")
+                        # 6. Handle empty case
+                        if indexed_count == 0:
+                             logger.warning(f"No embeddings indexed for {source_id}")
                              # Mark as done but empty
                              await status_manager.transition_stage(
                                 doc_id=uuid.UUID(source_id),
@@ -130,63 +215,6 @@ def index_model(self: Task, embed_result: Dict[str, Any], tenant_id: str) -> Dic
                              await session.commit()
                              return {"status": "completed", "indexed_count": 0}
 
-                        # 4. Fetch Chunks Metadata from DB
-                        chunks = await chunk_repo.get_by_source_id(uuid.UUID(source_id))
-                        chunk_map = {c.chunk_id: c for c in chunks}
-                        
-                        # 5. Prepare Qdrant Data
-                        from app.adapters.impl.qdrant import QdrantVectorStore
-                        vector_store = QdrantVectorStore()
-                        embedding_service = EmbeddingServiceFactory.get_service(model_alias)
-                        model_info = embedding_service.get_model_info()
-                        
-                        collection_name = f"{tenant_id}__{model_alias}"
-                        await vector_store.ensure_collection(collection_name, model_info.dimensions)
-                        
-                        vectors = []
-                        payloads = []
-                        ids = []
-                        
-                        for record in embedding_records:
-                            chunk_id = record['chunk_id']
-                            chunk = chunk_map.get(chunk_id)
-                            
-                            if not chunk:
-                                logger.warning(f"Chunk {chunk_id} not found in DB, skipping index")
-                                continue
-                            
-                            vectors.append(record['vector'])
-                            ids.append(str(uuid.uuid4())) # Qdrant Point ID (new UUID)
-                            
-                            payload = {
-                                "tenant_id": tenant_id,
-                                "source_id": source_id,
-                                "chunk_id": chunk_id,
-                                "page": chunk.page or 0,
-                                "lang": chunk.lang or "en",
-                                "mime": "text/plain",
-                                "embed_model_alias": model_alias,
-                                "version": model_info.version,
-                                "updated_at": datetime.now(timezone.utc).isoformat(),
-                                "tags": [],
-                                "text": chunk.meta.get('text', '') if chunk.meta else ''
-                            }
-                            payloads.append(payload)
-                        
-                        # 6. Upsert in Batches
-                        batch_size = 100
-                        indexed_count = 0
-                        
-                        for i in range(0, len(vectors), batch_size):
-                            batch_vectors = vectors[i:i + batch_size]
-                            batch_payloads = payloads[i:i + batch_size]
-                            batch_ids = ids[i:i + batch_size]
-                            
-                            await vector_store.upsert(collection_name, batch_vectors, batch_payloads, batch_ids)
-                            indexed_count += len(batch_vectors)
-                            
-                            # Optional: Log progress?
-                        
                         # 7. Complete
                         await status_manager.transition_stage(
                             doc_id=uuid.UUID(source_id),

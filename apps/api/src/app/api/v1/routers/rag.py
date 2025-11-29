@@ -106,6 +106,18 @@ async def get_rag_document(
             agg_status = document.agg_status
             agg_details = document.agg_details_json or {}
         
+        # Get vectorized models list
+        # If we didn't fetch nodes above, fetch them now
+        if 'embedding_nodes' not in locals():
+            from app.repositories.rag_status_repo import AsyncRAGStatusRepository
+            status_repo = AsyncRAGStatusRepository(session)
+            embedding_nodes = await status_repo.get_embedding_nodes(document.id)
+            
+        vectorized_models = [
+            node.node_key for node in embedding_nodes 
+            if node.status == 'completed'
+        ]
+        
         return {
             "id": str(document.id),
             "name": document.filename,
@@ -118,8 +130,8 @@ async def get_rag_document(
             "tags": document.tags or [],
             "size": document.size,
             "content_type": document.content_type,
-            "vectorized_models": [],
-            "tenant_name": "admins"
+            "vectorized_models": vectorized_models,
+            "tenant_name": "Default Tenant"
         }
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid document ID format")
@@ -191,6 +203,15 @@ async def list_rag_documents(
                 agg_status = doc.agg_status
                 agg_details = doc.agg_details_json or {}
             
+            # Only populate vectorized_models if we already fetched embedding_nodes
+            # otherwise leave empty to avoid N+1 queries in list view
+            vectorized_models = []
+            if 'embedding_nodes' in locals() and embedding_nodes:
+                 vectorized_models = [
+                    node.node_key for node in embedding_nodes 
+                    if node.status == 'completed'
+                ]
+
             items.append({
                 "id": str(doc.id),
                 "name": doc.filename,
@@ -203,8 +224,8 @@ async def list_rag_documents(
                 "tags": doc.tags or [],
                 "size": doc.size,
                 "content_type": doc.content_type,
-                "vectorized_models": [],  # TODO: implement when worker is ready
-                "tenant_name": "admins"  # Default tenant name
+                "vectorized_models": vectorized_models,
+                "tenant_name": "Default Tenant"
             })
         
         return {
