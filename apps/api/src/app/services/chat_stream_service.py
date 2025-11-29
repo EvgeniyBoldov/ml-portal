@@ -172,6 +172,9 @@ class ChatStreamService:
             # Add current message to context
             llm_messages = context + [{"role": "user", "content": content}]
             
+            # Metadata to save with assistant message
+            rag_sources = []
+            
             # Add RAG context if use_rag=True
             if use_rag:
                 try:
@@ -192,7 +195,24 @@ class ChatStreamService:
                         )
                         
                         if search_results:
-                            yield {"type": "status", "stage": "rag_search_done", "hits": len(search_results)}
+                            # Prepare sources for metadata and client
+                            for result in search_results:
+                                rag_sources.append({
+                                    "source_id": result.source_id,
+                                    "chunk_id": result.chunk_id,
+                                    "text": result.text[:200], # snippet
+                                    "page": result.page,
+                                    "score": result.score,
+                                    "meta": result.meta
+                                })
+
+                            yield {
+                                "type": "status", 
+                                "stage": "rag_search_done", 
+                                "hits": len(search_results),
+                                "sources": rag_sources
+                            }
+                            
                             # Format RAG context with better structure
                             rag_context = "# Контекст из базы знаний\n\n"
                             rag_context += "Используй следующую информацию для ответа. При цитировании указывай источник.\n\n"
@@ -258,7 +278,8 @@ class ChatStreamService:
                 assistant_message = await self.messages_repo.create_message(
                     chat_id=chat_id,
                     role="assistant",
-                    content={"text": assistant_content}
+                    content={"text": assistant_content},
+                    meta={"rag_sources": rag_sources} if rag_sources else None
                 )
                 await self.session.flush()  # Flush message
                 # Commit to persist assistant message as soon as it is saved
