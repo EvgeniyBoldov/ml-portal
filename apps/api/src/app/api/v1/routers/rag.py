@@ -451,25 +451,23 @@ async def delete_rag_document(
     user: UserCtx = Depends(get_current_user),
     repo_factory: AsyncRepositoryFactory = Depends(get_async_repository_factory)
 ):
-    """Delete RAG document"""
+    """Delete RAG document and clean up all artifacts"""
     try:
         document = await repo_factory.get_rag_document_by_id(uuid.UUID(doc_id))
         if not document:
             raise HTTPException(status_code=404, detail="Document not found")
         
-        # Delete file from MinIO if exists
-        if document.s3_key_raw:
-            settings = get_settings()
-            try:
-                await s3_manager.delete_file(
-                    bucket=settings.S3_BUCKET_RAG,
-                    key=document.s3_key_raw
-                )
-            except Exception as e:
-                # Log error but don't fail the deletion
-                print(f"Failed to delete file from S3: {e}")
+        # Trigger background cleanup of S3 artifacts and Vector Store data
+        from app.workers.tasks_rag_ingest import cleanup_document_artifacts
         
-        # Delete document from database
+        # Send to cleanup queue
+        cleanup_document_artifacts.delay(
+            str(document.tenant_id), 
+            str(document.id)
+        )
+        
+        # Delete document from database (this will cascade delete status nodes if configured)
+        # Or the repo handles it
         await repo_factory.delete_rag_document(uuid.UUID(doc_id))
         
         return {"id": doc_id, "deleted": True}

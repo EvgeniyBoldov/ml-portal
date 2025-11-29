@@ -192,6 +192,78 @@ class RAGIngestService:
             "status": "retry_started"
         }
     
+    async def reindex_document(self, document_id: UUID, model_alias: str) -> Dict[str, Any]:
+        """
+        Reindex document with specific model (skip extract/chunk steps)
+        
+        Args:
+            document_id: Document ID
+            model_alias: New model alias to use
+            
+        Returns:
+            Dict: Reindex result
+        """
+        logger.info(f"Reindexing document {document_id} with model {model_alias}")
+        
+        # Get document and source
+        document = await self.rag_repo.get_by_id(self.repo_factory.tenant_id, document_id)
+        if not document:
+            raise ValueError(f"Document {document_id} not found")
+            
+        source = await self.source_repo.get_by_id(document_id)
+        if not source:
+            raise ValueError(f"Source for document {document_id} not found")
+            
+        chunks_key = source.meta.get('chunks_key')
+        if not chunks_key:
+            # Fallback: check if chunk stage is completed
+            # If so, maybe try to find path? Or require full ingest.
+            logger.warning(f"No chunks_key found for {document_id}, falling back to full ingest retry")
+            return await self.retry_failed(document_id, Step.EXTRACT)
+            
+        # Initialize status nodes for new model
+        from app.services.rag_status_manager import RAGStatusManager
+        from app.core.db import get_session_factory
+        
+        session_factory = get_session_factory()
+        async with session_factory() as session:
+            status_manager = RAGStatusManager(session, self.repo_factory)
+            
+            # Add/Reset status nodes for this model
+            await status_manager.status_repo.upsert_node(
+                doc_id=document_id,
+                node_type='embedding',
+                node_key=model_alias,
+                status=DocumentStatus.QUEUED
+            )
+            await status_manager.status_repo.upsert_node(
+                doc_id=document_id,
+                node_type='index',
+                node_key=model_alias,
+                status=DocumentStatus.PENDING
+            )
+            await session.commit()
+            
+        # Start embedding chain
+        # Payload simulates chunk_document result
+        payload = {
+            "source_id": str(document_id),
+            "chunks_key": chunks_key,
+            "status": "reindexing"
+        }
+        
+        task = chain(
+            embed_chunks_model.s(payload, str(self.repo_factory.tenant_id), model_alias),
+            index_model.s(str(self.repo_factory.tenant_id))
+        ).apply_async()
+        
+        return {
+            "document_id": document_id,
+            "model_alias": model_alias,
+            "task_id": task.id,
+            "status": "reindex_started"
+        }
+
     async def get_progress(self, document_id: UUID) -> IngestProgress:
         """
         Get ingest progress for document

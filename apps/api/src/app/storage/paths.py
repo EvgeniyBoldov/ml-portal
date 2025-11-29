@@ -26,6 +26,11 @@ def get_origin_path(tenant_id: UUID, source_id: UUID, filename: str, checksum: s
         return f"{get_document_prefix(tenant_id, source_id)}/original/{filename}_{checksum}_{version}"
 
 
+def get_extracted_path(tenant_id: UUID, source_id: UUID, checksum: str, version: str = "v1") -> str:
+    """Get extracted text file path with checksum"""
+    return f"{get_document_prefix(tenant_id, source_id)}/extracted/{checksum}_{version}.txt"
+
+
 def get_canonical_path(tenant_id: UUID, source_id: UUID, checksum: str, version: str = "v1") -> str:
     """Get canonical file path with checksum"""
     return f"{get_document_prefix(tenant_id, source_id)}/canonical/{checksum}_{version}.jsonl"

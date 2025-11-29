@@ -1,0 +1,122 @@
+from __future__ import annotations
+import logging
+import uuid
+from typing import Dict, Any
+
+from celery import Task
+
+from app.celery_app import app as celery_app
+from app.core.config import get_settings
+from app.adapters.s3_client import s3_manager
+from app.storage.paths import get_document_prefix
+from app.workers.session_factory import get_worker_session_factory
+
+logger = logging.getLogger(__name__)
+
+
+@celery_app.task(
+    queue="cleanup_low",
+    bind=True,
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    retry_backoff_max=600,
+    max_retries=3
+)
+def cleanup_document_artifacts(self: Task, tenant_id: str, source_id: str) -> Dict[str, Any]:
+    """
+    Clean up all S3 artifacts for a document.
+    Deletes the entire prefix: {tenant_id}/{source_id}/
+    
+    Args:
+        tenant_id: Tenant ID
+        source_id: Document (Source) ID
+    
+    Returns:
+        Dict: Cleanup status
+    """
+    logger.info(f"Starting cleanup_document_artifacts for {source_id}")
+    
+    try:
+        import asyncio
+        
+        async def _cleanup():
+            settings = get_settings()
+            
+            # Construct the prefix to delete
+            # Ensure we are deleting the correct folder
+            try:
+                t_uuid = uuid.UUID(tenant_id)
+                s_uuid = uuid.UUID(source_id)
+                prefix = get_document_prefix(t_uuid, s_uuid)
+            except ValueError:
+                logger.error(f"Invalid UUIDs: tenant={tenant_id}, source={source_id}")
+                return {"status": "failed", "error": "Invalid UUIDs"}
+            
+            # Safety check: prefix should not be empty or root
+            if not prefix or len(prefix) < 10:
+                logger.error(f"Dangerous prefix deletion attempted: {prefix}")
+                return {"status": "failed", "error": "Dangerous prefix"}
+            
+            logger.info(f"Deleting S3 prefix: {prefix}")
+            
+            # List objects to verify (optional, but good for logging)
+            # Delete recursively
+            await s3_manager.delete_folder(
+                bucket=settings.S3_BUCKET_RAG,
+                prefix=prefix
+            )
+            
+            # Also delete from vector store (Qdrant)
+            # We need to delete by filter source_id
+            try:
+                from app.adapters.impl.qdrant import QdrantVectorStore
+                # We don't know which models were used, so we might need to iterate known collections
+                # or use Qdrant's delete_payload mechanism if collections are shared.
+                # Assuming collection name format: {tenant_id}__{model_alias}
+                
+                vector_store = QdrantVectorStore()
+                client = await vector_store.get_client()
+                
+                # List all collections for tenant? Or just try common ones.
+                # Better strategy: Since we don't track used models here easily without DB,
+                # we can rely on the fact that we usually use a few standard models.
+                from app.schemas.common import EmbeddingModel
+                known_models = [m.value for m in EmbeddingModel]
+                
+                for model_alias in known_models:
+                    collection_name = f"{tenant_id}__{model_alias}"
+                    try:
+                        # Qdrant delete by filter
+                        from qdrant_client.http import models
+                        await client.delete(
+                            collection_name=collection_name,
+                            points_selector=models.FilterSelector(
+                                filter=models.Filter(
+                                    must=[
+                                        models.FieldCondition(
+                                            key="source_id",
+                                            match=models.MatchValue(value=source_id)
+                                        )
+                                    ]
+                                )
+                            )
+                        )
+                        logger.info(f"Deleted vectors for {source_id} from {collection_name}")
+                    except Exception as q_err:
+                        # Collection might not exist, ignore
+                        pass
+                        
+            except Exception as v_err:
+                logger.error(f"Failed to clean up vectors: {v_err}")
+
+            return {
+                "source_id": source_id,
+                "status": "completed",
+                "prefix_deleted": prefix
+            }
+
+        return asyncio.run(_cleanup())
+
+    except Exception as e:
+        logger.error(f"Error in cleanup_document_artifacts for {source_id}: {e}")
+        raise self.retry(exc=e, countdown=60, max_retries=3)

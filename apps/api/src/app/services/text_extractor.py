@@ -102,17 +102,41 @@ def _extract_docx(data: bytes) -> ExtractResult:
         from docx import Document  # type: ignore
         doc = Document(BytesIO(data))
         parts: List[str] = []
-        # paragraphs
+        
+        # Process paragraphs with style awareness
         for p in doc.paragraphs:
-            if p.text:
-                parts.append(p.text)
-        # tables
+            if not p.text:
+                continue
+                
+            style_name = p.style.name if p.style else ""
+            p_text = p.text.strip()
+            
+            # Map styles to Markdown
+            if style_name.startswith('Heading 1'):
+                parts.append(f"\n# {p_text}\n")
+            elif style_name.startswith('Heading 2'):
+                parts.append(f"\n## {p_text}\n")
+            elif style_name.startswith('Heading 3'):
+                parts.append(f"\n### {p_text}\n")
+            elif style_name.startswith('List'):
+                parts.append(f"- {p_text}")
+            else:
+                parts.append(p_text)
+
+        # Process tables (simple conversion to text/tabs)
         for t in doc.tables:
+            parts.append("\n") # Separate tables
             for row in t.rows:
-                cells = [c.text.strip() for c in row.cells]
+                cells = [c.text.strip().replace('\n', ' ') for c in row.cells]
                 if any(cells):
-                    parts.append("\t".join(cells))
+                    parts.append("| " + " | ".join(cells) + " |")
+            parts.append("\n")
+
         text = "\n".join(parts).strip()
+        # Cleanup multiple newlines
+        import re
+        text = re.sub(r'\n{3,}', '\n\n', text)
+        
         if not text:
             warnings.append("DOCX parsed but no visible text was found.")
     except Exception as e:

@@ -115,6 +115,42 @@ def chunk_text_by_paragraphs(text: str, max_chunk_size: int = 512) -> List[Dict[
     return chunks
 
 
+def chunk_text_by_markdown(text: str, max_chunk_size: int = 512) -> List[Dict[str, Any]]:
+    """
+    Chunk text by Markdown headers (#, ##, ###).
+    Retains headers in the text for context.
+    """
+    import re
+    
+    # Split by headers (looking for # at start of line)
+    # Using lookahead to keep the delimiter
+    # Regex finds newlines followed by #
+    parts = re.split(r'(?=\n#{1,3} )', text)
+    
+    chunks = []
+    for part in parts:
+        part = part.strip()
+        if not part:
+            continue
+            
+        # Check size
+        words = part.split()
+        if len(words) > max_chunk_size:
+            # Fallback to paragraph splitting for large sections
+            sub_chunks = chunk_text_by_paragraphs(part, max_chunk_size)
+            chunks.extend(sub_chunks)
+        else:
+             chunks.append({
+                "text": part,
+                "start_pos": 0,
+                "end_pos": len(words),
+                "word_count": len(words),
+                "char_count": len(part)
+            })
+            
+    return chunks
+
+
 def chunker(text: str, profile: ChunkProfile = ChunkProfile.BY_TOKENS, **kwargs) -> List[Dict[str, Any]]:
     """Main chunking function"""
     if profile == ChunkProfile.BY_TOKENS:
@@ -127,6 +163,9 @@ def chunker(text: str, profile: ChunkProfile = ChunkProfile.BY_TOKENS, **kwargs)
     elif profile == ChunkProfile.BY_PARAGRAPHS:
         max_chunk_size = kwargs.get('max_chunk_size', 512)
         return chunk_text_by_paragraphs(text, max_chunk_size)
+    elif profile == ChunkProfile.BY_MARKDOWN:
+        max_chunk_size = kwargs.get('max_chunk_size', 512)
+        return chunk_text_by_markdown(text, max_chunk_size)
     else:
         raise ValueError(f"Unknown chunking profile: {profile}")
 

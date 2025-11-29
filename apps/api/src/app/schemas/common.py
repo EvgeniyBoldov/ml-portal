@@ -50,6 +50,7 @@ class ChunkProfile(str, Enum):
     BY_TOKENS = "by_tokens"
     BY_SENTENCES = "by_sentences"
     BY_PARAGRAPHS = "by_paragraphs"
+    BY_MARKDOWN = "by_markdown"
     BY_PAGES = "by_pages"
 
 
