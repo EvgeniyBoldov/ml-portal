@@ -44,7 +44,8 @@ class Settings(BaseSettings):
     LLM_DEFAULT_MODEL: str = Field(default="llama-3.1-8b-instant", description="Default model to use")
     LLM_TIMEOUT: int = Field(default=30, description="Request timeout in seconds")
     
-    # Embedding
+    # Embedding (deprecated - moved to models table)
+    # These are kept for backward compatibility during migration
     EMB_BASE_URL: str = Field(default="http://localhost:8001")
     EMB_MODELS: str = Field(default="all-MiniLM-L6-v2")  # Comma-separated list
     EMB_MODEL_ALIAS: str = Field(default="all-MiniLM-L6-v2")
@@ -53,6 +54,19 @@ class Settings(BaseSettings):
     EMB_CACHE_DIR: str = Field(default="/tmp/sentence_transformers")
     EMB_BATCH_SIZE: int = Field(default=128)
     EMB_MAX_WAIT_MS: int = Field(default=8)
+    
+    # Reranker (local service, not in models table)
+    RERANK_SERVICE_URL: str = Field(default="http://reranker:8002", description="Reranker service URL")
+    RERANK_MODEL: str = Field(default="cross-encoder/ms-marco-MiniLM-L-6-v2", description="Reranker model name")
+    RERANK_ENABLED: bool = Field(default=True, description="Enable reranker service")
+    
+    # OCR (local service, future)
+    OCR_SERVICE_URL: str = Field(default="http://ocr:8003", description="OCR service URL")
+    OCR_ENABLED: bool = Field(default=False, description="Enable OCR service")
+    
+    # ASR / Speech-to-Text (local service, future)
+    ASR_SERVICE_URL: str = Field(default="http://whisper:8004", description="ASR service URL")
+    ASR_ENABLED: bool = Field(default=False, description="Enable ASR service")
     
     # HTTP
     HTTP_TIMEOUT_SECONDS: int = Field(default=30)

@@ -1,86 +1,119 @@
 """
 Model Registry Pydantic schemas
+
+New architecture schemas for Model table.
+Only LLM and Embedding models stored in database.
 """
 from __future__ import annotations
 from typing import List, Optional, Dict, Any
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 from datetime import datetime
+from enum import Enum
 
 
-class ModelRegistryBase(BaseModel):
-    """Base model registry schema"""
-    model: str = Field(..., description="Unique model identifier from manifest")
-    version: str = Field(..., description="Model version")
-    modality: str = Field(..., description="Model modality: text|image|layout|table|rerank")
-    state: str = Field(default="active", description="Model state: active|archived|retired|disabled")
-    vector_dim: Optional[int] = Field(None, description="Vector dimension for embedding models")
-    path: str = Field(..., description="Full path to model directory")
-    is_global: bool = Field(
-        default=False,
-        alias="global",
-        serialization_alias="global",
-        description="Mark as global model for modality",
-    )
-    notes: Optional[str] = Field(None, description="Additional notes about the model")
-
-    model_config = ConfigDict(populate_by_name=True)
+class ModelTypeEnum(str, Enum):
+    """Model types"""
+    LLM_CHAT = "llm_chat"
+    EMBEDDING = "embedding"
 
 
-class ModelRegistryCreate(ModelRegistryBase):
-    """Schema for creating a new model registry entry"""
+class ModelStatusEnum(str, Enum):
+    """Model availability status"""
+    AVAILABLE = "available"
+    UNAVAILABLE = "unavailable"
+    DEPRECATED = "deprecated"
+    MAINTENANCE = "maintenance"
+
+
+class HealthStatusEnum(str, Enum):
+    """Health check status"""
+    HEALTHY = "healthy"
+    DEGRADED = "degraded"
+    UNAVAILABLE = "unavailable"
+
+
+class ModelBase(BaseModel):
+    """Base model schema"""
+    alias: str = Field(..., min_length=1, max_length=100, description="Unique identifier (e.g. llm.chat.default)")
+    name: str = Field(..., min_length=1, max_length=255, description="Human-readable name")
+    type: ModelTypeEnum = Field(..., description="Model type")
+    provider: str = Field(..., min_length=1, max_length=50, description="Provider (openai, groq, local, etc.)")
+    provider_model_name: str = Field(..., min_length=1, max_length=255, description="Model name at provider")
+    base_url: str = Field(..., min_length=1, max_length=500, description="API base URL")
+    api_key_ref: Optional[str] = Field(None, max_length=255, description="Reference to secret (not raw key)")
+    extra_config: Optional[Dict[str, Any]] = Field(None, description="Provider-specific config (JSON)")
+    status: ModelStatusEnum = Field(default=ModelStatusEnum.AVAILABLE, description="Availability status")
+    enabled: bool = Field(default=True, description="Is model enabled")
+    default_for_type: bool = Field(default=False, description="Default model for this type")
+    model_version: Optional[str] = Field(None, max_length=50, description="Model version (for tracking changes)")
+    description: Optional[str] = Field(None, description="Model description")
+
+    model_config = ConfigDict(use_enum_values=True)
+
+
+class ModelCreate(ModelBase):
+    """Schema for creating a new model"""
     pass
 
 
-class ModelRegistryUpdate(BaseModel):
-    """Schema for updating a model registry entry"""
-    state: Optional[str] = Field(None, description="Model state: active|archived|retired|disabled")
-    is_global: Optional[bool] = Field(
-        None,
-        alias="global",
-        serialization_alias="global",
-        description="Mark as global model for modality",
-    )
-    notes: Optional[str] = Field(None, description="Additional notes about the model")
+class ModelUpdate(BaseModel):
+    """Schema for updating a model"""
+    name: Optional[str] = Field(None, min_length=1, max_length=255)
+    provider: Optional[str] = Field(None, min_length=1, max_length=50)
+    provider_model_name: Optional[str] = Field(None, min_length=1, max_length=255)
+    base_url: Optional[str] = Field(None, min_length=1, max_length=500)
+    api_key_ref: Optional[str] = Field(None, max_length=255)
+    extra_config: Optional[Dict[str, Any]] = None
+    status: Optional[ModelStatusEnum] = None
+    enabled: Optional[bool] = None
+    default_for_type: Optional[bool] = None
+    model_version: Optional[str] = Field(None, max_length=50)
+    description: Optional[str] = None
 
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(use_enum_values=True)
 
 
-class ModelRegistry(ModelRegistryBase):
-    """Schema for model registry response"""
+class Model(ModelBase):
+    """Schema for model response"""
     id: str
-    used_by_tenants: int = Field(default=0, description="Number of tenants using this model")
+    last_health_check_at: Optional[datetime] = None
+    health_status: Optional[HealthStatusEnum] = None
+    health_error: Optional[str] = None
+    health_latency_ms: Optional[int] = None
     created_at: datetime
     updated_at: datetime
+    deleted_at: Optional[datetime] = None
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True, use_enum_values=True)
 
 
-class ModelRegistryListResponse(BaseModel):
-    """Schema for paginated model registry list"""
-    items: List[ModelRegistry]
+class ModelListResponse(BaseModel):
+    """Schema for paginated model list"""
+    items: List[Model]
     total: int
     page: int
     size: int
     has_more: bool
 
 
-class ScanResult(BaseModel):
-    """Schema for model directory scan results"""
-    added: List[str] = Field(default_factory=list, description="Newly added models")
-    updated: List[str] = Field(default_factory=list, description="Updated models")
-    disabled: List[str] = Field(default_factory=list, description="Disabled models (missing from FS)")
-    errors: List[Dict[str, Any]] = Field(default_factory=list, description="Scan errors")
+class HealthCheckRequest(BaseModel):
+    """Schema for health check request"""
+    force: bool = Field(default=False, description="Force health check even if recently checked")
 
 
-class RetireRequest(BaseModel):
-    """Schema for model retirement request"""
-    drop_vectors: bool = Field(default=False, description="Drop vector collections")
-    remove_from_tenants: bool = Field(default=False, description="Remove from tenant profiles")
+class HealthCheckResponse(BaseModel):
+    """Schema for health check response"""
+    model_id: str
+    alias: str
+    status: HealthStatusEnum
+    latency_ms: Optional[int] = None
+    error: Optional[str] = None
+    checked_at: datetime
 
 
-class RetireResponse(BaseModel):
-    """Schema for model retirement response"""
-    success: bool
-    affected_tenants: List[str] = Field(default_factory=list, description="Affected tenant IDs")
-    message: str
+# Backward compatibility aliases (will be removed after migration)
+ModelRegistry = Model
+ModelRegistryBase = ModelBase
+ModelRegistryCreate = ModelCreate
+ModelRegistryUpdate = ModelUpdate
+ModelRegistryListResponse = ModelListResponse
