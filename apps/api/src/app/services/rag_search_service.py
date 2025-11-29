@@ -74,7 +74,7 @@ class RagSearchService:
         user: Optional[Any] = None  # User object for RBAC filtering
     ) -> List[SearchResult]:
         """
-        Поиск по векторной базе данных с поддержкой scope-фильтров
+        Поиск по векторной базе данных с поддержкой scope-фильтров и реранкинга
         
         Args:
             tenant_id: ID тенанта
@@ -109,15 +109,19 @@ class RagSearchService:
         
         # Поиск по каждой модели
         all_results = []
+        # Берем больше кандидатов для реранкинга (Recall phase)
+        # Если реранкер включен, нам нужно больше кандидатов, чтобы отсеять мусор
+        candidates_k = k * 4 if self.settings.RERANK_ENABLED else k * 2
+        
         for model_alias in models:
             try:
                 collection_name = f"{tenant_id}__{model_alias}"
                 
-                # Поиск в Qdrant с scope-фильтрами (берем больше результатов для лучшего объединения)
+                # Поиск в Qdrant с scope-фильтрами
                 search_results = await vector_store.search(
                     collection=collection_name,
                     query=query_embedding,
-                    top_k=k * 2,  # Берем больше для RRF
+                    top_k=candidates_k,
                     filter=search_filter  # Применяем RBAC фильтры
                 )
                 
@@ -140,18 +144,91 @@ class RagSearchService:
             logger.warning("No results found from any model")
             return []
         
-        # Объединяем результаты через RRF
-        merged_results = self._rrf_merge(all_results, k=60)  # RRF parameter
+        # Объединяем результаты через RRF (Fusion phase)
+        merged_results = self._rrf_merge(all_results, k=60)
         
-        # Ограничиваем количество результатов
-        final_results = merged_results[:k]
+        # Reranking phase (Precision phase)
+        final_results = merged_results
         
-        # Получаем тексты чанков
-        # Используем тексты из payload Qdrant (уже есть в результатах)
-        # await self._enrich_with_texts(final_results, tenant_id)
+        if self.settings.RERANK_ENABLED:
+            try:
+                # Берем топ кандидатов для реранкинга
+                rerank_candidates = merged_results[:candidates_k]
+                if rerank_candidates:
+                    logger.info(f"Reranking {len(rerank_candidates)} candidates...")
+                    reranked_results = await self._rerank_results(query, rerank_candidates, top_k=k)
+                    final_results = reranked_results
+                    logger.info(f"Reranking finished. Top score: {final_results[0].score if final_results else 0}")
+                else:
+                    final_results = []
+            except Exception as e:
+                logger.error(f"Reranking failed, falling back to RRF results: {e}")
+                # Fallback to RRF results
+                final_results = merged_results[:k]
+        else:
+            # Если реранкер выключен, просто берем топ-k по RRF
+            final_results = merged_results[:k]
         
         logger.info(f"Returning {len(final_results)} final results")
         return final_results
+
+    async def _rerank_results(self, query: str, candidates: List[SearchResult], top_k: int) -> List[SearchResult]:
+        """
+        Переранжирование кандидатов с использованием Cross-Encoder сервиса
+        """
+        if not candidates:
+            return []
+            
+        import httpx
+        
+        # Подготовка payload для реранкера
+        # Reranker API ожидает: { "query": str, "documents": [str], "top_k": int }
+        payload = {
+            "query": query,
+            "documents": [c.text for c in candidates],
+            "top_k": top_k
+        }
+        
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.post(
+                    f"{self.settings.RERANK_SERVICE_URL}/rerank",
+                    json=payload
+                )
+                response.raise_for_status()
+                data = response.json()
+                
+                # Результаты приходят в формате: { "results": [ { "index": 0, "score": 0.99, "document": "..." } ] }
+                reranked_indices = data.get("results", [])
+                
+                final_results = []
+                for res in reranked_indices:
+                    idx = res["index"]
+                    new_score = res["score"]
+                    
+                    # Берем исходного кандидата по индексу
+                    candidate = candidates[idx]
+                    
+                    # Сохраняем старый скор (RRF) в метаданных для отладки
+                    if "rrf_score" not in candidate.meta:
+                        candidate.meta["rrf_score"] = candidate.score
+                        
+                    # Обновляем скор на score от реранкера
+                    candidate.score = new_score
+                    
+                    final_results.append(candidate)
+                
+                return final_results
+                
+        except httpx.RequestError as e:
+            logger.error(f"Reranker connection error: {e}")
+            raise e
+        except httpx.HTTPStatusError as e:
+            logger.error(f"Reranker API error {e.response.status_code}: {e.response.text}")
+            raise e
+        except Exception as e:
+            logger.error(f"Unexpected error during reranking: {e}")
+            raise e
     
     def _normalize_scores(self, results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
