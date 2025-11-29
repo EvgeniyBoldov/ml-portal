@@ -197,20 +197,38 @@ services:
       - "8001:8001"
     environment:
       - EMB_MODELS=all-MiniLM-L6-v2,multilingual-e5-small,bge-large-en
-      - EMB_MODEL_all-MiniLM-L6-v2_PATH=/models_llm/sentence-transformers--all-MiniLM-L6-v2
-      - EMB_MODEL_multilingual-e5-small_PATH=/models_llm/multilingual-e5-small
-      - EMB_MODEL_bge-large-en_PATH=/models_llm/bge-large-en
+      - EMB_MODEL_ALL_MINILM_L6_V2_PATH=/models_llm/sentence-transformers--all-MiniLM-L6-v2
+      - EMB_MODEL_MULTILINGUAL_E5_SMALL_PATH=/models_llm/multilingual-e5-small
+      - EMB_MODEL_BGE_LARGE_EN_PATH=/models_llm/bge-large-en
       - EMB_BATCH_SIZE=128
       - EMB_MAX_WAIT_MS=8
-      - EMB_PARALLELISM_all-MiniLM-L6-v2=2
-      - EMB_PARALLELISM_multilingual-e5-small=2
-      - EMB_PARALLELISM_bge-large-en=1
+      - EMB_PARALLELISM_ALL_MINILM_L6_V2=2
+      - EMB_PARALLELISM_MULTILINGUAL_E5_SMALL=2
+      - EMB_PARALLELISM_BGE_LARGE_EN=1
     volumes:
       - ./models_llm:/models_llm
     depends_on:
       - qdrant
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # =============================================================================
+  # RERANKER SERVICE
+  # =============================================================================
+
+  rerank:
+    build:
+      context: .
+      dockerfile: infra/docker/rerank/Dockerfile
+    ports:
+      - "8002:8002"
+    volumes:
+      - ./models_llm:/models_llm
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -311,9 +329,9 @@ services:
       retries: 3
 
 volumes:
-  # postgres_data:
+  postgres_data:
   redis_data:
-  # minio_data:
-  # qdrant_data:
+  minio_data:
+  qdrant_data:
   rabbitmq_data:
   frontend_node_modules:

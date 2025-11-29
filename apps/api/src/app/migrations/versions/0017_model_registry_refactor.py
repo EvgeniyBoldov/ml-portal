@@ -26,16 +26,31 @@ depends_on = None
 
 def upgrade() -> None:
     # 1. Remove FK from tenants to model_registry
-    # We first drop the constraint, then drop the column
-    with op.batch_alter_table("tenants") as batch_op:
-        # Try to drop constraint if it exists (name might vary)
-        try:
-            batch_op.drop_constraint("fk_tenants_extra_embed_model", type_="foreignkey")
-        except Exception:
-            # Fallback: try to find and drop by inspecting (not possible in batch mode directly easily)
-            # Assuming the name from 0013 migration
-            pass
-        batch_op.drop_column("extra_embed_model")
+    # Use inspector to check constraints safely
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    foreign_keys = inspector.get_foreign_keys("tenants")
+    
+    constraint_dropped = False
+    for fk in foreign_keys:
+        # Check if FK points to model_registry (either by name or target table)
+        if fk.get("name") == "fk_tenants_extra_embed_model" or fk.get("referred_table") == "model_registry":
+            try:
+                with op.batch_alter_table("tenants") as batch_op:
+                    batch_op.drop_constraint(fk["name"], type_="foreignkey")
+                constraint_dropped = True
+                break
+            except Exception as e:
+                print(f"Warning: Could not drop constraint {fk['name']}: {e}")
+
+    # Use inspector to check columns safely
+    columns = [c["name"] for c in inspector.get_columns("tenants")]
+    
+    if "extra_embed_model" in columns:
+        with op.batch_alter_table("tenants") as batch_op:
+            batch_op.drop_column("extra_embed_model")
+    else:
+        print("Warning: Column extra_embed_model does not exist in tenants table, skipping drop.")
 
     # 2. Drop model_registry table
     op.drop_table("model_registry")
@@ -45,10 +60,10 @@ def upgrade() -> None:
     op.execute("DROP TYPE IF EXISTS health_status")
 
     # 3. Create new models table
-    # Create Enums first
-    model_type = sa.Enum("llm_chat", "embedding", name="model_type")
-    model_status = sa.Enum("available", "unavailable", "deprecated", "maintenance", name="model_status")
-    health_status = sa.Enum("healthy", "degraded", "unavailable", name="health_status")
+    # Create Enums first - use UPPERCASE names to match Python Enum names (SQLAlchemy default persistence)
+    model_type = sa.Enum("LLM_CHAT", "EMBEDDING", name="model_type")
+    model_status = sa.Enum("AVAILABLE", "UNAVAILABLE", "DEPRECATED", "MAINTENANCE", name="model_status")
+    health_status = sa.Enum("HEALTHY", "DEGRADED", "UNAVAILABLE", name="health_status")
     
     # Note: in Postgres, Enums are created automatically by SQLAlchemy if using create_type=True
     # but here we use them in Column definition
@@ -64,7 +79,7 @@ def upgrade() -> None:
         sa.Column("base_url", sa.String(length=500), nullable=False),
         sa.Column("api_key_ref", sa.String(length=255), nullable=True),
         sa.Column("extra_config", postgresql.JSONB, nullable=True),
-        sa.Column("status", model_status, nullable=False, server_default="available"),
+        sa.Column("status", model_status, nullable=False, server_default="AVAILABLE"),
         sa.Column("enabled", sa.Boolean(), nullable=False, server_default="true"),
         sa.Column("default_for_type", sa.Boolean(), nullable=False, server_default="false"),
         sa.Column("model_version", sa.String(length=50), nullable=True),
@@ -114,11 +129,11 @@ def upgrade() -> None:
             gen_random_uuid(), 
             'llm.chat.default', 
             'Groq Llama 3.1 70B', 
-            'llm_chat', 
+            'LLM_CHAT', 
             'groq', 
             'llama-3.1-70b-versatile', 
             'https://api.groq.com/openai/v1', 
-            'available', 
+            'AVAILABLE', 
             true, 
             true, 
             NOW(), 
@@ -128,11 +143,11 @@ def upgrade() -> None:
             gen_random_uuid(), 
             'embed.default', 
             'OpenAI text-embedding-3-large', 
-            'embedding', 
+            'EMBEDDING', 
             'openai', 
             'text-embedding-3-large', 
             'https://api.openai.com/v1', 
-            'available', 
+            'AVAILABLE', 
             true, 
             true, 
             NOW(), 

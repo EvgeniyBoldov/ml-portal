@@ -135,10 +135,15 @@ class ModelService:
             
         Returns:
             True if deleted, False if not found
+        Raises:
+            ValueError: If trying to delete a system model
         """
         model = await self.get_by_id(model_id)
         if not model:
             return False
+        
+        if model.is_system:
+            raise ValueError(f"Cannot delete system model: {model.alias}")
         
         model.deleted_at = datetime.now(timezone.utc)
         model.enabled = False

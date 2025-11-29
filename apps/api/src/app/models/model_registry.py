@@ -19,8 +19,11 @@ class ModelType(str, enum.Enum):
     """Model types stored in database"""
     LLM_CHAT = "llm_chat"
     EMBEDDING = "embedding"
-    # Note: ocr, asr, reranker, vision are NOT in database
-    # They are local services configured via settings
+    RERANKER = "reranker"
+    OCR = "ocr"
+    ASR = "asr"
+    TTS = "tts"
+    # Note: ocr, asr, reranker, vision are NOW in database (immutable)
 
 
 class ModelStatus(str, enum.Enum):
@@ -74,6 +77,7 @@ class Model(Base):
         default=ModelStatus.AVAILABLE,
         comment="Availability status"
     )
+    is_system: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", comment="System model (cannot be deleted)")
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, comment="Is model enabled")
     default_for_type: Mapped[bool] = mapped_column(Boolean, default=False, comment="Default model for this type")
     

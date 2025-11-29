@@ -15,6 +15,10 @@ class ModelTypeEnum(str, Enum):
     """Model types"""
     LLM_CHAT = "llm_chat"
     EMBEDDING = "embedding"
+    RERANKER = "reranker"
+    OCR = "ocr"
+    ASR = "asr"
+    TTS = "tts"
 
 
 class ModelStatusEnum(str, Enum):
@@ -44,6 +48,7 @@ class ModelBase(BaseModel):
     extra_config: Optional[Dict[str, Any]] = Field(None, description="Provider-specific config (JSON)")
     status: ModelStatusEnum = Field(default=ModelStatusEnum.AVAILABLE, description="Availability status")
     enabled: bool = Field(default=True, description="Is model enabled")
+    is_system: bool = Field(default=False, description="System model (cannot be deleted)")
     default_for_type: bool = Field(default=False, description="Default model for this type")
     model_version: Optional[str] = Field(None, max_length=50, description="Model version (for tracking changes)")
     description: Optional[str] = Field(None, description="Model description")
