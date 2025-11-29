@@ -39,6 +39,7 @@ export interface ChatMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
   content: string;
   created_at?: string | null;
+  meta?: Record<string, unknown>;
 }
 
 export interface ChatCreateRequest {

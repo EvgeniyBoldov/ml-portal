@@ -7,6 +7,7 @@ interface Message {
   content: string;
   created_at: string;
   isOptimistic?: boolean;
+  meta?: Record<string, any>;
 }
 
 interface ChatState {
@@ -224,6 +225,27 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             try {
               const parsed = JSON.parse(data);
               const stage = parsed.stage || '';
+              
+              // Handle RAG sources if present
+              if (parsed.sources && Array.isArray(parsed.sources)) {
+                setMessagesByChat(prev => {
+                  const current = prev[chatId];
+                  if (!current) return prev;
+                  return {
+                    ...prev,
+                    [chatId]: {
+                      ...current,
+                      items: current.items.map(m =>
+                        m.id === tempAssistantId ? { 
+                            ...m, 
+                            meta: { ...m.meta, rag_sources: parsed.sources } 
+                        } : m
+                      )
+                    }
+                  };
+                });
+              }
+
               // Map stage to user-friendly status
               const statusMap: Record<string, string> = {
                 'saving_user_message': 'Сохраняю сообщение...',
