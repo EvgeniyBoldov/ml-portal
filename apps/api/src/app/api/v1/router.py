@@ -11,6 +11,7 @@ from app.api.v1.routers import users as users_router
 from app.api.v1.routers import rag_search as rag_search_router
 from app.api.v1.routers import tenants as tenants_router
 from app.api.v1.routers import models as models_router
+from app.api.v1.routers import prompts as prompts_router
 from app.api.v1.routers import rag_status_stream as rag_status_router
 # from app.api.v1 import jobs as jobs_router  # .del - mock implementation
 # from api.v1.routers import auth as deprecated_auth_router  # kept for compat, not mounted
@@ -55,3 +56,6 @@ api_v1.include_router(rag_status_router.router, prefix="/rag/status", tags=["rag
 
 # Models endpoints
 api_v1.include_router(models_router.router, prefix="/admin/models", tags=["models"])
+
+# Prompts endpoints
+api_v1.include_router(prompts_router.router, prefix="/admin/prompts", tags=["prompts"])
