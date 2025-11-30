@@ -13,6 +13,7 @@ from redis.asyncio import Redis
 from app.repositories.chats_repo import AsyncChatsRepository, AsyncChatMessagesRepository
 from app.core.http.clients import LLMClientProtocol
 from app.services.rag_search_service import RagSearchService
+from app.services.prompt_service import PromptService
 from app.core.logging import get_logger
 from app.core.idempotency import IdempotencyManager
 
@@ -36,6 +37,7 @@ class ChatStreamService:
         self.chats_repo = chats_repo
         self.messages_repo = messages_repo
         self.idempotency = IdempotencyManager(redis)
+        self.prompt_service = PromptService(session)
     
     async def verify_chat_access(self, chat_id: str, user_id: str) -> bool:
         """Verify that user has access to the chat"""
@@ -213,27 +215,36 @@ class ChatStreamService:
                                 "sources": rag_sources
                             }
                             
-                            # Format RAG context with better structure
-                            rag_context = "# Контекст из базы знаний\n\n"
-                            rag_context += "Используй следующую информацию для ответа. При цитировании указывай источник.\n\n"
-                            
-                            for idx, result in enumerate(search_results, 1):
+                            # Format RAG context using PromptService
+                            rag_context_items = []
+                            for result in search_results:
                                 # Truncate text to max 500 chars to avoid context overflow
                                 text = result.text.strip()
                                 if len(text) > 500:
                                     text = text[:497] + "..."
                                 
-                                rag_context += f"## Источник {idx}\n"
-                                rag_context += f"{text}\n\n"
-                                rag_context += f"*Документ: {result.source_id}, страница: {result.page or 'N/A'}*\n"
-                                
-                                # Add model hits info for debugging
+                                item = {
+                                    "text": text,
+                                    "source_id": result.source_id,
+                                    "page": result.page,
+                                    "model_hits": None
+                                }
                                 if result.model_hits:
-                                    models_info = ", ".join([f"{hit['alias']}({hit['score']:.2f})" for hit in result.model_hits])
-                                    rag_context += f"*Модели: {models_info}*\n"
-                                
-                                rag_context += "\n---\n\n"
-                            
+                                    item["model_hits"] = ", ".join([f"{hit['alias']}({hit['score']:.2f})" for hit in result.model_hits])
+                                rag_context_items.append(item)
+
+                            try:
+                                rag_context = await self.prompt_service.render(
+                                    "chat.rag.system", 
+                                    {"results": rag_context_items}
+                                )
+                            except Exception as e:
+                                logger.error(f"Failed to render RAG prompt template: {e}")
+                                # Fallback to hardcoded minimal prompt
+                                rag_context = "# Контекст из базы знаний\n\n"
+                                for item in rag_context_items:
+                                    rag_context += f"## Источник\n{item['text']}\n*Документ: {item['source_id']}*\n\n"
+
                             # Add system message with RAG context before user message
                             llm_messages.insert(-1, {
                                 "role": "system",
