@@ -8,6 +8,7 @@ from .rag_ingest import Source, Chunk, EmbStatus, RAGStatus
 from .analyze import AnalysisDocuments, AnalysisChunks
 from .model_registry import ModelRegistry
 from .events import EventOutbox
+from .prompt import Prompt
 
 __all__ = [
     "Base",
@@ -26,4 +27,5 @@ __all__ = [
     "AnalysisChunks",
     "ModelRegistry",
     "EventOutbox",
+    "Prompt",
 ]
