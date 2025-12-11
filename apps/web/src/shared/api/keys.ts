@@ -17,13 +17,22 @@ export const qk = {
   },
   admin: {
     all: () => ['admin'] as const,
-    users: (params?: { page?: number; q?: string }) =>
-      ['admin', 'users', params] as const,
-    user: (id: string) => ['admin', 'user', id] as const,
-    tenants: (params?: { page?: number }) => ['admin', 'tenants', params] as const,
-    tenant: (id: string) => ['admin', 'tenant', id] as const,
-    models: () => ['admin', 'models'] as const,
-    model: (id: string) => ['admin', 'model', id] as const,
+    users: {
+      all: () => ['admin', 'users'] as const,
+      list: (params?: { page?: number; q?: string; limit?: number }) =>
+        ['admin', 'users', 'list', params] as const,
+      detail: (id: string) => ['admin', 'users', id] as const,
+    },
+    tenants: {
+      all: () => ['admin', 'tenants'] as const,
+      list: (params?: { page?: number }) => ['admin', 'tenants', 'list', params] as const,
+      detail: (id: string) => ['admin', 'tenants', id] as const,
+    },
+    models: {
+      all: () => ['admin', 'models'] as const,
+      list: (params?: { page?: number; size?: number }) => ['admin', 'models', 'list', params] as const,
+      detail: (id: string) => ['admin', 'models', id] as const,
+    },
     audit: (params?: { page?: number }) => ['admin', 'audit', params] as const,
   },
   agents: {

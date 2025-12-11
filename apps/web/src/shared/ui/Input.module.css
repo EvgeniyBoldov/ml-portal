@@ -1,17 +1,53 @@
 .input {
-  background: var(--panel);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  width: 100%;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
   color: var(--text);
-  padding: 10px 12px;
-  border-radius: 10px;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius);
+  font-family: inherit;
+  font-size: var(--text-base);
+  line-height: 1.5;
   outline: none;
+  transition: all var(--transition);
 }
+
 .input::placeholder {
   color: var(--muted);
 }
-.input:focus {
-  border-color: var(--primary);
+
+.input:hover {
+  border-color: var(--border-hover);
 }
+
+.input:focus {
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 3px var(--primary-light);
+}
+
+.input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  background: var(--bg-hover);
+}
+
 .input.error {
   border-color: var(--danger);
+}
+
+.input.error:focus {
+  box-shadow: 0 0 0 3px var(--danger-light);
+}
+
+/* Sizes */
+.sm {
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--text-sm);
+  border-radius: var(--radius-sm);
+}
+
+.lg {
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--text-md);
+  border-radius: var(--radius-md);
 }

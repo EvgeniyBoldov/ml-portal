@@ -16,7 +16,8 @@ const RagPage = lazy(() => import('@/domains/gpt/pages/Rag'));
 const NotFound = lazy(() => import('@/domains/common/pages/NotFound'));
 
 // Admin pages
-const AdminLayout = lazy(() => import('@/domains/admin/pages/AdminLayout'));
+const AdminLayout = lazy(() => import('@/domains/admin/layouts/AdminLayout'));
+const DashboardPage = lazy(() => import('@/domains/admin/pages/DashboardPage'));
 const UsersPage = lazy(() => import('@/domains/admin/pages/UsersPage'));
 const CreateUserPage = lazy(() => import('@/domains/admin/pages/CreateUserPage'));
 const UserDetailPage = lazy(() => import('@/domains/admin/pages/UserDetailPage'));
@@ -59,7 +60,7 @@ const router = createBrowserRouter([
       </GPTGate>
     ),
     children: [
-      { index: true, element: withSuspense(<UsersPage />) },
+      { index: true, element: withSuspense(<DashboardPage />) },
       { path: 'users', element: withSuspense(<UsersPage />) },
       { path: 'users/new', element: withSuspense(<CreateUserPage />) },
       { path: 'users/:id', element: withSuspense(<UserDetailPage />) },

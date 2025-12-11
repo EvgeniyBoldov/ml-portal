@@ -1,0 +1,83 @@
+.card {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 20px;
+  background: var(--panel);
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  transition: all 0.2s ease;
+}
+
+.card:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+.iconWrap {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.primary .iconWrap {
+  background: rgba(99, 102, 241, 0.1);
+  color: #6366f1;
+}
+
+.success .iconWrap {
+  background: rgba(34, 197, 94, 0.1);
+  color: #22c55e;
+}
+
+.warning .iconWrap {
+  background: rgba(245, 158, 11, 0.1);
+  color: #f59e0b;
+}
+
+.danger .iconWrap {
+  background: rgba(239, 68, 68, 0.1);
+  color: #ef4444;
+}
+
+.info .iconWrap {
+  background: rgba(59, 130, 246, 0.1);
+  color: #3b82f6;
+}
+
+.content {
+  flex: 1;
+  min-width: 0;
+}
+
+.value {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1.2;
+}
+
+.title {
+  font-size: 14px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+
+.trend {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  margin-top: 8px;
+}
+
+.trendUp {
+  color: #22c55e;
+}
+
+.trendDown {
+  color: #ef4444;
+}

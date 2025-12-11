@@ -659,6 +659,23 @@ async def get_status_graph(
                 updated_at=node.updated_at.isoformat()
             ))
         
+        # Add missing index entries for models that have embeddings but no index yet
+        existing_index_models = {node.node_key for node in index_nodes}
+        for emb_node in embedding_nodes:
+            if emb_node.node_key not in existing_index_models:
+                # Only show pending if embedding is completed
+                if emb_node.status == 'completed':
+                    index_models.append(EmbeddingModel(
+                        model=emb_node.node_key,
+                        version=emb_node.model_version,
+                        status='pending',
+                        error=None,
+                        metrics=None,
+                        started_at=None,
+                        finished_at=None,
+                        updated_at=datetime.now(timezone.utc).isoformat()
+                    ))
+        
         # Clean agg_details - remove duplicate pipeline field
         clean_agg_details = {k: v for k, v in agg_details.items() if k != 'pipeline'}
         

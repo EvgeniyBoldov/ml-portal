@@ -59,7 +59,7 @@ export function ModelEditorPage() {
   
   // Load existing model
   const { data: model, isLoading } = useQuery({
-    queryKey: qk.admin.model(id || ''),
+    queryKey: qk.admin.models.detail(id || ''),
     queryFn: () => adminApi.getModel(id!),
     enabled: !isNew && !!id,
   });
@@ -93,7 +93,7 @@ export function ModelEditorPage() {
     mutationFn: (data: ModelCreate) => adminApi.createModel(data),
     onSuccess: () => {
       showSuccess('Model created successfully');
-      queryClient.invalidateQueries({ queryKey: qk.admin.models() });
+      queryClient.invalidateQueries({ queryKey: qk.admin.models.all() });
       navigate('/admin/models');
     },
     onError: (error: Error) => {
@@ -106,8 +106,8 @@ export function ModelEditorPage() {
     mutationFn: (data: ModelUpdate) => adminApi.updateModel(id!, data),
     onSuccess: () => {
       showSuccess('Model updated successfully');
-      queryClient.invalidateQueries({ queryKey: qk.admin.models() });
-      queryClient.invalidateQueries({ queryKey: qk.admin.model(id!) });
+      queryClient.invalidateQueries({ queryKey: qk.admin.models.all() });
+      queryClient.invalidateQueries({ queryKey: qk.admin.models.detail(id!) });
       navigate('/admin/models');
     },
     onError: (error: Error) => {

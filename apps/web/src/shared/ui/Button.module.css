@@ -1,37 +1,129 @@
 .btn {
-  padding: 10px 14px;
-  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius);
   border: 1px solid transparent;
-  background: var(--panel);
+  background: var(--bg-hover);
   color: var(--text);
-  cursor: pointer;
-  transition:
-    transform 0.05s ease,
-    background 0.2s ease,
-    border-color 0.2s ease;
+  font-family: inherit;
+  font-size: var(--text-base);
   font-weight: 500;
+  line-height: 1.4;
+  cursor: pointer;
+  transition: all var(--transition);
+  white-space: nowrap;
 }
+
+.btn:hover {
+  background: var(--bg-active);
+}
+
 .btn:active {
   transform: translateY(1px);
 }
+
+.btn:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+/* Variants */
 .primary {
   background: var(--primary);
-  color: white;
+  color: var(--primary-text);
+  border-color: var(--primary);
 }
+
+.primary:hover {
+  background: var(--primary-hover);
+  border-color: var(--primary-hover);
+}
+
+.outline {
+  background: transparent;
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.outline:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-hover);
+}
+
 .ghost {
   background: transparent;
-  border-color: rgba(255, 255, 255, 0.12);
+  border-color: transparent;
+  color: var(--muted);
 }
+
+.ghost:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
 .danger {
   background: var(--danger);
   color: white;
+  border-color: var(--danger);
 }
+
+.danger:hover {
+  background: var(--danger);
+  opacity: 0.9;
+}
+
+.success {
+  background: var(--success);
+  color: white;
+  border-color: var(--success);
+}
+
+.success:hover {
+  opacity: 0.9;
+}
+
+/* Sizes */
+.lg {
+  padding: var(--space-3) var(--space-6);
+  font-size: var(--text-md);
+  border-radius: var(--radius-md);
+}
+
 .md {
-  padding: 10px 14px;
-  font-size: 14px;
+  padding: var(--space-2) var(--space-4);
+  font-size: var(--text-base);
 }
+
 .sm {
-  padding: 6px 10px;
-  font-size: 12px;
-  border-radius: 8px;
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--text-sm);
+  border-radius: var(--radius-sm);
+}
+
+.xs {
+  padding: 2px var(--space-2);
+  font-size: var(--text-xs);
+  border-radius: var(--radius-sm);
+}
+
+/* Icon-only button */
+.iconOnly {
+  padding: var(--space-2);
+}
+
+.iconOnly.sm {
+  padding: var(--space-1);
+}
+
+.iconOnly.lg {
+  padding: var(--space-3);
 }

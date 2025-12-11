@@ -1,7 +1,35 @@
 .card {
   background: var(--panel);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: var(--radius);
-  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  box-shadow: var(--shadow-sm);
+}
+
+.card.elevated {
+  background: var(--bg-elevated);
   box-shadow: var(--shadow);
+}
+
+.card.interactive {
+  cursor: pointer;
+  transition: all var(--transition);
+}
+
+.card.interactive:hover {
+  border-color: var(--border-hover);
+  box-shadow: var(--shadow);
+}
+
+/* Padding variants */
+.compact {
+  padding: var(--space-3);
+}
+
+.spacious {
+  padding: var(--space-6);
+}
+
+.noPadding {
+  padding: 0;
 }
