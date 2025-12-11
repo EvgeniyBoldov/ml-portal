@@ -28,10 +28,8 @@ logger = logging.getLogger(__name__)
 @celery_app.task(
     queue="ingest.extract",
     bind=True,
-    autoretry_for=(Exception,),
-    retry_backoff=True,
-    retry_backoff_max=600,
-    max_retries=5
+    acks_late=True,  # Acknowledge after task completes
+    reject_on_worker_lost=True,  # Requeue if worker dies
 )
 def extract_document(self: Task, source_id: str, tenant_id: str) -> Dict[str, Any]:
     """
@@ -196,4 +194,5 @@ def extract_document(self: Task, source_id: str, tenant_id: str) -> Dict[str, An
 
     except Exception as e:
         logger.error(f"Error in extract_document for {source_id}: {e}")
-        raise self.retry(exc=e, countdown=60, max_retries=3)
+        # No auto-retry - error is already handled in _process() via notify_stage_error
+        raise

@@ -1,17 +1,15 @@
+/* RAG Page - Modern Design */
 .wrap {
   height: 100%;
   display: flex;
   flex-direction: column;
+  background: var(--panel);
+  overflow: hidden;
 }
+
 .card {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 12px;
-  background: var(--chat-panel-bg, var(--panel-alt, #f4f6ff));
-  border: 1px solid var(--chat-panel-border, rgba(0, 0, 0, 0.08));
-  border-radius: var(--radius);
-  margin-top: 0;
   height: 100%;
   overflow: hidden;
 }
@@ -20,58 +18,89 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 1rem;
+  gap: 16px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--panel);
+  flex-shrink: 0;
+}
+
+.headerLeft {
+  display: flex;
+  align-items: center;
+  gap: 16px;
 }
 
 .title {
-  font-size: 1.25rem;
+  font-size: 20px;
   font-weight: 600;
   color: var(--color-text);
+  margin: 0;
+}
+
+.docCount {
+  font-size: 13px;
+  color: var(--muted);
+  padding: 4px 10px;
+  background: var(--color-bg-secondary);
+  border-radius: 12px;
 }
 
 .controls {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
+  gap: 12px;
 }
 
 .search {
-  min-width: 200px;
+  min-width: 240px;
 }
 
+.loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 200px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+/* Table Container */
 .tableWrap {
   flex: 1;
   overflow: auto;
-  border-radius: var(--radius);
-  border: 1px solid var(--color-border);
+  padding: 0 20px 20px;
 }
 
-.table {
-  width: 100%;
-  border-collapse: collapse;
-  background: var(--color-bg);
+/* Empty State */
+.emptyState {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 20px;
+  text-align: center;
 }
 
-.table th {
-  background: var(--color-bg-secondary);
-  padding: 0.75rem;
-  text-align: left;
+.emptyIcon {
+  width: 64px;
+  height: 64px;
+  margin-bottom: 16px;
+  color: var(--muted);
+  opacity: 0.5;
+}
+
+.emptyTitle {
+  font-size: 18px;
   font-weight: 600;
   color: var(--color-text);
-  border-bottom: 1px solid var(--color-border);
-  position: sticky;
-  top: 0;
-  z-index: 1;
+  margin: 0 0 8px;
 }
 
-.table td {
-  padding: 0.75rem;
-  border-bottom: 1px solid var(--color-border);
-  color: var(--color-text);
-}
-
-.table tr:hover {
-  background: var(--color-bg-secondary);
+.emptyDescription {
+  font-size: 14px;
+  color: var(--muted);
+  margin: 0;
 }
 
 .table .icon {

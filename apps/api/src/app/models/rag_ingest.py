@@ -104,11 +104,3 @@ class RAGStatus(Base):
     )
 
 
-class LegacyModelRegistry(Base):
-    """Legacy model registry table (deprecated - use app.models.model_registry.ModelRegistry instead)"""
-    __tablename__ = 'legacy_model_registry'
-    
-    model_alias = Column(Text, primary_key=True)
-    model_version = Column(Text, nullable=False)
-    dim = Column(Integer, nullable=False)
-    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())

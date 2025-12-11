@@ -3,6 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { SSEClient, SSEMessage } from '@shared/lib/sse';
 import { applyRagEvents } from './applyRagEvents';
 import { config } from '@shared/config';
+import { useAuth } from '@shared/hooks/useAuth';
 
 interface SSEProviderProps {
   children: React.ReactNode;
@@ -11,10 +12,10 @@ interface SSEProviderProps {
 
 /**
  * SSEProvider - manages SSE connection for RAG events
- * - Opens connection once on mount
+ * - Opens connection ONLY when user is authenticated
  * - Batches events every 100ms to avoid UI thrashing
  * - Updates QueryClient cache atomically
- * - Closes connection on unmount
+ * - Closes connection on unmount or logout
  * - Uses httpOnly cookies for authentication (withCredentials: true)
  */
 export function SSEProvider({
@@ -22,6 +23,7 @@ export function SSEProvider({
   url = config.ragEventsUrl,
 }: SSEProviderProps) {
   const queryClient = useQueryClient();
+  const { isAuthenticated, isAuthReady } = useAuth();
   const clientRef = useRef<SSEClient | null>(null);
   const statsRef = useRef({
     totalEvents: 0,
@@ -31,6 +33,19 @@ export function SSEProvider({
   });
 
   useEffect(() => {
+    // Don't connect until auth is ready and user is authenticated
+    if (!isAuthReady || !isAuthenticated) {
+      // Disconnect if was connected
+      if (clientRef.current) {
+        if (config.enableSSELogging) {
+          console.log('[SSE] Disconnecting - user not authenticated');
+        }
+        clientRef.current.disconnect();
+        clientRef.current = null;
+      }
+      return;
+    }
+
     // Create and connect SSE client
     const client = new SSEClient(
       url,
@@ -77,7 +92,7 @@ export function SSEProvider({
         clientRef.current = null;
       }
     };
-  }, [url, queryClient]);
+  }, [url, queryClient, isAuthenticated, isAuthReady]);
 
   return <>{children}</>;
 }

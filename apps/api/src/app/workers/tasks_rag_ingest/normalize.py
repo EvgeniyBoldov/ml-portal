@@ -56,10 +56,8 @@ def smart_normalize(text: str) -> str:
 @celery_app.task(
     queue="ingest.normalize",
     bind=True,
-    autoretry_for=(Exception,),
-    retry_backoff=True,
-    retry_backoff_max=600,
-    max_retries=5
+    acks_late=True,
+    reject_on_worker_lost=True,
 )
 def normalize_document(self: Task, extract_result: Dict[str, Any], tenant_id: str) -> Dict[str, Any]:
     """
@@ -249,4 +247,5 @@ def normalize_document(self: Task, extract_result: Dict[str, Any], tenant_id: st
 
     except Exception as e:
         logger.error(f"Error in normalize_document for {source_id}: {e}")
-        raise self.retry(exc=e, countdown=60, max_retries=3)
+        # No auto-retry - error is already handled in _process() via notify_stage_error
+        raise

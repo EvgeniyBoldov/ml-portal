@@ -250,20 +250,27 @@ export default function Rag() {
 
   return (
     <div className={styles.wrap}>
-      <Card className={styles.card}>
+      <div className={styles.card}>
         <div className={styles.header}>
-          <div className={styles.title}>База знаний — документы</div>
+          <div className={styles.headerLeft}>
+            <h1 className={styles.title}>База знаний</h1>
+            {!isLoading && (
+              <span className={styles.docCount}>
+                {filteredDocuments.length} документов
+              </span>
+            )}
+          </div>
           <div className={styles.controls}>
             <Input
               className={styles.search}
-              placeholder="Поиск…"
+              placeholder="Поиск по документам…"
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
             />
             {hasAnyFilter && (
               <Badge onClick={() => setFilters({})}>Сбросить фильтры</Badge>
             )}
-            <Button onClick={() => setUploadModalOpen(true)}>Добавить</Button>
+            <Button onClick={() => setUploadModalOpen(true)}>Загрузить</Button>
           </div>
         </div>
 
@@ -271,6 +278,18 @@ export default function Rag() {
           <div className={styles.loading}>Загрузка документов...</div>
         ) : error ? (
           <div className={styles.loading}>Ошибка загрузки документов</div>
+        ) : filteredDocuments.length === 0 ? (
+          <div className={styles.emptyState}>
+            <div className={styles.emptyIcon}>📄</div>
+            <h3 className={styles.emptyTitle}>
+              {searchQuery ? 'Документы не найдены' : 'Нет документов'}
+            </h3>
+            <p className={styles.emptyDescription}>
+              {searchQuery
+                ? 'Попробуйте изменить поисковый запрос'
+                : 'Загрузите первый документ для начала работы с базой знаний'}
+            </p>
+          </div>
         ) : (
           <DocumentList
             documents={filteredDocuments}
@@ -278,7 +297,7 @@ export default function Rag() {
             isAdmin={isAdmin}
           />
         )}
-      </Card>
+      </div>
 
       {/* Модалка загрузки */}
       <Uploader

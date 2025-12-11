@@ -25,10 +25,8 @@ logger = logging.getLogger(__name__)
 @celery_app.task(
     queue="ingest.index",
     bind=True,
-    autoretry_for=(Exception,),
-    retry_backoff=True,
-    retry_backoff_max=600,
-    max_retries=5
+    acks_late=True,
+    reject_on_worker_lost=True,
 )
 def index_model(self: Task, embed_result: Dict[str, Any], tenant_id: str) -> Dict[str, Any]:
     """
@@ -263,7 +261,8 @@ def index_model(self: Task, embed_result: Dict[str, Any], tenant_id: str) -> Dic
     
     except Exception as e:
         logger.error(f"Error in index_model for {source_id}: {e}")
-        raise self.retry(exc=e, countdown=60, max_retries=3)
+        # No auto-retry - error is already handled in _index() via notify_stage_error
+        raise
 
 
 @celery_app.task(

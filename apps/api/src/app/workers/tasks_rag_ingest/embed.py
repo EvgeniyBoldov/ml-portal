@@ -29,10 +29,8 @@ logger = logging.getLogger(__name__)
 @celery_app.task(
     queue="ingest.embed",
     bind=True,
-    autoretry_for=(Exception,),
-    retry_backoff=True,
-    retry_backoff_max=600,
-    max_retries=5
+    acks_late=True,
+    reject_on_worker_lost=True,
 )
 def embed_chunks_model(self: Task, chunk_result: Dict[str, Any], tenant_id: str, model_alias: str = "all-MiniLM-L6-v2") -> Dict[str, Any]:
     """
@@ -285,4 +283,5 @@ def embed_chunks_model(self: Task, chunk_result: Dict[str, Any], tenant_id: str,
 
     except Exception as e:
         logger.error(f"Error in embed_chunks_model for {source_id}: {e}")
-        raise self.retry(exc=e, countdown=60, max_retries=3)
+        # No auto-retry - error is already handled in _embed() via notify_embed_error
+        raise
