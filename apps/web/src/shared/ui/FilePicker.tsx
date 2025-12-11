@@ -3,25 +3,31 @@ import Button from './Button';
 import styles from './FilePicker.module.css';
 
 type Props = {
-  onFileSelected: (file: File | null) => void;
+  onFilesSelected: (files: File[]) => void;
   accept?: string;
   disabled?: boolean;
   label?: string;
-  selectedFile?: File | null;
+  multiple?: boolean;
 };
 
 export default function FilePicker({
-  onFileSelected,
+  onFilesSelected,
   accept,
   disabled,
   label = 'Choose file',
-  selectedFile,
+  multiple = false,
 }: Props) {
   const ref = useRef<HTMLInputElement>(null);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0] || null;
-    onFileSelected(file);
+    const fileList = e.target.files;
+    if (fileList && fileList.length > 0) {
+      onFilesSelected(Array.from(fileList));
+    }
+    // Reset input value so the same file can be selected again if needed
+    if (ref.current) {
+      ref.current.value = '';
+    }
   };
 
   return (
@@ -33,18 +39,11 @@ export default function FilePicker({
         accept={accept}
         onChange={handleFileChange}
         disabled={disabled}
+        multiple={multiple}
       />
       <Button onClick={() => ref.current?.click()} disabled={disabled}>
         {label}
       </Button>
-      {selectedFile && (
-        <div className={styles.fileInfo}>
-          <span className={styles.fileName}>{selectedFile.name}</span>
-          <span className={styles.fileSize}>
-            ({(selectedFile.size / 1024 / 1024).toFixed(2)} MB)
-          </span>
-        </div>
-      )}
     </div>
   );
 }

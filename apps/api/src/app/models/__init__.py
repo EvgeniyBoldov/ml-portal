@@ -9,6 +9,8 @@ from .analyze import AnalysisDocuments, AnalysisChunks
 from .model_registry import ModelRegistry
 from .events import EventOutbox
 from .prompt import Prompt
+from .tool import Tool
+from .agent import Agent
 
 __all__ = [
     "Base",
@@ -28,4 +30,6 @@ __all__ = [
     "ModelRegistry",
     "EventOutbox",
     "Prompt",
+    "Tool",
+    "Agent",
 ]

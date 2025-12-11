@@ -60,7 +60,7 @@ class PromptService:
         template: str,
         description: Optional[str] = None,
         input_variables: Optional[List[str]] = None,
-        model_config: Optional[Dict[str, Any]] = None,
+        generation_config: Optional[Dict[str, Any]] = None,
         type: str = "chat"
     ) -> Prompt:
         """
@@ -86,7 +86,7 @@ class PromptService:
             description=description,
             template=template,
             input_variables=input_variables,
-            model_config=model_config or {},
+            generation_config=generation_config or {},
             version=new_version,
             type=type,
             is_active=True

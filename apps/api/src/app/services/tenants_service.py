@@ -6,6 +6,7 @@ from typing import List, Optional, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.repositories.tenants_repo import AsyncTenantsRepository
 from app.repositories.model_registry_repo import AsyncModelRegistryRepository
+from app.models.model_registry import ModelType, ModelStatus
 from app.core.logging import get_logger
 import uuid
 
@@ -42,18 +43,26 @@ class AsyncTenantsService:
         if not tenant_data.get("name"):
             raise ValueError("Tenant name is required")
         
-        # Validate models if provided
+        # Map extra_embed_model to embedding_model_alias for backward compatibility
         if "extra_embed_model" in tenant_data:
-            await self.validate_tenant_models(tenant_data.get("extra_embed_model"))
+            tenant_data["embedding_model_alias"] = tenant_data.pop("extra_embed_model")
+            
+        # Validate models if provided
+        if "embedding_model_alias" in tenant_data:
+            await self.validate_tenant_models(tenant_data.get("embedding_model_alias"))
         
         tenant = await self.repo.create(**tenant_data)
         return await self._build_tenant_response(tenant)
     
     async def update_tenant(self, tenant_id: str, update_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Update tenant"""
-        # Validate models if provided
+        # Map extra_embed_model to embedding_model_alias for backward compatibility
         if "extra_embed_model" in update_data:
-            await self.validate_tenant_models(update_data.get("extra_embed_model"))
+            update_data["embedding_model_alias"] = update_data.pop("extra_embed_model")
+            
+        # Validate models if provided
+        if "embedding_model_alias" in update_data:
+            await self.validate_tenant_models(update_data.get("embedding_model_alias"))
         
         tenant = await self.repo.update(uuid.UUID(tenant_id), **update_data)
         if not tenant:
@@ -65,19 +74,19 @@ class AsyncTenantsService:
         """Delete tenant"""
         return await self.repo.delete(uuid.UUID(tenant_id))
     
-    async def validate_tenant_models(self, extra_embed_model: Optional[str]) -> None:
+    async def validate_tenant_models(self, embedding_model_alias: Optional[str]) -> None:
         """Validate tenant's extra embedding model"""
-        if not extra_embed_model:
+        if not embedding_model_alias:
             return
-        model = await self.model_repo.get_by_model(extra_embed_model)
+        model = await self.model_repo.get_by_alias(embedding_model_alias)
         if not model:
-            raise ValueError(f"Embedding model '{extra_embed_model}' not found")
-        if model.modality != "text":
-            raise ValueError(f"Model '{extra_embed_model}' is not a text embedding model")
-        if model.state not in ["active", "archived"]:
-            raise ValueError(f"Model '{extra_embed_model}' is not available (state: {model.state})")
-        if model.is_global:
-            raise ValueError("Global embedding model is already in use and cannot be selected as extra")
+            raise ValueError(f"Embedding model '{embedding_model_alias}' not found")
+        if model.type != ModelType.EMBEDDING:
+            raise ValueError(f"Model '{embedding_model_alias}' is not an embedding model")
+        if model.status != ModelStatus.AVAILABLE:
+            raise ValueError(f"Model '{embedding_model_alias}' is not available (status: {model.status})")
+        if model.default_for_type:
+            raise ValueError("Default embedding model is already in use and cannot be selected as extra")
     
     async def get_tenant_active_models(self, tenant_id: str) -> Dict[str, Any]:
         """Get resolved active models for a tenant: global embedding + optional extra, and global reranker"""
@@ -100,44 +109,46 @@ class AsyncTenantsService:
         global_rerank=None,
     ) -> Dict[str, Any]:
         if global_embed is None:
-            global_embed = await self.model_repo.get_global_by_modality("text")
+            global_embed = await self.model_repo.get_global_by_type(ModelType.EMBEDDING)
         if global_rerank is None:
-            global_rerank = await self.model_repo.get_global_by_modality("rerank")
+            global_rerank = await self.model_repo.get_global_by_type(ModelType.RERANKER)
 
         embed_models: List[str] = []
         embed_models_info: List[Dict[str, Any]] = []
 
-        if global_embed and global_embed.state == "active":
-            embed_models.append(global_embed.model)
+        if global_embed and global_embed.status == ModelStatus.AVAILABLE:
+            embed_models.append(global_embed.alias)
+            vector_dim = global_embed.extra_config.get('vector_dim') if global_embed.extra_config else None
             embed_models_info.append(
                 {
-                    "model": global_embed.model,
-                    "version": global_embed.version,
-                    "vector_dim": global_embed.vector_dim,
+                    "model": global_embed.alias,
+                    "version": global_embed.model_version,
+                    "vector_dim": vector_dim,
                     "global": True,
                 }
             )
 
-        if tenant.extra_embed_model:
-            extra_model = await self.model_repo.get_by_model(tenant.extra_embed_model)
-            if extra_model and extra_model.state in ["active", "archived"]:
-                embed_models.append(extra_model.model)
+        if tenant.embedding_model_alias:
+            extra_model = await self.model_repo.get_by_alias(tenant.embedding_model_alias)
+            if extra_model and extra_model.status == ModelStatus.AVAILABLE:
+                embed_models.append(extra_model.alias)
+                vector_dim = extra_model.extra_config.get('vector_dim') if extra_model.extra_config else None
                 embed_models_info.append(
                     {
-                        "model": extra_model.model,
-                        "version": extra_model.version,
-                        "vector_dim": extra_model.vector_dim,
+                        "model": extra_model.alias,
+                        "version": extra_model.model_version,
+                        "vector_dim": vector_dim,
                         "global": False,
                     }
                 )
 
         rerank_model = None
         rerank_model_info = None
-        if global_rerank and global_rerank.state == "active":
-            rerank_model = global_rerank.model
+        if global_rerank and global_rerank.status == ModelStatus.AVAILABLE:
+            rerank_model = global_rerank.alias
             rerank_model_info = {
-                "model": global_rerank.model,
-                "version": global_rerank.version,
+                "model": global_rerank.alias,
+                "version": global_rerank.model_version,
                 "global": True,
             }
 
@@ -150,7 +161,7 @@ class AsyncTenantsService:
             "embed_models_info": embed_models_info,
             "rerank_model": rerank_model,
             "rerank_model_info": rerank_model_info,
-            "extra_embed_model": tenant.extra_embed_model,
+            "extra_embed_model": tenant.embedding_model_alias,
             "ocr": tenant.ocr,
             "layout": tenant.layout,
             "created_at": tenant.created_at,

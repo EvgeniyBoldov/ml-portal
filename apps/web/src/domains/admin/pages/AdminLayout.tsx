@@ -25,8 +25,13 @@ export function AdminLayout({ children }: AdminLayoutProps) {
       ],
     },
     {
-      group: 'Models',
-      items: [{ path: '/admin/models', label: 'Models', icon: '🤖' }],
+      group: 'AI Resources',
+      items: [
+        { path: '/admin/models', label: 'Models', icon: '🤖' },
+        { path: '/admin/prompts', label: 'Prompts', icon: '📝' },
+        { path: '/admin/tools', label: 'Tools', icon: '🛠️' },
+        { path: '/admin/agents', label: 'Agents', icon: '🕵️' },
+      ],
     },
     {
       group: 'System',

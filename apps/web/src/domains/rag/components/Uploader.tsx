@@ -8,8 +8,8 @@ interface UploaderProps {
   isOpen: boolean;
   onClose: () => void;
   onUpload: () => void;
-  file: File | null;
-  onFileSelected: (file: File | null) => void;
+  files: File[];
+  onFilesSelected: (files: File[]) => void;
   uploadTags: string[];
   onUploadTagsChange: (tags: string[]) => void;
   isUploading: boolean;
@@ -19,35 +19,79 @@ export default function Uploader({
   isOpen,
   onClose,
   onUpload,
-  file,
-  onFileSelected,
+  files,
+  onFilesSelected,
   uploadTags,
   onUploadTagsChange,
   isUploading,
 }: UploaderProps) {
+  const handleRemoveFile = (index: number) => {
+    const newFiles = [...files];
+    newFiles.splice(index, 1);
+    onFilesSelected(newFiles);
+  };
+
   return (
     <Modal
       open={isOpen}
       onClose={onClose}
-      title="Новый документ"
+      title="Загрузка документов"
       footer={
         <>
           <Button variant="ghost" onClick={onClose}>
             Отмена
           </Button>
-          <Button onClick={onUpload} disabled={isUploading || !file}>
-            Загрузить
+          <Button onClick={onUpload} disabled={isUploading || files.length === 0}>
+            {isUploading ? 'Загрузка...' : `Загрузить (${files.length})`}
           </Button>
         </>
       }
     >
       <div className="stack">
         <FilePicker
-          onFileSelected={onFileSelected}
+          onFilesSelected={(newFiles) => onFilesSelected([...files, ...newFiles])}
           accept=".txt,.pdf,.doc,.docx,.md,.rtf,.odt"
-          selectedFile={file}
-          label="Выбрать файл"
+          multiple={true}
+          label="Выбрать файлы"
         />
+        
+        {files.length > 0 && (
+          <div style={{ marginTop: '1rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+            {files.map((file, index) => (
+              <div 
+                key={`${file.name}-${index}`}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  padding: '8px',
+                  background: 'var(--color-bg-secondary)',
+                  border: '1px solid var(--color-border)',
+                  borderRadius: 'var(--radius-sm)',
+                  fontSize: '14px'
+                }}
+              >
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '300px' }}>
+                  {file.name} <span style={{ color: 'var(--color-muted)', fontSize: '12px' }}>({(file.size / 1024 / 1024).toFixed(2)} MB)</span>
+                </span>
+                <button 
+                  onClick={() => handleRemoveFile(index)}
+                  style={{ 
+                    background: 'none', 
+                    border: 'none', 
+                    cursor: 'pointer', 
+                    padding: '4px',
+                    color: 'var(--color-muted)' 
+                  }}
+                  type="button"
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
         <div>
           <label>Теги (опционально):</label>
           <Input

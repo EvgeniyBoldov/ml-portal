@@ -565,17 +565,21 @@ class RAGStatusManager:
             return []
 
         # Resolve global embedding + optional extra
-        from app.models.model_registry import ModelRegistry
+        from app.models.model_registry import ModelRegistry, ModelType, ModelStatus
 
         models: List[str] = []
         result = await self.session.execute(
-            select(ModelRegistry).where((ModelRegistry.is_global == True) & (ModelRegistry.modality == "text"))
+            select(ModelRegistry).where(
+                (ModelRegistry.type == ModelType.EMBEDDING) & 
+                (ModelRegistry.default_for_type == True) &
+                (ModelRegistry.enabled == True)
+            )
         )
         global_embed = result.scalars().first()
-        if global_embed and global_embed.state in ("active", "archived"):
-            models.append(global_embed.model)
+        if global_embed and global_embed.status == ModelStatus.AVAILABLE:
+            models.append(global_embed.alias)
 
-        if tenant.extra_embed_model and tenant.extra_embed_model not in models:
-            models.append(tenant.extra_embed_model)
+        if tenant.embedding_model_alias and tenant.embedding_model_alias not in models:
+            models.append(tenant.embedding_model_alias)
 
         return models

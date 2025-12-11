@@ -26,7 +26,7 @@ def upgrade() -> None:
         sa.Column('description', sa.Text(), nullable=True),
         sa.Column('template', sa.Text(), nullable=False),
         sa.Column('input_variables', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
-        sa.Column('model_config', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+        sa.Column('generation_config', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.Column('version', sa.Integer(), nullable=True),
         sa.Column('is_active', sa.Boolean(), nullable=True),
         sa.Column('type', sa.String(length=50), nullable=False, server_default='chat'),

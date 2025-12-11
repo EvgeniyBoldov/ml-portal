@@ -43,7 +43,7 @@ class RagSearchService:
         from uuid import UUID
         from app.repositories.tenants_repo import AsyncTenantsRepository
         from sqlalchemy import select
-        from app.models.model_registry import ModelRegistry
+        from app.models.model_registry import ModelRegistry, ModelType, ModelStatus
         
         session_factory = get_session_factory()
         async with session_factory() as session:
@@ -52,16 +52,20 @@ class RagSearchService:
             
             # global embedding
             result = await session.execute(
-                select(ModelRegistry).where((ModelRegistry.is_global == True) & (ModelRegistry.modality == "text"))
+                select(ModelRegistry).where(
+                    (ModelRegistry.type == ModelType.EMBEDDING) & 
+                    (ModelRegistry.default_for_type == True) &
+                    (ModelRegistry.enabled == True)
+                )
             )
             global_embed = result.scalars().first()
             models: List[str] = []
-            if global_embed and global_embed.state in ("active", "archived"):
-                models.append(global_embed.model)
+            if global_embed and global_embed.status == ModelStatus.AVAILABLE:
+                models.append(global_embed.alias)
             
             # extra embedding (if any)
-            if tenant and tenant.extra_embed_model and tenant.extra_embed_model not in models:
-                models.append(tenant.extra_embed_model)
+            if tenant and tenant.embedding_model_alias and tenant.embedding_model_alias not in models:
+                models.append(tenant.embedding_model_alias)
             
             return models
     

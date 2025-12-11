@@ -51,7 +51,7 @@ async def create_prompt(
             template=prompt_in.template,
             description=prompt_in.description,
             input_variables=prompt_in.input_variables,
-            model_config=prompt_in.model_config,
+            generation_config=prompt_in.generation_config,
             type=prompt_in.type
         )
     except ValidationException as e:

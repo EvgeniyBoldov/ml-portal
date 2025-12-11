@@ -35,8 +35,9 @@ export default function Rag() {
 
   // Состояние загрузки
   const [isUploadModalOpen, setUploadModalOpen] = useState(false);
-  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [uploadFiles, setUploadFiles] = useState<File[]>([]);
   const [uploadTags, setUploadTags] = useState<string[]>([]);
+  const [isUploading, setIsUploading] = useState(false);
 
   // Состояние меню действий
   const [actionMenuOpen, setActionMenuOpen] = useState(false);
@@ -54,21 +55,40 @@ export default function Rag() {
 
   // Обработчики событий
   const handleUpload = async () => {
-    if (!uploadFile) return;
+    if (uploadFiles.length === 0) return;
 
+    setIsUploading(true);
     try {
-      await uploadMutation.mutateAsync({
-        file: uploadFile,
-        filename: uploadFile.name,
-        tags: uploadTags,
-      });
+      const results = await Promise.allSettled(
+        uploadFiles.map(file =>
+          uploadMutation.mutateAsync({
+            file,
+            filename: file.name,
+            tags: uploadTags,
+          })
+        )
+      );
+
+      const succeeded = results.filter(r => r.status === 'fulfilled');
+      const failed = results.filter(r => r.status === 'rejected');
+
+      if (succeeded.length > 0) {
+        showToast(`Загрузка начата: ${succeeded.length} файлов`, 'success');
+      }
+
+      if (failed.length > 0) {
+        console.error('Some uploads failed:', failed);
+        showToast(`Не удалось загрузить: ${failed.length} файлов`, 'error');
+      }
+
       setUploadModalOpen(false);
-      setUploadFile(null);
+      setUploadFiles([]);
       setUploadTags([]);
-      showToast('Файл загружен и обработка запущена', 'success');
     } catch (error) {
       console.error('Upload failed:', error);
-      showToast('Ошибка при загрузке файла', 'error');
+      showToast('Критическая ошибка при загрузке', 'error');
+    } finally {
+      setIsUploading(false);
     }
   };
 
@@ -255,7 +275,6 @@ export default function Rag() {
           <DocumentList
             documents={filteredDocuments}
             onActionMenuOpen={handleActionMenuOpen}
-            onStatusGraphOpen={() => {}} // Not used anymore
             isAdmin={isAdmin}
           />
         )}
@@ -266,11 +285,11 @@ export default function Rag() {
         isOpen={isUploadModalOpen}
         onClose={() => setUploadModalOpen(false)}
         onUpload={handleUpload}
-        file={uploadFile}
-        onFileSelected={setUploadFile}
+        files={uploadFiles}
+        onFilesSelected={setUploadFiles}
         uploadTags={uploadTags}
         onUploadTagsChange={setUploadTags}
-        isUploading={uploadMutation.isPending}
+        isUploading={isUploading}
       />
 
       {/* Меню действий */}

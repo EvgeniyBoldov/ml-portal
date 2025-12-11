@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 from typing import Optional, Dict, Any, List
-from sqlalchemy import String, Boolean, DateTime, Text, Integer
+from sqlalchemy import String, Boolean, DateTime, Text, Integer, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -14,13 +14,16 @@ class Prompt(Base):
     Supports versioning and Jinja2 templating.
     """
     __tablename__ = "prompts"
+    __table_args__ = (
+        UniqueConstraint('slug', 'version', name='uix_slug_version'),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     
     # Human-readable unique identifier (e.g., "chat.rag.system", "agent.netbox.config_gen")
-    slug: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
+    slug: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
     
     # Display name for UI
     name: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -35,7 +38,7 @@ class Prompt(Base):
     input_variables: Mapped[List[str]] = mapped_column(JSONB, default=list)
     
     # Model configuration override (e.g., {"temperature": 0.2, "model": "gpt-4"})
-    model_config: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict)
+    generation_config: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict)
     
     # Versioning
     version: Mapped[int] = mapped_column(Integer, default=1)

@@ -10,7 +10,7 @@ class PromptBase(BaseModel):
     description: Optional[str] = None
     template: str = Field(..., description="Jinja2 template")
     input_variables: Optional[List[str]] = []
-    model_config: Optional[Dict[str, Any]] = {}
+    generation_config: Optional[Dict[str, Any]] = {}
     type: str = Field("chat", description="Prompt type: chat, agent, task")
 
 
@@ -23,7 +23,7 @@ class PromptUpdate(BaseModel):
     description: Optional[str] = None
     template: Optional[str] = None
     input_variables: Optional[List[str]] = None
-    model_config: Optional[Dict[str, Any]] = None
+    generation_config: Optional[Dict[str, Any]] = None
     type: Optional[str] = None
 
 
