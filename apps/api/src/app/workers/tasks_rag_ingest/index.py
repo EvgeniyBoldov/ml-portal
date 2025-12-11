@@ -18,7 +18,7 @@ from app.repositories.factory import AsyncRepositoryFactory
 from app.services.rag_status_manager import RAGStatusManager, StageStatus
 from app.services.rag_event_publisher import RAGEventPublisher
 from app.workers.tasks_rag_ingest.error_utils import notify_stage_error
-from app.workers.session_factory import get_worker_session_factory
+from app.workers.session_factory import get_worker_session
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +57,6 @@ def index_model(self: Task, embed_result: Dict[str, Any], tenant_id: str) -> Dic
         async def _index():
             start_time = time.monotonic()
             settings = get_settings()
-            session_factory = get_worker_session_factory()
             
             import redis.asyncio as redis
             redis_client = redis.from_url(settings.REDIS_URL, decode_responses=True)
@@ -66,7 +65,7 @@ def index_model(self: Task, embed_result: Dict[str, Any], tenant_id: str) -> Dic
             
             try:
                 async with redis_client.lock(lock_key, timeout=600, blocking_timeout=5):
-                    async with session_factory() as session:
+                    async with get_worker_session() as session:
                         repo_factory = AsyncRepositoryFactory(session, uuid.UUID(tenant_id))
                         event_publisher = RAGEventPublisher(redis_client)
                         status_manager = RAGStatusManager(session, repo_factory, event_publisher)

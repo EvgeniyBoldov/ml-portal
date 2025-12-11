@@ -22,7 +22,7 @@ from app.repositories.factory import AsyncRepositoryFactory
 from app.services.rag_status_manager import RAGStatusManager, StageStatus
 from app.services.rag_event_publisher import RAGEventPublisher
 from app.workers.tasks_rag_ingest.error_utils import notify_embed_error
-from app.workers.session_factory import get_worker_session_factory
+from app.workers.session_factory import get_worker_session
 
 logger = logging.getLogger(__name__)
 
@@ -67,11 +67,8 @@ def embed_chunks_model(self: Task, chunk_result: Dict[str, Any], tenant_id: str,
         async def _embed():
             start_time = time.monotonic()
             settings = get_settings()
-            session_factory = get_worker_session_factory()
             
             import redis.asyncio as redis
-            # We need separate redis client for locking logic if needed, 
-            # but here we focus on session/logic isolation
             redis_client = redis.from_url(settings.REDIS_URL, decode_responses=True)
             
             # Lock is good to prevent duplicate embedding of the same model/doc
@@ -80,7 +77,7 @@ def embed_chunks_model(self: Task, chunk_result: Dict[str, Any], tenant_id: str,
             try:
                 # Use lock with timeout
                 async with redis_client.lock(lock_key, timeout=600, blocking_timeout=5):
-                    async with session_factory() as session:
+                    async with get_worker_session() as session:
                         repo_factory = AsyncRepositoryFactory(session, uuid.UUID(tenant_id))
                         event_publisher = RAGEventPublisher(redis_client)
                         status_manager = RAGStatusManager(session, repo_factory, event_publisher)

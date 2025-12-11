@@ -296,6 +296,40 @@ class S3Client:
             logger.error(f"S3 health check unexpected error: {e}")
             return False
 
+    async def delete_folder(self, bucket: str, prefix: str) -> bool:
+        """Delete all objects with given prefix (folder) from S3/MinIO"""
+        try:
+            client = self._get_client()
+            loop = asyncio.get_event_loop()
+            
+            # List all objects with prefix
+            objects = await self.list_objects(bucket, prefix, max_keys=1000)
+            
+            if not objects:
+                logger.debug(f"No objects found in s3://{bucket}/{prefix}")
+                return True
+            
+            # Delete objects in batches of 1000 (S3 limit)
+            keys_to_delete = [{'Key': obj['Key']} for obj in objects]
+            
+            await loop.run_in_executor(
+                None,
+                lambda: client.delete_objects(
+                    Bucket=bucket,
+                    Delete={'Objects': keys_to_delete}
+                )
+            )
+            
+            logger.info(f"Deleted {len(keys_to_delete)} objects from s3://{bucket}/{prefix}")
+            return True
+            
+        except ClientError as e:
+            logger.error(f"S3 delete folder error for {prefix}: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"Unexpected error deleting folder {prefix}: {e}")
+            return False
+
 
 @dataclass
 class PresignOptions:

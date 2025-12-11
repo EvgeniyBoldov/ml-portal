@@ -1,98 +1,105 @@
 """
-Shared session factory for Celery workers (one engine per process)
+Session factory for Celery workers.
+
+IMPORTANT: asyncio.run() creates a NEW event loop each time it's called.
+AsyncEngine and its connection pool are bound to the event loop where they were created.
+Therefore, we MUST create a fresh engine inside each asyncio.run() context.
+
+This module provides a context manager that creates engine+session per task execution.
 """
 from __future__ import annotations
-from typing import Optional
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncEngine, AsyncSession
+from contextlib import asynccontextmanager
+from typing import AsyncGenerator
+from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from app.core.config import get_settings
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
-# Global engine and session factory (initialized once per worker process)
-_engine: Optional[AsyncEngine] = None
-_session_factory: Optional[async_sessionmaker] = None
 
-
-def _initialize_session_factory() -> None:
-    """Initialize session factory - called on worker process start"""
-    global _engine, _session_factory
-    
-    if _session_factory is not None and _engine is not None:
-        return  # Already initialized
-    
+def _get_db_url() -> str:
+    """Get database URL from settings or environment"""
     settings = get_settings()
-    logger.info("Initializing worker session factory (one per process)")
-    
-    # Get ASYNC_DB_URL from settings
     db_url = settings.ASYNC_DB_URL
     if not db_url:
-        # Try to get from environment variable directly
         import os
         db_url = os.getenv("ASYNC_DB_URL")
         if not db_url:
             raise ValueError("ASYNC_DB_URL is not configured")
+    return db_url
+
+
+@asynccontextmanager
+async def get_worker_session() -> AsyncGenerator[AsyncSession, None]:
+    """
+    Create a fresh async session for Celery worker task.
     
-    _engine = create_async_engine(
+    This creates a new engine bound to the CURRENT event loop (inside asyncio.run()),
+    uses it for the session, and disposes it after the task completes.
+    
+    Usage in Celery task:
+        async def _process():
+            async with get_worker_session() as session:
+                # use session here
+                ...
+        
+        asyncio.run(_process())
+    """
+    db_url = _get_db_url()
+    
+    # Create engine bound to current event loop
+    engine = create_async_engine(
         db_url,
         echo=False,
         pool_pre_ping=True,
         pool_recycle=300,
-        pool_size=5,  # Smaller pool for workers
-        max_overflow=10,
+        pool_size=2,  # Small pool - one task at a time per worker
+        max_overflow=3,
     )
     
-    _session_factory = async_sessionmaker(
-        _engine,
+    session_factory = async_sessionmaker(
+        engine,
         expire_on_commit=False,
         class_=AsyncSession
     )
     
-    logger.info(f"Worker session factory initialized with DB URL: {db_url.split('@')[-1] if '@' in db_url else '***'}")
+    try:
+        async with session_factory() as session:
+            yield session
+    finally:
+        await engine.dispose()
 
 
 def get_worker_session_factory() -> async_sessionmaker:
     """
-    Get or create shared session factory for Celery worker.
+    DEPRECATED: This function is kept for backward compatibility but should not be used.
     
-    This creates a single engine per worker process, avoiding
-    connection pool exhaustion from creating engines in each task.
+    The problem: AsyncEngine is bound to the event loop where it was created.
+    asyncio.run() creates a NEW event loop each time, so a globally cached engine
+    will fail with "Future attached to a different loop" error.
     
-    Note: In Celery with ForkPoolWorker, global variables may not persist
-    across forks, so we always check if session_factory is None and reinitialize.
+    Use get_worker_session() context manager instead.
     """
-    global _engine, _session_factory
+    logger.warning(
+        "get_worker_session_factory() is deprecated and will cause event loop errors. "
+        "Use 'async with get_worker_session() as session:' instead."
+    )
     
-    # Always check if None (important for fork workers)
-    if _session_factory is None or _engine is None:
-        logger.warning(f"Session factory is None before initialization. _session_factory={_session_factory}, _engine={_engine}")
-        try:
-            _initialize_session_factory()
-            logger.info("Session factory reinitialized successfully")
-        except Exception as e:
-            logger.error(f"Failed to reinitialize session factory: {e}", exc_info=True)
-            raise
+    # Create a fresh factory each time (not ideal but prevents the loop error)
+    db_url = _get_db_url()
     
-    # Double check after initialization
-    if _session_factory is None:
-        logger.error("Session factory is still None after initialization attempt")
-        raise RuntimeError("Failed to initialize worker session factory")
+    engine = create_async_engine(
+        db_url,
+        echo=False,
+        pool_pre_ping=True,
+        pool_recycle=300,
+        pool_size=2,
+        max_overflow=3,
+    )
     
-    logger.debug(f"Returning session factory: type={type(_session_factory)}")
-    return _session_factory
-
-
-async def dispose_worker_engine():
-    """
-    Dispose worker engine (call on worker shutdown).
-    
-    Typically called from worker signal handlers or cleanup hooks.
-    """
-    global _engine, _session_factory
-    
-    if _engine:
-        logger.info("Disposing worker engine")
-        await _engine.dispose()
-        _engine = None
-        _session_factory = None
+    return async_sessionmaker(
+        engine,
+        expire_on_commit=False,
+        class_=AsyncSession
+    )
 

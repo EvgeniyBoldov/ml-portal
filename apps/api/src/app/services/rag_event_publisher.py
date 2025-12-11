@@ -148,6 +148,46 @@ class RAGEventPublisher:
         except Exception as e:
             logger.error(f"Failed to publish ingest started: {e}")
     
+    async def publish_aggregate_status(
+        self,
+        doc_id: UUID,
+        tenant_id: UUID,
+        agg_status: str,
+        agg_details: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """
+        Опубликовать событие обновления агрегированного статуса документа
+        
+        Args:
+            doc_id: ID документа
+            tenant_id: ID тенанта
+            agg_status: Агрегированный статус (pending, processing, ready, failed)
+            agg_details: Детали статуса (pipeline stages, embeddings, etc.)
+        """
+        if not self.redis:
+            return
+        
+        event = {
+            'event_type': 'status_update',
+            'document_id': str(doc_id),
+            'doc_id': str(doc_id),  # Alias for frontend compatibility
+            'tenant_id': str(tenant_id),
+            'status': agg_status,
+            'agg_status': agg_status,
+            'agg_details': agg_details or {},
+            'timestamp': datetime.now(timezone.utc).isoformat()
+        }
+        
+        try:
+            tenant_channel = self.CHANNEL_TENANT_FMT.format(tenant_id=str(tenant_id))
+            payload = json.dumps(event)
+            await self.redis.publish(self.CHANNEL_ADMIN, payload)
+            await self.redis.publish(tenant_channel, payload)
+            await self.redis.publish(self.CHANNEL_LEGACY, payload)
+            logger.debug(f"Published aggregate status: {doc_id} -> {agg_status}")
+        except Exception as e:
+            logger.error(f"Failed to publish aggregate status: {e}")
+
     async def publish_document_archived(
         self,
         doc_id: UUID,

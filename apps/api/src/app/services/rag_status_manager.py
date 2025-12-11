@@ -540,6 +540,12 @@ class RAGStatusManager:
             index_nodes=index_nodes,
         )
 
+        # Получаем tenant_id для публикации события
+        result = await self.session.execute(
+            select(RAGDocument.tenant_id).where(RAGDocument.id == doc_id)
+        )
+        tenant_id = result.scalar_one_or_none()
+
         await self.session.execute(
             update(RAGDocument)
             .where(RAGDocument.id == doc_id)
@@ -548,6 +554,15 @@ class RAGStatusManager:
                 agg_details_json=agg_details,
             )
         )
+
+        # Публикуем событие с agg_status для обновления UI
+        if self.event_publisher and tenant_id:
+            await self.event_publisher.publish_aggregate_status(
+                doc_id=doc_id,
+                tenant_id=tenant_id,
+                agg_status=agg_status,
+                agg_details=agg_details,
+            )
 
         logger.debug(f"Updated aggregate status for {doc_id}: {agg_status}")
 

@@ -16,14 +16,13 @@ async def notify_stage_error(source_id: str, tenant_id: str, stage: str, error: 
     This helper encapsulates session/redis/publisher setup for reuse across tasks.
     """
     try:
-        from app.workers.session_factory import get_worker_session_factory
+        from app.workers.session_factory import get_worker_session
         from app.core.config import get_settings
         import redis.asyncio as redis
 
         settings = get_settings()
-        session_factory = get_worker_session_factory()
 
-        async with session_factory() as session:
+        async with get_worker_session() as session:
             repo_factory = AsyncRepositoryFactory(session, uuid.UUID(tenant_id))
 
             redis_client = redis.from_url(settings.REDIS_URL, decode_responses=True)
@@ -46,7 +45,7 @@ async def notify_embed_error(source_id: str, tenant_id: str, model_alias: str, e
     Notify about embed error and emit progress snapshot for the model.
     """
     try:
-        from app.workers.session_factory import get_worker_session_factory
+        from app.workers.session_factory import get_worker_session
         from app.core.config import get_settings
         import redis.asyncio as redis
         from app.repositories.factory import AsyncRepositoryFactory
@@ -58,9 +57,8 @@ async def notify_embed_error(source_id: str, tenant_id: str, model_alias: str, e
         import uuid as _uuid
 
         settings = get_settings()
-        session_factory = get_worker_session_factory()
 
-        async with session_factory() as session:
+        async with get_worker_session() as session:
             repo_factory = AsyncRepositoryFactory(session, _uuid.UUID(tenant_id))
 
             redis_client = redis.from_url(settings.REDIS_URL, decode_responses=True)

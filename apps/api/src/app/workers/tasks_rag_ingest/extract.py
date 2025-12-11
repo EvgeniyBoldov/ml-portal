@@ -21,7 +21,7 @@ from app.repositories.factory import AsyncRepositoryFactory
 from app.services.rag_status_manager import RAGStatusManager, StageStatus
 from app.services.rag_event_publisher import RAGEventPublisher
 from app.workers.tasks_rag_ingest.error_utils import notify_stage_error
-from app.workers.session_factory import get_worker_session_factory
+from app.workers.session_factory import get_worker_session
 
 logger = logging.getLogger(__name__)
 
@@ -57,11 +57,10 @@ def extract_document(self: Task, source_id: str, tenant_id: str) -> Dict[str, An
         async def _process():
             start_time = time.monotonic()
             settings = get_settings()
-            session_factory = get_worker_session_factory()
             
             redis_client = None
             try:
-                async with session_factory() as session:
+                async with get_worker_session() as session:
                     repo_factory = AsyncRepositoryFactory(session, uuid.UUID(tenant_id))
                     
                     import redis.asyncio as redis

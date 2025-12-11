@@ -119,6 +119,35 @@ class AsyncChunkRepository(AsyncTenantRepository):
         
         return texts
 
+    async def delete_by_document_id(self, source_id: UUID) -> int:
+        """Delete all chunks for a document (source)"""
+        result = await self.session.execute(
+            delete(Chunk).where(Chunk.source_id == source_id)
+        )
+        return result.rowcount
+
+    async def create_batch(self, chunks_data: List[Dict[str, Any]]) -> int:
+        """Create multiple chunks in batch"""
+        if not chunks_data:
+            return 0
+        
+        # Prepare chunk objects
+        for chunk_data in chunks_data:
+            chunk = Chunk(
+                chunk_id=chunk_data["chunk_id"],
+                source_id=chunk_data.get("document_id") or chunk_data.get("source_id"),
+                page=chunk_data.get("page"),
+                offset=chunk_data.get("start_pos", 0),
+                length=chunk_data.get("end_pos", 0) - chunk_data.get("start_pos", 0),
+                lang=chunk_data.get("lang"),
+                hash=chunk_data.get("hash", ""),
+                meta={"text": chunk_data.get("text", "")}
+            )
+            self.session.add(chunk)
+        
+        await self.session.flush()
+        return len(chunks_data)
+
 
 class AsyncEmbStatusRepository(AsyncRepository):
     """Async repository for EmbStatus model operations"""

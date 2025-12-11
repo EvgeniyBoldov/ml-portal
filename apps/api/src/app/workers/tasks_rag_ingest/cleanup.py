@@ -9,7 +9,7 @@ from app.celery_app import app as celery_app
 from app.core.config import get_settings
 from app.adapters.s3_client import s3_manager
 from app.storage.paths import get_document_prefix
-from app.workers.session_factory import get_worker_session_factory
+from app.workers.session_factory import get_worker_session
 
 logger = logging.getLogger(__name__)
 
@@ -76,10 +76,9 @@ def cleanup_document_artifacts(self: Task, tenant_id: str, source_id: str) -> Di
                 # Determine which models were used for this document
                 # by querying the RAGStatus table
                 used_models = []
-                session_factory = get_worker_session_factory()
                 
                 try:
-                    async with session_factory() as session:
+                    async with get_worker_session() as session:
                         status_repo = AsyncRAGStatusRepository(session, tenant_id=uuid.UUID(tenant_id))
                         embedding_nodes = await status_repo.get_embedding_nodes(uuid.UUID(source_id))
                         used_models = [node.node_key for node in embedding_nodes]
