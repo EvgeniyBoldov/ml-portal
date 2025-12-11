@@ -2,6 +2,7 @@ from __future__ import annotations
 import logging
 import uuid
 import json
+import time
 from typing import Dict, Any, List
 from datetime import datetime, timezone
 
@@ -64,6 +65,7 @@ def chunk_document(self: Task, normalize_result: Dict[str, Any], tenant_id: str)
         import asyncio
         
         async def _process():
+            start_time = time.monotonic()
             settings = get_settings()
             session_factory = get_worker_session_factory()
             
@@ -206,6 +208,7 @@ def chunk_document(self: Task, normalize_result: Dict[str, Any], tenant_id: str)
                     # Explicit update if needed, but session commit should catch it
                     
                     # 7. Complete
+                    duration_sec = round(time.monotonic() - start_time, 2)
                     await status_manager.transition_stage(
                         doc_id=uuid.UUID(source_id),
                         stage='chunk',
@@ -213,7 +216,8 @@ def chunk_document(self: Task, normalize_result: Dict[str, Any], tenant_id: str)
                         metrics={
                             'chunk_count': len(chunks_data),
                             'strategy': str(profile),
-                            'avg_chunk_size': sum(len(c['text']) for c in chunks_data) / len(chunks_data) if chunks_data else 0
+                            'avg_chunk_size': round(sum(len(c['text']) for c in chunks_data) / len(chunks_data), 1) if chunks_data else 0,
+                            'duration_sec': duration_sec
                         }
                     )
                     

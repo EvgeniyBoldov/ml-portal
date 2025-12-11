@@ -203,6 +203,9 @@ class RAGStatusManager:
             'status': new_status.value,
         }
         
+        if celery_task_id:
+            update_data['celery_task_id'] = celery_task_id
+        
         if error:
             update_data['error_short'] = error
         
@@ -214,6 +217,8 @@ class RAGStatusManager:
             update_data['started_at'] = datetime.now(timezone.utc)
         elif new_status in [StageStatus.COMPLETED, StageStatus.FAILED, StageStatus.CANCELLED]:
             update_data['finished_at'] = datetime.now(timezone.utc)
+            # Clear task_id when stage finishes
+            update_data['celery_task_id'] = None
         
         await self.status_repo.upsert_node(**update_data)
         
@@ -313,6 +318,9 @@ class RAGStatusManager:
             logger.warning(f"Stage {stage} not found for document {doc_id}")
             return None
         
+        # Сохраняем task_id до перехода статуса
+        task_id = getattr(current_node, 'celery_task_id', None)
+        
         # Переводим в cancelled
         await self.transition_stage(
             doc_id=doc_id,
@@ -323,9 +331,8 @@ class RAGStatusManager:
         # Cascade: останавливаем последующие этапы
         await self._cascade_reset_downstream(doc_id, stage)
         
-        # Возвращаем task_id если нужно убить задачу
-        # TODO: добавить поле celery_task_id в модель
-        return None
+        # Возвращаем task_id для отмены в Celery
+        return task_id
     
     async def retry_stage(self, doc_id: UUID, stage: str) -> None:
         """

@@ -2,6 +2,7 @@ from __future__ import annotations
 import logging
 import uuid
 import json
+import time
 from typing import Dict, Any
 from datetime import datetime, timezone
 
@@ -54,6 +55,7 @@ def extract_document(self: Task, source_id: str, tenant_id: str) -> Dict[str, An
         import asyncio
         
         async def _process():
+            start_time = time.monotonic()
             settings = get_settings()
             session_factory = get_worker_session_factory()
             
@@ -143,11 +145,14 @@ def extract_document(self: Task, source_id: str, tenant_id: str) -> Dict[str, An
                     )
                     
                     # 6. Complete
+                    duration_sec = round(time.monotonic() - start_time, 2)
                     metrics = {
                         'word_count': len(extracted_text.split()), 
                         'char_count': len(extracted_text),
                         'extractor': extract_result.kind,
-                        'checksum': text_checksum
+                        'checksum': text_checksum,
+                        'duration_sec': duration_sec,
+                        'file_size_bytes': len(file_content)
                     }
                     if extract_result.meta:
                         metrics.update(extract_result.meta)

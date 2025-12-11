@@ -2,6 +2,7 @@ from __future__ import annotations
 import logging
 import uuid
 import json
+import time
 from typing import Dict, Any
 from datetime import datetime, timezone
 
@@ -54,6 +55,7 @@ def index_model(self: Task, embed_result: Dict[str, Any], tenant_id: str) -> Dic
         import asyncio
         
         async def _index():
+            start_time = time.monotonic()
             settings = get_settings()
             session_factory = get_worker_session_factory()
             
@@ -214,6 +216,7 @@ def index_model(self: Task, embed_result: Dict[str, Any], tenant_id: str) -> Dic
                              return {"status": "completed", "indexed_count": 0}
 
                         # 7. Complete
+                        duration_sec = round(time.monotonic() - start_time, 2)
                         await status_manager.transition_stage(
                             doc_id=uuid.UUID(source_id),
                             stage=f'index.{model_alias}',
@@ -221,7 +224,8 @@ def index_model(self: Task, embed_result: Dict[str, Any], tenant_id: str) -> Dic
                             metrics={
                                 'indexed_count': indexed_count,
                                 'collection': collection_name,
-                                'model_version': model_info.version
+                                'model_version': model_info.version,
+                                'duration_sec': duration_sec
                             }
                         )
                         

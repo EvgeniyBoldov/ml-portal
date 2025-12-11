@@ -2,6 +2,7 @@ from __future__ import annotations
 import logging
 import uuid
 import json
+import time
 from typing import Dict, Any
 from datetime import datetime, timezone
 
@@ -64,6 +65,7 @@ def embed_chunks_model(self: Task, chunk_result: Dict[str, Any], tenant_id: str,
         import asyncio
 
         async def _embed():
+            start_time = time.monotonic()
             settings = get_settings()
             session_factory = get_worker_session_factory()
             
@@ -221,6 +223,7 @@ def embed_chunks_model(self: Task, chunk_result: Dict[str, Any], tenant_id: str,
                         )
 
                         # 7. Complete
+                        duration_sec = round(time.monotonic() - start_time, 2)
                         await status_manager.transition_stage(
                             doc_id=uuid.UUID(source_id),
                             stage=f'embed.{model_alias}',
@@ -229,6 +232,8 @@ def embed_chunks_model(self: Task, chunk_result: Dict[str, Any], tenant_id: str,
                                 'vectors': len(embeddings_data),
                                 'model_version': model_info.version,
                                 'dimensions': model_info.dimensions,
+                                'duration_sec': duration_sec,
+                                'vectors_per_sec': round(len(embeddings_data) / duration_sec, 1) if duration_sec > 0 else 0
                             }
                         )
                         

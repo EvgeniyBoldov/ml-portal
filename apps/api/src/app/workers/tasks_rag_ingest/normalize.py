@@ -3,6 +3,7 @@ import logging
 import uuid
 import json
 import re
+import time
 from typing import Dict, Any
 from datetime import datetime, timezone
 
@@ -92,6 +93,7 @@ def normalize_document(self: Task, extract_result: Dict[str, Any], tenant_id: st
         import asyncio
         
         async def _process():
+            start_time = time.monotonic()
             settings = get_settings()
             session_factory = get_worker_session_factory()
             
@@ -201,6 +203,7 @@ def normalize_document(self: Task, extract_result: Dict[str, Any], tenant_id: st
                     )
                     
                     # 7. Complete
+                    duration_sec = round(time.monotonic() - start_time, 2)
                     await status_manager.transition_stage(
                         doc_id=uuid.UUID(source_id),
                         stage='normalize',
@@ -208,7 +211,8 @@ def normalize_document(self: Task, extract_result: Dict[str, Any], tenant_id: st
                         metrics={
                             'original_size': len(raw_text),
                             'normalized_size': len(normalized_text),
-                            'reduction_ratio': round(1 - (len(normalized_text) / len(raw_text) if raw_text else 0), 2)
+                            'reduction_ratio': round(1 - (len(normalized_text) / len(raw_text) if raw_text else 0), 2),
+                            'duration_sec': duration_sec
                         }
                     )
                     

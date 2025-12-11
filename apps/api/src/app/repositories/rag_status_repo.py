@@ -59,6 +59,7 @@ class AsyncRAGStatusRepository(AsyncRepository):
         node_type: str, 
         node_key: str, 
         status: str,
+        celery_task_id: Optional[str] = None,
         model_version: Optional[str] = None,
         modality: Optional[str] = None,
         error_short: Optional[str] = None,
@@ -72,6 +73,8 @@ class AsyncRAGStatusRepository(AsyncRepository):
         if existing:
             # Update existing node
             existing.status = status
+            if celery_task_id is not None:
+                existing.celery_task_id = celery_task_id
             existing.model_version = model_version
             existing.modality = modality
             existing.error_short = error_short
@@ -105,6 +108,7 @@ class AsyncRAGStatusRepository(AsyncRepository):
                 node_type=node_type,
                 node_key=node_key,
                 status=status,
+                celery_task_id=celery_task_id,
                 model_version=model_version,
                 modality=modality,
                 error_short=error_short,

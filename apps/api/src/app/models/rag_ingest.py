@@ -83,9 +83,10 @@ class RAGStatus(Base):
     
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     doc_id = Column(UUID(as_uuid=True), ForeignKey('ragdocuments.id', ondelete='CASCADE'), nullable=False)
-    node_type = Column(String(20), nullable=False)  # 'pipeline' | 'embedding'
-    node_key = Column(String(100), nullable=False)  # 'upload'|'extract'|'chunk'|'index' OR model_id
-    status = Column(String(20), nullable=False)  # 'pending'|'running'|'ok'|'error'
+    node_type = Column(String(20), nullable=False)  # 'pipeline' | 'embedding' | 'index'
+    node_key = Column(String(100), nullable=False)  # 'upload'|'extract'|'normalize'|'chunk' OR model_alias
+    status = Column(String(20), nullable=False)  # 'pending'|'queued'|'processing'|'completed'|'failed'|'cancelled'
+    celery_task_id = Column(String(50), nullable=True)  # For task cancellation
     model_version = Column(String(50), nullable=True)
     modality = Column(String(20), nullable=True)  # 'text'|'image'
     error_short = Column(Text, nullable=True)
