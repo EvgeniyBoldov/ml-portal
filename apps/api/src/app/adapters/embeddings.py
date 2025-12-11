@@ -1,10 +1,17 @@
 """
 Embedding service factory and implementations
+
+Supports:
+- Local SentenceTransformer models
+- OpenAI API (text-embedding-3-large, etc.)
+- Local embedding service (HTTP API)
+- Mock for testing
 """
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 import os
 import logging
+import httpx
 from app.adapters.interfaces.embeddings import EmbeddingInterface, EmbeddingModelInfo
 from app.core.config import get_settings
 
@@ -116,13 +123,162 @@ class LocalSentenceTransformerProvider(EmbeddingInterface):
         return self.embed_texts([text])[0]
 
 
+class OpenAIEmbeddingProvider(EmbeddingInterface):
+    """OpenAI API embedding provider"""
+    
+    # Model dimensions mapping
+    MODEL_DIMENSIONS = {
+        "text-embedding-3-large": 3072,
+        "text-embedding-3-small": 1536,
+        "text-embedding-ada-002": 1536,
+    }
+    
+    def __init__(
+        self, 
+        model_alias: str,
+        provider_model_name: str,
+        base_url: str,
+        api_key: Optional[str] = None,
+        dimensions: Optional[int] = None
+    ):
+        self._model_alias = model_alias
+        self._provider_model_name = provider_model_name
+        self._base_url = base_url.rstrip('/')
+        self._api_key = api_key
+        self._dimensions = dimensions or self.MODEL_DIMENSIONS.get(provider_model_name, 1536)
+        self._version = "1.0"
+        
+    def get_model_info(self) -> EmbeddingModelInfo:
+        return EmbeddingModelInfo(
+            alias=self._model_alias,
+            version=self._version,
+            dimensions=self._dimensions,
+            max_tokens=8191,
+            description=f"OpenAI {self._provider_model_name}"
+        )
+    
+    def embed_texts(self, texts: List[str]) -> List[List[float]]:
+        """Embed texts via OpenAI API"""
+        if not texts:
+            return []
+        
+        headers = {
+            "Content-Type": "application/json",
+        }
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+        
+        payload = {
+            "input": texts,
+            "model": self._provider_model_name,
+        }
+        
+        # Add dimensions if model supports it
+        if self._provider_model_name.startswith("text-embedding-3"):
+            payload["dimensions"] = self._dimensions
+        
+        try:
+            with httpx.Client(timeout=30.0) as client:
+                response = client.post(
+                    f"{self._base_url}/embeddings",
+                    headers=headers,
+                    json=payload
+                )
+                response.raise_for_status()
+                data = response.json()
+                
+                # Extract embeddings from response
+                embeddings = [item["embedding"] for item in data["data"]]
+                return embeddings
+                
+        except httpx.HTTPStatusError as e:
+            logger.error(f"OpenAI API error: {e.response.status_code} - {e.response.text}")
+            raise RuntimeError(f"OpenAI embedding failed: {e.response.text}")
+        except Exception as e:
+            logger.error(f"OpenAI embedding error: {e}")
+            raise
+    
+    def embed_text(self, text: str) -> List[float]:
+        return self.embed_texts([text])[0]
+
+
+class LocalEmbeddingServiceProvider(EmbeddingInterface):
+    """Local embedding service via HTTP API (e.g., emb container)"""
+    
+    def __init__(
+        self,
+        model_alias: str,
+        provider_model_name: str,
+        base_url: str,
+        dimensions: int = 384
+    ):
+        self._model_alias = model_alias
+        self._provider_model_name = provider_model_name
+        self._base_url = base_url.rstrip('/')
+        self._dimensions = dimensions
+        self._version = "1.0"
+        self._model_info: Optional[EmbeddingModelInfo] = None
+    
+    def _fetch_model_info(self) -> EmbeddingModelInfo:
+        """Fetch model info from service"""
+        if self._model_info:
+            return self._model_info
+            
+        try:
+            with httpx.Client(timeout=5.0) as client:
+                response = client.get(f"{self._base_url}/info")
+                if response.status_code == 200:
+                    data = response.json()
+                    self._dimensions = data.get("dimensions", self._dimensions)
+                    self._version = data.get("version", self._version)
+        except Exception as e:
+            logger.warning(f"Could not fetch model info from {self._base_url}: {e}")
+        
+        self._model_info = EmbeddingModelInfo(
+            alias=self._model_alias,
+            version=self._version,
+            dimensions=self._dimensions,
+            max_tokens=512,
+            description=f"Local embedding service {self._provider_model_name}"
+        )
+        return self._model_info
+    
+    def get_model_info(self) -> EmbeddingModelInfo:
+        return self._fetch_model_info()
+    
+    def embed_texts(self, texts: List[str]) -> List[List[float]]:
+        """Embed texts via local HTTP service"""
+        if not texts:
+            return []
+        
+        try:
+            with httpx.Client(timeout=30.0) as client:
+                response = client.post(
+                    f"{self._base_url}/embed",
+                    json={"texts": texts}
+                )
+                response.raise_for_status()
+                data = response.json()
+                return data.get("embeddings", [])
+                
+        except httpx.HTTPStatusError as e:
+            logger.error(f"Local embedding service error: {e.response.status_code}")
+            raise RuntimeError(f"Local embedding failed: {e.response.text}")
+        except Exception as e:
+            logger.error(f"Local embedding error: {e}")
+            raise
+    
+    def embed_text(self, text: str) -> List[float]:
+        return self.embed_texts([text])[0]
+
+
 class MockEmbeddingService(EmbeddingInterface):
     """Mock embedding service for development"""
     
-    def __init__(self, model_alias: str = "all-MiniLM-L6-v2"):
+    def __init__(self, model_alias: str = "all-MiniLM-L6-v2", dimensions: int = 384):
         self._model_alias = model_alias
         self._version = "v1"
-        self._dimensions = 384  # Standard MiniLM dimensions
+        self._dimensions = dimensions
     
     def get_model_info(self) -> EmbeddingModelInfo:
         """Get model information"""
@@ -154,34 +310,167 @@ class MockEmbeddingService(EmbeddingInterface):
         return self.embed_texts([text])[0]
 
 
+@dataclass
+class ModelConfig:
+    """Model configuration from database"""
+    alias: str
+    provider: str
+    provider_model_name: str
+    base_url: str
+    api_key: Optional[str] = None
+    dimensions: Optional[int] = None
+    extra_config: Optional[Dict[str, Any]] = None
+
+
 class EmbeddingServiceFactory:
-    """Factory for embedding services"""
+    """Factory for embedding services
     
-    _services = {}
+    Creates appropriate provider based on model configuration from database.
+    Caches service instances for reuse.
+    """
+    
+    _services: Dict[str, EmbeddingInterface] = {}
+    _model_configs: Dict[str, ModelConfig] = {}
+    
+    @classmethod
+    def _resolve_api_key(cls, api_key_ref: Optional[str]) -> Optional[str]:
+        """Resolve API key from environment variable reference"""
+        if not api_key_ref:
+            return None
+        # api_key_ref is env var name like "OPENAI_API_KEY"
+        return os.getenv(api_key_ref)
+    
+    @classmethod
+    def _create_provider(cls, config: ModelConfig) -> EmbeddingInterface:
+        """Create embedding provider based on config"""
+        settings = get_settings()
+        
+        # Mock mode
+        if getattr(settings, 'EMB_USE_MOCK', False):
+            dimensions = config.dimensions or 384
+            return MockEmbeddingService(config.alias, dimensions)
+        
+        provider = config.provider.lower()
+        
+        if provider == "openai":
+            return OpenAIEmbeddingProvider(
+                model_alias=config.alias,
+                provider_model_name=config.provider_model_name,
+                base_url=config.base_url,
+                api_key=config.api_key,
+                dimensions=config.dimensions
+            )
+        
+        elif provider == "local":
+            # Check if it's a local HTTP service or SentenceTransformer
+            if config.base_url.startswith("http"):
+                return LocalEmbeddingServiceProvider(
+                    model_alias=config.alias,
+                    provider_model_name=config.provider_model_name,
+                    base_url=config.base_url,
+                    dimensions=config.dimensions or 384
+                )
+            else:
+                # Local SentenceTransformer
+                return LocalSentenceTransformerProvider(config.provider_model_name)
+        
+        elif provider == "sentence-transformers":
+            return LocalSentenceTransformerProvider(config.provider_model_name)
+        
+        else:
+            logger.warning(f"Unknown provider '{provider}' for {config.alias}, using mock")
+            return MockEmbeddingService(config.alias, config.dimensions or 384)
+    
+    @classmethod
+    def register_model(cls, config: ModelConfig) -> None:
+        """Register model configuration (called during startup)"""
+        cls._model_configs[config.alias] = config
+        # Clear cached service if exists
+        if config.alias in cls._services:
+            del cls._services[config.alias]
     
     @classmethod
     def get_service(cls, model_alias: str) -> EmbeddingInterface:
         """Get embedding service by alias"""
-        settings = get_settings()
-        
-        # Use mock if configured
-        if getattr(settings, 'EMB_USE_MOCK', False):
-            if model_alias not in cls._services:
-                cls._services[model_alias] = MockEmbeddingService(model_alias)
+        # Return cached service if available
+        if model_alias in cls._services:
             return cls._services[model_alias]
         
-        # Use real provider for all-MiniLM-L6-v2
-        if model_alias == "all-MiniLM-L6-v2":
-            if model_alias not in cls._services:
-                cls._services[model_alias] = LocalSentenceTransformerProvider(model_alias)
-            return cls._services[model_alias]
+        # Check if we have config for this model
+        if model_alias in cls._model_configs:
+            config = cls._model_configs[model_alias]
+            service = cls._create_provider(config)
+            cls._services[model_alias] = service
+            return service
         
-        # Fallback to mock for other models
-        if model_alias not in cls._services:
-            cls._services[model_alias] = MockEmbeddingService(model_alias)
-        return cls._services[model_alias]
+        # Fallback: try to load from database synchronously
+        # This is a fallback for cases where startup didn't register models
+        config = cls._load_model_config_sync(model_alias)
+        if config:
+            cls._model_configs[model_alias] = config
+            service = cls._create_provider(config)
+            cls._services[model_alias] = service
+            return service
+        
+        # Ultimate fallback: mock service
+        logger.warning(f"Model '{model_alias}' not found, using mock")
+        service = MockEmbeddingService(model_alias)
+        cls._services[model_alias] = service
+        return service
+    
+    @classmethod
+    def _load_model_config_sync(cls, model_alias: str) -> Optional[ModelConfig]:
+        """Load model config from database (sync fallback)"""
+        try:
+            import asyncio
+            from app.core.db import get_session_factory
+            from app.models.model_registry import Model, ModelType
+            from sqlalchemy import select
+            
+            async def _load():
+                session_factory = get_session_factory()
+                async with session_factory() as session:
+                    result = await session.execute(
+                        select(Model).where(
+                            (Model.alias == model_alias) &
+                            (Model.type == ModelType.EMBEDDING)
+                        )
+                    )
+                    model = result.scalars().first()
+                    if model:
+                        return ModelConfig(
+                            alias=model.alias,
+                            provider=model.provider,
+                            provider_model_name=model.provider_model_name,
+                            base_url=model.base_url,
+                            api_key=cls._resolve_api_key(model.api_key_ref),
+                            dimensions=model.extra_config.get('vector_dim') if model.extra_config else None,
+                            extra_config=model.extra_config
+                        )
+                    return None
+            
+            # Try to get existing event loop or create new one
+            try:
+                loop = asyncio.get_running_loop()
+                # If we're in async context, we can't use run()
+                # This shouldn't happen in normal flow
+                logger.warning(f"Cannot load model config in async context for {model_alias}")
+                return None
+            except RuntimeError:
+                # No running loop, safe to create one
+                return asyncio.run(_load())
+                
+        except Exception as e:
+            logger.error(f"Failed to load model config for {model_alias}: {e}")
+            return None
     
     @classmethod
     def list_available_models(cls) -> List[str]:
         """List available model aliases"""
-        return ["all-MiniLM-L6-v2", "all-MiniLM-L12-v2", "all-mpnet-base-v2"]
+        return list(cls._model_configs.keys())
+    
+    @classmethod
+    def clear_cache(cls) -> None:
+        """Clear all cached services and configs"""
+        cls._services.clear()
+        cls._model_configs.clear()

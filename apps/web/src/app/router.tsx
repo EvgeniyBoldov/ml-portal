@@ -23,6 +23,7 @@ const UserDetailPage = lazy(() => import('@/domains/admin/pages/UserDetailPage')
 const TenantsPage = lazy(() => import('@/domains/admin/pages/TenantsPage'));
 const CreateTenantPage = lazy(() => import('@/domains/admin/pages/CreateTenantPage'));
 const ModelsPage = lazy(() => import('@/domains/admin/pages/ModelsPage'));
+const ModelEditorPage = lazy(() => import('@/domains/admin/pages/ModelEditorPage').then(m => ({ default: m.ModelEditorPage })));
 const AuditPage = lazy(() => import('@/domains/admin/pages/AuditPage'));
 const EmailSettingsPage = lazy(() => import('@/domains/admin/pages/EmailSettingsPage'));
 const PromptRegistryPage = lazy(() => import('@/domains/admin/pages/PromptRegistryPage').then(m => ({ default: m.PromptRegistryPage })));
@@ -66,6 +67,8 @@ const router = createBrowserRouter([
       { path: 'tenants/new', element: withSuspense(<CreateTenantPage />) },
       { path: 'tenants/:id/edit', element: withSuspense(<CreateTenantPage />) },
       { path: 'models', element: withSuspense(<ModelsPage />) },
+      { path: 'models/new', element: withSuspense(<ModelEditorPage />) },
+      { path: 'models/:id', element: withSuspense(<ModelEditorPage />) },
       { path: 'audit', element: withSuspense(<AuditPage />) },
       { path: 'prompts', element: withSuspense(<PromptRegistryPage />) },
       { path: 'prompts/new', element: withSuspense(<PromptEditorPage />) },

@@ -5,6 +5,7 @@
  * No file scanning - models are added manually via API.
  */
 import React, { useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import type { Model } from '@shared/api/admin';
 import {
   useModels,
@@ -263,9 +264,9 @@ export function ModelsPage() {
               }
               className={styles.search}
             />
-            <Button onClick={() => setCreateModalOpen(true)}>
-              Add Model
-            </Button>
+            <Link to="/admin/models/new">
+              <Button>Add Model</Button>
+            </Link>
           </div>
         </div>
 

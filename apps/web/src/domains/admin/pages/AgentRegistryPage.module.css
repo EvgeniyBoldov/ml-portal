@@ -1,0 +1,151 @@
+/* Agent Registry Page - RAG-style layout */
+.wrap {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  background: var(--chat-panel-bg, var(--panel-alt, #f4f6ff));
+  border: 1px solid var(--chat-panel-border, rgba(0, 0, 0, 0.08));
+  border-radius: var(--radius);
+  margin-top: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+}
+
+.title {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.subtitle {
+  color: var(--muted);
+  font-size: 0.9em;
+  margin-top: 4px;
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.search {
+  min-width: 200px;
+}
+
+.tableWrap {
+  flex: 1;
+  overflow: auto;
+  border-radius: var(--radius);
+  border: 1px solid var(--color-border);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--panel);
+}
+
+.table th {
+  background: var(--panel-alt);
+  color: var(--text);
+  font-weight: 600;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 12px 16px;
+  text-align: left;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.table td {
+  padding: 16px;
+  border-bottom: 1px solid var(--color-border);
+  color: var(--text);
+}
+
+.table tr:hover {
+  background: var(--color-bg-secondary);
+}
+
+.agentName {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.agentSlug {
+  font-weight: 500;
+  color: var(--text);
+}
+
+.agentDisplayName {
+  font-size: 0.85em;
+  color: var(--muted);
+}
+
+.promptSlug {
+  font-family: monospace;
+  font-size: 0.9em;
+  color: var(--text);
+}
+
+.toolsList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.updatedAt {
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.emptyState {
+  padding: 48px;
+  text-align: center;
+  color: var(--muted);
+  background: var(--panel);
+}
+
+/* Mobile */
+@media (max-width: 768px) {
+  .header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 16px;
+  }
+
+  .controls {
+    justify-content: stretch;
+  }
+
+  .search {
+    min-width: auto;
+  }
+
+  .table th,
+  .table td {
+    padding: 8px;
+  }
+}

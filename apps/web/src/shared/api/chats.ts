@@ -62,6 +62,7 @@ export async function* sendMessageStreamSSE(
     idempotencyKey?: string;
     useRag?: boolean;
     model?: string | null;
+    agentSlug?: string | null;
   } = {}
 ) {
   const headers: Record<string, string> = {
@@ -89,6 +90,7 @@ export async function* sendMessageStreamSSE(
       content,
       use_rag: opts?.useRag ?? false,
       model: opts?.model ?? null,
+      agent_slug: opts?.agentSlug ?? null,
     }),
   });
 
@@ -162,4 +164,17 @@ export async function deleteChat(chat_id: string) {
   return apiRequest<{ id: string; deleted: boolean }>(`/chats/${chat_id}`, {
     method: 'DELETE',
   });
+}
+
+/** Chat agent info for UI selection */
+export interface ChatAgent {
+  slug: string;
+  name: string;
+  description?: string;
+  has_rag: boolean;
+}
+
+/** Get list of available agents for chat */
+export async function listChatAgents() {
+  return apiRequest<{ agents: ChatAgent[] }>('/chats/agents');
 }

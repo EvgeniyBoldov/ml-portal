@@ -14,6 +14,7 @@ from app.repositories.chats_repo import AsyncChatsRepository, AsyncChatMessagesR
 from app.core.http.clients import LLMClientProtocol
 from app.services.rag_search_service import RagSearchService
 from app.services.prompt_service import PromptService
+from app.services.agent_service import AgentService, AgentProfile
 from app.core.logging import get_logger
 from app.core.idempotency import IdempotencyManager
 
@@ -38,6 +39,7 @@ class ChatStreamService:
         self.messages_repo = messages_repo
         self.idempotency = IdempotencyManager(redis)
         self.prompt_service = PromptService(session)
+        self.agent_service = AgentService(session)
     
     async def verify_chat_access(self, chat_id: str, user_id: str) -> bool:
         """Verify that user has access to the chat"""
@@ -121,7 +123,8 @@ class ChatStreamService:
         content: str,
         idempotency_key: Optional[str] = None,
         use_rag: bool = False,
-        model: Optional[str] = None
+        model: Optional[str] = None,
+        agent_slug: Optional[str] = None
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
         Send message and stream LLM response
@@ -167,7 +170,15 @@ class ChatStreamService:
             
             yield {"type": "user_message", "message_id": user_message_id}
             
-            # 4. Load context
+            # 4. Load agent profile
+            yield {"type": "status", "stage": "loading_agent"}
+            agent_profile = await self.agent_service.get_agent_profile(
+                agent_slug=agent_slug,
+                use_rag=use_rag
+            )
+            logger.info(f"Using agent: {agent_profile.agent.slug}, prompt: {agent_profile.system_prompt.slug}")
+            
+            # 5. Load context
             yield {"type": "status", "stage": "loading_context"}
             context = await self.load_chat_context(chat_id, limit=20)
             
@@ -176,6 +187,7 @@ class ChatStreamService:
             
             # Metadata to save with assistant message
             rag_sources = []
+            rag_context = None
             
             # Add RAG context if use_rag=True
             if use_rag:
@@ -244,12 +256,6 @@ class ChatStreamService:
                                 rag_context = "# Контекст из базы знаний\n\n"
                                 for item in rag_context_items:
                                     rag_context += f"## Источник\n{item['text']}\n*Документ: {item['source_id']}*\n\n"
-
-                            # Add system message with RAG context before user message
-                            llm_messages.insert(-1, {
-                                "role": "system",
-                                "content": rag_context
-                            })
                             
                             logger.info(f"✓ Added RAG context with {len(search_results)} results to LLM prompt")
                         else:
@@ -271,12 +277,39 @@ class ChatStreamService:
                         "message": f"Ошибка поиска в базе знаний: {str(e)}"
                     }
             
-            # 6. Stream LLM response
+            # 6. Build system prompt from agent profile
+            try:
+                system_prompt = self.prompt_service._render_text(
+                    agent_profile.system_prompt.template,
+                    {"rag_context": rag_context or ""}
+                )
+            except Exception as e:
+                logger.error(f"Failed to render agent system prompt: {e}")
+                # Fallback to raw template
+                system_prompt = agent_profile.system_prompt.template
+            
+            # Insert system prompt at the beginning
+            llm_messages.insert(0, {
+                "role": "system",
+                "content": system_prompt
+            })
+            
+            # If we have RAG context, add it as a separate system message
+            if rag_context:
+                llm_messages.insert(-1, {
+                    "role": "system",
+                    "content": rag_context
+                })
+            
+            # Apply generation config from agent (model override)
+            effective_model = model or agent_profile.generation_config.get("model")
+            
+            # 7. Stream LLM response
             yield {"type": "status", "stage": "generating_answer_started"}
             assistant_content = ""
             llm_error = None
             try:
-                async for chunk in self.llm_client.chat_stream(llm_messages, model=model):
+                async for chunk in self.llm_client.chat_stream(llm_messages, model=effective_model):
                     assistant_content += chunk
                     yield {"type": "delta", "content": chunk}
             except Exception as llm_exc:

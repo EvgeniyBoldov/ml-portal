@@ -26,6 +26,21 @@ export const qk = {
     model: (id: string) => ['admin', 'model', id] as const,
     audit: (params?: { page?: number }) => ['admin', 'audit', params] as const,
   },
+  agents: {
+    all: () => ['agents'] as const,
+    list: (params?: { q?: string }) => ['agents', 'list', params] as const,
+    detail: (slug: string) => ['agents', 'detail', slug] as const,
+  },
+  prompts: {
+    all: () => ['prompts'] as const,
+    list: (params?: { type?: string; q?: string }) => ['prompts', 'list', params] as const,
+    detail: (slug: string) => ['prompts', 'detail', slug] as const,
+  },
+  tools: {
+    all: () => ['tools'] as const,
+    list: (params?: { q?: string }) => ['tools', 'list', params] as const,
+    detail: (slug: string) => ['tools', 'detail', slug] as const,
+  },
   chats: {
     all: () => ['chats'] as const,
     list: (q?: string) => ['chats', 'list', q] as const,

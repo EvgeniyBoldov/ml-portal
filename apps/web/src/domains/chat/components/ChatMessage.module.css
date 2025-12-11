@@ -1,0 +1,246 @@
+/* ChatMessage - Modern chat bubble design */
+.message {
+  display: flex;
+  gap: 12px;
+  padding: 12px 16px;
+  border-radius: 12px;
+  transition: background-color 0.15s ease;
+}
+
+.message:hover {
+  background: var(--color-bg-hover, rgba(0, 0, 0, 0.02));
+}
+
+.user {
+  flex-direction: row-reverse;
+}
+
+.assistant {
+  flex-direction: row;
+}
+
+/* Avatar */
+.avatar {
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+}
+
+.user .avatar {
+  background: var(--color-primary);
+  color: white;
+}
+
+.assistant .avatar {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+}
+
+/* Content */
+.content {
+  flex: 1;
+  min-width: 0;
+  max-width: 75%;
+}
+
+.user .content {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+  font-size: 12px;
+}
+
+.user .header {
+  flex-direction: row-reverse;
+}
+
+.role {
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.time {
+  color: var(--muted);
+}
+
+/* Message body */
+.body {
+  padding: 12px 16px;
+  border-radius: 16px;
+  line-height: 1.5;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+}
+
+.user .body {
+  background: var(--color-primary);
+  color: white;
+  border-bottom-right-radius: 4px;
+}
+
+.assistant .body {
+  background: var(--color-bg-secondary, #f4f6f8);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  border-bottom-left-radius: 4px;
+}
+
+.userText {
+  white-space: pre-wrap;
+}
+
+/* Typing indicator */
+.typing {
+  display: flex;
+  gap: 4px;
+  padding: 4px 0;
+}
+
+.typing span {
+  width: 8px;
+  height: 8px;
+  background: var(--muted);
+  border-radius: 50%;
+  animation: typing 1.4s infinite ease-in-out both;
+}
+
+.typing span:nth-child(1) {
+  animation-delay: -0.32s;
+}
+
+.typing span:nth-child(2) {
+  animation-delay: -0.16s;
+}
+
+@keyframes typing {
+  0%, 80%, 100% {
+    transform: scale(0.6);
+    opacity: 0.5;
+  }
+  40% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+/* Attachments */
+.attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.attachment {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--color-text);
+}
+
+/* RAG Sources */
+.sources {
+  margin-top: 8px;
+}
+
+.sourcesToggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: transparent;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.sourcesToggle:hover {
+  background: var(--color-bg-secondary);
+  color: var(--color-text);
+}
+
+.sourcesList {
+  margin-top: 8px;
+  padding: 8px;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+}
+
+.sourceItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  font-size: 12px;
+  color: var(--color-text);
+  border-radius: 4px;
+}
+
+.sourceItem:hover {
+  background: var(--color-bg-hover, rgba(0, 0, 0, 0.04));
+}
+
+.sourceTitle {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sourceScore {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+/* Actions */
+.actions {
+  display: flex;
+  gap: 4px;
+  margin-top: 4px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.message:hover .actions {
+  opacity: 1;
+}
+
+.actionBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.actionBtn:hover {
+  background: var(--color-bg-secondary);
+  color: var(--color-text);
+}

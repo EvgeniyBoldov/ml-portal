@@ -27,7 +27,8 @@ interface ChatContextValue {
     message: string,
     useRag: boolean,
     onChunk: (chunk: string) => void,
-    onError: (error: string) => void
+    onError: (error: string) => void,
+    agentSlug?: string
   ) => Promise<void>;
 }
 
@@ -74,7 +75,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     message: string,
     useRag: boolean,
     onChunk: (chunk: string) => void,
-    onError: (error: string) => void
+    onError: (error: string) => void,
+    agentSlug?: string
   ) => {
     try {
       setError(null);
@@ -141,7 +143,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         method: 'POST',
         headers,
         credentials: 'include',
-        body: JSON.stringify({ content: message, use_rag: useRag }),
+        body: JSON.stringify({ content: message, use_rag: useRag, agent_slug: agentSlug }),
       });
 
       if (!response.ok || !response.body) {

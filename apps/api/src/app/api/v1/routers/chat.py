@@ -44,6 +44,32 @@ async def list_llm_models():
     
     return {"models": models}
 
+
+@router.get("/agents")
+async def list_chat_agents(
+    session: AsyncSession = Depends(db_session),
+    current_user: UserCtx = Depends(get_current_user)
+):
+    """Get list of available agents for chat selection"""
+    from app.services.agent_service import AgentService
+    
+    service = AgentService(session)
+    agents, _ = await service.list_agents(limit=50)
+    
+    # Return only active agents with minimal info for UI
+    return {
+        "agents": [
+            {
+                "slug": agent.slug,
+                "name": agent.name,
+                "description": agent.description,
+                "has_rag": "rag.search" in (agent.tools or []),
+            }
+            for agent in agents
+            if agent.is_active
+        ]
+    }
+
 @router.get("")
 async def list_chats(
     limit: int = Query(100, ge=1, le=1000),
@@ -165,10 +191,18 @@ async def send_message_stream(
     llm: LLMClientProtocol = Depends(get_llm_client),
     current_user: UserCtx = Depends(get_current_user)
 ) -> StreamingResponse:
-    """Send a message to a chat with SSE streaming (persist→stream→persist)"""
+    """Send a message to a chat with SSE streaming (persist→stream→persist)
+    
+    Body params:
+        content: str - Message content (required)
+        use_rag: bool - Enable RAG search (default: False)
+        model: str - LLM model override (optional)
+        agent_slug: str - Agent profile to use (optional, defaults based on use_rag)
+    """
     content = body.get("content", "")
     use_rag = body.get("use_rag", False)
     model = body.get("model", None)
+    agent_slug = body.get("agent_slug", None)
     
     if not content:
         raise HTTPException(status_code=400, detail="Content is required")
@@ -226,7 +260,8 @@ async def send_message_stream(
                 content=content,
                 idempotency_key=idempotency_key,
                 use_rag=use_rag,
-                model=model
+                model=model,
+                agent_slug=agent_slug
             ):
                 event_type = event.get("type")
                 

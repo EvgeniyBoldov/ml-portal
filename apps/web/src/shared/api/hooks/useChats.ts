@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import * as chatsApi from '@shared/api/chats';
 import { qk } from '@shared/api/keys';
 import type { Chat, ChatMessage, ChatMessageCreateRequest } from '@shared/api/types';
+import type { ChatAgent } from '@shared/api/chats';
 
 /**
  * Hook for fetching chat list
@@ -110,3 +111,19 @@ export function useUpdateChatTags() {
     },
   });
 }
+
+/**
+ * Hook for fetching available chat agents
+ */
+export function useChatAgents() {
+  return useQuery({
+    queryKey: qk.agents.list(),
+    queryFn: async () => {
+      const result = await chatsApi.listChatAgents();
+      return result.agents;
+    },
+    staleTime: 60_000, // 1 minute - agents don't change often
+  });
+}
+
+export type { ChatAgent };

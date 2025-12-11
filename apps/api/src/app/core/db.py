@@ -30,6 +30,50 @@ def _db_url() -> str:
     return url
 
 
+async def _register_embedding_models():
+    """Register embedding models from database into EmbeddingServiceFactory"""
+    try:
+        from app.models.model_registry import Model, ModelType
+        from app.adapters.embeddings import EmbeddingServiceFactory, ModelConfig
+        from sqlalchemy import select
+        
+        async with _session_factory() as session:
+            result = await session.execute(
+                select(Model).where(
+                    (Model.type == ModelType.EMBEDDING) &
+                    (Model.enabled == True)
+                )
+            )
+            models = result.scalars().all()
+            
+            for model in models:
+                # Resolve API key from env var
+                api_key = None
+                if model.api_key_ref:
+                    api_key = os.getenv(model.api_key_ref)
+                
+                # Get dimensions from extra_config
+                dimensions = None
+                if model.extra_config and 'vector_dim' in model.extra_config:
+                    dimensions = model.extra_config['vector_dim']
+                
+                config = ModelConfig(
+                    alias=model.alias,
+                    provider=model.provider,
+                    provider_model_name=model.provider_model_name,
+                    base_url=model.base_url,
+                    api_key=api_key,
+                    dimensions=dimensions,
+                    extra_config=model.extra_config
+                )
+                EmbeddingServiceFactory.register_model(config)
+                logger.info(f"Registered embedding model: {model.alias} ({model.provider})")
+            
+            logger.info(f"Registered {len(models)} embedding models")
+    except Exception as e:
+        logger.error(f"Failed to register embedding models: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app):
     """FastAPI lifespan context manager for database initialization"""
@@ -56,6 +100,10 @@ async def lifespan(app):
         )
         
         logger.info("Database connection initialized successfully")
+        
+        # Register embedding models from database
+        await _register_embedding_models()
+        
         yield
         
     except Exception as e:
