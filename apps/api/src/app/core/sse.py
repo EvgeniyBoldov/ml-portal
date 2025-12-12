@@ -44,8 +44,8 @@ class SSEMessage:
         for line in data_str.split('\n'):
             lines.append(f"data: {line}")
         
-        lines.append("")  # Empty line to end message
-        return "\n".join(lines)
+        # SSE messages must end with double newline (\n\n)
+        return "\n".join(lines) + "\n\n"
 
 class SSEStream:
     """Server-Sent Events stream handler"""

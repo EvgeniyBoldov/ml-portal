@@ -32,33 +32,44 @@ export function SSEProvider({
     droppedEvents: 0,
   });
 
+  // Store queryClient in ref to avoid re-creating SSE connection on queryClient changes
+  const queryClientRef = useRef(queryClient);
+  queryClientRef.current = queryClient;
+
   useEffect(() => {
     // Don't connect until auth is ready and user is authenticated
     if (!isAuthReady || !isAuthenticated) {
       // Disconnect if was connected
       if (clientRef.current) {
-        if (config.enableSSELogging) {
-          console.log('[SSE] Disconnecting - user not authenticated');
-        }
+        console.log('[SSE] Disconnecting - user not authenticated');
         clientRef.current.disconnect();
         clientRef.current = null;
       }
       return;
     }
 
-    // Create and connect SSE client
-    const client = new SSEClient(
-      url,
-      (events: SSEMessage[]) => {
-        // Logging (dev only)
-        if (config.enableSSELogging) {
+    // Already connected - don't reconnect
+    if (clientRef.current) {
+      console.log('[SSE] Already connected, skipping');
+      return;
+    }
+
+    // Small delay to ensure cookies are set after auth
+    const connectTimeout = setTimeout(() => {
+      // Create and connect SSE client
+      const client = new SSEClient(
+        url,
+        (events: SSEMessage[]) => {
+          console.log('[SSE] Batch callback received', events.length, 'events');
+          
+          // Logging (dev only)
           const stats = statsRef.current;
           stats.totalEvents += events.length;
           stats.eventsThisSecond += events.length;
 
           const now = Date.now();
           if (now - stats.lastSecond > 1000) {
-            console.log('[SSE]', {
+            console.log('[SSE] Stats:', {
               total: stats.totalEvents,
               lastSecond: stats.eventsThisSecond,
               url,
@@ -66,33 +77,30 @@ export function SSEProvider({
             stats.eventsThisSecond = 0;
             stats.lastSecond = now;
           }
+
+          // Apply events to cache using ref to get latest queryClient
+          applyRagEvents(events, queryClientRef.current);
         }
+      );
 
-        // Apply events to cache
-        applyRagEvents(events, queryClient);
-      }
-    );
+      clientRef.current = client;
 
-    clientRef.current = client;
+      console.log('[SSE] Connecting to', url, { isAuthenticated, isAuthReady });
 
-    if (config.enableSSELogging) {
-      console.log('[SSE] Connecting to', url);
-    }
-
-    client.connect();
+      client.connect();
+    }, 100); // Small delay to ensure cookies are ready
 
     // Cleanup on unmount
     return () => {
-      if (config.enableSSELogging) {
-        console.log('[SSE] Disconnecting from', url);
-      }
+      clearTimeout(connectTimeout);
+      console.log('[SSE] Cleanup - disconnecting from', url);
 
       if (clientRef.current) {
         clientRef.current.disconnect();
         clientRef.current = null;
       }
     };
-  }, [url, queryClient, isAuthenticated, isAuthReady]);
+  }, [url, isAuthenticated, isAuthReady]); // Removed queryClient from deps
 
   return <>{children}</>;
 }

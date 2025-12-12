@@ -24,8 +24,11 @@ export function applyRagEvents(
       // Transform SSEMessage to RagEvent format
       const event = transformMessageToRagEvent(msg);
       if (!event) {
+        console.debug('[SSE] Skipped message (no event):', msg);
         continue;
       }
+
+      console.debug('[SSE] Processing event:', event.type, event.doc_id, event.data);
 
       switch (event.type) {
         case 'rag.status':
@@ -68,18 +71,29 @@ function transformMessageToRagEvent(msg: SSEMessage): RagEvent | null {
     timestamp:
       typeof msg.timestamp === 'number'
         ? new Date(msg.timestamp).toISOString()
-        : msg.timestamp,
+        : (data.timestamp || msg.timestamp),
     seq: msg.seq || 0,
   };
 
   switch (msg.type) {
     case 'rag.status':
+      // Backend sends: {event_type, document_id, stage, status, error, metrics, timestamp}
+      // We need to transform this to invalidate/refetch the document status
       return {
         ...base,
         type: 'rag.status',
         data: {
-          status: data.status || data.agg_status || data.new_status,
+          // Stage-level status from backend (e.g., "extract", "chunk", "embed.model-name", "index.model-name")
+          stage: data.stage,
+          // Status of the stage (e.g., "processing", "completed", "failed")
+          stageStatus: data.status,
+          // Aggregate status (if provided by backend, otherwise we'll refetch)
+          status: data.agg_status || data.new_status,
           details: data.agg_details || data.agg_details_json || data.details,
+          error: data.error,
+          metrics: data.metrics,
+          // Event type from backend
+          eventType: data.event_type,
         },
       };
 
@@ -148,10 +162,37 @@ function applyStatusEvent(
   queryClient: QueryClient
 ): void {
   const { doc_id } = event;
+  const { stage, stageStatus, eventType } = event.data;
+
+  console.log('[SSE] applyStatusEvent:', { doc_id, stage, stageStatus, eventType });
+
+  // For stage-level updates, we invalidate the detail query to refetch fresh data
+  // This ensures the StatusGraph is always in sync with backend
+  if (stage) {
+    // Invalidate detail query to get fresh StatusGraph from backend
+    queryClient.invalidateQueries({ 
+      queryKey: qk.rag.detail(doc_id),
+      exact: true 
+    });
+    
+    // Also invalidate list to update aggregate status
+    queryClient.invalidateQueries({ 
+      queryKey: ['rag', 'list'], 
+      exact: false 
+    });
+    
+    console.log('[SSE] Invalidated queries for doc:', doc_id);
+    return;
+  }
+
+  // For aggregate status updates (if backend sends them), update cache directly
   const { status } = event.data;
+  if (!status) {
+    console.debug('[SSE] No aggregate status in event, skipping cache update');
+    return;
+  }
 
   // Update document status in StatusGraph cache and recalculate aggregate on frontend
-  // Use setQueriesData to update all matching caches (different tenants)
   queryClient.setQueriesData<StatusGraph>(
     { queryKey: ['rag', 'detail'], exact: false },
     old => {
@@ -188,15 +229,21 @@ function applyStatusEvent(
   queryClient.setQueriesData<RagListCache>(
     { queryKey: ['rag', 'list'], exact: false },
     data => {
-      if (!data) return undefined;
+      if (!data) {
+        console.debug('[SSE] No list data in cache');
+        return undefined;
+      }
 
       const itemExists = data.items.some(item => item.id === doc_id);
       
       // If document doesn't exist in list, invalidate to fetch it
       if (!itemExists) {
+        console.debug('[SSE] Document not in list, invalidating:', doc_id);
         queryClient.invalidateQueries({ queryKey: ['rag', 'list'], exact: false });
         return data;
       }
+
+      console.debug('[SSE] Updating document in list:', doc_id, '->', status);
 
       const updatedItems = data.items.map(item => {
         if (item.id === doc_id) {

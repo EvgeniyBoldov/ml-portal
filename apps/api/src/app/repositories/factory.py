@@ -209,8 +209,8 @@ def _extract_tenant_id_from_user(user: UserCtx) -> uuid.UUID:
     if not is_local():
         raise ValueError(f"User {user.id} has no tenant_ids. This is not allowed in {get_settings().ENV} environment.")
     
-    # For local development only, create a default tenant_id
+    # For local development only, use the admins tenant
     logger.warning(f"User {user.id} has no valid tenant_id. Using default tenant for local development.")
-    return uuid.UUID("fb983a10-c5f8-4840-a9d3-856eea0dc729")  # Use existing tenant for development
+    return uuid.UUID("5b8675b7-6b17-4b8e-915e-e2c7694fd40f")  # admins tenant from seed data
 
 

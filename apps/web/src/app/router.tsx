@@ -10,7 +10,7 @@ const Login = lazy(() => import('@/domains/auth/pages/Login'));
 // GPT pages
 const GPTLayout = lazy(() => import('@/domains/gpt/pages/GPTLayout'));
 const ChatPage = lazy(() => import('@/domains/gpt/pages/ChatPage'));
-const RagPage = lazy(() => import('@/domains/gpt/pages/Rag'));
+const RagPage = lazy(() => import('@/domains/rag/pages/RagPage'));
 
 // Common pages
 const NotFound = lazy(() => import('@/domains/common/pages/NotFound'));
@@ -18,11 +18,11 @@ const NotFound = lazy(() => import('@/domains/common/pages/NotFound'));
 // Admin pages
 const AdminLayout = lazy(() => import('@/domains/admin/layouts/AdminLayout'));
 const DashboardPage = lazy(() => import('@/domains/admin/pages/DashboardPage'));
-const UsersPage = lazy(() => import('@/domains/admin/pages/UsersPage'));
+const UsersPage = lazy(() => import('@/domains/admin/pages/UsersPageNew'));
 const CreateUserPage = lazy(() => import('@/domains/admin/pages/CreateUserPage'));
-const UserDetailPage = lazy(() => import('@/domains/admin/pages/UserDetailPage'));
-const TenantsPage = lazy(() => import('@/domains/admin/pages/TenantsPage'));
-const CreateTenantPage = lazy(() => import('@/domains/admin/pages/CreateTenantPage'));
+const UserEditorPage = lazy(() => import('@/domains/admin/pages/UserEditorPage'));
+const TenantsPage = lazy(() => import('@/domains/admin/pages/TenantsPageNew'));
+const TenantEditorPage = lazy(() => import('@/domains/admin/pages/TenantEditorPage'));
 const ModelsPage = lazy(() => import('@/domains/admin/pages/ModelsPage'));
 const ModelEditorPage = lazy(() => import('@/domains/admin/pages/ModelEditorPage').then(m => ({ default: m.ModelEditorPage })));
 const AuditPage = lazy(() => import('@/domains/admin/pages/AuditPage'));
@@ -63,10 +63,10 @@ const router = createBrowserRouter([
       { index: true, element: withSuspense(<DashboardPage />) },
       { path: 'users', element: withSuspense(<UsersPage />) },
       { path: 'users/new', element: withSuspense(<CreateUserPage />) },
-      { path: 'users/:id', element: withSuspense(<UserDetailPage />) },
+      { path: 'users/:id', element: withSuspense(<UserEditorPage />) },
       { path: 'tenants', element: withSuspense(<TenantsPage />) },
-      { path: 'tenants/new', element: withSuspense(<CreateTenantPage />) },
-      { path: 'tenants/:id/edit', element: withSuspense(<CreateTenantPage />) },
+      { path: 'tenants/new', element: withSuspense(<TenantEditorPage />) },
+      { path: 'tenants/:id/edit', element: withSuspense(<TenantEditorPage />) },
       { path: 'models', element: withSuspense(<ModelsPage />) },
       { path: 'models/new', element: withSuspense(<ModelEditorPage />) },
       { path: 'models/:id', element: withSuspense(<ModelEditorPage />) },

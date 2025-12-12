@@ -94,7 +94,14 @@ export interface BaseRagEvent {
 export interface RagStatusEvent extends BaseRagEvent {
   type: 'rag.status';
   data: {
-    status: string;
+    // Stage-level fields (from backend status_update events)
+    stage?: string;
+    stageStatus?: string;
+    eventType?: string;
+    error?: string;
+    metrics?: Record<string, unknown>;
+    // Aggregate status fields
+    status?: string;
     details?: Record<string, unknown>;
   };
 }

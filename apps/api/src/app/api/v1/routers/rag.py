@@ -255,12 +255,29 @@ async def upload_rag_file(
     from app.api.deps import get_redis_client
     from app.services.rag_upload_service import RAGUploadService
     from app.services.rag_event_publisher import RAGEventPublisher
+    from sqlalchemy.exc import IntegrityError
     
     logger.info(f"Upload request received: file={file.filename if file else None}, name={name}, tags={tags}")
     
     if not file:
         logger.error("No file provided in upload request")
         raise HTTPException(status_code=400, detail="No file provided")
+    
+    # Validate tenant exists
+    tenant_id = repo_factory.tenant_id
+    if not tenant_id:
+        raise HTTPException(status_code=400, detail="User has no tenant assigned")
+    
+    # Check tenant exists in DB
+    from app.models.tenant import Tenants
+    from sqlalchemy import select
+    tenant_check = await session.execute(select(Tenants.id).where(Tenants.id == tenant_id))
+    if not tenant_check.scalar_one_or_none():
+        logger.error(f"Tenant {tenant_id} not found in database for user {user.id}")
+        raise HTTPException(
+            status_code=400, 
+            detail="Your tenant configuration is invalid. Please contact administrator."
+        )
     
     try:
         # Parse tags from JSON string
@@ -297,6 +314,13 @@ async def upload_rag_file(
         
         return result
         
+    except IntegrityError as e:
+        logger.error(f"Database integrity error during upload: {str(e)}", exc_info=True)
+        await session.rollback()
+        raise HTTPException(
+            status_code=400, 
+            detail="Database error: tenant or user configuration is invalid"
+        )
     except Exception as e:
         logger.error(f"Upload failed: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to upload file: {str(e)}")
@@ -585,7 +609,8 @@ async def get_status_graph(
             doc_id=doc_uuid,
             pipeline_nodes=pipeline_nodes,
             embedding_nodes=embedding_nodes,
-            target_models=target_models
+            target_models=target_models,
+            index_nodes=index_nodes
         )
         
         # Build pipeline stages - 5 stages (upload, extract, normalize, chunk, archive)
