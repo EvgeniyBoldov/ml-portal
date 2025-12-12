@@ -165,6 +165,7 @@ export interface Model {
   extra_config?: Record<string, any> | null;  // Provider-specific config
   status: ModelStatus;                // Availability status
   enabled: boolean;
+  is_system: boolean;                 // System model (cannot be deleted)
   default_for_type: boolean;          // Is this the default model for its type?
   model_version?: string | null;      // For tracking changes
   description?: string | null;
@@ -226,6 +227,19 @@ export interface HealthCheckResponse {
   latency_ms?: number;
   error?: string;
   checked_at: string;
+}
+
+export interface HealthCheckAllResponse {
+  total: number;
+  healthy: number;
+  unhealthy: number;
+  results: Array<{
+    model_id: string;
+    alias: string;
+    status: string;
+    latency_ms?: number;
+    error?: string;
+  }>;
 }
 
 // Backward compatibility (will be removed)
@@ -420,6 +434,12 @@ export const adminApi = {
     return apiRequest(`/admin/models/${id}/health-check`, {
       method: 'POST',
       body: JSON.stringify({ force }),
+    });
+  },
+
+  async healthCheckAllModels(): Promise<HealthCheckAllResponse> {
+    return apiRequest('/admin/models/health-check-all', {
+      method: 'POST',
     });
   },
 

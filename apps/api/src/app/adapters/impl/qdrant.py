@@ -57,3 +57,11 @@ class QdrantVectorStore:
     async def search(self, collection: str, query: Sequence[float], top_k: int = 5, filter: Mapping[str, Any] | qm.Filter | None = None) -> list[dict]:
         rr = await self._client.search(collection_name=collection, query_vector=list(query), limit=top_k, query_filter=_dict_to_filter(filter) if not isinstance(filter, qm.Filter) else filter)
         return [r.dict() for r in rr]
+
+    async def collection_exists(self, name: str) -> bool:
+        """Check if collection exists in Qdrant"""
+        try:
+            collections = await self._client.get_collections()
+            return name in [c.name for c in collections.collections]
+        except Exception:
+            return False

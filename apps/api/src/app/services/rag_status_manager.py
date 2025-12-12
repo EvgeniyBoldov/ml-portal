@@ -164,10 +164,10 @@ class RAGStatusManager:
         # Получаем текущий статус
         if stage.startswith('embed.'):
             node_type = 'embedding'
-            node_key = stage.replace('embed.', '')
+            node_key = stage.replace('embed.', '', 1)  # Только первое вхождение
         elif stage.startswith('index.'):
             node_type = 'index'
-            node_key = stage.replace('index.', '')
+            node_key = stage.replace('index.', '', 1)  # Только первое вхождение
         else:
             node_type = 'pipeline'
             node_key = stage
@@ -304,10 +304,10 @@ class RAGStatusManager:
         
         if stage.startswith('embed.'):
             node_type = 'embedding'
-            node_key = stage.replace('embed.', '')
+            node_key = stage.replace('embed.', '', 1)  # Только первое вхождение
         elif stage.startswith('index.'):
             node_type = 'index'
-            node_key = stage.replace('index.', '')
+            node_key = stage.replace('index.', '', 1)  # Только первое вхождение
         else:
             node_type = 'pipeline'
             node_key = stage
@@ -351,7 +351,7 @@ class RAGStatusManager:
         )
 
         if stage.startswith('embed.'):
-            model_key = stage.replace('embed.', '')
+            model_key = stage.replace('embed.', '', 1)  # Только первое вхождение
             await self._reset_stage_if_needed(
                 doc_id,
                 f'index.{model_key}',
@@ -433,7 +433,7 @@ class RAGStatusManager:
         target_status = StageStatus.PENDING if reset_to_pending else StageStatus.CANCELLED
 
         if failed_stage.startswith('embed.'):
-            model = failed_stage.replace('embed.', '')
+            model = failed_stage.replace('embed.', '', 1)  # Только первое вхождение
             await self._reset_stage_if_needed(
                 doc_id,
                 f'index.{model}',
@@ -485,10 +485,10 @@ class RAGStatusManager:
         """Сбросить статус этапа, если он не в финальном состоянии."""
         if stage.startswith('embed.'):
             node_type = 'embedding'
-            node_key = stage.replace('embed.', '')
+            node_key = stage.replace('embed.', '', 1)  # Только первое вхождение
         elif stage.startswith('index.'):
             node_type = 'index'
-            node_key = stage.replace('index.', '')
+            node_key = stage.replace('index.', '', 1)  # Только первое вхождение
         else:
             node_type = 'pipeline'
             node_key = stage

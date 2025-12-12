@@ -289,17 +289,11 @@ class ChatStreamService:
                 system_prompt = agent_profile.system_prompt.template
             
             # Insert system prompt at the beginning
+            # Note: RAG context is already included in system_prompt via agent template {{ rag_context }}
             llm_messages.insert(0, {
                 "role": "system",
                 "content": system_prompt
             })
-            
-            # If we have RAG context, add it as a separate system message
-            if rag_context:
-                llm_messages.insert(-1, {
-                    "role": "system",
-                    "content": rag_context
-                })
             
             # Apply generation config from agent (model override)
             effective_model = model or agent_profile.generation_config.get("model")

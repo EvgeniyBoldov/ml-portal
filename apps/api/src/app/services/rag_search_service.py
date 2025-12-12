@@ -38,34 +38,44 @@ class RagSearchService:
     
     async def _get_tenant_models(self, tenant_id: str) -> List[str]:
         """
-        Получить активные модели эмбеддингов для тенанта: глобальный + дополнительный (если есть)
+        Получить модели эмбеддингов для поиска: ищем коллекции в Qdrant для этого тенанта
         """
         from uuid import UUID
-        from app.repositories.tenants_repo import AsyncTenantsRepository
         from sqlalchemy import select
         from app.models.model_registry import ModelRegistry, ModelType, ModelStatus
         
         session_factory = get_session_factory()
         async with session_factory() as session:
-            tenants_repo = AsyncTenantsRepository(session)
-            tenant = await tenants_repo.get_by_id(UUID(tenant_id))
-            
-            # global embedding
+            # Get all available embedding models
             result = await session.execute(
                 select(ModelRegistry).where(
                     (ModelRegistry.type == ModelType.EMBEDDING) & 
-                    (ModelRegistry.default_for_type == True) &
-                    (ModelRegistry.enabled == True)
+                    (ModelRegistry.enabled == True) &
+                    (ModelRegistry.status == ModelStatus.AVAILABLE)
                 )
             )
-            global_embed = result.scalars().first()
-            models: List[str] = []
-            if global_embed and global_embed.status == ModelStatus.AVAILABLE:
-                models.append(global_embed.alias)
+            all_models = result.scalars().all()
             
-            # extra embedding (if any)
-            if tenant and tenant.embedding_model_alias and tenant.embedding_model_alias not in models:
-                models.append(tenant.embedding_model_alias)
+            # Check which collections exist in Qdrant for this tenant
+            vector_store = QdrantVectorStore()
+            models: List[str] = []
+            
+            for model in all_models:
+                collection_name = f"{tenant_id}__{model.alias}"
+                try:
+                    exists = await vector_store.collection_exists(collection_name)
+                    if exists:
+                        models.append(model.alias)
+                        logger.info(f"Found collection {collection_name}")
+                except Exception as e:
+                    logger.debug(f"Collection {collection_name} check failed: {e}")
+            
+            if not models:
+                # Fallback to default model if no collections found
+                default_model = next((m for m in all_models if m.default_for_type), None)
+                if default_model:
+                    models.append(default_model.alias)
+                    logger.warning(f"No collections found, using default model: {default_model.alias}")
             
             return models
     

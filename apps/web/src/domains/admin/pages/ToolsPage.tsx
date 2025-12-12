@@ -1,52 +1,83 @@
-import React, { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { Link } from 'react-router-dom';
-import { toolsApi, Tool } from '@/shared/api';
+/**
+ * ToolsPage - Реестр инструментов
+ * 
+ * Управление внешними инструментами, API вызовами и функциями для агентов.
+ * Единый стиль с остальными админ-реестрами.
+ */
+import { useState } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { Link, useNavigate } from 'react-router-dom';
+import { toolsApi, type Tool } from '@/shared/api';
+import { qk } from '@/shared/api/keys';
 import Button from '@/shared/ui/Button';
 import Badge from '@/shared/ui/Badge';
 import Input from '@/shared/ui/Input';
+import Alert from '@/shared/ui/Alert';
 import { Skeleton } from '@/shared/ui/Skeleton';
-// Reuse styles from prompts page as they are identical in structure
-import styles from './PromptRegistryPage.module.css';
+import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
+import { ActionsButton, type ActionItem } from '@/shared/ui/ActionsButton';
+import { useAppStore } from '@/app/store/app.store';
+import styles from './RegistryPage.module.css';
 
-function ToolRow({ tool }: { tool: Tool }) {
+const TYPE_LABELS: Record<string, string> = {
+  api: 'API',
+  function: 'Функция',
+  database: 'База данных',
+};
+
+function ToolRow({ 
+  tool, 
+  getActions 
+}: { 
+  tool: Tool;
+  getActions: (tool: Tool) => ActionItem[];
+}) {
   return (
     <tr>
       <td>
-        <div className={styles.modelName}>
-          <div style={{ fontWeight: 500 }}>{tool.slug}</div>
-          <div style={{ fontSize: '0.85em', color: '#666' }}>{tool.name}</div>
+        <div className={styles.cellStack}>
+          <span className={styles.cellPrimary}>{tool.slug}</span>
+          <span className={styles.cellSecondary}>{tool.name}</span>
         </div>
       </td>
       <td>
-        <Badge tone="info">{tool.type}</Badge>
+        <Badge tone="info">{TYPE_LABELS[tool.type] || tool.type}</Badge>
       </td>
       <td>
-        {/* Tools don't have versions in UI yet */}
-        <span style={{ color: '#999' }}>—</span>
+        <Badge tone={tool.is_active ? 'success' : 'neutral'} size="small">
+          {tool.is_active ? 'Активен' : 'Неактивен'}
+        </Badge>
       </td>
       <td>
-        <span className={styles.updatedAt}>
-          {new Date(tool.updated_at).toLocaleDateString()}
+        <span className={styles.muted}>
+          {new Date(tool.updated_at).toLocaleDateString('ru-RU')}
         </span>
       </td>
       <td>
-        <div className={styles.actions}>
-          <Link to={`/admin/tools/${tool.slug}`}>
-            <Button variant="outline" size="sm">Редактировать</Button>
-          </Link>
-        </div>
+        <ActionsButton actions={getActions(tool)} />
       </td>
     </tr>
   );
 }
 
 export function ToolsPage() {
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const showError = useErrorToast();
+  const showSuccess = useSuccessToast();
+  const showConfirmDialog = useAppStore(state => state.showConfirmDialog);
+  
   const [q, setQ] = useState('');
   
   const { data: tools, isLoading, error } = useQuery({
-    queryKey: ['tools', 'list'],
+    queryKey: qk.tools.list({ q: q || undefined }),
     queryFn: () => toolsApi.list(),
+    staleTime: 60000,
+  });
+
+  const deleteToolMutation = useMutation({
+    mutationFn: (slug: string) => toolsApi.delete(slug),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: qk.tools.all() }),
   });
 
   const filteredTools = tools?.filter(t => 
@@ -54,32 +85,73 @@ export function ToolsPage() {
     t.slug.toLowerCase().includes(q.toLowerCase())
   ) || [];
 
+  const handleDelete = (tool: Tool) => {
+    showConfirmDialog({
+      title: `Удалить инструмент «${tool.slug}»?`,
+      confirmLabel: 'Удалить',
+      cancelLabel: 'Отмена',
+      variant: 'danger',
+      message: (
+        <Alert
+          variant="danger"
+          title="Инструмент будет удалён"
+          description="Удаление нельзя отменить. Агенты, использующие этот инструмент, перестанут работать."
+        />
+      ),
+      onConfirm: async () => {
+        try {
+          await deleteToolMutation.mutateAsync(tool.slug);
+          showSuccess(`Инструмент ${tool.slug} удалён`);
+        } catch (err) {
+          console.error(err);
+          showError('Не удалось удалить инструмент');
+        }
+      },
+    });
+  };
+
+  const getActions = (tool: Tool): ActionItem[] => [
+    {
+      label: 'Редактировать',
+      onClick: () => navigate(`/admin/tools/${tool.slug}`),
+    },
+    {
+      label: 'Дублировать',
+      onClick: () => navigate(`/admin/tools/new?from=${tool.slug}`),
+    },
+    {
+      label: 'Удалить',
+      onClick: () => handleDelete(tool),
+      danger: true,
+    },
+  ];
+
   return (
     <div className={styles.wrap}>
       <div className={styles.card}>
         <div className={styles.header}>
-          <div>
-            <h1 className={styles.title}>Реестр Инструментов</h1>
-            <p style={{ color: 'var(--muted)', fontSize: '0.9em', marginTop: '4px' }}>
-              Управление внешними инструментами, API вызовами и функциями для агентов.
+          <div className={styles.headerLeft}>
+            <h1 className={styles.title}>Инструменты</h1>
+            <p className={styles.subtitle}>
+              Управление внешними инструментами и API вызовами
             </p>
           </div>
           <div className={styles.controls}>
             <Input
-              placeholder="Search tools..."
+              placeholder="Поиск инструментов..."
               value={q}
               onChange={(e) => setQ(e.target.value)}
               className={styles.search}
             />
             <Link to="/admin/tools/new">
-              <Button variant="primary">Создать Инструмент</Button>
+              <Button>Создать инструмент</Button>
             </Link>
           </div>
         </div>
 
         {error && (
-          <div style={{ color: 'var(--danger)', padding: '12px' }}>
-            Failed to load tools. Please try again.
+          <div className={styles.errorState}>
+            Не удалось загрузить инструменты. Попробуйте снова.
           </div>
         )}
 
@@ -87,11 +159,11 @@ export function ToolsPage() {
           <table className={styles.table}>
             <thead>
               <tr>
-                <th>SLUG / NAME</th>
-                <th>TYPE</th>
-                <th>VERSION</th>
-                <th>UPDATED</th>
-                <th>ACTIONS</th>
+                <th>SLUG / ИМЯ</th>
+                <th>ТИП</th>
+                <th>СТАТУС</th>
+                <th>ОБНОВЛЁН</th>
+                <th>ДЕЙСТВИЯ</th>
               </tr>
             </thead>
             <tbody>
@@ -108,12 +180,16 @@ export function ToolsPage() {
               ) : filteredTools.length === 0 ? (
                 <tr>
                   <td colSpan={5} className={styles.emptyState}>
-                    Нет созданных инструментов
+                    Инструменты не найдены. Нажмите «Создать инструмент» для создания.
                   </td>
                 </tr>
               ) : (
                 filteredTools.map(tool => (
-                  <ToolRow key={tool.id} tool={tool} />
+                  <ToolRow 
+                    key={tool.id} 
+                    tool={tool} 
+                    getActions={getActions}
+                  />
                 ))
               )}
             </tbody>
@@ -123,3 +199,5 @@ export function ToolsPage() {
     </div>
   );
 }
+
+export default ToolsPage;

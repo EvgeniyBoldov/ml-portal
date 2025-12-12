@@ -201,6 +201,10 @@ def normalize_document(self: Task, extract_result: Dict[str, Any], tenant_id: st
                         content_type="application/json"
                     )
                     
+                    # 6.1. Update document with s3_key_processed
+                    source.s3_key_processed = canonical_key
+                    session.add(source)
+                    
                     # 7. Complete
                     duration_sec = round(time.monotonic() - start_time, 2)
                     await status_manager.transition_stage(

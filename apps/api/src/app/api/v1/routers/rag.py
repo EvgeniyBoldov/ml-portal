@@ -389,20 +389,47 @@ async def download_rag_file(
         if not document:
             raise HTTPException(status_code=404, detail="Document not found")
         
+        settings = get_settings()
+        
         # Determine S3 key based on kind
-        s3_key = document.s3_key_raw if kind == "original" else document.s3_key_processed
+        if kind == "original":
+            s3_key = document.s3_key_raw
+        else:
+            # For canonical, try s3_key_processed first
+            s3_key = document.s3_key_processed
+            
+            # Fallback: search for canonical file in S3 if not in DB
+            if not s3_key:
+                # Try to find canonical file by pattern
+                prefix = f"{document.tenant_id}/{doc_id}/canonical/"
+                try:
+                    objects = await s3_manager.list_objects(
+                        bucket=settings.S3_BUCKET_RAG,
+                        prefix=prefix,
+                        max_keys=1
+                    )
+                    if objects:
+                        s3_key = objects[0].get('Key')
+                        # Update document with found key for future requests
+                        document.s3_key_processed = s3_key
+                        session.add(document)
+                        await session.commit()
+                except Exception as e:
+                    logger.warning(f"Failed to search for canonical file: {e}")
+        
         if not s3_key:
             raise HTTPException(status_code=404, detail="File not found")
         
         # Generate presigned URL for download
-        settings = get_settings()
         url = await s3_manager.generate_presigned_url(
             bucket=settings.S3_BUCKET_RAG,
             key=s3_key,
-            options=PresignOptions(operation="get", expiry_seconds=3600)
+            options=PresignOptions(method="GET", expires_in=3600)
         )
         
         return {"url": url}
+    except HTTPException:
+        raise
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid document ID")
     except Exception as e:

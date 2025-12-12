@@ -1,75 +1,107 @@
 /**
- * ModelsPage - Admin models management (New Architecture)
+ * ModelsPage - Реестр моделей
  * 
- * Supports LLM and Embedding models only.
- * No file scanning - models are added manually via API.
+ * Управление LLM и Embedding моделями.
+ * Единый стиль с остальными админ-реестрами.
  */
 import React, { useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import type { Model } from '@shared/api/admin';
 import {
   useModels,
-  useCreateModel,
   useUpdateModel,
   useDeleteModel,
   useHealthCheckModel,
+  useHealthCheckAllModels,
 } from '@shared/api/hooks/useAdmin';
 import Button from '@shared/ui/Button';
 import Input from '@shared/ui/Input';
 import Badge from '@shared/ui/Badge';
 import { Skeleton } from '@shared/ui/Skeleton';
 import { useErrorToast, useSuccessToast } from '@shared/ui/Toast';
-import Modal from '@shared/ui/Modal';
+import Alert from '@shared/ui/Alert';
 import { ActionsButton, type ActionItem } from '@shared/ui/ActionsButton';
 import { useAppStore } from '@app/store/app.store';
-import styles from './ModelsPage.module.css';
+import styles from './RegistryPage.module.css';
 
-// Component for rendering a single model row
+const TYPE_LABELS: Record<string, string> = {
+  llm_chat: 'LLM',
+  embedding: 'Embedding',
+  reranker: 'Reranker',
+};
+
+const STATUS_LABELS: Record<string, string> = {
+  available: 'Доступна',
+  deprecated: 'Устарела',
+  unavailable: 'Недоступна',
+  maintenance: 'Обслуживание',
+};
+
+const HEALTH_LABELS: Record<string, string> = {
+  healthy: 'OK',
+  degraded: 'Деградация',
+  unavailable: 'Недоступна',
+};
+
+function getStatusTone(status: string): 'success' | 'warn' | 'danger' | 'neutral' {
+  switch (status) {
+    case 'available': return 'success';
+    case 'deprecated': return 'warn';
+    case 'unavailable':
+    case 'maintenance': return 'danger';
+    default: return 'neutral';
+  }
+}
+
+function getHealthTone(health: string): 'success' | 'warn' | 'danger' | 'neutral' {
+  switch (health) {
+    case 'healthy': return 'success';
+    case 'degraded': return 'warn';
+    case 'unavailable': return 'danger';
+    default: return 'neutral';
+  }
+}
+
 function ModelRow({
   model,
   getActions,
-  getStatusColor,
-  getTypeLabel,
 }: {
   model: Model;
   getActions: (model: Model) => ActionItem[];
-  getStatusColor: (status: string) => string;
-  getTypeLabel: (type: string) => string;
 }) {
-  const healthColor = model.health_status === 'healthy' ? 'success' 
-    : model.health_status === 'degraded' ? 'warn'
-    : model.health_status === 'unavailable' ? 'danger'
-    : 'neutral';
-
   return (
     <tr>
       <td>
-        <div>
-          <div style={{ fontWeight: 500 }}>{model.alias}</div>
-          <div style={{ fontSize: '0.85em', color: '#666' }}>{model.name}</div>
+        <div className={styles.cellStack}>
+          <span className={styles.cellPrimary}>{model.alias}</span>
+          <span className={styles.cellSecondary}>{model.name}</span>
         </div>
       </td>
       <td>
-        <Badge tone={getTypeLabel(model.type) === 'LLM' ? 'info' : 'success'}>
-          {getTypeLabel(model.type)}
+        <Badge tone={model.type === 'llm_chat' ? 'info' : 'success'}>
+          {TYPE_LABELS[model.type] || model.type}
         </Badge>
       </td>
       <td>
-        <div>
-          <div style={{ fontWeight: 500 }}>{model.provider}</div>
-          <div style={{ fontSize: '0.85em', color: '#666' }}>{model.provider_model_name}</div>
+        <div className={styles.cellStack}>
+          <span className={styles.cellPrimary}>{model.provider}</span>
+          <span className={styles.cellSecondary}>{model.provider_model_name}</span>
         </div>
       </td>
       <td>
-        <Badge tone={getStatusColor(model.status)}>{model.status}</Badge>
+        <Badge tone={getStatusTone(model.status)}>
+          {STATUS_LABELS[model.status] || model.status}
+        </Badge>
       </td>
       <td>
         {model.health_status ? (
-          <div>
-            <Badge tone={healthColor} size="small">{model.health_status}</Badge>
+          <div className={styles.cellStack}>
+            <Badge tone={getHealthTone(model.health_status)} size="small">
+              {HEALTH_LABELS[model.health_status] || model.health_status}
+            </Badge>
             {model.health_latency_ms && (
-              <span style={{ fontSize: '0.85em', color: '#666', marginLeft: '4px' }}>
-                ({model.health_latency_ms}ms)
+              <span className={styles.cellSecondary}>
+                {model.health_latency_ms}ms
               </span>
             )}
           </div>
@@ -79,7 +111,7 @@ function ModelRow({
       </td>
       <td>
         {model.default_for_type ? (
-          <Badge tone="success" size="small">Default</Badge>
+          <Badge tone="success" size="small">По умолч.</Badge>
         ) : (
           <span className={styles.muted}>—</span>
         )}
@@ -91,20 +123,16 @@ function ModelRow({
   );
 }
 
-type AppState = ReturnType<typeof useAppStore.getState>;
-
 export function ModelsPage() {
+  const navigate = useNavigate();
   const showError = useErrorToast();
   const showSuccess = useSuccessToast();
+  const showConfirmDialog = useAppStore(state => state.showConfirmDialog);
 
   // UI state
   const [q, setQ] = useState('');
   const [debouncedQ, setDebouncedQ] = useState('');
-  const filters = useAppStore((state: AppState) => state.filters);
-  
-  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
-  const [createModalOpen, setCreateModalOpen] = useState(false);
-  const [selectedModel, setSelectedModel] = useState<Model | null>(null);
+  const filters = useAppStore(state => state.filters);
   const [pendingModelId, setPendingModelId] = useState<string | null>(null);
 
   // Debounce search
@@ -116,8 +144,8 @@ export function ModelsPage() {
   // Query params
   const queryParams = useMemo(
     () => ({
-      type: filters.models_type || undefined,
-      status: filters.models_status || undefined,
+      type: (filters.models_type as string) || undefined,
+      status: (filters.models_status as string) || undefined,
       search: debouncedQ || undefined,
       page: 1,
       size: 50,
@@ -130,8 +158,19 @@ export function ModelsPage() {
   const updateModelMutation = useUpdateModel();
   const deleteModelMutation = useDeleteModel();
   const healthCheckMutation = useHealthCheckModel();
+  const healthCheckAllMutation = useHealthCheckAllModels();
 
   const models = data?.items || [];
+
+  const handleHealthCheckAll = async () => {
+    try {
+      const result = await healthCheckAllMutation.mutateAsync();
+      showSuccess(`Проверка завершена: ${result.healthy}/${result.total} доступно`);
+    } catch (err) {
+      console.error(err);
+      showError('Не удалось выполнить проверку');
+    }
+  };
 
   const handleToggleDefault = async (target: Model) => {
     try {
@@ -142,12 +181,12 @@ export function ModelsPage() {
       });
       showSuccess(
         target.default_for_type
-          ? `${target.alias} is no longer default`
-          : `${target.alias} set as default`
+          ? `${target.alias} больше не по умолчанию`
+          : `${target.alias} установлена по умолчанию`
       );
-    } catch (error) {
-      console.error(error);
-      showError('Failed to update default flag');
+    } catch (err) {
+      console.error(err);
+      showError('Не удалось обновить флаг');
     } finally {
       setPendingModelId(null);
     }
@@ -162,12 +201,12 @@ export function ModelsPage() {
       });
       showSuccess(
         target.enabled
-          ? `${target.alias} disabled`
-          : `${target.alias} enabled`
+          ? `${target.alias} отключена`
+          : `${target.alias} включена`
       );
-    } catch (error) {
-      console.error(error);
-      showError('Failed to toggle enabled status');
+    } catch (err) {
+      console.error(err);
+      showError('Не удалось изменить статус');
     } finally {
       setPendingModelId(null);
     }
@@ -177,102 +216,124 @@ export function ModelsPage() {
     try {
       setPendingModelId(target.id);
       await healthCheckMutation.mutateAsync({ id: target.id, force: true });
-      showSuccess(`Health check completed for ${target.alias}`);
-    } catch (error) {
-      console.error(error);
-      showError('Health check failed');
+      showSuccess(`Проверка ${target.alias} завершена`);
+    } catch (err) {
+      console.error(err);
+      showError('Проверка не удалась');
     } finally {
       setPendingModelId(null);
     }
   };
 
-  const handleDelete = async () => {
-    if (!selectedModel) return;
-
-    try {
-      await deleteModelMutation.mutateAsync(selectedModel.id);
-      showSuccess('Model deleted successfully');
-      setDeleteModalOpen(false);
-      setSelectedModel(null);
-    } catch {
-      showError('Failed to delete model');
-    }
-  };
-
-  const getActions = (model: Model): ActionItem[] => [
-    {
-      label: model.enabled ? 'Disable' : 'Enable',
-      onClick: () => handleToggleEnabled(model),
-      disabled: pendingModelId === model.id,
-    },
-    {
-      label: model.default_for_type ? 'Unset Default' : 'Set as Default',
-      onClick: () => handleToggleDefault(model),
-      disabled: pendingModelId === model.id || !model.enabled,
-    },
-    {
-      label: 'Health Check',
-      onClick: () => handleHealthCheck(model),
-      disabled: pendingModelId === model.id || !model.enabled,
-    },
-    {
-      label: 'Delete',
-      onClick: () => {
-        setSelectedModel(model);
-        setDeleteModalOpen(true);
+  const handleDelete = (target: Model) => {
+    showConfirmDialog({
+      title: 'Удаление модели',
+      confirmLabel: 'Удалить',
+      cancelLabel: 'Отмена',
+      variant: 'danger',
+      message: (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          <p style={{ margin: 0 }}>
+            Вы уверены, что хотите удалить модель <strong>{target.alias}</strong>?
+          </p>
+          <div style={{ 
+            padding: '12px', 
+            background: 'var(--color-bg-secondary, #f5f5f5)', 
+            borderRadius: '6px',
+            fontSize: '13px'
+          }}>
+            <div><strong>Имя:</strong> {target.name}</div>
+            <div><strong>Провайдер:</strong> {target.provider}</div>
+            <div><strong>Тип:</strong> {target.type === 'llm_chat' ? 'LLM' : 'Embedding'}</div>
+          </div>
+          <Alert
+            variant="danger"
+            title="Это действие необратимо"
+            description="Модель будет помечена как удалённая и станет недоступна для использования."
+          />
+        </div>
+      ),
+      onConfirm: async () => {
+        try {
+          await deleteModelMutation.mutateAsync(target.id);
+          showSuccess(`Модель «${target.alias}» удалена`);
+        } catch (err: any) {
+          console.error(err);
+          const message = err?.message || 'Не удалось удалить модель';
+          showError(message);
+        }
       },
-      danger: true,
-    },
-  ];
-
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'available':
-        return 'success';
-      case 'deprecated':
-        return 'warn';
-      case 'unavailable':
-      case 'maintenance':
-        return 'danger';
-      default:
-        return 'neutral';
-    }
+    });
   };
 
-  const getTypeLabel = (type: string) => {
-    switch (type) {
-      case 'llm_chat':
-        return 'LLM';
-      case 'embedding':
-        return 'Embedding';
-      default:
-        return type;
+  const getActions = (model: Model): ActionItem[] => {
+    const actions: ActionItem[] = [
+      {
+        label: 'Редактировать',
+        onClick: () => navigate(`/admin/models/${model.id}`),
+      },
+      {
+        label: model.enabled ? 'Отключить' : 'Включить',
+        onClick: () => handleToggleEnabled(model),
+        disabled: pendingModelId === model.id,
+      },
+      {
+        label: model.default_for_type ? 'Убрать по умолч.' : 'По умолчанию',
+        onClick: () => handleToggleDefault(model),
+        disabled: pendingModelId === model.id || !model.enabled,
+      },
+      {
+        label: 'Проверить',
+        onClick: () => handleHealthCheck(model),
+        disabled: pendingModelId === model.id || !model.enabled,
+      },
+    ];
+    
+    // Системные модели нельзя удалять
+    if (!model.is_system) {
+      actions.push({
+        label: 'Удалить',
+        onClick: () => handleDelete(model),
+        danger: true,
+      });
     }
+    
+    return actions;
   };
 
   return (
     <div className={styles.wrap}>
       <div className={styles.card}>
         <div className={styles.header}>
-          <h1 className={styles.title}>Models</h1>
+          <div className={styles.headerLeft}>
+            <h1 className={styles.title}>Модели</h1>
+            <p className={styles.subtitle}>
+              Управление LLM и Embedding моделями
+            </p>
+          </div>
           <div className={styles.controls}>
             <Input
-              placeholder="Search models..."
+              placeholder="Поиск моделей..."
               value={q}
-              onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
-                setQ(event.target.value)
-              }
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setQ(e.target.value)}
               className={styles.search}
             />
+            <Button
+              variant="outline"
+              onClick={handleHealthCheckAll}
+              disabled={healthCheckAllMutation.isPending}
+            >
+              {healthCheckAllMutation.isPending ? 'Проверка...' : 'Проверить все'}
+            </Button>
             <Link to="/admin/models/new">
-              <Button>Add Model</Button>
+              <Button>Добавить модель</Button>
             </Link>
           </div>
         </div>
 
         {error && (
           <div className={styles.errorState}>
-            Failed to load models. Please try again.
+            Не удалось загрузить модели. Попробуйте снова.
           </div>
         )}
 
@@ -280,13 +341,13 @@ export function ModelsPage() {
           <table className={styles.table}>
             <thead>
               <tr>
-                <th>ALIAS / NAME</th>
-                <th>TYPE</th>
-                <th>PROVIDER / MODEL</th>
-                <th>STATUS</th>
-                <th>HEALTH</th>
-                <th>DEFAULT</th>
-                <th>ACTIONS</th>
+                <th>АЛИАС / ИМЯ</th>
+                <th>ТИП</th>
+                <th>ПРОВАЙДЕР / МОДЕЛЬ</th>
+                <th>СТАТУС</th>
+                <th>ЗДОРОВЬЕ</th>
+                <th>ПО УМОЛЧ.</th>
+                <th>ДЕЙСТВИЯ</th>
               </tr>
             </thead>
             <tbody>
@@ -303,7 +364,7 @@ export function ModelsPage() {
               ) : models.length === 0 ? (
                 <tr>
                   <td colSpan={7} className={styles.emptyState}>
-                    No models found. Click "Add Model" to create one.
+                    Модели не найдены. Нажмите «Добавить модель» для создания.
                   </td>
                 </tr>
               ) : (
@@ -312,8 +373,6 @@ export function ModelsPage() {
                     key={model.id}
                     model={model}
                     getActions={getActions}
-                    getStatusColor={getStatusColor}
-                    getTypeLabel={getTypeLabel}
                   />
                 ))
               )}
@@ -321,46 +380,6 @@ export function ModelsPage() {
           </table>
         </div>
       </div>
-
-      {/* Delete Modal */}
-      <Modal
-        open={deleteModalOpen}
-        onClose={() => setDeleteModalOpen(false)}
-        title="Delete Model"
-        content={
-          <div>
-            <p>Are you sure you want to delete <strong>{selectedModel?.alias}</strong>?</p>
-            <p style={{ fontSize: '0.9em', color: '#666', marginTop: '8px' }}>
-              This action cannot be undone. The model will be soft-deleted.
-            </p>
-            <div className={styles.modalActions}>
-              <Button onClick={() => setDeleteModalOpen(false)}>Cancel</Button>
-              <Button
-                onClick={handleDelete}
-                variant="danger"
-                disabled={deleteModelMutation.isPending}
-              >
-                {deleteModelMutation.isPending ? 'Deleting...' : 'Delete'}
-              </Button>
-            </div>
-          </div>
-        }
-      />
-
-      {/* Create Modal - TODO: Implement form */}
-      <Modal
-        open={createModalOpen}
-        onClose={() => setCreateModalOpen(false)}
-        title="Add Model"
-        content={
-          <div>
-            <p>Model creation form coming soon...</p>
-            <div className={styles.modalActions}>
-              <Button onClick={() => setCreateModalOpen(false)}>Close</Button>
-            </div>
-          </div>
-        }
-      />
     </div>
   );
 }

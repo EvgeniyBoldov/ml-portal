@@ -41,7 +41,6 @@ export function SSEProvider({
     if (!isAuthReady || !isAuthenticated) {
       // Disconnect if was connected
       if (clientRef.current) {
-        console.log('[SSE] Disconnecting - user not authenticated');
         clientRef.current.disconnect();
         clientRef.current = null;
       }
@@ -50,7 +49,6 @@ export function SSEProvider({
 
     // Already connected - don't reconnect
     if (clientRef.current) {
-      console.log('[SSE] Already connected, skipping');
       return;
     }
 
@@ -60,32 +58,12 @@ export function SSEProvider({
       const client = new SSEClient(
         url,
         (events: SSEMessage[]) => {
-          console.log('[SSE] Batch callback received', events.length, 'events');
-          
-          // Logging (dev only)
-          const stats = statsRef.current;
-          stats.totalEvents += events.length;
-          stats.eventsThisSecond += events.length;
-
-          const now = Date.now();
-          if (now - stats.lastSecond > 1000) {
-            console.log('[SSE] Stats:', {
-              total: stats.totalEvents,
-              lastSecond: stats.eventsThisSecond,
-              url,
-            });
-            stats.eventsThisSecond = 0;
-            stats.lastSecond = now;
-          }
-
-          // Apply events to cache using ref to get latest queryClient
+          // Apply events to cache
           applyRagEvents(events, queryClientRef.current);
         }
       );
 
       clientRef.current = client;
-
-      console.log('[SSE] Connecting to', url, { isAuthenticated, isAuthReady });
 
       client.connect();
     }, 100); // Small delay to ensure cookies are ready
@@ -93,8 +71,6 @@ export function SSEProvider({
     // Cleanup on unmount
     return () => {
       clearTimeout(connectTimeout);
-      console.log('[SSE] Cleanup - disconnecting from', url);
-
       if (clientRef.current) {
         clientRef.current.disconnect();
         clientRef.current = null;

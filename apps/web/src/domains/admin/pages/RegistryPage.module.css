@@ -1,4 +1,4 @@
-/* Agent Registry Page - RAG-style layout */
+/* Единые стили для всех админ-реестров: Models, Prompts, Agents, Tools */
 .wrap {
   height: 100%;
   display: flex;
@@ -25,16 +25,23 @@
   gap: 1rem;
 }
 
+.headerLeft {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
 .title {
   font-size: 1.25rem;
   font-weight: 600;
   color: var(--color-text);
+  margin: 0;
 }
 
 .subtitle {
+  font-size: 0.875rem;
   color: var(--muted);
-  font-size: 0.9em;
-  margin-top: 4px;
+  margin: 0;
 }
 
 .controls {
@@ -70,10 +77,13 @@
   padding: 12px 16px;
   text-align: left;
   border-bottom: 1px solid var(--color-border);
+  position: sticky;
+  top: 0;
+  z-index: 1;
 }
 
 .table td {
-  padding: 16px;
+  padding: 12px 16px;
   border-bottom: 1px solid var(--color-border);
   color: var(--text);
 }
@@ -82,50 +92,82 @@
   background: var(--color-bg-secondary);
 }
 
-.agentName {
+/* Ячейка с двумя строками (slug/name, provider/model) */
+.cellStack {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
 }
 
-.agentSlug {
+.cellPrimary {
   font-weight: 500;
   color: var(--text);
 }
 
-.agentDisplayName {
+.cellSecondary {
   font-size: 0.85em;
   color: var(--muted);
 }
 
-.promptSlug {
-  font-family: monospace;
-  font-size: 0.9em;
-  color: var(--text);
-}
-
-.toolsList {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-
-.updatedAt {
+.muted {
   color: var(--muted);
-  font-size: 14px;
 }
 
+.code {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.85em;
+  background: var(--bg-hover);
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+}
+
+/* Действия */
 .actions {
   display: flex;
-  align-items: center;
   gap: 8px;
+  align-items: center;
 }
 
+/* Пустое состояние */
 .emptyState {
-  padding: 48px;
   text-align: center;
+  padding: 3rem 2rem;
   color: var(--muted);
-  background: var(--panel);
+}
+
+/* Ошибка */
+.errorState {
+  padding: 1rem;
+  color: var(--danger);
+  background: var(--danger-light);
+  border-radius: var(--radius);
+  margin: 0.5rem 0;
+}
+
+/* Модальные действия */
+.modalActions {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+  margin-top: 20px;
+}
+
+.modalText {
+  color: var(--text);
+  line-height: 1.5;
+}
+
+.modalWarning {
+  font-size: 0.9em;
+  color: var(--muted);
+  margin-top: 8px;
+}
+
+/* Пагинация */
+.pagination {
+  display: flex;
+  justify-content: center;
+  padding: 1rem 0;
 }
 
 /* Mobile */
@@ -133,19 +175,31 @@
   .header {
     flex-direction: column;
     align-items: stretch;
-    gap: 16px;
+    gap: 1rem;
   }
 
   .controls {
-    justify-content: stretch;
+    flex-direction: column;
+    gap: 0.5rem;
   }
 
   .search {
     min-width: auto;
+    width: 100%;
+  }
+
+  .tableWrap {
+    overflow-x: auto;
   }
 
   .table th,
   .table td {
-    padding: 8px;
+    padding: 8px 12px;
+    font-size: 0.875rem;
+  }
+
+  .actions {
+    flex-wrap: wrap;
+    gap: 4px;
   }
 }

@@ -272,6 +272,47 @@ class S3Client:
             logger.error(f"Unexpected error getting metadata for {key}: {e}")
             return None
     
+    async def generate_presigned_url(
+        self, 
+        bucket: str, 
+        key: str, 
+        options: Optional['PresignOptions'] = None
+    ) -> str:
+        """Generate presigned URL for object download/upload"""
+        try:
+            client = self._get_client()
+            opts = options or PresignOptions()
+            
+            params = {
+                'Bucket': bucket,
+                'Key': key,
+            }
+            
+            # Add response headers if specified
+            if opts.response_headers:
+                for header_key, header_value in opts.response_headers.items():
+                    params[header_key] = header_value
+            
+            # Run in executor to avoid blocking event loop
+            loop = asyncio.get_event_loop()
+            url = await loop.run_in_executor(
+                None,
+                lambda: client.generate_presigned_url(
+                    ClientMethod='get_object' if opts.method == 'GET' else 'put_object',
+                    Params=params,
+                    ExpiresIn=opts.expires_in
+                )
+            )
+            
+            return url
+            
+        except ClientError as e:
+            logger.error(f"Failed to generate presigned URL for {key}: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error generating presigned URL for {key}: {e}")
+            raise
+
     async def health_check(self) -> bool:
         """Check S3/MinIO connectivity"""
         try:

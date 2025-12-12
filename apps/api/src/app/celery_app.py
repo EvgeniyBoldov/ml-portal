@@ -129,6 +129,10 @@ if os.getenv("BEAT") == "1":
         "update-system-statistics": {
             "task": "periodic_tasks.update_system_statistics",
             "schedule": 3600.0,  # 1 hour
+        },
+        "models-health-check": {
+            "task": "app.workers.tasks_health_check.health_check_all_models",
+            "schedule": 300.0,  # 5 minutes
         }
     }
 

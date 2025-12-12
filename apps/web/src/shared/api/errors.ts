@@ -28,12 +28,26 @@ export async function toApiError(resp: Response): Promise<ApiError> {
   let details: unknown;
   try {
     const data = await resp.json();
-    if (data && typeof data === 'object' && 'error' in data) {
-      const err = (data as any).error;
-      msg = err?.message || msg;
-      code = err?.code || code;
-      requestId = (data as any).request_id;
-      details = err?.details;
+    if (data && typeof data === 'object') {
+      // FastAPI format: {detail: "message"} or {detail: [{...}]}
+      if ('detail' in data) {
+        const detail = (data as any).detail;
+        if (typeof detail === 'string') {
+          msg = detail;
+        } else if (Array.isArray(detail) && detail.length > 0) {
+          // Validation errors
+          msg = detail.map((e: any) => e.msg || e.message || JSON.stringify(e)).join('; ');
+        }
+        code = `http_${resp.status}`;
+      }
+      // Custom format: {error: {...}}
+      else if ('error' in data) {
+        const err = (data as any).error;
+        msg = err?.message || msg;
+        code = err?.code || code;
+        requestId = (data as any).request_id;
+        details = err?.details;
+      }
     }
   } catch {
     // Ignore errors when parsing error response

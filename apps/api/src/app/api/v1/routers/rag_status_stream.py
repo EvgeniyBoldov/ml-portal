@@ -403,7 +403,7 @@ async def retry_ingest(
 
     # Узнаём текущий статус узла
     node_type = 'embedding' if stage.startswith('embed.') else 'pipeline'
-    node_key = stage.replace('embed.', '') if stage.startswith('embed.') else stage
+    node_key = stage.replace('embed.', '', 1) if stage.startswith('embed.') else stage  # Только первое вхождение
     current_node = await status_manager.status_repo.get_node(doc_uuid, node_type, node_key)
     current = None
     if current_node:

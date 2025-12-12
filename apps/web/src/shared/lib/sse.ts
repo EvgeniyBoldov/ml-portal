@@ -90,18 +90,16 @@ export class SSEClient {
         timestamp: raw?.timestamp || Date.now(),
         seq: raw?.seq,
       };
-      console.log('[SSE] Pushed to buffer:', type, raw?.document_id || raw?.doc_id);
       this.buffer.push(msg);
     };
 
     // Connection opened
     this.eventSource.onopen = () => {
-      console.log('[SSE] Connection opened to', this.url);
+      // Connection established
     };
 
     // Default message handler (fallback for events without 'event:' field)
     this.eventSource.onmessage = event => {
-      console.log('[SSE] onmessage (fallback) received:', event.data?.substring(0, 100));
       try {
         const parsed = JSON.parse(event.data);
         // Try to infer internal type
@@ -129,53 +127,36 @@ export class SSEClient {
     const namedHandlers: Record<string, (e: MessageEvent) => void> = {
       status_update: e => {
         try {
-          // Log raw data for debugging
-          console.log('[SSE] Raw status_update data:', e.data);
-          
-          // Handle case where multiple JSON objects might be concatenated
-          // This can happen if SSE events are buffered
-          const dataStr = e.data.trim();
-          
-          // Try to parse as single JSON first
-          const parsed = JSON.parse(dataStr);
-          console.log('[SSE] Received status_update event:', parsed.document_id, parsed.stage || parsed.agg_status);
+          const parsed = JSON.parse(e.data.trim());
           push('rag.status', parsed);
         } catch (err) {
-          console.error('[SSE] Failed to parse status_update:', err, 'Raw data:', e.data);
+          console.error('[SSE] Failed to parse status_update:', err);
         }
       },
       status_initialized: e => {
         try {
-          const parsed = JSON.parse(e.data);
-          console.log('[SSE] Received status_initialized event:', parsed.document_id);
-          push('rag.status', parsed);
+          push('rag.status', JSON.parse(e.data));
         } catch (err) {
           console.error('[SSE] Failed to parse status_initialized:', err);
         }
       },
       ingest_started: e => {
         try {
-          const parsed = JSON.parse(e.data);
-          console.log('[SSE] Received ingest_started event:', parsed.document_id);
-          push('rag.status', parsed);
+          push('rag.status', JSON.parse(e.data));
         } catch (err) {
           console.error('[SSE] Failed to parse ingest_started:', err);
         }
       },
       document_archived: e => {
         try {
-          const parsed = JSON.parse(e.data);
-          console.log('[SSE] Received document_archived event:', parsed.document_id);
-          push('rag.deleted', parsed);
+          push('rag.deleted', JSON.parse(e.data));
         } catch (err) {
           console.error('[SSE] Failed to parse document_archived:', err);
         }
       },
       document_unarchived: e => {
         try {
-          const parsed = JSON.parse(e.data);
-          console.log('[SSE] Received document_unarchived event:', parsed.document_id);
-          push('rag.deleted', parsed);
+          push('rag.deleted', JSON.parse(e.data));
         } catch (err) {
           console.error('[SSE] Failed to parse document_unarchived:', err);
         }

@@ -24,11 +24,8 @@ export function applyRagEvents(
       // Transform SSEMessage to RagEvent format
       const event = transformMessageToRagEvent(msg);
       if (!event) {
-        console.debug('[SSE] Skipped message (no event):', msg);
         continue;
       }
-
-      console.debug('[SSE] Processing event:', event.type, event.doc_id, event.data);
 
       switch (event.type) {
         case 'rag.status':
@@ -164,7 +161,6 @@ function applyStatusEvent(
   const { doc_id } = event;
   const { stage, stageStatus, eventType } = event.data;
 
-  console.log('[SSE] applyStatusEvent:', { doc_id, stage, stageStatus, eventType });
 
   // For stage-level updates, we invalidate the detail query to refetch fresh data
   // This ensures the StatusGraph is always in sync with backend
@@ -181,14 +177,12 @@ function applyStatusEvent(
       exact: false 
     });
     
-    console.log('[SSE] Invalidated queries for doc:', doc_id);
     return;
   }
 
   // For aggregate status updates (if backend sends them), update cache directly
   const { status } = event.data;
   if (!status) {
-    console.debug('[SSE] No aggregate status in event, skipping cache update');
     return;
   }
 

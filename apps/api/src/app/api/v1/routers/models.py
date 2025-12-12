@@ -4,12 +4,15 @@ CRUD operations for LLM and Embedding models.
 No file system scanning - models are added manually.
 """
 from __future__ import annotations
-from typing import Optional
+import uuid
+from datetime import datetime, timezone
+from typing import Optional, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import db_uow, get_current_user, require_admin
 from app.core.security import UserCtx
 from app.services.model_service import ModelService
+from app.models.model_registry import Model
 from app.schemas.model_registry import (
     Model as ModelSchema,
     ModelCreate,
@@ -24,6 +27,34 @@ from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 router = APIRouter(tags=["models"])
+
+
+def serialize_model(model: Model) -> Dict[str, Any]:
+    """Serialize Model ORM object to dict for API response"""
+    return {
+        "id": str(model.id),
+        "alias": model.alias,
+        "name": model.name,
+        "type": model.type.value,
+        "provider": model.provider,
+        "provider_model_name": model.provider_model_name,
+        "base_url": model.base_url,
+        "api_key_ref": model.api_key_ref,
+        "extra_config": model.extra_config,
+        "status": model.status.value,
+        "enabled": model.enabled,
+        "is_system": model.is_system,
+        "default_for_type": model.default_for_type,
+        "model_version": model.model_version,
+        "description": model.description,
+        "last_health_check_at": model.last_health_check_at,
+        "health_status": model.health_status.value if model.health_status else None,
+        "health_error": model.health_error,
+        "health_latency_ms": model.health_latency_ms,
+        "created_at": model.created_at,
+        "updated_at": model.updated_at,
+        "deleted_at": model.deleted_at,
+    }
 
 
 @router.get("", response_model=ModelListResponse)
@@ -59,32 +90,7 @@ async def list_models(
         items = models[start:end]
         
         return {
-            "items": [
-                {
-                    "id": str(m.id),
-                    "alias": m.alias,
-                    "name": m.name,
-                    "type": m.type.value,
-                    "provider": m.provider,
-                    "provider_model_name": m.provider_model_name,
-                    "base_url": m.base_url,
-                    "api_key_ref": m.api_key_ref,
-                    "extra_config": m.extra_config,
-                    "status": m.status.value,
-                    "enabled": m.enabled,
-                    "default_for_type": m.default_for_type,
-                    "model_version": m.model_version,
-                    "description": m.description,
-                    "last_health_check_at": m.last_health_check_at,
-                    "health_status": m.health_status.value if m.health_status else None,
-                    "health_error": m.health_error,
-                    "health_latency_ms": m.health_latency_ms,
-                    "created_at": m.created_at,
-                    "updated_at": m.updated_at,
-                    "deleted_at": m.deleted_at,
-                }
-                for m in items
-            ],
+            "items": [serialize_model(m) for m in items],
             "total": total,
             "page": page,
             "size": size,
@@ -106,30 +112,7 @@ async def create_model(
     try:
         service = ModelService(session)
         model = await service.create_model(payload.model_dump())
-        
-        return {
-            "id": str(model.id),
-            "alias": model.alias,
-            "name": model.name,
-            "type": model.type.value,
-            "provider": model.provider,
-            "provider_model_name": model.provider_model_name,
-            "base_url": model.base_url,
-            "api_key_ref": model.api_key_ref,
-            "extra_config": model.extra_config,
-            "status": model.status.value,
-            "enabled": model.enabled,
-            "default_for_type": model.default_for_type,
-            "model_version": model.model_version,
-            "description": model.description,
-            "last_health_check_at": model.last_health_check_at,
-            "health_status": model.health_status.value if model.health_status else None,
-            "health_error": model.health_error,
-            "health_latency_ms": model.health_latency_ms,
-            "created_at": model.created_at,
-            "updated_at": model.updated_at,
-            "deleted_at": model.deleted_at,
-        }
+        return serialize_model(model)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -146,36 +129,13 @@ async def get_model(
 ):
     """Get model by ID"""
     try:
-        import uuid
         service = ModelService(session)
         model = await service.get_by_id(uuid.UUID(model_id))
         
         if not model:
             raise HTTPException(status_code=404, detail="Model not found")
         
-        return {
-            "id": str(model.id),
-            "alias": model.alias,
-            "name": model.name,
-            "type": model.type.value,
-            "provider": model.provider,
-            "provider_model_name": model.provider_model_name,
-            "base_url": model.base_url,
-            "api_key_ref": model.api_key_ref,
-            "extra_config": model.extra_config,
-            "status": model.status.value,
-            "enabled": model.enabled,
-            "default_for_type": model.default_for_type,
-            "model_version": model.model_version,
-            "description": model.description,
-            "last_health_check_at": model.last_health_check_at,
-            "health_status": model.health_status.value if model.health_status else None,
-            "health_error": model.health_error,
-            "health_latency_ms": model.health_latency_ms,
-            "created_at": model.created_at,
-            "updated_at": model.updated_at,
-            "deleted_at": model.deleted_at,
-        }
+        return serialize_model(model)
     except HTTPException:
         raise
     except Exception as e:
@@ -193,7 +153,6 @@ async def update_model(
 ):
     """Update model"""
     try:
-        import uuid
         service = ModelService(session)
         data = payload.model_dump(exclude_unset=True)
         model = await service.update_model(uuid.UUID(model_id), data)
@@ -201,29 +160,7 @@ async def update_model(
         if not model:
             raise HTTPException(status_code=404, detail="Model not found")
         
-        return {
-            "id": str(model.id),
-            "alias": model.alias,
-            "name": model.name,
-            "type": model.type.value,
-            "provider": model.provider,
-            "provider_model_name": model.provider_model_name,
-            "base_url": model.base_url,
-            "api_key_ref": model.api_key_ref,
-            "extra_config": model.extra_config,
-            "status": model.status.value,
-            "enabled": model.enabled,
-            "default_for_type": model.default_for_type,
-            "model_version": model.model_version,
-            "description": model.description,
-            "last_health_check_at": model.last_health_check_at,
-            "health_status": model.health_status.value if model.health_status else None,
-            "health_error": model.health_error,
-            "health_latency_ms": model.health_latency_ms,
-            "created_at": model.created_at,
-            "updated_at": model.updated_at,
-            "deleted_at": model.deleted_at,
-        }
+        return serialize_model(model)
     except HTTPException:
         raise
     except ValueError as e:
@@ -242,7 +179,6 @@ async def delete_model(
 ):
     """Delete model (soft delete)"""
     try:
-        import uuid
         service = ModelService(session)
         ok = await service.delete_model(uuid.UUID(model_id))
         
@@ -252,9 +188,59 @@ async def delete_model(
         return None
     except HTTPException:
         raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Failed to delete model: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to delete model: {str(e)}")
+
+
+@router.post("/health-check-all")
+async def health_check_all_models(
+    session: AsyncSession = Depends(db_uow),
+    user: UserCtx = Depends(get_current_user),
+    admin_user = Depends(require_admin),
+):
+    """Perform health check on all enabled models
+    
+    Returns summary of health check results.
+    """
+    try:
+        from app.services.model_health_checker import get_health_checker
+        
+        service = ModelService(session)
+        models = await service.list_models(enabled_only=True)
+        
+        health_checker = get_health_checker()
+        results = []
+        
+        for model in models:
+            result = await health_checker.check_model(model)
+            await service.update_health_status(
+                model.id,
+                result.status,
+                latency_ms=result.latency_ms,
+                error=result.error
+            )
+            results.append({
+                "model_id": str(model.id),
+                "alias": model.alias,
+                "status": result.status.value,
+                "latency_ms": result.latency_ms,
+                "error": result.error
+            })
+        
+        healthy = sum(1 for r in results if r["status"] == "healthy")
+        
+        return {
+            "total": len(results),
+            "healthy": healthy,
+            "unhealthy": len(results) - healthy,
+            "results": results
+        }
+    except Exception as e:
+        logger.error(f"Failed to health check all models: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to health check models: {str(e)}")
 
 
 @router.post("/{model_id}/health-check", response_model=HealthCheckResponse)
@@ -267,12 +253,11 @@ async def health_check_model(
 ):
     """Perform health check on model
     
-    TODO: Implement actual provider health check
+    Calls the actual provider to verify model availability.
+    Updates model status based on result.
     """
     try:
-        import uuid
-        from datetime import datetime, timezone
-        from app.models.model_registry import HealthStatus
+        from app.services.model_health_checker import get_health_checker
         
         service = ModelService(session)
         model = await service.get_by_id(uuid.UUID(model_id))
@@ -280,21 +265,24 @@ async def health_check_model(
         if not model:
             raise HTTPException(status_code=404, detail="Model not found")
         
-        # TODO: Actually call provider to check health
-        # For now, just mark as healthy
+        # Perform actual health check
+        health_checker = get_health_checker()
+        result = await health_checker.check_model(model)
+        
+        # Update model health status in DB
         await service.update_health_status(
             model.id,
-            HealthStatus.HEALTHY,
-            latency_ms=100,
-            error=None
+            result.status,
+            latency_ms=result.latency_ms,
+            error=result.error
         )
         
         return {
             "model_id": str(model.id),
             "alias": model.alias,
-            "status": HealthStatus.HEALTHY.value,
-            "latency_ms": 100,
-            "error": None,
+            "status": result.status.value,
+            "latency_ms": result.latency_ms,
+            "error": result.error,
             "checked_at": datetime.now(timezone.utc)
         }
     except HTTPException:

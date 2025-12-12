@@ -195,6 +195,17 @@ export function useHealthCheckModel() {
   });
 }
 
+export function useHealthCheckAllModels() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: () => adminApi.healthCheckAllModels(),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: qk.admin.models.all() });
+    },
+  });
+}
+
 // ============================================================================
 // Tenants
 // ============================================================================

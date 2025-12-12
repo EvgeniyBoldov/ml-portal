@@ -247,19 +247,30 @@ class LocalEmbeddingServiceProvider(EmbeddingInterface):
         return self._fetch_model_info()
     
     def embed_texts(self, texts: List[str]) -> List[List[float]]:
-        """Embed texts via local HTTP service"""
+        """Embed texts via local HTTP service
+        
+        Emb service expects {"text": "string"} and returns {"vectors": [[...]]}
+        We batch by calling once per text.
+        """
         if not texts:
             return []
         
         try:
+            embeddings = []
             with httpx.Client(timeout=30.0) as client:
-                response = client.post(
-                    f"{self._base_url}/embed",
-                    json={"texts": texts}
-                )
-                response.raise_for_status()
-                data = response.json()
-                return data.get("embeddings", [])
+                for text in texts:
+                    response = client.post(
+                        f"{self._base_url}/embed",
+                        json={"text": text}
+                    )
+                    response.raise_for_status()
+                    data = response.json()
+                    vectors = data.get("vectors", [[]])
+                    if vectors:
+                        embeddings.append(vectors[0])
+                    else:
+                        embeddings.append([])
+            return embeddings
                 
         except httpx.HTTPStatusError as e:
             logger.error(f"Local embedding service error: {e.response.status_code}")
@@ -269,7 +280,20 @@ class LocalEmbeddingServiceProvider(EmbeddingInterface):
             raise
     
     def embed_text(self, text: str) -> List[float]:
-        return self.embed_texts([text])[0]
+        """Embed single text"""
+        try:
+            with httpx.Client(timeout=30.0) as client:
+                response = client.post(
+                    f"{self._base_url}/embed",
+                    json={"text": text}
+                )
+                response.raise_for_status()
+                data = response.json()
+                vectors = data.get("vectors", [[]])
+                return vectors[0] if vectors else []
+        except Exception as e:
+            logger.error(f"Local embedding error: {e}")
+            raise
 
 
 class MockEmbeddingService(EmbeddingInterface):
