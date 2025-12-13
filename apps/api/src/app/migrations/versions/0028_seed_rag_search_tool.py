@@ -15,7 +15,7 @@ from sqlalchemy.sql import table, column
 from sqlalchemy.dialects import postgresql
 
 revision: str = '0028_seed_rag_search_tool'
-down_revision: Union[str, None] = '0027_add_celery_task_id'
+down_revision: Union[str, None] = '0027'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

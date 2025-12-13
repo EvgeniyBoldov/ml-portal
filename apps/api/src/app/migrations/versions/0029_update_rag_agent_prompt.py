@@ -55,38 +55,24 @@ OLD_RAG_SYSTEM_TEMPLATE = """Ты — AI-ассистент с доступом 
 
 
 def upgrade() -> None:
-    now = datetime.utcnow()
-    
-    # Update the agent.rag.system prompt
-    op.execute(
-        sa.text("""
-            UPDATE prompts 
-            SET template = :template,
-                input_variables = :input_vars,
-                updated_at = :updated_at
-            WHERE slug = 'agent.rag.system'
-        """).bindparams(
-            template=NEW_RAG_SYSTEM_TEMPLATE,
-            input_vars='[]',  # No more rag_context variable
-            updated_at=now
-        )
-    )
+    # Update the agent.rag.system prompt - use raw SQL with escaped values
+    escaped_template = NEW_RAG_SYSTEM_TEMPLATE.replace("'", "''")
+    op.execute(f"""
+        UPDATE prompts 
+        SET template = '{escaped_template}',
+            input_variables = '[]'::jsonb,
+            updated_at = NOW()
+        WHERE slug = 'agent.rag.system'
+    """)
 
 
 def downgrade() -> None:
-    now = datetime.utcnow()
-    
     # Restore old prompt
-    op.execute(
-        sa.text("""
-            UPDATE prompts 
-            SET template = :template,
-                input_variables = :input_vars,
-                updated_at = :updated_at
-            WHERE slug = 'agent.rag.system'
-        """).bindparams(
-            template=OLD_RAG_SYSTEM_TEMPLATE,
-            input_vars='["rag_context"]',
-            updated_at=now
-        )
-    )
+    escaped_template = OLD_RAG_SYSTEM_TEMPLATE.replace("'", "''")
+    op.execute(f"""
+        UPDATE prompts 
+        SET template = '{escaped_template}',
+            input_variables = '["rag_context"]'::jsonb,
+            updated_at = NOW()
+        WHERE slug = 'agent.rag.system'
+    """)
