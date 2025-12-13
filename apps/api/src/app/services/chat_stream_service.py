@@ -1,5 +1,10 @@
 """
-Chat streaming service with idempotency, context loading, and RAG support
+Chat streaming service with idempotency, context loading, and Agent Runtime integration.
+
+This service acts as a thin transport layer:
+- Handles idempotency
+- Manages message persistence
+- Delegates agent execution to AgentRuntime
 """
 from __future__ import annotations
 from typing import Optional, Dict, Any, List, AsyncGenerator
@@ -12,9 +17,8 @@ from redis.asyncio import Redis
 
 from app.repositories.chats_repo import AsyncChatsRepository, AsyncChatMessagesRepository
 from app.core.http.clients import LLMClientProtocol
-from app.services.rag_search_service import RagSearchService
-from app.services.prompt_service import PromptService
-from app.services.agent_service import AgentService, AgentProfile
+from app.services.agent_service import AgentService
+from app.agents import AgentRuntime, ToolContext, RuntimeEvent, RuntimeEventType
 from app.core.logging import get_logger
 from app.core.idempotency import IdempotencyManager
 
@@ -22,7 +26,16 @@ logger = get_logger(__name__)
 
 
 class ChatStreamService:
-    """Service for streaming chat messages with idempotency and context"""
+    """
+    Service for streaming chat messages with idempotency and context.
+    
+    Responsibilities:
+    - Idempotency checking and storage
+    - Access control
+    - Message persistence (user and assistant)
+    - Context loading
+    - Delegating to AgentRuntime for actual agent execution
+    """
     
     def __init__(
         self,
@@ -38,8 +51,8 @@ class ChatStreamService:
         self.chats_repo = chats_repo
         self.messages_repo = messages_repo
         self.idempotency = IdempotencyManager(redis)
-        self.prompt_service = PromptService(session)
         self.agent_service = AgentService(session)
+        self.runtime = AgentRuntime(llm_client)
     
     async def verify_chat_access(self, chat_id: str, user_id: str) -> bool:
         """Verify that user has access to the chat"""
@@ -127,12 +140,15 @@ class ChatStreamService:
         agent_slug: Optional[str] = None
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
-        Send message and stream LLM response
+        Send message and stream LLM response via AgentRuntime.
         
         Yields events:
         - {"type": "user_message", "message_id": "..."}
+        - {"type": "status", "stage": "..."}
+        - {"type": "tool_call", "tool": "...", "arguments": {...}}
+        - {"type": "tool_result", "tool": "...", "success": bool, "data": ...}
         - {"type": "delta", "content": "..."}
-        - {"type": "final", "message_id": "..."}
+        - {"type": "final", "message_id": "...", "sources": [...]}
         - {"type": "error", "error": "..."}
         """
         
@@ -154,164 +170,85 @@ class ChatStreamService:
             return
         
         try:
+            # 3. Get chat for tenant_id
+            chat = await self.chats_repo.get_chat_by_id(chat_id)
+            if not chat:
+                yield {"type": "error", "error": "Chat not found"}
+                return
+            
+            tenant_id = str(chat.tenant_id)
+            
+            # 4. Save user message
             yield {"type": "status", "stage": "saving_user_message"}
-            # 3. Save user message
             user_message = await self.messages_repo.create_message(
                 chat_id=chat_id,
                 role="user",
                 content={"text": content}
             )
-            await self.session.flush()  # Flush message
-            # Commit to persist user message early so it is visible on reloads
+            await self.session.flush()
             await self.session.commit()
             
             user_message_id = str(user_message.id)
             logger.info(f"User message created: {user_message_id}")
-            
             yield {"type": "user_message", "message_id": user_message_id}
             
-            # 4. Load agent profile
+            # 5. Load agent profile
             yield {"type": "status", "stage": "loading_agent"}
             agent_profile = await self.agent_service.get_agent_profile(
                 agent_slug=agent_slug,
                 use_rag=use_rag
             )
-            logger.info(f"Using agent: {agent_profile.agent.slug}, prompt: {agent_profile.system_prompt.slug}")
+            logger.info(
+                f"Using agent: {agent_profile.agent.slug}, "
+                f"tools: {agent_profile.tools}"
+            )
             
-            # 5. Load context
+            # 6. Load context
             yield {"type": "status", "stage": "loading_context"}
             context = await self.load_chat_context(chat_id, limit=20)
-            
-            # Add current message to context
             llm_messages = context + [{"role": "user", "content": content}]
             
-            # Metadata to save with assistant message
-            rag_sources = []
-            rag_context = None
+            # 7. Create tool context
+            tool_ctx = ToolContext(
+                tenant_id=tenant_id,
+                user_id=user_id,
+                chat_id=chat_id,
+                request_id=idempotency_key or str(uuid.uuid4())
+            )
             
-            # Add RAG context if use_rag=True
-            if use_rag:
-                try:
-                    yield {"type": "status", "stage": "rag_search_started"}
-                    # Get tenant_id from chat
-                    chat = await self.chats_repo.get_chat_by_id(chat_id)
-                    if chat:
-                        tenant_id = str(chat.tenant_id)
-                        
-                        logger.info(f"RAG search requested for tenant {tenant_id}, query: '{content[:100]}...'")
-                        
-                        # Search in RAG
-                        rag_service = RagSearchService()
-                        search_results = await rag_service.search(
-                            tenant_id=tenant_id,
-                            query=content,
-                            k=5  # Top 5 results
-                        )
-                        
-                        if search_results:
-                            # Prepare sources for metadata and client
-                            for result in search_results:
-                                rag_sources.append({
-                                    "source_id": result.source_id,
-                                    "chunk_id": result.chunk_id,
-                                    "text": result.text[:200], # snippet
-                                    "page": result.page,
-                                    "score": result.score,
-                                    "meta": result.meta
-                                })
-
-                            yield {
-                                "type": "status", 
-                                "stage": "rag_search_done", 
-                                "hits": len(search_results),
-                                "sources": rag_sources
-                            }
-                            
-                            # Format RAG context using PromptService
-                            rag_context_items = []
-                            for result in search_results:
-                                # Truncate text to max 500 chars to avoid context overflow
-                                text = result.text.strip()
-                                if len(text) > 500:
-                                    text = text[:497] + "..."
-                                
-                                item = {
-                                    "text": text,
-                                    "source_id": result.source_id,
-                                    "page": result.page,
-                                    "model_hits": None
-                                }
-                                if result.model_hits:
-                                    item["model_hits"] = ", ".join([f"{hit['alias']}({hit['score']:.2f})" for hit in result.model_hits])
-                                rag_context_items.append(item)
-
-                            try:
-                                rag_context = await self.prompt_service.render(
-                                    "chat.rag.system", 
-                                    {"results": rag_context_items}
-                                )
-                            except Exception as e:
-                                logger.error(f"Failed to render RAG prompt template: {e}")
-                                # Fallback to hardcoded minimal prompt
-                                rag_context = "# Контекст из базы знаний\n\n"
-                                for item in rag_context_items:
-                                    rag_context += f"## Источник\n{item['text']}\n*Документ: {item['source_id']}*\n\n"
-                            
-                            logger.info(f"✓ Added RAG context with {len(search_results)} results to LLM prompt")
-                        else:
-                            yield {"type": "status", "stage": "rag_no_results"}
-                            logger.warning(f"RAG search returned no results for query: '{content[:100]}...'")
-                            # Optionally notify user that RAG found nothing
-                            yield {
-                                "type": "rag_status",
-                                "status": "no_results",
-                                "message": "База знаний не содержит релевантной информации"
-                            }
-                except Exception as e:
-                    yield {"type": "status", "stage": "rag_error"}
-                    logger.error(f"✗ Error in RAG search: {e}", exc_info=True)
-                    # Continue without RAG if search fails
-                    yield {
-                        "type": "rag_status",
-                        "status": "error",
-                        "message": f"Ошибка поиска в базе знаний: {str(e)}"
-                    }
+            # 8. Run agent via AgentRuntime
+            yield {"type": "status", "stage": "agent_running"}
             
-            # 6. Build system prompt from agent profile
-            try:
-                system_prompt = self.prompt_service._render_text(
-                    agent_profile.system_prompt.template,
-                    {"rag_context": rag_context or ""}
-                )
-            except Exception as e:
-                logger.error(f"Failed to render agent system prompt: {e}")
-                # Fallback to raw template
-                system_prompt = agent_profile.system_prompt.template
-            
-            # Insert system prompt at the beginning
-            # Note: RAG context is already included in system_prompt via agent template {{ rag_context }}
-            llm_messages.insert(0, {
-                "role": "system",
-                "content": system_prompt
-            })
-            
-            # Apply generation config from agent (model override)
-            effective_model = model or agent_profile.generation_config.get("model")
-            
-            # 7. Stream LLM response
-            yield {"type": "status", "stage": "generating_answer_started"}
             assistant_content = ""
+            rag_sources = []
             llm_error = None
+            
             try:
-                async for chunk in self.llm_client.chat_stream(llm_messages, model=effective_model):
-                    assistant_content += chunk
-                    yield {"type": "delta", "content": chunk}
-            except Exception as llm_exc:
-                llm_error = str(llm_exc)
-                logger.error(f"Error in LLM streaming: {llm_error}", exc_info=True)
+                async for event in self.runtime.run(
+                    profile=agent_profile,
+                    messages=llm_messages,
+                    ctx=tool_ctx,
+                    model=model
+                ):
+                    mapped = self._map_runtime_event(event)
+                    if mapped:
+                        yield mapped
+                    
+                    # Collect final content and sources
+                    if event.type == RuntimeEventType.DELTA:
+                        assistant_content += event.data.get("content", "")
+                    elif event.type == RuntimeEventType.FINAL:
+                        assistant_content = event.data.get("content", assistant_content)
+                        rag_sources = event.data.get("sources", [])
+                    elif event.type == RuntimeEventType.ERROR:
+                        llm_error = event.data.get("error")
+                        
+            except Exception as runtime_exc:
+                llm_error = str(runtime_exc)
+                logger.error(f"AgentRuntime error: {llm_error}", exc_info=True)
                 yield {"type": "error", "error": llm_error}
             
-            # 7. Save assistant message (if we got any content)
+            # 9. Save assistant message
             if assistant_content:
                 assistant_message = await self.messages_repo.create_message(
                     chat_id=chat_id,
@@ -319,14 +256,13 @@ class ChatStreamService:
                     content={"text": assistant_content},
                     meta={"rag_sources": rag_sources} if rag_sources else None
                 )
-                await self.session.flush()  # Flush message
-                # Commit to persist assistant message as soon as it is saved
+                await self.session.flush()
                 await self.session.commit()
                 
                 assistant_message_id = str(assistant_message.id)
                 logger.info(f"Assistant message saved: {assistant_message_id}")
                 
-                # 8. Store idempotency
+                # 10. Store idempotency
                 if idempotency_key:
                     await self.store_idempotency(
                         idempotency_key,
@@ -334,12 +270,49 @@ class ChatStreamService:
                         assistant_message_id
                     )
                 
-                yield {"type": "final", "message_id": assistant_message_id}
-                yield {"type": "status", "stage": "generating_answer_finished"}
+                yield {
+                    "type": "final", 
+                    "message_id": assistant_message_id,
+                    "sources": rag_sources
+                }
+                yield {"type": "status", "stage": "completed"}
             elif not llm_error:
-                # Only report empty response if there was no LLM error
-                yield {"type": "error", "error": "Empty response from LLM"}
+                yield {"type": "error", "error": "Empty response from agent"}
         
         except Exception as e:
             logger.error(f"Error in send_message_stream: {e}", exc_info=True)
             yield {"type": "error", "error": str(e)}
+    
+    def _map_runtime_event(self, event: RuntimeEvent) -> Optional[Dict[str, Any]]:
+        """Map AgentRuntime event to SSE event format"""
+        if event.type == RuntimeEventType.STATUS:
+            return {"type": "status", "stage": event.data.get("stage")}
+        
+        elif event.type == RuntimeEventType.THINKING:
+            return {"type": "status", "stage": f"thinking_step_{event.data.get('step')}"}
+        
+        elif event.type == RuntimeEventType.TOOL_CALL:
+            return {
+                "type": "tool_call",
+                "tool": event.data.get("tool"),
+                "call_id": event.data.get("call_id"),
+                "arguments": event.data.get("arguments")
+            }
+        
+        elif event.type == RuntimeEventType.TOOL_RESULT:
+            return {
+                "type": "tool_result",
+                "tool": event.data.get("tool"),
+                "call_id": event.data.get("call_id"),
+                "success": event.data.get("success"),
+                "data": event.data.get("data")
+            }
+        
+        elif event.type == RuntimeEventType.DELTA:
+            return {"type": "delta", "content": event.data.get("content")}
+        
+        elif event.type == RuntimeEventType.ERROR:
+            return {"type": "error", "error": event.data.get("error")}
+        
+        # FINAL is handled separately for message persistence
+        return None
