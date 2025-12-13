@@ -155,6 +155,17 @@ class AgentRuntime:
         step = 0
         collected_sources: List[dict] = []
         
+        # Optimization: if no tools, skip tool-call loop and stream directly
+        if not tool_handlers:
+            logger.info("No tools configured, streaming directly")
+            async for event in self._stream_final_response(
+                llm_messages,
+                effective_model,
+                collected_sources
+            ):
+                yield event
+            return
+        
         while step < self.max_steps:
             step += 1
             run_ctx.add_step("llm_request", {"step": step, "messages_count": len(llm_messages)})
