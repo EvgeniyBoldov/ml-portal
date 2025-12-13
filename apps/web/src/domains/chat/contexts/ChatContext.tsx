@@ -251,22 +251,83 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               // Map stage to user-friendly status
               const statusMap: Record<string, string> = {
                 'saving_user_message': 'Сохраняю сообщение...',
+                'loading_agent': 'Загружаю агента...',
                 'loading_context': 'Загружаю контекст...',
+                'agent_running': 'Агент работает...',
+                'thinking_step_1': 'Анализирую запрос...',
+                'thinking_step_2': 'Обрабатываю результаты...',
+                'thinking_step_3': 'Формирую ответ...',
+                'streaming': 'Генерирую ответ...',
+                'completed': '',
+                // Legacy stages (for backward compatibility)
                 'rag_search_started': 'Ищу в базе знаний...',
                 'rag_search_done': 'Нашёл документы...',
                 'rag_no_results': 'Документы не найдены',
                 'generating_answer_started': 'Генерирую ответ...',
                 'generating_answer_finished': ''
               };
-              const statusText = statusMap[stage] || 'Загрузка...';
-              if (statusText) {
-                setStreamStatus(statusText);
-              } else if (stage === 'generating_answer_finished') {
-                // Clear status when generation is finished
-                setStreamStatus(null);
+              const statusText = statusMap[stage];
+              if (statusText !== undefined) {
+                if (statusText === '') {
+                  setStreamStatus(null);
+                } else {
+                  setStreamStatus(statusText);
+                }
+              } else if (stage.startsWith('thinking_step_')) {
+                // Handle dynamic thinking steps
+                setStreamStatus('Думаю...');
               }
             } catch (e) {
               console.error('Failed to parse status event', e);
+            }
+          }
+          // Handle tool_call events (show status that tool is being called)
+          else if (eventType === 'tool_call') {
+            try {
+              const parsed = JSON.parse(data);
+              const toolName = parsed.tool || 'инструмент';
+              // Map tool slugs to user-friendly names
+              const toolNames: Record<string, string> = {
+                'rag.search': 'Поиск в базе знаний'
+              };
+              const displayName = toolNames[toolName] || toolName;
+              setStreamStatus(`${displayName}...`);
+            } catch (e) {
+              console.error('Failed to parse tool_call event', e);
+            }
+          }
+          // Handle tool_result events (update sources from RAG tool)
+          else if (eventType === 'tool_result') {
+            try {
+              const parsed = JSON.parse(data);
+              // If this is rag.search result, extract sources
+              if (parsed.tool === 'rag.search' && parsed.success && parsed.data?.hits) {
+                const sources = parsed.data.hits.map((hit: any) => ({
+                  source_id: hit.source_id,
+                  text: hit.text?.slice(0, 200),
+                  page: hit.page,
+                  score: hit.score
+                }));
+                setMessagesByChat(prev => {
+                  const current = prev[chatId];
+                  if (!current) return prev;
+                  return {
+                    ...prev,
+                    [chatId]: {
+                      ...current,
+                      items: current.items.map(m =>
+                        m.id === tempAssistantId ? { 
+                          ...m, 
+                          meta: { ...m.meta, rag_sources: sources } 
+                        } : m
+                      )
+                    }
+                  };
+                });
+              }
+              setStreamStatus('Генерирую ответ...');
+            } catch (e) {
+              console.error('Failed to parse tool_result event', e);
             }
           }
           // Handle delta events
@@ -293,7 +354,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             try {
               const parsed = JSON.parse(data);
               realAssistantId = parsed.message_id;
-              // Update temp assistant message with real ID
+              // Update sources if present in final event
+              const finalSources = parsed.sources;
+              // Update temp assistant message with real ID and sources
               setMessagesByChat(prev => {
                 const current = prev[chatId];
                 if (!current) return prev;
@@ -302,7 +365,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                   [chatId]: {
                     ...current,
                     items: current.items.map(m =>
-                      m.id === tempAssistantId ? { ...m, id: realAssistantId!, isOptimistic: false } : m
+                      m.id === tempAssistantId ? { 
+                        ...m, 
+                        id: realAssistantId!, 
+                        isOptimistic: false,
+                        meta: finalSources?.length ? { ...m.meta, rag_sources: finalSources } : m.meta
+                      } : m
                     )
                   }
                 };
