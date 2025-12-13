@@ -176,23 +176,35 @@ export function AgentEditorPage() {
 
           <div className={styles.formGroup}>
             <label className={styles.label}>Доступные Инструменты</label>
-            <div className="border rounded-md p-4 bg-gray-50 max-h-[300px] overflow-y-auto">
-              {tools?.length === 0 && <div className="text-sm text-gray-500">Нет доступных инструментов</div>}
-              {tools?.map(tool => (
-                <div key={tool.slug} className="flex items-start gap-2 mb-2 last:mb-0">
-                  <input 
-                    type="checkbox"
-                    id={`tool-${tool.slug}`}
-                    checked={formData.tools.includes(tool.slug)}
-                    onChange={() => toggleTool(tool.slug)}
-                    className="mt-1"
-                  />
-                  <label htmlFor={`tool-${tool.slug}`} className="cursor-pointer">
-                    <div className="text-sm font-medium text-gray-900">{tool.name}</div>
-                    <div className="text-xs text-gray-500 font-mono">{tool.slug}</div>
-                  </label>
-                </div>
-              ))}
+            <div className={styles.toolsList}>
+              {tools?.length === 0 && (
+                <div className={styles.emptyState}>Нет доступных инструментов</div>
+              )}
+              {tools?.map(tool => {
+                const isSelected = formData.tools.includes(tool.slug);
+                return (
+                  <div 
+                    key={tool.slug} 
+                    className={`${styles.toolItem} ${isSelected ? styles.selected : ''}`}
+                    onClick={() => toggleTool(tool.slug)}
+                  >
+                    <input 
+                      type="checkbox"
+                      className={styles.toolCheckbox}
+                      checked={isSelected}
+                      onChange={() => toggleTool(tool.slug)}
+                      onClick={e => e.stopPropagation()}
+                    />
+                    <div className={styles.toolInfo}>
+                      <div className={styles.toolName}>{tool.name}</div>
+                      <div className={styles.toolSlug}>{tool.slug}</div>
+                      {tool.description && (
+                        <div className={styles.toolDescription}>{tool.description}</div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
             <p className={styles.description}>
               Выберите функции, которые агент может вызывать
