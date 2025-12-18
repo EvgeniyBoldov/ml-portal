@@ -4,7 +4,7 @@ Audit Log model for tracking MCP and API requests.
 Stores request/response data for observability and debugging.
 """
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 from sqlalchemy import String, DateTime, Text, Integer, Index
 from sqlalchemy.dialects.postgresql import UUID, JSONB
@@ -62,7 +62,7 @@ class AuditLog(Base):
     request_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=datetime.utcnow, nullable=False
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
     )
 
     def __repr__(self):
