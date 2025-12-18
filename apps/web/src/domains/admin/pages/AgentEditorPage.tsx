@@ -24,7 +24,8 @@ export function AgentEditorPage() {
     system_prompt_slug: '',
     tools: [],
     generation_config: {},
-    is_active: true
+    is_active: true,
+    enable_logging: true,
   });
 
   // Load metadata for selectors
@@ -54,7 +55,8 @@ export function AgentEditorPage() {
         system_prompt_slug: existingAgent.system_prompt_slug,
         tools: existingAgent.tools,
         generation_config: existingAgent.generation_config || {},
-        is_active: existingAgent.is_active
+        is_active: existingAgent.is_active,
+        enable_logging: existingAgent.enable_logging,
       });
     }
   }, [existingAgent]);
@@ -209,6 +211,30 @@ export function AgentEditorPage() {
             <p className={styles.description}>
               Выберите функции, которые агент может вызывать
             </p>
+          </div>
+
+          <div className={styles.formGroup}>
+            <label className={styles.label}>Настройки логирования</label>
+            <div className={styles.toolsList} style={{ maxHeight: 'auto', padding: '12px' }}>
+              <div 
+                className={`${styles.toolItem} ${formData.enable_logging ? styles.selected : ''}`}
+                onClick={() => setFormData({ ...formData, enable_logging: !formData.enable_logging })}
+              >
+                <input 
+                  type="checkbox"
+                  className={styles.toolCheckbox}
+                  checked={formData.enable_logging ?? true}
+                  onChange={() => setFormData({ ...formData, enable_logging: !formData.enable_logging })}
+                  onClick={e => e.stopPropagation()}
+                />
+                <div className={styles.toolInfo}>
+                  <div className={styles.toolName}>Логировать выполнение</div>
+                  <div className={styles.toolDescription}>
+                    Сохранять детальную информацию о каждом запуске агента (шаги, tool calls, результаты)
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
 
           <div className={styles.actions}>

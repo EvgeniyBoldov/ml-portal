@@ -9,6 +9,7 @@ export interface Agent {
   tools: string[];
   generation_config?: Record<string, any>;
   is_active: boolean;
+  enable_logging: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -21,6 +22,7 @@ export interface AgentCreate {
   tools: string[];
   generation_config?: Record<string, any>;
   is_active?: boolean;
+  enable_logging?: boolean;
 }
 
 export interface AgentUpdate {
@@ -30,6 +32,7 @@ export interface AgentUpdate {
   tools?: string[];
   generation_config?: Record<string, any>;
   is_active?: boolean;
+  enable_logging?: boolean;
 }
 
 export const agentsApi = {

@@ -18,6 +18,7 @@ from redis.asyncio import Redis
 from app.repositories.chats_repo import AsyncChatsRepository, AsyncChatMessagesRepository
 from app.core.http.clients import LLMClientProtocol
 from app.services.agent_service import AgentService
+from app.services.run_store import RunStore
 from app.agents import AgentRuntime, ToolContext, RuntimeEvent, RuntimeEventType
 from app.core.logging import get_logger
 from app.core.idempotency import IdempotencyManager
@@ -52,7 +53,8 @@ class ChatStreamService:
         self.messages_repo = messages_repo
         self.idempotency = IdempotencyManager(redis)
         self.agent_service = AgentService(session)
-        self.runtime = AgentRuntime(llm_client)
+        self.run_store = RunStore(session)
+        self.runtime = AgentRuntime(llm_client, run_store=self.run_store)
     
     async def verify_chat_access(self, chat_id: str, user_id: str) -> bool:
         """Verify that user has access to the chat"""
@@ -228,7 +230,8 @@ class ChatStreamService:
                     profile=agent_profile,
                     messages=llm_messages,
                     ctx=tool_ctx,
-                    model=model
+                    model=model,
+                    enable_logging=agent_profile.agent.enable_logging,
                 ):
                     mapped = self._map_runtime_event(event)
                     if mapped:

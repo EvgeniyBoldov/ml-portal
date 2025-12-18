@@ -6,6 +6,7 @@ export * from './errors';
 export * from './prompts';
 export * from './tools';
 export * from './agents';
+export * from './agentRuns';
 
 export * from './rag';
 export { ApiError, toApiError } from './errors';

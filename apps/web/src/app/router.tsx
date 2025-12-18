@@ -33,6 +33,7 @@ const ToolsPage = lazy(() => import('@/domains/admin/pages/ToolsPage').then(m =>
 const ToolEditorPage = lazy(() => import('@/domains/admin/pages/ToolEditorPage').then(m => ({ default: m.ToolEditorPage })));
 const AgentRegistryPage = lazy(() => import('@/domains/admin/pages/AgentRegistryPage').then(m => ({ default: m.AgentRegistryPage })));
 const AgentEditorPage = lazy(() => import('@/domains/admin/pages/AgentEditorPage').then(m => ({ default: m.AgentEditorPage })));
+const AgentRunsPage = lazy(() => import('@/domains/admin/pages/AgentRunsPage').then(m => ({ default: m.AgentRunsPage })));
 
 
 const withSuspense = (el: React.ReactNode) => (
@@ -80,6 +81,7 @@ const router = createBrowserRouter([
       { path: 'agents', element: withSuspense(<AgentRegistryPage />) },
       { path: 'agents/new', element: withSuspense(<AgentEditorPage />) },
       { path: 'agents/:slug', element: withSuspense(<AgentEditorPage />) },
+      { path: 'agent-runs', element: withSuspense(<AgentRunsPage />) },
       { path: 'settings/email', element: withSuspense(<EmailSettingsPage />) },
     ],
   },

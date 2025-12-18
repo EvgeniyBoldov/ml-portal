@@ -4,10 +4,14 @@ Agent Runtime - ядро выполнения агентов с tool-call loop
 from __future__ import annotations
 from enum import Enum
 from dataclasses import dataclass, field
-from typing import Any, AsyncGenerator, Dict, List, Optional
+from typing import Any, AsyncGenerator, Dict, List, Optional, TYPE_CHECKING
 import logging
+import uuid
 
 from app.agents.context import ToolContext, ToolResult, ToolCall, RunContext
+
+if TYPE_CHECKING:
+    from app.services.run_store import RunStore
 from app.agents.registry import ToolRegistry
 from app.agents.protocol import (
     parse_llm_response,
@@ -108,17 +112,20 @@ class AgentRuntime:
     def __init__(
         self,
         llm_client: LLMClientProtocol,
-        max_steps: int = DEFAULT_MAX_STEPS
+        max_steps: int = DEFAULT_MAX_STEPS,
+        run_store: Optional["RunStore"] = None,
     ):
         self.llm_client = llm_client
         self.max_steps = max_steps
+        self.run_store = run_store
     
     async def run(
         self,
         profile: AgentProfile,
         messages: List[Dict[str, Any]],
         ctx: ToolContext,
-        model: Optional[str] = None
+        model: Optional[str] = None,
+        enable_logging: bool = True,
     ) -> AsyncGenerator[RuntimeEvent, None]:
         """
         Выполнить агента с tool-call loop.
@@ -145,6 +152,22 @@ class AgentRuntime:
             f"model: {effective_model}"
         )
         
+        # Start run logging if enabled
+        run_id: Optional[uuid.UUID] = None
+        should_log = enable_logging and self.run_store is not None
+        
+        if should_log:
+            try:
+                run_id = await self.run_store.start_run(
+                    tenant_id=ctx.tenant_id,
+                    agent_slug=profile.agent.slug,
+                    user_id=ctx.user_id,
+                    chat_id=ctx.chat_id,
+                )
+            except Exception as e:
+                logger.warning(f"Failed to start run logging: {e}")
+                should_log = False
+        
         system_prompt = self._build_system_prompt(profile, tools_schemas)
         
         llm_messages = [{"role": "system", "content": system_prompt}]
@@ -154,6 +177,22 @@ class AgentRuntime:
         
         step = 0
         collected_sources: List[dict] = []
+        total_tokens_in = 0
+        total_tokens_out = 0
+        
+        async def finish_run(status: str, error: Optional[str] = None):
+            """Helper to finalize run logging"""
+            if should_log and run_id:
+                try:
+                    await self.run_store.finish_run(
+                        run_id,
+                        status=status,
+                        error=error,
+                        tokens_in=total_tokens_in if total_tokens_in else None,
+                        tokens_out=total_tokens_out if total_tokens_out else None,
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to finish run logging: {e}")
         
         # Optimization: if no tools, skip tool-call loop and stream directly
         if not tool_handlers:
@@ -164,6 +203,7 @@ class AgentRuntime:
                 collected_sources
             ):
                 yield event
+            await finish_run("completed")
             return
         
         while step < self.max_steps:
@@ -172,11 +212,27 @@ class AgentRuntime:
             
             yield RuntimeEvent.thinking(step)
             
+            # Log LLM request step
+            if should_log and run_id:
+                try:
+                    await self.run_store.add_step(
+                        run_id,
+                        step_type="llm_request",
+                        data={
+                            "step": step,
+                            "model": effective_model,
+                            "messages_count": len(llm_messages),
+                        }
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to log step: {e}")
+            
             try:
                 llm_response = await self._call_llm(llm_messages, effective_model)
             except Exception as e:
                 logger.error(f"LLM call failed: {e}", exc_info=True)
                 yield RuntimeEvent.error(str(e))
+                await finish_run("failed", str(e))
                 return
             
             parsed = parse_llm_response(llm_response)
@@ -184,12 +240,24 @@ class AgentRuntime:
             if parsed.is_final:
                 logger.info(f"Agent finished after {step} steps")
                 
+                # Log final response step
+                if should_log and run_id:
+                    try:
+                        await self.run_store.add_step(
+                            run_id,
+                            step_type="final_response",
+                            data={"step": step, "has_sources": bool(collected_sources)}
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to log final step: {e}")
+                
                 async for event in self._stream_final_response(
                     llm_messages, 
                     effective_model,
                     collected_sources
                 ):
                     yield event
+                await finish_run("completed")
                 return
             
             logger.info(f"Step {step}: {len(parsed.tool_calls)} tool calls")
@@ -202,6 +270,21 @@ class AgentRuntime:
                     tool_call.arguments
                 )
                 
+                # Log tool call step
+                if should_log and run_id:
+                    try:
+                        await self.run_store.add_step(
+                            run_id,
+                            step_type="tool_call",
+                            data={
+                                "tool_slug": tool_call.tool_slug,
+                                "call_id": tool_call.id,
+                                "arguments": tool_call.arguments,
+                            }
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to log tool call: {e}")
+                
                 result, sources = await self._execute_tool(tool_call, ctx, tool_handlers)
                 
                 if sources:
@@ -213,6 +296,27 @@ class AgentRuntime:
                     result.success,
                     result.data if result.success else result.error
                 )
+                
+                # Log tool result step
+                if should_log and run_id:
+                    try:
+                        # Truncate large results for storage
+                        result_data = result.data if result.success else result.error
+                        if isinstance(result_data, str) and len(result_data) > 5000:
+                            result_data = result_data[:5000] + "... [truncated]"
+                        
+                        await self.run_store.add_step(
+                            run_id,
+                            step_type="tool_result",
+                            data={
+                                "tool_slug": tool_call.tool_slug,
+                                "call_id": tool_call.id,
+                                "success": result.success,
+                                "result": result_data,
+                            }
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to log tool result: {e}")
                 
                 tool_results.append((tool_call, result.to_message_content()))
                 run_ctx.increment_tool_calls()
@@ -238,6 +342,7 @@ class AgentRuntime:
             f"Maximum steps ({self.max_steps}) reached",
             recoverable=True
         )
+        await finish_run("failed", f"Maximum steps ({self.max_steps}) reached")
     
     def _build_system_prompt(
         self,

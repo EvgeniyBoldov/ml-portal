@@ -14,6 +14,8 @@ app = Celery(
     include=[
         # RAG ingest pipeline tasks
         "app.workers.tasks_rag_ingest",
+        # Cleanup tasks for retention policies
+        "app.workers.tasks_cleanup",
         # Optional modules below may be added later; keep them out to avoid import errors
         # "app.workers.tasks_reindex",
         # "app.workers.tasks_maintenance",
