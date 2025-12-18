@@ -5,7 +5,7 @@ from __future__ import annotations
 from enum import Enum
 from dataclasses import dataclass, field
 from typing import Any, AsyncGenerator, Dict, List, Optional, TYPE_CHECKING
-import logging
+from app.core.logging import get_logger
 import uuid
 
 from app.agents.context import ToolContext, ToolResult, ToolCall, RunContext
@@ -21,7 +21,7 @@ from app.agents.protocol import (
 from app.services.agent_service import AgentProfile
 from app.core.http.clients import LLMClientProtocol
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class RuntimeEventType(str, Enum):

@@ -3,11 +3,11 @@ Tool Registry - реестр всех доступных tool handlers
 """
 from __future__ import annotations
 from typing import Dict, List, Optional, Type
-import logging
+from app.core.logging import get_logger
 
 from app.agents.handlers.base import ToolHandler
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class ToolRegistry:

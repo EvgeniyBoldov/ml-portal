@@ -4,7 +4,7 @@ Audit Logs endpoints for admin observability.
 Provides read-only access to MCP and API audit logs.
 """
 from __future__ import annotations
-import logging
+from app.core.logging import get_logger
 from typing import Optional, List
 from datetime import datetime
 from uuid import UUID
@@ -18,7 +18,7 @@ from app.api.deps import db_session, require_admin
 from app.core.security import UserCtx
 from app.models.audit_log import AuditLog
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 router = APIRouter()
 

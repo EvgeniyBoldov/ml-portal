@@ -1,11 +1,11 @@
 from __future__ import annotations
-import logging
+from app.core.logging import get_logger
 from typing import Dict, Any
 
 from celery import Task
 from app.celery_app import app as celery_app
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @celery_app.task(name="app.workers.tasks_maintenance.cleanup_old_documents_daily", queue="maintenance.default")

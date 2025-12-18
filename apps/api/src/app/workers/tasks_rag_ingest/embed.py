@@ -1,5 +1,5 @@
 from __future__ import annotations
-import logging
+from app.core.logging import get_logger
 import uuid
 import json
 import time
@@ -24,7 +24,7 @@ from app.services.rag_event_publisher import RAGEventPublisher
 from app.workers.tasks_rag_ingest.error_utils import notify_embed_error
 from app.workers.session_factory import get_worker_session
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @celery_app.task(

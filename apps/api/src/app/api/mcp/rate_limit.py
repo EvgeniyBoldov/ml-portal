@@ -4,7 +4,7 @@ Rate Limiting for MCP endpoints.
 Uses Redis for distributed rate limiting with sliding window algorithm.
 """
 from __future__ import annotations
-import logging
+from app.core.logging import get_logger
 import time
 from typing import Optional, Tuple
 from fastapi import HTTPException, Request, Depends
@@ -12,7 +12,7 @@ from redis.asyncio import Redis
 
 from app.api.deps import get_redis
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Default rate limits
 DEFAULT_REQUESTS_PER_MINUTE = 60

@@ -2,7 +2,7 @@
 """
 Audit system for tracking presigned URL generation and access
 """
-import logging
+from app.core.logging import get_logger
 import uuid
 from typing import Dict, Any, Optional
 from datetime import datetime, timezone

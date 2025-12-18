@@ -3,9 +3,9 @@ from fastapi import Request, HTTPException, status
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from app.core.security import decode_jwt
-import logging
+from app.core.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class TenantMiddleware(BaseHTTPMiddleware):
     """Middleware to extract tenant_id from request headers or JWT token"""

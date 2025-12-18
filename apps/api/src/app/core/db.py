@@ -1,12 +1,12 @@
 from __future__ import annotations
 import os
-import logging
+from app.core.logging import get_logger
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator, AsyncIterator
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy import text
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Global state managed by lifespan
 _engine: AsyncEngine | None = None

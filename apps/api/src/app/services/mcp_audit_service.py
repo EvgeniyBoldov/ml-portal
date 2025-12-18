@@ -5,14 +5,14 @@ Provides async logging of MCP tool calls, prompt requests, and LLM proxy usage.
 """
 from __future__ import annotations
 import time
-import logging
+from app.core.logging import get_logger
 from typing import Any, Dict, Optional
 from contextlib import asynccontextmanager
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.audit_log import AuditLog
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class MCPAuditService:

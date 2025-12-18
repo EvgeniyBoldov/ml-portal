@@ -11,11 +11,11 @@ from app.core.http.clients import LLMClientProtocol
 from app.repositories.factory import AsyncRepositoryFactory
 from app.services.chat_stream_service import ChatStreamService
 import uuid
-import logging
+from app.core.logging import get_logger
 import json
 
 router = APIRouter(tags=["chat"])
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 @router.get("/models")
 async def list_llm_models():

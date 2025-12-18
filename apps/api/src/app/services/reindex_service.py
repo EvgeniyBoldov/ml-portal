@@ -6,7 +6,7 @@ import enum
 from typing import Optional, Dict, Any, List, AsyncGenerator
 from uuid import UUID
 from datetime import datetime, timezone
-import logging
+from app.core.logging import get_logger
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update
@@ -16,7 +16,7 @@ from app.models.rag import RAGDocument, RAGChunk, DocumentScope, DocumentStatus
 from app.models.user import Users
 from app.core.rbac import RBACValidator
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class ReindexJobStatus(str, enum.Enum):

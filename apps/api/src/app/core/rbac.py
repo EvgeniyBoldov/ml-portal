@@ -5,12 +5,12 @@ from enum import Enum
 from typing import Optional, List, Dict, Any
 from dataclasses import dataclass
 from uuid import UUID
-import logging
+from app.core.logging import get_logger
 
 from app.models.user import Users
 from app.models.rag import DocumentScope
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class UserRole(str, Enum):

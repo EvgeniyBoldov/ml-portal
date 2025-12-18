@@ -1,5 +1,5 @@
 from __future__ import annotations
-import logging
+from app.core.logging import get_logger
 import uuid
 from typing import Dict, Any
 
@@ -11,7 +11,7 @@ from app.adapters.s3_client import s3_manager
 from app.storage.paths import get_document_prefix
 from app.workers.session_factory import get_worker_session
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @celery_app.task(

@@ -13,9 +13,9 @@ from app.core.cache import get_cache
 import os
 import subprocess
 from datetime import datetime
-import logging
+from app.core.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 router = APIRouter(tags=["health"])
 
 
@@ -102,7 +102,7 @@ def version_endpoint():
         )
         if result.returncode == 0:
             git_commit = result.stdout.strip()[:8]  # Short hash
-    except:
+    except Exception:
         pass
     
     # Try to get build time from environment

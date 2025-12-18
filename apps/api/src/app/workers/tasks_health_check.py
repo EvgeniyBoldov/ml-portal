@@ -5,7 +5,7 @@ Updates model status based on results.
 """
 from __future__ import annotations
 import asyncio
-import logging
+from app.core.logging import get_logger
 from datetime import datetime, timezone
 
 from celery import Task
@@ -15,7 +15,7 @@ from app.services.model_service import ModelService
 from app.services.model_health_checker import get_health_checker
 from app.models.model_registry import HealthStatus
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @celery_app.task(

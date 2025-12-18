@@ -1,5 +1,5 @@
 from __future__ import annotations
-import logging
+from app.core.logging import get_logger
 import uuid
 from typing import Optional
 
@@ -7,7 +7,7 @@ from app.repositories.factory import AsyncRepositoryFactory
 from app.services.rag_status_manager import RAGStatusManager, StageStatus
 from app.services.rag_event_publisher import RAGEventPublisher
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 async def notify_stage_error(source_id: str, tenant_id: str, stage: str, error: Exception) -> None:

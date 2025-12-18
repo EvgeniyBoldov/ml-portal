@@ -3,7 +3,7 @@ Worker helpers and utilities
 """
 import hashlib
 import json
-import logging
+from app.core.logging import get_logger
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime, timezone
 from uuid import UUID
@@ -11,7 +11,7 @@ from uuid import UUID
 from app.schemas.common import ChunkProfile, Step
 from app.storage.paths import get_idempotency_key, get_lock_key
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def generate_content_hash(content: str) -> str:

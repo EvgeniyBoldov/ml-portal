@@ -106,7 +106,7 @@ class HealthService:
             )
             if result.returncode == 0:
                 git_commit = result.stdout.strip()[:8]  # Short hash
-        except:
+        except Exception:
             pass
         
         # Try to get build time from environment

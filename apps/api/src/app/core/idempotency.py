@@ -7,9 +7,9 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from app.core.config import get_settings
 import redis
-import logging
+from app.core.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class IdempotencyMiddleware(BaseHTTPMiddleware):
     """Middleware for idempotency key handling"""
@@ -114,7 +114,7 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
             # Try to parse as JSON
             try:
                 content = json.loads(body.decode()) if body else {}
-            except:
+            except (json.JSONDecodeError, UnicodeDecodeError):
                 content = {"message": "Response cached but not JSON"}
             
             cache_data = {

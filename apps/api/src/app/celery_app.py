@@ -1,11 +1,12 @@
 from __future__ import annotations
-import os
-import logging
+from app.core.logging import get_logger
+from app.core.config import get_settings
 from celery import Celery
 from kombu import Queue
 
-BROKER_URL = os.getenv("CELERY_BROKER_URL") or "redis://redis:6379/0"
-RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND") or "redis://redis:6379/1"
+settings = get_settings()
+BROKER_URL = settings.CELERY_BROKER_URL
+RESULT_BACKEND = settings.CELERY_RESULT_BACKEND
 
 app = Celery(
     "backend",
@@ -118,7 +119,7 @@ app.conf.update(
 
 # RAG ingest tasks are now imported from tasks_rag_ingest module
 
-if os.getenv("BEAT") == "1":
+if settings.BEAT == 1:
     app.conf.beat_schedule = {
         "cleanup-old-documents-daily": {
             "task": "periodic_tasks.cleanup_old_documents_daily",

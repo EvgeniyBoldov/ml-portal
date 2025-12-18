@@ -3,7 +3,7 @@
 Metrics collection system for monitoring Celery queues and emb-gateway performance
 """
 import time
-import logging
+from app.core.logging import get_logger
 from typing import Dict, Any, Optional
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -13,7 +13,7 @@ from celery import Celery
 from celery.events.state import State
 from celery.events import EventReceiver
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 @dataclass
 class QueueMetrics:

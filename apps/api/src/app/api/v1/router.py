@@ -6,7 +6,7 @@ from app.api.v1.routers import health as health_router
 from app.api.v1.routers import analyze as analyze_router
 from app.api.v1.routers import artifacts as artifacts_router
 from app.api.v1.routers import chat as chat_router
-from app.api.v1.routers import rag as rag_router
+from app.api.v1.routers.rag import router as rag_router
 from app.api.v1.routers import users as users_router
 from app.api.v1.routers import rag_search as rag_search_router
 from app.api.v1.routers import tenants as tenants_router
@@ -48,8 +48,8 @@ api_v1.include_router(artifacts_router.router, prefix="/artifacts", tags=["artif
 # Chat endpoints
 api_v1.include_router(chat_router.router, prefix="/chats", tags=["chat"])
 
-# RAG endpoints
-api_v1.include_router(rag_router.router, prefix="/rag", tags=["rag"])
+# RAG endpoints (modular)
+api_v1.include_router(rag_router, prefix="/rag", tags=["rag"])
 
 # RAG search endpoints
 api_v1.include_router(rag_search_router.router, prefix="/rag", tags=["rag-search"])

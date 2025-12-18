@@ -4,7 +4,7 @@ API Keys management endpoints.
 Allows users to create, list, and revoke API keys for IDE plugins.
 """
 from __future__ import annotations
-import logging
+from app.core.logging import get_logger
 from typing import Optional, List
 from datetime import datetime
 from uuid import UUID
@@ -17,7 +17,7 @@ from app.api.deps import db_session, get_current_user, require_admin
 from app.core.security import UserCtx
 from app.services.api_key_service import APIKeyService
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 router = APIRouter()
 

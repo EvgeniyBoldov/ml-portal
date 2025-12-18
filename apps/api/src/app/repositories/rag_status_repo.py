@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import List, Optional, Dict, Any
 from uuid import UUID
 from datetime import datetime, timezone
-import logging
+from app.core.logging import get_logger
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, delete
@@ -16,7 +16,7 @@ from app.models.rag import RAGDocument
 from app.repositories.base import AsyncRepository
 
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class AsyncRAGStatusRepository(AsyncRepository):
