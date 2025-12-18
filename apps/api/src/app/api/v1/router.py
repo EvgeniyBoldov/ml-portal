@@ -14,7 +14,11 @@ from app.api.v1.routers import models as models_router
 from app.api.v1.routers import prompts as prompts_router
 from app.api.v1.routers import tools as tools_router
 from app.api.v1.routers import agents as agents_router
+from app.api.v1.routers import agent_runs as agent_runs_router
 from app.api.v1.routers import rag_status_stream as rag_status_router
+from app.api.v1.routers import api_keys as api_keys_router
+from app.api.v1.routers import audit_logs as audit_logs_router
+from app.api.mcp import router as mcp_router
 # from app.api.v1 import jobs as jobs_router  # .del - mock implementation
 # from api.v1.routers import auth as deprecated_auth_router  # kept for compat, not mounted
 
@@ -67,3 +71,15 @@ api_v1.include_router(tools_router.router, prefix="/admin/tools", tags=["tools"]
 
 # Agents endpoints
 api_v1.include_router(agents_router.router, prefix="/admin/agents", tags=["agents"])
+
+# Agent Runs endpoints (observability)
+api_v1.include_router(agent_runs_router.router, prefix="/admin/agent-runs", tags=["agent-runs"])
+
+# API Keys endpoints (for IDE plugin auth)
+api_v1.include_router(api_keys_router.router, prefix="/api-keys", tags=["api-keys"])
+
+# Audit Logs endpoints (admin observability)
+api_v1.include_router(audit_logs_router.router, prefix="/admin/audit-logs", tags=["audit-logs"])
+
+# MCP (Model Context Protocol) endpoint for IDE integration
+api_v1.include_router(mcp_router, tags=["mcp"])

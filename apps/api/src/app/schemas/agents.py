@@ -12,6 +12,7 @@ class AgentBase(BaseModel):
     tools: List[str] = Field(default=[], description="List of Tool slugs")
     generation_config: Optional[Dict[str, Any]] = {}
     is_active: bool = True
+    enable_logging: bool = Field(default=True, description="Enable detailed run logging")
 
 
 class AgentCreate(AgentBase):
@@ -25,6 +26,7 @@ class AgentUpdate(BaseModel):
     tools: Optional[List[str]] = None
     generation_config: Optional[Dict[str, Any]] = None
     is_active: Optional[bool] = None
+    enable_logging: Optional[bool] = None
 
 
 class AgentResponse(AgentBase):

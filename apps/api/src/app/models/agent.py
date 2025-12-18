@@ -40,6 +40,9 @@ class Agent(Base):
     
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     
+    # Enable detailed logging of agent runs for observability
+    enable_logging: Mapped[bool] = mapped_column(Boolean, default=True)
+    
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=datetime.utcnow, nullable=False
     )

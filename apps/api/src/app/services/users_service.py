@@ -19,12 +19,10 @@ class AsyncUsersService:
         if user is None or getattr(user, "is_active", True) is False:
             return None
 
-        # Verify password with bcrypt
-        try:
-            ok = bcrypt.checkpw(password.encode("utf-8"), user.password_hash.encode("utf-8"))
-        except Exception:
-            ok = False
-        return user if ok else None
+        # Verify password with argon2
+        if not verify_password(password, user.password_hash):
+            return None
+        return user
 
     async def get_user_by_id(self, user_id: str):
         """Get user by ID"""

@@ -24,7 +24,8 @@ export function AgentEditorPage() {
     system_prompt_slug: '',
     tools: [],
     generation_config: {},
-    is_active: true
+    is_active: true,
+    enable_logging: true,
   });
 
   // Load metadata for selectors
@@ -54,7 +55,8 @@ export function AgentEditorPage() {
         system_prompt_slug: existingAgent.system_prompt_slug,
         tools: existingAgent.tools,
         generation_config: existingAgent.generation_config || {},
-        is_active: existingAgent.is_active
+        is_active: existingAgent.is_active,
+        enable_logging: existingAgent.enable_logging,
       });
     }
   }, [existingAgent]);
@@ -176,27 +178,63 @@ export function AgentEditorPage() {
 
           <div className={styles.formGroup}>
             <label className={styles.label}>Доступные Инструменты</label>
-            <div className="border rounded-md p-4 bg-gray-50 max-h-[300px] overflow-y-auto">
-              {tools?.length === 0 && <div className="text-sm text-gray-500">Нет доступных инструментов</div>}
-              {tools?.map(tool => (
-                <div key={tool.slug} className="flex items-start gap-2 mb-2 last:mb-0">
-                  <input 
-                    type="checkbox"
-                    id={`tool-${tool.slug}`}
-                    checked={formData.tools.includes(tool.slug)}
-                    onChange={() => toggleTool(tool.slug)}
-                    className="mt-1"
-                  />
-                  <label htmlFor={`tool-${tool.slug}`} className="cursor-pointer">
-                    <div className="text-sm font-medium text-gray-900">{tool.name}</div>
-                    <div className="text-xs text-gray-500 font-mono">{tool.slug}</div>
-                  </label>
-                </div>
-              ))}
+            <div className={styles.toolsList}>
+              {tools?.length === 0 && (
+                <div className={styles.emptyState}>Нет доступных инструментов</div>
+              )}
+              {tools?.map(tool => {
+                const isSelected = formData.tools.includes(tool.slug);
+                return (
+                  <div 
+                    key={tool.slug} 
+                    className={`${styles.toolItem} ${isSelected ? styles.selected : ''}`}
+                    onClick={() => toggleTool(tool.slug)}
+                  >
+                    <input 
+                      type="checkbox"
+                      className={styles.toolCheckbox}
+                      checked={isSelected}
+                      onChange={() => toggleTool(tool.slug)}
+                      onClick={e => e.stopPropagation()}
+                    />
+                    <div className={styles.toolInfo}>
+                      <div className={styles.toolName}>{tool.name}</div>
+                      <div className={styles.toolSlug}>{tool.slug}</div>
+                      {tool.description && (
+                        <div className={styles.toolDescription}>{tool.description}</div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
             <p className={styles.description}>
               Выберите функции, которые агент может вызывать
             </p>
+          </div>
+
+          <div className={styles.formGroup}>
+            <label className={styles.label}>Настройки логирования</label>
+            <div className={styles.toolsList} style={{ maxHeight: 'auto', padding: '12px' }}>
+              <div 
+                className={`${styles.toolItem} ${formData.enable_logging ? styles.selected : ''}`}
+                onClick={() => setFormData({ ...formData, enable_logging: !formData.enable_logging })}
+              >
+                <input 
+                  type="checkbox"
+                  className={styles.toolCheckbox}
+                  checked={formData.enable_logging ?? true}
+                  onChange={() => setFormData({ ...formData, enable_logging: !formData.enable_logging })}
+                  onClick={e => e.stopPropagation()}
+                />
+                <div className={styles.toolInfo}>
+                  <div className={styles.toolName}>Логировать выполнение</div>
+                  <div className={styles.toolDescription}>
+                    Сохранять детальную информацию о каждом запуске агента (шаги, tool calls, результаты)
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
 
           <div className={styles.actions}>

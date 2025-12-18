@@ -30,6 +30,42 @@ def _db_url() -> str:
     return url
 
 
+async def _ensure_default_admin():
+    """Create default admin user if it doesn't exist"""
+    try:
+        from app.models.user import Users
+        from app.core.security import hash_password
+        from sqlalchemy import select
+        import uuid as uuid_module
+        
+        admin_login = os.getenv("DEFAULT_ADMIN_LOGIN", "admin")
+        admin_password = os.getenv("DEFAULT_ADMIN_PASSWORD", "admin123")
+        admin_email = os.getenv("DEFAULT_ADMIN_EMAIL", "admin@example.com")
+        
+        async with _session_factory() as session:
+            result = await session.execute(
+                select(Users).where(Users.login == admin_login)
+            )
+            existing = result.scalar_one_or_none()
+            
+            if not existing:
+                admin = Users(
+                    id=uuid_module.uuid4(),
+                    login=admin_login,
+                    email=admin_email,
+                    password_hash=hash_password(admin_password),
+                    role="admin",
+                    is_active=True
+                )
+                session.add(admin)
+                await session.commit()
+                logger.info(f"Created default admin user: {admin_login}")
+            else:
+                logger.info(f"Admin user '{admin_login}' already exists")
+    except Exception as e:
+        logger.error(f"Failed to create default admin: {e}")
+
+
 async def _register_embedding_models():
     """Register embedding models from database into EmbeddingServiceFactory"""
     try:
@@ -100,6 +136,9 @@ async def lifespan(app):
         )
         
         logger.info("Database connection initialized successfully")
+        
+        # Ensure default admin exists
+        await _ensure_default_admin()
         
         # Register embedding models from database
         await _register_embedding_models()

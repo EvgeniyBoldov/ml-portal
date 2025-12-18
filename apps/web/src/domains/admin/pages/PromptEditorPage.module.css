@@ -4,9 +4,10 @@
   display: flex;
   flex-direction: column;
   gap: 24px;
-  padding: 24px;
-  max-width: 1200px;
+  padding: 24px 32px;
+  max-width: 1600px;
   margin: 0 auto;
+  width: 100%;
 }
 
 .header {
@@ -25,11 +26,14 @@
   display: grid;
   grid-template-columns: 1fr;
   gap: 24px;
+  flex: 1;
+  min-height: 0;
 }
 
 @media (min-width: 1024px) {
   .grid {
     grid-template-columns: 1fr 1fr;
+    align-items: start;
   }
 }
 
@@ -37,11 +41,12 @@
   display: flex;
   flex-direction: column;
   gap: 16px;
-  padding: 24px;
+  padding: 24px 28px;
   background: var(--panel);
   border: 1px solid var(--color-border);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
+  min-width: 0;
 }
 
 .cardHeader {
@@ -135,5 +140,79 @@
   background: var(--danger-light);
   padding: 12px;
   border-radius: var(--radius);
+  font-size: 0.875rem;
+}
+
+/* Tools checkbox list */
+.toolsList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px;
+  background: var(--panel-alt);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.toolItem {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 12px;
+  background: var(--panel);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.toolItem:hover {
+  border-color: var(--primary);
+  background: var(--primary-light, rgba(99, 102, 241, 0.05));
+}
+
+.toolItem.selected {
+  border-color: var(--primary);
+  background: var(--primary-light, rgba(99, 102, 241, 0.1));
+}
+
+.toolCheckbox {
+  width: 18px;
+  height: 18px;
+  margin-top: 2px;
+  accent-color: var(--primary);
+  cursor: pointer;
+}
+
+.toolInfo {
+  flex: 1;
+  min-width: 0;
+}
+
+.toolName {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--color-text);
+}
+
+.toolSlug {
+  font-size: 0.75rem;
+  color: var(--muted);
+  font-family: monospace;
+}
+
+.toolDescription {
+  font-size: 0.75rem;
+  color: var(--muted);
+  margin-top: 4px;
+  line-height: 1.4;
+}
+
+.emptyState {
+  text-align: center;
+  padding: 24px;
+  color: var(--muted);
   font-size: 0.875rem;
 }

@@ -1,5 +1,6 @@
 # Import all models to ensure they are registered with SQLAlchemy
-from .base import Base
+from app.models.base import Base
+from app.models.audit_log import AuditLog
 from .user import Users
 from .tenant import Tenants, UserTenants
 from .chat import Chats, ChatMessages
@@ -11,9 +12,12 @@ from .events import EventOutbox
 from .prompt import Prompt
 from .tool import Tool
 from .agent import Agent
+from .agent_run import AgentRun, AgentRunStep
+from .api_key import APIKey
 
 __all__ = [
     "Base",
+    "AuditLog",
     "Users",
     "Tenants",
     "UserTenants",
@@ -32,4 +36,7 @@ __all__ = [
     "Prompt",
     "Tool",
     "Agent",
+    "AgentRun",
+    "AgentRunStep",
+    "APIKey",
 ]
