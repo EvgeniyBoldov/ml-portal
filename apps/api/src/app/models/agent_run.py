@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
 from sqlalchemy import String, Integer, Boolean, DateTime, Text, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID, JSONB
@@ -47,7 +47,7 @@ class AgentRun(Base):
     error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     
     started_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=datetime.utcnow, nullable=False
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
     )
     finished_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -95,7 +95,7 @@ class AgentRunStep(Base):
     duration_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=datetime.utcnow, nullable=False
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
     )
     
     # Relationship

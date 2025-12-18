@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
 from sqlalchemy import String, Boolean, DateTime, Text, Integer, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID, JSONB
@@ -48,12 +48,12 @@ class Prompt(Base):
     type: Mapped[str] = mapped_column(String(50), default="chat", nullable=False)  # chat, agent, task
     
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=datetime.utcnow, nullable=False
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), 
-        default=datetime.utcnow, 
-        onupdate=datetime.utcnow, 
+        default=lambda: datetime.now(timezone.utc), 
+        onupdate=lambda: datetime.now(timezone.utc), 
         nullable=False
     )
 

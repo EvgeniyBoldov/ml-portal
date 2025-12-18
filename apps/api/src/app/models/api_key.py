@@ -6,7 +6,7 @@ Provides secure API key management for MCP clients.
 import uuid
 import secrets
 import hashlib
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, List
 from sqlalchemy import String, DateTime, Text, Boolean, Index
 from sqlalchemy.dialects.postgresql import UUID, JSONB, ARRAY
@@ -76,7 +76,7 @@ class APIKey(Base):
     last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=datetime.utcnow, nullable=False
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
     )
     
     def __repr__(self):
@@ -129,7 +129,7 @@ class APIKey(Base):
         """Check if key is active and not expired."""
         if not self.is_active:
             return False
-        if self.expires_at and self.expires_at < datetime.utcnow():
+        if self.expires_at and self.expires_at < datetime.now(timezone.utc):
             return False
         return True
     
