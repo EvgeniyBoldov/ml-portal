@@ -1,5 +1,5 @@
 from __future__ import annotations
-import logging
+from app.core.logging import get_logger
 import uuid
 import json
 import time
@@ -25,7 +25,7 @@ from app.workers.session_factory import get_worker_session
 from app.workers.helpers import chunker, create_chunk_payload, generate_chunk_id
 from app.schemas.common import ChunkProfile
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @celery_app.task(

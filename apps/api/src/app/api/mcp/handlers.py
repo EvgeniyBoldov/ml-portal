@@ -5,7 +5,7 @@ Each handler implements a specific MCP method (initialize, tools/list, etc.)
 """
 from __future__ import annotations
 import json
-import logging
+from app.core.logging import get_logger
 from typing import Any, Dict, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -36,7 +36,7 @@ from app.agents.registry import ToolRegistry
 from app.agents.context import ToolContext
 from app.repositories.prompt_repository import PromptRepository
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Protocol version we support
 PROTOCOL_VERSION = "2024-11-05"

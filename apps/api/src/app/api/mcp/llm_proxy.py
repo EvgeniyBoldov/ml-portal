@@ -5,7 +5,7 @@ Provides OpenAI-compatible chat/completions endpoint that proxies to configured 
 This allows IDE plugins to use Portal as a unified LLM gateway.
 """
 from __future__ import annotations
-import logging
+from app.core.logging import get_logger
 import json
 from typing import Any, Dict, List, Optional, AsyncGenerator
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -17,7 +17,7 @@ from app.api.deps import db_session, get_current_user, get_llm_client
 from app.core.security import UserCtx
 from app.core.http.clients import LLMClientProtocol
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 router = APIRouter()
 

@@ -4,14 +4,14 @@ Redis cache and distributed locks implementation
 from __future__ import annotations
 import asyncio
 import json
-import logging
+from app.core.logging import get_logger
 import time
 import uuid
 from typing import Any, Dict, List, Optional, Union
 import redis.asyncio as redis
 from app.core.config import get_settings
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class RedisCache:
     """Redis cache with SCAN-based operations and index sets"""

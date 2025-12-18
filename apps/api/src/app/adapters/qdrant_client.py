@@ -3,7 +3,7 @@ Qdrant adapter with collection caching and explicit filter construction
 """
 from __future__ import annotations
 import asyncio
-import logging
+from app.core.logging import get_logger
 import time
 from typing import Dict, List, Any, Optional, Union
 from qdrant_client import QdrantClient
@@ -11,7 +11,7 @@ from qdrant_client.http import models
 from qdrant_client.http.models import Distance, VectorParams, PointStruct, Filter, FieldCondition, MatchValue
 from app.core.config import get_settings
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class QdrantAdapter:

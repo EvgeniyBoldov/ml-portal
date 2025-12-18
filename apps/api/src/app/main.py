@@ -3,8 +3,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1.router import api_v1
 from app.core.db import lifespan
 from app.core.health import health_checker
+from app.core.errors import install_exception_handlers
 
 app = FastAPI(title="ML-Portal API", lifespan=lifespan)
+
+# Install custom exception handlers for consistent error responses
+install_exception_handlers(app)
 
 # Add CORS middleware - strict origin for cookie-based auth
 from app.core.config import get_settings

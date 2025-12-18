@@ -3,7 +3,7 @@ S3/MinIO adapter with proper error handling and timeouts
 """
 from __future__ import annotations
 import asyncio
-import logging
+from app.core.logging import get_logger
 from dataclasses import dataclass
 from typing import Optional, Dict, Any, BinaryIO
 from botocore.exceptions import ClientError, NoCredentialsError
@@ -11,7 +11,7 @@ import boto3
 from botocore.config import Config
 from app.core.config import get_settings
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class S3Client:

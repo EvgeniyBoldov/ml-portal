@@ -3,10 +3,10 @@ import asyncio
 import time
 from typing import Any, Callable, Dict, Optional, TypeVar
 from enum import Enum
-import logging
+from app.core.logging import get_logger
 from app.core.config import get_settings
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 T = TypeVar('T')
 

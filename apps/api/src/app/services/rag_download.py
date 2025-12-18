@@ -3,14 +3,14 @@ RAG document download service
 """
 from typing import Tuple, Optional
 import uuid
-import logging
+from app.core.logging import get_logger
 
 from app.core.config import get_settings
 from app.repositories.factory import AsyncRepositoryFactory
 from app.core.security import UserCtx
 from app.models.rag import RAGDocument
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def resolve_minio_path(

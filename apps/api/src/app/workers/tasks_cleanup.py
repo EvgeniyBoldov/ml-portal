@@ -4,7 +4,7 @@ Cleanup tasks for retention policies.
 Handles automatic cleanup of old audit logs, agent runs, etc.
 """
 from __future__ import annotations
-import logging
+from app.core.logging import get_logger
 from datetime import datetime, timedelta
 
 from celery import shared_task
@@ -16,7 +16,7 @@ import os
 from app.models.audit_log import AuditLog
 from app.models.agent_run import AgentRun
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Retention periods (days)
 AUDIT_LOG_RETENTION_DAYS = 7

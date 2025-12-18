@@ -3,9 +3,9 @@ import json
 import yaml
 from typing import Dict, List, Any, Optional
 from pathlib import Path
-import logging
+from app.core.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class OpenAPIValidator:
     """Validator for OpenAPI specification"""

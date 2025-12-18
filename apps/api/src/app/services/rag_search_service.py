@@ -3,7 +3,7 @@ RAG Search Service - поиск по векторной базе данных
 """
 from __future__ import annotations
 import asyncio
-import logging
+from app.core.logging import get_logger
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 from collections import defaultdict
@@ -14,7 +14,7 @@ from app.adapters.embeddings import EmbeddingServiceFactory
 from app.repositories.rag_ingest_repos import AsyncChunkRepository
 from app.core.db import get_session_factory
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass

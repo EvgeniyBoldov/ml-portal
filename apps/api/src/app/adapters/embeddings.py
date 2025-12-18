@@ -10,12 +10,12 @@ Supports:
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 import os
-import logging
+from app.core.logging import get_logger
 import httpx
 from app.adapters.interfaces.embeddings import EmbeddingInterface, EmbeddingModelInfo
 from app.core.config import get_settings
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass

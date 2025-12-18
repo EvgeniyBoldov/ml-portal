@@ -4,11 +4,11 @@ LLM client implementation using OpenAI API (supports Groq and other OpenAI-compa
 from __future__ import annotations
 from typing import Any, AsyncIterator, Mapping, Optional
 import asyncio
-import logging
+from app.core.logging import get_logger
 from openai import AsyncOpenAI
 from app.core.config import get_settings
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class LLMClient:

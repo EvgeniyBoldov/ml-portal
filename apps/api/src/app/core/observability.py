@@ -1,7 +1,8 @@
 from __future__ import annotations
+import logging
 import time
 import uuid
-import logging
+from app.core.logging import get_logger
 from typing import Dict, Any, Optional
 from contextvars import ContextVar
 from fastapi import Request, Response

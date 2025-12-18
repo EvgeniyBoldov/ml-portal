@@ -5,7 +5,7 @@ Single endpoint that handles all MCP methods via JSON-RPC dispatch.
 Supports Streamable HTTP transport as per MCP spec.
 """
 from __future__ import annotations
-import logging
+from app.core.logging import get_logger
 import uuid
 from typing import Any, Dict, Optional, Union
 from fastapi import APIRouter, Depends, Request, Header
@@ -26,7 +26,7 @@ from app.services.mcp_audit_service import MCPAuditService
 from app.services.api_key_service import APIKeyService
 from app.models.api_key import APIKey
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/mcp", tags=["mcp"])
 

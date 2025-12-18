@@ -4,9 +4,9 @@ import json
 from typing import Any, AsyncGenerator, Dict, Optional, Callable
 from fastapi import HTTPException, status
 from fastapi.responses import StreamingResponse
-import logging
+from app.core.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 EVENT_META = "meta"
 EVENT_TOKEN = "token"

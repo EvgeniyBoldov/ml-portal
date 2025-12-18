@@ -3,13 +3,13 @@ RAG Search Tool - поиск по базе знаний
 """
 from __future__ import annotations
 from typing import Any, Dict, List, ClassVar
-import logging
+from app.core.logging import get_logger
 
 from app.agents.handlers.base import ToolHandler
 from app.agents.context import ToolContext, ToolResult
 from app.services.rag_search_service import RagSearchService, SearchResult
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class RagSearchTool(ToolHandler):

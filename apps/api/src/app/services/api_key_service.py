@@ -2,7 +2,7 @@
 API Key Service for managing IDE plugin authentication.
 """
 from __future__ import annotations
-import logging
+from app.core.logging import get_logger
 from datetime import datetime
 from typing import Optional, List, Tuple
 from uuid import UUID
@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.api_key import APIKey, hash_api_key
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class APIKeyService:

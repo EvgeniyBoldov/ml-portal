@@ -2,7 +2,7 @@
 RAG Search API endpoints
 """
 from __future__ import annotations
-import logging
+from app.core.logging import get_logger
 from typing import List, Optional
 from uuid import UUID
 
@@ -15,7 +15,7 @@ from app.services.rag_search_service import RagSearchService, SearchResult
 from app.repositories.rag_ingest_repos import AsyncEmbStatusRepository, AsyncSourceRepository
 from app.models.user import Users
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 router = APIRouter(tags=["rag-search"])
 

@@ -3,12 +3,12 @@ import asyncio
 import time
 from typing import Dict, Any, Optional
 from enum import Enum
-import logging
+from app.core.logging import get_logger
 from sqlalchemy import text
 from app.core.config import get_settings
 from app.core.resilience import resilience_manager
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class HealthStatus(Enum):
     HEALTHY = "healthy"
