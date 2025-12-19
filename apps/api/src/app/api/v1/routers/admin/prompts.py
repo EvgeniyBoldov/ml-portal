@@ -1,10 +1,10 @@
-from typing import Any, List
+from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_db, get_current_user
-from app.models.user import Users
+from app.api.deps import db_session, require_admin
+from app.core.security import UserCtx
 from app.schemas.prompts import (
     PromptCreate, 
     PromptResponse, 
@@ -22,11 +22,11 @@ async def list_prompts(
     skip: int = 0,
     limit: int = 100,
     type: str = Query(None, description="Filter by type (chat, agent, task)"),
-    db: AsyncSession = Depends(get_db),
-    current_user: Users = Depends(get_current_user),
+    db: AsyncSession = Depends(db_session),
+    _: UserCtx = Depends(require_admin),
 ):
     """
-    List all prompts (latest versions).
+    List all prompts (latest versions). Admin only.
     """
     service = PromptService(db)
     prompts, _ = await service.list_prompts(skip=skip, limit=limit, type_filter=type)
@@ -36,13 +36,12 @@ async def list_prompts(
 @router.post("", response_model=PromptResponse)
 async def create_prompt(
     prompt_in: PromptCreate,
-    db: AsyncSession = Depends(get_db),
-    current_user: Users = Depends(get_current_user),
+    db: AsyncSession = Depends(db_session),
+    _: UserCtx = Depends(require_admin),
 ):
     """
-    Create a new prompt or new version of existing prompt.
+    Create a new prompt or new version of existing prompt. Admin only.
     """
-    # TODO: Add RBAC check (only MLOps/Admin)
     service = PromptService(db)
     try:
         return await service.create_or_update(
@@ -61,11 +60,11 @@ async def create_prompt(
 @router.get("/{slug}", response_model=PromptResponse)
 async def get_prompt(
     slug: str,
-    db: AsyncSession = Depends(get_db),
-    current_user: Users = Depends(get_current_user),
+    db: AsyncSession = Depends(db_session),
+    _: UserCtx = Depends(require_admin),
 ):
     """
-    Get prompt by slug.
+    Get prompt by slug. Admin only.
     """
     service = PromptService(db)
     try:
@@ -78,11 +77,11 @@ async def get_prompt(
 async def render_prompt(
     slug: str,
     request: PromptRenderRequest,
-    db: AsyncSession = Depends(get_db),
-    current_user: Users = Depends(get_current_user),
+    db: AsyncSession = Depends(db_session),
+    _: UserCtx = Depends(require_admin),
 ):
     """
-    Render a prompt with variables (for testing/playground).
+    Render a prompt with variables (for testing/playground). Admin only.
     """
     service = PromptService(db)
     try:
@@ -98,11 +97,11 @@ async def render_prompt(
 async def preview_prompt_template(
     request: PromptCreate,
     variables: dict,
-    db: AsyncSession = Depends(get_db),
-    current_user: Users = Depends(get_current_user),
+    db: AsyncSession = Depends(db_session),
+    _: UserCtx = Depends(require_admin),
 ):
     """
-    Preview a template without saving it (for editor).
+    Preview a template without saving it (for editor). Admin only.
     """
     service = PromptService(db)
     try:

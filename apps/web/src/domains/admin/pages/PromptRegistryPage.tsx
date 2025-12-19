@@ -79,12 +79,6 @@ export function PromptRegistryPage() {
     staleTime: 60000,
   });
 
-  // TODO: Добавить deletePrompt в API когда будет готов бэкенд
-  // const deletePromptMutation = useMutation({
-  //   mutationFn: (slug: string) => promptsApi.delete(slug),
-  //   onSuccess: () => queryClient.invalidateQueries({ queryKey: qk.prompts.all() }),
-  // });
-
   const filteredPrompts = prompts?.filter(p => 
     p.name.toLowerCase().includes(q.toLowerCase()) || 
     p.slug.toLowerCase().includes(q.toLowerCase())

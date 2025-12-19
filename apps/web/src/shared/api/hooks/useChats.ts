@@ -18,7 +18,6 @@ export function useChats(searchQuery?: string) {
 
 /**
  * Hook for fetching chat messages
- * TODO: Backend doesn't have GET /chats/{id} for detail, using messages list
  */
 export function useChatMessages(chatId: string | undefined, limit = 50) {
   return useQuery({

@@ -4,7 +4,7 @@ Health and status endpoints for the API
 from __future__ import annotations
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.api.deps import get_db
+from app.api.deps import db_session
 from app.core.config import get_settings
 from app.core.db import health_check as db_health_check
 from app.adapters.s3_client import get_s3_client
@@ -29,7 +29,7 @@ def health_check_endpoint():
 
 
 @router.get("/readyz")
-async def readiness_check_endpoint(session: AsyncSession = Depends(get_db)):
+async def readiness_check_endpoint(session: AsyncSession = Depends(db_session)):
     """Readiness check endpoint - checks if service is ready to serve traffic"""
     try:
         dependencies = {}

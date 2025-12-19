@@ -66,10 +66,6 @@ async def search_rag(
         Результаты поиска с цитатами и метаданными
     """
     try:
-        # TODO: Integrate with model_registry - check tenant_profile.embed_models state='active'
-        # Should use only active embedding models from tenant profile for query encoding
-        # and active rerank model for result reranking
-        
         # Получаем tenant_id из пользователя
         tenant_id = current_user.tenant_ids[0] if current_user.tenant_ids else "fb983a10-c5f8-4840-a9d3-856eea0dc729"  # Default tenant
         

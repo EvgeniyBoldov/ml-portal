@@ -7,7 +7,7 @@ Create Date: 2025-12-13
 from alembic import op
 import sqlalchemy as sa
 
-revision = '0031'
+revision = '0031_remove_openai_embedding'
 down_revision = '0030'
 branch_labels = None
 depends_on = None

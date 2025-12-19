@@ -6,7 +6,6 @@ export interface RoundButtonAction {
   label: string;
   disabled?: boolean;
   onClick: () => void;
-  todo?: string;
 }
 
 export interface RoundButtonProps {
@@ -142,18 +141,16 @@ export default function RoundButton({
                   onClick={e => {
                     e.preventDefault();
                     e.stopPropagation();
-                    if (action.disabled && action.todo) {
-                      console.log(action.todo);
-                    } else if (!action.disabled) {
+                    if (!action.disabled) {
                       action.onClick();
+                      setDropdownOpen(false);
                     }
-                    setDropdownOpen(false);
                   }}
                   onMouseDown={e => {
                     e.preventDefault();
                     e.stopPropagation();
                   }}
-                  title={action.disabled ? action.todo : ''}
+                  title={action.label}
                 >
                   <span className={action.disabled ? styles.disabledText : ''}>
                     {action.label}

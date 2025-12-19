@@ -83,8 +83,8 @@ class AsyncTenantsRepository:
         return True
 
     async def get_tenants_by_model(self, model: str) -> List[Tenants]:
-        """Get tenants using a specific model as extra embedding"""
+        """Get tenants using a specific model as embedding"""
         result = await self.session.execute(
-            select(Tenants).where(Tenants.extra_embed_model == model)
+            select(Tenants).where(Tenants.embedding_model_alias == model)
         )
         return result.scalars().all()

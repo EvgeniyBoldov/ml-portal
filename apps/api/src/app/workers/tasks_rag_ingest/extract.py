@@ -121,7 +121,6 @@ def extract_document(self: Task, source_id: str, tenant_id: str) -> Dict[str, An
                     )
 
                     # 4. Extract Text
-                    # TODO: Refactor text_extractor to support structure-aware extraction
                     from app.services.text_extractor import extract_text
                     filename = source.meta.get('filename', '') or origin_key.split('/')[-1]
                     extract_result = extract_text(file_content, filename)

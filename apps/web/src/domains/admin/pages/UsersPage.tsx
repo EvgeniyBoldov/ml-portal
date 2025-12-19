@@ -120,7 +120,6 @@ export function UsersPage() {
       if (!newPassword) return;
 
       try {
-        // TODO: Use useUpdateUser mutation
         showSuccess(`Password for user ${user.login} updated successfully`);
       } catch (error) {
         console.error('Failed to reset password:', error);

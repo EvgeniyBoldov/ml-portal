@@ -17,9 +17,6 @@ app = Celery(
         "app.workers.tasks_rag_ingest",
         # Cleanup tasks for retention policies
         "app.workers.tasks_cleanup",
-        # Optional modules below may be added later; keep them out to avoid import errors
-        # "app.workers.tasks_reindex",
-        # "app.workers.tasks_maintenance",
     ],
     autodiscover_tasks=False,  # Отключаем автообнаружение задач
 )
@@ -74,14 +71,6 @@ app.conf.task_routes = {
     # Reindex tasks
     "app.workers.tasks_reindex.reindex_source": {"queue": "reindex.default", "priority": 2},
     "app.workers.tasks_reindex.reindex_by_model": {"queue": "reindex.default", "priority": 2},
-
-    # Maintenance tasks
-    "app.workers.tasks_maintenance.cleanup_old_documents_daily": {"queue": "maintenance.default", "priority": 1},
-    "app.workers.tasks_maintenance.system_health_check": {"queue": "chat_critical", "priority": 10},
-    "app.workers.tasks_maintenance.update_system_statistics": {"queue": "rag_low", "priority": 2},
-    "app.workers.tasks_maintenance.cleanup_temp_files": {"queue": "cleanup_low", "priority": 1},
-    "app.workers.tasks_maintenance.reindex_failed_documents": {"queue": "rag_low", "priority": 2},
-    "app.workers.tasks_maintenance.monitor_queue_health": {"queue": "chat_critical", "priority": 10},
 }
 
 app.conf.update(
@@ -121,18 +110,6 @@ app.conf.update(
 
 if settings.BEAT == 1:
     app.conf.beat_schedule = {
-        "cleanup-old-documents-daily": {
-            "task": "periodic_tasks.cleanup_old_documents_daily",
-            "schedule": 86400.0,  # 24 hours
-        },
-        "system-health-check": {
-            "task": "periodic_tasks.system_health_check",
-            "schedule": 300.0,  # 5 minutes
-        },
-        "update-system-statistics": {
-            "task": "periodic_tasks.update_system_statistics",
-            "schedule": 3600.0,  # 1 hour
-        },
         "models-health-check": {
             "task": "app.workers.tasks_health_check.health_check_all_models",
             "schedule": 300.0,  # 5 minutes

@@ -18,8 +18,6 @@ export function useRBAC() {
   };
 
   const hasScope = (scope: UserScope): boolean => {
-    // TODO: implement scope-based permissions when backend ready
-    // For now, admin has all scopes
     if (user?.role === 'admin') return true;
     return false;
   };

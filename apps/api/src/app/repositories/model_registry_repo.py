@@ -141,19 +141,6 @@ class AsyncModelRegistryRepository:
         )
         return result.scalars().first()
     
-    # Alias for backward compatibility
-    async def get_global_by_modality(self, modality: str) -> Optional[ModelRegistry]:
-        # Map old modality string to new ModelType
-        type_map = {
-            "text": ModelType.EMBEDDING,
-            "rerank": ModelType.RERANKER,
-            "llm": ModelType.LLM_CHAT
-        }
-        model_type = type_map.get(modality)
-        if not model_type:
-            return None
-        return await self.get_global_by_type(model_type)
-    
     async def count_total(self) -> int:
         """Get total count of models"""
         result = await self.session.execute(

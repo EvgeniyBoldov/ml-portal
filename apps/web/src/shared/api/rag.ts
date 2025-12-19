@@ -118,14 +118,6 @@ export async function getRagDocumentRaw(docId: string): Promise<StatusGraph> {
   return response;
 }
 
-/**
- * Legacy: fetch and adapt immediately
- * @deprecated Use getRagDocumentRaw + adaptStatusGraphToDocStatus in select instead
- */
-export async function getRagDocument(docId: string): Promise<DocStatus> {
-  const graph = await getRagDocumentRaw(docId);
-  return adaptStatusGraphToDocStatus(graph);
-}
 
 export async function uploadRagDocument(
   file: File,

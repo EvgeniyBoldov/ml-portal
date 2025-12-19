@@ -137,7 +137,6 @@ def chunk_document(self: Task, normalize_result: Dict[str, Any], tenant_id: str)
                         chunks_data = []
                     else:
                         # 4. Chunking
-                        # TODO: Get chunking preferences from Source metadata or Tenant config
                         profile = ChunkProfile.BY_TOKENS  # Default
                         chunk_size = 512
                         overlap = 50

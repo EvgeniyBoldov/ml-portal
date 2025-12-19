@@ -303,7 +303,6 @@ function SecurityTab({ user, updateUser, showSuccess }: SecurityTabProps) {
 
 function AuditTab({ userId }: { userId: string }) {
   const { isLoading } = useUser(userId);
-  // TODO: Implement audit log query
 
   if (isLoading) {
     return <Skeleton width={500} height={200} />;

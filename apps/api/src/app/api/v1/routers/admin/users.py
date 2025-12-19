@@ -75,10 +75,6 @@ async def create_user(
             ).model_dump()
         )
     
-    # For now, skip authentication to allow validation testing
-    # TODO: Add proper authentication after tests pass
-    current_user = None
-    
     repo = AsyncUsersRepository(session)
     service = AsyncUsersService(repo)
     

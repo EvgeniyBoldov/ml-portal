@@ -4,18 +4,16 @@ API v1 Router - combines all API routers.
 Structure:
 - /health - Health checks
 - /auth - Authentication (security.py)
-- /tenants - Tenant management
 - /chats - Chat endpoints
 - /rag - RAG module (documents, upload, download, lifecycle, status, search, stream)
 - /api-keys - API keys for IDE plugin
-- /admin/* - Admin endpoints (users, models, prompts, tools, agents, agent-runs, audit-logs)
+- /admin/* - Admin endpoints (users, tenants, models, prompts, tools, agents, agent-runs, audit-logs)
 - /mcp - Model Context Protocol for IDE integration
 """
 from fastapi import APIRouter
 
 from app.api.v1.routers import security as security_router
 from app.api.v1.routers import health as health_router
-from app.api.v1.routers import tenants as tenants_router
 from app.api.v1.routers import chat as chat_router
 from app.api.v1.routers import api_keys as api_keys_router
 from app.api.v1.routers.rag import router as rag_router
@@ -30,9 +28,6 @@ api_v1.include_router(health_router.router, tags=["health"])
 # Auth: mount exactly once at '/auth'
 api_v1.include_router(security_router.router, prefix="/auth", tags=["auth"])
 
-# Tenant endpoints
-api_v1.include_router(tenants_router.router, prefix="/tenants", tags=["tenants"])
-
 # Chat endpoints
 api_v1.include_router(chat_router.router, prefix="/chats", tags=["chat"])
 
@@ -42,7 +37,7 @@ api_v1.include_router(rag_router, prefix="/rag", tags=["rag"])
 # API Keys endpoints (for IDE plugin auth)
 api_v1.include_router(api_keys_router.router, prefix="/api-keys", tags=["api-keys"])
 
-# Admin endpoints (users, models, prompts, tools, agents, agent-runs, audit-logs)
+# Admin endpoints (users, tenants, models, prompts, tools, agents, agent-runs, audit-logs)
 api_v1.include_router(admin_router)
 
 # MCP (Model Context Protocol) endpoint for IDE integration

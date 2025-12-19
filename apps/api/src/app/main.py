@@ -2,20 +2,15 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1.router import api_v1
 from app.core.db import lifespan
-from app.core.health import health_checker
 from app.core.errors import install_exception_handlers
 
 app = FastAPI(title="ML-Portal API", lifespan=lifespan)
 
-# Install custom exception handlers for consistent error responses
 install_exception_handlers(app)
 
-# Add CORS middleware - strict origin for cookie-based auth
 from app.core.config import get_settings
 settings = get_settings()
 
-# Starlette forbids wildcard '*' when allow_credentials=True. Provide sane
-# defaults for local dev if CORS_ALLOW_ORIGINS is '*' or empty.
 if not getattr(settings, "CORS_ALLOW_ORIGINS", None) or settings.CORS_ALLOW_ORIGINS.strip() == "*":
     allowed_origins = [
         "http://localhost",
@@ -36,23 +31,6 @@ app.add_middleware(
 )
 
 
-@app.get("/healthz")
-async def healthz():
-    """Liveness probe - basic health check"""
-    return {"status": "healthy"}
-
-@app.get("/readyz")
-async def readyz():
-    """Readiness probe - check critical dependencies"""
-    health_result = await health_checker.check_critical()
-    return health_result
-
-@app.get("/health")
-async def health():
-    """Detailed health check with all services"""
-    health_result = await health_checker.check_all()
-    return health_result
-
 @app.get("/version")
 async def version():
     return {"version": "0.0.0", "build_time": "", "git_commit": ""}
@@ -67,5 +45,4 @@ async def metrics():
         media_type="text/plain; version=0.0.4"
     )
 
-# Versioned API
 app.include_router(api_v1, prefix="/api/v1")
