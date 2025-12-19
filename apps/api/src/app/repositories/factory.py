@@ -12,7 +12,6 @@ from app.repositories.chats_repo import AsyncChatsRepository, AsyncChatMessagesR
 from app.repositories.idempotency_repo import AsyncIdempotencyRepository
 from app.repositories.documents_repo import AsyncRAGDocumentsRepository, AsyncRAGChunksRepository
 from app.repositories.users_repo import AsyncUsersRepository
-from app.repositories.analyze_repo import AnalyzeRepo
 from app.repositories.rag_ingest_repos import AsyncSourceRepository, AsyncChunkRepository, AsyncEmbStatusRepository, AsyncModelRegistryRepository
 from app.repositories.rag_status_repo import AsyncRAGStatusRepository
 from app.repositories.tenants_repo import AsyncTenantsRepository
