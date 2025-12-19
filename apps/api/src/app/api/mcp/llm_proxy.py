@@ -66,7 +66,7 @@ class ChatCompletionResponse(BaseModel):
     usage: Optional[ChatCompletionUsage] = None
 
 
-@router.post("/chat/completions")
+@router.post("/chat/completions", response_model=None)
 async def chat_completions(
     request_body: ChatCompletionRequest,
     request: Request,

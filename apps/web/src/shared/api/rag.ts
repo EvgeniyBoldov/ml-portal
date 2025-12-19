@@ -16,7 +16,7 @@ export async function getRagDocuments(
   if (status) params.append('status', status);
   if (search) params.append('search', search);
 
-  const response = await apiRequest<RagDocumentsResponse>(`/rag?${params}`);
+  const response = await apiRequest<RagDocumentsResponse>(`/rag/documents?${params}`);
 
   // Валидация ответа
   if (!response || typeof response !== 'object') {

@@ -60,17 +60,17 @@ export const tenantApi = {
     if (params.is_active !== undefined)
       searchParams.set('is_active', String(params.is_active));
 
-    return apiRequest(`/tenants?${searchParams.toString()}`);
+    return apiRequest(`/admin/tenants?${searchParams.toString()}`);
   },
 
   // Get tenant by ID
   async getTenant(id: string): Promise<Tenant> {
-    return apiRequest(`/tenants/${id}`);
+    return apiRequest(`/admin/tenants/${id}`);
   },
 
   // Create tenant
   async createTenant(tenant: TenantCreate): Promise<Tenant> {
-    return apiRequest('/tenants', {
+    return apiRequest('/admin/tenants', {
       method: 'POST',
       body: JSON.stringify(tenant),
     });
@@ -78,7 +78,7 @@ export const tenantApi = {
 
   // Update tenant
   async updateTenant(id: string, tenant: TenantUpdate): Promise<Tenant> {
-    return apiRequest(`/tenants/${id}`, {
+    return apiRequest(`/admin/tenants/${id}`, {
       method: 'PUT',
       body: JSON.stringify(tenant),
     });
@@ -86,7 +86,7 @@ export const tenantApi = {
 
   // Delete tenant
   async deleteTenant(id: string): Promise<void> {
-    return apiRequest(`/tenants/${id}`, {
+    return apiRequest(`/admin/tenants/${id}`, {
       method: 'DELETE',
     });
   },

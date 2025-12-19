@@ -4,7 +4,7 @@ import { queryClient } from '@/shared/lib/query-client';
 import { ToastProvider } from '@/shared/ui/Toast';
 import { GlobalConfirmDialog } from './providers/GlobalConfirmDialog';
 import { AuthProvider } from './providers/AuthProvider';
-import { ErrorBoundary } from '@/shared/ui/ErrorBoundary';
+import ErrorBoundary from '@/shared/ui/ErrorBoundary';
 import { SSEProvider } from './providers/SSEProvider';
 import { ThemeProvider } from './providers/ThemeProvider';
 

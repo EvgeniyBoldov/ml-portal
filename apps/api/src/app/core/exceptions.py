@@ -4,3 +4,7 @@ class NotFoundException(Exception):
 
 class ValidationException(Exception):
     pass
+
+
+class DuplicateError(Exception):
+    pass

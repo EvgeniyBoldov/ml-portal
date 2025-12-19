@@ -16,7 +16,7 @@ from .stream import router as stream_router
 router = APIRouter(tags=["rag"])
 
 # Include all sub-routers
-router.include_router(documents_router)
+router.include_router(documents_router, prefix="/documents")
 router.include_router(upload_router)
 router.include_router(download_router)
 router.include_router(lifecycle_router)

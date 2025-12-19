@@ -18,7 +18,7 @@ from .rag_event_publisher import RAGEventPublisher, RAGEventSubscriber
 from .run_store import RunStore
 from .status_aggregator import calculate_aggregate_status
 from .tenants_service import AsyncTenantsService
-from .text_extractor import extract_text_from_file
+from .text_extractor import extract_text
 from .users_service import AsyncUsersService
 
 __all__ = [
@@ -40,6 +40,6 @@ __all__ = [
     "RunStore",
     "calculate_aggregate_status",
     "AsyncTenantsService",
-    "extract_text_from_file",
+    "extract_text",
     "AsyncUsersService",
 ]

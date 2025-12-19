@@ -8,7 +8,7 @@ import hashlib
 import uuid
 from datetime import datetime, timezone, timedelta
 
-from app.repositories.idempotency_repo import IdempotencyRepository
+from app.repositories.idempotency_repo import AsyncIdempotencyRepository
 from app.schemas.common import ProblemDetails
 from app.core.exceptions import DuplicateError
 
@@ -16,7 +16,7 @@ from app.core.exceptions import DuplicateError
 class IdempotencyService:
     """Service for handling idempotency keys and cached responses"""
     
-    def __init__(self, idempotency_repo: IdempotencyRepository):
+    def __init__(self, idempotency_repo: AsyncIdempotencyRepository):
         self.idempotency_repo = idempotency_repo
     
     def _compute_request_hash(

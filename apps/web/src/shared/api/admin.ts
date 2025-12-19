@@ -445,32 +445,22 @@ export const adminApi = {
 
   // Tenants
   async getTenants(): Promise<TenantListResponse> {
-    const response = await apiRequest<{ items?: Tenant[]; total?: number }>(
-      '/tenants'
-    );
-    // API возвращает {items: [...], total: N}, оборачиваем в правильный формат
-    return {
-      items: response.items || [],
-      total: response.total || 0,
-      page: 1,
-      size: response.items?.length || 0,
-      has_more: false,
-    };
+    return apiRequest(`/admin/tenants`);
   },
 
   async getTenant(id: string): Promise<Tenant> {
-    return apiRequest(`/tenants/${id}`);
+    return apiRequest(`/admin/tenants/${id}`);
   },
 
   async createTenant(data: TenantCreate): Promise<Tenant> {
-    return apiRequest('/tenants', {
+    return apiRequest('/admin/tenants', {
       method: 'POST',
       body: JSON.stringify(data),
     });
   },
 
   async updateTenant(id: string, data: TenantUpdate): Promise<Tenant> {
-    return apiRequest(`/tenants/${id}`, {
+    return apiRequest(`/admin/tenants/${id}`, {
       method: 'PUT',
       body: JSON.stringify(data),
     });
@@ -486,7 +476,7 @@ export const adminApi = {
     ocr: boolean;
     layout: boolean;
   }> {
-    return apiRequest(`/tenants/${id}/models/resolve`);
+    return apiRequest(`/admin/tenants/${id}/models/resolve`);
   },
 
   async getEmailSettings(): Promise<EmailSettings> {
