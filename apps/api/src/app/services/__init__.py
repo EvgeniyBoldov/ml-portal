@@ -10,7 +10,6 @@ from .prompt_service import PromptService
 from .tool_service import ToolService
 from .model_service import ModelService
 from .model_health_checker import ModelHealthChecker
-from .rag_ingest_service import RAGIngestService
 from .rag_search_service import RagSearchService
 from .rag_status_manager import RAGStatusManager
 from .rag_upload_service import RAGUploadService
@@ -31,7 +30,6 @@ __all__ = [
     "ToolService",
     "ModelService",
     "ModelHealthChecker",
-    "RAGIngestService",
     "RagSearchService",
     "RAGStatusManager",
     "RAGUploadService",

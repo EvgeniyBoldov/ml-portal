@@ -55,8 +55,27 @@ class QdrantVectorStore:
         await self._client.upsert(collection_name=collection, points=points)
 
     async def search(self, collection: str, query: Sequence[float], top_k: int = 5, filter: Mapping[str, Any] | qm.Filter | None = None) -> list[dict]:
-        rr = await self._client.search(collection_name=collection, query_vector=list(query), limit=top_k, query_filter=_dict_to_filter(filter) if not isinstance(filter, qm.Filter) else filter)
-        return [r.dict() for r in rr]
+        """Search vectors using query_points (qdrant-client >= 1.7.0)"""
+        query_filter = _dict_to_filter(filter) if not isinstance(filter, qm.Filter) else filter
+        
+        # Use query_points instead of deprecated search method
+        response = await self._client.query_points(
+            collection_name=collection,
+            query=list(query),
+            limit=top_k,
+            query_filter=query_filter,
+            with_payload=True,
+        )
+        
+        # Convert ScoredPoint objects to dicts
+        return [
+            {
+                "id": point.id,
+                "score": point.score,
+                "payload": point.payload or {},
+            }
+            for point in response.points
+        ]
 
     async def collection_exists(self, name: str) -> bool:
         """Check if collection exists in Qdrant"""

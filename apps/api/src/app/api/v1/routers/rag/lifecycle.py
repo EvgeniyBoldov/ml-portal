@@ -185,18 +185,11 @@ async def update_rag_document_scope(
             raise HTTPException(status_code=404, detail="Document not found")
         
         if scope == "global":
-            from app.core.rbac import RBACValidator
-            permission_check = RBACValidator.can_edit_global_docs(user)
-            if not permission_check.allowed:
+            # Only admins can change scope to global
+            if user.role != "admin":
                 raise HTTPException(
                     status_code=403, 
-                    detail=f"Cannot change scope to global: {permission_check.reason}"
-                )
-            
-            if document.user_id != user.id:
-                raise HTTPException(
-                    status_code=403,
-                    detail="You can only change scope of your own documents"
+                    detail="Only admins can change document scope to global"
                 )
         
         document.scope = DocumentScope(scope)

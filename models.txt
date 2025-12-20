@@ -1,9 +1,0 @@
-# Список моделей для локального скачивания
-# Формат: <repo>/<model>
-
-cross-encoder/ms-marco-MiniLM-L-6-v2
-sentence-transformers/all-MiniLM-L6-v2
-sentence-transformers/paraphrase-multilingual-mpnet-base-v2
-intfloat/multilingual-e5-base
-Qwen/Qwen3-8B-Base  
-BAAI/bge-m3

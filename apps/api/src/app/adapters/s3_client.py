@@ -278,7 +278,11 @@ class S3Client:
         key: str, 
         options: Optional['PresignOptions'] = None
     ) -> str:
-        """Generate presigned URL for object download/upload"""
+        """Generate presigned URL for object download/upload
+        
+        If S3_PUBLIC_ENDPOINT is configured, the internal endpoint in the URL
+        will be replaced with the public endpoint for browser access.
+        """
         try:
             client = self._get_client()
             opts = options or PresignOptions()
@@ -303,6 +307,25 @@ class S3Client:
                     ExpiresIn=opts.expires_in
                 )
             )
+            
+            # Replace internal endpoint with public endpoint if configured
+            public_endpoint = self._settings.S3_PUBLIC_ENDPOINT
+            if public_endpoint:
+                from urllib.parse import urlparse, urlunparse
+                internal_endpoint = self._settings.S3_ENDPOINT
+                
+                # Parse both URLs
+                internal_parsed = urlparse(internal_endpoint)
+                public_parsed = urlparse(public_endpoint)
+                url_parsed = urlparse(url)
+                
+                # Replace scheme and netloc with public endpoint
+                new_url = url_parsed._replace(
+                    scheme=public_parsed.scheme,
+                    netloc=public_parsed.netloc
+                )
+                url = urlunparse(new_url)
+                logger.debug(f"Replaced internal endpoint with public: {url}")
             
             return url
             

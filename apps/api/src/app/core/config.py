@@ -83,6 +83,7 @@ class Settings(BaseSettings):
 
     # S3/MinIO
     S3_ENDPOINT: str = Field(default="http://minio:9000")
+    S3_PUBLIC_ENDPOINT: str | None = Field(default=None, description="Public S3 endpoint for presigned URLs (e.g. https://files.localhost:8443). If not set, S3_ENDPOINT is used.")
     S3_ACCESS_KEY: str = Field(default="minioadmin")
     S3_SECRET_KEY: str = Field(default="minioadmin123")
     S3_SECURE: bool = Field(default=False)

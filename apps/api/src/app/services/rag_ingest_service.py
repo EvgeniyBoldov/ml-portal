@@ -8,13 +8,6 @@ from uuid import UUID
 from app.schemas.rag import IngestRequest, IngestResponse, IngestProgress
 from app.schemas.common import DocumentStatus, Step, ChunkProfile
 from app.repositories.factory import AsyncRepositoryFactory
-from app.workers.tasks_rag_ingest import (
-    extract_document,
-    normalize_document,
-    chunk_document,
-    embed_chunks_model,
-    index_model,
-)
 from celery import chain, group
 from app.core.logging import get_logger
 
@@ -77,6 +70,13 @@ class RAGIngestService:
         from celery import group, chord
         from app.services.rag_status_manager import RAGStatusManager
         from app.core.db import get_session_factory
+        from app.workers.tasks_rag_ingest import (
+            extract_document,
+            normalize_document,
+            chunk_document,
+            embed_chunks_model,
+            index_model,
+        )
         
         # Get tenant's embedding models
         session_factory = get_session_factory()
@@ -157,6 +157,13 @@ class RAGIngestService:
             # Get tenant models (same logic as start_ingest)
             from app.services.rag_status_manager import RAGStatusManager
             from app.core.db import get_session_factory
+            from app.workers.tasks_rag_ingest import (
+                extract_document,
+                normalize_document,
+                chunk_document,
+                embed_chunks_model,
+                index_model,
+            )
             session_factory = get_session_factory()
             async with session_factory() as session:
                 status_manager = RAGStatusManager(session, self.repo_factory)
@@ -177,6 +184,7 @@ class RAGIngestService:
             ]
             task = chain(extract_task, normalize_task, chunk_task, group(embedding_index_chains)).apply_async()
         elif step == Step.EMBED:
+            from app.workers.tasks_rag_ingest import embed_chunks_model
             if not model_alias:
                 raise ValueError("Model alias required for embed step")
             # Allow direct restart of embed: task will fetch chunks by source_id
@@ -224,6 +232,7 @@ class RAGIngestService:
         # Initialize status nodes for new model
         from app.services.rag_status_manager import RAGStatusManager
         from app.core.db import get_session_factory
+        from app.workers.tasks_rag_ingest import embed_chunks_model, index_model
         
         session_factory = get_session_factory()
         async with session_factory() as session:

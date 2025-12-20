@@ -243,28 +243,27 @@ class QdrantAdapter:
     
     async def _search_with_filter(self, collection_name: str, query_vector: List[float],
                                  top_k: int, search_filter: Optional[Filter]) -> List[Dict[str, Any]]:
-        """Internal search method with filter"""
+        """Internal search method with filter using query_points (qdrant-client >= 1.7.0)"""
         try:
             loop = asyncio.get_event_loop()
-            results = await loop.run_in_executor(
+            response = await loop.run_in_executor(
                 None,
-                lambda: self.client.search(
+                lambda: self.client.query_points(
                     collection_name=collection_name,
-                    query_vector=query_vector,
+                    query=query_vector,
                     limit=top_k,
                     query_filter=search_filter,
                     with_payload=True,
-                    with_vectors=False
                 )
             )
             
             return [
                 {
-                    'id': result.id,
-                    'score': result.score,
-                    'payload': result.payload or {}
+                    'id': point.id,
+                    'score': point.score,
+                    'payload': point.payload or {}
                 }
-                for result in results
+                for point in response.points
             ]
             
         except Exception as e:

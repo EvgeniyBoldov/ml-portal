@@ -132,7 +132,7 @@ async def stream_rag_status(
     )
 
 
-@router.get("/{document_id}/status")
+@router.get("/{document_id}")
 async def get_document_status(
     document_id: str,
     user: UserCtx = Depends(get_current_user),

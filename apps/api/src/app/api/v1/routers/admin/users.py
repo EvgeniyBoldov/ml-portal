@@ -171,7 +171,7 @@ async def get_user(
 async def update_user(
     user_id: str,
     user_data: dict,
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_uow),
     admin_user = Depends(require_admin),
 ):
     """Update user (admin only)"""
@@ -195,6 +195,7 @@ async def update_user(
             "id": updated_user.id,
             "login": updated_user.login,
             "email": updated_user.email,
+            "full_name": getattr(updated_user, "full_name", None),
             "role": updated_user.role,
             "is_active": getattr(updated_user, "is_active", True),
             "created_at": updated_user.created_at.isoformat() if getattr(updated_user, "created_at", None) else "",
@@ -213,7 +214,7 @@ async def update_user(
 @router.delete("/{user_id}")
 async def delete_user(
     user_id: str,
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_uow),
     admin_user = Depends(require_admin),
 ):
     """Delete user (admin only)"""

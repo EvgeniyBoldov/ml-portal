@@ -423,6 +423,11 @@
   cursor: pointer;
   transition: all 0.2s ease;
   color: var(--muted);
+  user-select: none;
+}
+
+.dropZone * {
+  pointer-events: none;
 }
 
 .dropZone:hover {

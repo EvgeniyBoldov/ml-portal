@@ -624,7 +624,18 @@ export default function RagPage() {
         <div className={styles.uploadContent}>
           <div
             className={styles.dropZone}
-            onClick={() => fileInputRef.current?.click()}
+            onClick={(e) => {
+              e.stopPropagation();
+              fileInputRef.current?.click();
+            }}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                fileInputRef.current?.click();
+              }
+            }}
           >
             <Icon name="upload" size={32} />
             <span>Нажмите или перетащите файлы</span>
@@ -641,6 +652,10 @@ export default function RagPage() {
             onChange={e => {
               const files = Array.from(e.target.files || []);
               setUploadFiles(prev => [...prev, ...files]);
+              // Reset input to allow selecting the same file again
+              if (e.target) {
+                e.target.value = '';
+              }
             }}
           />
 

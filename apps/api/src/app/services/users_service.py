@@ -1,10 +1,9 @@
 
 from __future__ import annotations
 from typing import Optional, List
-import bcrypt
 import uuid
 from app.repositories.users_repo import AsyncUsersRepository
-from app.core.security import verify_password
+from app.core.security import verify_password, hash_password
 
 class AsyncUsersService:
     def __init__(self, users_repo: AsyncUsersRepository):
@@ -42,8 +41,8 @@ class AsyncUsersService:
         if existing_user:
             raise ValueError("User with this email already exists")
         
-        # Hash password
-        password_hash = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+        # Hash password using argon2 (same as verify_password)
+        password_hash = hash_password(password)
         
         # Create user
         user = await self.users_repo.create(
@@ -86,11 +85,13 @@ class AsyncUsersService:
             user.role = user_data["role"]
         
         if "password" in user_data:
-            password_hash = bcrypt.hashpw(user_data["password"].encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
-            user.password_hash = password_hash
+            user.password_hash = hash_password(user_data["password"])
         
         if "is_active" in user_data:
             user.is_active = bool(user_data["is_active"])
+        
+        if "full_name" in user_data:
+            user.full_name = user_data["full_name"]
         
         # Flush changes to trigger onupdate
         await self.users_repo.session.flush()
