@@ -27,6 +27,7 @@ class SearchResult:
     page: int
     model_hits: List[Dict[str, Any]]  # [{"alias": "model1", "score": 0.8}]
     meta: Dict[str, Any]
+    source_name: str = ""  # Имя документа-источника
 
 
 class RagSearchService:
@@ -183,6 +184,9 @@ class RagSearchService:
             # Если реранкер выключен, просто берем топ-k по RRF
             final_results = merged_results[:k]
         
+        # Обогащаем результаты именами документов
+        await self._enrich_with_source_names(final_results, tenant_id)
+        
         logger.info(f"Returning {len(final_results)} final results")
         return final_results
 
@@ -332,6 +336,41 @@ class RagSearchService:
         final_results.sort(key=lambda x: x.score, reverse=True)
         
         return final_results
+    
+    async def _enrich_with_source_names(self, results: List[SearchResult], tenant_id: str):
+        """
+        Обогащает результаты именами документов-источников
+        """
+        if not results:
+            return
+        
+        # Собираем уникальные source_id
+        source_ids = list(set(r.source_id for r in results if r.source_id))
+        if not source_ids:
+            return
+        
+        from uuid import UUID
+        from sqlalchemy import select
+        from app.models.rag import RAGDocument
+        
+        session_factory = get_session_factory()
+        async with session_factory() as session:
+            try:
+                # Получаем имена документов
+                result = await session.execute(
+                    select(RAGDocument.id, RAGDocument.name).where(
+                        RAGDocument.id.in_([UUID(sid) for sid in source_ids])
+                    )
+                )
+                source_names = {str(row.id): row.name for row in result.fetchall()}
+                
+                # Обновляем результаты
+                for r in results:
+                    if r.source_id in source_names:
+                        r.source_name = source_names[r.source_id] or ""
+                        
+            except Exception as e:
+                logger.error(f"Error enriching source names: {e}")
     
     async def _enrich_with_texts(self, results: List[SearchResult], tenant_id: str):
         """

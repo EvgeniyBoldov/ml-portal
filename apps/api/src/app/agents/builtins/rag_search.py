@@ -111,6 +111,7 @@ class RagSearchTool(ToolHandler):
                 
                 sources.append({
                     "source_id": result.source_id,
+                    "source_name": result.source_name,
                     "chunk_id": result.chunk_id,
                     "text": result.text[:200],
                     "page": result.page,

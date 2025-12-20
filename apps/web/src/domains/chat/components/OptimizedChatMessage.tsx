@@ -16,9 +16,10 @@ const OptimizedChatMessage = memo<OptimizedChatMessageProps>(
     }, [message.content]);
 
     const messageTime = useMemo(() => {
-      return message.created_at
-        ? new Date(message.created_at).toLocaleTimeString()
-        : null;
+      if (!message.created_at) return null;
+      const date = new Date(message.created_at);
+      if (isNaN(date.getTime())) return null;
+      return date.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
     }, [message.created_at]);
 
     const messageClass = useMemo(() => {
