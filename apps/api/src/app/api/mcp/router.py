@@ -25,6 +25,7 @@ from app.core.security import UserCtx
 from app.services.mcp_audit_service import MCPAuditService
 from app.services.api_key_service import APIKeyService
 from app.models.api_key import APIKey
+from app.api.v1.routers.profile import verify_api_token
 
 logger = get_logger(__name__)
 
@@ -154,23 +155,37 @@ async def mcp_endpoint(
         tenant_id = str(current_user.tenant_ids[0]) if current_user.tenant_ids else "default"
         user_id = str(current_user.id)
     elif x_api_key:
-        # Verify API key
-        api_key_service = APIKeyService(session)
-        api_key_obj = await api_key_service.verify_key(x_api_key)
-        
-        if not api_key_obj:
-            response = make_error_response(
-                rpc_request.id,
-                MCPErrorCode.INTERNAL_ERROR,
-                "Invalid or expired API key",
+        # First try user API token (from /profile/tokens)
+        token_result = await verify_api_token(x_api_key)
+        if token_result:
+            user, api_token = token_result
+            # Get user's tenant
+            from app.models.tenant import UserTenants
+            from sqlalchemy import select
+            result = await session.execute(
+                select(UserTenants.tenant_id).where(UserTenants.user_id == user.id).limit(1)
             )
-            return JSONResponse(
-                content=response.model_dump(exclude_none=True),
-                status_code=200,
-            )
-        
-        tenant_id = str(api_key_obj.tenant_id) if api_key_obj.tenant_id else "default"
-        user_id = str(api_key_obj.user_id)
+            row = result.first()
+            tenant_id = str(row.tenant_id) if row else "default"
+            user_id = str(user.id)
+        else:
+            # Fall back to legacy API key
+            api_key_service = APIKeyService(session)
+            api_key_obj = await api_key_service.verify_key(x_api_key)
+            
+            if not api_key_obj:
+                response = make_error_response(
+                    rpc_request.id,
+                    MCPErrorCode.INTERNAL_ERROR,
+                    "Invalid or expired API key",
+                )
+                return JSONResponse(
+                    content=response.model_dump(exclude_none=True),
+                    status_code=200,
+                )
+            
+            tenant_id = str(api_key_obj.tenant_id) if api_key_obj.tenant_id else "default"
+            user_id = str(api_key_obj.user_id)
     elif rpc_request.method == "initialize":
         # Allow anonymous initialize for capability discovery
         tenant_id = "anonymous"

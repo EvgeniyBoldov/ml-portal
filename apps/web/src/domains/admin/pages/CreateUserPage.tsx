@@ -1,26 +1,34 @@
 /**
- * CreateUserPage - Create new user
+ * CreateUserPage - Создание нового пользователя
+ * Переделано в стиле проекта с красивыми компонентами
  */
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useCreateUser } from '@shared/api/hooks/useAdmin';
 import { useTenants } from '@shared/hooks/useTenants';
 import Button from '@shared/ui/Button';
 import Input from '@shared/ui/Input';
 import Select from '@shared/ui/Select';
+import Switch from '@shared/ui/Switch';
 import { useErrorToast, useSuccessToast } from '@shared/ui/Toast';
 import styles from './CreateUserPage.module.css';
+
+type UserRole = 'admin' | 'editor' | 'reader';
 
 interface FormData {
   login: string;
   email: string;
-  role: 'admin' | 'editor' | 'reader';
+  role: UserRole;
   is_active: boolean;
   password: string;
-  send_email: boolean;
-  require_password_change: boolean;
   tenant_id: string;
 }
+
+const ROLES: { value: UserRole; label: string; description: string }[] = [
+  { value: 'reader', label: 'Читатель', description: 'Только просмотр' },
+  { value: 'editor', label: 'Редактор', description: 'Просмотр и редактирование' },
+  { value: 'admin', label: 'Администратор', description: 'Полный доступ' },
+];
 
 export function CreateUserPage() {
   const navigate = useNavigate();
@@ -35,38 +43,64 @@ export function CreateUserPage() {
     role: 'reader',
     is_active: true,
     password: '',
-    send_email: true,
-    require_password_change: true,
-    tenant_id: tenants?.[0]?.id || '',
+    tenant_id: '',
   });
 
-  React.useEffect(() => {
-    if (tenants.length > 0) {
-      setFormData((prev: FormData) =>
-        prev.tenant_id ? prev : { ...prev, tenant_id: tenants[0]?.id || '' }
-      );
-    }
-  }, [tenants]);
+  const [errors, setErrors] = useState<Partial<Record<keyof FormData, string>>>({});
+  const [generatePassword, setGeneratePassword] = useState(false);
 
-  const [errors, setErrors] = useState<Partial<FormData>>({});
+  useEffect(() => {
+    if (tenants.length > 0 && !formData.tenant_id) {
+      setFormData(prev => ({ ...prev, tenant_id: tenants[0]?.id || '' }));
+    }
+  }, [tenants, formData.tenant_id]);
+
+  const generateRandomPassword = () => {
+    const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*';
+    let password = '';
+    for (let i = 0; i < 16; i++) {
+      password += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return password;
+  };
+
+  const handleGeneratePassword = () => {
+    const newPassword = generateRandomPassword();
+    setFormData(prev => ({ ...prev, password: newPassword }));
+    setGeneratePassword(true);
+  };
+
+  const validate = (): boolean => {
+    const newErrors: Partial<Record<keyof FormData, string>> = {};
+
+    if (!formData.login.trim()) {
+      newErrors.login = 'Логин обязателен';
+    } else if (formData.login.length < 3) {
+      newErrors.login = 'Минимум 3 символа';
+    }
+
+    if (formData.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email)) {
+      newErrors.email = 'Некорректный email';
+    }
+
+    if (!formData.password) {
+      newErrors.password = 'Пароль обязателен';
+    } else if (formData.password.length < 8) {
+      newErrors.password = 'Минимум 8 символов';
+    }
+
+    if (!formData.tenant_id) {
+      newErrors.tenant_id = 'Выберите тенант';
+    }
+
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
+  };
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
-    setErrors({});
-
-    // Validation
-    if (!formData.login) {
-      setErrors({ login: 'Login is required' });
-      return;
-    }
-    if (!formData.password) {
-      setErrors({ password: 'Password is required' });
-      return;
-    }
-    if (!formData.tenant_id) {
-      setErrors({ tenant_id: 'Tenant is required' });
-      return;
-    }
+    
+    if (!validate()) return;
 
     try {
       await createUser.mutateAsync({
@@ -75,166 +109,168 @@ export function CreateUserPage() {
         role: formData.role,
         is_active: formData.is_active,
         password: formData.password,
-        send_email: formData.send_email,
-        tenant_ids: formData.tenant_id ? [formData.tenant_id] : [],
+        tenant_ids: [formData.tenant_id],
       });
-      showSuccess('User created successfully');
+      showSuccess('Пользователь успешно создан');
       navigate('/admin/users');
     } catch {
-      showError('Failed to create user');
+      showError('Не удалось создать пользователя');
+    }
+  };
+
+  const updateField = <K extends keyof FormData>(field: K, value: FormData[K]) => {
+    setFormData(prev => ({ ...prev, [field]: value }));
+    if (errors[field]) {
+      setErrors(prev => ({ ...prev, [field]: undefined }));
     }
   };
 
   return (
-    <div className={styles.wrap}>
-      <div className={styles.card}>
-        <h1 className={styles.title}>Create User</h1>
-
-        <form onSubmit={handleSubmit} className={styles.form}>
-          <div className={styles.formGroup}>
-            <label>Login *</label>
-            <Input
-              value={formData.login}
-              onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
-                setFormData((prev: FormData) => ({
-                  ...prev,
-                  login: event.target.value,
-                }))
-              }
-              error={errors.login}
-            />
-          </div>
-
-          <div className={styles.formGroup}>
-            <label>Email</label>
-            <Input
-              type="email"
-              value={formData.email}
-              onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
-                setFormData((prev: FormData) => ({
-                  ...prev,
-                  email: event.target.value,
-                }))
-              }
-              error={errors.email}
-            />
-          </div>
-
-          <div className={styles.formGroup}>
-            <label>Role *</label>
-            <Select
-              value={formData.role}
-              onChange={(event: React.ChangeEvent<HTMLSelectElement>) =>
-                setFormData((prev: FormData) => ({
-                  ...prev,
-                  role: event.target.value as FormData['role'],
-                }))
-              }
-            >
-              <option value="reader">Reader</option>
-              <option value="editor">Editor</option>
-              <option value="admin">Admin</option>
-            </Select>
-          </div>
-
-          <div className={styles.formGroup}>
-            <label>Tenant *</label>
-            <Select
-              value={formData.tenant_id}
-              onChange={(event: React.ChangeEvent<HTMLSelectElement>) =>
-                setFormData((prev: FormData) => ({
-                  ...prev,
-                  tenant_id: event.target.value,
-                }))
-              }
-              error={errors.tenant_id}
-            >
-              <option value="">Select tenant</option>
-              {tenants.map((tenant: { id: string; name: string }) => (
-                <option key={tenant.id} value={tenant.id}>
-                  {tenant.name}
-                </option>
-              ))}
-            </Select>
-          </div>
-
-          <div className={styles.formGroup}>
-            <label>Password *</label>
-            <Input
-              type="password"
-              value={formData.password}
-              onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
-                setFormData((prev: FormData) => ({
-                  ...prev,
-                  password: event.target.value,
-                }))
-              }
-              error={errors.password}
-            />
-          </div>
-
-          <div className={styles.formGroup}>
-            <label>
-              <input
-                type="checkbox"
-                checked={formData.is_active}
-                onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
-                  setFormData((prev: FormData) => ({
-                    ...prev,
-                    is_active: event.target.checked,
-                  }))
-                }
-              />
-              Active
-            </label>
-          </div>
-
-          <div className={styles.formGroup}>
-            <label>
-              <input
-                type="checkbox"
-                checked={formData.send_email}
-                onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
-                  setFormData((prev: FormData) => ({
-                    ...prev,
-                    send_email: event.target.checked,
-                  }))
-                }
-              />
-              Send email
-            </label>
-          </div>
-
-          <div className={styles.formGroup}>
-            <label>
-              <input
-                type="checkbox"
-                checked={formData.require_password_change}
-                onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
-                  setFormData((prev: FormData) => ({
-                    ...prev,
-                    require_password_change: event.target.checked,
-                  }))
-                }
-              />
-              Require password change
-            </label>
-          </div>
-
-          <div className={styles.formActions}>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => navigate('/admin/users')}
-            >
-              Cancel
-            </Button>
-            <Button type="submit" disabled={createUser.isPending}>
-              {createUser.isPending ? 'Creating...' : 'Create User'}
-            </Button>
-          </div>
-        </form>
+    <div className={styles.page}>
+      <div className={styles.pageHeader}>
+        <h1 className={styles.pageTitle}>Создание пользователя</h1>
+        <p className={styles.pageDescription}>
+          Заполните информацию для создания нового пользователя системы
+        </p>
       </div>
+
+      <form onSubmit={handleSubmit} className={styles.form}>
+        {/* Основная информация */}
+        <section className={styles.formSection}>
+          <h2 className={styles.sectionTitle}>Основная информация</h2>
+          
+          <div className={styles.formGrid}>
+            <div className={styles.formGroup}>
+              <label className={`${styles.formLabel} ${styles.required}`}>Логин</label>
+              <Input
+                value={formData.login}
+                onChange={e => updateField('login', e.target.value)}
+                placeholder="username"
+                error={!!errors.login}
+                className={styles.formInput}
+              />
+              {errors.login && <span className={styles.formError}>{errors.login}</span>}
+            </div>
+
+            <div className={styles.formGroup}>
+              <label className={styles.formLabel}>Email</label>
+              <Input
+                type="email"
+                value={formData.email}
+                onChange={e => updateField('email', e.target.value)}
+                placeholder="user@example.com"
+                error={!!errors.email}
+                className={styles.formInput}
+              />
+              {errors.email && <span className={styles.formError}>{errors.email}</span>}
+            </div>
+
+            <div className={`${styles.formGroup} ${styles.fullWidth}`}>
+              <label className={`${styles.formLabel} ${styles.required}`}>Тенант</label>
+              <Select
+                value={formData.tenant_id}
+                onChange={e => updateField('tenant_id', e.target.value)}
+                className={styles.formSelect}
+              >
+                <option value="">Выберите тенант</option>
+                {tenants.map(tenant => (
+                  <option key={tenant.id} value={tenant.id}>
+                    {tenant.name}
+                  </option>
+                ))}
+              </Select>
+              {errors.tenant_id && <span className={styles.formError}>{errors.tenant_id}</span>}
+            </div>
+
+            <div className={`${styles.formGroup} ${styles.fullWidth}`}>
+              <Switch
+                checked={formData.is_active}
+                onChange={checked => updateField('is_active', checked)}
+                label="Активен"
+                description="Пользователь может входить в систему"
+              />
+            </div>
+          </div>
+        </section>
+
+        {/* Роль */}
+        <section className={styles.formSection}>
+          <h2 className={styles.sectionTitle}>Роль</h2>
+          
+          <div className={styles.roleGrid}>
+            {ROLES.map(role => (
+              <button
+                key={role.value}
+                type="button"
+                className={`${styles.roleCard} ${formData.role === role.value ? styles.roleCardActive : ''}`}
+                onClick={() => updateField('role', role.value)}
+              >
+                <span className={styles.roleLabel}>{role.label}</span>
+                <span className={styles.roleDescription}>{role.description}</span>
+                {formData.role === role.value && (
+                  <span className={styles.roleCheck}>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+                      <polyline points="20 6 9 17 4 12" />
+                    </svg>
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
+        </section>
+
+        {/* Безопасность */}
+        <section className={styles.formSection}>
+          <h2 className={styles.sectionTitle}>Безопасность</h2>
+          
+          <div className={styles.formGrid}>
+            <div className={`${styles.formGroup} ${styles.fullWidth}`}>
+              <label className={`${styles.formLabel} ${styles.required}`}>Пароль</label>
+              <div className={styles.passwordField}>
+                <Input
+                  type={generatePassword ? 'text' : 'password'}
+                  value={formData.password}
+                  onChange={e => {
+                    updateField('password', e.target.value);
+                    setGeneratePassword(false);
+                  }}
+                  placeholder="Минимум 8 символов"
+                  error={!!errors.password}
+                  className={styles.formInput}
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={handleGeneratePassword}
+                  className={styles.generateBtn}
+                >
+                  Сгенерировать
+                </Button>
+              </div>
+              {errors.password && <span className={styles.formError}>{errors.password}</span>}
+              {generatePassword && (
+                <span className={styles.formHelp}>
+                  Пароль сгенерирован. Скопируйте его перед сохранением.
+                </span>
+              )}
+            </div>
+          </div>
+        </section>
+
+        {/* Действия */}
+        <div className={styles.formActions}>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => navigate('/admin/users')}
+          >
+            Отмена
+          </Button>
+          <Button type="submit" disabled={createUser.isPending}>
+            {createUser.isPending ? 'Создание...' : 'Создать пользователя'}
+          </Button>
+        </div>
+      </form>
     </div>
   );
 }

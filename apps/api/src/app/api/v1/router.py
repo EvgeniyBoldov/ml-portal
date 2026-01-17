@@ -16,6 +16,7 @@ from app.api.v1.routers import security as security_router
 from app.api.v1.routers import health as health_router
 from app.api.v1.routers import chat as chat_router
 from app.api.v1.routers import api_keys as api_keys_router
+from app.api.v1.routers import profile as profile_router
 from app.api.v1.routers.rag import router as rag_router
 from app.api.v1.routers.admin import router as admin_router
 from app.api.mcp import router as mcp_router
@@ -36,6 +37,9 @@ api_v1.include_router(rag_router, prefix="/rag", tags=["rag"])
 
 # API Keys endpoints (for IDE plugin auth)
 api_v1.include_router(api_keys_router.router, prefix="/api-keys", tags=["api-keys"])
+
+# Profile endpoints (user profile and API tokens)
+api_v1.include_router(profile_router.router, tags=["profile"])
 
 # Admin endpoints (users, tenants, models, prompts, tools, agents, agent-runs, audit-logs)
 api_v1.include_router(admin_router)

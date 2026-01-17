@@ -11,6 +11,7 @@ const Login = lazy(() => import('@/domains/auth/pages/Login'));
 const GPTLayout = lazy(() => import('@/domains/gpt/pages/GPTLayout'));
 const ChatPage = lazy(() => import('@/domains/gpt/pages/ChatPage'));
 const RagPage = lazy(() => import('@/domains/rag/pages/RagPage'));
+const ProfilePage = lazy(() => import('@/domains/profile/pages/ProfilePage'));
 
 // Common pages
 const NotFound = lazy(() => import('@/domains/common/pages/NotFound'));
@@ -43,6 +44,7 @@ const withSuspense = (el: React.ReactNode) => (
 );
 
 const router = createBrowserRouter([
+  { path: '/', element: withSuspense(<Login />) },
   { path: '/login', element: withSuspense(<Login />) },
   {
     path: '/gpt',
@@ -51,6 +53,7 @@ const router = createBrowserRouter([
       { path: 'chat', element: withSuspense(<ChatPage />) },
       { path: 'chat/:chatId', element: withSuspense(<ChatPage />) },
       { path: 'rag', element: withSuspense(<RagPage />) },
+      { path: 'profile', element: withSuspense(<ProfilePage />) },
     ],
   },
   {

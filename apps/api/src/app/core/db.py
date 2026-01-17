@@ -31,9 +31,10 @@ def _db_url() -> str:
 
 
 async def _ensure_default_admin():
-    """Create default admin user if it doesn't exist"""
+    """Create default admin user if it doesn't exist and link to default tenant"""
     try:
         from app.models.user import Users
+        from app.models.tenant import Tenants, UserTenants
         from app.core.security import hash_password
         from sqlalchemy import select
         import uuid as uuid_module
@@ -43,12 +44,30 @@ async def _ensure_default_admin():
         admin_email = os.getenv("DEFAULT_ADMIN_EMAIL", "admin@example.com")
         
         async with _session_factory() as session:
+            # Get or create default tenant
+            tenant_result = await session.execute(
+                select(Tenants).where(Tenants.name == "default")
+            )
+            default_tenant = tenant_result.scalar_one_or_none()
+            
+            if not default_tenant:
+                default_tenant = Tenants(
+                    id=uuid_module.uuid4(),
+                    name="default",
+                    description="Default tenant",
+                    is_active=True
+                )
+                session.add(default_tenant)
+                await session.flush()
+                logger.info("Created default tenant")
+            
+            # Get or create admin user
             result = await session.execute(
                 select(Users).where(Users.login == admin_login)
             )
-            existing = result.scalar_one_or_none()
+            admin = result.scalar_one_or_none()
             
-            if not existing:
+            if not admin:
                 admin = Users(
                     id=uuid_module.uuid4(),
                     login=admin_login,
@@ -58,10 +77,30 @@ async def _ensure_default_admin():
                     is_active=True
                 )
                 session.add(admin)
-                await session.commit()
+                await session.flush()
                 logger.info(f"Created default admin user: {admin_login}")
-            else:
-                logger.info(f"Admin user '{admin_login}' already exists")
+            
+            # Ensure admin is linked to default tenant
+            link_result = await session.execute(
+                select(UserTenants).where(
+                    UserTenants.user_id == admin.id,
+                    UserTenants.tenant_id == default_tenant.id
+                )
+            )
+            existing_link = link_result.scalar_one_or_none()
+            
+            if not existing_link:
+                user_tenant = UserTenants(
+                    id=uuid_module.uuid4(),
+                    user_id=admin.id,
+                    tenant_id=default_tenant.id,
+                    is_default=True
+                )
+                session.add(user_tenant)
+                logger.info(f"Linked admin user to default tenant")
+            
+            await session.commit()
+            logger.info(f"Admin user '{admin_login}' ready with tenant '{default_tenant.name}'")
     except Exception as e:
         logger.error(f"Failed to create default admin: {e}")
 

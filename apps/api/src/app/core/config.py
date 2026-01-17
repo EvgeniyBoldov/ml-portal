@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     JWT_PUBLIC_KEY: str | None = Field(default=None, description="RSA public key (PEM format) for RS256")
     JWT_ISSUER: str = Field(default="urn:ml-portal")
     JWT_AUDIENCE: str = Field(default="urn:ml-portal:api")
-    JWT_ACCESS_TTL_MINUTES: int = Field(default=15)
+    JWT_ACCESS_TTL_MINUTES: int = Field(default=1440)  # 24 hours for comfortable work
     JWT_REFRESH_TTL_DAYS: int = Field(default=30)
     JWT_KID: str | None = Field(default=None, description="Key ID for key rotation")
 

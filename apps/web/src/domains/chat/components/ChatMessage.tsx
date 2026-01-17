@@ -37,8 +37,14 @@ function ChatMessageComponent({
 
   const formatTime = (dateStr?: string) => {
     if (!dateStr) return '';
-    const date = new Date(dateStr);
-    return date.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+    try {
+      // Handle both ISO strings and timestamps
+      const date = typeof dateStr === 'number' ? new Date(dateStr) : new Date(dateStr);
+      if (isNaN(date.getTime())) return '';
+      return date.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+    } catch {
+      return '';
+    }
   };
 
   const isUser = role === 'user';

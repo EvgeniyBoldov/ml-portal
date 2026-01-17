@@ -5,6 +5,7 @@ import { idempotencyKey } from '@/shared/lib/idempotency';
 export interface RequestOptions extends RequestInit {
   idempotent?: boolean;
   timeout?: number;
+  skipAuthRedirect?: boolean; // Skip redirect to login on 401
 }
 
 export type AuthTokens = {
@@ -17,6 +18,13 @@ export type AuthTokens = {
 // Refresh token is stored in httpOnly cookie by backend
 let _accessToken: string | null = null;
 let _refreshPromise: Promise<void> | null = null;
+
+// Callback for auth failure - will redirect to login
+let _onAuthFailure: (() => void) | null = null;
+
+export function setOnAuthFailure(callback: () => void) {
+  _onAuthFailure = callback;
+}
 
 const ensureAbortController = (): typeof globalThis.AbortController => {
   if (
@@ -87,7 +95,7 @@ export async function apiRequest<T>(
     const attempt = () =>
       fetch(url, { ...opts, headers, credentials: 'include', signal });
     let resp = await attempt();
-    if (resp.status === 401) {
+    if (resp.status === 401 && !opts.skipAuthRedirect) {
       try {
         // Try to refresh using httpOnly cookie
         await refreshAccessToken();
@@ -101,11 +109,21 @@ export async function apiRequest<T>(
           signal,
         });
       } catch {
-        // Refresh failed, let the error propagate
+        // Refresh failed - redirect to login
+        _accessToken = null;
+        if (_onAuthFailure) {
+          _onAuthFailure();
+        }
+        throw new ApiError(401, 'Session expired. Please login again.');
       }
     }
     if (!resp.ok) {
       const error = await toApiError(resp);
+      // If still 401 after refresh attempt, redirect to login
+      if (error.status === 401 && !opts.skipAuthRedirect && _onAuthFailure) {
+        _accessToken = null;
+        _onAuthFailure();
+      }
       throw error;
     }
     if (resp.status === 204) return undefined as unknown as T;
