@@ -1,7 +1,7 @@
 /**
  * Collections API client
  */
-import { http } from './http';
+import { apiRequest } from './http';
 
 export interface CollectionField {
   name: string;
@@ -76,41 +76,46 @@ export const collectionsApi = {
       searchParams.set('is_active', String(params.is_active));
 
     const query = searchParams.toString();
-    return http.get<CollectionListResponse>(
+    return apiRequest<CollectionListResponse>(
       `/admin/collections${query ? `?${query}` : ''}`
     );
   },
 
   getById: async (id: string): Promise<Collection> => {
-    return http.get<Collection>(`/admin/collections/${id}`);
+    return apiRequest<Collection>(`/admin/collections/${id}`);
   },
 
   create: async (data: CreateCollectionRequest): Promise<Collection> => {
-    return http.post<Collection>('/admin/collections', data);
+    return apiRequest<Collection>('/admin/collections', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
   },
 
   delete: async (
     id: string,
     dropTable = true
   ): Promise<{ status: string; id: string; table_dropped: boolean }> => {
-    return http.delete(`/admin/collections/${id}?drop_table=${dropTable}`);
+    return apiRequest(`/admin/collections/${id}?drop_table=${dropTable}`, {
+      method: 'DELETE',
+    });
   },
 
   getSchema: async (
     id: string
   ): Promise<{ slug: string; name: string; description: string; input_schema: object }> => {
-    return http.get(`/admin/collections/${id}/schema`);
+    return apiRequest(`/admin/collections/${id}/schema`);
   },
 
   // Tenant-level endpoints
   list: async (activeOnly = true): Promise<CollectionListResponse> => {
-    return http.get<CollectionListResponse>(
+    return apiRequest<CollectionListResponse>(
       `/collections?active_only=${activeOnly}`
     );
   },
 
   getBySlug: async (slug: string): Promise<Collection> => {
-    return http.get<Collection>(`/collections/${slug}`);
+    return apiRequest<Collection>(`/collections/${slug}`);
   },
 
   // CSV operations
@@ -127,9 +132,12 @@ export const collectionsApi = {
     if (options?.delimiter) params.set('delimiter', options.delimiter);
 
     const query = params.toString();
-    return http.upload<CSVPreviewResponse>(
+    return apiRequest<CSVPreviewResponse>(
       `/collections/${slug}/preview${query ? `?${query}` : ''}`,
-      formData
+      {
+        method: 'POST',
+        body: formData,
+      }
     );
   },
 
@@ -148,9 +156,12 @@ export const collectionsApi = {
       params.set('skip_errors', String(options.skip_errors));
 
     const query = params.toString();
-    return http.upload<CSVUploadResponse>(
+    return apiRequest<CSVUploadResponse>(
       `/collections/${slug}/upload${query ? `?${query}` : ''}`,
-      formData
+      {
+        method: 'POST',
+        body: formData,
+      }
     );
   },
 
@@ -164,7 +175,7 @@ export const collectionsApi = {
     if (params?.search) searchParams.set('search', params.search);
 
     const query = searchParams.toString();
-    return http.get(`/collections/${slug}/data${query ? `?${query}` : ''}`);
+    return apiRequest(`/collections/${slug}/data${query ? `?${query}` : ''}`);
   },
 
   deleteRows: async (
@@ -173,7 +184,9 @@ export const collectionsApi = {
   ): Promise<{ deleted: number; ids: number[] }> => {
     const params = new URLSearchParams();
     ids.forEach(id => params.append('ids', String(id)));
-    return http.delete(`/collections/${slug}/data?${params.toString()}`);
+    return apiRequest(`/collections/${slug}/data?${params.toString()}`, {
+      method: 'DELETE',
+    });
   },
 
   downloadTemplate: (slug: string): string => {
