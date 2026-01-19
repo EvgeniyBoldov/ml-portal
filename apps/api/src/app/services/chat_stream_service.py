@@ -36,7 +36,14 @@ class ChatStreamService:
     - Message persistence (user and assistant)
     - Context loading
     - Delegating to AgentRuntime for actual agent execution
+    - Auto-generating chat titles
     """
+    
+    TITLE_GENERATION_PROMPT = """Generate a short, descriptive title (3-6 words) for a chat that starts with this message. 
+The title should capture the main topic or intent. Reply with ONLY the title, nothing else.
+Language: use the same language as the user message.
+
+User message: {message}"""
     
     def __init__(
         self,
@@ -91,6 +98,36 @@ class ChatStreamService:
             })
         
         return context
+    
+    async def generate_chat_title(self, chat_id: str, first_message: str) -> Optional[str]:
+        """Generate a title for the chat based on the first message"""
+        try:
+            prompt = self.TITLE_GENERATION_PROMPT.format(message=first_message[:500])
+            
+            response = await self.llm_client.chat(
+                messages=[{"role": "user", "content": prompt}],
+                model=None,  # Use default model
+                stream=False,
+                max_tokens=50,
+                temperature=0.3,
+            )
+            
+            title = response.get("content", "").strip()
+            # Clean up title - remove quotes if present
+            title = title.strip('"\'')
+            
+            if title and len(title) > 2:
+                # Update chat name
+                chat = await self.chats_repo.get_chat_by_id(chat_id)
+                if chat:
+                    chat.name = title[:100]  # Limit to 100 chars
+                    await self.session.flush()
+                    await self.session.commit()
+                    logger.info(f"Generated chat title: {title}")
+                    return title
+        except Exception as e:
+            logger.warning(f"Failed to generate chat title: {e}")
+        return None
     
     async def check_idempotency(
         self,
@@ -191,8 +228,9 @@ class ChatStreamService:
             await self.session.commit()
             
             user_message_id = str(user_message.id)
+            user_message_created_at = user_message.created_at.isoformat() if user_message.created_at else None
             logger.info(f"User message created: {user_message_id}")
-            yield {"type": "user_message", "message_id": user_message_id}
+            yield {"type": "user_message", "message_id": user_message_id, "created_at": user_message_created_at}
             
             # 5. Load agent profile
             yield {"type": "status", "stage": "loading_agent"}
@@ -209,6 +247,13 @@ class ChatStreamService:
             yield {"type": "status", "stage": "loading_context"}
             context = await self.load_chat_context(chat_id, limit=20)
             llm_messages = context + [{"role": "user", "content": content}]
+            
+            # 6.1. Auto-generate chat title if this is the first message
+            is_first_message = len(context) <= 1  # Only the user message we just added
+            if is_first_message and chat.name in (None, "", "New Chat", "Новый чат"):
+                generated_title = await self.generate_chat_title(chat_id, content)
+                if generated_title:
+                    yield {"type": "chat_title", "title": generated_title}
             
             # 7. Create tool context
             tool_ctx = ToolContext(
@@ -263,6 +308,7 @@ class ChatStreamService:
                 await self.session.commit()
                 
                 assistant_message_id = str(assistant_message.id)
+                assistant_message_created_at = assistant_message.created_at.isoformat() if assistant_message.created_at else None
                 logger.info(f"Assistant message saved: {assistant_message_id}")
                 
                 # 10. Store idempotency
@@ -276,6 +322,7 @@ class ChatStreamService:
                 yield {
                     "type": "final", 
                     "message_id": assistant_message_id,
+                    "created_at": assistant_message_created_at,
                     "sources": rag_sources
                 }
                 yield {"type": "status", "stage": "completed"}
