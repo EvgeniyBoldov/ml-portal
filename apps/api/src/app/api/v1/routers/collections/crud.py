@@ -50,13 +50,26 @@ async def list_collections(
     user: UserCtx = Depends(get_current_user),
     repo_factory: AsyncRepositoryFactory = Depends(get_async_repository_factory),
 ):
-    """List all collections for the current tenant"""
-    tenant_id = repo_factory.tenant_id
-    if not tenant_id:
-        raise HTTPException(status_code=400, detail="User has no tenant assigned")
-
+    """List all collections for the current tenant (or all if admin)"""
     service = CollectionService(session)
-    collections = await service.list_collections(tenant_id, active_only=active_only)
+    
+    # Admin sees all collections, regular users see only their tenant's collections
+    if user.role == "admin":
+        from sqlalchemy.future import select
+        from app.models.collection import Collection
+        
+        query = select(Collection)
+        if active_only:
+            query = query.where(Collection.is_active == True)
+        query = query.order_by(Collection.created_at.desc())
+        
+        result = await session.execute(query)
+        collections = list(result.scalars().all())
+    else:
+        tenant_id = repo_factory.tenant_id
+        if not tenant_id:
+            raise HTTPException(status_code=400, detail="User has no tenant assigned")
+        collections = await service.list_collections(tenant_id, active_only=active_only)
 
     items = [
         CollectionResponse(
@@ -84,13 +97,22 @@ async def get_collection(
     user: UserCtx = Depends(get_current_user),
     repo_factory: AsyncRepositoryFactory = Depends(get_async_repository_factory),
 ):
-    """Get a collection by slug"""
-    tenant_id = repo_factory.tenant_id
-    if not tenant_id:
-        raise HTTPException(status_code=400, detail="User has no tenant assigned")
-
+    """Get a collection by slug (admin sees all, users see only their tenant's)"""
     service = CollectionService(session)
-    collection = await service.get_by_slug(tenant_id, slug)
+    
+    # Admin can access any collection by slug, regular users only their tenant's
+    if user.role == "admin":
+        from sqlalchemy.future import select
+        from app.models.collection import Collection
+        
+        query = select(Collection).where(Collection.slug == slug)
+        result = await session.execute(query)
+        collection = result.scalar_one_or_none()
+    else:
+        tenant_id = repo_factory.tenant_id
+        if not tenant_id:
+            raise HTTPException(status_code=400, detail="User has no tenant assigned")
+        collection = await service.get_by_slug(tenant_id, slug)
 
     if not collection:
         raise HTTPException(status_code=404, detail=f"Collection '{slug}' not found")

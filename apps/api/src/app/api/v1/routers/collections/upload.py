@@ -170,12 +170,21 @@ async def get_collection_data(
     repo_factory: AsyncRepositoryFactory = Depends(get_async_repository_factory),
 ):
     """Get data from collection with pagination and search"""
-    tenant_id = repo_factory.tenant_id
-    if not tenant_id:
-        raise HTTPException(status_code=400, detail="User has no tenant assigned")
-
     service = CollectionService(session)
-    collection = await service.get_by_slug(tenant_id, slug)
+    
+    # Admin can access any collection, regular users only their tenant's
+    if user.role == "admin":
+        from sqlalchemy.future import select
+        from app.models.collection import Collection
+        
+        query = select(Collection).where(Collection.slug == slug)
+        result = await session.execute(query)
+        collection = result.scalar_one_or_none()
+    else:
+        tenant_id = repo_factory.tenant_id
+        if not tenant_id:
+            raise HTTPException(status_code=400, detail="User has no tenant assigned")
+        collection = await service.get_by_slug(tenant_id, slug)
 
     if not collection:
         raise HTTPException(status_code=404, detail=f"Collection '{slug}' not found")
@@ -206,13 +215,22 @@ async def delete_collection_rows(
     user: UserCtx = Depends(get_current_user),
     repo_factory: AsyncRepositoryFactory = Depends(get_async_repository_factory),
 ):
-    """Delete rows from collection by IDs"""
-    tenant_id = repo_factory.tenant_id
-    if not tenant_id:
-        raise HTTPException(status_code=400, detail="User has no tenant assigned")
-
+    """Delete rows from collection by IDs (admin can delete from any collection)"""
     service = CollectionService(session)
-    collection = await service.get_by_slug(tenant_id, slug)
+    
+    # Admin can delete from any collection, regular users only their tenant's
+    if user.role == "admin":
+        from sqlalchemy.future import select
+        from app.models.collection import Collection
+        
+        query = select(Collection).where(Collection.slug == slug)
+        result = await session.execute(query)
+        collection = result.scalar_one_or_none()
+    else:
+        tenant_id = repo_factory.tenant_id
+        if not tenant_id:
+            raise HTTPException(status_code=400, detail="User has no tenant assigned")
+        collection = await service.get_by_slug(tenant_id, slug)
 
     if not collection:
         raise HTTPException(status_code=404, detail=f"Collection '{slug}' not found")

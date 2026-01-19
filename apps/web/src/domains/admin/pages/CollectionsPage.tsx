@@ -13,6 +13,7 @@ import { ActionsButton } from '@shared/ui/ActionsButton';
 import { useAppStore } from '@app/store/app.store';
 import Alert from '@shared/ui/Alert';
 import { collectionsApi, type Collection } from '@shared/api/collections';
+import { tenantApi } from '@shared/api/admin';
 import styles from './CollectionsPage.module.css';
 
 export function CollectionsPage() {
@@ -27,6 +28,18 @@ export function CollectionsPage() {
     queryKey: ['admin', 'collections'],
     queryFn: () => collectionsApi.listAll({ size: 100 }),
   });
+
+  const { data: tenantsData } = useQuery({
+    queryKey: ['admin', 'tenants'],
+    queryFn: () => tenantApi.list({ page: 1, size: 100 }),
+  });
+
+  const tenants = tenantsData?.items ?? [];
+  const getTenantName = (tenantId?: string) => {
+    if (!tenantId) return '—';
+    const tenant = tenants.find(t => t.id === tenantId);
+    return tenant?.name || tenantId.slice(0, 8);
+  };
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => collectionsApi.delete(id, true),
@@ -118,6 +131,7 @@ export function CollectionsPage() {
               <tr>
                 <th>SLUG</th>
                 <th>NAME</th>
+                <th>TENANT</th>
                 <th>TYPE</th>
                 <th>FIELDS</th>
                 <th>ROWS</th>
@@ -132,6 +146,7 @@ export function CollectionsPage() {
                   <tr key={i}>
                     <td><Skeleton width={100} /></td>
                     <td><Skeleton width={150} /></td>
+                    <td><Skeleton width={100} /></td>
                     <td><Skeleton width={60} /></td>
                     <td><Skeleton width={120} /></td>
                     <td><Skeleton width={60} /></td>
@@ -142,7 +157,7 @@ export function CollectionsPage() {
                 ))
               ) : filteredCollections.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className={styles.emptyState}>
+                  <td colSpan={9} className={styles.emptyState}>
                     No collections found
                   </td>
                 </tr>
@@ -153,6 +168,11 @@ export function CollectionsPage() {
                       <span className={styles.slug}>{collection.slug}</span>
                     </td>
                     <td>{collection.name}</td>
+                    <td>
+                      <span className={styles.tenantName}>
+                        {getTenantName(collection.tenant_id)}
+                      </span>
+                    </td>
                     <td>
                       <Badge
                         tone={collection.type === 'sql' ? 'info' : 'warning'}

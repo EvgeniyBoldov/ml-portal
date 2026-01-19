@@ -81,9 +81,14 @@
 }
 
 .slug {
-  font-family: var(--font-mono);
-  font-size: 0.85rem;
-  color: var(--color-primary);
+  font-family: 'Monaco', 'Menlo', monospace;
+  font-size: 0.875rem;
+  color: var(--color-text-secondary);
+}
+
+.tenantName {
+  font-size: 0.875rem;
+  color: var(--color-text);
 }
 
 .fieldsList {

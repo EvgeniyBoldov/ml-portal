@@ -37,6 +37,7 @@ const AgentEditorPage = lazy(() => import('@/domains/admin/pages/AgentEditorPage
 const AgentRunsPage = lazy(() => import('@/domains/admin/pages/AgentRunsPage').then(m => ({ default: m.AgentRunsPage })));
 const CollectionsPage = lazy(() => import('@/domains/admin/pages/CollectionsPage'));
 const CreateCollectionPage = lazy(() => import('@/domains/admin/pages/CreateCollectionPage'));
+const ViewCollectionPage = lazy(() => import('@/domains/admin/pages/ViewCollectionPage'));
 
 // Collections pages (user-facing)
 const CollectionsListPage = lazy(() => import('@/domains/collections/pages/CollectionsListPage'));
@@ -95,6 +96,7 @@ const router = createBrowserRouter([
       { path: 'agent-runs', element: withSuspense(<AgentRunsPage />) },
       { path: 'collections', element: withSuspense(<CollectionsPage />) },
       { path: 'collections/new', element: withSuspense(<CreateCollectionPage />) },
+      { path: 'collections/:id', element: withSuspense(<ViewCollectionPage />) },
       { path: 'settings/email', element: withSuspense(<EmailSettingsPage />) },
     ],
   },
