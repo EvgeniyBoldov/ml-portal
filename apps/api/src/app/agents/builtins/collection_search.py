@@ -126,8 +126,7 @@ class CollectionSearchTool(ToolHandler):
         """
         Выполнить поиск по коллекции.
         """
-        from sqlalchemy.ext.asyncio import AsyncSession
-        from app.core.database import get_async_session
+        from app.core.db import get_session_factory
         from app.services.collection_service import CollectionService
         
         collection_slug = args.get("collection_slug")
@@ -142,7 +141,8 @@ class CollectionSearchTool(ToolHandler):
         )
         
         try:
-            async with get_async_session() as session:
+            session_factory = get_session_factory()
+            async with session_factory() as session:
                 service = CollectionService(session)
                 
                 collection = await service.get_by_slug(ctx.tenant_id, collection_slug)
