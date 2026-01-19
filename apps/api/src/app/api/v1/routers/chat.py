@@ -64,6 +64,8 @@ async def list_chat_agents(
                 "name": agent.name,
                 "description": agent.description,
                 "has_rag": "rag.search" in (agent.tools or []),
+                "has_collections": "collection.search" in (agent.tools or []),
+                "tools": agent.tools or [],
             }
             for agent in agents
             if agent.is_active
