@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useCallback, ReactNode } from 'react';
 import { useChats, useChatMessages, useSendMessage } from '@shared/api/hooks/useChats';
+import { useQueryClient } from '@tanstack/react-query';
 
 interface Message {
   id: string;
@@ -43,6 +44,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
   const { data: chats } = useChats();
   const sendMessageMutation = useSendMessage();
+  const queryClient = useQueryClient();
 
   const loadMessages = useCallback(async (chatId: string) => {
     setIsLoading(true);
@@ -235,7 +237,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               const newTitle = parsed.title;
               if (newTitle) {
                 // Invalidate chats query to refresh sidebar
-                const { queryClient } = await import('@shared/api/queryClient');
                 queryClient.invalidateQueries({ queryKey: ['chats'] });
               }
             } catch (e) {
