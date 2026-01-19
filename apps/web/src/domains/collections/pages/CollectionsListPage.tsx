@@ -110,12 +110,12 @@ export default function CollectionsListPage() {
                 )}
 
                 <div className={styles.fieldsList}>
-                  {collection.fields.slice(0, 4).map(f => (
+                  {Array.isArray(collection.fields) && collection.fields.slice(0, 4).map(f => (
                     <Badge key={f.name} tone="neutral" size="small">
                       {f.name}
                     </Badge>
                   ))}
-                  {collection.fields.length > 4 && (
+                  {Array.isArray(collection.fields) && collection.fields.length > 4 && (
                     <Badge tone="neutral" size="small">
                       +{collection.fields.length - 4}
                     </Badge>

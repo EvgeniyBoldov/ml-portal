@@ -203,7 +203,8 @@ export default function CollectionDataPage() {
     );
   }
 
-  const fields = collection.fields || [];
+  // Ensure fields is always an array
+  const fields = Array.isArray(collection.fields) ? collection.fields : [];
 
   return (
     <div className={styles.page}>
