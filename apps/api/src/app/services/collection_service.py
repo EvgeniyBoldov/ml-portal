@@ -340,6 +340,7 @@ class CollectionService:
         filters: dict,
         limit: int = 50,
         offset: int = 0,
+        query: Optional[str] = None,
     ) -> List[dict]:
         """
         Search collection with filters.
@@ -349,6 +350,7 @@ class CollectionService:
             filters: Dict of field_name -> value or {op: value}
             limit: Max results
             offset: Offset for pagination
+            query: Free text search query (searches all LIKE fields with OR)
         
         Returns:
             List of matching rows as dicts
@@ -356,6 +358,19 @@ class CollectionService:
         where_clauses = []
         params = {}
 
+        # Handle free text query - search across all LIKE fields with OR
+        if query:
+            like_clauses = []
+            for field_def in collection.get_searchable_fields():
+                field_name = field_def["name"]
+                search_mode = field_def.get("search_mode", SearchMode.EXACT.value)
+                if search_mode == SearchMode.LIKE.value:
+                    like_clauses.append(f"{field_name} ILIKE :query_param")
+            if like_clauses:
+                params["query_param"] = f"%{query}%"
+                where_clauses.append(f"({' OR '.join(like_clauses)})")
+
+        # Handle specific field filters
         for field_def in collection.get_searchable_fields():
             field_name = field_def["name"]
             if field_name not in filters:
@@ -386,7 +401,7 @@ class CollectionService:
 
         where_sql = " AND ".join(where_clauses) if where_clauses else "TRUE"
 
-        query = text(
+        sql_query = text(
             f"SELECT * FROM {collection.table_name} "
             f"WHERE {where_sql} "
             f"ORDER BY _created_at DESC "
@@ -395,15 +410,32 @@ class CollectionService:
         params["limit"] = limit
         params["offset"] = offset
 
-        result = await self.session.execute(query, params)
+        result = await self.session.execute(sql_query, params)
         rows = result.mappings().all()
 
         return [dict(row) for row in rows]
 
-    async def count(self, collection: Collection, filters: dict) -> int:
+    async def count(
+        self,
+        collection: Collection,
+        filters: dict,
+        query: Optional[str] = None,
+    ) -> int:
         """Count matching rows"""
         where_clauses = []
         params = {}
+
+        # Handle free text query - search across all LIKE fields with OR
+        if query:
+            like_clauses = []
+            for field_def in collection.get_searchable_fields():
+                field_name = field_def["name"]
+                search_mode = field_def.get("search_mode", SearchMode.EXACT.value)
+                if search_mode == SearchMode.LIKE.value:
+                    like_clauses.append(f"{field_name} ILIKE :query_param")
+            if like_clauses:
+                params["query_param"] = f"%{query}%"
+                where_clauses.append(f"({' OR '.join(like_clauses)})")
 
         for field_def in collection.get_searchable_fields():
             field_name = field_def["name"]
@@ -433,11 +465,11 @@ class CollectionService:
 
         where_sql = " AND ".join(where_clauses) if where_clauses else "TRUE"
 
-        query = text(
+        sql_query = text(
             f"SELECT COUNT(*) FROM {collection.table_name} WHERE {where_sql}"
         )
 
-        result = await self.session.execute(query, params)
+        result = await self.session.execute(sql_query, params)
         return result.scalar()
 
     async def delete_rows(self, collection: Collection, ids: List[int]) -> int:

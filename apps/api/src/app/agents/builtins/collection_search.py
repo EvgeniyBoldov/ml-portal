@@ -151,15 +151,16 @@ class CollectionSearchTool(ToolHandler):
                         f"Collection '{collection_slug}' not found"
                     )
                 
-                search_filters = self._build_filters(collection, args, query)
+                search_filters = self._build_filters(collection, args)
                 
                 rows = await service.search(
                     collection=collection,
                     filters=search_filters,
                     limit=limit,
+                    query=query,
                 )
                 
-                total = await service.count(collection, search_filters)
+                total = await service.count(collection, search_filters, query=query)
                 
                 formatted_rows = self._format_rows(rows, collection)
                 
@@ -182,9 +183,8 @@ class CollectionSearchTool(ToolHandler):
         self,
         collection: Collection,
         args: Dict[str, Any],
-        query: Optional[str]
     ) -> Dict[str, Any]:
-        """Build filters dict from args"""
+        """Build filters dict from args (specific field filters only)"""
         filters = {}
         
         for field in collection.get_searchable_fields():
@@ -201,8 +201,6 @@ class CollectionSearchTool(ToolHandler):
                     filters[field_name] = range_filter
             elif field_name in args:
                 filters[field_name] = args[field_name]
-            elif query and search_mode == SearchMode.LIKE.value:
-                filters[field_name] = query
         
         if "filters" in args and isinstance(args["filters"], dict):
             filters.update(args["filters"])
