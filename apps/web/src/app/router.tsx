@@ -35,6 +35,8 @@ const ToolEditorPage = lazy(() => import('@/domains/admin/pages/ToolEditorPage')
 const AgentRegistryPage = lazy(() => import('@/domains/admin/pages/AgentRegistryPage').then(m => ({ default: m.AgentRegistryPage })));
 const AgentEditorPage = lazy(() => import('@/domains/admin/pages/AgentEditorPage').then(m => ({ default: m.AgentEditorPage })));
 const AgentRunsPage = lazy(() => import('@/domains/admin/pages/AgentRunsPage').then(m => ({ default: m.AgentRunsPage })));
+const CollectionsPage = lazy(() => import('@/domains/admin/pages/CollectionsPage'));
+const CreateCollectionPage = lazy(() => import('@/domains/admin/pages/CreateCollectionPage'));
 
 
 const withSuspense = (el: React.ReactNode) => (
@@ -85,6 +87,8 @@ const router = createBrowserRouter([
       { path: 'agents/new', element: withSuspense(<AgentEditorPage />) },
       { path: 'agents/:slug', element: withSuspense(<AgentEditorPage />) },
       { path: 'agent-runs', element: withSuspense(<AgentRunsPage />) },
+      { path: 'collections', element: withSuspense(<CollectionsPage />) },
+      { path: 'collections/new', element: withSuspense(<CreateCollectionPage />) },
       { path: 'settings/email', element: withSuspense(<EmailSettingsPage />) },
     ],
   },
