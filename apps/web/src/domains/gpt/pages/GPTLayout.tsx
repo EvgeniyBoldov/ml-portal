@@ -53,6 +53,16 @@ export default function GPTLayout() {
                   База знаний
                 </NavLink>
               )}
+              {canAccessRag && (
+                <NavLink
+                  to="/gpt/collections"
+                  className={({ isActive }) =>
+                    [styles.segBtn, isActive ? styles.active : ''].join(' ')
+                  }
+                >
+                  Коллекции
+                </NavLink>
+              )}
             </div>
           </div>
         </nav>

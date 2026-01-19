@@ -156,14 +156,28 @@ export const collectionsApi = {
 
   getData: async (
     slug: string,
-    params?: { limit?: number; offset?: number }
-  ): Promise<{ items: Record<string, unknown>[]; total: number }> => {
+    params?: { limit?: number; offset?: number; search?: string }
+  ): Promise<{ items: Record<string, unknown>[]; total: number; limit: number; offset: number }> => {
     const searchParams = new URLSearchParams();
     if (params?.limit) searchParams.set('limit', String(params.limit));
     if (params?.offset) searchParams.set('offset', String(params.offset));
+    if (params?.search) searchParams.set('search', params.search);
 
     const query = searchParams.toString();
     return http.get(`/collections/${slug}/data${query ? `?${query}` : ''}`);
+  },
+
+  deleteRows: async (
+    slug: string,
+    ids: number[]
+  ): Promise<{ deleted: number; ids: number[] }> => {
+    const params = new URLSearchParams();
+    ids.forEach(id => params.append('ids', String(id)));
+    return http.delete(`/collections/${slug}/data?${params.toString()}`);
+  },
+
+  downloadTemplate: (slug: string): string => {
+    return `/api/v1/collections/${slug}/template`;
   },
 };
 

@@ -439,3 +439,32 @@ class CollectionService:
 
         result = await self.session.execute(query, params)
         return result.scalar()
+
+    async def delete_rows(self, collection: Collection, ids: List[int]) -> int:
+        """
+        Delete rows from collection by IDs.
+        
+        Args:
+            collection: Collection object
+            ids: List of row IDs to delete
+        
+        Returns:
+            Number of deleted rows
+        """
+        if not ids:
+            return 0
+
+        placeholders = ", ".join([f":id_{i}" for i in range(len(ids))])
+        params = {f"id_{i}": id_val for i, id_val in enumerate(ids)}
+
+        delete_sql = text(
+            f"DELETE FROM {collection.table_name} WHERE _id IN ({placeholders})"
+        )
+
+        result = await self.session.execute(delete_sql, params)
+        deleted_count = result.rowcount
+
+        collection.row_count = max(0, collection.row_count - deleted_count)
+        await self.session.flush()
+
+        return deleted_count

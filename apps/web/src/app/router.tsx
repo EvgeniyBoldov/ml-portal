@@ -38,6 +38,10 @@ const AgentRunsPage = lazy(() => import('@/domains/admin/pages/AgentRunsPage').t
 const CollectionsPage = lazy(() => import('@/domains/admin/pages/CollectionsPage'));
 const CreateCollectionPage = lazy(() => import('@/domains/admin/pages/CreateCollectionPage'));
 
+// Collections pages (user-facing)
+const CollectionsListPage = lazy(() => import('@/domains/collections/pages/CollectionsListPage'));
+const CollectionDataPage = lazy(() => import('@/domains/collections/pages/CollectionDataPage'));
+
 
 const withSuspense = (el: React.ReactNode) => (
   <Suspense fallback={<div style={{ padding: '2rem' }}><Skeleton variant="card" /></div>}>
@@ -55,6 +59,8 @@ const router = createBrowserRouter([
       { path: 'chat', element: withSuspense(<ChatPage />) },
       { path: 'chat/:chatId', element: withSuspense(<ChatPage />) },
       { path: 'rag', element: withSuspense(<RagPage />) },
+      { path: 'collections', element: withSuspense(<CollectionsListPage />) },
+      { path: 'collections/:slug', element: withSuspense(<CollectionDataPage />) },
       { path: 'profile', element: withSuspense(<ProfilePage />) },
     ],
   },

@@ -43,7 +43,7 @@ class CollectionListResponse(BaseModel):
     total: int
 
 
-@router.get("", response_model=CollectionListResponse)
+@router.get("/", response_model=CollectionListResponse)
 async def list_collections(
     active_only: bool = True,
     session: AsyncSession = Depends(db_uow),
