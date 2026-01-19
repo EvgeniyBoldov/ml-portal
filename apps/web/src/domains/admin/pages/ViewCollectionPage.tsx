@@ -8,7 +8,7 @@ import Button from '@shared/ui/Button';
 import Badge from '@shared/ui/Badge';
 import { Skeleton } from '@shared/ui/Skeleton';
 import { collectionsApi } from '@shared/api/collections';
-import { tenantApi } from '@shared/api/admin';
+import { adminApi } from '@shared/api/admin';
 import styles from './ViewCollectionPage.module.css';
 
 export function ViewCollectionPage() {
@@ -23,7 +23,7 @@ export function ViewCollectionPage() {
 
   const { data: tenantsData } = useQuery({
     queryKey: ['admin', 'tenants'],
-    queryFn: () => tenantApi.list({ page: 1, size: 100 }),
+    queryFn: () => adminApi.getTenants(),
   });
 
   const tenants = tenantsData?.items ?? [];

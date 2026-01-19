@@ -13,7 +13,7 @@ import { ActionsButton } from '@shared/ui/ActionsButton';
 import { useAppStore } from '@app/store/app.store';
 import Alert from '@shared/ui/Alert';
 import { collectionsApi, type Collection } from '@shared/api/collections';
-import { tenantApi } from '@shared/api/admin';
+import { adminApi } from '@shared/api/admin';
 import styles from './CollectionsPage.module.css';
 
 export function CollectionsPage() {
@@ -31,7 +31,7 @@ export function CollectionsPage() {
 
   const { data: tenantsData } = useQuery({
     queryKey: ['admin', 'tenants'],
-    queryFn: () => tenantApi.list({ page: 1, size: 100 }),
+    queryFn: () => adminApi.getTenants(),
   });
 
   const tenants = tenantsData?.items ?? [];
