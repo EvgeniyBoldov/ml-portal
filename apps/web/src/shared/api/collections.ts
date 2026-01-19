@@ -110,7 +110,7 @@ export const collectionsApi = {
   // Tenant-level endpoints
   list: async (activeOnly = true): Promise<CollectionListResponse> => {
     return apiRequest<CollectionListResponse>(
-      `/collections?active_only=${activeOnly}`
+      `/collections/?active_only=${activeOnly}`
     );
   },
 
