@@ -1,0 +1,88 @@
+# =============================================================================
+# ML Portal Worker - Production Multi-Stage Dockerfile
+# =============================================================================
+
+# =============================================================================
+# Stage 1: Base Builder
+# =============================================================================
+FROM python:3.11-slim AS base
+
+WORKDIR /app
+
+# Install system dependencies including OCR tools
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libpq-dev \
+    curl \
+    libmagic1 \
+    libmagic-dev \
+    tesseract-ocr \
+    tesseract-ocr-rus \
+    poppler-utils \
+    libgl1-mesa-dri \
+    libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# =============================================================================
+# Stage 2: Dependencies Builder
+# =============================================================================
+FROM base AS dependencies
+
+# Copy requirements files
+COPY infra/docker/base/requirements.ml.txt /tmp/requirements.base.txt
+COPY infra/docker/api/requirements.txt /tmp/requirements.api.txt
+
+# Install Python dependencies
+RUN python -m pip install --upgrade pip && \
+    pip install --no-cache-dir -r /tmp/requirements.base.txt && \
+    pip install --no-cache-dir -r /tmp/requirements.api.txt
+
+# =============================================================================
+# Stage 3: Production Runtime
+# =============================================================================
+FROM python:3.11-slim AS production
+
+WORKDIR /app
+
+# Install only runtime dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq5 \
+    curl \
+    libmagic1 \
+    tesseract-ocr \
+    tesseract-ocr-rus \
+    poppler-utils \
+    libgl1-mesa-dri \
+    libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Copy Python packages from dependencies stage
+COPY --from=dependencies /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=dependencies /usr/local/bin /usr/local/bin
+
+# Create non-root user
+RUN groupadd -r appuser && useradd -r -g appuser -u 1000 appuser && \
+    chown -R appuser:appuser /app
+
+# Copy application code
+COPY --chown=appuser:appuser apps/api/src/app/ ./app/
+COPY --chown=appuser:appuser infra/scripts/ ./infra/scripts/
+
+# Set environment variables
+ENV PYTHONPATH=/app \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    ENV=production \
+    DEBUG=false
+
+# Switch to non-root user
+USER appuser
+
+# Health check (check if Celery worker is responsive)
+HEALTHCHECK --interval=60s --timeout=10s --start-period=30s --retries=3 \
+    CMD celery -A app.celery_app inspect ping -d celery@$HOSTNAME || exit 1
+
+# Start Celery worker
+CMD ["celery", "-A", "app.celery_app", "worker", "--loglevel=info", "--concurrency=4", "--max-tasks-per-child=100"]

@@ -1,0 +1,56 @@
+# =============================================================================
+# ML Portal Main Cluster - Staging Values
+# =============================================================================
+
+global:
+  environment: staging
+  domain: staging.portal.example.com
+  imageRegistry: registry.example.com
+
+frontend:
+  replicaCount: 2
+  image:
+    tag: latest
+  autoscaling:
+    enabled: false
+
+api:
+  replicaCount: 3
+  image:
+    tag: latest
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 6
+  env:
+    ENV: staging
+    DEBUG: "false"
+    LOG_LEVEL: INFO
+
+workers:
+  replicaCount: 2
+  image:
+    tag: latest
+  autoscaling:
+    enabled: false
+
+embedding:
+  replicaCount: 2
+  image:
+    tag: latest
+  persistence:
+    enabled: false
+
+ingress:
+  enabled: true
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-staging
+  tls:
+    - secretName: ml-portal-staging-tls
+      hosts:
+        - staging.portal.example.com
+
+configMap:
+  data:
+    CORS_ALLOW_ORIGINS: "https://staging.portal.example.com"
+    IDEMPOTENCY_ENABLED: "false"

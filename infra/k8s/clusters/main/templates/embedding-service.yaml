@@ -1,0 +1,18 @@
+{{- if .Values.embedding.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ml-portal.fullname" . }}-embedding
+  labels:
+    {{- include "ml-portal.embedding.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.embedding.service.type }}
+  ports:
+  - port: {{ .Values.embedding.service.port }}
+    targetPort: {{ .Values.embedding.service.targetPort }}
+    protocol: TCP
+    name: http
+  selector:
+    {{- include "ml-portal.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: embedding
+{{- end }}
