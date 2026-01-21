@@ -27,10 +27,10 @@ class CollectionResponse(BaseModel):
     slug: str
     name: str
     description: Optional[str]
-    type: str
     fields: List[dict]
     row_count: int
     is_active: bool
+    has_vector_search: bool = False
     created_at: str
     updated_at: str
 
@@ -77,10 +77,10 @@ async def list_collections(
             slug=c.slug,
             name=c.name,
             description=c.description,
-            type=c.type,
             fields=c.fields,
             row_count=c.row_count,
             is_active=c.is_active,
+            has_vector_search=c.has_vector_search,
             created_at=c.created_at.isoformat(),
             updated_at=c.updated_at.isoformat(),
         )
@@ -122,10 +122,10 @@ async def get_collection(
         slug=collection.slug,
         name=collection.name,
         description=collection.description,
-        type=collection.type,
         fields=collection.fields,
         row_count=collection.row_count,
         is_active=collection.is_active,
+        has_vector_search=collection.has_vector_search,
         created_at=collection.created_at.isoformat(),
         updated_at=collection.updated_at.isoformat(),
     )

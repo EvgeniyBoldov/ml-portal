@@ -9,7 +9,7 @@ import Input from '@shared/ui/Input';
 import FieldEditor from '@shared/ui/FieldEditor';
 import FieldCard from '@shared/ui/FieldCard';
 import { useErrorToast, useSuccessToast } from '@shared/ui/Toast';
-import { collectionsApi } from '@shared/api/collections';
+import { collectionsApi, CollectionField, SearchMode } from '@shared/api/collections';
 import { adminApi } from '@shared/api/admin';
 import styles from './CreateCollectionPage.module.css';
 
@@ -35,13 +35,13 @@ export function CreateCollectionPage() {
   const showError = useErrorToast();
   const showSuccess = useSuccessToast();
 
-  const { data: tenants, isLoading: tenantsLoading } = useQuery(
-    ['tenants'],
-    async () => {
+  const { data: tenants, isLoading: tenantsLoading } = useQuery({
+    queryKey: ['tenants'],
+    queryFn: async () => {
       const response = await adminApi.getTenants();
       return response.data;
-    }
-  );
+    },
+  });
 
   const [formData, setFormData] = useState({
     tenant_id: '',
@@ -298,7 +298,7 @@ export function CreateCollectionPage() {
                   onNameChange={(name) => handleFieldChange(field.id, 'name', name)}
                   onTypeChange={(type) => handleFieldChange(field.id, 'type', type)}
                   onRequiredChange={(required) => handleFieldChange(field.id, 'required', required)}
-                  onSearchModeToggle={(mode) => toggleSearchMode(field.id, mode)}
+                  onSearchModeToggle={(mode) => toggleSearchMode(field.id, mode as SearchMode)}
                   onRemove={() => handleRemoveField(field.id)}
                 />
               ))
