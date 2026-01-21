@@ -10,6 +10,7 @@ class AgentBase(BaseModel):
     description: Optional[str] = None
     system_prompt_slug: str = Field(..., description="Slug of the System Prompt")
     tools: List[str] = Field(default=[], description="List of Tool slugs")
+    available_collections: List[str] = Field(default=[], description="List of Collection slugs available for this agent")
     generation_config: Optional[Dict[str, Any]] = {}
     is_active: bool = True
     enable_logging: bool = Field(default=True, description="Enable detailed run logging")

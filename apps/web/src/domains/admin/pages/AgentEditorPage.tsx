@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { agentsApi, promptsApi, toolsApi, AgentCreate } from '@/shared/api';
+import { agentsApi, promptsApi, toolsApi, collectionsApi, AgentCreate } from '@/shared/api';
 import Button from '@/shared/ui/Button';
 import Input from '@/shared/ui/Input';
 import Textarea from '@/shared/ui/Textarea';
@@ -23,6 +23,7 @@ export function AgentEditorPage() {
     description: '',
     system_prompt_slug: '',
     tools: [],
+    available_collections: [],
     generation_config: {},
     is_active: true,
     enable_logging: true,
@@ -37,6 +38,11 @@ export function AgentEditorPage() {
   const { data: tools } = useQuery({
     queryKey: ['tools', 'list'],
     queryFn: () => toolsApi.list(),
+  });
+
+  const { data: collections } = useQuery({
+    queryKey: ['collections', 'list'],
+    queryFn: () => collectionsApi.list(),
   });
 
   // Load agent data if editing
@@ -54,6 +60,7 @@ export function AgentEditorPage() {
         description: existingAgent.description || '',
         system_prompt_slug: existingAgent.system_prompt_slug,
         tools: existingAgent.tools,
+        available_collections: existingAgent.available_collections || [],
         generation_config: existingAgent.generation_config || {},
         is_active: existingAgent.is_active,
         enable_logging: existingAgent.enable_logging,
@@ -90,6 +97,17 @@ export function AgentEditorPage() {
       setFormData({ ...formData, tools: [...currentTools, toolSlug] });
     }
   };
+
+  const toggleCollection = (collectionSlug: string) => {
+    const currentCollections = formData.available_collections || [];
+    if (currentCollections.includes(collectionSlug)) {
+      setFormData({ ...formData, available_collections: currentCollections.filter(c => c !== collectionSlug) });
+    } else {
+      setFormData({ ...formData, available_collections: [...currentCollections, collectionSlug] });
+    }
+  };
+
+  const hasCollectionSearchTool = formData.tools.includes('collection.search');
 
   if (!isNew && isLoading) {
     return <div className="p-6 text-center text-gray-500">Loading agent...</div>;
@@ -212,6 +230,45 @@ export function AgentEditorPage() {
               Выберите функции, которые агент может вызывать
             </p>
           </div>
+
+          {hasCollectionSearchTool && (
+            <div className={styles.formGroup}>
+              <label className={styles.label}>Доступные Коллекции</label>
+              <div className={styles.toolsList}>
+                {collections?.length === 0 && (
+                  <div className={styles.emptyState}>Нет доступных коллекций</div>
+                )}
+                {collections?.map(collection => {
+                  const isSelected = (formData.available_collections || []).includes(collection.slug);
+                  return (
+                    <div 
+                      key={collection.slug} 
+                      className={`${styles.toolItem} ${isSelected ? styles.selected : ''}`}
+                      onClick={() => toggleCollection(collection.slug)}
+                    >
+                      <input 
+                        type="checkbox"
+                        className={styles.toolCheckbox}
+                        checked={isSelected}
+                        onChange={() => toggleCollection(collection.slug)}
+                        onClick={e => e.stopPropagation()}
+                      />
+                      <div className={styles.toolInfo}>
+                        <div className={styles.toolName}>{collection.name}</div>
+                        <div className={styles.toolSlug}>{collection.slug}</div>
+                        {collection.description && (
+                          <div className={styles.toolDescription}>{collection.description}</div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              <p className={styles.description}>
+                Выберите коллекции, к которым агент будет иметь доступ при использовании collection.search
+              </p>
+            </div>
+          )}
 
           <div className={styles.formGroup}>
             <label className={styles.label}>Настройки логирования</label>

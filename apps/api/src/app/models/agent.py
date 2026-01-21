@@ -33,6 +33,11 @@ class Agent(Base):
     # e.g. ["netbox.get_device", "rag.search"]
     tools: Mapped[List[str]] = mapped_column(JSONB, default=list)
     
+    # List of Collection slugs available for this agent
+    # Used when agent has collection.search tool enabled
+    # e.g. ["tickets", "documentation"]
+    available_collections: Mapped[List[str]] = mapped_column(JSONB, default=list)
+    
     # LLM Model configuration override (optional)
     # e.g. {"model": "gpt-4", "temperature": 0.7}
     # If empty, uses system defaults

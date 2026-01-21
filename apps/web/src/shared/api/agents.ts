@@ -7,6 +7,7 @@ export interface Agent {
   description?: string;
   system_prompt_slug: string;
   tools: string[];
+  available_collections: string[];
   generation_config?: Record<string, any>;
   is_active: boolean;
   enable_logging: boolean;
