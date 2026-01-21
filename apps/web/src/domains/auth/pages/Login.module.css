@@ -212,11 +212,38 @@
 
 .footer {
   margin-top: var(--space-8);
-  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
   color: var(--muted);
   font-size: var(--text-xs);
 }
 
-.footer p {
-  margin: 0;
+.footerLink {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--text);
+  text-decoration: none;
+  font-weight: 500;
+  transition: color var(--transition);
+}
+
+.footerLink:hover {
+  color: var(--primary);
+}
+
+.footerIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.footerDivider {
+  color: var(--border);
+}
+
+.footerYear {
+  color: var(--muted);
 }

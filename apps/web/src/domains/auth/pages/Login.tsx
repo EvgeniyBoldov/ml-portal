@@ -27,6 +27,14 @@ const AlertIcon = () => (
   </svg>
 );
 
+const LayersIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="14" height="14">
+    <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+    <path d="M2 17l10 5 10-5"/>
+    <path d="M2 12l10 5 10-5"/>
+  </svg>
+);
+
 export default function Login() {
   const nav = useNavigate();
   const { login, loading } = useAuth();
@@ -127,7 +135,17 @@ export default function Login() {
           </form>
 
           <div className={styles.footer}>
-            <p>© 2024 ML Portal. Все права защищены.</p>
+            <a 
+              href="https://boldov.dev" 
+              target="_blank" 
+              rel="noopener noreferrer"
+              className={styles.footerLink}
+            >
+              <span className={styles.footerIcon}><LayersIcon /></span>
+              Boldov Development Ltd
+            </a>
+            <span className={styles.footerDivider}>•</span>
+            <span className={styles.footerYear}>© {new Date().getFullYear()}</span>
           </div>
         </div>
       </div>

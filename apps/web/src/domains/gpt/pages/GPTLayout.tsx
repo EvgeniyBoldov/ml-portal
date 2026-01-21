@@ -93,7 +93,23 @@ export default function GPTLayout() {
       </main>
 
       <footer className={styles.footer}>
-        {/* пустой подвал, заполним позже */}
+        <div className={styles.footerContent}>
+          <a 
+            href="https://boldov.dev" 
+            target="_blank" 
+            rel="noopener noreferrer"
+            className={styles.footerLogo}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+              <path d="M2 17l10 5 10-5"/>
+              <path d="M2 12l10 5 10-5"/>
+            </svg>
+            Boldov Development Ltd
+          </a>
+          <span className={styles.footerDivider}>•</span>
+          <span className={styles.footerYear}>© {new Date().getFullYear()}</span>
+        </div>
       </footer>
     </div>
   );
