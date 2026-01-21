@@ -14,6 +14,7 @@ from .agent import Agent
 from .agent_run import AgentRun, AgentRunStep
 from .api_key import APIKey
 from .api_token import ApiToken
+from .collection import Collection, CollectionType, FieldType, SearchMode
 
 __all__ = [
     "Base",
@@ -38,4 +39,8 @@ __all__ = [
     "AgentRunStep",
     "APIKey",
     "ApiToken",
+    "Collection",
+    "CollectionType",
+    "FieldType",
+    "SearchMode",
 ]

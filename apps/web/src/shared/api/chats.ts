@@ -172,6 +172,8 @@ export interface ChatAgent {
   name: string;
   description?: string;
   has_rag: boolean;
+  has_collections: boolean;
+  tools: string[];
 }
 
 /** Get list of available agents for chat */

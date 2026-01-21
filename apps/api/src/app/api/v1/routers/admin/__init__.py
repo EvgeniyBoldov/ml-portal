@@ -13,6 +13,7 @@ from .tools import router as tools_router
 from .agents import router as agents_router
 from .agent_runs import router as agent_runs_router
 from .audit_logs import router as audit_logs_router
+from .collections import router as collections_router
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -24,5 +25,6 @@ router.include_router(tools_router, prefix="/tools", tags=["tools"])
 router.include_router(agents_router, prefix="/agents", tags=["agents"])
 router.include_router(agent_runs_router, prefix="/agent-runs", tags=["agent-runs"])
 router.include_router(audit_logs_router, prefix="/audit-logs", tags=["audit-logs"])
+router.include_router(collections_router, prefix="/collections", tags=["collections"])
 
 __all__ = ["router"]

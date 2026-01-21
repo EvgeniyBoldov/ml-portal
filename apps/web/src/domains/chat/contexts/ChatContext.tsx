@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useCallback, ReactNode } from 'react';
 import { useChats, useChatMessages, useSendMessage } from '@shared/api/hooks/useChats';
+import { useQueryClient } from '@tanstack/react-query';
 
 interface Message {
   id: string;
@@ -43,6 +44,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
   const { data: chats } = useChats();
   const sendMessageMutation = useSendMessage();
+  const queryClient = useQueryClient();
 
   const loadMessages = useCallback(async (chatId: string) => {
     setIsLoading(true);
@@ -204,7 +206,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             try {
               const parsed = JSON.parse(data);
               realUserId = parsed.message_id;
-              // Update temp user message with real ID
+              const userCreatedAt = parsed.created_at;
+              // Update temp user message with real ID and created_at from backend
               setMessagesByChat(prev => {
                 const current = prev[chatId];
                 if (!current) return prev;
@@ -213,13 +216,31 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                   [chatId]: {
                     ...current,
                     items: current.items.map(m =>
-                      m.id === tempUserId ? { ...m, id: realUserId!, isOptimistic: false } : m
+                      m.id === tempUserId ? { 
+                        ...m, 
+                        id: realUserId!, 
+                        created_at: userCreatedAt || m.created_at,
+                        isOptimistic: false 
+                      } : m
                     )
                   }
                 };
               });
             } catch (e) {
               console.error('Failed to parse user_message event', e);
+            }
+          }
+          // Handle chat_title event (auto-generated title)
+          else if (eventType === 'chat_title') {
+            try {
+              const parsed = JSON.parse(data);
+              const newTitle = parsed.title;
+              if (newTitle) {
+                // Invalidate chats query to refresh sidebar
+                queryClient.invalidateQueries({ queryKey: ['chats'] });
+              }
+            } catch (e) {
+              console.error('Failed to parse chat_title event', e);
             }
           }
           // Handle status events
@@ -354,9 +375,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             try {
               const parsed = JSON.parse(data);
               realAssistantId = parsed.message_id;
+              const assistantCreatedAt = parsed.created_at;
               // Update sources if present in final event
               const finalSources = parsed.sources;
-              // Update temp assistant message with real ID and sources
+              // Update temp assistant message with real ID, created_at and sources
               setMessagesByChat(prev => {
                 const current = prev[chatId];
                 if (!current) return prev;
@@ -368,6 +390,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                       m.id === tempAssistantId ? { 
                         ...m, 
                         id: realAssistantId!, 
+                        created_at: assistantCreatedAt || m.created_at,
                         isOptimistic: false,
                         meta: finalSources?.length ? { ...m.meta, rag_sources: finalSources } : m.meta
                       } : m

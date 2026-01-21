@@ -10,5 +10,7 @@ def register_builtins() -> None:
     Вызывается лениво при первом обращении к ToolRegistry.
     """
     from app.agents.builtins.rag_search import RagSearchTool
+    from app.agents.builtins.collection_search import CollectionSearchTool
     
     ToolRegistry.register(RagSearchTool())
+    ToolRegistry.register(CollectionSearchTool())

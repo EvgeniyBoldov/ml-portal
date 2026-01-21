@@ -35,6 +35,13 @@ const ToolEditorPage = lazy(() => import('@/domains/admin/pages/ToolEditorPage')
 const AgentRegistryPage = lazy(() => import('@/domains/admin/pages/AgentRegistryPage').then(m => ({ default: m.AgentRegistryPage })));
 const AgentEditorPage = lazy(() => import('@/domains/admin/pages/AgentEditorPage').then(m => ({ default: m.AgentEditorPage })));
 const AgentRunsPage = lazy(() => import('@/domains/admin/pages/AgentRunsPage').then(m => ({ default: m.AgentRunsPage })));
+const CollectionsPage = lazy(() => import('@/domains/admin/pages/CollectionsPage'));
+const CreateCollectionPage = lazy(() => import('@/domains/admin/pages/CreateCollectionPage'));
+const ViewCollectionPage = lazy(() => import('@/domains/admin/pages/ViewCollectionPage'));
+
+// Collections pages (user-facing)
+const CollectionsListPage = lazy(() => import('@/domains/collections/pages/CollectionsListPage'));
+const CollectionDataPage = lazy(() => import('@/domains/collections/pages/CollectionDataPage'));
 
 
 const withSuspense = (el: React.ReactNode) => (
@@ -53,6 +60,8 @@ const router = createBrowserRouter([
       { path: 'chat', element: withSuspense(<ChatPage />) },
       { path: 'chat/:chatId', element: withSuspense(<ChatPage />) },
       { path: 'rag', element: withSuspense(<RagPage />) },
+      { path: 'collections', element: withSuspense(<CollectionsListPage />) },
+      { path: 'collections/:slug', element: withSuspense(<CollectionDataPage />) },
       { path: 'profile', element: withSuspense(<ProfilePage />) },
     ],
   },
@@ -85,6 +94,9 @@ const router = createBrowserRouter([
       { path: 'agents/new', element: withSuspense(<AgentEditorPage />) },
       { path: 'agents/:slug', element: withSuspense(<AgentEditorPage />) },
       { path: 'agent-runs', element: withSuspense(<AgentRunsPage />) },
+      { path: 'collections', element: withSuspense(<CollectionsPage />) },
+      { path: 'collections/new', element: withSuspense(<CreateCollectionPage />) },
+      { path: 'collections/:id', element: withSuspense(<ViewCollectionPage />) },
       { path: 'settings/email', element: withSuspense(<EmailSettingsPage />) },
     ],
   },

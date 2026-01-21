@@ -115,7 +115,7 @@ export function ChatComposer({ onSend, disabled, placeholder }: ChatComposerProp
             type="button"
             title="Выбрать ассистента"
           >
-            <Icon name={currentAgent?.has_rag ? 'database' : 'sparkles'} size={18} />
+            <Icon name={currentAgent?.has_collections ? 'file-text' : currentAgent?.has_rag ? 'database' : 'sparkles'} size={18} />
             <span className={styles.agentName}>{currentAgent?.name || 'Ассистент'}</span>
             <Icon name="chevron-down" size={14} />
           </button>
@@ -132,7 +132,7 @@ export function ChatComposer({ onSend, disabled, placeholder }: ChatComposerProp
                     onClick={() => handleAgentSelect(agent.slug)}
                     type="button"
                   >
-                    <Icon name={agent.has_rag ? 'database' : 'sparkles'} size={16} />
+                    <Icon name={agent.has_collections ? 'file-text' : agent.has_rag ? 'database' : 'sparkles'} size={16} />
                     <div className={styles.agentInfo}>
                       <span className={styles.agentOptionName}>{agent.name}</span>
                       {agent.description && (
@@ -141,6 +141,9 @@ export function ChatComposer({ onSend, disabled, placeholder }: ChatComposerProp
                     </div>
                     {agent.has_rag && (
                       <span className={styles.ragBadge}>RAG</span>
+                    )}
+                    {agent.has_collections && (
+                      <span className={styles.ragBadge}>DATA</span>
                     )}
                   </button>
                 ))
