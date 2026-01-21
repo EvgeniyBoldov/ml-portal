@@ -3,13 +3,14 @@
  */
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useQuery, useMutation } from '@tanstack/react-query';
-import { useTenants } from '@shared/hooks/useTenants';
+import { useMutation, useQueryClient, useQuery } from '@tanstack/react-query';
 import Button from '@shared/ui/Button';
 import Input from '@shared/ui/Input';
+import FieldEditor from '@shared/ui/FieldEditor';
+import FieldCard from '@shared/ui/FieldCard';
 import { useErrorToast, useSuccessToast } from '@shared/ui/Toast';
-import { Skeleton } from '@shared/ui/Skeleton';
-import { collectionsApi, type CollectionField, type SearchMode } from '@shared/api/collections';
+import { collectionsApi } from '@shared/api/collections';
+import { adminApi } from '@shared/api/admin';
 import styles from './CreateCollectionPage.module.css';
 
 interface FieldFormData extends CollectionField {
@@ -25,8 +26,6 @@ const FIELD_TYPES = [
   { value: 'date', label: 'Date' },
 ];
 
-// Search modes are now managed as checkboxes per field
-
 function generateId() {
   return Math.random().toString(36).substring(2, 9);
 }
@@ -36,7 +35,13 @@ export function CreateCollectionPage() {
   const showError = useErrorToast();
   const showSuccess = useSuccessToast();
 
-  const { tenants, loading: tenantsLoading } = useTenants();
+  const { data: tenants, isLoading: tenantsLoading } = useQuery(
+    ['tenants'],
+    async () => {
+      const response = await adminApi.getTenants();
+      return response.data;
+    }
+  );
 
   const [formData, setFormData] = useState({
     tenant_id: '',
@@ -174,7 +179,8 @@ export function CreateCollectionPage() {
     return (
       <div className={styles.page}>
         <div className={styles.loadingState}>
-          <Skeleton width={400} height={300} />
+          <div className={styles.emptyIcon}>🔄</div>
+          <h3>Loading...</h3>
         </div>
       </div>
     );
@@ -274,113 +280,28 @@ export function CreateCollectionPage() {
             </Button>
           </div>
 
-          <div className={styles.fieldsList}>
+          <div className={styles.fieldsContainer}>
             {fields.length === 0 ? (
-              <div className={styles.emptyFields}>
-                Добавьте хотя бы одно поле
+              <div className={styles.emptyState}>
+                <div className={styles.emptyIcon}>📋</div>
+                <h3>No fields yet</h3>
+                <p>Add fields to define your collection schema</p>
               </div>
             ) : (
-              fields.map(field => {
-                const isTextField = field.type === 'text';
-                const isNumericOrDate = ['integer', 'float', 'datetime', 'date'].includes(field.type);
-                const hasLike = field.search_modes.includes('like');
-                
-                return (
-                  <div key={field.id} className={styles.fieldRow}>
-                    <div className={styles.fieldBasic}>
-                      <input
-                        type="text"
-                        className={styles.fieldInput}
-                        value={field.name}
-                        onChange={e =>
-                          handleFieldChange(
-                            field.id,
-                            'name',
-                            e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '')
-                          )
-                        }
-                        placeholder="field_name"
-                      />
-                      <select
-                        className={styles.fieldSelect}
-                        value={field.type}
-                        onChange={e =>
-                          handleFieldChange(field.id, 'type', e.target.value)
-                        }
-                      >
-                        {FIELD_TYPES.map(t => (
-                          <option key={t.value} value={t.value}>
-                            {t.label}
-                          </option>
-                        ))}
-                      </select>
-                      <label className={styles.fieldCheckbox}>
-                        <input
-                          type="checkbox"
-                          checked={field.required}
-                          onChange={e =>
-                            handleFieldChange(field.id, 'required', e.target.checked)
-                          }
-                        />
-                        Required
-                      </label>
-                    </div>
-                    
-                    <div className={styles.searchModes}>
-                      <span className={styles.searchModesLabel}>Search:</span>
-                      
-                      {/* LIKE - only for text */}
-                      {isTextField && (
-                        <label className={styles.searchModeCheckbox}>
-                          <input
-                            type="checkbox"
-                            checked={hasLike}
-                            onChange={() => toggleSearchMode(field.id, 'like')}
-                          />
-                          LIKE
-                        </label>
-                      )}
-                      
-                      {/* Vector - only for text with LIKE */}
-                      {isTextField && hasLike && (
-                        <label className={styles.searchModeCheckbox}>
-                          <input
-                            type="checkbox"
-                            checked={field.search_modes.includes('vector')}
-                            onChange={() => toggleSearchMode(field.id, 'vector')}
-                          />
-                          Vector
-                        </label>
-                      )}
-                      
-                      {/* Range - only for numeric/date */}
-                      {isNumericOrDate && (
-                        <label className={styles.searchModeCheckbox}>
-                          <input
-                            type="checkbox"
-                            checked={field.search_modes.includes('range')}
-                            onChange={() => toggleSearchMode(field.id, 'range')}
-                          />
-                          Range
-                        </label>
-                      )}
-                      
-                      <span className={styles.searchModesHint}>
-                        (Exact always enabled)
-                      </span>
-                    </div>
-                    
-                    <button
-                      type="button"
-                      className={styles.removeFieldBtn}
-                      onClick={() => handleRemoveField(field.id)}
-                      title="Remove field"
-                    >
-                      ✕
-                    </button>
-                  </div>
-                );
-              })
+              fields.map(field => (
+                <FieldEditor
+                  key={field.id}
+                  name={field.name}
+                  type={field.type}
+                  required={field.required}
+                  searchModes={field.search_modes}
+                  onNameChange={(name) => handleFieldChange(field.id, 'name', name)}
+                  onTypeChange={(type) => handleFieldChange(field.id, 'type', type)}
+                  onRequiredChange={(required) => handleFieldChange(field.id, 'required', required)}
+                  onSearchModeToggle={(mode) => toggleSearchMode(field.id, mode)}
+                  onRemove={() => handleRemoveField(field.id)}
+                />
+              ))
             )}
           </div>
         </div>

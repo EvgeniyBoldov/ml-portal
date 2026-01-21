@@ -103,3 +103,10 @@ class PromptService:
         type_filter: Optional[str] = None
     ) -> Tuple[List[Prompt], int]:
         return await self.repo.list_prompts(skip, limit, type_filter)
+    
+    async def get_agents_using_prompt(self, prompt_slug: str) -> List[str]:
+        """Get list of agent slugs that use this prompt"""
+        result = await self.repo.session.execute(
+            select(Agent.slug).where(Agent.system_prompt_slug == prompt_slug)
+        )
+        return [row[0] for row in result.all()]
