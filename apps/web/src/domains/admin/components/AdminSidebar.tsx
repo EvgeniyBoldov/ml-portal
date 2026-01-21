@@ -43,7 +43,6 @@ const navigation: NavGroup[] = [
     title: 'Система',
     items: [
       { path: '/admin/audit', label: 'Аудит', icon: 'file' },
-      { path: '/admin/settings', label: 'Настройки', icon: 'settings' },
     ],
   },
 ];
