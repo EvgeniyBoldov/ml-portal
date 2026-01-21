@@ -203,3 +203,10 @@
     gap: 4px;
   }
 }
+
+.agentsList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}

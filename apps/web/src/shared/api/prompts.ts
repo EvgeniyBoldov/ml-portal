@@ -13,6 +13,7 @@ export interface Prompt {
   type: 'chat' | 'agent' | 'task';
   created_at: string;
   updated_at: string;
+  used_by_agents?: string[];
 }
 
 export interface PromptCreate {

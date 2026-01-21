@@ -33,6 +33,7 @@ class PromptResponse(PromptBase):
     is_active: bool
     created_at: datetime
     updated_at: datetime
+    used_by_agents: Optional[List[str]] = Field(default=[], description="List of agent slugs using this prompt")
 
     class Config:
         from_attributes = True

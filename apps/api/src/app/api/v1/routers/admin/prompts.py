@@ -26,11 +26,20 @@ async def list_prompts(
     _: UserCtx = Depends(require_admin),
 ):
     """
-    List all prompts (latest versions). Admin only.
+    List all prompts (latest versions) with agents using them. Admin only.
     """
     service = PromptService(db)
     prompts, _ = await service.list_prompts(skip=skip, limit=limit, type_filter=type)
-    return prompts
+    
+    # Enrich with agent information
+    result = []
+    for prompt in prompts:
+        agents = await service.get_agents_using_prompt(prompt.slug)
+        prompt_dict = prompt.__dict__.copy()
+        prompt_dict['used_by_agents'] = agents
+        result.append(PromptResponse(**prompt_dict))
+    
+    return result
 
 
 @router.post("", response_model=PromptResponse)

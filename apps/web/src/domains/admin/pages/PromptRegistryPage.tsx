@@ -53,6 +53,19 @@ function PromptRow({
         </Badge>
       </td>
       <td>
+        {prompt.used_by_agents && prompt.used_by_agents.length > 0 ? (
+          <div className={styles.agentsList}>
+            {prompt.used_by_agents.map((agentSlug, idx) => (
+              <Badge key={idx} tone="neutral" size="small">
+                {agentSlug}
+              </Badge>
+            ))}
+          </div>
+        ) : (
+          <span className={styles.muted}>—</span>
+        )}
+      </td>
+      <td>
         <span className={styles.muted}>
           {new Date(prompt.updated_at).toLocaleDateString('ru-RU')}
         </span>
@@ -163,6 +176,7 @@ export function PromptRegistryPage() {
                 <th>ТИП</th>
                 <th>ВЕРСИЯ</th>
                 <th>СТАТУС</th>
+                <th>АГЕНТЫ</th>
                 <th>ОБНОВЛЁН</th>
                 <th>ДЕЙСТВИЯ</th>
               </tr>
@@ -171,7 +185,7 @@ export function PromptRegistryPage() {
               {isLoading ? (
                 Array.from({ length: 3 }).map((_, i) => (
                   <tr key={i}>
-                    {Array.from({ length: 6 }).map((__, j) => (
+                    {Array.from({ length: 7 }).map((__, j) => (
                       <td key={j}>
                         <Skeleton width={j === 0 ? 200 : 100} />
                       </td>
@@ -180,7 +194,7 @@ export function PromptRegistryPage() {
                 ))
               ) : filteredPrompts.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className={styles.emptyState}>
+                  <td colSpan={7} className={styles.emptyState}>
                     Промпты не найдены. Нажмите «Создать промпт» для создания.
                   </td>
                 </tr>

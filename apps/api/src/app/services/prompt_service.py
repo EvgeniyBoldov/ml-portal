@@ -3,8 +3,10 @@ import jinja2
 from jinja2 import meta
 
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
 from app.models.prompt import Prompt
+from app.models.agent import Agent
 from app.repositories.prompt_repository import PromptRepository
 from app.core.exceptions import NotFoundException, ValidationException
 
