@@ -103,14 +103,14 @@ export function ViewCollectionPage() {
               </div>
 
               <div className={styles.field}>
-                <label>Type</label>
+                <label>Search Capabilities</label>
                 <div className={styles.value}>
-                  <Badge
-                    tone={collection.type === 'sql' ? 'info' : 'warning'}
-                    size="small"
-                  >
-                    {collection.type.toUpperCase()}
-                  </Badge>
+                  <div className={styles.badges}>
+                    <Badge tone="info" size="small">SQL</Badge>
+                    {collection.has_vector_search && (
+                      <Badge tone="warning" size="small">VECTOR</Badge>
+                    )}
+                  </div>
                 </div>
               </div>
 

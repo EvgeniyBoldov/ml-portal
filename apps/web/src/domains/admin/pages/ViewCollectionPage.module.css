@@ -148,3 +148,9 @@
   font-size: 18px;
   color: var(--color-text-muted);
 }
+
+.badges {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}

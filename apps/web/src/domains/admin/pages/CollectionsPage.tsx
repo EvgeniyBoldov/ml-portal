@@ -132,7 +132,7 @@ export function CollectionsPage() {
                 <th>SLUG</th>
                 <th>NAME</th>
                 <th>TENANT</th>
-                <th>TYPE</th>
+                <th>SEARCH</th>
                 <th>FIELDS</th>
                 <th>ROWS</th>
                 <th>STATUS</th>
@@ -174,12 +174,12 @@ export function CollectionsPage() {
                       </span>
                     </td>
                     <td>
-                      <Badge
-                        tone={collection.type === 'sql' ? 'info' : 'warning'}
-                        size="small"
-                      >
-                        {collection.type.toUpperCase()}
-                      </Badge>
+                      <div className={styles.searchBadges}>
+                        <Badge tone="info" size="small">SQL</Badge>
+                        {collection.has_vector_search && (
+                          <Badge tone="warning" size="small">VECTOR</Badge>
+                        )}
+                      </div>
                     </td>
                     <td>
                       <div className={styles.fieldsList}>
