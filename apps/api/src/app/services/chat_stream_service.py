@@ -248,8 +248,9 @@ User message: {message}"""
             context = await self.load_chat_context(chat_id, limit=20)
             llm_messages = context + [{"role": "user", "content": content}]
             
-            # 6.1. Auto-generate chat title if this is the first message
-            is_first_message = len(context) <= 1  # Only the user message we just added
+            # 6.1. Auto-generate chat title if this is the first user message
+            user_messages_count = sum(1 for msg in context if msg.get("role") == "user")
+            is_first_message = user_messages_count == 1  # Only the user message we just added
             if is_first_message and chat.name in (None, "", "New Chat", "Новый чат"):
                 generated_title = await self.generate_chat_title(chat_id, content)
                 if generated_title:

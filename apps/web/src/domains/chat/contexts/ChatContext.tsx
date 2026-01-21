@@ -235,8 +235,18 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             try {
               const parsed = JSON.parse(data);
               const newTitle = parsed.title;
-              if (newTitle) {
-                // Invalidate chats query to refresh sidebar
+              if (newTitle && chatId) {
+                // Update chat title in cache immediately
+                queryClient.setQueryData(['chats', 'list'], (oldData: any) => {
+                  if (!oldData?.items) return oldData;
+                  return {
+                    ...oldData,
+                    items: oldData.items.map((chat: any) =>
+                      chat.id === chatId ? { ...chat, name: newTitle } : chat
+                    ),
+                  };
+                });
+                // Also invalidate to ensure consistency
                 queryClient.invalidateQueries({ queryKey: ['chats'] });
               }
             } catch (e) {
