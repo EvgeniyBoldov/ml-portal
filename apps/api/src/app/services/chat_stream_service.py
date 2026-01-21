@@ -252,10 +252,15 @@ User message: {message}"""
             # Context is loaded BEFORE current message, so for first message user_messages_count == 0
             user_messages_count = sum(1 for msg in context if msg.get("role") == "user")
             is_first_message = user_messages_count == 0
+            logger.info(f"Chat title check: user_messages_count={user_messages_count}, is_first={is_first_message}, chat.name='{chat.name}'")
             if is_first_message and chat.name in (None, "", "New Chat", "Новый чат"):
+                logger.info(f"Generating chat title for first message: {content[:100]}")
                 generated_title = await self.generate_chat_title(chat_id, content)
                 if generated_title:
+                    logger.info(f"Generated title: {generated_title}")
                     yield {"type": "chat_title", "title": generated_title}
+                else:
+                    logger.warning("Failed to generate chat title")
             
             # 7. Create tool context
             tool_ctx = ToolContext(

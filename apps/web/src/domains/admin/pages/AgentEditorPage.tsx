@@ -250,10 +250,10 @@ export function AgentEditorPage() {
             <div className={styles.formGroup}>
               <label className={styles.label}>Доступные Коллекции</label>
               <div className={styles.toolsList}>
-                {collections?.length === 0 && (
+                {collections?.items?.length === 0 && (
                   <div className={styles.emptyState}>Нет доступных коллекций</div>
                 )}
-                {collections?.map(collection => {
+                {collections?.items?.map(collection => {
                   const isSelected = (formData.available_collections || []).includes(collection.slug);
                   return (
                     <div 

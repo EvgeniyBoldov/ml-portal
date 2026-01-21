@@ -104,7 +104,8 @@ export default function CollectionDataPage() {
 
   // Handlers
   const handleSelectAll = useCallback(() => {
-    if (selectedIds.size === rows.length) {
+    if (rows.length === 0) return;
+    if (selectedIds.size === rows.length && selectedIds.size > 0) {
       setSelectedIds(new Set());
     } else {
       setSelectedIds(new Set(rows.map(r => r._id as number)));
