@@ -1,6 +1,6 @@
 """Add available_collections field to agents table
 
-Revision ID: 0039_add_available_collections_to_agents
+Revision ID: 0039_agent_collections
 Revises: 0038_seed_collections_agent
 Create Date: 2026-01-21
 
@@ -10,7 +10,7 @@ from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
-revision: str = '0039_add_available_collections_to_agents'
+revision: str = '0039_agent_collections'
 down_revision: Union[str, None] = '0038_seed_collections_agent'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
