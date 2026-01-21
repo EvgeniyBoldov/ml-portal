@@ -5,6 +5,7 @@ import { agentsApi, promptsApi, toolsApi, collectionsApi, AgentCreate } from '@/
 import Button from '@/shared/ui/Button';
 import Input from '@/shared/ui/Input';
 import Textarea from '@/shared/ui/Textarea';
+import { Tabs, TabPanel } from '@/shared/ui/Tabs';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
 import styles from './PromptEditorPage.module.css';
 
@@ -108,6 +109,9 @@ export function AgentEditorPage() {
   };
 
   const hasCollectionSearchTool = formData.tools.includes('collection.search');
+
+  // Tab state for prompt preview
+  const [promptTab, setPromptTab] = useState<'base' | 'generated'>('base');
 
   // Load generated prompt for preview
   const { data: generatedPrompt, refetch: refetchPrompt } = useQuery({
@@ -321,52 +325,78 @@ export function AgentEditorPage() {
         </div>
       </form>
 
-      {/* Generated Prompt Preview */}
-      {!isNew && generatedPrompt && (
-        <div className={styles.card}>
-          <div className={styles.cardHeader}>
-            <h2 className={styles.cardTitle}>Сгенерированный Промпт</h2>
-            <p className={styles.cardDescription}>
-              Финальный промпт, который видит LLM (базовый промпт + инструменты + коллекции)
-            </p>
-          </div>
-
-          <div className={styles.formGroup}>
-            <label className={styles.label}>Базовый промпт</label>
-            <div className={styles.promptPreview}>
-              <pre>{generatedPrompt.base_prompt}</pre>
-            </div>
-            <p className={styles.description}>
-              Источник: {generatedPrompt.base_prompt_slug}
-            </p>
-          </div>
-
-          {generatedPrompt.tools_section && (
-            <div className={styles.formGroup}>
-              <label className={styles.label}>Секция инструментов</label>
-              <div className={styles.promptPreview}>
-                <pre>{generatedPrompt.tools_section}</pre>
-              </div>
-            </div>
-          )}
-
-          {generatedPrompt.collections_section && (
-            <div className={styles.formGroup}>
-              <label className={styles.label}>Секция коллекций</label>
-              <div className={styles.promptPreview}>
-                <pre>{generatedPrompt.collections_section}</pre>
-              </div>
-            </div>
-          )}
-
-          <div className={styles.formGroup}>
-            <label className={styles.label}>Финальный промпт</label>
-            <div className={styles.promptPreview} style={{ maxHeight: '400px', overflow: 'auto' }}>
-              <pre>{generatedPrompt.final_prompt}</pre>
-            </div>
-          </div>
+      {/* Prompt Preview with Tabs */}
+      <div className={styles.card}>
+        <div className={styles.cardHeader}>
+          <h2 className={styles.cardTitle}>Превью Промпта</h2>
+          <p className={styles.cardDescription}>
+            Просмотр базового и финального промпта агента
+          </p>
         </div>
-      )}
+
+        <Tabs
+          tabs={[
+            { id: 'base', label: 'Базовый промпт', icon: '📝' },
+            { id: 'generated', label: 'Сгенерированный', icon: '🔧' },
+          ]}
+          activeTab={promptTab}
+          onChange={(tab) => setPromptTab(tab as 'base' | 'generated')}
+        >
+          <TabPanel id="base" activeTab={promptTab}>
+            {formData.system_prompt_slug ? (
+              <div className={styles.formGroup}>
+                <p className={styles.description} style={{ marginBottom: '12px' }}>
+                  Источник: <code>{formData.system_prompt_slug}</code>
+                </p>
+                <div className={styles.promptPreview} style={{ maxHeight: '500px', overflow: 'auto' }}>
+                  <pre>{generatedPrompt?.base_prompt || 'Загрузка...'}</pre>
+                </div>
+              </div>
+            ) : (
+              <div className={styles.emptyState}>
+                Выберите системный промпт слева
+              </div>
+            )}
+          </TabPanel>
+
+          <TabPanel id="generated" activeTab={promptTab}>
+            {!isNew && generatedPrompt ? (
+              <>
+                {generatedPrompt.tools_section && (
+                  <div className={styles.formGroup}>
+                    <label className={styles.label}>📦 Секция инструментов</label>
+                    <div className={styles.promptPreview}>
+                      <pre>{generatedPrompt.tools_section}</pre>
+                    </div>
+                  </div>
+                )}
+
+                {generatedPrompt.collections_section && (
+                  <div className={styles.formGroup}>
+                    <label className={styles.label}>📚 Секция коллекций</label>
+                    <div className={styles.promptPreview}>
+                      <pre>{generatedPrompt.collections_section}</pre>
+                    </div>
+                  </div>
+                )}
+
+                <div className={styles.formGroup}>
+                  <label className={styles.label}>🎯 Финальный промпт</label>
+                  <div className={styles.promptPreview} style={{ maxHeight: '400px', overflow: 'auto' }}>
+                    <pre>{generatedPrompt.final_prompt}</pre>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className={styles.emptyState}>
+                {isNew 
+                  ? 'Сохраните агента чтобы увидеть сгенерированный промпт'
+                  : 'Загрузка...'}
+              </div>
+            )}
+          </TabPanel>
+        </Tabs>
+      </div>
       </div>
     </div>
   );

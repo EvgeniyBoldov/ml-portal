@@ -32,3 +32,4 @@ export { Toast, ToastProvider, useToast } from './Toast';
 export { default as Toggle } from './Toggle';
 export { default as FieldEditor } from './FieldEditor';
 export { default as FieldCard } from './FieldCard';
+export { Tabs, TabPanel } from './Tabs';

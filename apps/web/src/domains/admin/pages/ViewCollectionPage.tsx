@@ -174,8 +174,7 @@ export function ViewCollectionPage() {
                     <th>Name</th>
                     <th>Type</th>
                     <th>Required</th>
-                    <th>Searchable</th>
-                    <th>Search Mode</th>
+                    <th>Search Modes</th>
                     <th>Description</th>
                   </tr>
                 </thead>
@@ -199,21 +198,17 @@ export function ViewCollectionPage() {
                         </Badge>
                       </td>
                       <td>
-                        <Badge
-                          tone={field.searchable ? 'info' : 'neutral'}
-                          size="small"
-                        >
-                          {field.searchable ? 'Yes' : 'No'}
-                        </Badge>
-                      </td>
-                      <td>
-                        {field.search_mode ? (
-                          <Badge tone="neutral" size="small">
-                            {field.search_mode}
-                          </Badge>
-                        ) : (
-                          '—'
-                        )}
+                        <div className={styles.searchModesList}>
+                          {field.search_modes?.map(mode => (
+                            <Badge
+                              key={mode}
+                              tone={mode === 'vector' ? 'warning' : 'info'}
+                              size="small"
+                            >
+                              {mode}
+                            </Badge>
+                          )) || <span>—</span>}
+                        </div>
                       </td>
                       <td>{field.description || '—'}</td>
                     </tr>
