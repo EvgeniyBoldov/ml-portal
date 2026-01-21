@@ -9,6 +9,7 @@ export * from './agents';
 export * from './agentRuns';
 
 export * from './rag';
+export * from './collections';
 export { ApiError, toApiError } from './errors';
 export { apiRequest, setAuthTokens, clearAuthTokens, getAccessToken, refreshAccessToken } from './http';
 export { qk } from './keys';

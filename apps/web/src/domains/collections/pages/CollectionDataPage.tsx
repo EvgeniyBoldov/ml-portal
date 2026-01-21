@@ -1,7 +1,7 @@
 /**
  * CollectionDataPage - View and manage collection data
  */
-import React, { useState, useMemo, useCallback, useRef } from 'react';
+import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import Button from '@shared/ui/Button';
@@ -40,6 +40,10 @@ export default function CollectionDataPage() {
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
 
+  // Checkbox refs for indeterminate state
+  const selectAllRef = useRef<HTMLInputElement>(null);
+  const selectAllTableRef = useRef<HTMLInputElement>(null);
+
   // Debounce search
   React.useEffect(() => {
     const timer = setTimeout(() => {
@@ -72,6 +76,17 @@ export default function CollectionDataPage() {
   const rows = dataResult?.items ?? [];
   const total = dataResult?.total ?? 0;
   const totalPages = Math.ceil(total / pageSize);
+
+  // Update indeterminate state for "select all" checkboxes
+  useEffect(() => {
+    const isIndeterminate = selectedIds.size > 0 && selectedIds.size < rows.length;
+    if (selectAllRef.current) {
+      selectAllRef.current.indeterminate = isIndeterminate;
+    }
+    if (selectAllTableRef.current) {
+      selectAllTableRef.current.indeterminate = isIndeterminate;
+    }
+  }, [selectedIds.size, rows.length]);
 
   // Delete mutation
   const deleteMutation = useMutation({
@@ -246,6 +261,7 @@ export default function CollectionDataPage() {
         <div className={styles.toolbarLeft}>
           <label className={styles.selectAll}>
             <input
+              ref={selectAllRef}
               type="checkbox"
               checked={rows.length > 0 && selectedIds.size === rows.length}
               onChange={handleSelectAll}
@@ -313,8 +329,9 @@ export default function CollectionDataPage() {
               <tr>
                 <th className={styles.checkboxCol}>
                   <input
+                    ref={selectAllTableRef}
                     type="checkbox"
-                    checked={selectedIds.size === rows.length}
+                    checked={rows.length > 0 && selectedIds.size === rows.length}
                     onChange={handleSelectAll}
                   />
                 </th>
