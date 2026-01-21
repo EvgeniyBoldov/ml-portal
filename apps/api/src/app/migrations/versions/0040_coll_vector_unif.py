@@ -10,7 +10,7 @@ from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
-revision: str = '0040_collection_vector_unification'
+revision: str = '0040_coll_vector_unif'
 down_revision: Union[str, None] = '0039_agent_collections'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
