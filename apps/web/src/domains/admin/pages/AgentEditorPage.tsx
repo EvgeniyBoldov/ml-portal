@@ -109,6 +109,20 @@ export function AgentEditorPage() {
 
   const hasCollectionSearchTool = formData.tools.includes('collection.search');
 
+  // Load generated prompt for preview
+  const { data: generatedPrompt, refetch: refetchPrompt } = useQuery({
+    queryKey: ['agents', slug, 'generated-prompt'],
+    queryFn: () => agentsApi.getGeneratedPrompt(slug!),
+    enabled: !isNew && !!slug,
+  });
+
+  // Refetch generated prompt when tools or collections change
+  useEffect(() => {
+    if (!isNew && slug) {
+      refetchPrompt();
+    }
+  }, [formData.tools, formData.available_collections, isNew, slug, refetchPrompt]);
+
   if (!isNew && isLoading) {
     return <div className="p-6 text-center text-gray-500">Loading agent...</div>;
   }
@@ -124,7 +138,8 @@ export function AgentEditorPage() {
         </Link>
       </div>
 
-      <form id="agent-form" onSubmit={handleSubmit} className={styles.grid}>
+      <div className={styles.grid}>
+        <form id="agent-form" onSubmit={handleSubmit}>
         {/* Main Settings */}
         <div className={styles.card}>
           <div className={styles.cardHeader}>
@@ -305,6 +320,54 @@ export function AgentEditorPage() {
           </div>
         </div>
       </form>
+
+      {/* Generated Prompt Preview */}
+      {!isNew && generatedPrompt && (
+        <div className={styles.card}>
+          <div className={styles.cardHeader}>
+            <h2 className={styles.cardTitle}>Сгенерированный Промпт</h2>
+            <p className={styles.cardDescription}>
+              Финальный промпт, который видит LLM (базовый промпт + инструменты + коллекции)
+            </p>
+          </div>
+
+          <div className={styles.formGroup}>
+            <label className={styles.label}>Базовый промпт</label>
+            <div className={styles.promptPreview}>
+              <pre>{generatedPrompt.base_prompt}</pre>
+            </div>
+            <p className={styles.description}>
+              Источник: {generatedPrompt.base_prompt_slug}
+            </p>
+          </div>
+
+          {generatedPrompt.tools_section && (
+            <div className={styles.formGroup}>
+              <label className={styles.label}>Секция инструментов</label>
+              <div className={styles.promptPreview}>
+                <pre>{generatedPrompt.tools_section}</pre>
+              </div>
+            </div>
+          )}
+
+          {generatedPrompt.collections_section && (
+            <div className={styles.formGroup}>
+              <label className={styles.label}>Секция коллекций</label>
+              <div className={styles.promptPreview}>
+                <pre>{generatedPrompt.collections_section}</pre>
+              </div>
+            </div>
+          )}
+
+          <div className={styles.formGroup}>
+            <label className={styles.label}>Финальный промпт</label>
+            <div className={styles.promptPreview} style={{ maxHeight: '400px', overflow: 'auto' }}>
+              <pre>{generatedPrompt.final_prompt}</pre>
+            </div>
+          </div>
+        </div>
+      )}
+      </div>
     </div>
   );
 }

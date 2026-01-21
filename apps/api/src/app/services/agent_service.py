@@ -142,3 +142,68 @@ class AgentService:
             profile.system_prompt.slug,
             profile.generation_config
         )
+
+    async def get_generated_prompt(self, identifier: str) -> Dict[str, Any]:
+        """
+        Generate the final system prompt for an agent.
+        Shows how the prompt is composed from base prompt + tools instructions.
+        
+        Returns:
+            Dict with base_prompt, tools_section, collections_section, and final_prompt
+        """
+        from app.agents.registry import ToolRegistry
+        
+        agent = await self.get_agent(identifier)
+        
+        # Load system prompt
+        system_prompt = await self.prompt_repo.get_by_slug(agent.system_prompt_slug)
+        if not system_prompt:
+            raise HTTPException(
+                status_code=500,
+                detail=f"System prompt '{agent.system_prompt_slug}' not found"
+            )
+        
+        base_prompt = system_prompt.template
+        
+        # Build tools section
+        tools_section = ""
+        if agent.tools:
+            tools_section = "\n\n# Available Tools\n\n"
+            tools_section += "You have access to the following tools:\n\n"
+            
+            for tool_slug in agent.tools:
+                handler = ToolRegistry.get(tool_slug)
+                if handler:
+                    tools_section += f"## {handler.name} ({tool_slug})\n"
+                    tools_section += f"{handler.description}\n\n"
+                    tools_section += f"Input Schema:\n```json\n{handler.input_schema}\n```\n\n"
+                else:
+                    tools_section += f"## {tool_slug}\n"
+                    tools_section += f"Tool not found in registry\n\n"
+        
+        # Build collections section
+        collections_section = ""
+        if agent.available_collections and "collection.search" in agent.tools:
+            collections_section = "\n\n# Available Collections\n\n"
+            collections_section += "You can search in the following collections:\n"
+            for coll_slug in agent.available_collections:
+                collections_section += f"- {coll_slug}\n"
+        
+        # Compose final prompt
+        final_prompt = base_prompt
+        if tools_section:
+            final_prompt += tools_section
+        if collections_section:
+            final_prompt += collections_section
+        
+        return {
+            "agent_slug": agent.slug,
+            "agent_name": agent.name,
+            "base_prompt": base_prompt,
+            "base_prompt_slug": system_prompt.slug,
+            "tools_section": tools_section if tools_section else None,
+            "collections_section": collections_section if collections_section else None,
+            "final_prompt": final_prompt,
+            "tools": agent.tools,
+            "available_collections": agent.available_collections,
+        }

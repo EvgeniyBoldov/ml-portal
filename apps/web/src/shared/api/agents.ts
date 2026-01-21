@@ -70,5 +70,19 @@ export const agentsApi = {
     return apiRequest(`/admin/agents/${slug}`, {
       method: 'DELETE',
     });
+  },
+
+  async getGeneratedPrompt(slug: string): Promise<{
+    agent_slug: string;
+    agent_name: string;
+    base_prompt: string;
+    base_prompt_slug: string;
+    tools_section: string | null;
+    collections_section: string | null;
+    final_prompt: string;
+    tools: string[];
+    available_collections: string[];
+  }> {
+    return apiRequest(`/admin/agents/${slug}/generated-prompt`);
   }
 };

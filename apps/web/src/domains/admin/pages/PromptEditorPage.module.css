@@ -216,3 +216,22 @@
   color: var(--muted);
   font-size: 0.875rem;
 }
+
+.promptPreview {
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 16px;
+  max-height: 300px;
+  overflow: auto;
+}
+
+.promptPreview pre {
+  margin: 0;
+  font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  color: var(--text);
+}

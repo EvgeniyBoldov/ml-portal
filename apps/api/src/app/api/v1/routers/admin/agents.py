@@ -66,3 +66,18 @@ async def delete_agent(
     """Delete agent. Admin only."""
     service = AgentService(db)
     await service.delete_agent(identifier)
+
+
+@router.get("/{identifier}/generated-prompt")
+async def get_agent_generated_prompt(
+    identifier: str,
+    db: AsyncSession = Depends(db_session),
+    _: UserCtx = Depends(require_admin),
+):
+    """
+    Get the generated system prompt for an agent.
+    Shows how the final prompt is composed from base prompt + tools instructions.
+    Admin only.
+    """
+    service = AgentService(db)
+    return await service.get_generated_prompt(identifier)
