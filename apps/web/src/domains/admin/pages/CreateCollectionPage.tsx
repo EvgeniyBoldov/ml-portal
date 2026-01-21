@@ -9,7 +9,7 @@ import Button from '@shared/ui/Button';
 import Input from '@shared/ui/Input';
 import { useErrorToast, useSuccessToast } from '@shared/ui/Toast';
 import { Skeleton } from '@shared/ui/Skeleton';
-import { collectionsApi, type CollectionField } from '@shared/api/collections';
+import { collectionsApi, type CollectionField, type SearchMode } from '@shared/api/collections';
 import styles from './CreateCollectionPage.module.css';
 
 interface FieldFormData extends CollectionField {
@@ -25,11 +25,7 @@ const FIELD_TYPES = [
   { value: 'date', label: 'Date' },
 ];
 
-const SEARCH_MODES = [
-  { value: 'exact', label: 'Exact' },
-  { value: 'like', label: 'LIKE' },
-  { value: 'range', label: 'Range' },
-];
+// Search modes are now managed as checkboxes per field
 
 function generateId() {
   return Math.random().toString(36).substring(2, 9);
@@ -47,7 +43,6 @@ export function CreateCollectionPage() {
     slug: '',
     name: '',
     description: '',
-    type: 'sql' as const,
   });
 
   const [fields, setFields] = useState<FieldFormData[]>([
@@ -56,8 +51,7 @@ export function CreateCollectionPage() {
       name: '',
       type: 'text',
       required: false,
-      searchable: true,
-      search_mode: 'like',
+      search_modes: ['exact'],
     },
   ]);
 
@@ -80,8 +74,7 @@ export function CreateCollectionPage() {
         name: '',
         type: 'text',
         required: false,
-        searchable: true,
-        search_mode: 'like',
+        search_modes: ['exact'],
       },
     ]);
   };
@@ -97,22 +90,45 @@ export function CreateCollectionPage() {
   const handleFieldChange = (
     id: string,
     key: keyof FieldFormData,
-    value: string | boolean
+    value: string | boolean | SearchMode[]
   ) => {
     setFields(
       fields.map(f => {
         if (f.id !== id) return f;
         const updated = { ...f, [key]: value };
+        
+        // Reset search_modes when type changes
         if (key === 'type') {
-          if (value === 'text') {
-            updated.search_mode = 'like';
-          } else if (['integer', 'float', 'datetime', 'date'].includes(value as string)) {
-            updated.search_mode = 'range';
-          } else {
-            updated.search_mode = 'exact';
+          updated.search_modes = ['exact'];
+        }
+        
+        return updated;
+      })
+    );
+  };
+  
+  const toggleSearchMode = (fieldId: string, mode: SearchMode) => {
+    setFields(
+      fields.map(f => {
+        if (f.id !== fieldId) return f;
+        
+        const modes = new Set(f.search_modes);
+        
+        if (modes.has(mode)) {
+          modes.delete(mode);
+          // Always keep at least 'exact'
+          if (modes.size === 0) {
+            modes.add('exact');
+          }
+        } else {
+          modes.add(mode);
+          // If adding vector, ensure like is also present
+          if (mode === 'vector' && !modes.has('like')) {
+            modes.add('like');
           }
         }
-        return updated;
+        
+        return { ...f, search_modes: Array.from(modes) };
       })
     );
   };
@@ -150,7 +166,6 @@ export function CreateCollectionPage() {
       slug: formData.slug,
       name: formData.name,
       description: formData.description || undefined,
-      type: formData.type,
       fields: cleanFields,
     });
   };
@@ -170,7 +185,7 @@ export function CreateCollectionPage() {
       <div className={styles.pageHeader}>
         <h1 className={styles.pageTitle}>Create Collection</h1>
         <p className={styles.pageDescription}>
-          Создайте новую коллекцию данных для хранения структурированной информации
+          Создайте коллекцию для структурированных данных. Векторный поиск включается автоматически для текстовых полей с LIKE.
         </p>
       </div>
 
@@ -232,25 +247,6 @@ export function CreateCollectionPage() {
               />
             </div>
 
-            <div className={styles.formGroup}>
-              <label className={styles.formLabel}>Type</label>
-              <select
-                className={styles.formSelect}
-                value={formData.type}
-                onChange={e =>
-                  setFormData({ ...formData, type: e.target.value as 'sql' })
-                }
-              >
-                <option value="sql">SQL</option>
-                <option value="vector" disabled>
-                  Vector (coming soon)
-                </option>
-                <option value="hybrid" disabled>
-                  Hybrid (coming soon)
-                </option>
-              </select>
-            </div>
-
             <div className={`${styles.formGroup} ${styles.fullWidth}`}>
               <label className={styles.formLabel}>Description</label>
               <textarea
@@ -284,87 +280,107 @@ export function CreateCollectionPage() {
                 Добавьте хотя бы одно поле
               </div>
             ) : (
-              fields.map(field => (
-                <div key={field.id} className={styles.fieldRow}>
-                  <input
-                    type="text"
-                    className={styles.fieldInput}
-                    value={field.name}
-                    onChange={e =>
-                      handleFieldChange(
-                        field.id,
-                        'name',
-                        e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '')
-                      )
-                    }
-                    placeholder="field_name"
-                  />
-                  <select
-                    className={styles.fieldSelect}
-                    value={field.type}
-                    onChange={e =>
-                      handleFieldChange(field.id, 'type', e.target.value)
-                    }
-                  >
-                    {FIELD_TYPES.map(t => (
-                      <option key={t.value} value={t.value}>
-                        {t.label}
-                      </option>
-                    ))}
-                  </select>
-                  <select
-                    className={styles.fieldSelect}
-                    value={field.search_mode || 'exact'}
-                    onChange={e =>
-                      handleFieldChange(field.id, 'search_mode', e.target.value)
-                    }
-                  >
-                    {SEARCH_MODES.map(m => (
-                      <option
-                        key={m.value}
-                        value={m.value}
-                        disabled={
-                          (m.value === 'like' && field.type !== 'text') ||
-                          (m.value === 'range' &&
-                            !['integer', 'float', 'datetime', 'date'].includes(
-                              field.type
-                            ))
+              fields.map(field => {
+                const isTextField = field.type === 'text';
+                const isNumericOrDate = ['integer', 'float', 'datetime', 'date'].includes(field.type);
+                const hasLike = field.search_modes.includes('like');
+                
+                return (
+                  <div key={field.id} className={styles.fieldRow}>
+                    <div className={styles.fieldBasic}>
+                      <input
+                        type="text"
+                        className={styles.fieldInput}
+                        value={field.name}
+                        onChange={e =>
+                          handleFieldChange(
+                            field.id,
+                            'name',
+                            e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '')
+                          )
+                        }
+                        placeholder="field_name"
+                      />
+                      <select
+                        className={styles.fieldSelect}
+                        value={field.type}
+                        onChange={e =>
+                          handleFieldChange(field.id, 'type', e.target.value)
                         }
                       >
-                        {m.label}
-                      </option>
-                    ))}
-                  </select>
-                  <label className={styles.fieldCheckbox}>
-                    <input
-                      type="checkbox"
-                      checked={field.required}
-                      onChange={e =>
-                        handleFieldChange(field.id, 'required', e.target.checked)
-                      }
-                    />
-                    Required
-                  </label>
-                  <label className={styles.fieldCheckbox}>
-                    <input
-                      type="checkbox"
-                      checked={field.searchable}
-                      onChange={e =>
-                        handleFieldChange(field.id, 'searchable', e.target.checked)
-                      }
-                    />
-                    Searchable
-                  </label>
-                  <button
-                    type="button"
-                    className={styles.removeFieldBtn}
-                    onClick={() => handleRemoveField(field.id)}
-                    title="Remove field"
-                  >
-                    ✕
-                  </button>
-                </div>
-              ))
+                        {FIELD_TYPES.map(t => (
+                          <option key={t.value} value={t.value}>
+                            {t.label}
+                          </option>
+                        ))}
+                      </select>
+                      <label className={styles.fieldCheckbox}>
+                        <input
+                          type="checkbox"
+                          checked={field.required}
+                          onChange={e =>
+                            handleFieldChange(field.id, 'required', e.target.checked)
+                          }
+                        />
+                        Required
+                      </label>
+                    </div>
+                    
+                    <div className={styles.searchModes}>
+                      <span className={styles.searchModesLabel}>Search:</span>
+                      
+                      {/* LIKE - only for text */}
+                      {isTextField && (
+                        <label className={styles.searchModeCheckbox}>
+                          <input
+                            type="checkbox"
+                            checked={hasLike}
+                            onChange={() => toggleSearchMode(field.id, 'like')}
+                          />
+                          LIKE
+                        </label>
+                      )}
+                      
+                      {/* Vector - only for text with LIKE */}
+                      {isTextField && hasLike && (
+                        <label className={styles.searchModeCheckbox}>
+                          <input
+                            type="checkbox"
+                            checked={field.search_modes.includes('vector')}
+                            onChange={() => toggleSearchMode(field.id, 'vector')}
+                          />
+                          Vector
+                        </label>
+                      )}
+                      
+                      {/* Range - only for numeric/date */}
+                      {isNumericOrDate && (
+                        <label className={styles.searchModeCheckbox}>
+                          <input
+                            type="checkbox"
+                            checked={field.search_modes.includes('range')}
+                            onChange={() => toggleSearchMode(field.id, 'range')}
+                          />
+                          Range
+                        </label>
+                      )}
+                      
+                      <span className={styles.searchModesHint}>
+                        (Exact always enabled)
+                      </span>
+                    </div>
+                    
+                    <button
+                      type="button"
+                      className={styles.removeFieldBtn}
+                      onClick={() => handleRemoveField(field.id)}
+                      title="Remove field"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                );
+              })
             )}
           </div>
         </div>

@@ -10,7 +10,7 @@ from sqlalchemy import text, TextClause
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
-from app.models.collection import Collection, CollectionType, FieldType, SearchMode
+from app.models.collection import Collection, FieldType, SearchMode
 
 
 FIELD_TYPE_TO_PG = {
@@ -66,12 +66,12 @@ class CollectionService:
             )
 
     def _validate_fields(self, fields: List[dict]) -> None:
-        """Validate fields schema"""
+        """Validate fields schema with search_modes support"""
         if not fields:
             raise InvalidSchemaError("At least one field is required")
 
         field_names = set()
-        reserved_names = {"id", "_created_at", "_updated_at"}
+        reserved_names = {"id", "_created_at", "_updated_at", "_vector_status", "_vector_chunk_count", "_vector_error"}
 
         for field in fields:
             name = field.get("name")
@@ -96,25 +96,47 @@ class CollectionService:
                     f"Invalid field type '{field_type}' for field '{name}'"
                 )
 
-            search_mode = field.get("search_mode")
-            if search_mode and search_mode not in [sm.value for sm in SearchMode]:
+            # Validate search_modes (array)
+            search_modes = field.get("search_modes", ["exact"])
+            if not isinstance(search_modes, list):
                 raise InvalidSchemaError(
-                    f"Invalid search mode '{search_mode}' for field '{name}'"
+                    f"Field '{name}': search_modes must be an array"
                 )
-
-            if search_mode == SearchMode.LIKE.value and field_type != FieldType.TEXT.value:
+            
+            valid_modes = {sm.value for sm in SearchMode}
+            for mode in search_modes:
+                if mode not in valid_modes:
+                    raise InvalidSchemaError(
+                        f"Field '{name}': invalid search mode '{mode}'"
+                    )
+            
+            # Vector only for text fields
+            if "vector" in search_modes and field_type != FieldType.TEXT.value:
                 raise InvalidSchemaError(
-                    f"Search mode 'like' only valid for text fields, not '{field_type}'"
+                    f"Field '{name}': vector search only available for text fields"
                 )
-
-            if search_mode == SearchMode.RANGE.value and field_type not in [
+            
+            # Vector requires like
+            if "vector" in search_modes and "like" not in search_modes:
+                raise InvalidSchemaError(
+                    f"Field '{name}': vector search requires 'like' in search_modes"
+                )
+            
+            # Like only for text fields
+            if "like" in search_modes and field_type != FieldType.TEXT.value:
+                raise InvalidSchemaError(
+                    f"Field '{name}': like search only available for text fields"
+                )
+            
+            # Range only for numeric/date fields
+            if "range" in search_modes and field_type not in [
                 FieldType.INTEGER.value,
                 FieldType.FLOAT.value,
                 FieldType.DATETIME.value,
                 FieldType.DATE.value,
             ]:
                 raise InvalidSchemaError(
-                    f"Search mode 'range' not valid for field type '{field_type}'"
+                    f"Field '{name}': range search not valid for field type '{field_type}'"
                 )
 
     def _build_create_table_sql(self, table_name: str, fields: List[dict]) -> str:
@@ -135,28 +157,28 @@ class CollectionService:
         return f"CREATE TABLE {table_name} (\n    {columns_sql}\n)"
 
     def _build_indexes_sql(self, table_name: str, fields: List[dict]) -> List[str]:
-        """Build CREATE INDEX statements for searchable fields"""
+        """Build CREATE INDEX statements based on search_modes"""
         indexes = []
 
         for field in fields:
-            if not field.get("searchable", False):
-                continue
-
             name = field["name"]
-            search_mode = field.get("search_mode", SearchMode.EXACT.value)
-            field_type = field["type"]
-
-            if search_mode == SearchMode.LIKE.value:
+            search_modes = field.get("search_modes", [])
+            
+            # Create indexes based on search modes
+            if "like" in search_modes:
+                # GIN trigram index for LIKE search
                 indexes.append(
                     f"CREATE INDEX idx_{table_name}_{name}_trgm "
                     f"ON {table_name} USING GIN ({name} gin_trgm_ops)"
                 )
-            elif search_mode == SearchMode.RANGE.value:
+            elif "range" in search_modes:
+                # B-tree index for range queries
                 indexes.append(
                     f"CREATE INDEX idx_{table_name}_{name}_btree "
                     f"ON {table_name} ({name})"
                 )
-            else:
+            elif "exact" in search_modes:
+                # B-tree index for exact match
                 indexes.append(
                     f"CREATE INDEX idx_{table_name}_{name} "
                     f"ON {table_name} ({name})"
@@ -171,18 +193,19 @@ class CollectionService:
         name: str,
         fields: List[dict],
         description: Optional[str] = None,
-        collection_type: CollectionType = CollectionType.SQL,
+        vector_config: Optional[dict] = None,
     ) -> Collection:
         """
         Create a new collection with its dynamic table.
+        Automatically creates Qdrant collection if any field has 'vector' in search_modes.
         
         Args:
             tenant_id: Tenant UUID
             slug: Unique identifier (within tenant)
             name: Human-readable name
-            fields: List of field definitions
+            fields: List of field definitions with search_modes
             description: Optional description for LLM
-            collection_type: Type of collection (sql, vector, hybrid)
+            vector_config: Optional vector search configuration
         
         Returns:
             Created Collection object
@@ -195,6 +218,26 @@ class CollectionService:
             raise CollectionExistsError(f"Collection '{slug}' already exists")
 
         table_name = self._generate_table_name(tenant_id, slug)
+        
+        # Check if any field has vector search
+        has_vector_fields = any(
+            "vector" in field.get("search_modes", []) 
+            for field in fields
+        )
+        
+        # Auto-generate vector config if needed
+        if has_vector_fields and not vector_config:
+            vector_config = {
+                "chunk_strategy": "by_paragraphs",
+                "chunk_size": 512,
+                "overlap": 50,
+            }
+        
+        # Generate Qdrant collection name if vector search enabled
+        qdrant_collection_name = None
+        if has_vector_fields:
+            tenant_short = str(tenant_id).replace("-", "")[:8]
+            qdrant_collection_name = f"coll_{tenant_short}_{slug}"
 
         collection = Collection(
             id=uuid.uuid4(),
@@ -202,20 +245,45 @@ class CollectionService:
             slug=slug,
             name=name,
             description=description,
-            type=collection_type.value,
             fields=fields,
             table_name=table_name,
             row_count=0,
+            vector_config=vector_config,
+            qdrant_collection_name=qdrant_collection_name,
+            total_rows=0,
+            vectorized_rows=0,
+            total_chunks=0,
+            failed_rows=0,
             is_active=True,
         )
 
+        # Create SQL table
         create_table_sql = self._build_create_table_sql(table_name, fields)
         await self.session.execute(text(create_table_sql))
+        
+        # Add vector metadata columns if needed
+        if has_vector_fields:
+            await self.session.execute(text(
+                f"ALTER TABLE {table_name} "
+                f"ADD COLUMN _vector_status TEXT DEFAULT 'pending', "
+                f"ADD COLUMN _vector_chunk_count INTEGER DEFAULT 0, "
+                f"ADD COLUMN _vector_error TEXT"
+            ))
+            await self.session.execute(text(
+                f"CREATE INDEX idx_{table_name}_vector_status "
+                f"ON {table_name} (_vector_status)"
+            ))
 
+        # Create trigram extension for LIKE search
         await self.session.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
 
+        # Create indexes
         for index_sql in self._build_indexes_sql(table_name, fields):
             await self.session.execute(text(index_sql))
+        
+        # TODO: Create Qdrant collection here when vector service is implemented
+        # if qdrant_collection_name:
+        #     await self._create_qdrant_collection(qdrant_collection_name, vector_config)
 
         self.session.add(collection)
         await self.session.flush()

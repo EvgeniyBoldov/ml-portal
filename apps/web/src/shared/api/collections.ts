@@ -3,13 +3,20 @@
  */
 import { apiRequest } from './http';
 
+export type SearchMode = 'exact' | 'like' | 'range' | 'vector';
+
 export interface CollectionField {
   name: string;
   type: 'text' | 'integer' | 'float' | 'boolean' | 'datetime' | 'date';
   required: boolean;
-  searchable: boolean;
-  search_mode?: 'exact' | 'like' | 'range';
+  search_modes: SearchMode[];
   description?: string;
+}
+
+export interface VectorConfig {
+  chunk_strategy: 'by_tokens' | 'by_paragraphs' | 'by_sentences' | 'by_markdown';
+  chunk_size: number;
+  overlap: number;
 }
 
 export interface Collection {
@@ -18,10 +25,23 @@ export interface Collection {
   slug: string;
   name: string;
   description?: string;
-  type: 'sql' | 'vector' | 'hybrid';
   fields: CollectionField[];
   row_count: number;
   table_name?: string;
+  
+  // Vector search fields
+  has_vector_search: boolean;
+  vector_config?: VectorConfig;
+  qdrant_collection_name?: string;
+  
+  // Vectorization statistics
+  total_rows: number;
+  vectorized_rows: number;
+  total_chunks: number;
+  failed_rows: number;
+  vectorization_progress: number;
+  is_fully_vectorized: boolean;
+  
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -40,8 +60,8 @@ export interface CreateCollectionRequest {
   slug: string;
   name: string;
   description?: string;
-  type?: 'sql' | 'vector' | 'hybrid';
   fields: CollectionField[];
+  vector_config?: VectorConfig;
 }
 
 export interface CSVPreviewResponse {
