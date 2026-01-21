@@ -1,165 +1,216 @@
 /**
- * AuditPage - Audit logs viewer
+ * AuditPage - Audit logs viewer with DataTable
  */
 import React, { useState } from 'react';
-import { useAuditLog } from '@shared/api/hooks/useAdmin';
+import { useQuery } from '@tanstack/react-query';
+import { adminApi, type AuditLog } from '@shared/api';
+import { qk } from '@shared/api/keys';
+import DataTable, { type DataTableColumn } from '@shared/ui/DataTable';
+import Badge from '@shared/ui/Badge';
 import Input from '@shared/ui/Input';
-import { Skeleton } from '@shared/ui/Skeleton';
 import Button from '@shared/ui/Button';
-import styles from './AuditPage.module.css';
-
-interface AuditFilters {
-  actor_user_id: string;
-  action: string;
-  object_type: string;
-  start_date: string;
-  end_date: string;
-}
+import Modal from '@shared/ui/Modal';
+import styles from './RegistryPage.module.css';
 
 export function AuditPage() {
-  const [filters, setFilters] = useState<AuditFilters>({
-    actor_user_id: '',
-    action: '',
-    object_type: '',
-    start_date: '',
-    end_date: '',
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
+  const [action, setAction] = useState('');
+  const [userId, setUserId] = useState('');
+  const [selectedLog, setSelectedLog] = useState<AuditLog | null>(null);
+
+  const { data, isLoading, error } = useQuery({
+    queryKey: qk.admin.audit({ page, action: action || undefined, user_id: userId || undefined }),
+    queryFn: () => adminApi.getAuditLogs({
+      action: action || undefined,
+      actor_user_id: userId || undefined,
+      limit: pageSize,
+    }),
+    staleTime: 30000,
   });
 
-  const queryParams = React.useMemo(
-    () => ({
-      actor_user_id: filters.actor_user_id || undefined,
-      action: filters.action || undefined,
-      object_type: filters.object_type || undefined,
-      start_date: filters.start_date || undefined,
-      end_date: filters.end_date || undefined,
-      limit: 50,
-    }),
-    [filters]
-  );
-
-  const { data, isLoading, error } = useAuditLog(queryParams);
   const logs = data?.logs || [];
+  const total = data?.total || logs.length;
 
-  if (error) {
-    return (
-      <div className={styles.wrap}>
-        <div className={styles.errorState}>Failed to load audit logs.</div>
-      </div>
-    );
-  }
+  const columns: DataTableColumn<AuditLog>[] = [
+    {
+      key: 'ts',
+      label: 'Время',
+      width: 180,
+      render: (log) => (
+        <span className={styles.muted}>
+          {new Date(log.ts).toLocaleString('ru-RU', {
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+          })}
+        </span>
+      ),
+    },
+    {
+      key: 'action',
+      label: 'Действие',
+      width: 200,
+      render: (log) => {
+        const actionType = log.action.split('.')[0];
+        const tone = actionType === 'mcp' ? 'info' : 
+                     log.action.includes('delete') ? 'danger' :
+                     log.action.includes('create') ? 'success' : 'neutral';
+        return <Badge tone={tone} size="small">{log.action}</Badge>;
+      },
+    },
+    {
+      key: 'actor_user_id',
+      label: 'Пользователь',
+      width: 120,
+      render: (log) => (
+        <code className={styles.code}>
+          {log.actor_user_id ? log.actor_user_id.substring(0, 8) : '—'}
+        </code>
+      ),
+    },
+    {
+      key: 'object_type',
+      label: 'Объект',
+      width: 150,
+      render: (log) => log.object_type || '—',
+    },
+    {
+      key: 'ip',
+      label: 'IP',
+      width: 120,
+      render: (log) => (
+        <code className={styles.code}>{log.ip || '—'}</code>
+      ),
+    },
+    {
+      key: 'meta',
+      label: 'Детали',
+      render: (log) => (
+        <Button
+          variant="outline"
+          size="small"
+          onClick={() => setSelectedLog(log)}
+        >
+          Подробнее
+        </Button>
+      ),
+    },
+  ];
 
   return (
     <div className={styles.wrap}>
       <div className={styles.card}>
         <div className={styles.header}>
-          <h1 className={styles.title}>Audit Log</h1>
+          <div className={styles.headerLeft}>
+            <h1 className={styles.title}>Аудит</h1>
+            <p className={styles.subtitle}>
+              Журнал действий пользователей и MCP запросов
+            </p>
+          </div>
+          <div className={styles.controls}>
+            <Input
+              placeholder="Фильтр по действию..."
+              value={action}
+              onChange={(e) => setAction(e.target.value)}
+              className={styles.search}
+            />
+            <Input
+              placeholder="User ID..."
+              value={userId}
+              onChange={(e) => setUserId(e.target.value)}
+              className={styles.search}
+            />
+          </div>
         </div>
 
-        <div className={styles.filters}>
-          <Input
-            placeholder="Actor ID"
-            value={filters.actor_user_id}
-            onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
-              setFilters(prev => ({
-                ...prev,
-                actor_user_id: event.target.value,
-              }))
-            }
-          />
-          <Input
-            placeholder="Action"
-            value={filters.action}
-            onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
-              setFilters(prev => ({ ...prev, action: event.target.value }))
-            }
-          />
-          <Input
-            placeholder="Object Type"
-            value={filters.object_type}
-            onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
-              setFilters(prev => ({
-                ...prev,
-                object_type: event.target.value,
-              }))
-            }
-          />
-          <Input
-            type="date"
-            placeholder="Start Date"
-            value={filters.start_date}
-            onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
-              setFilters(prev => ({ ...prev, start_date: event.target.value }))
-            }
-          />
-          <Input
-            type="date"
-            placeholder="End Date"
-            value={filters.end_date}
-            onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
-              setFilters(prev => ({ ...prev, end_date: event.target.value }))
-            }
-          />
-        </div>
-
-        <div className={styles.tableWrap}>
-          <table className={styles.table}>
-            <thead>
-              <tr>
-                <th>TIMESTAMP</th>
-                <th>ACTOR</th>
-                <th>ACTION</th>
-                <th>OBJECT</th>
-                <th>DETAILS</th>
-              </tr>
-            </thead>
-            <tbody>
-              {isLoading ? (
-                Array.from({ length: 5 }).map((_, i) => (
-                  <tr key={i}>
-                    <td>
-                      <Skeleton width={140} />
-                    </td>
-                    <td>
-                      <Skeleton width={100} />
-                    </td>
-                    <td>
-                      <Skeleton width={80} />
-                    </td>
-                    <td>
-                      <Skeleton width={120} />
-                    </td>
-                    <td>
-                      <Skeleton width={200} />
-                    </td>
-                  </tr>
-                ))
-              ) : logs.length === 0 ? (
-                <tr>
-                  <td colSpan={5} className={styles.emptyState}>
-                    No audit logs found
-                  </td>
-                </tr>
-              ) : (
-                logs.map((log, i) => (
-                  <tr key={i}>
-                    <td>{new Date(log.timestamp).toLocaleString()}</td>
-                    <td>{log.actor_user_id?.substring(0, 8)}</td>
-                    <td>{log.action}</td>
-                    <td>{log.object_type}</td>
-                    <td>{JSON.stringify(log.changes).substring(0, 50)}...</td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-
-        {data?.has_more && (
-          <div className={styles.loadMore}>
-            <Button onClick={() => {}}>Load More</Button>
+        {error && (
+          <div className={styles.errorState}>
+            Не удалось загрузить логи аудита
           </div>
         )}
+
+        <DataTable
+          columns={columns}
+          data={logs}
+          keyField="id"
+          loading={isLoading}
+          paginated
+          pageSize={pageSize}
+          currentPage={page}
+          totalItems={total}
+          onPageChange={setPage}
+          onPageSizeChange={setPageSize}
+          emptyText="Логи аудита не найдены"
+        />
       </div>
+
+      {/* Details Modal */}
+      {selectedLog && (
+        <Modal
+          open={!!selectedLog}
+          onClose={() => setSelectedLog(null)}
+          title="Детали лога аудита"
+        >
+          <div style={{ padding: '24px', maxWidth: '600px' }}>
+            <div style={{ marginBottom: '16px' }}>
+              <strong>ID:</strong> <code>{selectedLog.id}</code>
+            </div>
+            <div style={{ marginBottom: '16px' }}>
+              <strong>Время:</strong> {new Date(selectedLog.ts).toLocaleString('ru-RU')}
+            </div>
+            <div style={{ marginBottom: '16px' }}>
+              <strong>Действие:</strong> <Badge>{selectedLog.action}</Badge>
+            </div>
+            <div style={{ marginBottom: '16px' }}>
+              <strong>Пользователь:</strong> {selectedLog.actor_user_id || '—'}
+            </div>
+            <div style={{ marginBottom: '16px' }}>
+              <strong>Объект:</strong> {selectedLog.object_type || '—'}
+            </div>
+            {selectedLog.object_id && (
+              <div style={{ marginBottom: '16px' }}>
+                <strong>Object ID:</strong> <code>{selectedLog.object_id}</code>
+              </div>
+            )}
+            <div style={{ marginBottom: '16px' }}>
+              <strong>IP:</strong> {selectedLog.ip || '—'}
+            </div>
+            {selectedLog.user_agent && (
+              <div style={{ marginBottom: '16px' }}>
+                <strong>User Agent:</strong>
+                <div style={{ fontSize: '12px', color: 'var(--muted)', marginTop: '4px' }}>
+                  {selectedLog.user_agent}
+                </div>
+              </div>
+            )}
+            {selectedLog.request_id && (
+              <div style={{ marginBottom: '16px' }}>
+                <strong>Request ID:</strong> <code>{selectedLog.request_id}</code>
+              </div>
+            )}
+            {selectedLog.meta && Object.keys(selectedLog.meta).length > 0 && (
+              <div>
+                <strong>Метаданные:</strong>
+                <pre style={{
+                  marginTop: '8px',
+                  padding: '12px',
+                  background: 'var(--bg-subtle)',
+                  borderRadius: 'var(--radius-sm)',
+                  fontSize: '12px',
+                  overflow: 'auto',
+                  maxHeight: '300px',
+                }}>
+                  {JSON.stringify(selectedLog.meta, null, 2)}
+                </pre>
+              </div>
+            )}
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
