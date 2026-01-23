@@ -50,6 +50,33 @@ export const qk = {
     list: (params?: { q?: string }) => ['tools', 'list', params] as const,
     detail: (slug: string) => ['tools', 'detail', slug] as const,
   },
+  toolInstances: {
+    all: () => ['tool-instances'] as const,
+    list: (params?: { toolSlug?: string; scope?: string; tenantId?: string }) =>
+      ['tool-instances', 'list', params] as const,
+    detail: (id: string) => ['tool-instances', 'detail', id] as const,
+  },
+  credentials: {
+    all: () => ['credentials'] as const,
+    list: (params?: { toolInstanceId?: string; scope?: string; tenantId?: string }) =>
+      ['credentials', 'list', params] as const,
+    detail: (id: string) => ['credentials', 'detail', id] as const,
+  },
+  permissions: {
+    all: () => ['permissions'] as const,
+    list: (params?: { scope?: string; tenantId?: string }) =>
+      ['permissions', 'list', params] as const,
+    detail: (id: string) => ['permissions', 'detail', id] as const,
+    effective: (params?: { userId?: string; tenantId?: string }) =>
+      ['permissions', 'effective', params] as const,
+  },
+  routingLogs: {
+    all: () => ['routing-logs'] as const,
+    list: (params?: { agentSlug?: string; status?: string; tenantId?: string }) =>
+      ['routing-logs', 'list', params] as const,
+    detail: (id: string) => ['routing-logs', 'detail', id] as const,
+    stats: (params?: { tenantId?: string }) => ['routing-logs', 'stats', params] as const,
+  },
   chats: {
     all: () => ['chats'] as const,
     list: (q?: string) => ['chats', 'list', q] as const,

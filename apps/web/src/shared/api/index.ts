@@ -5,6 +5,9 @@ export * from './auth';
 export * from './errors';
 export * from './prompts';
 export * from './tools';
+export * from './toolInstances';
+export * from './credentials';
+export * from './permissions';
 export * from './agents';
 export * from './agentRuns';
 
