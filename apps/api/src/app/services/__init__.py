@@ -1,13 +1,17 @@
 """
 Services layer - business logic.
 """
-from .agent_service import AgentService
+from .agent_service import AgentService, AgentProfile
 from .api_key_service import APIKeyService
 from .chat_stream_service import ChatStreamService
+from .credential_service import CredentialService
 from .idempotency_service import IdempotencyService
 from .mcp_audit_service import MCPAuditService
+from .permission_service import PermissionService, EffectivePermissions
 from .prompt_service import PromptService
 from .tool_service import ToolService
+from .tool_instance_service import ToolInstanceService
+from .tool_sync_service import ToolSyncService, sync_tools_from_registry
 from .model_service import ModelService
 from .model_health_checker import ModelHealthChecker
 from .rag_search_service import RagSearchService
@@ -22,12 +26,19 @@ from .users_service import AsyncUsersService
 
 __all__ = [
     "AgentService",
+    "AgentProfile",
     "APIKeyService",
     "ChatStreamService",
+    "CredentialService",
     "IdempotencyService",
     "MCPAuditService",
+    "PermissionService",
+    "EffectivePermissions",
     "PromptService",
     "ToolService",
+    "ToolInstanceService",
+    "ToolSyncService",
+    "sync_tools_from_registry",
     "ModelService",
     "ModelHealthChecker",
     "RagSearchService",
