@@ -118,6 +118,18 @@ class Settings(BaseSettings):
     PROMETHEUS_ENABLED: bool = Field(default=True)
     METRICS_PORT: int = Field(default=9090)
 
+    # Credentials encryption
+    CREDENTIALS_MASTER_KEY: str | None = Field(
+        default=None, 
+        description="Master key for encrypting tool credentials. Required in production."
+    )
+    
+    # Agent Router
+    AGENT_ROUTER_ENABLED: bool = Field(
+        default=False,
+        description="Enable AgentRouter for permission checking and policy enforcement"
+    )
+
     model_config = ConfigDict(
         env_file=".env",
         case_sensitive=False

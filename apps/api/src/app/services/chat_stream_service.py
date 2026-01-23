@@ -20,6 +20,7 @@ from app.core.http.clients import LLMClientProtocol
 from app.services.agent_service import AgentService
 from app.services.run_store import RunStore
 from app.agents import AgentRuntime, ToolContext, RuntimeEvent, RuntimeEventType
+from app.agents.router import AgentRouter, AgentUnavailableError, ExecutionMode
 from app.core.logging import get_logger
 from app.core.idempotency import IdempotencyManager
 
@@ -52,6 +53,7 @@ User message: {message}"""
         llm_client: LLMClientProtocol,
         chats_repo: AsyncChatsRepository,
         messages_repo: AsyncChatMessagesRepository,
+        use_router: bool = False,
     ):
         self.session = session
         self.redis = redis
@@ -62,6 +64,8 @@ User message: {message}"""
         self.agent_service = AgentService(session)
         self.run_store = RunStore(session)
         self.runtime = AgentRuntime(llm_client, run_store=self.run_store)
+        self.use_router = use_router
+        self.router = AgentRouter(session) if use_router else None
     
     async def verify_chat_access(self, chat_id: str, user_id: str) -> bool:
         """Verify that user has access to the chat"""
@@ -270,7 +274,7 @@ User message: {message}"""
                 request_id=idempotency_key or str(uuid.uuid4())
             )
             
-            # 8. Run agent via AgentRuntime
+            # 8. Run agent via AgentRuntime (with optional Router)
             yield {"type": "status", "stage": "agent_running"}
             
             assistant_content = ""
@@ -278,25 +282,49 @@ User message: {message}"""
             llm_error = None
             
             try:
-                async for event in self.runtime.run(
-                    profile=agent_profile,
-                    messages=llm_messages,
-                    ctx=tool_ctx,
-                    model=model,
-                    enable_logging=agent_profile.agent.enable_logging,
-                ):
-                    mapped = self._map_runtime_event(event)
-                    if mapped:
-                        yield mapped
-                    
-                    # Collect final content and sources
-                    if event.type == RuntimeEventType.DELTA:
-                        assistant_content += event.data.get("content", "")
-                    elif event.type == RuntimeEventType.FINAL:
-                        assistant_content = event.data.get("content", assistant_content)
-                        rag_sources = event.data.get("sources", [])
-                    elif event.type == RuntimeEventType.ERROR:
-                        llm_error = event.data.get("error")
+                # Use Router if enabled, otherwise use legacy flow
+                if self.use_router and self.router:
+                    async for event_data in self._run_with_router(
+                        agent_slug=agent_profile.agent.slug,
+                        user_id=user_id,
+                        tenant_id=tenant_id,
+                        llm_messages=llm_messages,
+                        tool_ctx=tool_ctx,
+                        model=model,
+                        content=content,
+                    ):
+                        if event_data.get("type") == "delta":
+                            assistant_content += event_data.get("content", "")
+                        elif event_data.get("type") == "final_content":
+                            assistant_content = event_data.get("content", assistant_content)
+                            rag_sources = event_data.get("sources", [])
+                        elif event_data.get("type") == "error":
+                            llm_error = event_data.get("error")
+                        
+                        # Forward events to client (except internal ones)
+                        if event_data.get("type") != "final_content":
+                            yield event_data
+                else:
+                    # Legacy flow without Router
+                    async for event in self.runtime.run(
+                        profile=agent_profile,
+                        messages=llm_messages,
+                        ctx=tool_ctx,
+                        model=model,
+                        enable_logging=agent_profile.agent.enable_logging,
+                    ):
+                        mapped = self._map_runtime_event(event)
+                        if mapped:
+                            yield mapped
+                        
+                        # Collect final content and sources
+                        if event.type == RuntimeEventType.DELTA:
+                            assistant_content += event.data.get("content", "")
+                        elif event.type == RuntimeEventType.FINAL:
+                            assistant_content = event.data.get("content", assistant_content)
+                            rag_sources = event.data.get("sources", [])
+                        elif event.type == RuntimeEventType.ERROR:
+                            llm_error = event.data.get("error")
                         
             except Exception as runtime_exc:
                 llm_error = str(runtime_exc)
@@ -373,3 +401,94 @@ User message: {message}"""
         
         # FINAL is handled separately for message persistence
         return None
+    
+    async def _run_with_router(
+        self,
+        agent_slug: str,
+        user_id: str,
+        tenant_id: str,
+        llm_messages: List[Dict[str, str]],
+        tool_ctx: ToolContext,
+        model: Optional[str],
+        content: str,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """
+        Run agent with Router for permission checking and policy enforcement.
+        
+        This method:
+        1. Routes request through AgentRouter
+        2. Checks permissions and prerequisites
+        3. Runs agent with ExecutionRequest
+        """
+        try:
+            # 1. Route request
+            yield {"type": "status", "stage": "routing"}
+            
+            exec_request = await self.router.route(
+                agent_slug=agent_slug,
+                user_id=uuid.UUID(user_id),
+                tenant_id=uuid.UUID(tenant_id),
+                request_text=content[:500],
+                allow_partial=False,
+            )
+            
+            logger.info(
+                f"Router decision: agent={exec_request.agent_slug}, "
+                f"mode={exec_request.mode.value}, "
+                f"tools={len(exec_request.available_tools)}"
+            )
+            
+            # Emit routing info
+            yield {
+                "type": "routing_complete",
+                "agent": exec_request.agent_slug,
+                "mode": exec_request.mode.value,
+                "available_tools": [t.tool_slug for t in exec_request.available_tools],
+                "routing_duration_ms": exec_request.routing_duration_ms,
+            }
+            
+            # 2. Check if agent is available
+            if exec_request.mode == ExecutionMode.UNAVAILABLE:
+                missing = exec_request.missing_requirements
+                error_msg = f"Agent unavailable: {missing.to_message()}" if missing else "Agent unavailable"
+                yield {"type": "error", "error": error_msg}
+                return
+            
+            # 3. Run agent with ExecutionRequest
+            yield {"type": "status", "stage": "agent_executing"}
+            
+            async for event in self.runtime.run_with_request(
+                exec_request=exec_request,
+                messages=llm_messages,
+                ctx=tool_ctx,
+                model=model,
+                enable_logging=exec_request.agent.enable_logging,
+            ):
+                mapped = self._map_runtime_event(event)
+                if mapped:
+                    yield mapped
+                
+                # Collect final content for internal use
+                if event.type == RuntimeEventType.DELTA:
+                    pass  # Handled by caller
+                elif event.type == RuntimeEventType.FINAL:
+                    yield {
+                        "type": "final_content",
+                        "content": event.data.get("content", ""),
+                        "sources": event.data.get("sources", []),
+                    }
+                elif event.type == RuntimeEventType.ERROR:
+                    yield {"type": "error", "error": event.data.get("error")}
+                    
+        except AgentUnavailableError as e:
+            logger.warning(f"Agent unavailable: {e}")
+            yield {
+                "type": "error",
+                "error": str(e),
+                "missing_tools": e.missing.tools if e.missing else [],
+                "missing_collections": e.missing.collections if e.missing else [],
+                "missing_credentials": e.missing.credentials if e.missing else [],
+            }
+        except Exception as e:
+            logger.error(f"Router error: {e}", exc_info=True)
+            yield {"type": "error", "error": f"Routing failed: {str(e)}"}
