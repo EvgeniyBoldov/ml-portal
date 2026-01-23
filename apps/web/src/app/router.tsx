@@ -39,6 +39,7 @@ const CollectionsPage = lazy(() => import('@/domains/admin/pages/CollectionsPage
 const CreateCollectionPage = lazy(() => import('@/domains/admin/pages/CreateCollectionPage'));
 const ViewCollectionPage = lazy(() => import('@/domains/admin/pages/ViewCollectionPage'));
 const ToolInstancesPage = lazy(() => import('@/domains/admin/pages/ToolInstancesPage').then(m => ({ default: m.ToolInstancesPage })));
+const CredentialsPage = lazy(() => import('@/domains/admin/pages/CredentialsPage').then(m => ({ default: m.CredentialsPage })));
 const PermissionsPage = lazy(() => import('@/domains/admin/pages/PermissionsPage').then(m => ({ default: m.PermissionsPage })));
 
 // Collections pages (user-facing)
@@ -100,6 +101,7 @@ const router = createBrowserRouter([
       { path: 'collections/new', element: withSuspense(<CreateCollectionPage />) },
       { path: 'collections/:id', element: withSuspense(<ViewCollectionPage />) },
       { path: 'tool-instances', element: withSuspense(<ToolInstancesPage />) },
+      { path: 'credentials', element: withSuspense(<CredentialsPage />) },
       { path: 'permissions', element: withSuspense(<PermissionsPage />) },
       { path: 'settings/email', element: withSuspense(<EmailSettingsPage />) },
     ],

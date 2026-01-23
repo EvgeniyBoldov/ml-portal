@@ -35,6 +35,7 @@ const navigation: NavGroup[] = [
       { path: '/admin/prompts', label: 'Промпты', icon: 'file-text' },
       { path: '/admin/tools', label: 'Инструменты', icon: 'settings' },
       { path: '/admin/tool-instances', label: 'Инстансы', icon: 'plug' },
+      { path: '/admin/credentials', label: 'Credentials', icon: 'key' },
       { path: '/admin/agents', label: 'Агенты', icon: 'sparkles' },
       { path: '/admin/agent-runs', label: 'Agent Runs', icon: 'activity' },
       { path: '/admin/collections', label: 'Коллекции', icon: 'database' },
