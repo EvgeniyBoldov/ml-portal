@@ -1,16 +1,16 @@
 """
 Agent permissions system - tool instances, credentials, permission sets
 
-Revision ID: 0041
-Revises: 0040
+Revision ID: 0041_agent_permissions_system
+Revises: 0040_coll_vector_unif
 Create Date: 2026-01-24
 """
 from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
-revision = '0041'
-down_revision = '0040'
+revision = '0041_agent_permissions_system'
+down_revision = '0040_coll_vector_unif'
 branch_labels = None
 depends_on = None
 

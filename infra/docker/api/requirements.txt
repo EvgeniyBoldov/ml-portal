@@ -41,6 +41,9 @@ PyJWT>=2.8.0
 argon2-cffi>=21.3.0
 bcrypt>=4.0.0
 
+# Encryption for credentials
+cryptography>=41.0.0
+
 # S3/MinIO client
 minio>=7.0.0
 aiobotocore>=2.7.0
