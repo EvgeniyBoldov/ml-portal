@@ -18,6 +18,14 @@ class AgentProfile:
     system_prompt: Prompt
     tools: List[str]
     generation_config: Dict[str, Any]
+    policy: Dict[str, Any] = None
+    capabilities: List[str] = None
+    
+    def __post_init__(self):
+        if self.policy is None:
+            self.policy = {}
+        if self.capabilities is None:
+            self.capabilities = []
 
 
 class AgentService:
@@ -118,11 +126,16 @@ class AgentService:
                 detail=f"System prompt '{agent.system_prompt_slug}' not found for agent '{agent.slug}'"
             )
         
+        # Use all tools from both legacy and new config
+        all_tools = agent.get_all_tool_slugs()
+        
         return AgentProfile(
             agent=agent,
             system_prompt=system_prompt,
-            tools=agent.tools or [],
-            generation_config=agent.generation_config or {}
+            tools=all_tools,
+            generation_config=agent.generation_config or {},
+            policy=agent.policy or {},
+            capabilities=agent.capabilities or [],
         )
 
     async def resolve_agent_for_chat(
@@ -165,13 +178,17 @@ class AgentService:
         
         base_prompt = system_prompt.template
         
+        # Get all tools from both legacy and new config
+        all_tools = agent.get_all_tool_slugs()
+        all_collections = agent.get_all_collection_slugs()
+        
         # Build tools section
         tools_section = ""
-        if agent.tools:
+        if all_tools:
             tools_section = "\n\n# Available Tools\n\n"
             tools_section += "You have access to the following tools:\n\n"
             
-            for tool_slug in agent.tools:
+            for tool_slug in all_tools:
                 handler = ToolRegistry.get(tool_slug)
                 if handler:
                     tools_section += f"## {handler.name} ({tool_slug})\n"
@@ -183,10 +200,10 @@ class AgentService:
         
         # Build collections section
         collections_section = ""
-        if agent.available_collections and "collection.search" in agent.tools:
+        if all_collections and "collection.search" in all_tools:
             collections_section = "\n\n# Available Collections\n\n"
             collections_section += "You can search in the following collections:\n"
-            for coll_slug in agent.available_collections:
+            for coll_slug in all_collections:
                 collections_section += f"- {coll_slug}\n"
         
         # Compose final prompt
@@ -204,6 +221,10 @@ class AgentService:
             "tools_section": tools_section if tools_section else None,
             "collections_section": collections_section if collections_section else None,
             "final_prompt": final_prompt,
-            "tools": agent.tools,
-            "available_collections": agent.available_collections,
+            "tools": all_tools,
+            "tools_config": agent.tools_config,
+            "available_collections": all_collections,
+            "collections_config": agent.collections_config,
+            "policy": agent.policy,
+            "capabilities": agent.capabilities,
         }
