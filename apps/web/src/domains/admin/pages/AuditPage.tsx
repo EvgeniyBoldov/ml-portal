@@ -8,7 +8,7 @@ import { qk } from '@shared/api/keys';
 import DataTable, { type DataTableColumn } from '@shared/ui/DataTable';
 import Badge from '@shared/ui/Badge';
 import Input from '@shared/ui/Input';
-import Button from '@shared/ui/Button';
+import Button from '@shared/ui/Button';l
 import Modal from '@shared/ui/Modal';
 import styles from './RegistryPage.module.css';
 
