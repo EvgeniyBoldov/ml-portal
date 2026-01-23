@@ -2,6 +2,7 @@
 Agent Runtime - ядро выполнения агентов с tool-call loop
 """
 from __future__ import annotations
+import time
 from enum import Enum
 from dataclasses import dataclass, field
 from typing import Any, AsyncGenerator, Dict, List, Optional, TYPE_CHECKING
@@ -12,6 +13,7 @@ from app.agents.context import ToolContext, ToolResult, ToolCall, RunContext
 
 if TYPE_CHECKING:
     from app.services.run_store import RunStore
+    from app.agents.router import ExecutionRequest
 from app.agents.registry import ToolRegistry
 from app.agents.protocol import (
     parse_llm_response,
@@ -88,6 +90,38 @@ class RuntimeEvent:
         })
 
 
+@dataclass
+class PolicyLimits:
+    """Extracted policy limits for runtime enforcement"""
+    max_steps: int = 10
+    max_tool_calls_total: int = 50
+    max_wall_time_ms: int = 300000
+    tool_timeout_ms: int = 30000
+    max_retries: int = 3
+    streaming_enabled: bool = True
+    citations_required: bool = False
+    allow_parallel_tool_calls: bool = False
+    
+    @classmethod
+    def from_policy(cls, policy: Dict[str, Any]) -> "PolicyLimits":
+        """Extract limits from agent policy dict"""
+        execution = policy.get("execution", {})
+        retry = policy.get("retry", {})
+        output = policy.get("output", {})
+        tool_exec = policy.get("tool_execution", {})
+        
+        return cls(
+            max_steps=execution.get("max_steps", 10),
+            max_tool_calls_total=execution.get("max_tool_calls_total", 50),
+            max_wall_time_ms=execution.get("max_wall_time_ms", 300000),
+            tool_timeout_ms=execution.get("tool_timeout_ms", 30000),
+            max_retries=retry.get("max_retries", 3),
+            streaming_enabled=execution.get("streaming_enabled", True),
+            citations_required=output.get("citations_required", False),
+            allow_parallel_tool_calls=tool_exec.get("allow_parallel_tool_calls", False),
+        )
+
+
 class AgentRuntime:
     """
     Ядро выполнения агентов с tool-call loop.
@@ -104,6 +138,11 @@ class AgentRuntime:
     Использование:
         runtime = AgentRuntime(llm_client)
         async for event in runtime.run(profile, messages, ctx):
+            handle_event(event)
+            
+    С ExecutionRequest (новый способ):
+        exec_request = await router.route(agent_slug, user_id, tenant_id)
+        async for event in runtime.run_with_request(exec_request, messages, ctx):
             handle_event(event)
     """
     
@@ -441,3 +480,231 @@ class AgentRuntime:
         except Exception as e:
             logger.error(f"Tool execution failed: {e}", exc_info=True)
             return ToolResult.fail(str(e)), []
+    
+    async def run_with_request(
+        self,
+        exec_request: "ExecutionRequest",
+        messages: List[Dict[str, Any]],
+        ctx: ToolContext,
+        model: Optional[str] = None,
+        enable_logging: bool = True,
+    ) -> AsyncGenerator[RuntimeEvent, None]:
+        """
+        Выполнить агента с ExecutionRequest от Router.
+        
+        Применяет policy limits из агента и использует
+        только доступные tools из exec_request.
+        
+        Args:
+            exec_request: ExecutionRequest от AgentRouter
+            messages: История сообщений (без system prompt)
+            ctx: Контекст выполнения
+            model: Override модели (опционально)
+            enable_logging: Включить логирование run
+            
+        Yields:
+            RuntimeEvent с прогрессом выполнения
+        """
+        from app.agents.router import ExecutionMode
+        
+        agent = exec_request.agent
+        
+        # Extract policy limits
+        policy = PolicyLimits.from_policy(agent.policy or {})
+        
+        # Override max_steps from policy
+        original_max_steps = self.max_steps
+        self.max_steps = policy.max_steps
+        
+        run_ctx = RunContext()
+        start_time = time.time()
+        total_tool_calls = 0
+        
+        effective_model = model or agent.generation_config.get("model")
+        
+        # Use only available tools from exec_request
+        available_tool_slugs = [t.tool_slug for t in exec_request.available_tools]
+        tool_handlers = ToolRegistry.get_for_agent(available_tool_slugs)
+        tools_schemas = [h.to_llm_schema() for h in tool_handlers]
+        
+        logger.info(
+            f"Starting agent run with ExecutionRequest: {agent.slug}, "
+            f"mode: {exec_request.mode.value}, "
+            f"tools: {available_tool_slugs}, "
+            f"policy: max_steps={policy.max_steps}, max_tool_calls={policy.max_tool_calls_total}"
+        )
+        
+        # Start run logging
+        run_id: Optional[uuid.UUID] = exec_request.run_id
+        should_log = enable_logging and self.run_store is not None
+        
+        if should_log:
+            try:
+                run_id = await self.run_store.start_run(
+                    tenant_id=ctx.tenant_id,
+                    agent_slug=agent.slug,
+                    user_id=ctx.user_id,
+                    chat_id=ctx.chat_id,
+                )
+            except Exception as e:
+                logger.warning(f"Failed to start run logging: {e}")
+                should_log = False
+        
+        # Build system prompt
+        from app.services.agent_service import AgentProfile
+        from app.repositories.prompt_repository import PromptRepository
+        
+        # We need to load the prompt - simplified approach
+        system_prompt_template = agent.system_prompt_slug
+        
+        # For now, use a simplified prompt building
+        base_prompt = f"You are an AI assistant."  # Fallback
+        
+        if tools_schemas:
+            tools_instruction = build_tools_prompt(tools_schemas)
+            system_prompt = f"{base_prompt}\n\n{tools_instruction}"
+        else:
+            system_prompt = base_prompt
+        
+        llm_messages = [{"role": "system", "content": system_prompt}]
+        llm_messages.extend(messages)
+        
+        run_ctx.messages = llm_messages.copy()
+        
+        step = 0
+        collected_sources: List[dict] = []
+        
+        async def finish_run(status: str, error: Optional[str] = None):
+            if should_log and run_id:
+                try:
+                    await self.run_store.finish_run(run_id, status=status, error=error)
+                except Exception as e:
+                    logger.warning(f"Failed to finish run logging: {e}")
+        
+        async def check_policy_limits() -> Optional[RuntimeEvent]:
+            """Check if policy limits are exceeded"""
+            elapsed_ms = (time.time() - start_time) * 1000
+            
+            if elapsed_ms > policy.max_wall_time_ms:
+                return RuntimeEvent.error(
+                    f"Wall time limit exceeded ({policy.max_wall_time_ms}ms)",
+                    recoverable=False
+                )
+            
+            if total_tool_calls >= policy.max_tool_calls_total:
+                return RuntimeEvent.error(
+                    f"Tool calls limit exceeded ({policy.max_tool_calls_total})",
+                    recoverable=False
+                )
+            
+            return None
+        
+        # If no tools, stream directly
+        if not tool_handlers:
+            logger.info("No tools available, streaming directly")
+            async for event in self._stream_final_response(
+                llm_messages, effective_model, collected_sources
+            ):
+                yield event
+            await finish_run("completed")
+            self.max_steps = original_max_steps
+            return
+        
+        try:
+            while step < self.max_steps:
+                step += 1
+                
+                # Check policy limits
+                limit_error = await check_policy_limits()
+                if limit_error:
+                    yield limit_error
+                    await finish_run("failed", limit_error.data.get("error"))
+                    return
+                
+                yield RuntimeEvent.thinking(step)
+                
+                try:
+                    llm_response = await self._call_llm(llm_messages, effective_model)
+                except Exception as e:
+                    logger.error(f"LLM call failed: {e}", exc_info=True)
+                    yield RuntimeEvent.error(str(e))
+                    await finish_run("failed", str(e))
+                    return
+                
+                parsed = parse_llm_response(llm_response)
+                
+                if parsed.is_final:
+                    logger.info(f"Agent finished after {step} steps, {total_tool_calls} tool calls")
+                    async for event in self._stream_final_response(
+                        llm_messages, effective_model, collected_sources
+                    ):
+                        yield event
+                    await finish_run("completed")
+                    return
+                
+                logger.info(f"Step {step}: {len(parsed.tool_calls)} tool calls")
+                
+                tool_results = []
+                for tool_call in parsed.tool_calls:
+                    # Check if tool is in available tools
+                    if tool_call.tool_slug not in available_tool_slugs:
+                        logger.warning(f"Tool {tool_call.tool_slug} not available, skipping")
+                        tool_results.append((
+                            tool_call,
+                            f"Tool '{tool_call.tool_slug}' is not available for this agent"
+                        ))
+                        continue
+                    
+                    total_tool_calls += 1
+                    
+                    # Check tool calls limit
+                    if total_tool_calls > policy.max_tool_calls_total:
+                        yield RuntimeEvent.error(
+                            f"Tool calls limit exceeded ({policy.max_tool_calls_total})",
+                            recoverable=False
+                        )
+                        await finish_run("failed", "Tool calls limit exceeded")
+                        return
+                    
+                    yield RuntimeEvent.tool_call(
+                        tool_call.tool_slug,
+                        tool_call.id,
+                        tool_call.arguments
+                    )
+                    
+                    result, sources = await self._execute_tool(tool_call, ctx, tool_handlers)
+                    
+                    if sources:
+                        collected_sources.extend(sources)
+                    
+                    yield RuntimeEvent.tool_result(
+                        tool_call.tool_slug,
+                        tool_call.id,
+                        result.success,
+                        result.data if result.success else result.error
+                    )
+                    
+                    tool_results.append((tool_call, result.to_message_content()))
+                    run_ctx.increment_tool_calls()
+                
+                llm_messages.append({
+                    "role": "assistant",
+                    "content": llm_response
+                })
+                
+                results_message = build_tool_results_message(tool_results)
+                llm_messages.append({
+                    "role": "user",
+                    "content": results_message
+                })
+            
+            logger.warning(f"Agent reached max steps ({self.max_steps})")
+            yield RuntimeEvent.error(
+                f"Maximum steps ({self.max_steps}) reached",
+                recoverable=True
+            )
+            await finish_run("failed", f"Maximum steps ({self.max_steps}) reached")
+            
+        finally:
+            # Restore original max_steps
+            self.max_steps = original_max_steps

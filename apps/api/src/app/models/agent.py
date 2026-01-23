@@ -7,11 +7,24 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
 
+
 class Agent(Base):
     """
     Agent configuration entity.
     Combines a System Prompt, a set of Tools, and Model configuration.
     Acts as a profile for the Chat/LLM interaction.
+    
+    Tools and Collections configuration format:
+    tools_config: [
+        {"tool_slug": "rag.search", "required": true, "recommended": false},
+        {"tool_slug": "jira.create", "required": false, "recommended": true}
+    ]
+    collections_config: [
+        {"collection_slug": "tickets", "required": false, "recommended": true}
+    ]
+    
+    Policy controls execution limits and behavior.
+    Capabilities are used by Router for agent selection.
     """
     __tablename__ = "agents"
 
@@ -19,33 +32,45 @@ class Agent(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     
-    # Unique identifier (e.g., "netbox-helper", "general-chat")
     slug: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
     
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     
-    # Reference to the System Prompt (by slug)
-    # We use slug to be environment-agnostic
     system_prompt_slug: Mapped[str] = mapped_column(String(255), nullable=False)
     
-    # List of Tool slugs enabled for this agent
-    # e.g. ["netbox.get_device", "rag.search"]
+    # Legacy fields - kept for backward compatibility, will be migrated to *_config
     tools: Mapped[List[str]] = mapped_column(JSONB, default=list)
-    
-    # List of Collection slugs available for this agent
-    # Used when agent has collection.search tool enabled
-    # e.g. ["tickets", "documentation"]
     available_collections: Mapped[List[str]] = mapped_column(JSONB, default=list)
     
-    # LLM Model configuration override (optional)
-    # e.g. {"model": "gpt-4", "temperature": 0.7}
-    # If empty, uses system defaults
+    # New structured configuration for tools
+    # [{"tool_slug": "rag.search", "required": true, "recommended": false}]
+    tools_config: Mapped[List[Dict[str, Any]]] = mapped_column(JSONB, default=list)
+    
+    # New structured configuration for collections
+    # [{"collection_slug": "tickets", "required": false, "recommended": true}]
+    collections_config: Mapped[List[Dict[str, Any]]] = mapped_column(JSONB, default=list)
+    
+    # Execution policy
+    # {
+    #   "execution": {"max_steps": 20, "max_tool_calls_total": 50, ...},
+    #   "retry": {"max_retries": 3, ...},
+    #   "output": {"citations_required": true, ...},
+    #   "tool_execution": {"allow_parallel_tool_calls": true, ...}
+    # }
+    policy: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict)
+    
+    # Capabilities for Router matching
+    # ["knowledge_base_search", "ticket_management", "code_generation"]
+    capabilities: Mapped[List[str]] = mapped_column(JSONB, default=list)
+    
+    # Whether agent can run in partial mode (some tools unavailable)
+    supports_partial_mode: Mapped[bool] = mapped_column(Boolean, default=False)
+    
     generation_config: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict)
     
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     
-    # Enable detailed logging of agent runs for observability
     enable_logging: Mapped[bool] = mapped_column(Boolean, default=True)
     
     created_at: Mapped[datetime] = mapped_column(
@@ -57,6 +82,32 @@ class Agent(Base):
         onupdate=lambda: datetime.now(timezone.utc), 
         nullable=False
     )
+
+    def get_required_tools(self) -> List[str]:
+        """Get list of required tool slugs"""
+        return [
+            tc["tool_slug"] 
+            for tc in self.tools_config 
+            if tc.get("required", False)
+        ]
+    
+    def get_required_collections(self) -> List[str]:
+        """Get list of required collection slugs"""
+        return [
+            cc["collection_slug"] 
+            for cc in self.collections_config 
+            if cc.get("required", False)
+        ]
+    
+    def get_all_tool_slugs(self) -> List[str]:
+        """Get all tool slugs (from both legacy and new config)"""
+        from_config = [tc["tool_slug"] for tc in self.tools_config]
+        return list(set(self.tools + from_config))
+    
+    def get_all_collection_slugs(self) -> List[str]:
+        """Get all collection slugs (from both legacy and new config)"""
+        from_config = [cc["collection_slug"] for cc in self.collections_config]
+        return list(set(self.available_collections + from_config))
 
     def __repr__(self):
         return f"<Agent {self.slug}>"

@@ -105,6 +105,32 @@ async def _ensure_default_admin():
         logger.error(f"Failed to create default admin: {e}")
 
 
+async def _sync_tools_from_registry():
+    """Sync tools from ToolRegistry to database"""
+    try:
+        from app.services.tool_sync_service import sync_tools_from_registry
+        
+        async with _session_factory() as session:
+            stats = await sync_tools_from_registry(session)
+            logger.info(f"Tool sync: {stats}")
+    except Exception as e:
+        logger.error(f"Failed to sync tools from registry: {e}")
+
+
+async def _ensure_default_permission_set():
+    """Ensure default permission set exists"""
+    try:
+        from app.repositories.permission_set_repository import PermissionSetRepository
+        
+        async with _session_factory() as session:
+            repo = PermissionSetRepository(session)
+            perm_set = await repo.get_or_create_default()
+            await session.commit()
+            logger.info(f"Default permission set ready: {perm_set.id}")
+    except Exception as e:
+        logger.error(f"Failed to ensure default permission set: {e}")
+
+
 async def _register_embedding_models():
     """Register embedding models from database into EmbeddingServiceFactory"""
     try:
@@ -181,6 +207,12 @@ async def lifespan(app):
         
         # Register embedding models from database
         await _register_embedding_models()
+        
+        # Sync tools from registry to database
+        await _sync_tools_from_registry()
+        
+        # Ensure default permission set exists
+        await _ensure_default_permission_set()
         
         yield
         
