@@ -29,22 +29,28 @@ const navigation: NavGroup[] = [
     ],
   },
   {
-    title: 'AI Ресурсы',
+    title: 'AI Конфигурация',
     items: [
       { path: '/admin/models', label: 'Модели', icon: 'bot' },
       { path: '/admin/prompts', label: 'Промпты', icon: 'file-text' },
       { path: '/admin/tools', label: 'Инструменты', icon: 'settings' },
-      { path: '/admin/tool-instances', label: 'Инстансы', icon: 'plug' },
-      { path: '/admin/credentials', label: 'Credentials', icon: 'key' },
       { path: '/admin/agents', label: 'Агенты', icon: 'sparkles' },
-      { path: '/admin/agent-runs', label: 'Agent Runs', icon: 'activity' },
       { path: '/admin/collections', label: 'Коллекции', icon: 'database' },
-      { path: '/admin/permissions', label: 'Права доступа', icon: 'shield' },
+      { path: '/admin/policies', label: 'Политики', icon: 'shield' },
     ],
   },
   {
-    title: 'Система',
+    title: 'Интеграции',
     items: [
+      { path: '/admin/instances', label: 'Инстансы', icon: 'server' },
+      { path: '/admin/defaults', label: 'Общие настройки', icon: 'sliders' },
+    ],
+  },
+  {
+    title: 'Мониторинг',
+    items: [
+      { path: '/admin/agent-runs', label: 'Agent Runs', icon: 'activity' },
+      { path: '/admin/routing-logs', label: 'Routing Logs', icon: 'git-branch' },
       { path: '/admin/audit', label: 'Аудит', icon: 'file' },
     ],
   },

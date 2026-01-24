@@ -38,11 +38,14 @@ const AgentRunsPage = lazy(() => import('@/domains/admin/pages/AgentRunsPage').t
 const CollectionsPage = lazy(() => import('@/domains/admin/pages/CollectionsPage'));
 const CreateCollectionPage = lazy(() => import('@/domains/admin/pages/CreateCollectionPage'));
 const ViewCollectionPage = lazy(() => import('@/domains/admin/pages/ViewCollectionPage'));
-const ToolInstancesPage = lazy(() => import('@/domains/admin/pages/ToolInstancesPage').then(m => ({ default: m.ToolInstancesPage })));
-const ToolInstanceEditorPage = lazy(() => import('@/domains/admin/pages/ToolInstanceEditorPage').then(m => ({ default: m.ToolInstanceEditorPage })));
-const CredentialsPage = lazy(() => import('@/domains/admin/pages/CredentialsPage').then(m => ({ default: m.CredentialsPage })));
-const CredentialEditorPage = lazy(() => import('@/domains/admin/pages/CredentialEditorPage').then(m => ({ default: m.CredentialEditorPage })));
-const PermissionsPage = lazy(() => import('@/domains/admin/pages/PermissionsPage').then(m => ({ default: m.PermissionsPage })));
+const InstancesPage = lazy(() => import('@/domains/admin/pages/InstancesPage').then(m => ({ default: m.InstancesPage })));
+const InstanceViewPage = lazy(() => import('@/domains/admin/pages/InstanceViewPage').then(m => ({ default: m.InstanceViewPage })));
+const InstanceEditorPage = lazy(() => import('@/domains/admin/pages/InstanceEditorPage').then(m => ({ default: m.InstanceEditorPage })));
+const PoliciesPage = lazy(() => import('@/domains/admin/pages/PoliciesPage').then(m => ({ default: m.PoliciesPage })));
+const PolicyViewPage = lazy(() => import('@/domains/admin/pages/PolicyViewPage').then(m => ({ default: m.PolicyViewPage })));
+const PolicyEditorPage = lazy(() => import('@/domains/admin/pages/PolicyEditorPage').then(m => ({ default: m.PolicyEditorPage })));
+const DefaultsPage = lazy(() => import('@/domains/admin/pages/DefaultsPage').then(m => ({ default: m.DefaultsPage })));
+const RoutingLogsPage = lazy(() => import('@/domains/admin/pages/RoutingLogsPage').then(m => ({ default: m.RoutingLogsPage })));
 
 // Collections pages (user-facing)
 const CollectionsListPage = lazy(() => import('@/domains/collections/pages/CollectionsListPage'));
@@ -102,13 +105,16 @@ const router = createBrowserRouter([
       { path: 'collections', element: withSuspense(<CollectionsPage />) },
       { path: 'collections/new', element: withSuspense(<CreateCollectionPage />) },
       { path: 'collections/:id', element: withSuspense(<ViewCollectionPage />) },
-      { path: 'tool-instances', element: withSuspense(<ToolInstancesPage />) },
-      { path: 'tool-instances/new', element: withSuspense(<ToolInstanceEditorPage />) },
-      { path: 'tool-instances/:id', element: withSuspense(<ToolInstanceEditorPage />) },
-      { path: 'credentials', element: withSuspense(<CredentialsPage />) },
-      { path: 'credentials/new', element: withSuspense(<CredentialEditorPage />) },
-      { path: 'credentials/:id', element: withSuspense(<CredentialEditorPage />) },
-      { path: 'permissions', element: withSuspense(<PermissionsPage />) },
+      { path: 'policies', element: withSuspense(<PoliciesPage />) },
+      { path: 'policies/new', element: withSuspense(<PolicyEditorPage />) },
+      { path: 'policies/:id', element: withSuspense(<PolicyViewPage />) },
+      { path: 'policies/:id/edit', element: withSuspense(<PolicyEditorPage />) },
+      { path: 'instances', element: withSuspense(<InstancesPage />) },
+      { path: 'instances/new', element: withSuspense(<InstanceEditorPage />) },
+      { path: 'instances/:id', element: withSuspense(<InstanceViewPage />) },
+      { path: 'instances/:id/edit', element: withSuspense(<InstanceEditorPage />) },
+      { path: 'defaults', element: withSuspense(<DefaultsPage />) },
+      { path: 'routing-logs', element: withSuspense(<RoutingLogsPage />) },
       { path: 'settings/email', element: withSuspense(<EmailSettingsPage />) },
     ],
   },
