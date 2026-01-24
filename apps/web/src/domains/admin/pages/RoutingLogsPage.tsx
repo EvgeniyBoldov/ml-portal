@@ -1,14 +1,11 @@
 /**
  * RoutingLogsPage - View agent routing decisions logs
  */
-import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { qk } from '@/shared/api/keys';
 import { http } from '@/shared/api/client';
 import Badge from '@/shared/ui/Badge';
-import Alert from '@/shared/ui/Alert';
-import { Skeleton } from '@/shared/ui/Skeleton';
-import styles from './PromptRegistryPage.module.css';
+import DataTable, { type DataTableColumn } from '@/shared/ui/DataTable/DataTable';
+import styles from './RegistryPage.module.css';
 
 interface RoutingLog {
   id: string;
@@ -43,133 +40,94 @@ const MODE_LABELS: Record<string, string> = {
 };
 
 export function RoutingLogsPage() {
-  const [limit] = useState(50);
-  const [offset, setOffset] = useState(0);
-
-  const { data: logs, isLoading, error } = useQuery({
-    queryKey: ['routing-logs', { limit, offset }],
-    queryFn: () => fetchRoutingLogs({ limit, offset }),
+  const { data: logs, isLoading } = useQuery({
+    queryKey: ['routing-logs'],
+    queryFn: () => fetchRoutingLogs({ limit: 100, offset: 0 }),
   });
 
-  if (isLoading) {
-    return (
-      <div className={styles.wrap}>
-        <Skeleton variant="card" />
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className={styles.wrap}>
-        <Alert variant="error" title="Ошибка загрузки" description={String(error)} />
-      </div>
-    );
-  }
+  const columns: DataTableColumn<RoutingLog>[] = [
+    {
+      key: 'created_at',
+      label: 'Время',
+      width: 160,
+      render: (row) => new Date(row.created_at).toLocaleString('ru-RU'),
+    },
+    {
+      key: 'agent_id',
+      label: 'Агент',
+      render: (row) => <code className={styles.code}>{row.agent_id.slice(0, 8)}...</code>,
+    },
+    {
+      key: 'user_id',
+      label: 'Пользователь',
+      render: (row) => <code className={styles.code}>{row.user_id.slice(0, 8)}...</code>,
+    },
+    {
+      key: 'execution_mode',
+      label: 'Режим',
+      width: 120,
+      render: (row) => (
+        <Badge variant={MODE_VARIANTS[row.execution_mode] || 'secondary'}>
+          {MODE_LABELS[row.execution_mode] || row.execution_mode}
+        </Badge>
+      ),
+    },
+    {
+      key: 'available_tools',
+      label: 'Доступные',
+      render: (row) => (
+        <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+          {row.available_tools?.slice(0, 2).map(tool => (
+            <Badge key={tool} variant="success">{tool}</Badge>
+          ))}
+          {(row.available_tools?.length || 0) > 2 && (
+            <Badge variant="outline">+{row.available_tools.length - 2}</Badge>
+          )}
+          {!row.available_tools?.length && <span className={styles.muted}>—</span>}
+        </div>
+      ),
+    },
+    {
+      key: 'unavailable_tools',
+      label: 'Недоступные',
+      render: (row) => (
+        <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+          {row.unavailable_tools?.slice(0, 2).map(tool => (
+            <Badge key={tool} variant="error">{tool}</Badge>
+          ))}
+          {(row.unavailable_tools?.length || 0) > 2 && (
+            <Badge variant="outline">+{row.unavailable_tools.length - 2}</Badge>
+          )}
+          {!row.unavailable_tools?.length && <span className={styles.muted}>—</span>}
+        </div>
+      ),
+    },
+  ];
 
   return (
     <div className={styles.wrap}>
-      <div className={styles.header}>
-        <div>
-          <h1 className={styles.title}>Routing Logs</h1>
-          <p className={styles.description}>
-            Логи решений маршрутизатора агентов
-          </p>
-        </div>
-      </div>
-
-      {!logs?.length ? (
-        <Alert
-          variant="info"
-          title="Нет логов"
-          description="Логи появятся после выполнения запросов к агентам"
-        />
-      ) : (
-        <div className={styles.list}>
-          <table className={styles.table}>
-            <thead>
-              <tr>
-                <th>Время</th>
-                <th>Агент</th>
-                <th>Пользователь</th>
-                <th>Режим</th>
-                <th>Доступные инструменты</th>
-                <th>Недоступные</th>
-                <th>Причина</th>
-              </tr>
-            </thead>
-            <tbody>
-              {logs.map(log => (
-                <tr key={log.id}>
-                  <td style={{ whiteSpace: 'nowrap' }}>
-                    {new Date(log.created_at).toLocaleString()}
-                  </td>
-                  <td>
-                    <code style={{ fontSize: '0.875rem' }}>
-                      {log.agent_id.slice(0, 8)}...
-                    </code>
-                  </td>
-                  <td>
-                    <code style={{ fontSize: '0.875rem' }}>
-                      {log.user_id.slice(0, 8)}...
-                    </code>
-                  </td>
-                  <td>
-                    <Badge variant={MODE_VARIANTS[log.execution_mode] || 'secondary'}>
-                      {MODE_LABELS[log.execution_mode] || log.execution_mode}
-                    </Badge>
-                  </td>
-                  <td>
-                    <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap' }}>
-                      {log.available_tools?.slice(0, 3).map(tool => (
-                        <Badge key={tool} variant="success">{tool}</Badge>
-                      ))}
-                      {(log.available_tools?.length || 0) > 3 && (
-                        <Badge variant="outline">+{log.available_tools.length - 3}</Badge>
-                      )}
-                      {!log.available_tools?.length && '—'}
-                    </div>
-                  </td>
-                  <td>
-                    <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap' }}>
-                      {log.unavailable_tools?.slice(0, 2).map(tool => (
-                        <Badge key={tool} variant="error">{tool}</Badge>
-                      ))}
-                      {(log.unavailable_tools?.length || 0) > 2 && (
-                        <Badge variant="outline">+{log.unavailable_tools.length - 2}</Badge>
-                      )}
-                      {!log.unavailable_tools?.length && '—'}
-                    </div>
-                  </td>
-                  <td style={{ maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    {log.reason || '—'}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-
-          <div style={{ display: 'flex', justifyContent: 'center', gap: '1rem', marginTop: '1rem' }}>
-            <button
-              onClick={() => setOffset(Math.max(0, offset - limit))}
-              disabled={offset === 0}
-              style={{ padding: '0.5rem 1rem', cursor: offset === 0 ? 'not-allowed' : 'pointer' }}
-            >
-              ← Назад
-            </button>
-            <span style={{ padding: '0.5rem' }}>
-              {offset + 1} - {offset + (logs?.length || 0)}
-            </span>
-            <button
-              onClick={() => setOffset(offset + limit)}
-              disabled={(logs?.length || 0) < limit}
-              style={{ padding: '0.5rem 1rem', cursor: (logs?.length || 0) < limit ? 'not-allowed' : 'pointer' }}
-            >
-              Вперёд →
-            </button>
+      <div className={styles.card}>
+        <div className={styles.header}>
+          <div className={styles.headerLeft}>
+            <h1 className={styles.title}>Routing Logs</h1>
+            <p className={styles.subtitle}>Логи решений маршрутизатора</p>
           </div>
         </div>
-      )}
+
+        <div className={styles.tableWrap}>
+          <DataTable
+            columns={columns}
+            data={logs || []}
+            keyField="id"
+            loading={isLoading}
+            emptyText="Нет логов"
+            searchable
+            searchPlaceholder="Поиск..."
+            paginated
+            pageSize={50}
+          />
+        </div>
+      </div>
     </div>
   );
 }

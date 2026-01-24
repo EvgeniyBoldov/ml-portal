@@ -6,7 +6,8 @@ export interface ActionItem {
   label: string;
   onClick: () => void;
   disabled?: boolean;
-  danger?: boolean;
+  variant?: 'default' | 'danger';
+  icon?: React.ReactNode;
 }
 
 interface ActionsButtonProps {
@@ -58,7 +59,7 @@ export function ActionsButton({ actions, className }: ActionsButtonProps) {
                 e.stopPropagation();
               }}
               disabled={action.disabled}
-              className={`${styles.actionButton} ${action.danger ? styles.dangerButton : ''}`}
+              className={`${styles.actionButton} ${action.variant === 'danger' ? styles.dangerButton : ''}`}
             >
               {action.label}
             </button>

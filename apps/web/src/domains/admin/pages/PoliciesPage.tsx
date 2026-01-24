@@ -1,5 +1,5 @@
 /**
- * PoliciesPage - Permission policies management (renamed from Permissions)
+ * PoliciesPage - Permission policies management
  */
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
@@ -8,11 +8,10 @@ import { permissionsApi } from '@/shared/api';
 import { qk } from '@/shared/api/keys';
 import Button from '@/shared/ui/Button';
 import Badge from '@/shared/ui/Badge';
-import Alert from '@/shared/ui/Alert';
-import { Skeleton } from '@/shared/ui/Skeleton';
-import { ActionsButton } from '@/shared/ui/ActionsButton';
+import DataTable, { type DataTableColumn } from '@/shared/ui/DataTable/DataTable';
+import { RowActions } from '@/shared/ui/RowActions';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
-import styles from './PromptRegistryPage.module.css';
+import styles from './RegistryPage.module.css';
 
 const SCOPE_LABELS: Record<string, string> = {
   default: 'По умолчанию',
@@ -26,7 +25,7 @@ export function PoliciesPage() {
   const showSuccess = useSuccessToast();
   const [scopeFilter, setScopeFilter] = useState<string>('all');
 
-  const { data: policies, isLoading, error } = useQuery({
+  const { data: policies, isLoading } = useQuery({
     queryKey: qk.permissions.list({}),
     queryFn: () => permissionsApi.list({}),
   });
@@ -43,138 +42,111 @@ export function PoliciesPage() {
   const filteredPolicies = policies?.filter(p => {
     if (scopeFilter === 'all') return true;
     return p.scope === scopeFilter;
-  });
+  }) || [];
 
-  if (isLoading) {
-    return (
-      <div className={styles.wrap}>
-        <Skeleton variant="card" />
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className={styles.wrap}>
-        <Alert variant="error" title="Ошибка загрузки" description={String(error)} />
-      </div>
-    );
-  }
+  const columns: DataTableColumn[] = [
+    {
+      key: 'scope',
+      label: 'Уровень',
+      width: 140,
+      render: (row) => (
+        <Badge variant={row.scope === 'default' ? 'primary' : 'secondary'}>
+          {SCOPE_LABELS[row.scope] || row.scope}
+        </Badge>
+      ),
+    },
+    {
+      key: 'target',
+      label: 'Тенант / Пользователь',
+      render: (row) => (
+        row.scope === 'default' ? (
+          <span className={styles.muted}>—</span>
+        ) : row.scope === 'tenant' ? (
+          <code className={styles.code}>{row.tenant_id?.slice(0, 8)}...</code>
+        ) : (
+          <code className={styles.code}>{row.user_id?.slice(0, 8)}...</code>
+        )
+      ),
+    },
+    {
+      key: 'allowed_tools',
+      label: 'Инструменты',
+      render: (row) => (
+        <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+          {row.allowed_tools?.slice(0, 3).map((tool: string) => (
+            <Badge key={tool} variant="outline">{tool}</Badge>
+          ))}
+          {(row.allowed_tools?.length || 0) > 3 && (
+            <Badge variant="outline">+{row.allowed_tools.length - 3}</Badge>
+          )}
+          {!row.allowed_tools?.length && <span className={styles.muted}>—</span>}
+        </div>
+      ),
+    },
+    {
+      key: 'is_active',
+      label: 'Статус',
+      width: 100,
+      render: (row) => (
+        <Badge variant={row.is_active ? 'success' : 'secondary'}>
+          {row.is_active ? 'Активна' : 'Неактивна'}
+        </Badge>
+      ),
+    },
+    {
+      key: 'actions',
+      label: '',
+      width: 50,
+      align: 'right',
+      render: (row) => (
+        <RowActions
+          basePath="/admin/policies"
+          id={row.id}
+          onDelete={row.scope !== 'default' ? () => deleteMutation.mutate(row.id) : undefined}
+          deletable={row.scope !== 'default'}
+          deleteLoading={deleteMutation.isPending}
+        />
+      ),
+    },
+  ];
 
   return (
     <div className={styles.wrap}>
-      <div className={styles.header}>
-        <div>
-          <h1 className={styles.title}>Политики</h1>
-          <p className={styles.description}>
-            Политики доступа определяют какие инструменты и коллекции доступны пользователям
-          </p>
+      <div className={styles.card}>
+        <div className={styles.header}>
+          <div className={styles.headerLeft}>
+            <h1 className={styles.title}>Политики</h1>
+            <p className={styles.subtitle}>Управление доступом к инструментам и коллекциям</p>
+          </div>
+          <div className={styles.controls}>
+            <select
+              value={scopeFilter}
+              onChange={e => setScopeFilter(e.target.value)}
+              style={{ padding: '8px 12px', borderRadius: 'var(--radius)', border: '1px solid var(--color-border)' }}
+            >
+              <option value="all">Все уровни</option>
+              <option value="default">По умолчанию</option>
+              <option value="tenant">Тенант</option>
+              <option value="user">Пользователь</option>
+            </select>
+            <Link to="/admin/policies/new">
+              <Button variant="primary">Создать</Button>
+            </Link>
+          </div>
         </div>
-        <Link to="/admin/policies/new">
-          <Button variant="primary">Создать политику</Button>
-        </Link>
-      </div>
 
-      <div className={styles.filters}>
-        <select
-          className={styles.select}
-          value={scopeFilter}
-          onChange={e => setScopeFilter(e.target.value)}
-        >
-          <option value="all">Все уровни</option>
-          <option value="default">По умолчанию</option>
-          <option value="tenant">Тенант</option>
-          <option value="user">Пользователь</option>
-        </select>
-      </div>
-
-      {!filteredPolicies?.length ? (
-        <Alert
-          variant="info"
-          title="Нет политик"
-          description="Создайте политику для управления доступом к инструментам"
-        />
-      ) : (
-        <div className={styles.list}>
-          <table className={styles.table}>
-            <thead>
-              <tr>
-                <th>Уровень</th>
-                <th>Тенант / Пользователь</th>
-                <th>Разрешённые инструменты</th>
-                <th>Разрешённые коллекции</th>
-                <th>Статус</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredPolicies.map(policy => (
-                <tr key={policy.id}>
-                  <td>
-                    <Badge variant={policy.scope === 'default' ? 'primary' : 'secondary'}>
-                      {SCOPE_LABELS[policy.scope] || policy.scope}
-                    </Badge>
-                  </td>
-                  <td>
-                    {policy.scope === 'default' ? (
-                      <span style={{ color: 'var(--color-text-secondary)' }}>—</span>
-                    ) : policy.scope === 'tenant' ? (
-                      policy.tenant_id?.slice(0, 8) + '...'
-                    ) : (
-                      policy.user_id?.slice(0, 8) + '...'
-                    )}
-                  </td>
-                  <td>
-                    <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap' }}>
-                      {policy.allowed_tools?.slice(0, 3).map(tool => (
-                        <Badge key={tool} variant="outline">{tool}</Badge>
-                      ))}
-                      {(policy.allowed_tools?.length || 0) > 3 && (
-                        <Badge variant="outline">+{policy.allowed_tools!.length - 3}</Badge>
-                      )}
-                      {!policy.allowed_tools?.length && (
-                        <span style={{ color: 'var(--color-text-secondary)' }}>Нет</span>
-                      )}
-                    </div>
-                  </td>
-                  <td>
-                    <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap' }}>
-                      {policy.allowed_collections?.slice(0, 2).map(coll => (
-                        <Badge key={coll} variant="outline">{coll}</Badge>
-                      ))}
-                      {(policy.allowed_collections?.length || 0) > 2 && (
-                        <Badge variant="outline">+{policy.allowed_collections!.length - 2}</Badge>
-                      )}
-                      {!policy.allowed_collections?.length && (
-                        <span style={{ color: 'var(--color-text-secondary)' }}>Нет</span>
-                      )}
-                    </div>
-                  </td>
-                  <td>
-                    <Badge variant={policy.is_active ? 'success' : 'secondary'}>
-                      {policy.is_active ? 'Активна' : 'Неактивна'}
-                    </Badge>
-                  </td>
-                  <td>
-                    <ActionsButton
-                      actions={[
-                        { label: 'Просмотр', onClick: () => window.location.href = `/admin/policies/${policy.id}` },
-                        { label: 'Редактировать', onClick: () => window.location.href = `/admin/policies/${policy.id}/edit` },
-                        { 
-                          label: 'Удалить', 
-                          onClick: () => deleteMutation.mutate(policy.id), 
-                          variant: 'danger',
-                          disabled: policy.scope === 'default'
-                        },
-                      ]}
-                    />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className={styles.tableWrap}>
+          <DataTable
+            columns={columns}
+            data={filteredPolicies}
+            keyField="id"
+            loading={isLoading}
+            emptyText="Нет политик"
+            searchable
+            searchPlaceholder="Поиск..."
+          />
         </div>
-      )}
+      </div>
     </div>
   );
 }
