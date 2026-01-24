@@ -12,9 +12,14 @@ import hashlib
 from app.api.deps import get_current_user
 from app.core.db import get_session_factory
 from app.core.security import UserCtx
+from app.core.crypto import get_crypto_service
 from app.models.user import Users
 from app.models.api_token import ApiToken
+from app.models.credential_set import CredentialSet
+from app.models.tool_instance import ToolInstance
+from app.models.tool import Tool
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
 router = APIRouter(prefix="/profile", tags=["profile"])
 
@@ -47,6 +52,21 @@ class ApiTokenResponse(BaseModel):
 
 class ApiTokenCreatedResponse(ApiTokenResponse):
     token: str  # Full token, shown only once
+
+
+class CredentialCreate(BaseModel):
+    tool_instance_id: str
+    auth_type: str = "token"
+    encrypted_payload: dict
+
+
+class CredentialResponse(BaseModel):
+    id: str
+    tool_instance_id: str
+    tool_name: Optional[str] = None
+    auth_type: str
+    is_active: bool
+    created_at: datetime
 
 
 async def get_user_from_db(user_ctx: UserCtx) -> Users:
@@ -203,3 +223,117 @@ async def verify_api_token(token: str) -> Optional[tuple[Users, ApiToken]]:
         await session.commit()
         
         return user, api_token
+
+
+# ============================================================================
+# User Credentials endpoints
+# ============================================================================
+
+@router.get("/credentials", response_model=List[CredentialResponse])
+async def list_user_credentials(current_user: UserCtx = Depends(get_current_user)):
+    """List user's credentials for tool instances"""
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        result = await session.execute(
+            select(CredentialSet, ToolInstance, Tool)
+            .join(ToolInstance, CredentialSet.tool_instance_id == ToolInstance.id)
+            .outerjoin(Tool, ToolInstance.tool_id == Tool.id)
+            .where(
+                CredentialSet.user_id == UUID(current_user.id),
+                CredentialSet.scope == 'user'
+            )
+            .order_by(CredentialSet.created_at.desc())
+        )
+        rows = result.all()
+        
+        return [
+            CredentialResponse(
+                id=str(cred.id),
+                tool_instance_id=str(cred.tool_instance_id),
+                tool_name=tool.name if tool else None,
+                auth_type=cred.auth_type,
+                is_active=cred.is_active,
+                created_at=cred.created_at,
+            )
+            for cred, instance, tool in rows
+        ]
+
+
+@router.post("/credentials", response_model=CredentialResponse, status_code=status.HTTP_201_CREATED)
+async def create_user_credential(
+    data: CredentialCreate,
+    current_user: UserCtx = Depends(get_current_user)
+):
+    """Create user credential for a tool instance"""
+    crypto = get_crypto_service()
+    
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        # Verify tool instance exists and is active
+        result = await session.execute(
+            select(ToolInstance, Tool)
+            .outerjoin(Tool, ToolInstance.tool_id == Tool.id)
+            .where(ToolInstance.id == UUID(data.tool_instance_id))
+        )
+        row = result.first()
+        if not row:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Tool instance not found"
+            )
+        instance, tool = row
+        
+        # Encrypt payload
+        encrypted = crypto.encrypt(data.encrypted_payload)
+        
+        # Get user's tenant_id (first one if multiple)
+        tenant_id = UUID(current_user.tenant_ids[0]) if current_user.tenant_ids else None
+        
+        credential = CredentialSet(
+            tool_instance_id=UUID(data.tool_instance_id),
+            scope='user',
+            tenant_id=tenant_id,
+            user_id=UUID(current_user.id),
+            auth_type=data.auth_type,
+            encrypted_payload=encrypted,
+            is_active=True,
+        )
+        session.add(credential)
+        await session.commit()
+        await session.refresh(credential)
+        
+        return CredentialResponse(
+            id=str(credential.id),
+            tool_instance_id=str(credential.tool_instance_id),
+            tool_name=tool.name if tool else None,
+            auth_type=credential.auth_type,
+            is_active=credential.is_active,
+            created_at=credential.created_at,
+        )
+
+
+@router.delete("/credentials/{credential_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_user_credential(
+    credential_id: UUID,
+    current_user: UserCtx = Depends(get_current_user)
+):
+    """Delete user's credential"""
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        result = await session.execute(
+            select(CredentialSet).where(
+                CredentialSet.id == credential_id,
+                CredentialSet.user_id == UUID(current_user.id),
+                CredentialSet.scope == 'user'
+            )
+        )
+        credential = result.scalar_one_or_none()
+        
+        if not credential:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Credential not found"
+            )
+        
+        await session.delete(credential)
+        await session.commit()
