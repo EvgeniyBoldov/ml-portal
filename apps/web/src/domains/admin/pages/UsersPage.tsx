@@ -1,9 +1,8 @@
 /**
- * UsersPage - Admin users management
- * Uses TanStack Query for data fetching and Zustand for UI state
+ * UsersPage - Управление пользователями
  */
 import React, { useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import type { User } from '@shared/api/admin';
 import {
   useUsers,
@@ -18,12 +17,12 @@ import Select from '@shared/ui/Select';
 import Badge from '@shared/ui/Badge';
 import { Skeleton } from '@shared/ui/Skeleton';
 import { useErrorToast, useSuccessToast } from '@shared/ui/Toast';
-import { FilterIcon, MoreVerticalIcon } from '@shared/ui/Icon';
+import { FilterIcon } from '@shared/ui/Icon';
 import Popover from '@shared/ui/Popover';
 import { ActionsButton, type ActionItem } from '@shared/ui/ActionsButton';
 import { useAppStore } from '@app/store/app.store';
 import Alert from '@shared/ui/Alert';
-import styles from './UsersPage.module.css';
+import styles from './RegistryPage.module.css';
 
 export function UsersPage() {
   const navigate = useNavigate();
@@ -189,10 +188,10 @@ export function UsersPage() {
       <div className={styles.wrap}>
         <div className={styles.card}>
           <div className={styles.header}>
-            <h1 className={styles.title}>Users</h1>
+            <h1 className={styles.title}>Пользователи</h1>
           </div>
           <div className={styles.errorState}>
-            Failed to load users. Please try again.
+            Не удалось загрузить пользователей
           </div>
         </div>
       </div>
@@ -203,17 +202,20 @@ export function UsersPage() {
     <div className={styles.wrap}>
       <div className={styles.card}>
         <div className={styles.header}>
-          <h1 className={styles.title}>Users</h1>
+          <div className={styles.headerLeft}>
+            <h1 className={styles.title}>Пользователи</h1>
+            <p className={styles.subtitle}>Управление учётными записями и доступом</p>
+          </div>
           <div className={styles.controls}>
             <Input
-              placeholder="Search users..."
+              placeholder="Поиск пользователей..."
               value={q}
               onChange={e => setQ(e.target.value)}
               className={styles.search}
             />
-            <Button onClick={() => navigate('/admin/users/new')}>
-              Create User
-            </Button>
+            <Link to="/admin/users/new">
+              <Button>Создать</Button>
+            </Link>
           </div>
         </div>
 
@@ -221,37 +223,13 @@ export function UsersPage() {
           <table className={styles.table}>
             <thead>
               <tr>
-                <th>
-                  LOGIN
-                  <button
-                    className={styles.icon}
-                    onClick={e => openFilter('login', e.currentTarget)}
-                  >
-                    <FilterIcon />
-                  </button>
-                </th>
-                <th>
-                  ROLE
-                  <button
-                    className={styles.icon}
-                    onClick={e => openFilter('role', e.currentTarget)}
-                  >
-                    <FilterIcon />
-                  </button>
-                </th>
+                <th>ЛОГИН</th>
+                <th>РОЛЬ</th>
                 <th>EMAIL</th>
-                <th>TENANT</th>
-                <th>
-                  STATUS
-                  <button
-                    className={styles.icon}
-                    onClick={e => openFilter('status', e.currentTarget)}
-                  >
-                    <FilterIcon />
-                  </button>
-                </th>
-                <th>CREATED</th>
-                <th>ACTIONS</th>
+                <th>ТЕНАНТ</th>
+                <th>СТАТУС</th>
+                <th>СОЗДАН</th>
+                <th>ДЕЙСТВИЯ</th>
               </tr>
             </thead>
             <tbody>
@@ -284,14 +262,14 @@ export function UsersPage() {
               ) : users.length === 0 ? (
                 <tr>
                   <td colSpan={7} className={styles.emptyState}>
-                    No users found
+                    Пользователи не найдены
                   </td>
                 </tr>
               ) : (
                 users.map(user => (
                   <tr key={user.id}>
                     <td>
-                      <span className={styles.loginText}>{user.login}</span>
+                      <span className={styles.cellPrimary}>{user.login}</span>
                     </td>
                     <td>
                       <RoleBadge role={user.role as any} size="small" />
@@ -316,21 +294,21 @@ export function UsersPage() {
                       <ActionsButton
                         actions={[
                           {
-                            label: 'Edit',
+                            label: 'Редактировать',
                             onClick: () => navigate(`/admin/users/${user.id}`),
                           },
                           {
-                            label: 'Reset Password',
+                            label: 'Сбросить пароль',
                             onClick: () => handleResetPassword(user),
                           },
                           {
-                            label: user.is_active ? 'Deactivate' : 'Activate',
+                            label: user.is_active ? 'Деактивировать' : 'Активировать',
                             onClick: () => handleToggleUserStatus(user),
                           },
                           {
-                            label: 'Delete',
+                            label: 'Удалить',
                             onClick: () => handleDeleteUser(user),
-                            danger: true,
+                            variant: 'danger',
                           },
                         ]}
                       />
@@ -345,7 +323,7 @@ export function UsersPage() {
         {total > users.length && (
           <div className={styles.pagination}>
             <Button variant="outline" onClick={() => {}}>
-              Load More ({total - users.length} remaining)
+              Загрузить ещё ({total - users.length} осталось)
             </Button>
           </div>
         )}
@@ -356,31 +334,31 @@ export function UsersPage() {
           content={
             <div className={styles.filterPopover}>
               <div className={styles.filterGroup}>
-                <label className={styles.filterLabel}>Role</label>
+                <label className={styles.filterLabel}>Роль</label>
                 <Select
                   value={roleFilter || ''}
                   onChange={e => handleRoleFilterChange(e.target.value)}
                 >
-                  <option value="">All Roles</option>
+                  <option value="">Все роли</option>
                   <option value="admin">Admin</option>
                   <option value="editor">Editor</option>
                   <option value="reader">Reader</option>
                 </Select>
               </div>
               <div className={styles.filterGroup}>
-                <label className={styles.filterLabel}>Status</label>
+                <label className={styles.filterLabel}>Статус</label>
                 <Select
                   value={statusFilter || ''}
                   onChange={e => handleStatusFilterChange(e.target.value)}
                 >
-                  <option value="">All Status</option>
-                  <option value="active">Active</option>
-                  <option value="inactive">Inactive</option>
+                  <option value="">Все статусы</option>
+                  <option value="active">Активные</option>
+                  <option value="inactive">Неактивные</option>
                 </Select>
               </div>
               <div className={styles.filterActions}>
                 <Button onClick={clearAll} variant="outline" size="small">
-                  Clear
+                  Сбросить
                 </Button>
               </div>
             </div>

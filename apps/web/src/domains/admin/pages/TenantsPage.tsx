@@ -1,20 +1,20 @@
 /**
- * TenantsPage - Admin tenants management
+ * TenantsPage - Управление тенантами
  */
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { useTenants } from '@shared/hooks/useTenants';
 import Button from '@shared/ui/Button';
 import Input from '@shared/ui/Input';
 import Badge from '@shared/ui/Badge';
 import { Skeleton } from '@shared/ui/Skeleton';
 import { useErrorToast, useSuccessToast } from '@shared/ui/Toast';
-import { ActionsButton } from '@shared/ui/ActionsButton';
+import { ActionsButton, type ActionItem } from '@shared/ui/ActionsButton';
 import { useAppStore } from '@app/store/app.store';
 import Alert from '@shared/ui/Alert';
 import { tenantApi } from '@shared/api/tenant';
 import type { Tenant } from '@shared/api/admin';
-import styles from './TenantsPage.module.css';
+import styles from './RegistryPage.module.css';
 
 export function TenantsPage() {
   const navigate = useNavigate();
@@ -35,18 +35,18 @@ export function TenantsPage() {
     });
   }, [tenants, q]);
 
-  const getActions = (tenant: Tenant) => [
+  const getActions = (tenant: Tenant): ActionItem[] => [
     {
-      label: 'Edit',
+      label: 'Редактировать',
       onClick: () => navigate(`/admin/tenants/${tenant.id}/edit`),
     },
     {
-      label: 'View Details',
+      label: 'Просмотр',
       onClick: () => navigate(`/admin/tenants/${tenant.id}`),
     },
     {
-      label: 'Delete',
-      danger: true,
+      label: 'Удалить',
+      variant: 'danger',
       onClick: () =>
         showConfirmDialog({
           title: `Удалить тенант «${tenant.name || tenant.id}»?`,
@@ -86,7 +86,7 @@ export function TenantsPage() {
   if (error) {
     return (
       <div className={styles.wrap}>
-        <div className={styles.errorState}>Failed to load tenants.</div>
+        <div className={styles.errorState}>Не удалось загрузить тенанты</div>
       </div>
     );
   }
@@ -95,19 +95,22 @@ export function TenantsPage() {
     <div className={styles.wrap}>
       <div className={styles.card}>
         <div className={styles.header}>
-          <h1 className={styles.title}>Tenants</h1>
+          <div className={styles.headerLeft}>
+            <h1 className={styles.title}>Тенанты</h1>
+            <p className={styles.subtitle}>Управление организациями и их настройками</p>
+          </div>
           <div className={styles.controls}>
             <Input
-              placeholder="Search tenants..."
+              placeholder="Поиск тенантов..."
               value={q}
               onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
                 setQ(event.target.value)
               }
               className={styles.search}
             />
-            <Button onClick={() => navigate('/admin/tenants/new')}>
-              Create Tenant
-            </Button>
+            <Link to="/admin/tenants/new">
+              <Button>Создать</Button>
+            </Link>
           </div>
         </div>
 
@@ -115,12 +118,12 @@ export function TenantsPage() {
           <table className={styles.table}>
             <thead>
               <tr>
-                <th>NAME</th>
-                <th>DESCRIPTION</th>
-                <th>EMBED MODELS</th>
-                <th>RERANK MODEL</th>
-                <th>CREATED</th>
-                <th>ACTIONS</th>
+                <th>ИМЯ</th>
+                <th>ОПИСАНИЕ</th>
+                <th>EMBED МОДЕЛИ</th>
+                <th>RERANK МОДЕЛЬ</th>
+                <th>СОЗДАН</th>
+                <th>ДЕЙСТВИЯ</th>
               </tr>
             </thead>
             <tbody>
@@ -150,7 +153,7 @@ export function TenantsPage() {
               ) : filteredTenants.length === 0 ? (
                 <tr>
                   <td colSpan={6} className={styles.emptyState}>
-                    No tenants found
+                    Тенанты не найдены
                   </td>
                 </tr>
               ) : (

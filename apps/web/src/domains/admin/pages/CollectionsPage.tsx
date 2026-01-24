@@ -1,20 +1,20 @@
 /**
- * CollectionsPage - Admin collections management
+ * CollectionsPage - Управление коллекциями
  */
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import Button from '@shared/ui/Button';
 import Input from '@shared/ui/Input';
 import Badge from '@shared/ui/Badge';
 import { Skeleton } from '@shared/ui/Skeleton';
 import { useErrorToast, useSuccessToast } from '@shared/ui/Toast';
-import { ActionsButton } from '@shared/ui/ActionsButton';
+import { ActionsButton, type ActionItem } from '@shared/ui/ActionsButton';
 import { useAppStore } from '@app/store/app.store';
 import Alert from '@shared/ui/Alert';
 import { collectionsApi, type Collection } from '@shared/api/collections';
 import { adminApi } from '@shared/api/admin';
-import styles from './CollectionsPage.module.css';
+import styles from './RegistryPage.module.css';
 
 export function CollectionsPage() {
   const navigate = useNavigate();
@@ -64,14 +64,14 @@ export function CollectionsPage() {
     });
   }, [collections, q]);
 
-  const getActions = (collection: Collection) => [
+  const getActions = (collection: Collection): ActionItem[] => [
     {
-      label: 'View Details',
+      label: 'Просмотр',
       onClick: () => navigate(`/admin/collections/${collection.id}`),
     },
     {
-      label: 'Delete',
-      danger: true,
+      label: 'Удалить',
+      variant: 'danger',
       onClick: () =>
         showConfirmDialog({
           title: `Удалить коллекцию «${collection.name}»?`,
@@ -100,7 +100,7 @@ export function CollectionsPage() {
   if (error) {
     return (
       <div className={styles.wrap}>
-        <div className={styles.errorState}>Failed to load collections.</div>
+        <div className={styles.errorState}>Не удалось загрузить коллекции</div>
       </div>
     );
   }
@@ -109,19 +109,22 @@ export function CollectionsPage() {
     <div className={styles.wrap}>
       <div className={styles.card}>
         <div className={styles.header}>
-          <h1 className={styles.title}>Collections</h1>
+          <div className={styles.headerLeft}>
+            <h1 className={styles.title}>Коллекции</h1>
+            <p className={styles.subtitle}>Управление базами знаний и векторными хранилищами</p>
+          </div>
           <div className={styles.controls}>
             <Input
-              placeholder="Search collections..."
+              placeholder="Поиск коллекций..."
               value={q}
               onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
                 setQ(event.target.value)
               }
               className={styles.search}
             />
-            <Button onClick={() => navigate('/admin/collections/new')}>
-              Create Collection
-            </Button>
+            <Link to="/admin/collections/new">
+              <Button>Создать</Button>
+            </Link>
           </div>
         </div>
 
@@ -129,15 +132,13 @@ export function CollectionsPage() {
           <table className={styles.table}>
             <thead>
               <tr>
-                <th>SLUG</th>
-                <th>NAME</th>
-                <th>TENANT</th>
-                <th>SEARCH</th>
-                <th>FIELDS</th>
-                <th>ROWS</th>
-                <th>STATUS</th>
-                <th>CREATED</th>
-                <th>ACTIONS</th>
+                <th>SLUG / ИМЯ</th>
+                <th>ТЕНАНТ</th>
+                <th>ПОИСК</th>
+                <th>ПОЛЯ</th>
+                <th>ЗАПИСЕЙ</th>
+                <th>СТАТУС</th>
+                <th>ДЕЙСТВИЯ</th>
               </tr>
             </thead>
             <tbody>
@@ -157,21 +158,23 @@ export function CollectionsPage() {
                 ))
               ) : filteredCollections.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className={styles.emptyState}>
-                    No collections found
+                  <td colSpan={7} className={styles.emptyState}>
+                    Коллекции не найдены
                   </td>
                 </tr>
               ) : (
                 filteredCollections.map((collection: Collection) => (
                   <tr key={collection.id}>
                     <td>
-                      <span className={styles.slug}>{collection.slug}</span>
+                      <div className={styles.cellStack}>
+                        <span className={styles.cellPrimary}>{collection.slug}</span>
+                        <span className={styles.cellSecondary}>{collection.name}</span>
+                      </div>
                     </td>
-                    <td>{collection.name}</td>
                     <td>
-                      <span className={styles.tenantName}>
+                      <Badge tone="info" size="small">
                         {getTenantName(collection.tenant_id)}
-                      </span>
+                      </Badge>
                     </td>
                     <td>
                       <div className={styles.searchBadges}>
@@ -201,11 +204,8 @@ export function CollectionsPage() {
                         tone={collection.is_active ? 'success' : 'neutral'}
                         size="small"
                       >
-                        {collection.is_active ? 'Active' : 'Inactive'}
+                        {collection.is_active ? 'Активна' : 'Неактивна'}
                       </Badge>
-                    </td>
-                    <td>
-                      {new Date(collection.created_at).toLocaleDateString()}
                     </td>
                     <td>
                       <ActionsButton actions={getActions(collection)} />

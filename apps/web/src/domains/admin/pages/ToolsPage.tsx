@@ -122,7 +122,7 @@ export function ToolsPage() {
     {
       label: 'Удалить',
       onClick: () => handleDelete(tool),
-      danger: true,
+      variant: 'danger',
     },
   ];
 

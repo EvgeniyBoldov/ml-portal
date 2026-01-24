@@ -1,7 +1,6 @@
 /**
- * PoliciesPage - Permission policies management
+ * PoliciesPage - Ограничения доступа для агентов
  */
-import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { permissionsApi } from '@/shared/api';
@@ -13,18 +12,12 @@ import { RowActions } from '@/shared/ui/RowActions';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
 import styles from './RegistryPage.module.css';
 
-const SCOPE_LABELS: Record<string, string> = {
-  default: 'По умолчанию',
-  tenant: 'Тенант',
-  user: 'Пользователь',
-};
 
 export function PoliciesPage() {
   const queryClient = useQueryClient();
   const showError = useErrorToast();
   const showSuccess = useSuccessToast();
-  const [scopeFilter, setScopeFilter] = useState<string>('all');
-
+  
   const { data: policies, isLoading } = useQuery({
     queryKey: qk.permissions.list({}),
     queryFn: () => permissionsApi.list({}),
@@ -39,47 +32,48 @@ export function PoliciesPage() {
     onError: () => showError('Ошибка удаления'),
   });
 
-  const filteredPolicies = policies?.filter(p => {
-    if (scopeFilter === 'all') return true;
-    return p.scope === scopeFilter;
-  }) || [];
+  const filteredPolicies = policies || [];
 
   const columns: DataTableColumn[] = [
     {
-      key: 'scope',
-      label: 'Уровень',
-      width: 140,
+      key: 'name',
+      label: 'Название',
       render: (row) => (
-        <Badge variant={row.scope === 'default' ? 'primary' : 'secondary'}>
-          {SCOPE_LABELS[row.scope] || row.scope}
-        </Badge>
-      ),
-    },
-    {
-      key: 'target',
-      label: 'Тенант / Пользователь',
-      render: (row) => (
-        row.scope === 'default' ? (
-          <span className={styles.muted}>—</span>
-        ) : row.scope === 'tenant' ? (
-          <code className={styles.code}>{row.tenant_id?.slice(0, 8)}...</code>
-        ) : (
-          <code className={styles.code}>{row.user_id?.slice(0, 8)}...</code>
-        )
+        <div className={styles.cellStack}>
+          <span className={styles.cellPrimary}>
+            {row.name || `Ограничение #${row.id.slice(0, 8)}`}
+          </span>
+          <code className={styles.code}>{row.id.slice(0, 8)}...</code>
+        </div>
       ),
     },
     {
       key: 'allowed_tools',
-      label: 'Инструменты',
+      label: 'Разрешённые инструменты',
       render: (row) => (
         <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
           {row.allowed_tools?.slice(0, 3).map((tool: string) => (
-            <Badge key={tool} variant="outline">{tool}</Badge>
+            <Badge key={tool} variant="success">{tool}</Badge>
           ))}
           {(row.allowed_tools?.length || 0) > 3 && (
             <Badge variant="outline">+{row.allowed_tools.length - 3}</Badge>
           )}
-          {!row.allowed_tools?.length && <span className={styles.muted}>—</span>}
+          {!row.allowed_tools?.length && <span className={styles.muted}>Все</span>}
+        </div>
+      ),
+    },
+    {
+      key: 'denied_tools',
+      label: 'Запрещённые',
+      render: (row) => (
+        <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+          {row.denied_tools?.slice(0, 2).map((tool: string) => (
+            <Badge key={tool} variant="error">{tool}</Badge>
+          ))}
+          {(row.denied_tools?.length || 0) > 2 && (
+            <Badge variant="outline">+{row.denied_tools.length - 2}</Badge>
+          )}
+          {!row.denied_tools?.length && <span className={styles.muted}>—</span>}
         </div>
       ),
     },
@@ -89,7 +83,7 @@ export function PoliciesPage() {
       width: 100,
       render: (row) => (
         <Badge variant={row.is_active ? 'success' : 'secondary'}>
-          {row.is_active ? 'Активна' : 'Неактивна'}
+          {row.is_active ? 'Активно' : 'Неактивно'}
         </Badge>
       ),
     },
@@ -102,8 +96,7 @@ export function PoliciesPage() {
         <RowActions
           basePath="/admin/policies"
           id={row.id}
-          onDelete={row.scope !== 'default' ? () => deleteMutation.mutate(row.id) : undefined}
-          deletable={row.scope !== 'default'}
+          onDelete={() => deleteMutation.mutate(row.id)}
           deleteLoading={deleteMutation.isPending}
         />
       ),
@@ -115,22 +108,12 @@ export function PoliciesPage() {
       <div className={styles.card}>
         <div className={styles.header}>
           <div className={styles.headerLeft}>
-            <h1 className={styles.title}>Политики</h1>
-            <p className={styles.subtitle}>Управление доступом к инструментам и коллекциям</p>
+            <h1 className={styles.title}>Ограничения</h1>
+            <p className={styles.subtitle}>Настройка доступа к инструментам для агентов</p>
           </div>
           <div className={styles.controls}>
-            <select
-              value={scopeFilter}
-              onChange={e => setScopeFilter(e.target.value)}
-              style={{ padding: '8px 12px', borderRadius: 'var(--radius)', border: '1px solid var(--color-border)' }}
-            >
-              <option value="all">Все уровни</option>
-              <option value="default">По умолчанию</option>
-              <option value="tenant">Тенант</option>
-              <option value="user">Пользователь</option>
-            </select>
             <Link to="/admin/policies/new">
-              <Button variant="primary">Создать</Button>
+              <Button>Создать</Button>
             </Link>
           </div>
         </div>
@@ -141,7 +124,7 @@ export function PoliciesPage() {
             data={filteredPolicies}
             keyField="id"
             loading={isLoading}
-            emptyText="Нет политик"
+            emptyText="Нет ограничений"
             searchable
             searchPlaceholder="Поиск..."
           />

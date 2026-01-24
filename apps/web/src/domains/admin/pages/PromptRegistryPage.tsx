@@ -135,7 +135,7 @@ export function PromptRegistryPage() {
     {
       label: 'Удалить',
       onClick: () => handleDelete(prompt),
-      danger: true,
+      variant: 'danger',
     },
   ];
 

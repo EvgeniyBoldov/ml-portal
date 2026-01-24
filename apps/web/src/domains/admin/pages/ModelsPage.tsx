@@ -294,7 +294,7 @@ export function ModelsPage() {
       actions.push({
         label: 'Удалить',
         onClick: () => handleDelete(model),
-        danger: true,
+        variant: 'danger',
       });
     }
     

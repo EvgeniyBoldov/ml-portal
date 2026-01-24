@@ -36,7 +36,7 @@ const navigation: NavGroup[] = [
       { path: '/admin/tools', label: 'Инструменты', icon: 'settings' },
       { path: '/admin/agents', label: 'Агенты', icon: 'sparkles' },
       { path: '/admin/collections', label: 'Коллекции', icon: 'database' },
-      { path: '/admin/policies', label: 'Политики', icon: 'shield' },
+      { path: '/admin/policies', label: 'Ограничения', icon: 'shield' },
     ],
   },
   {
@@ -49,8 +49,8 @@ const navigation: NavGroup[] = [
   {
     title: 'Мониторинг',
     items: [
-      { path: '/admin/agent-runs', label: 'Agent Runs', icon: 'activity' },
-      { path: '/admin/routing-logs', label: 'Routing Logs', icon: 'git-branch' },
+      { path: '/admin/agent-runs', label: 'Запуски агентов', icon: 'activity' },
+      { path: '/admin/routing-logs', label: 'Логи маршрутизации', icon: 'git-branch' },
       { path: '/admin/audit', label: 'Аудит', icon: 'file' },
     ],
   },

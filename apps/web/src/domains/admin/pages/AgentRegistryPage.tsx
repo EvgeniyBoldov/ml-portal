@@ -125,7 +125,7 @@ export function AgentRegistryPage() {
     {
       label: 'Удалить',
       onClick: () => handleDelete(agent),
-      danger: true,
+      variant: 'danger',
     },
   ];
 
