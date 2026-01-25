@@ -12,6 +12,7 @@ from sqlalchemy import select
 
 from app.core.logging import get_logger
 from app.models.tool import Tool
+from app.models.permission_set import PermissionSet
 from app.agents.registry import ToolRegistry
 from app.agents.handlers.base import ToolHandler
 
@@ -98,7 +99,40 @@ class ToolSyncService:
         )
         self.session.add(tool)
         await self.session.flush()
+        
+        # Auto-add to default permission set
+        await self._add_tool_to_default_permissions(handler.slug)
+        
         return tool
+    
+    async def _add_tool_to_default_permissions(self, tool_slug: str):
+        """Add new tool to default permission set with 'denied' status"""
+        # Get default permission set
+        stmt = select(PermissionSet).where(
+            PermissionSet.scope == "default",
+            PermissionSet.tenant_id.is_(None),
+            PermissionSet.user_id.is_(None)
+        )
+        result = await self.session.execute(stmt)
+        default_perms = result.scalar_one_or_none()
+        
+        if not default_perms:
+            logger.warning("Default permission set not found, skipping auto-add")
+            return
+        
+        # Check if tool already in permissions
+        tools_permissions = default_perms.tools_permissions or {}
+        if tool_slug in tools_permissions:
+            return
+        
+        # Add with 'denied' status by default
+        tools_permissions[tool_slug] = "denied"
+        default_perms.tools_permissions = tools_permissions
+        
+        self.session.add(default_perms)
+        await self.session.flush()
+        
+        logger.info(f"Added tool '{tool_slug}' to default permissions (status: denied)")
     
     async def _update_tool(self, tool: Tool, handler: ToolHandler) -> bool:
         """

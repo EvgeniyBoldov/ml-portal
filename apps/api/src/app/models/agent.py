@@ -39,6 +39,15 @@ class Agent(Base):
     
     system_prompt_slug: Mapped[str] = mapped_column(String(255), nullable=False)
     
+    # Optional baseline prompt for restrictions/limitations
+    # Must reference a prompt with type='baseline'
+    baseline_prompt_slug: Mapped[Optional[str]] = mapped_column(
+        String(255), 
+        ForeignKey('prompts.slug', ondelete='SET NULL'),
+        nullable=True,
+        index=True
+    )
+    
     # Legacy fields - kept for backward compatibility, will be migrated to *_config
     tools: Mapped[List[str]] = mapped_column(JSONB, default=list)
     available_collections: Mapped[List[str]] = mapped_column(JSONB, default=list)

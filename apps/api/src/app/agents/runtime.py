@@ -599,6 +599,11 @@ class AgentRuntime:
             
             return None
         
+        # Emit partial mode warning if present
+        if exec_request.partial_mode_warning:
+            logger.info(f"Partial mode: {exec_request.partial_mode_warning}")
+            yield RuntimeEvent.status("partial_mode_warning", warning=exec_request.partial_mode_warning)
+        
         # If no tools, stream directly
         if not tool_handlers:
             logger.info("No tools available, streaming directly")

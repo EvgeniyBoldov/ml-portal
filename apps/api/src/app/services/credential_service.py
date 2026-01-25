@@ -64,6 +64,7 @@ class CredentialService:
         scope: str,
         tenant_id: Optional[UUID] = None,
         user_id: Optional[UUID] = None,
+        is_default: bool = True,
     ) -> CredentialSet:
         """
         Create new credentials for a tool instance.
@@ -84,15 +85,13 @@ class CredentialService:
         self._validate_auth_type(auth_type)
         self._validate_payload(auth_type, payload)
         
-        exists = await self.repo.exists_for_scope(
-            tool_instance_id=tool_instance_id,
-            scope=scope,
-            tenant_id=tenant_id,
-            user_id=user_id,
-        )
-        if exists:
-            raise CredentialExistsError(
-                f"Credentials already exist for this scope. Use update instead."
+        # If setting as default, unset other defaults for this scope
+        if is_default:
+            await self._unset_other_defaults(
+                tool_instance_id=tool_instance_id,
+                scope=scope,
+                tenant_id=tenant_id,
+                user_id=user_id,
             )
         
         try:
@@ -108,6 +107,7 @@ class CredentialService:
             auth_type=auth_type,
             encrypted_payload=encrypted_payload,
             is_active=True,
+            is_default=is_default,
         )
         
         return await self.repo.create(cred_set)
@@ -144,6 +144,7 @@ class CredentialService:
         auth_type: Optional[str] = None,
         payload: Optional[Dict[str, Any]] = None,
         is_active: Optional[bool] = None,
+        is_default: Optional[bool] = None,
     ) -> CredentialSet:
         """Update existing credentials"""
         cred_set = await self.get_credentials(credential_id)
@@ -161,6 +162,18 @@ class CredentialService:
         
         if is_active is not None:
             cred_set.is_active = is_active
+        
+        if is_default is not None:
+            if is_default:
+                # Unset other defaults for this scope
+                await self._unset_other_defaults(
+                    tool_instance_id=cred_set.tool_instance_id,
+                    scope=cred_set.scope,
+                    tenant_id=cred_set.tenant_id,
+                    user_id=cred_set.user_id,
+                    exclude_id=credential_id,
+                )
+            cred_set.is_default = is_default
         
         return await self.repo.update(cred_set)
     
@@ -197,19 +210,46 @@ class CredentialService:
         """
         Resolve and decrypt credentials for a tool instance.
         
-        Priority: User > Tenant
+        Priority: User > Tenant > Default
+        
+        If multiple credentials exist for a scope, uses is_default=true.
+        If no default is set, raises error.
         
         Returns None if no credentials found.
         """
-        cred_set = await self.repo.get_for_instance(
+        # Try user scope first
+        if user_id and tenant_id:
+            cred_set = await self.repo.get_default_for_scope(
+                tool_instance_id=tool_instance_id,
+                scope="user",
+                tenant_id=tenant_id,
+                user_id=user_id,
+            )
+            if cred_set:
+                return await self._decrypt_credentials(cred_set)
+        
+        # Try tenant scope
+        if tenant_id:
+            cred_set = await self.repo.get_default_for_scope(
+                tool_instance_id=tool_instance_id,
+                scope="tenant",
+                tenant_id=tenant_id,
+            )
+            if cred_set:
+                return await self._decrypt_credentials(cred_set)
+        
+        # Try default scope
+        cred_set = await self.repo.get_default_for_scope(
             tool_instance_id=tool_instance_id,
-            user_id=user_id,
-            tenant_id=tenant_id,
+            scope="default",
         )
+        if cred_set:
+            return await self._decrypt_credentials(cred_set)
         
-        if not cred_set:
-            return None
-        
+        return None
+    
+    async def _decrypt_credentials(self, cred_set: CredentialSet) -> Optional[DecryptedCredentials]:
+        """Helper to decrypt credentials"""
         try:
             payload = self.crypto.decrypt(cred_set.encrypted_payload)
         except CryptoError as e:
@@ -277,3 +317,39 @@ class CredentialService:
         
         elif auth_type == AuthType.OAUTH.value:
             pass
+    
+    async def _unset_other_defaults(
+        self,
+        tool_instance_id: UUID,
+        scope: str,
+        tenant_id: Optional[UUID] = None,
+        user_id: Optional[UUID] = None,
+        exclude_id: Optional[UUID] = None,
+    ) -> None:
+        """Unset is_default for other credentials in the same scope"""
+        from sqlalchemy import update
+        
+        stmt = (
+            update(CredentialSet)
+            .where(
+                CredentialSet.tool_instance_id == tool_instance_id,
+                CredentialSet.scope == scope,
+                CredentialSet.is_default == True,
+            )
+        )
+        
+        if scope == "tenant":
+            stmt = stmt.where(CredentialSet.tenant_id == tenant_id)
+        elif scope == "user":
+            stmt = stmt.where(
+                CredentialSet.tenant_id == tenant_id,
+                CredentialSet.user_id == user_id,
+            )
+        
+        if exclude_id:
+            stmt = stmt.where(CredentialSet.id != exclude_id)
+        
+        stmt = stmt.values(is_default=False)
+        
+        await self.session.execute(stmt)
+        await self.session.flush()

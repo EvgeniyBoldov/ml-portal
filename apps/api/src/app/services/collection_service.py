@@ -11,6 +11,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
 from app.models.collection import Collection, FieldType, SearchMode
+from app.models.permission_set import PermissionSet
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 FIELD_TYPE_TO_PG = {
@@ -287,8 +291,40 @@ class CollectionService:
 
         self.session.add(collection)
         await self.session.flush()
+        
+        # Auto-add to default permission set
+        await self._add_collection_to_default_permissions(tenant_id, slug)
 
         return collection
+    
+    async def _add_collection_to_default_permissions(self, tenant_id: uuid.UUID, collection_slug: str):
+        """Add new collection to default permission set with 'denied' status"""
+        # Get default permission set
+        stmt = select(PermissionSet).where(
+            PermissionSet.scope == "default",
+            PermissionSet.tenant_id.is_(None),
+            PermissionSet.user_id.is_(None)
+        )
+        result = await self.session.execute(stmt)
+        default_perms = result.scalar_one_or_none()
+        
+        if not default_perms:
+            logger.warning("Default permission set not found, skipping auto-add")
+            return
+        
+        # Check if collection already in permissions
+        collections_permissions = default_perms.collections_permissions or {}
+        if collection_slug in collections_permissions:
+            return
+        
+        # Add with 'denied' status by default
+        collections_permissions[collection_slug] = "denied"
+        default_perms.collections_permissions = collections_permissions
+        
+        self.session.add(default_perms)
+        await self.session.flush()
+        
+        logger.info(f"Added collection '{collection_slug}' to default permissions (status: denied)")
 
     async def get_by_id(self, collection_id: uuid.UUID) -> Optional[Collection]:
         """Get collection by ID"""

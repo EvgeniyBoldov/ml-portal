@@ -2,12 +2,15 @@ import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { agentsApi, promptsApi, toolsApi, collectionsApi, AgentCreate } from '@/shared/api';
+import { qk } from '@/shared/api/keys';
 import Button from '@/shared/ui/Button';
 import Input from '@/shared/ui/Input';
 import Textarea from '@/shared/ui/Textarea';
+import Badge from '@/shared/ui/Badge';
+import Modal from '@/shared/ui/Modal';
 import { Tabs, TabPanel } from '@/shared/ui/Tabs';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
-import styles from './PromptEditorPage.module.css';
+import styles from './AgentEditorPage.module.css';
 
 export function AgentEditorPage() {
   const { slug } = useParams<{ slug: string }>();
@@ -110,211 +113,237 @@ export function AgentEditorPage() {
 
   const hasCollectionSearchTool = formData.tools.includes('collection.search');
 
-  // Tab state for prompt preview
+  // Modal state for prompt preview
+  const [showPromptModal, setShowPromptModal] = useState(false);
   const [promptTab, setPromptTab] = useState<'base' | 'generated'>('base');
 
-  // Load generated prompt for preview
-  const { data: generatedPrompt, refetch: refetchPrompt } = useQuery({
-    queryKey: ['agents', slug, 'generated-prompt'],
+  // Load generated prompt for preview (only when modal is open)
+  const { data: generatedPrompt } = useQuery({
+    queryKey: qk.agents.detail(slug || ''),
     queryFn: () => agentsApi.getGeneratedPrompt(slug!),
-    enabled: !isNew && !!slug,
+    enabled: !isNew && !!slug && showPromptModal,
   });
 
-  // Refetch generated prompt when tools or collections change
-  useEffect(() => {
-    if (!isNew && slug) {
-      refetchPrompt();
-    }
-  }, [formData.tools, formData.available_collections, isNew, slug, refetchPrompt]);
+  // Get selected prompt info
+  const selectedPrompt = prompts?.find(p => p.slug === formData.system_prompt_slug);
 
   if (!isNew && isLoading) {
-    return <div className="p-6 text-center text-gray-500">Loading agent...</div>;
+    return <div className={styles.emptyState}>Загрузка агента...</div>;
   }
 
   return (
     <div className={styles.wrap}>
+      {/* Header */}
       <div className={styles.header}>
-        <h1 className={styles.title}>
-          {isNew ? 'Создать Агента' : `Редактировать: ${slug}`}
-        </h1>
-        <Link to="/admin/agents">
-          <Button variant="outline">Назад</Button>
-        </Link>
+        <div>
+          <h1 className={styles.title}>
+            {isNew ? 'Создать Агента' : formData.name || slug}
+          </h1>
+          {!isNew && <p className={styles.subtitle}><code>{slug}</code></p>}
+        </div>
+        <div className={styles.headerActions}>
+          <Link to="/admin/agents">
+            <Button variant="outline">← Назад</Button>
+          </Link>
+        </div>
       </div>
 
-      <div className={styles.grid}>
-        <form id="agent-form" onSubmit={handleSubmit}>
-        {/* Main Settings */}
-        <div className={styles.card}>
-          <div className={styles.cardHeader}>
-            <h2 className={styles.cardTitle}>Профиль Агента</h2>
-            <p className={styles.cardDescription}>
-              Базовые настройки идентификации
-            </p>
+      <form onSubmit={handleSubmit}>
+        <div className={styles.content}>
+          {/* Basic Info Card */}
+          <div className={styles.card}>
+            <div className={styles.cardHeader}>
+              <h2 className={styles.cardTitle}>Основная информация</h2>
+            </div>
+
+            <div className={styles.formRow}>
+              <div className={styles.formGroup}>
+                <label className={styles.label}>Slug (ID)</label>
+                <Input 
+                  value={formData.slug} 
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormData({...formData, slug: e.target.value})}
+                  disabled={!isNew}
+                  placeholder="network-assistant"
+                  required
+                />
+              </div>
+              <div className={styles.formGroup}>
+                <label className={styles.label}>Название</label>
+                <Input 
+                  value={formData.name} 
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormData({...formData, name: e.target.value})}
+                  placeholder="Network Engineer Helper"
+                  required
+                />
+              </div>
+            </div>
+
+            <div className={styles.formGroup}>
+              <label className={styles.label}>Описание</label>
+              <Textarea 
+                value={formData.description} 
+                onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setFormData({...formData, description: e.target.value})}
+                rows={2}
+                placeholder="Краткое описание агента..."
+              />
+            </div>
           </div>
 
-          <div className={styles.formGroup}>
-            <label className={styles.label}>Slug (ID)</label>
-            <Input 
-              value={formData.slug} 
-              onChange={e => setFormData({...formData, slug: e.target.value})}
-              disabled={!isNew}
-              placeholder="network-assistant"
-              required
-            />
+          {/* System Prompt Card */}
+          <div className={styles.card}>
+            <div className={styles.cardHeader}>
+              <h2 className={styles.cardTitle}>Системный промпт</h2>
+              <p className={styles.cardDescription}>Определяет личность и инструкции поведения</p>
+            </div>
+
+            <div className={styles.formGroup}>
+              <div className={styles.promptSelector}>
+                <select 
+                  className={styles.select}
+                  value={formData.system_prompt_slug}
+                  onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setFormData({...formData, system_prompt_slug: e.target.value})}
+                  required
+                >
+                  <option value="">Выберите промпт...</option>
+                  {prompts?.map((p: { slug: string; name: string }) => (
+                    <option key={p.slug} value={p.slug}>{p.name}</option>
+                  ))}
+                </select>
+                {formData.system_prompt_slug && !isNew && (
+                  <Button 
+                    type="button" 
+                    variant="outline" 
+                    onClick={() => setShowPromptModal(true)}
+                  >
+                    Превью
+                  </Button>
+                )}
+              </div>
+              {selectedPrompt && (
+                <div className={styles.promptInfo}>
+                  <Badge tone="info">{selectedPrompt.slug}</Badge>
+                  <Link to={`/admin/prompts/${selectedPrompt.slug}`}>
+                    <Button variant="link" size="small">Открыть →</Button>
+                  </Link>
+                </div>
+              )}
+            </div>
           </div>
 
-          <div className={styles.formGroup}>
-            <label className={styles.label}>Название</label>
-            <Input 
-              value={formData.name} 
-              onChange={e => setFormData({...formData, name: e.target.value})}
-              placeholder="Network Engineer Helper"
-              required
-            />
-          </div>
+          {/* Tools Card */}
+          <div className={styles.card}>
+            <div className={styles.cardHeader}>
+              <h2 className={styles.cardTitle}>Инструменты</h2>
+              <p className={styles.cardDescription}>
+                Выбрано: {formData.tools.length} из {tools?.length || 0}
+              </p>
+            </div>
 
-          <div className={styles.formGroup}>
-            <label className={styles.label}>Описание</label>
-            <Textarea 
-              value={formData.description} 
-              onChange={e => setFormData({...formData, description: e.target.value})}
-              rows={3}
-            />
-          </div>
-        </div>
-
-        {/* Configuration */}
-        <div className={styles.card}>
-          <div className={styles.cardHeader}>
-            <h2 className={styles.cardTitle}>Конфигурация ("Мозги")</h2>
-            <p className={styles.cardDescription}>
-              Выбор системного промпта и доступных инструментов
-            </p>
-          </div>
-
-          <div className={styles.formGroup}>
-            <label className={styles.label}>System Prompt</label>
-            <select 
-              className={styles.select}
-              value={formData.system_prompt_slug}
-              onChange={e => setFormData({...formData, system_prompt_slug: e.target.value})}
-              required
-            >
-              <option value="">Выберите системный промпт...</option>
-              {prompts?.map(p => (
-                <option key={p.slug} value={p.slug}>
-                  {p.name} ({p.slug})
-                </option>
-              ))}
-            </select>
-            <p className={styles.description}>
-              Определяет личность и базовые инструкции поведения
-            </p>
-          </div>
-
-          <div className={styles.formGroup}>
-            <label className={styles.label}>Доступные Инструменты</label>
-            <div className={styles.toolsList}>
+            <div className={styles.toolsGrid}>
               {tools?.length === 0 && (
                 <div className={styles.emptyState}>Нет доступных инструментов</div>
               )}
-              {tools?.map(tool => {
+              {tools?.map((tool: { slug: string; name: string }) => {
                 const isSelected = formData.tools.includes(tool.slug);
                 return (
                   <div 
                     key={tool.slug} 
-                    className={`${styles.toolItem} ${isSelected ? styles.selected : ''}`}
+                    className={`${styles.toolChip} ${isSelected ? styles.selected : ''}`}
                     onClick={() => toggleTool(tool.slug)}
                   >
                     <input 
                       type="checkbox"
-                      className={styles.toolCheckbox}
                       checked={isSelected}
                       onChange={() => toggleTool(tool.slug)}
-                      onClick={e => e.stopPropagation()}
+                      onClick={(e: React.MouseEvent) => e.stopPropagation()}
                     />
-                    <div className={styles.toolInfo}>
-                      <div className={styles.toolName}>{tool.name}</div>
-                      <div className={styles.toolSlug}>{tool.slug}</div>
-                      {tool.description && (
-                        <div className={styles.toolDescription}>{tool.description}</div>
-                      )}
+                    <div className={styles.toolChipInfo}>
+                      <div className={styles.toolChipName}>{tool.name}</div>
+                      <div className={styles.toolChipSlug}>{tool.slug}</div>
                     </div>
                   </div>
                 );
               })}
             </div>
-            <p className={styles.description}>
-              Выберите функции, которые агент может вызывать
-            </p>
           </div>
 
+          {/* Collections Card (only if collection.search tool selected) */}
           {hasCollectionSearchTool && (
-            <div className={styles.formGroup}>
-              <label className={styles.label}>Доступные Коллекции</label>
-              <div className={styles.toolsList}>
+            <div className={styles.card}>
+              <div className={styles.cardHeader}>
+                <h2 className={styles.cardTitle}>Коллекции</h2>
+                <p className={styles.cardDescription}>
+                  Доступ для collection.search
+                </p>
+              </div>
+
+              <div className={styles.collectionsGrid}>
                 {collections?.items?.length === 0 && (
                   <div className={styles.emptyState}>Нет доступных коллекций</div>
                 )}
-                {collections?.items?.map(collection => {
+                {collections?.items?.map((collection: { slug: string; name: string }) => {
                   const isSelected = (formData.available_collections || []).includes(collection.slug);
                   return (
                     <div 
                       key={collection.slug} 
-                      className={`${styles.toolItem} ${isSelected ? styles.selected : ''}`}
+                      className={`${styles.toolChip} ${isSelected ? styles.selected : ''}`}
                       onClick={() => toggleCollection(collection.slug)}
                     >
                       <input 
                         type="checkbox"
-                        className={styles.toolCheckbox}
                         checked={isSelected}
                         onChange={() => toggleCollection(collection.slug)}
-                        onClick={e => e.stopPropagation()}
+                        onClick={(e: React.MouseEvent) => e.stopPropagation()}
                       />
-                      <div className={styles.toolInfo}>
-                        <div className={styles.toolName}>{collection.name}</div>
-                        <div className={styles.toolSlug}>{collection.slug}</div>
-                        {collection.description && (
-                          <div className={styles.toolDescription}>{collection.description}</div>
-                        )}
+                      <div className={styles.toolChipInfo}>
+                        <div className={styles.toolChipName}>{collection.name}</div>
+                        <div className={styles.toolChipSlug}>{collection.slug}</div>
                       </div>
                     </div>
                   );
                 })}
               </div>
-              <p className={styles.description}>
-                Выберите коллекции, к которым агент будет иметь доступ при использовании collection.search
-              </p>
             </div>
           )}
 
-          <div className={styles.formGroup}>
-            <label className={styles.label}>Настройки логирования</label>
-            <div className={styles.toolsList} style={{ maxHeight: 'auto', padding: '12px' }}>
+          {/* Options Card */}
+          <div className={styles.card}>
+            <div className={styles.cardHeader}>
+              <h2 className={styles.cardTitle}>Настройки</h2>
+            </div>
+
+            <div className={styles.optionsRow}>
               <div 
-                className={`${styles.toolItem} ${formData.enable_logging ? styles.selected : ''}`}
+                className={`${styles.optionItem} ${formData.is_active ? styles.active : ''}`}
+                onClick={() => setFormData({ ...formData, is_active: !formData.is_active })}
+              >
+                <input 
+                  type="checkbox"
+                  checked={formData.is_active}
+                  onChange={() => setFormData({ ...formData, is_active: !formData.is_active })}
+                />
+                <span>Активен</span>
+              </div>
+              <div 
+                className={`${styles.optionItem} ${formData.enable_logging ? styles.active : ''}`}
                 onClick={() => setFormData({ ...formData, enable_logging: !formData.enable_logging })}
               >
                 <input 
                   type="checkbox"
-                  className={styles.toolCheckbox}
                   checked={formData.enable_logging ?? true}
                   onChange={() => setFormData({ ...formData, enable_logging: !formData.enable_logging })}
-                  onClick={e => e.stopPropagation()}
                 />
-                <div className={styles.toolInfo}>
-                  <div className={styles.toolName}>Логировать выполнение</div>
-                  <div className={styles.toolDescription}>
-                    Сохранять детальную информацию о каждом запуске агента (шаги, tool calls, результаты)
-                  </div>
-                </div>
+                <span>Логирование</span>
               </div>
             </div>
           </div>
 
+          {/* Actions */}
           <div className={styles.actions}>
-             <Button 
+            <Link to="/admin/agents">
+              <Button type="button" variant="outline">Отмена</Button>
+            </Link>
+            <Button 
               type="submit" 
               variant="primary" 
               disabled={saveMutation.isPending}
@@ -325,79 +354,38 @@ export function AgentEditorPage() {
         </div>
       </form>
 
-      {/* Prompt Preview with Tabs */}
-      <div className={styles.card}>
-        <div className={styles.cardHeader}>
-          <h2 className={styles.cardTitle}>Превью Промпта</h2>
-          <p className={styles.cardDescription}>
-            Просмотр базового и финального промпта агента
-          </p>
-        </div>
-
+      {/* Prompt Preview Modal */}
+      <Modal 
+        open={showPromptModal} 
+        onClose={() => setShowPromptModal(false)} 
+        title="Превью промпта"
+        size="lg"
+      >
         <Tabs
           tabs={[
-            { id: 'base', label: 'Базовый промпт', icon: '📝' },
-            { id: 'generated', label: 'Сгенерированный', icon: '🔧' },
+            { id: 'base', label: 'Базовый' },
+            { id: 'generated', label: 'Сгенерированный' },
           ]}
           activeTab={promptTab}
           onChange={(tab) => setPromptTab(tab as 'base' | 'generated')}
         >
           <TabPanel id="base" activeTab={promptTab}>
-            {formData.system_prompt_slug ? (
-              <div className={styles.formGroup}>
-                <p className={styles.description} style={{ marginBottom: '12px' }}>
-                  Источник: <code>{formData.system_prompt_slug}</code>
-                </p>
-                <div className={styles.promptPreview} style={{ maxHeight: '500px', overflow: 'auto' }}>
-                  <pre>{generatedPrompt?.base_prompt || 'Загрузка...'}</pre>
-                </div>
-              </div>
-            ) : (
-              <div className={styles.emptyState}>
-                Выберите системный промпт слева
-              </div>
-            )}
+            <div className={styles.promptPreview}>
+              <pre>{generatedPrompt?.base_prompt || 'Загрузка...'}</pre>
+            </div>
           </TabPanel>
 
           <TabPanel id="generated" activeTab={promptTab}>
-            {!isNew && generatedPrompt ? (
-              <>
-                {generatedPrompt.tools_section && (
-                  <div className={styles.formGroup}>
-                    <label className={styles.label}>📦 Секция инструментов</label>
-                    <div className={styles.promptPreview}>
-                      <pre>{generatedPrompt.tools_section}</pre>
-                    </div>
-                  </div>
-                )}
-
-                {generatedPrompt.collections_section && (
-                  <div className={styles.formGroup}>
-                    <label className={styles.label}>📚 Секция коллекций</label>
-                    <div className={styles.promptPreview}>
-                      <pre>{generatedPrompt.collections_section}</pre>
-                    </div>
-                  </div>
-                )}
-
-                <div className={styles.formGroup}>
-                  <label className={styles.label}>🎯 Финальный промпт</label>
-                  <div className={styles.promptPreview} style={{ maxHeight: '400px', overflow: 'auto' }}>
-                    <pre>{generatedPrompt.final_prompt}</pre>
-                  </div>
-                </div>
-              </>
-            ) : (
-              <div className={styles.emptyState}>
-                {isNew 
-                  ? 'Сохраните агента чтобы увидеть сгенерированный промпт'
-                  : 'Загрузка...'}
+            {generatedPrompt ? (
+              <div className={styles.promptPreview}>
+                <pre>{generatedPrompt.final_prompt}</pre>
               </div>
+            ) : (
+              <div className={styles.emptyState}>Загрузка...</div>
             )}
           </TabPanel>
         </Tabs>
-      </div>
-      </div>
+      </Modal>
     </div>
   );
 }

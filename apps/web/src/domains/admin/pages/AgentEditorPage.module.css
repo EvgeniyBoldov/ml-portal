@@ -1,0 +1,289 @@
+/**
+ * AgentEditorPage - Компактный редактор агентов
+ */
+
+.wrap {
+  padding: 24px;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 24px;
+}
+
+.title {
+  font-size: 1.5rem;
+  font-weight: 600;
+  margin: 0;
+}
+
+.subtitle {
+  color: var(--muted);
+  margin: 4px 0 0;
+  font-size: 0.875rem;
+}
+
+.headerActions {
+  display: flex;
+  gap: 8px;
+}
+
+/* Main layout - single column */
+.content {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+}
+
+.cardHeader {
+  margin-bottom: 16px;
+}
+
+.cardTitle {
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 0 0 4px;
+}
+
+.cardDescription {
+  color: var(--muted);
+  font-size: 0.875rem;
+  margin: 0;
+}
+
+/* Form layout - 2 columns for basic info */
+.formRow {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+@media (max-width: 768px) {
+  .formRow {
+    grid-template-columns: 1fr;
+  }
+}
+
+.formGroup {
+  margin-bottom: 16px;
+}
+
+.formGroup:last-child {
+  margin-bottom: 0;
+}
+
+.label {
+  display: block;
+  font-size: 0.875rem;
+  font-weight: 500;
+  margin-bottom: 6px;
+}
+
+.description {
+  color: var(--muted);
+  font-size: 0.75rem;
+  margin-top: 4px;
+}
+
+/* Prompt selector with preview button */
+.promptSelector {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.promptSelector select {
+  flex: 1;
+}
+
+.promptInfo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 8px 12px;
+  background: var(--bg-hover);
+  border-radius: var(--radius);
+  font-size: 0.875rem;
+}
+
+.promptInfo code {
+  color: var(--primary);
+}
+
+/* Tools grid - compact */
+.toolsGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 8px;
+  max-height: 300px;
+  overflow-y: auto;
+  padding: 4px;
+}
+
+.toolChip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-size: 0.875rem;
+}
+
+.toolChip:hover {
+  border-color: var(--primary);
+}
+
+.toolChip.selected {
+  background: var(--primary-light);
+  border-color: var(--primary);
+}
+
+.toolChip input[type="checkbox"] {
+  margin: 0;
+  accent-color: var(--primary);
+}
+
+.toolChipInfo {
+  flex: 1;
+  min-width: 0;
+}
+
+.toolChipName {
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.toolChipSlug {
+  color: var(--muted);
+  font-size: 0.75rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Collections - similar to tools */
+.collectionsGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 8px;
+  max-height: 200px;
+  overflow-y: auto;
+  padding: 4px;
+}
+
+/* Options row */
+.optionsRow {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.optionItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-size: 0.875rem;
+}
+
+.optionItem:hover {
+  border-color: var(--primary);
+}
+
+.optionItem.active {
+  background: var(--success-light);
+  border-color: var(--success);
+}
+
+.optionItem input[type="checkbox"] {
+  margin: 0;
+}
+
+/* Actions */
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  margin-top: 16px;
+}
+
+/* Empty state */
+.emptyState {
+  text-align: center;
+  padding: 24px;
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
+/* Select styling */
+.select {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-input);
+  font-size: 0.875rem;
+  color: var(--text);
+}
+
+.select:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+
+/* Prompt preview modal */
+.promptPreview {
+  background: var(--bg-hover);
+  border-radius: var(--radius);
+  padding: 16px;
+  max-height: 400px;
+  overflow: auto;
+}
+
+.promptPreview pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.promptSection {
+  margin-bottom: 16px;
+}
+
+.promptSection:last-child {
+  margin-bottom: 0;
+}
+
+.promptSectionTitle {
+  font-weight: 600;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}

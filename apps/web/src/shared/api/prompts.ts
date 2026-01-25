@@ -1,5 +1,33 @@
 import { apiRequest } from './http';
 
+// Types
+export type PromptStatus = 'draft' | 'active' | 'archived';
+export type PromptType = 'prompt' | 'baseline';
+
+export interface PromptVersionInfo {
+  id: string;
+  version: number;
+  status: PromptStatus;
+  created_at: string;
+}
+
+export interface AgentUsingPrompt {
+  slug: string;
+  name: string;
+  version: number;
+}
+
+export interface PromptListItem {
+  slug: string;
+  name: string;
+  description?: string;
+  type: PromptType;
+  latest_version: number;
+  active_version?: number;
+  versions_count: number;
+  updated_at: string;
+}
+
 export interface Prompt {
   id: string;
   slug: string;
@@ -7,13 +35,13 @@ export interface Prompt {
   description?: string;
   template: string;
   input_variables: string[];
-  model_config?: Record<string, any>;
+  generation_config?: Record<string, any>;
+  type: PromptType;
   version: number;
-  is_active: boolean;
-  type: 'chat' | 'agent' | 'task';
+  status: PromptStatus;
+  parent_version_id?: string;
   created_at: string;
   updated_at: string;
-  used_by_agents?: string[];
 }
 
 export interface PromptCreate {
@@ -22,8 +50,25 @@ export interface PromptCreate {
   description?: string;
   template: string;
   input_variables?: string[];
-  model_config?: Record<string, any>;
-  type?: string;
+  generation_config?: Record<string, any>;
+  type?: PromptType;
+}
+
+export interface PromptVersionCreate {
+  parent_version_id: string;
+  name: string;
+  description?: string;
+  template: string;
+  input_variables?: string[];
+  generation_config?: Record<string, any>;
+}
+
+export interface PromptUpdate {
+  name?: string;
+  description?: string;
+  template?: string;
+  input_variables?: string[];
+  generation_config?: Record<string, any>;
 }
 
 export interface PromptRenderRequest {
@@ -35,11 +80,12 @@ export interface PromptRenderResponse {
 }
 
 export const promptsApi = {
+  // List prompts (aggregated view)
   async list(params: {
     skip?: number;
     limit?: number;
-    type?: string;
-  } = {}): Promise<Prompt[]> {
+    type?: PromptType;
+  } = {}): Promise<PromptListItem[]> {
     const searchParams = new URLSearchParams();
     if (params.skip) searchParams.set('skip', String(params.skip));
     if (params.limit) searchParams.set('limit', String(params.limit));
@@ -48,10 +94,22 @@ export const promptsApi = {
     return apiRequest(`/admin/prompts?${searchParams.toString()}`);
   },
 
-  async get(slug: string): Promise<Prompt> {
-    return apiRequest(`/admin/prompts/${slug}`);
+  // Get all versions of a prompt
+  async getVersions(slug: string): Promise<PromptVersionInfo[]> {
+    return apiRequest(`/admin/prompts/${slug}/versions`);
   },
 
+  // Get specific version
+  async getVersion(slug: string, version: number): Promise<Prompt> {
+    return apiRequest(`/admin/prompts/${slug}/versions/${version}`);
+  },
+
+  // Get agents using this prompt
+  async getAgents(slug: string): Promise<AgentUsingPrompt[]> {
+    return apiRequest(`/admin/prompts/${slug}/agents`);
+  },
+
+  // Create new prompt (first version as draft)
   async create(data: PromptCreate): Promise<Prompt> {
     return apiRequest('/admin/prompts', {
       method: 'POST',
@@ -59,23 +117,57 @@ export const promptsApi = {
     });
   },
 
-  async render(slug: string, variables: Record<string, any>): Promise<PromptRenderResponse> {
-    return apiRequest(`/admin/prompts/${slug}/render`, {
+  // Create new version from existing
+  async createVersion(slug: string, data: PromptVersionCreate): Promise<Prompt> {
+    return apiRequest(`/admin/prompts/${slug}/versions`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+
+  // Update draft prompt
+  async update(promptId: string, data: PromptUpdate): Promise<Prompt> {
+    return apiRequest(`/admin/prompts/${promptId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    });
+  },
+
+  // Activate draft prompt
+  async activate(promptId: string, archiveCurrent = true): Promise<Prompt> {
+    return apiRequest(`/admin/prompts/${promptId}/activate`, {
+      method: 'POST',
+      body: JSON.stringify({ archive_current: archiveCurrent }),
+    });
+  },
+
+  // Archive prompt version
+  async archive(promptId: string): Promise<Prompt> {
+    return apiRequest(`/admin/prompts/${promptId}/archive`, {
+      method: 'POST',
+    });
+  },
+
+  // Render prompt with variables
+  async render(
+    slug: string, 
+    variables: Record<string, any>,
+    version?: number
+  ): Promise<PromptRenderResponse> {
+    const searchParams = version ? `?version=${version}` : '';
+    return apiRequest(`/admin/prompts/${slug}/render${searchParams}`, {
       method: 'POST',
       body: JSON.stringify({ variables }),
     });
   },
 
+  // Preview template without saving
   async preview(template: string, variables: Record<string, any>): Promise<PromptRenderResponse> {
-    // For preview, we send a dummy create payload
-    return apiRequest('/admin/prompts/preview', {
+    const searchParams = new URLSearchParams();
+    searchParams.set('template', template);
+    return apiRequest(`/admin/prompts/preview?${searchParams.toString()}`, {
       method: 'POST',
-      body: JSON.stringify({ 
-        slug: 'preview',
-        name: 'preview',
-        template,
-        variables 
-      }), // Backend expects PromptCreate schema + variables param
+      body: JSON.stringify(variables),
     });
   }
 };

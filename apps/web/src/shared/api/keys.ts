@@ -44,6 +44,9 @@ export const qk = {
     all: () => ['prompts'] as const,
     list: (params?: { type?: string; q?: string }) => ['prompts', 'list', params] as const,
     detail: (slug: string) => ['prompts', 'detail', slug] as const,
+    versions: (slug: string) => ['prompts', 'versions', slug] as const,
+    version: (slug: string, version: number) => ['prompts', 'version', slug, version] as const,
+    agents: (slug: string) => ['prompts', 'agents', slug] as const,
   },
   tools: {
     all: () => ['tools'] as const,

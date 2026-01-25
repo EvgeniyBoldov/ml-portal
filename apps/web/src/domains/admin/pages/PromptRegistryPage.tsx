@@ -1,40 +1,38 @@
 /**
  * PromptRegistryPage - Реестр промптов
  * 
- * Управление системными промптами и их версиями.
- * Единый стиль с остальными админ-реестрами.
+ * Список промптов с агрегированной информацией о версиях.
+ * Клик по промпту открывает детальную страницу с версиями.
  */
 import { useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
-import { promptsApi, type Prompt } from '@/shared/api';
+import { promptsApi, type PromptListItem, type PromptType } from '@/shared/api';
 import { qk } from '@/shared/api/keys';
 import Button from '@/shared/ui/Button';
 import Badge from '@/shared/ui/Badge';
 import Input from '@/shared/ui/Input';
-import Alert from '@/shared/ui/Alert';
 import { Skeleton } from '@/shared/ui/Skeleton';
-import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
-import { ActionsButton, type ActionItem } from '@/shared/ui/ActionsButton';
-import { useAppStore } from '@/app/store/app.store';
 import styles from './RegistryPage.module.css';
 
-const TYPE_LABELS: Record<string, string> = {
-  chat: 'Чат',
-  agent: 'Агент',
-  task: 'Задача',
-  system: 'Системный',
+const TYPE_LABELS: Record<PromptType, string> = {
+  prompt: 'Промпт',
+  baseline: 'Бейслайн',
 };
 
-function PromptRow({ 
-  prompt, 
-  getActions 
-}: { 
-  prompt: Prompt;
-  getActions: (prompt: Prompt) => ActionItem[];
-}) {
+const TYPE_TONES: Record<PromptType, 'info' | 'warning'> = {
+  prompt: 'info',
+  baseline: 'warning',
+};
+
+function PromptRow({ prompt }: { prompt: PromptListItem }) {
+  const navigate = useNavigate();
+  
   return (
-    <tr>
+    <tr 
+      onClick={() => navigate(`/admin/prompts/${prompt.slug}`)}
+      style={{ cursor: 'pointer' }}
+    >
       <td>
         <div className={styles.cellStack}>
           <span className={styles.cellPrimary}>{prompt.slug}</span>
@@ -42,27 +40,30 @@ function PromptRow({
         </div>
       </td>
       <td>
-        <Badge tone="info">{TYPE_LABELS[prompt.type] || prompt.type}</Badge>
-      </td>
-      <td>
-        <code className={styles.code}>v{prompt.version}</code>
-      </td>
-      <td>
-        <Badge tone={prompt.is_active ? 'success' : 'neutral'} size="small">
-          {prompt.is_active ? 'Активен' : 'Неактивен'}
+        <Badge tone={TYPE_TONES[prompt.type]}>
+          {TYPE_LABELS[prompt.type]}
         </Badge>
       </td>
       <td>
-        {prompt.used_by_agents && prompt.used_by_agents.length > 0 ? (
-          <div className={styles.agentsList}>
-            {prompt.used_by_agents.map((agentSlug, idx) => (
-              <Badge key={idx} tone="neutral" size="small">
-                {agentSlug}
-              </Badge>
-            ))}
-          </div>
+        <div className={styles.cellStack}>
+          <span>
+            <code className={styles.code}>v{prompt.latest_version}</code>
+            {prompt.versions_count > 1 && (
+              <span className={styles.muted}> ({prompt.versions_count} версий)</span>
+            )}
+          </span>
+          {prompt.active_version && (
+            <span className={styles.cellSecondary}>
+              Активная: v{prompt.active_version}
+            </span>
+          )}
+        </div>
+      </td>
+      <td>
+        {prompt.active_version ? (
+          <Badge tone="success" size="small">Активен</Badge>
         ) : (
-          <span className={styles.muted}>—</span>
+          <Badge tone="neutral" size="small">Черновик</Badge>
         )}
       </td>
       <td>
@@ -70,25 +71,17 @@ function PromptRow({
           {new Date(prompt.updated_at).toLocaleDateString('ru-RU')}
         </span>
       </td>
-      <td>
-        <ActionsButton actions={getActions(prompt)} />
-      </td>
     </tr>
   );
 }
 
 export function PromptRegistryPage() {
-  const navigate = useNavigate();
-  const queryClient = useQueryClient();
-  const showError = useErrorToast();
-  const showSuccess = useSuccessToast();
-  const showConfirmDialog = useAppStore(state => state.showConfirmDialog);
-  
   const [q, setQ] = useState('');
+  const [typeFilter, setTypeFilter] = useState<PromptType | ''>('');
   
   const { data: prompts, isLoading, error } = useQuery({
-    queryKey: qk.prompts.list({ q: q || undefined }),
-    queryFn: () => promptsApi.list(),
+    queryKey: qk.prompts.list({ q: q || undefined, type: typeFilter || undefined }),
+    queryFn: () => promptsApi.list({ type: typeFilter || undefined }),
     staleTime: 60000,
   });
 
@@ -97,48 +90,6 @@ export function PromptRegistryPage() {
     p.slug.toLowerCase().includes(q.toLowerCase())
   ) || [];
 
-  const handleDelete = (prompt: Prompt) => {
-    showConfirmDialog({
-      title: `Удалить промпт «${prompt.slug}»?`,
-      confirmLabel: 'Удалить',
-      cancelLabel: 'Отмена',
-      variant: 'danger',
-      message: (
-        <Alert
-          variant="danger"
-          title="Промпт будет удалён"
-          description="Удаление нельзя отменить. Агенты, использующие этот промпт, перестанут работать."
-        />
-      ),
-      onConfirm: async () => {
-        try {
-          // await deletePromptMutation.mutateAsync(prompt.slug);
-          showSuccess(`Промпт ${prompt.slug} удалён`);
-          queryClient.invalidateQueries({ queryKey: qk.prompts.all() });
-        } catch (err) {
-          console.error(err);
-          showError('Не удалось удалить промпт');
-        }
-      },
-    });
-  };
-
-  const getActions = (prompt: Prompt): ActionItem[] => [
-    {
-      label: 'Редактировать',
-      onClick: () => navigate(`/admin/prompts/${prompt.slug}`),
-    },
-    {
-      label: 'Дублировать',
-      onClick: () => navigate(`/admin/prompts/new?from=${prompt.slug}`),
-    },
-    {
-      label: 'Удалить',
-      onClick: () => handleDelete(prompt),
-      variant: 'danger',
-    },
-  ];
-
   return (
     <div className={styles.wrap}>
       <div className={styles.card}>
@@ -146,10 +97,25 @@ export function PromptRegistryPage() {
           <div className={styles.headerLeft}>
             <h1 className={styles.title}>Промпты</h1>
             <p className={styles.subtitle}>
-              Управление системными промптами и их версиями
+              Управление системными промптами и бейслайнами
             </p>
           </div>
           <div className={styles.controls}>
+            <select
+              value={typeFilter}
+              onChange={(e) => setTypeFilter(e.target.value as PromptType | '')}
+              style={{ 
+                padding: '8px 12px', 
+                borderRadius: 'var(--radius)', 
+                border: '1px solid var(--color-border)',
+                background: 'var(--panel)',
+                color: 'var(--text)'
+              }}
+            >
+              <option value="">Все типы</option>
+              <option value="prompt">Промпты</option>
+              <option value="baseline">Бейслайны</option>
+            </select>
             <Input
               placeholder="Поиск промптов..."
               value={q}
@@ -174,18 +140,16 @@ export function PromptRegistryPage() {
               <tr>
                 <th>SLUG / ИМЯ</th>
                 <th>ТИП</th>
-                <th>ВЕРСИЯ</th>
+                <th>ВЕРСИИ</th>
                 <th>СТАТУС</th>
-                <th>АГЕНТЫ</th>
                 <th>ОБНОВЛЁН</th>
-                <th>ДЕЙСТВИЯ</th>
               </tr>
             </thead>
             <tbody>
               {isLoading ? (
                 Array.from({ length: 3 }).map((_, i) => (
                   <tr key={i}>
-                    {Array.from({ length: 7 }).map((__, j) => (
+                    {Array.from({ length: 5 }).map((__, j) => (
                       <td key={j}>
                         <Skeleton width={j === 0 ? 200 : 100} />
                       </td>
@@ -194,17 +158,13 @@ export function PromptRegistryPage() {
                 ))
               ) : filteredPrompts.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className={styles.emptyState}>
+                  <td colSpan={5} className={styles.emptyState}>
                     Промпты не найдены. Нажмите «Создать промпт» для создания.
                   </td>
                 </tr>
               ) : (
                 filteredPrompts.map(prompt => (
-                  <PromptRow 
-                    key={prompt.id} 
-                    prompt={prompt} 
-                    getActions={getActions}
-                  />
+                  <PromptRow key={prompt.slug} prompt={prompt} />
                 ))
               )}
             </tbody>

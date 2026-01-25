@@ -8,6 +8,7 @@ from app.models.agent import Agent
 from app.models.prompt import Prompt
 from app.repositories.agent_repository import AgentRepository
 from app.repositories.prompt_repository import PromptRepository
+from app.services.prompt_service import PromptService
 from app.schemas.agents import AgentCreate, AgentUpdate
 
 
@@ -16,6 +17,8 @@ class AgentProfile:
     """Resolved agent profile with prompt template"""
     agent: Agent
     system_prompt: Prompt
+    baseline_prompt: Optional[Prompt]
+    merged_baseline: str
     tools: List[str]
     generation_config: Dict[str, Any]
     policy: Dict[str, Any] = None
@@ -39,6 +42,7 @@ class AgentService:
         self.session = session
         self.repo = AgentRepository(session)
         self.prompt_repo = PromptRepository(session)
+        self.prompt_service = PromptService(session)
 
     async def list_agents(
         self, 
@@ -126,12 +130,27 @@ class AgentService:
                 detail=f"System prompt '{agent.system_prompt_slug}' not found for agent '{agent.slug}'"
             )
         
+        # Load baseline prompt if specified
+        baseline_prompt = None
+        if agent.baseline_prompt_slug:
+            baseline_prompt = await self.prompt_repo.get_active_by_slug(agent.baseline_prompt_slug)
+        
+        # Merge baselines (default baseline from config + agent baseline)
+        # TODO: Get default_baseline_slug from app config/settings
+        default_baseline_slug = None  # Will be configurable later
+        merged_baseline = await self.prompt_service.merge_baselines(
+            default_baseline_slug,
+            agent.baseline_prompt_slug
+        )
+        
         # Use all tools from both legacy and new config
         all_tools = agent.get_all_tool_slugs()
         
         return AgentProfile(
             agent=agent,
             system_prompt=system_prompt,
+            baseline_prompt=baseline_prompt,
+            merged_baseline=merged_baseline,
             tools=all_tools,
             generation_config=agent.generation_config or {},
             policy=agent.policy or {},
@@ -178,6 +197,13 @@ class AgentService:
         
         base_prompt = system_prompt.template
         
+        # Get merged baseline
+        default_baseline_slug = None  # TODO: Get from config
+        merged_baseline = await self.prompt_service.merge_baselines(
+            default_baseline_slug,
+            agent.baseline_prompt_slug
+        )
+        
         # Get all tools from both legacy and new config
         all_tools = agent.get_all_tool_slugs()
         all_collections = agent.get_all_collection_slugs()
@@ -208,6 +234,8 @@ class AgentService:
         
         # Compose final prompt
         final_prompt = base_prompt
+        if merged_baseline:
+            final_prompt += f"\n\n# Restrictions and Limitations\n\n{merged_baseline}"
         if tools_section:
             final_prompt += tools_section
         if collections_section:
@@ -218,6 +246,8 @@ class AgentService:
             "agent_name": agent.name,
             "base_prompt": base_prompt,
             "base_prompt_slug": system_prompt.slug,
+            "baseline_prompt_slug": agent.baseline_prompt_slug,
+            "merged_baseline": merged_baseline if merged_baseline else None,
             "tools_section": tools_section if tools_section else None,
             "collections_section": collections_section if collections_section else None,
             "final_prompt": final_prompt,

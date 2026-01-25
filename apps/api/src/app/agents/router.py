@@ -109,6 +109,7 @@ class ExecutionRequest:
     mode: ExecutionMode = ExecutionMode.FULL
     
     missing_requirements: Optional[MissingRequirements] = None
+    partial_mode_warning: Optional[str] = None
     
     routing_reasons: List[str] = field(default_factory=list)
     routed_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
@@ -245,6 +246,24 @@ class AgentRouter:
             
             routing_reasons.append(f"Execution mode: {mode.value}")
             
+            # Generate partial mode warning if needed
+            partial_warning = None
+            if mode == ExecutionMode.PARTIAL and missing.has_missing:
+                warning_parts = []
+                if missing.tools:
+                    warning_parts.append(f"tools: {', '.join(missing.tools)}")
+                if missing.collections:
+                    warning_parts.append(f"collections: {', '.join(missing.collections)}")
+                if missing.credentials:
+                    warning_parts.append(f"credentials for: {', '.join(missing.credentials)}")
+                
+                partial_warning = (
+                    "⚠️ Running in partial mode. Some capabilities are unavailable:\n"
+                    f"{'; '.join(warning_parts)}.\n"
+                    "Responses may be incomplete or less accurate."
+                )
+                routing_reasons.append(f"Partial mode warning: {partial_warning}")
+            
             exec_request = ExecutionRequest(
                 run_id=run_id,
                 agent_slug=agent_slug,
@@ -257,6 +276,7 @@ class AgentRouter:
                 effective_permissions=effective_perms,
                 mode=mode,
                 missing_requirements=missing if missing.has_missing else None,
+                partial_mode_warning=partial_warning,
                 routing_reasons=routing_reasons,
                 routing_duration_ms=int((time.time() - start_time) * 1000),
             )

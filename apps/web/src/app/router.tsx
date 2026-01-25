@@ -29,9 +29,9 @@ const ModelEditorPage = lazy(() => import('@/domains/admin/pages/ModelEditorPage
 const AuditPage = lazy(() => import('@/domains/admin/pages/AuditPage'));
 const EmailSettingsPage = lazy(() => import('@/domains/admin/pages/EmailSettingsPage'));
 const PromptRegistryPage = lazy(() => import('@/domains/admin/pages/PromptRegistryPage').then(m => ({ default: m.PromptRegistryPage })));
+const PromptDetailPage = lazy(() => import('@/domains/admin/pages/PromptDetailPage').then(m => ({ default: m.PromptDetailPage })));
 const PromptEditorPage = lazy(() => import('@/domains/admin/pages/PromptEditorPage').then(m => ({ default: m.PromptEditorPage })));
 const ToolsPage = lazy(() => import('@/domains/admin/pages/ToolsPage').then(m => ({ default: m.ToolsPage })));
-const ToolEditorPage = lazy(() => import('@/domains/admin/pages/ToolEditorPage').then(m => ({ default: m.ToolEditorPage })));
 const AgentRegistryPage = lazy(() => import('@/domains/admin/pages/AgentRegistryPage').then(m => ({ default: m.AgentRegistryPage })));
 const AgentEditorPage = lazy(() => import('@/domains/admin/pages/AgentEditorPage').then(m => ({ default: m.AgentEditorPage })));
 const AgentRunsPage = lazy(() => import('@/domains/admin/pages/AgentRunsPage').then(m => ({ default: m.AgentRunsPage })));
@@ -94,10 +94,8 @@ const router = createBrowserRouter([
       { path: 'audit', element: withSuspense(<AuditPage />) },
       { path: 'prompts', element: withSuspense(<PromptRegistryPage />) },
       { path: 'prompts/new', element: withSuspense(<PromptEditorPage />) },
-      { path: 'prompts/:slug', element: withSuspense(<PromptEditorPage />) },
+      { path: 'prompts/:slug', element: withSuspense(<PromptDetailPage />) },
       { path: 'tools', element: withSuspense(<ToolsPage />) },
-      { path: 'tools/new', element: withSuspense(<ToolEditorPage />) },
-      { path: 'tools/:slug', element: withSuspense(<ToolEditorPage />) },
       { path: 'agents', element: withSuspense(<AgentRegistryPage />) },
       { path: 'agents/new', element: withSuspense(<AgentEditorPage />) },
       { path: 'agents/:slug', element: withSuspense(<AgentEditorPage />) },

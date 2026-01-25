@@ -147,3 +147,59 @@ class CredentialSetRepository:
         stmt = select(func.count()).where(and_(*conditions))
         count = await self.session.scalar(stmt) or 0
         return count > 0
+    
+    async def get_default_for_scope(
+        self,
+        tool_instance_id: UUID,
+        scope: str,
+        tenant_id: Optional[UUID] = None,
+        user_id: Optional[UUID] = None,
+    ) -> Optional[CredentialSet]:
+        """
+        Get default credential set for a specific scope.
+        
+        If is_default=true exists, returns it.
+        If multiple credentials exist but no default, returns None (error case).
+        If only one credential exists, returns it.
+        """
+        conditions = [
+            CredentialSet.tool_instance_id == tool_instance_id,
+            CredentialSet.scope == scope,
+            CredentialSet.is_active == True,
+        ]
+        
+        if scope == "tenant" and tenant_id:
+            conditions.append(CredentialSet.tenant_id == tenant_id)
+        elif scope == "user" and tenant_id and user_id:
+            conditions.append(CredentialSet.tenant_id == tenant_id)
+            conditions.append(CredentialSet.user_id == user_id)
+        
+        # Try to get default first
+        default_stmt = select(CredentialSet).where(
+            and_(*conditions, CredentialSet.is_default == True)
+        )
+        result = await self.session.execute(default_stmt)
+        default_cred = result.scalar_one_or_none()
+        
+        if default_cred:
+            return default_cred
+        
+        # If no default, check if only one exists
+        all_stmt = select(CredentialSet).where(and_(*conditions))
+        result = await self.session.execute(all_stmt)
+        all_creds = list(result.scalars().all())
+        
+        if len(all_creds) == 1:
+            return all_creds[0]
+        elif len(all_creds) > 1:
+            # Multiple credentials but no default - this is an error state
+            # Log warning and return None
+            from app.core.logging import get_logger
+            logger = get_logger(__name__)
+            logger.warning(
+                f"Multiple credentials found for instance {tool_instance_id} "
+                f"scope {scope} but no default set"
+            )
+            return None
+        
+        return None
