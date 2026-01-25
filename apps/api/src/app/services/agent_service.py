@@ -132,15 +132,18 @@ class AgentService:
         
         # Load baseline prompt if specified
         baseline_prompt = None
-        if agent.baseline_prompt_slug:
-            baseline_prompt = await self.prompt_repo.get_active_by_slug(agent.baseline_prompt_slug)
+        baseline_slug = None
+        if agent.baseline_prompt_id:
+            baseline_prompt = await self.prompt_repo.get_by_id(agent.baseline_prompt_id)
+            if baseline_prompt:
+                baseline_slug = baseline_prompt.slug
         
         # Merge baselines (default baseline from config + agent baseline)
         # TODO: Get default_baseline_slug from app config/settings
         default_baseline_slug = None  # Will be configurable later
         merged_baseline = await self.prompt_service.merge_baselines(
             default_baseline_slug,
-            agent.baseline_prompt_slug
+            baseline_slug
         )
         
         # Use all tools from both legacy and new config
