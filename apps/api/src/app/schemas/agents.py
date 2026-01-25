@@ -32,6 +32,7 @@ class AgentBase(BaseModel):
     name: str = Field(..., description="Display name")
     description: Optional[str] = None
     system_prompt_slug: str = Field(..., description="Slug of the System Prompt")
+    baseline_prompt_id: Optional[UUID] = Field(default=None, description="ID of the Baseline Prompt (restrictions)")
     tools: List[str] = Field(default=[], description="List of Tool slugs (legacy)")
     available_collections: List[str] = Field(default=[], description="List of Collection slugs (legacy)")
     tools_config: List[ToolConfig] = Field(default=[], description="Structured tools configuration")
@@ -52,6 +53,7 @@ class AgentUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     system_prompt_slug: Optional[str] = None
+    baseline_prompt_id: Optional[UUID] = None
     tools: Optional[List[str]] = None
     available_collections: Optional[List[str]] = None
     tools_config: Optional[List[ToolConfig]] = None

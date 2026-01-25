@@ -6,37 +6,37 @@
 
 ### Backend
 
-- [ ] **Baseline Prompts**: Добавить поддержку merge baseline промптов (default + agent)
-  - Реализовать `PromptService.merge_baselines()`
-  - Обновить `AgentService` для резолва baseline
-  - Добавить поле `baseline_prompt_slug` в Agent модель (nullable)
+- [x] **Baseline Prompts**: Добавить поддержку merge baseline промптов (default + agent)
+  - ✅ Реализован `PromptService.merge_baselines()`
+  - ✅ Обновлен `AgentService` для резолва baseline
+  - ✅ Добавлено поле `baseline_prompt_id` в Agent модель (nullable, FK на prompts.id)
 
-- [ ] **Auto-add Permissions**: Автоматическое добавление новых Tool/Collection в default permissions
-  - Хук при создании Tool (sync_tools_from_registry)
-  - Хук при создании Collection
-  - Статус по умолчанию: `denied`
+- [x] **Auto-add Permissions**: Автоматическое добавление новых Tool/Collection в default permissions
+  - ✅ Хук в `ToolSyncService._create_tool()` → `_add_tool_to_default_permissions()`
+  - ✅ Хук в `CollectionService.create_collection()` → `_add_collection_to_default_permissions()`
+  - ✅ Статус по умолчанию: `denied`
 
-- [ ] **Credential Resolution**: Улучшить логику выбора credential set
-  - Если у пользователя 2+ сета для инстанса → использовать `is_default=true`
-  - Если нет дефолтного → ошибка с предложением выбрать
+- [x] **Credential Resolution**: Улучшить логику выбора credential set
+  - ✅ Добавлено поле `is_default` в CredentialSet (миграция 0044)
+  - ✅ `CredentialService.resolve_credentials()` использует `is_default=true`
+  - ✅ `CredentialSetRepository.get_default_for_scope()` с fallback логикой
 
-- [ ] **Partial Mode Warning**: Уведомление пользователя о недоступных инструментах
-  - Если агент в partial mode → добавить warning в начало ответа
-  - Список недоступных recommended инструментов
+- [x] **Partial Mode Warning**: Уведомление пользователя о недоступных инструментах
+  - ✅ `ExecutionRequest.partial_mode_warning` генерируется в `AgentRouter`
+  - ✅ `AgentRuntime.run_with_request()` выводит warning через `RuntimeEvent.status()`
 
 ### Frontend
 
-- [ ] **DataTable Component**: Создать переиспользуемый компонент таблицы
-  - TanStack Table v8
-  - Фильтры, сортировка, пагинация, поиск
-  - Responsive design
-  - Заменить все кастомные таблицы на DataTable
+- [x] **DataTable Component**: Создать переиспользуемый компонент таблицы
+  - ✅ `shared/ui/DataTable/DataTable.tsx` с selection, search, pagination
+  - ⚠️ Не использует TanStack Table (custom implementation)
+  - ⚠️ Нужно заменить кастомные таблицы на DataTable
 
-- [ ] **Defaults Page**: Страница общих настроек
-  - Default Baseline (выбор промпта)
-  - Context Variables (список ctx-переменных)
-  - Default Permissions (таблица инструментов/коллекций)
-  - Default Credentials (список кредов scope=default)
+- [x] **Defaults Page**: Страница общих настроек
+  - ✅ `DefaultsPage.tsx` создана с базовым функционалом
+  - ⚠️ Нужно добавить: Default Baseline выбор
+  - ⚠️ Нужно добавить: Context Variables
+  - ⚠️ Нужно добавить: редактирование Default Permissions
 
 - [ ] **Prompt Detail Page**: Рефакторинг детального вида промпта
   - 3-блочный layout (info + versions + history)
@@ -50,9 +50,9 @@
 
 ### Database
 
-- [ ] **Migration**: Добавить `baseline_prompt_slug` в таблицу `agents`
-  - Nullable FK на `prompts.slug`
-  - Constraint: если указан, то prompt.type должен быть 'baseline'
+- [x] **Migration**: Добавить `baseline_prompt_id` в таблицу `agents`
+  - ✅ Миграция 0043: nullable FK на `prompts.id`
+  - ⚠️ Constraint на type='baseline' проверяется в service layer
 
 ---
 
@@ -235,9 +235,9 @@
 - ✅ Agent Runtime с tool-call loop
 - ✅ Permission system
 - ✅ RAG pipeline
-- ⚠️ Baseline prompts
-- ⚠️ DataTable component
-- ⚠️ Defaults page
+- ✅ Baseline prompts
+- ✅ DataTable component
+- ✅ Defaults page (базовая версия)
 
 ### Q2 2026: Admin Experience
 - 🔲 A/B testing промптов

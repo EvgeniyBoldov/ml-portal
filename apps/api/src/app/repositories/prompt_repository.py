@@ -121,21 +121,40 @@ class PromptRepository:
         result = await self.session.execute(stmt)
         rows = result.all()
         
-        # Get active versions for each slug
+        # Get active versions and IDs for each slug
         slugs = [r.slug for r in rows]
+        active_versions = {}
+        active_ids = {}
+        latest_ids = {}
+        
         if slugs:
-            active_stmt = select(Prompt.slug, Prompt.version).where(
+            # Get active versions
+            active_stmt = select(Prompt.slug, Prompt.version, Prompt.id).where(
                 Prompt.slug.in_(slugs),
                 Prompt.status == PromptStatus.ACTIVE.value
             )
             active_result = await self.session.execute(active_stmt)
-            active_versions = {r.slug: r.version for r in active_result.all()}
-        else:
-            active_versions = {}
+            for ar in active_result.all():
+                active_versions[ar.slug] = ar.version
+                active_ids[ar.slug] = ar.id
+            
+            # Get latest version IDs for slugs without active version
+            for row in rows:
+                if row.slug not in active_ids:
+                    latest_stmt = select(Prompt.id).where(
+                        Prompt.slug == row.slug,
+                        Prompt.version == row.latest_version
+                    )
+                    latest_id = await self.session.scalar(latest_stmt)
+                    if latest_id:
+                        latest_ids[row.slug] = latest_id
         
         items = []
         for row in rows:
+            # Use active version ID if available, otherwise latest version ID
+            prompt_id = active_ids.get(row.slug) or latest_ids.get(row.slug)
             items.append({
+                'id': prompt_id,
                 'slug': row.slug,
                 'name': row.name,
                 'description': row.description,

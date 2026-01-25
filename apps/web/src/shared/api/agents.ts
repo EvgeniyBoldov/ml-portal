@@ -6,6 +6,7 @@ export interface Agent {
   name: string;
   description?: string;
   system_prompt_slug: string;
+  baseline_prompt_id?: string | null;
   tools: string[];
   available_collections: string[];
   generation_config?: Record<string, any>;
@@ -20,7 +21,9 @@ export interface AgentCreate {
   name: string;
   description?: string;
   system_prompt_slug: string;
+  baseline_prompt_id?: string | null;
   tools: string[];
+  available_collections?: string[];
   generation_config?: Record<string, any>;
   is_active?: boolean;
   enable_logging?: boolean;
@@ -30,7 +33,9 @@ export interface AgentUpdate {
   name?: string;
   description?: string;
   system_prompt_slug?: string;
+  baseline_prompt_id?: string | null;
   tools?: string[];
+  available_collections?: string[];
   generation_config?: Record<string, any>;
   is_active?: boolean;
   enable_logging?: boolean;
@@ -77,6 +82,8 @@ export const agentsApi = {
     agent_name: string;
     base_prompt: string;
     base_prompt_slug: string;
+    baseline_prompt_id: string | null;
+    merged_baseline: string | null;
     tools_section: string | null;
     collections_section: string | null;
     final_prompt: string;

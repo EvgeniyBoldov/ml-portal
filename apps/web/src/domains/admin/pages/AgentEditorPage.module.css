@@ -90,6 +90,17 @@
   margin-bottom: 6px;
 }
 
+.optional {
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.fieldHint {
+  color: var(--muted);
+  font-size: 0.75rem;
+  margin: 0 0 8px;
+}
+
 .description {
   color: var(--muted);
   font-size: 0.75rem;

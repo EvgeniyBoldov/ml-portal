@@ -26,6 +26,7 @@ export function AgentEditorPage() {
     name: '',
     description: '',
     system_prompt_slug: '',
+    baseline_prompt_id: null,
     tools: [],
     available_collections: [],
     generation_config: {},
@@ -63,6 +64,7 @@ export function AgentEditorPage() {
         name: existingAgent.name,
         description: existingAgent.description || '',
         system_prompt_slug: existingAgent.system_prompt_slug,
+        baseline_prompt_id: existingAgent.baseline_prompt_id || null,
         tools: existingAgent.tools,
         available_collections: existingAgent.available_collections || [],
         generation_config: existingAgent.generation_config || {},
@@ -126,6 +128,10 @@ export function AgentEditorPage() {
 
   // Get selected prompt info
   const selectedPrompt = prompts?.find(p => p.slug === formData.system_prompt_slug);
+  
+  // Filter baseline prompts (type='baseline')
+  const baselinePrompts = prompts?.filter((p: any) => p.type === 'baseline') || [];
+  const selectedBaseline = prompts?.find((p: any) => p.id === formData.baseline_prompt_id);
 
   if (!isNew && isLoading) {
     return <div className={styles.emptyState}>Загрузка агента...</div>;
@@ -197,6 +203,7 @@ export function AgentEditorPage() {
             </div>
 
             <div className={styles.formGroup}>
+              <label className={styles.label}>Системный промпт</label>
               <div className={styles.promptSelector}>
                 <select 
                   className={styles.select}
@@ -205,7 +212,7 @@ export function AgentEditorPage() {
                   required
                 >
                   <option value="">Выберите промпт...</option>
-                  {prompts?.map((p: { slug: string; name: string }) => (
+                  {prompts?.filter((p: any) => p.type !== 'baseline').map((p: { slug: string; name: string }) => (
                     <option key={p.slug} value={p.slug}>{p.name}</option>
                   ))}
                 </select>
@@ -223,6 +230,31 @@ export function AgentEditorPage() {
                 <div className={styles.promptInfo}>
                   <Badge tone="info">{selectedPrompt.slug}</Badge>
                   <Link to={`/admin/prompts/${selectedPrompt.slug}`}>
+                    <Button variant="link" size="small">Открыть →</Button>
+                  </Link>
+                </div>
+              )}
+            </div>
+
+            <div className={styles.formGroup}>
+              <label className={styles.label}>Baseline промпт <span className={styles.optional}>(опционально)</span></label>
+              <p className={styles.fieldHint}>Ограничения и запреты для агента (что НЕЛЬЗЯ делать)</p>
+              <div className={styles.promptSelector}>
+                <select 
+                  className={styles.select}
+                  value={formData.baseline_prompt_id || ''}
+                  onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setFormData({...formData, baseline_prompt_id: e.target.value || null})}
+                >
+                  <option value="">Не выбран</option>
+                  {baselinePrompts.map((p: { id: string; slug: string; name: string }) => (
+                    <option key={p.id} value={p.id}>{p.name} ({p.slug})</option>
+                  ))}
+                </select>
+              </div>
+              {selectedBaseline && (
+                <div className={styles.promptInfo}>
+                  <Badge tone="warning">{selectedBaseline.slug}</Badge>
+                  <Link to={`/admin/prompts/${selectedBaseline.slug}`}>
                     <Button variant="link" size="small">Открыть →</Button>
                   </Link>
                 </div>

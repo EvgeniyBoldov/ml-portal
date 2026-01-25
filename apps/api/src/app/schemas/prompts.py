@@ -83,6 +83,7 @@ class PromptResponse(BaseModel):
 
 class PromptListItem(BaseModel):
     """Prompt item for list view (shows latest version info)"""
+    id: UUID  # ID of the active version (or latest if no active)
     slug: str
     name: str
     description: Optional[str] = None
