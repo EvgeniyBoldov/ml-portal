@@ -33,20 +33,20 @@
   - ⚠️ Нужно заменить кастомные таблицы на DataTable
 
 - [x] **Defaults Page**: Страница общих настроек
-  - ✅ `DefaultsPage.tsx` создана с базовым функционалом
-  - ⚠️ Нужно добавить: Default Baseline выбор
-  - ⚠️ Нужно добавить: Context Variables
-  - ⚠️ Нужно добавить: редактирование Default Permissions
+  - ✅ `DefaultsPage.tsx` с полным функционалом
+  - ✅ Default Baseline prompt selector
+  - ✅ Редактирование Default Permissions (tools/collections)
+  - ⚠️ Context Variables (отложено - требует backend)
 
-- [ ] **Prompt Detail Page**: Рефакторинг детального вида промпта
-  - 3-блочный layout (info + versions + history)
-  - Таблица версий с переключением
-  - Audit log в нижнем блоке
+- [x] **Prompt Detail Page**: Рефакторинг детального вида промпта
+  - ✅ 3-блочный layout (info + versions + history)
+  - ✅ Таблица версий с переключением
+  - ✅ История изменений в нижнем блоке (timeline)
 
-- [ ] **Agent Editor**: Улучшить редактор агента
-  - Добавить выбор Baseline Prompt
-  - Модальное окно "Просмотр промпта" (с merged baseline)
-  - Валидация required инструментов
+- [x] **Agent Editor**: Улучшить редактор агента
+  - ✅ Добавлен выбор Baseline Prompt
+  - ⚠️ Модальное окно "Просмотр промпта" (с merged baseline)
+  - ⚠️ Валидация required инструментов
 
 ### Database
 

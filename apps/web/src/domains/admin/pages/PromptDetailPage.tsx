@@ -369,6 +369,75 @@ export function PromptDetailPage() {
         </div>
       </div>
 
+      {/* === ИСТОРИЯ ИЗМЕНЕНИЙ === */}
+      <div className={styles.card} style={{ marginTop: '1.5rem' }}>
+        <div className={styles.cardHeader}>
+          <h2 className={styles.cardTitle}>История изменений</h2>
+          <p className={styles.cardDescription}>
+            Хронология версий и изменений промпта
+          </p>
+        </div>
+        
+        <div style={{ maxHeight: '300px', overflowY: 'auto' }}>
+          {versions && versions.length > 0 ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              {versions.map((v: PromptVersionInfo, index: number) => (
+                <div 
+                  key={v.id}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: '12px',
+                    padding: '12px',
+                    background: index === 0 ? 'var(--bg-hover)' : 'transparent',
+                    borderRadius: '8px',
+                    border: '1px solid var(--border)',
+                  }}
+                >
+                  <div style={{
+                    width: '32px',
+                    height: '32px',
+                    borderRadius: '50%',
+                    background: v.status === 'active' ? 'var(--success)' : v.status === 'draft' ? 'var(--warning)' : 'var(--muted)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: 'white',
+                    fontSize: '0.75rem',
+                    fontWeight: 600,
+                    flexShrink: 0,
+                  }}>
+                    v{v.version}
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+                      <strong>Версия {v.version}</strong>
+                      <Badge tone={STATUS_TONES[v.status]}>{STATUS_LABELS[v.status]}</Badge>
+                    </div>
+                    <p style={{ margin: 0, fontSize: '0.75rem', color: 'var(--muted)' }}>
+                      {v.status === 'active' && 'Текущая активная версия • '}
+                      {v.status === 'draft' && 'Черновик для редактирования • '}
+                      {v.status === 'archived' && 'Архивная версия • '}
+                      Создана {new Date(v.created_at).toLocaleString('ru-RU', {
+                        day: 'numeric',
+                        month: 'short',
+                        year: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit'
+                      })}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p style={{ color: 'var(--muted)', textAlign: 'center', padding: '20px' }}>
+              Нет истории изменений
+            </p>
+          )}
+        </div>
+      </div>
+
       {/* === МОДАЛКА РЕДАКТИРОВАНИЯ ПРОМПТА === */}
       <Modal
         open={showEditModal}
