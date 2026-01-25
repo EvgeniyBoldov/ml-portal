@@ -40,17 +40,22 @@ Default → Tenant → User
 
 Конкретное подключение к инструменту (например, "Jira Production", "Jira Staging").
 
+**ВАЖНО**: Инстансы глобальные (не привязаны к scope). Креды привязываются к инстансу на разных уровнях (default/tenant/user).
+
 ```python
 class ToolInstance:
     id: UUID
     tool_id: UUID              # FK на tools
     slug: str                  # Уникальный slug (например "jira-prod")
     name: str
-    scope: str                 # default | tenant | user
-    tenant_id: UUID | None     # Для tenant/user scope
-    user_id: UUID | None       # Для user scope
+    
+    # Scope поля оставлены для обратной совместимости, но не используются
+    scope: str                 # deprecated
+    tenant_id: UUID | None     # deprecated
+    user_id: UUID | None       # deprecated
+    
     connection_config: dict    # URL, параметры (НЕ креды!)
-    is_default: bool           # Дефолтный instance на этом scope
+    is_default: bool           # Дефолтный instance для инструмента
     is_active: bool
     health_status: str         # healthy | unhealthy | unknown
     last_health_check_at: datetime
@@ -64,13 +69,17 @@ class ToolInstance:
 class CredentialSet:
     id: UUID
     tool_instance_id: UUID     # FK на tool_instances
-    scope: str                 # tenant | user
+    scope: str                 # default | tenant | user
     tenant_id: UUID | None
     user_id: UUID | None
     auth_type: str             # token | basic | oauth | api_key
     encrypted_payload: str     # Зашифрованный JSON
     is_active: bool
+    is_default: bool           # Дефолтный для scope (если у юзера 2+ сета)
 ```
+
+**Multiple Credentials:**
+Пользователь может создать несколько credential sets для одного инстанса (например, разные Jira аккаунты). В этом случае используется `is_default=true` для выбора активного сета.
 
 **Типы авторизации:**
 - `token` - Bearer token (payload: `{"token": "..."}`)
