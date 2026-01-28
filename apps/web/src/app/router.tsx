@@ -19,19 +19,18 @@ const NotFound = lazy(() => import('@/domains/common/pages/NotFound'));
 // Admin pages
 const AdminLayout = lazy(() => import('@/domains/admin/layouts/AdminLayout'));
 const DashboardPage = lazy(() => import('@/domains/admin/pages/DashboardPage'));
-const UsersPage = lazy(() => import('@/domains/admin/pages/UsersPageNew'));
-const CreateUserPage = lazy(() => import('@/domains/admin/pages/CreateUserPage'));
+const UsersPage = lazy(() => import('@/domains/admin/pages/UsersPage'));
 const UserEditorPage = lazy(() => import('@/domains/admin/pages/UserEditorPage'));
-const TenantsPage = lazy(() => import('@/domains/admin/pages/TenantsPageNew'));
+const TenantsPage = lazy(() => import('@/domains/admin/pages/TenantsPage'));
 const TenantEditorPage = lazy(() => import('@/domains/admin/pages/TenantEditorPage'));
 const ModelsPage = lazy(() => import('@/domains/admin/pages/ModelsPage'));
 const ModelEditorPage = lazy(() => import('@/domains/admin/pages/ModelEditorPage').then(m => ({ default: m.ModelEditorPage })));
 const AuditPage = lazy(() => import('@/domains/admin/pages/AuditPage'));
 const EmailSettingsPage = lazy(() => import('@/domains/admin/pages/EmailSettingsPage'));
-const PromptRegistryPage = lazy(() => import('@/domains/admin/pages/PromptRegistryPage').then(m => ({ default: m.PromptRegistryPage })));
-const PromptDetailPage = lazy(() => import('@/domains/admin/pages/PromptDetailPage').then(m => ({ default: m.PromptDetailPage })));
+const PromptsListPage = lazy(() => import('@/domains/admin/pages/PromptsListPage'));
 const PromptEditorPage = lazy(() => import('@/domains/admin/pages/PromptEditorPage').then(m => ({ default: m.PromptEditorPage })));
 const ToolsPage = lazy(() => import('@/domains/admin/pages/ToolsPage').then(m => ({ default: m.ToolsPage })));
+const ToolEditorPage = lazy(() => import('@/domains/admin/pages/ToolEditorPage').then(m => ({ default: m.ToolEditorPage })));
 const AgentRegistryPage = lazy(() => import('@/domains/admin/pages/AgentRegistryPage').then(m => ({ default: m.AgentRegistryPage })));
 const AgentEditorPage = lazy(() => import('@/domains/admin/pages/AgentEditorPage').then(m => ({ default: m.AgentEditorPage })));
 const AgentRunsPage = lazy(() => import('@/domains/admin/pages/AgentRunsPage').then(m => ({ default: m.AgentRunsPage })));
@@ -39,10 +38,8 @@ const CollectionsPage = lazy(() => import('@/domains/admin/pages/CollectionsPage
 const CreateCollectionPage = lazy(() => import('@/domains/admin/pages/CreateCollectionPage'));
 const ViewCollectionPage = lazy(() => import('@/domains/admin/pages/ViewCollectionPage'));
 const InstancesPage = lazy(() => import('@/domains/admin/pages/InstancesPage').then(m => ({ default: m.InstancesPage })));
-const InstanceViewPage = lazy(() => import('@/domains/admin/pages/InstanceViewPage').then(m => ({ default: m.InstanceViewPage })));
 const InstanceEditorPage = lazy(() => import('@/domains/admin/pages/InstanceEditorPage').then(m => ({ default: m.InstanceEditorPage })));
 const PoliciesPage = lazy(() => import('@/domains/admin/pages/PoliciesPage').then(m => ({ default: m.PoliciesPage })));
-const PolicyViewPage = lazy(() => import('@/domains/admin/pages/PolicyViewPage').then(m => ({ default: m.PolicyViewPage })));
 const PolicyEditorPage = lazy(() => import('@/domains/admin/pages/PolicyEditorPage').then(m => ({ default: m.PolicyEditorPage })));
 const DefaultsPage = lazy(() => import('@/domains/admin/pages/DefaultsPage').then(m => ({ default: m.DefaultsPage })));
 const RoutingLogsPage = lazy(() => import('@/domains/admin/pages/RoutingLogsPage').then(m => ({ default: m.RoutingLogsPage })));
@@ -83,19 +80,19 @@ const router = createBrowserRouter([
     children: [
       { index: true, element: withSuspense(<DashboardPage />) },
       { path: 'users', element: withSuspense(<UsersPage />) },
-      { path: 'users/new', element: withSuspense(<CreateUserPage />) },
+      { path: 'users/new', element: withSuspense(<UserEditorPage />) },
       { path: 'users/:id', element: withSuspense(<UserEditorPage />) },
       { path: 'tenants', element: withSuspense(<TenantsPage />) },
       { path: 'tenants/new', element: withSuspense(<TenantEditorPage />) },
-      { path: 'tenants/:id/edit', element: withSuspense(<TenantEditorPage />) },
+      { path: 'tenants/:id', element: withSuspense(<TenantEditorPage />) },
       { path: 'models', element: withSuspense(<ModelsPage />) },
       { path: 'models/new', element: withSuspense(<ModelEditorPage />) },
       { path: 'models/:id', element: withSuspense(<ModelEditorPage />) },
       { path: 'audit', element: withSuspense(<AuditPage />) },
-      { path: 'prompts', element: withSuspense(<PromptRegistryPage />) },
-      { path: 'prompts/new', element: withSuspense(<PromptEditorPage />) },
-      { path: 'prompts/:slug', element: withSuspense(<PromptDetailPage />) },
+      { path: 'prompts', element: withSuspense(<PromptsListPage />) },
+      { path: 'prompts/:slug', element: withSuspense(<PromptEditorPage />) },
       { path: 'tools', element: withSuspense(<ToolsPage />) },
+      { path: 'tools/:slug', element: withSuspense(<ToolEditorPage />) },
       { path: 'agents', element: withSuspense(<AgentRegistryPage />) },
       { path: 'agents/new', element: withSuspense(<AgentEditorPage />) },
       { path: 'agents/:slug', element: withSuspense(<AgentEditorPage />) },
@@ -105,12 +102,10 @@ const router = createBrowserRouter([
       { path: 'collections/:id', element: withSuspense(<ViewCollectionPage />) },
       { path: 'policies', element: withSuspense(<PoliciesPage />) },
       { path: 'policies/new', element: withSuspense(<PolicyEditorPage />) },
-      { path: 'policies/:id', element: withSuspense(<PolicyViewPage />) },
-      { path: 'policies/:id/edit', element: withSuspense(<PolicyEditorPage />) },
+      { path: 'policies/:id', element: withSuspense(<PolicyEditorPage />) },
       { path: 'instances', element: withSuspense(<InstancesPage />) },
       { path: 'instances/new', element: withSuspense(<InstanceEditorPage />) },
-      { path: 'instances/:id', element: withSuspense(<InstanceViewPage />) },
-      { path: 'instances/:id/edit', element: withSuspense(<InstanceEditorPage />) },
+      { path: 'instances/:id', element: withSuspense(<InstanceEditorPage />) },
       { path: 'defaults', element: withSuspense(<DefaultsPage />) },
       { path: 'routing-logs', element: withSuspense(<RoutingLogsPage />) },
       { path: 'settings/email', element: withSuspense(<EmailSettingsPage />) },

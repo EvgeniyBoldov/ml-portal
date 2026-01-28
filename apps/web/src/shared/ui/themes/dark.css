@@ -3,13 +3,15 @@
  * Color palette for dark mode
  */
 
+:root,
+.dark,
 [data-theme='dark'] {
   /* Background colors */
-  --bg-primary: #111827;
-  --bg-secondary: #1f2937;
-  --bg-tertiary: #374151;
-  --bg-hover: #374151;
-  --bg-active: #4b5563;
+  --bg-primary: #0f1419;
+  --bg-secondary: #1a1f2e;
+  --bg-tertiary: #252b3b;
+  --bg-hover: #252b3b;
+  --bg-active: #2d3548;
 
   /* Text colors */
   --text-primary: #f9fafb;
@@ -51,10 +53,16 @@
   --gray-900: #f9fafb;
 
   /* Component-specific */
-  --input-bg: #1f2937;
-  --input-border: #4b5563;
+  --input-bg: rgba(15, 20, 25, 0.6);
+  --input-border: rgba(255, 255, 255, 0.1);
   --input-focus-border: var(--color-primary);
-  --input-disabled-bg: #374151;
+  --input-disabled-bg: rgba(37, 43, 59, 0.5);
+  
+  /* Aliases for consistency */
+  --border-color: rgba(255, 255, 255, 0.08);
+  --border-color-dark: rgba(255, 255, 255, 0.15);
+  --text-primary: #f9fafb;
+  --text-tertiary: #9ca3af;
 
   --button-ghost-hover: #374151;
   --button-ghost-active: #4b5563;

@@ -211,7 +211,7 @@ export function CreateCollectionPage() {
                 }
               >
                 <option value="">Select tenant...</option>
-                {tenants.map(t => (
+                {tenants?.map(t => (
                   <option key={t.id} value={t.id}>
                     {t.name}
                   </option>

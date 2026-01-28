@@ -9,7 +9,7 @@ import Button from '@/shared/ui/Button';
 import Badge from '@/shared/ui/Badge';
 import Alert from '@/shared/ui/Alert';
 import { Skeleton } from '@/shared/ui/Skeleton';
-import styles from './PromptEditorPage.module.css';
+import styles from './FormPage.module.css';
 
 const SCOPE_LABELS: Record<string, string> = {
   default: 'По умолчанию',

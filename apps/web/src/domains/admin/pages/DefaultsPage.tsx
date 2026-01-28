@@ -6,13 +6,14 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toolInstancesApi, permissionsApi, promptsApi, toolsApi, collectionsApi } from '@/shared/api';
 import { qk } from '@/shared/api/keys';
+import { AdminPage } from '@/shared/ui';
 import Button from '@/shared/ui/Button';
 import Badge from '@/shared/ui/Badge';
 import Alert from '@/shared/ui/Alert';
 import { Skeleton } from '@/shared/ui/Skeleton';
 import Switch from '@/shared/ui/Switch';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
-import styles from './PromptEditorPage.module.css';
+import styles from './FormPage.module.css';
 
 export function DefaultsPage() {
   const queryClient = useQueryClient();
@@ -39,7 +40,7 @@ export function DefaultsPage() {
   // Load baseline prompts
   const { data: prompts } = useQuery({
     queryKey: ['prompts', 'list', { type: 'baseline' }],
-    queryFn: () => promptsApi.list({ type: 'baseline' }),
+    queryFn: () => promptsApi.listPrompts({ type: 'baseline' }),
   });
   
   // Load all tools and collections for permissions editing
@@ -111,16 +112,10 @@ export function DefaultsPage() {
   }
 
   return (
-    <div className={styles.wrap}>
-      <div className={styles.header}>
-        <div>
-          <h1 className={styles.title}>Общие настройки</h1>
-          <p className={styles.description}>
-            Настройки по умолчанию для всех пользователей системы
-          </p>
-        </div>
-      </div>
-
+    <AdminPage
+      title="Общие настройки"
+      subtitle="Настройки по умолчанию для всех пользователей системы"
+    >
       {/* Default Baseline Prompt */}
       <div className={styles.card} style={{ marginBottom: '1.5rem' }}>
         <div className={styles.cardHeader}>
@@ -370,7 +365,7 @@ export function DefaultsPage() {
         description="Настройки применяются по иерархии: Пользователь → Тенант → По умолчанию. Более специфичные настройки переопределяют общие."
         style={{ marginTop: '1.5rem' }}
       />
-    </div>
+    </AdminPage>
   );
 }
 

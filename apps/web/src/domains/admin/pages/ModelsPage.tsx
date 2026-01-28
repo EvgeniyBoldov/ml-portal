@@ -5,7 +5,7 @@
  * Единый стиль с остальными админ-реестрами.
  */
 import React, { useMemo, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import type { Model } from '@shared/api/admin';
 import {
   useModels,
@@ -14,15 +14,13 @@ import {
   useHealthCheckModel,
   useHealthCheckAllModels,
 } from '@shared/api/hooks/useAdmin';
-import Button from '@shared/ui/Button';
-import Input from '@shared/ui/Input';
+import { AdminPage } from '@shared/ui';
 import Badge from '@shared/ui/Badge';
-import { Skeleton } from '@shared/ui/Skeleton';
 import { useErrorToast, useSuccessToast } from '@shared/ui/Toast';
 import Alert from '@shared/ui/Alert';
 import { ActionsButton, type ActionItem } from '@shared/ui/ActionsButton';
+import { AdminTable, type AdminTableColumn } from '@shared/ui/AdminTable';
 import { useAppStore } from '@app/store/app.store';
-import styles from './RegistryPage.module.css';
 
 const TYPE_LABELS: Record<string, string> = {
   llm_chat: 'LLM',
@@ -62,66 +60,6 @@ function getHealthTone(health: string): 'success' | 'warn' | 'danger' | 'neutral
   }
 }
 
-function ModelRow({
-  model,
-  getActions,
-}: {
-  model: Model;
-  getActions: (model: Model) => ActionItem[];
-}) {
-  return (
-    <tr>
-      <td>
-        <div className={styles.cellStack}>
-          <span className={styles.cellPrimary}>{model.alias}</span>
-          <span className={styles.cellSecondary}>{model.name}</span>
-        </div>
-      </td>
-      <td>
-        <Badge tone={model.type === 'llm_chat' ? 'info' : 'success'}>
-          {TYPE_LABELS[model.type] || model.type}
-        </Badge>
-      </td>
-      <td>
-        <div className={styles.cellStack}>
-          <span className={styles.cellPrimary}>{model.provider}</span>
-          <span className={styles.cellSecondary}>{model.provider_model_name}</span>
-        </div>
-      </td>
-      <td>
-        <Badge tone={getStatusTone(model.status)}>
-          {STATUS_LABELS[model.status] || model.status}
-        </Badge>
-      </td>
-      <td>
-        {model.health_status ? (
-          <div className={styles.cellStack}>
-            <Badge tone={getHealthTone(model.health_status)} size="small">
-              {HEALTH_LABELS[model.health_status] || model.health_status}
-            </Badge>
-            {model.health_latency_ms && (
-              <span className={styles.cellSecondary}>
-                {model.health_latency_ms}ms
-              </span>
-            )}
-          </div>
-        ) : (
-          <span className={styles.muted}>—</span>
-        )}
-      </td>
-      <td>
-        {model.default_for_type ? (
-          <Badge tone="success" size="small">По умолч.</Badge>
-        ) : (
-          <span className={styles.muted}>—</span>
-        )}
-      </td>
-      <td>
-        <ActionsButton actions={getActions(model)} />
-      </td>
-    </tr>
-  );
-}
 
 export function ModelsPage() {
   const navigate = useNavigate();
@@ -301,86 +239,131 @@ export function ModelsPage() {
     return actions;
   };
 
+  const columns: AdminTableColumn<Model>[] = [
+    {
+      key: 'alias',
+      label: 'АЛИАС / ИМЯ',
+      sortable: true,
+      render: (model) => (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+          <span style={{ fontWeight: 500 }}>{model.alias}</span>
+          <span style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>{model.name}</span>
+        </div>
+      ),
+    },
+    {
+      key: 'type',
+      label: 'ТИП',
+      width: 100,
+      sortable: true,
+      render: (model) => (
+        <Badge tone={model.type === 'llm_chat' ? 'info' : 'success'}>
+          {TYPE_LABELS[model.type] || model.type}
+        </Badge>
+      ),
+    },
+    {
+      key: 'provider',
+      label: 'ПРОВАЙДЕР / МОДЕЛЬ',
+      sortable: true,
+      render: (model) => (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+          <span style={{ fontWeight: 500 }}>{model.provider}</span>
+          <span style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>{model.provider_model_name}</span>
+        </div>
+      ),
+    },
+    {
+      key: 'status',
+      label: 'СТАТУС',
+      width: 120,
+      sortable: true,
+      render: (model) => (
+        <Badge tone={getStatusTone(model.status)}>
+          {STATUS_LABELS[model.status] || model.status}
+        </Badge>
+      ),
+    },
+    {
+      key: 'health_status',
+      label: 'ЗДОРОВЬЕ',
+      width: 100,
+      sortable: true,
+      render: (model) => model.health_status ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+          <Badge tone={getHealthTone(model.health_status)} size="small">
+            {HEALTH_LABELS[model.health_status] || model.health_status}
+          </Badge>
+          {model.health_latency_ms && (
+            <span style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>
+              {model.health_latency_ms}ms
+            </span>
+          )}
+        </div>
+      ) : (
+        <span style={{ color: 'var(--muted)' }}>—</span>
+      ),
+    },
+    {
+      key: 'default_for_type',
+      label: 'ПО УМОЛЧ.',
+      width: 100,
+      sortable: true,
+      render: (model) => model.default_for_type ? (
+        <Badge tone="success" size="small">По умолч.</Badge>
+      ) : (
+        <span style={{ color: 'var(--muted)' }}>—</span>
+      ),
+    },
+    {
+      key: 'actions',
+      label: 'ДЕЙСТВИЯ',
+      width: 80,
+      align: 'right',
+      render: (model) => <ActionsButton actions={getActions(model)} />,
+    },
+  ];
+
   return (
-    <div className={styles.wrap}>
-      <div className={styles.card}>
-        <div className={styles.header}>
-          <div className={styles.headerLeft}>
-            <h1 className={styles.title}>Модели</h1>
-            <p className={styles.subtitle}>
-              Управление LLM и Embedding моделями
-            </p>
-          </div>
-          <div className={styles.controls}>
-            <Input
-              placeholder="Поиск моделей..."
-              value={q}
-              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setQ(e.target.value)}
-              className={styles.search}
-            />
-            <Button
-              variant="outline"
-              onClick={handleHealthCheckAll}
-              disabled={healthCheckAllMutation.isPending}
-            >
-              {healthCheckAllMutation.isPending ? 'Проверка...' : 'Проверить все'}
-            </Button>
-            <Link to="/admin/models/new">
-              <Button>Добавить модель</Button>
-            </Link>
-          </div>
+    <AdminPage
+      title="Модели"
+      subtitle="Управление LLM и Embedding моделями"
+      searchValue={q}
+      onSearchChange={setQ}
+      searchPlaceholder="Поиск моделей..."
+      actions={[
+        {
+          label: healthCheckAllMutation.isPending ? 'Проверка...' : 'Проверить все',
+          onClick: handleHealthCheckAll,
+          disabled: healthCheckAllMutation.isPending,
+          variant: 'outline',
+        },
+        {
+          label: 'Добавить модель',
+          onClick: () => navigate('/admin/models/new'),
+          variant: 'primary',
+        },
+      ]}
+    >
+      {error && (
+        <div style={{ padding: '16px', background: 'var(--danger-bg)', borderRadius: '8px', marginBottom: '16px' }}>
+          Не удалось загрузить модели. Попробуйте снова.
         </div>
+      )}
 
-        {error && (
-          <div className={styles.errorState}>
-            Не удалось загрузить модели. Попробуйте снова.
-          </div>
-        )}
-
-        <div className={styles.tableWrap}>
-          <table className={styles.table}>
-            <thead>
-              <tr>
-                <th>АЛИАС / ИМЯ</th>
-                <th>ТИП</th>
-                <th>ПРОВАЙДЕР / МОДЕЛЬ</th>
-                <th>СТАТУС</th>
-                <th>ЗДОРОВЬЕ</th>
-                <th>ПО УМОЛЧ.</th>
-                <th>ДЕЙСТВИЯ</th>
-              </tr>
-            </thead>
-            <tbody>
-              {isLoading ? (
-                Array.from({ length: 3 }).map((_, i) => (
-                  <tr key={i}>
-                    {Array.from({ length: 7 }).map((__, j) => (
-                      <td key={j}>
-                        <Skeleton width={j === 0 ? 200 : j === 2 ? 150 : 100} />
-                      </td>
-                    ))}
-                  </tr>
-                ))
-              ) : models.length === 0 ? (
-                <tr>
-                  <td colSpan={7} className={styles.emptyState}>
-                    Модели не найдены. Нажмите «Добавить модель» для создания.
-                  </td>
-                </tr>
-              ) : (
-                models.map(model => (
-                  <ModelRow
-                    key={model.id}
-                    model={model}
-                    getActions={getActions}
-                  />
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
+      <AdminTable
+        columns={columns}
+        data={models}
+        keyField="id"
+        loading={isLoading}
+        emptyText="Модели не найдены. Нажмите «Добавить модель» для создания."
+        paginated
+        pageSize={20}
+        defaultSortKey="alias"
+        defaultSortDirection="asc"
+        onRowClick={(model) => navigate(`/admin/models/${model.id}`)}
+      />
+    </AdminPage>
   );
 }
 

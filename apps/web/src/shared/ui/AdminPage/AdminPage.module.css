@@ -1,0 +1,72 @@
+.page {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  padding: 16px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.titleSection {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.backButton {
+  background: none;
+  border: none;
+  font-size: 1.5rem;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  padding: 0.25rem 0.5rem;
+  border-radius: var(--radius);
+  transition: all 0.2s;
+}
+
+.backButton:hover {
+  background: var(--bg-secondary);
+  color: var(--color-text);
+}
+
+.titleBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.title {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin: 0;
+  color: var(--color-text);
+}
+
+.subtitle {
+  font-size: 0.875rem;
+  color: var(--color-text-muted);
+  margin: 0;
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.search {
+  min-width: 200px;
+}
+
+.content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}

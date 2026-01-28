@@ -1,237 +1,119 @@
-/* RAG-style layout */
-.wrap {
-  height: 100%;
+.versionHeader {
   display: flex;
-  flex-direction: column;
-  gap: 24px;
-  padding: 24px 32px;
-  max-width: 1600px;
-  margin: 0 auto;
-  width: 100%;
-}
-
-.header {
-  display: flex;
-  justify-content: space-between;
   align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--border);
 }
 
-.title {
-  font-size: 1.5rem;
-  font-weight: 600;
-  color: var(--color-text);
-}
-
-.grid {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 24px;
-  flex: 1;
-  min-height: 0;
-}
-
-@media (min-width: 1024px) {
-  .grid {
-    grid-template-columns: 1fr 1fr;
-    align-items: start;
-  }
-}
-
-.card {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  padding: 24px 28px;
-  background: var(--panel);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow);
-  min-width: 0;
-}
-
-.cardHeader {
-  border-bottom: 1px solid var(--color-border);
-  padding-bottom: 16px;
-  margin-bottom: 8px;
-}
-
-.cardTitle {
-  font-size: 1.125rem;
-  font-weight: 600;
-  color: var(--color-text);
-}
-
-.cardDescription {
-  font-size: 0.875rem;
-  color: var(--muted);
-  margin-top: 4px;
-}
-
-.formGroup {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.label {
-  font-size: 0.875rem;
-  font-weight: 500;
-  color: var(--color-text);
-}
-
-.description {
+.versionDate {
   font-size: 0.75rem;
   color: var(--muted);
 }
 
-.select {
+.templateBlock {
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1rem;
+  font-size: 0.8rem;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  overflow: auto;
+  max-height: 300px;
+  margin: 0 0 1rem 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.versionActions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.versionsTable {
+  overflow: auto;
+  max-height: 200px;
+}
+
+.versionsTable table {
   width: 100%;
-  padding: 8px 12px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius);
-  background: var(--panel-alt);
-  color: var(--color-text);
+  border-collapse: collapse;
   font-size: 0.875rem;
 }
 
-.select:focus {
-  outline: none;
-  border-color: var(--primary);
-  box-shadow: 0 0 0 1px var(--primary);
+.versionsTable th {
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  background: var(--bg-subtle);
+  font-weight: 500;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  position: sticky;
+  top: 0;
 }
 
-.editor {
-  font-family: monospace;
+.versionsTable td {
+  padding: 0.5rem 0.75rem;
+  border-top: 1px solid var(--border);
+}
+
+.versionsTable tr {
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.versionsTable tr:hover {
+  background: var(--bg-hover);
+}
+
+.versionsTable tr.selected {
+  background: var(--primary-bg);
+}
+
+.versionsTable tr.selected td {
+  color: var(--primary);
+}
+
+.modalContent {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.modalHint {
   font-size: 0.875rem;
-  min-height: 400px;
-  line-height: 1.5;
+  color: var(--muted);
+  margin: 0;
 }
 
-.actions {
+.templateInput {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.85rem;
+}
+
+.modalActions {
   display: flex;
   justify-content: flex-end;
-  padding-top: 16px;
-  border-top: 1px solid var(--color-border);
+  gap: 0.5rem;
+  margin-top: 0.5rem;
 }
 
-.preview {
-  background: var(--panel-alt);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius);
-  padding: 16px;
-  white-space: pre-wrap;
-  font-family: monospace;
-  font-size: 0.875rem;
-  min-height: 100px;
-  max-height: 500px;
-  overflow-y: auto;
-  color: var(--color-text);
-}
-
-.previewTitle {
-  font-size: 0.875rem;
-  font-weight: 500;
-  margin-bottom: 8px;
-  color: var(--color-text);
-}
-
-.previewError {
-  color: var(--danger);
-  background: var(--danger-light);
-  padding: 12px;
-  border-radius: var(--radius);
-  font-size: 0.875rem;
-}
-
-/* Tools checkbox list */
-.toolsList {
+.emptyVersion {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 16px;
-  background: var(--panel-alt);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius);
-  max-height: 300px;
-  overflow-y: auto;
-}
-
-.toolItem {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  padding: 10px 12px;
-  background: var(--panel);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius);
-  cursor: pointer;
-  transition: border-color 0.15s, background 0.15s;
-}
-
-.toolItem:hover {
-  border-color: var(--primary);
-  background: var(--primary-light, rgba(99, 102, 241, 0.05));
-}
-
-.toolItem.selected {
-  border-color: var(--primary);
-  background: var(--primary-light, rgba(99, 102, 241, 0.1));
-}
-
-.toolCheckbox {
-  width: 18px;
-  height: 18px;
-  margin-top: 2px;
-  accent-color: var(--primary);
-  cursor: pointer;
-}
-
-.toolInfo {
-  flex: 1;
-  min-width: 0;
-}
-
-.toolName {
-  font-size: 0.875rem;
-  font-weight: 500;
-  color: var(--color-text);
-}
-
-.toolSlug {
-  font-size: 0.75rem;
-  color: var(--muted);
-  font-family: monospace;
-}
-
-.toolDescription {
-  font-size: 0.75rem;
-  color: var(--muted);
-  margin-top: 4px;
-  line-height: 1.4;
-}
-
-.emptyState {
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
   text-align: center;
-  padding: 24px;
   color: var(--muted);
-  font-size: 0.875rem;
+  gap: 1rem;
 }
 
-.promptPreview {
-  background: var(--bg-subtle);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 16px;
-  max-height: 300px;
-  overflow: auto;
-}
-
-.promptPreview pre {
+.emptyVersion p {
   margin: 0;
-  font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
-  font-size: 0.8125rem;
-  line-height: 1.6;
-  white-space: pre-wrap;
-  word-wrap: break-word;
-  color: var(--text);
+  font-size: 0.875rem;
 }

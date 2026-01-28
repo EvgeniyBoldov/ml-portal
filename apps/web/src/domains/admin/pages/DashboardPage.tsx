@@ -3,7 +3,8 @@ import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { adminApi } from '@shared/api/admin';
 import { qk } from '@shared/api/keys';
-import { AdminHeader, StatCard } from '../components';
+import { StatCard } from '../components';
+import { AdminPage } from '@/shared/ui';
 import Button from '@shared/ui/Button';
 import Badge from '@shared/ui/Badge';
 import styles from './DashboardPage.module.css';
@@ -31,16 +32,17 @@ export function DashboardPage() {
   const activeModels = models?.items?.filter(m => m.enabled).length || 0;
 
   return (
-    <div className={styles.page}>
-      <AdminHeader 
-        title="Дашборд" 
-        actions={
-          <Button onClick={() => window.location.reload()}>
-            Обновить
-          </Button>
+    <AdminPage
+      title="Дашборд" 
+      subtitle="Обзор системы"
+      actions={[
+        {
+          label: 'Обновить',
+          onClick: () => window.location.reload(),
+          variant: 'outline',
         }
-      />
-
+      ]}
+    >
       <div className={styles.content}>
         <section className={styles.stats}>
           <StatCard
@@ -177,7 +179,7 @@ export function DashboardPage() {
           </section>
         </div>
       </div>
-    </div>
+    </AdminPage>
   );
 }
 

@@ -1,8 +1,34 @@
 import { apiRequest } from './http';
 
-// Types
+// ─────────────────────────────────────────────────────────────────────────────
+// TYPES
+// ─────────────────────────────────────────────────────────────────────────────
+
 export type PromptStatus = 'draft' | 'active' | 'archived';
 export type PromptType = 'prompt' | 'baseline';
+
+export interface PromptContainer {
+  id: string;
+  slug: string;
+  name: string;
+  description?: string;
+  type: PromptType;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PromptVersion {
+  id: string;
+  prompt_id: string;
+  template: string;
+  input_variables: string[];
+  generation_config: Record<string, any>;
+  version: number;
+  status: PromptStatus;
+  parent_version_id?: string;
+  created_at: string;
+  updated_at: string;
+}
 
 export interface PromptVersionInfo {
   id: string;
@@ -11,163 +37,143 @@ export interface PromptVersionInfo {
   created_at: string;
 }
 
-export interface AgentUsingPrompt {
-  slug: string;
-  name: string;
-  version: number;
-}
-
 export interface PromptListItem {
-  slug: string;
-  name: string;
-  description?: string;
-  type: PromptType;
-  latest_version: number;
-  active_version?: number;
-  versions_count: number;
-  updated_at: string;
-}
-
-export interface Prompt {
   id: string;
   slug: string;
   name: string;
   description?: string;
-  template: string;
-  input_variables: string[];
-  generation_config?: Record<string, any>;
   type: PromptType;
-  version: number;
-  status: PromptStatus;
-  parent_version_id?: string;
-  created_at: string;
+  versions_count: number;
+  latest_version?: number;
+  active_version?: number;
   updated_at: string;
 }
 
-export interface PromptCreate {
+export interface PromptDetail {
+  id: string;
   slug: string;
   name: string;
   description?: string;
-  template: string;
-  input_variables?: string[];
-  generation_config?: Record<string, any>;
-  type?: PromptType;
+  type: PromptType;
+  created_at: string;
+  updated_at: string;
+  versions: PromptVersionInfo[];
 }
 
-export interface PromptVersionCreate {
-  parent_version_id: string;
+// Request types
+export interface CreatePromptContainerRequest {
+  slug: string;
   name: string;
   description?: string;
+  type: PromptType;
+}
+
+export interface UpdatePromptContainerRequest {
+  name?: string;
+  description?: string;
+}
+
+export interface CreatePromptVersionRequest {
   template: string;
+  parent_version_id?: string;
   input_variables?: string[];
   generation_config?: Record<string, any>;
 }
 
-export interface PromptUpdate {
-  name?: string;
-  description?: string;
+export interface UpdatePromptVersionRequest {
   template?: string;
   input_variables?: string[];
   generation_config?: Record<string, any>;
 }
 
-export interface PromptRenderRequest {
-  variables: Record<string, any>;
-}
-
-export interface PromptRenderResponse {
-  rendered: string;
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// API CLIENT
+// ─────────────────────────────────────────────────────────────────────────────
 
 export const promptsApi = {
-  // List prompts (aggregated view)
-  async list(params: {
-    skip?: number;
-    limit?: number;
-    type?: PromptType;
-  } = {}): Promise<PromptListItem[]> {
-    const searchParams = new URLSearchParams();
-    if (params.skip) searchParams.set('skip', String(params.skip));
-    if (params.limit) searchParams.set('limit', String(params.limit));
-    if (params.type) searchParams.set('type', params.type);
-    
-    return apiRequest(`/admin/prompts?${searchParams.toString()}`);
-  },
-
-  // Get all versions of a prompt
-  async getVersions(slug: string): Promise<PromptVersionInfo[]> {
-    return apiRequest(`/admin/prompts/${slug}/versions`);
-  },
-
-  // Get specific version
-  async getVersion(slug: string, version: number): Promise<Prompt> {
-    return apiRequest(`/admin/prompts/${slug}/versions/${version}`);
-  },
-
-  // Get agents using this prompt
-  async getAgents(slug: string): Promise<AgentUsingPrompt[]> {
-    return apiRequest(`/admin/prompts/${slug}/agents`);
-  },
-
-  // Create new prompt (first version as draft)
-  async create(data: PromptCreate): Promise<Prompt> {
-    return apiRequest('/admin/prompts', {
+  // ─── PROMPT CONTAINER ───
+  
+  async createContainer(data: CreatePromptContainerRequest): Promise<PromptContainer> {
+    return apiRequest<PromptContainer>('/admin/prompts', {
       method: 'POST',
-      body: JSON.stringify(data),
+      body: data,
     });
   },
 
-  // Create new version from existing
-  async createVersion(slug: string, data: PromptVersionCreate): Promise<Prompt> {
-    return apiRequest(`/admin/prompts/${slug}/versions`, {
-      method: 'POST',
-      body: JSON.stringify(data),
+  async listPrompts(params?: { skip?: number; limit?: number; type?: PromptType }): Promise<PromptListItem[]> {
+    return apiRequest<PromptListItem[]>('/admin/prompts', {
+      method: 'GET',
+      params,
     });
   },
 
-  // Update draft prompt
-  async update(promptId: string, data: PromptUpdate): Promise<Prompt> {
-    return apiRequest(`/admin/prompts/${promptId}`, {
+  async getPrompt(slug: string): Promise<PromptDetail> {
+    return apiRequest<PromptDetail>(`/admin/prompts/${slug}`, {
+      method: 'GET',
+    });
+  },
+
+  async updateContainer(slug: string, data: UpdatePromptContainerRequest): Promise<PromptContainer> {
+    return apiRequest<PromptContainer>(`/admin/prompts/${slug}`, {
       method: 'PATCH',
-      body: JSON.stringify(data),
+      body: data,
     });
   },
 
-  // Activate draft prompt
-  async activate(promptId: string, archiveCurrent = true): Promise<Prompt> {
-    return apiRequest(`/admin/prompts/${promptId}/activate`, {
+  // ─── PROMPT VERSION ───
+
+  async createVersion(slug: string, data: CreatePromptVersionRequest): Promise<PromptVersion> {
+    return apiRequest<PromptVersion>(`/admin/prompts/${slug}/versions`, {
       method: 'POST',
-      body: JSON.stringify({ archive_current: archiveCurrent }),
+      body: data,
     });
   },
 
-  // Archive prompt version
-  async archive(promptId: string): Promise<Prompt> {
-    return apiRequest(`/admin/prompts/${promptId}/archive`, {
+  async getVersions(slug: string): Promise<PromptVersionInfo[]> {
+    return apiRequest<PromptVersionInfo[]>(`/admin/prompts/${slug}/versions`, {
+      method: 'GET',
+    });
+  },
+
+  async getVersion(slug: string, version: number): Promise<PromptVersion> {
+    return apiRequest<PromptVersion>(`/admin/prompts/${slug}/versions/${version}`, {
+      method: 'GET',
+    });
+  },
+
+  async updateVersion(versionId: string, data: UpdatePromptVersionRequest): Promise<PromptVersion> {
+    return apiRequest<PromptVersion>(`/admin/prompts/versions/${versionId}`, {
+      method: 'PATCH',
+      body: data,
+    });
+  },
+
+  async activateVersion(versionId: string, archiveCurrent: boolean = true): Promise<PromptVersion> {
+    return apiRequest<PromptVersion>(`/admin/prompts/versions/${versionId}/activate`, {
+      method: 'POST',
+      body: { archive_current: archiveCurrent },
+    });
+  },
+
+  async archiveVersion(versionId: string): Promise<PromptVersion> {
+    return apiRequest<PromptVersion>(`/admin/prompts/versions/${versionId}/archive`, {
       method: 'POST',
     });
   },
 
-  // Render prompt with variables
-  async render(
-    slug: string, 
-    variables: Record<string, any>,
-    version?: number
-  ): Promise<PromptRenderResponse> {
-    const searchParams = version ? `?version=${version}` : '';
-    return apiRequest(`/admin/prompts/${slug}/render${searchParams}`, {
+  // ─── RENDER ───
+
+  async renderActive(slug: string, variables: Record<string, any>): Promise<{ rendered: string }> {
+    return apiRequest<{ rendered: string }>(`/admin/prompts/${slug}/render`, {
       method: 'POST',
-      body: JSON.stringify({ variables }),
+      body: { variables },
     });
   },
 
-  // Preview template without saving
-  async preview(template: string, variables: Record<string, any>): Promise<PromptRenderResponse> {
-    const searchParams = new URLSearchParams();
-    searchParams.set('template', template);
-    return apiRequest(`/admin/prompts/preview?${searchParams.toString()}`, {
+  async renderVersion(slug: string, version: number, variables: Record<string, any>): Promise<{ rendered: string }> {
+    return apiRequest<{ rendered: string }>(`/admin/prompts/${slug}/versions/${version}/render`, {
       method: 'POST',
-      body: JSON.stringify(variables),
+      body: { variables },
     });
-  }
+  },
 };

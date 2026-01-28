@@ -91,9 +91,15 @@ export async function apiRequest<T>(
       headers.set('Idempotency-Key', idempotencyKey());
   }
 
+  // Serialize body to JSON if it's an object (not FormData or string)
+  let body = opts.body;
+  if (body && typeof body === 'object' && !(body instanceof FormData) && !(body instanceof Blob)) {
+    body = JSON.stringify(body);
+  }
+
   try {
     const attempt = () =>
-      fetch(url, { ...opts, headers, credentials: 'include', signal });
+      fetch(url, { ...opts, body, headers, credentials: 'include', signal });
     let resp = await attempt();
     if (resp.status === 401 && !opts.skipAuthRedirect) {
       try {
@@ -104,6 +110,7 @@ export async function apiRequest<T>(
           retryHeaders.set('Authorization', `Bearer ${_accessToken}`);
         resp = await fetch(url, {
           ...opts,
+          body,
           headers: retryHeaders,
           credentials: 'include',
           signal,

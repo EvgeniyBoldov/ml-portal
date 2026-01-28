@@ -60,7 +60,7 @@ export default function Login() {
           <div className={styles.heroIcon}>
             <BrainIcon />
           </div>
-          <h1 className={styles.heroTitle}>ML Portal</h1>
+          <h1 className={styles.heroTitle}>Почемучка</h1>
           <p className={styles.heroSubtitle}>
             Единая платформа для работы с AI-ассистентами, базами знаний и интеллектуальным поиском
           </p>
@@ -89,7 +89,7 @@ export default function Login() {
               <div className={styles.logoIcon}>
                 <BrainIcon />
               </div>
-              <span className={styles.logoText}>ML Portal</span>
+              <span className={styles.logoText}>Почемучка</span>
             </div>
             <h2 className={styles.formTitle}>Добро пожаловать</h2>
             <p className={styles.formSubtitle}>Войдите в свой аккаунт для продолжения</p>

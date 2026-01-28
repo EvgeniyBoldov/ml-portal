@@ -5,10 +5,11 @@ import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { adminApi, type AuditLog } from '@shared/api';
 import { qk } from '@shared/api/keys';
+import { AdminPage } from '@/shared/ui';
 import DataTable, { type DataTableColumn } from '@shared/ui/DataTable';
 import Badge from '@shared/ui/Badge';
 import Input from '@shared/ui/Input';
-import Button from '@shared/ui/Button';l
+import Button from '@shared/ui/Button';
 import Modal from '@shared/ui/Modal';
 import styles from './RegistryPage.module.css';
 
@@ -102,38 +103,33 @@ export function AuditPage() {
   ];
 
   return (
-    <div className={styles.wrap}>
-      <div className={styles.card}>
-        <div className={styles.header}>
-          <div className={styles.headerLeft}>
-            <h1 className={styles.title}>Аудит</h1>
-            <p className={styles.subtitle}>
-              Журнал действий пользователей и MCP запросов
-            </p>
-          </div>
-          <div className={styles.controls}>
-            <Input
-              placeholder="Фильтр по действию..."
-              value={action}
-              onChange={(e) => setAction(e.target.value)}
-              className={styles.search}
-            />
-            <Input
-              placeholder="User ID..."
-              value={userId}
-              onChange={(e) => setUserId(e.target.value)}
-              className={styles.search}
-            />
-          </div>
+    <AdminPage
+      title="Аудит"
+      subtitle="Журнал действий пользователей и MCP запросов"
+      customControls={
+        <>
+          <Input
+            placeholder="Фильтр по действию..."
+            value={action}
+            onChange={(e) => setAction(e.target.value)}
+            style={{ minWidth: '200px' }}
+          />
+          <Input
+            placeholder="User ID..."
+            value={userId}
+            onChange={(e) => setUserId(e.target.value)}
+            style={{ minWidth: '200px' }}
+          />
+        </>
+      }
+    >
+      {error && (
+        <div className={styles.errorState}>
+          Не удалось загрузить логи аудита
         </div>
+      )}
 
-        {error && (
-          <div className={styles.errorState}>
-            Не удалось загрузить логи аудита
-          </div>
-        )}
-
-        <DataTable
+      <DataTable
           columns={columns}
           data={logs}
           keyField="id"
@@ -145,8 +141,7 @@ export function AuditPage() {
           onPageChange={setPage}
           onPageSizeChange={setPageSize}
           emptyText="Логи аудита не найдены"
-        />
-      </div>
+      />
 
       {/* Details Modal */}
       {selectedLog && (
@@ -211,7 +206,7 @@ export function AuditPage() {
           </div>
         </Modal>
       )}
-    </div>
+    </AdminPage>
   );
 }
 

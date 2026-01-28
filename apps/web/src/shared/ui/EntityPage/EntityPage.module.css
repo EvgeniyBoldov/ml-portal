@@ -1,0 +1,229 @@
+/**
+ * EntityPage styles
+ * 
+ * Unified layout for View/Edit/Create entity pages
+ */
+
+.wrap {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  padding: 1rem 1.5rem;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border, var(--color-border));
+  flex-shrink: 0;
+}
+
+.headerLeft {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.backButton {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: var(--radius-md, 6px);
+  background: transparent;
+  color: var(--text, var(--color-text));
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.backButton:hover {
+  background: var(--hover, var(--color-hover));
+}
+
+.titleBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.title {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text, var(--color-text));
+}
+
+.subtitle {
+  font-size: 0.875rem;
+  color: var(--muted, var(--color-text-muted));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.editBadge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  background: var(--warning-bg, rgba(234, 179, 8, 0.15));
+  color: var(--warning, #eab308);
+  border-radius: var(--radius-full, 9999px);
+  white-space: nowrap;
+}
+
+.headerRight {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+.content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1.5rem;
+}
+
+.loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 200px;
+  color: var(--muted, var(--color-text-muted));
+}
+
+/* Form sections */
+.section {
+  background: var(--panel);
+  border: 1px solid var(--border, var(--color-border));
+  border-radius: var(--radius-lg, 8px);
+  margin-bottom: 1rem;
+}
+
+.sectionHeader {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid var(--border, var(--color-border));
+}
+
+.sectionIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-md, 6px);
+  background: var(--primary-bg, rgba(139, 92, 246, 0.15));
+  color: var(--primary, #8b5cf6);
+}
+
+.sectionTitle {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  margin: 0;
+  color: var(--text, var(--color-text));
+}
+
+.sectionContent {
+  padding: 1.25rem;
+}
+
+/* Form fields */
+.formGroup {
+  margin-bottom: 1.25rem;
+}
+
+.formGroup:last-child {
+  margin-bottom: 0;
+}
+
+.formLabel {
+  display: block;
+  font-size: 0.875rem;
+  font-weight: 500;
+  margin-bottom: 0.5rem;
+  color: var(--text, var(--color-text));
+}
+
+.formLabel.required::after {
+  content: ' *';
+  color: var(--danger, #ef4444);
+}
+
+.formHint {
+  font-size: 0.8125rem;
+  color: var(--muted, var(--color-text-muted));
+  margin-top: 0.375rem;
+}
+
+.formValue {
+  font-size: 0.9375rem;
+  color: var(--text, var(--color-text));
+  padding: 0.625rem 0.875rem;
+  background: var(--input-bg, var(--bg));
+  border: 1px solid var(--border, var(--color-border));
+  border-radius: var(--radius-md, 6px);
+  min-height: 42px;
+}
+
+/* Row layout for inline fields */
+.formRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.formRowLabel {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.formRowTitle {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text, var(--color-text));
+}
+
+.formRowDescription {
+  font-size: 0.8125rem;
+  color: var(--muted, var(--color-text-muted));
+}
+
+@media (max-width: 768px) {
+  .header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.75rem;
+    padding: 0.75rem 1rem;
+  }
+
+  .headerRight {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .content {
+    padding: 1rem;
+  }
+
+  .editBadge {
+    display: none;
+  }
+}

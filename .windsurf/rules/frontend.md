@@ -4,6 +4,11 @@ trigger: always_on
 
 You are refactoring a React 18 + TypeScript + Vite app with React Router, TanStack Query, Zustand, CSS-modules, SSE. Follow these NON-NEGOTIABLE rules:
 
+LANGUAGE & CODE REUSE
+- Use ONLY Russian or English in UI text, comments, and variable names. NO Ukrainian or other languages.
+- Maximize component reuse. Extract common patterns into shared components. Never duplicate code.
+- All components must be theme-aware and styled via CSS modules (no inline styles except dynamic values).
+
 ARCHITECTURE
 - Use domain-first folders:
   src/app (providers, router, layouts), src/domains/* (pages, components, hooks, types), src/shared/{api,ui,lib,config,hooks,types}.

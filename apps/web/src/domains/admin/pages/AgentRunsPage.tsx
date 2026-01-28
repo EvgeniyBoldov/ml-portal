@@ -1,12 +1,22 @@
+/**
+ * AgentRunsPage - Логи запусков агентов
+ * 
+ * Единый стиль с остальными админ-реестрами.
+ */
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { agentRunsApi, AgentRun, AgentRunDetail, AgentRunFilter } from '@/shared/api';
+import { AdminPage } from '@/shared/ui';
 import Button from '@/shared/ui/Button';
+import Badge from '@/shared/ui/Badge';
+import Modal from '@/shared/ui/Modal';
+import { Skeleton } from '@/shared/ui/Skeleton';
+import { ActionsButton, type ActionItem } from '@/shared/ui/ActionsButton';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
-import styles from './AgentRunsPage.module.css';
+import styles from './RegistryPage.module.css';
 
 function formatDuration(ms?: number): string {
-  if (!ms) return '-';
+  if (!ms) return '—';
   if (ms < 1000) return `${ms}ms`;
   return `${(ms / 1000).toFixed(2)}s`;
 }
@@ -21,58 +31,74 @@ function formatDate(dateStr: string): string {
   });
 }
 
-function StatusBadge({ status }: { status: string }) {
-  const className = {
-    running: styles.statusRunning,
-    completed: styles.statusCompleted,
-    failed: styles.statusFailed,
-  }[status] || styles.statusRunning;
+const STATUS_TONES: Record<string, 'success' | 'warning' | 'danger' | 'info'> = {
+  running: 'info',
+  completed: 'success',
+  failed: 'danger',
+};
 
-  return <span className={`${styles.statusBadge} ${className}`}>{status}</span>;
-}
+const STEP_ICONS: Record<string, string> = {
+  llm_request: '🤖',
+  tool_call: '🔧',
+  tool_result: '📤',
+  final_response: '✅',
+};
+
+const STEP_TONES: Record<string, 'info' | 'success' | 'warning' | 'neutral'> = {
+  llm_request: 'info',
+  tool_call: 'warning',
+  tool_result: 'success',
+  final_response: 'success',
+};
 
 function StepItem({ step }: { step: AgentRunDetail['steps'][0] }) {
   const [expanded, setExpanded] = useState(false);
-  
-  const stepClass = {
-    llm_request: styles.stepLlm,
-    tool_call: styles.stepToolCall,
-    tool_result: styles.stepToolResult,
-    final_response: styles.stepFinal,
-  }[step.step_type] || '';
-
-  const stepIcon = {
-    llm_request: '🤖',
-    tool_call: '🔧',
-    tool_result: '📤',
-    final_response: '✅',
-  }[step.step_type] || '📝';
-
   const dataPreview = JSON.stringify(step.data).slice(0, 100);
 
   return (
-    <div className={`${styles.step} ${stepClass} ${expanded ? styles.stepExpanded : ''}`}>
+    <div 
+      style={{ 
+        padding: '12px', 
+        background: 'var(--bg-subtle)', 
+        borderRadius: 'var(--radius-sm)',
+        marginBottom: '8px',
+      }}
+    >
       <div 
-        className={styles.stepHeader} 
         onClick={() => setExpanded(!expanded)}
-        style={{ cursor: 'pointer' }}
+        style={{ 
+          cursor: 'pointer', 
+          display: 'flex', 
+          alignItems: 'center', 
+          gap: '8px',
+        }}
       >
-        <span className={styles.stepIcon}>{stepIcon}</span>
-        <span className={styles.stepType}>
+        <span>{STEP_ICONS[step.step_type] || '📝'}</span>
+        <Badge tone={STEP_TONES[step.step_type] || 'neutral'} size="small">
           #{step.step_number + 1} {step.step_type.replace(/_/g, ' ')}
-        </span>
-        <span className={styles.stepTime}>
-          {step.duration_ms ? `${step.duration_ms}ms` : ''}
-        </span>
-        <span className={styles.stepToggle}>{expanded ? '▼' : '▶'}</span>
+        </Badge>
+        {step.duration_ms && (
+          <span style={{ color: 'var(--muted)', fontSize: '12px' }}>
+            {step.duration_ms}ms
+          </span>
+        )}
+        <span style={{ marginLeft: 'auto' }}>{expanded ? '▼' : '▶'}</span>
       </div>
       {!expanded && (
-        <div className={styles.stepPreview}>
+        <div style={{ fontSize: '12px', color: 'var(--muted)', marginTop: '4px' }}>
           {dataPreview}{dataPreview.length >= 100 ? '...' : ''}
         </div>
       )}
       {expanded && (
-        <pre className={styles.stepData}>
+        <pre style={{
+          marginTop: '8px',
+          padding: '12px',
+          background: 'var(--bg-hover)',
+          borderRadius: 'var(--radius-sm)',
+          fontSize: '12px',
+          overflow: 'auto',
+          maxHeight: '200px',
+        }}>
           {JSON.stringify(step.data, null, 2)}
         </pre>
       )}
@@ -88,61 +114,60 @@ function RunDetailModal({
   onClose: () => void;
 }) {
   return (
-    <div className={styles.modal} onClick={onClose}>
-      <div className={styles.modalContent} onClick={e => e.stopPropagation()}>
-        <div className={styles.modalHeader}>
-          <h2 className={styles.modalTitle}>Run Details</h2>
-          <button className={styles.modalClose} onClick={onClose}>&times;</button>
-        </div>
-        <div className={styles.modalBody}>
-          <div className={styles.runMeta}>
-            <div className={styles.metaItem}>
-              <span className={styles.metaLabel}>Agent</span>
-              <span className={styles.metaValue}>{run.agent_slug}</span>
-            </div>
-            <div className={styles.metaItem}>
-              <span className={styles.metaLabel}>Status</span>
-              <StatusBadge status={run.status} />
-            </div>
-            <div className={styles.metaItem}>
-              <span className={styles.metaLabel}>Duration</span>
-              <span className={styles.metaValue}>{formatDuration(run.duration_ms)}</span>
-            </div>
-            <div className={styles.metaItem}>
-              <span className={styles.metaLabel}>Steps</span>
-              <span className={styles.metaValue}>{run.total_steps}</span>
-            </div>
-            <div className={styles.metaItem}>
-              <span className={styles.metaLabel}>Tool Calls</span>
-              <span className={styles.metaValue}>{run.total_tool_calls}</span>
-            </div>
-            <div className={styles.metaItem}>
-              <span className={styles.metaLabel}>Started</span>
-              <span className={styles.metaValue}>{formatDate(run.started_at)}</span>
-            </div>
-            {run.error && (
-              <div className={styles.metaItem} style={{ gridColumn: '1 / -1' }}>
-                <span className={styles.metaLabel}>Error</span>
-                <span className={styles.metaValue} style={{ color: 'var(--danger)' }}>
-                  {run.error}
-                </span>
-              </div>
-            )}
+    <Modal open={!!run} onClose={onClose} title={`Запуск: ${run.agent_slug}`}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+        <div style={{ 
+          display: 'grid', 
+          gridTemplateColumns: 'repeat(3, 1fr)', 
+          gap: '12px',
+        }}>
+          <div>
+            <strong>Статус:</strong>{' '}
+            <Badge tone={STATUS_TONES[run.status] || 'neutral'}>{run.status}</Badge>
           </div>
+          <div>
+            <strong>Длительность:</strong> {formatDuration(run.duration_ms)}
+          </div>
+          <div>
+            <strong>Шагов:</strong> {run.total_steps}
+          </div>
+          <div>
+            <strong>Tool Calls:</strong> {run.total_tool_calls}
+          </div>
+          <div>
+            <strong>Начат:</strong> {formatDate(run.started_at)}
+          </div>
+        </div>
+        
+        {run.error && (
+          <div style={{ 
+            padding: '12px', 
+            background: 'var(--danger-bg)', 
+            borderRadius: 'var(--radius-sm)',
+            color: 'var(--danger)',
+          }}>
+            <strong>Ошибка:</strong> {run.error}
+          </div>
+        )}
 
-          <h3 className={styles.stepsTitle}>Steps ({run.steps?.length || 0})</h3>
-          <div className={styles.stepsList}>
+        <div>
+          <h4 style={{ margin: '0 0 12px' }}>Шаги ({run.steps?.length || 0})</h4>
+          <div style={{ maxHeight: '400px', overflow: 'auto' }}>
             {run.steps?.length ? (
               run.steps.map((step) => (
                 <StepItem key={step.id} step={step} />
               ))
             ) : (
-              <div className={styles.noSteps}>No steps recorded for this run</div>
+              <div style={{ color: 'var(--muted)' }}>Нет записанных шагов</div>
             )}
           </div>
         </div>
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+          <Button variant="outline" onClick={onClose}>Закрыть</Button>
+        </div>
       </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -218,151 +243,157 @@ export function AgentRunsPage() {
 
   const totalPages = runsData ? Math.ceil(runsData.total / runsData.page_size) : 0;
 
-  return (
-    <div className={styles.wrap}>
-      <div className={styles.header}>
-        <h1 className={styles.title}>Agent Runs</h1>
-        <div className={styles.headerActions}>
-          <Button 
-            variant="outline" 
-            onClick={handleDeleteOld}
-            disabled={deleteOldMutation.isPending}
-          >
-            Cleanup Old Runs
-          </Button>
-        </div>
-      </div>
+  const getActions = (run: AgentRun): ActionItem[] => [
+    {
+      label: 'Подробнее',
+      onClick: () => setSelectedRunId(run.id),
+    },
+    {
+      label: 'Удалить',
+      onClick: () => {
+        if (confirm('Удалить этот запуск?')) {
+          deleteMutation.mutate(run.id);
+        }
+      },
+      variant: 'danger',
+    },
+  ];
 
+  return (
+    <AdminPage
+      title="Запуски агентов"
+      subtitle="Логи выполнения агентов и их шагов"
+      actions={[
+        {
+          label: 'Очистить старые',
+          onClick: handleDeleteOld,
+          variant: 'outline',
+        },
+      ]}
+    >
+      {/* Stats */}
       {stats && (
-        <div className={styles.stats}>
-          <div className={styles.statCard}>
-            <div className={styles.statLabel}>Total Runs</div>
-            <div className={styles.statValue}>{stats.total_runs}</div>
+        <div style={{ 
+          display: 'grid', 
+          gridTemplateColumns: 'repeat(4, 1fr)', 
+          gap: '16px', 
+          marginBottom: '24px',
+        }}>
+          <div style={{ padding: '16px', background: 'var(--bg-subtle)', borderRadius: 'var(--radius)' }}>
+            <div style={{ fontSize: '12px', color: 'var(--muted)' }}>Всего</div>
+            <div style={{ fontSize: '24px', fontWeight: 600 }}>{stats.total_runs}</div>
           </div>
-          <div className={styles.statCard}>
-            <div className={styles.statLabel}>Completed</div>
-            <div className={styles.statValue}>{stats.by_status.completed || 0}</div>
+          <div style={{ padding: '16px', background: 'var(--bg-subtle)', borderRadius: 'var(--radius)' }}>
+            <div style={{ fontSize: '12px', color: 'var(--muted)' }}>Завершено</div>
+            <div style={{ fontSize: '24px', fontWeight: 600, color: 'var(--success)' }}>
+              {stats.by_status.completed || 0}
+            </div>
           </div>
-          <div className={styles.statCard}>
-            <div className={styles.statLabel}>Failed</div>
-            <div className={styles.statValue}>{stats.by_status.failed || 0}</div>
+          <div style={{ padding: '16px', background: 'var(--bg-subtle)', borderRadius: 'var(--radius)' }}>
+            <div style={{ fontSize: '12px', color: 'var(--muted)' }}>Ошибки</div>
+            <div style={{ fontSize: '24px', fontWeight: 600, color: 'var(--danger)' }}>
+              {stats.by_status.failed || 0}
+            </div>
           </div>
-          <div className={styles.statCard}>
-            <div className={styles.statLabel}>Avg Duration</div>
-            <div className={styles.statValue}>{formatDuration(stats.avg_duration_ms)}</div>
+          <div style={{ padding: '16px', background: 'var(--bg-subtle)', borderRadius: 'var(--radius)' }}>
+            <div style={{ fontSize: '12px', color: 'var(--muted)' }}>Среднее время</div>
+            <div style={{ fontSize: '24px', fontWeight: 600 }}>{formatDuration(stats.avg_duration_ms)}</div>
           </div>
         </div>
       )}
 
-      <div className={styles.filters}>
-        <div className={styles.filterGroup}>
-          <label className={styles.filterLabel}>Status</label>
-          <select
-            className={styles.filterSelect}
-            value={filters.status || ''}
-            onChange={e => setFilters({ ...filters, status: e.target.value || undefined, page: 1 })}
-          >
-            <option value="">All</option>
-            <option value="running">Running</option>
-            <option value="completed">Completed</option>
-            <option value="failed">Failed</option>
-          </select>
-        </div>
-        <div className={styles.filterGroup}>
-          <label className={styles.filterLabel}>Agent</label>
-          <input
-            type="text"
-            className={styles.filterInput}
-            placeholder="e.g. chat-rag"
-            value={filters.agent_slug || ''}
-            onChange={e => setFilters({ ...filters, agent_slug: e.target.value || undefined, page: 1 })}
-          />
-        </div>
-      </div>
-
-      {isLoading ? (
-        <div className={styles.emptyState}>Loading...</div>
-      ) : !runsData?.items.length ? (
-        <div className={styles.emptyState}>
-          <div className={styles.emptyIcon}>📊</div>
-          <div className={styles.emptyTitle}>No runs found</div>
-          <div className={styles.emptyDescription}>
-            Agent runs will appear here when agents with logging enabled are executed.
-          </div>
-        </div>
-      ) : (
-        <>
-          <table className={styles.table}>
-            <thead>
+      {/* Table */}
+      <div className={styles.tableWrap}>
+        <table className={styles.table}>
+          <thead>
+            <tr>
+              <th>АГЕНТ</th>
+              <th>СТАТУС</th>
+              <th>ШАГИ</th>
+              <th>TOOL CALLS</th>
+              <th>ВРЕМЯ</th>
+              <th>НАЧАТ</th>
+              <th>ДЕЙСТВИЯ</th>
+            </tr>
+          </thead>
+          <tbody>
+            {isLoading ? (
+              Array.from({ length: 3 }).map((_, i) => (
+                <tr key={i}>
+                  {Array.from({ length: 7 }).map((__, j) => (
+                    <td key={j}>
+                      <Skeleton width={j === 0 ? 120 : 80} />
+                    </td>
+                  ))}
+                </tr>
+              ))
+            ) : !runsData?.items.length ? (
               <tr>
-                <th>Agent</th>
-                <th>Status</th>
-                <th>Steps</th>
-                <th>Tool Calls</th>
-                <th>Duration</th>
-                <th>Started</th>
-                <th></th>
+                <td colSpan={7} className={styles.emptyState}>
+                  Запуски не найдены. Они появятся после выполнения агентов.
+                </td>
               </tr>
-            </thead>
-            <tbody>
-              {runsData.items.map((run) => (
-                <tr 
-                  key={run.id} 
-                  className={styles.clickableRow}
-                  onClick={() => setSelectedRunId(run.id)}
-                >
+            ) : (
+              runsData.items.map((run) => (
+                <tr key={run.id} onClick={() => setSelectedRunId(run.id)} style={{ cursor: 'pointer' }}>
                   <td>
-                    <span className={styles.agentSlug}>{run.agent_slug}</span>
+                    <code className={styles.code}>{run.agent_slug}</code>
                   </td>
-                  <td><StatusBadge status={run.status} /></td>
+                  <td>
+                    <Badge tone={STATUS_TONES[run.status] || 'neutral'} size="small">
+                      {run.status}
+                    </Badge>
+                  </td>
                   <td>{run.total_steps}</td>
                   <td>{run.total_tool_calls}</td>
-                  <td className={styles.duration}>{formatDuration(run.duration_ms)}</td>
-                  <td>{formatDate(run.started_at)}</td>
                   <td>
-                    <button
-                      className={styles.deleteBtn}
-                      onClick={(e) => handleDelete(e, run.id)}
-                      disabled={deleteMutation.isPending}
-                    >
-                      Delete
-                    </button>
+                    <span className={styles.muted}>{formatDuration(run.duration_ms)}</span>
+                  </td>
+                  <td>
+                    <span className={styles.muted}>{formatDate(run.started_at)}</span>
+                  </td>
+                  <td>
+                    <ActionsButton actions={getActions(run)} />
                   </td>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
 
-          {totalPages > 1 && (
-            <div className={styles.pagination}>
-              <Button
-                variant="outline"
-                disabled={filters.page === 1}
-                onClick={() => setFilters({ ...filters, page: (filters.page || 1) - 1 })}
-              >
-                Previous
-              </Button>
-              <span className={styles.pageInfo}>
-                Page {filters.page} of {totalPages}
-              </span>
-              <Button
-                variant="outline"
-                disabled={filters.page === totalPages}
-                onClick={() => setFilters({ ...filters, page: (filters.page || 1) + 1 })}
-              >
-                Next
-              </Button>
-            </div>
-          )}
-        </>
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '16px', marginTop: '16px' }}>
+          <Button
+            variant="outline"
+            size="small"
+            disabled={filters.page === 1}
+            onClick={() => setFilters({ ...filters, page: (filters.page || 1) - 1 })}
+          >
+            Назад
+          </Button>
+          <span style={{ color: 'var(--muted)' }}>
+            Страница {filters.page} из {totalPages}
+          </span>
+          <Button
+            variant="outline"
+            size="small"
+            disabled={filters.page === totalPages}
+            onClick={() => setFilters({ ...filters, page: (filters.page || 1) + 1 })}
+          >
+            Вперёд
+          </Button>
+        </div>
       )}
 
+      {/* Detail Modal */}
       {selectedRunId && selectedRun && !isLoadingDetail && (
         <RunDetailModal
           run={selectedRun}
           onClose={() => setSelectedRunId(null)}
         />
       )}
-    </div>
+    </AdminPage>
   );
 }

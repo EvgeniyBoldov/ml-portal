@@ -192,6 +192,26 @@
   color: var(--text);
 }
 
+/* Override input styles for login page - keep them white */
+.inputGroup input {
+  background: white !important;
+  border: 1px solid #e5e7eb !important;
+  color: #111827 !important;
+}
+
+.inputGroup input::placeholder {
+  color: #9ca3af !important;
+}
+
+.inputGroup input:hover {
+  border-color: #d1d5db !important;
+}
+
+.inputGroup input:focus {
+  border-color: var(--primary) !important;
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1) !important;
+}
+
 .error {
   background: var(--danger-light);
   color: var(--danger);

@@ -36,7 +36,7 @@ const navigation: NavGroup[] = [
       { path: '/admin/tools', label: 'Инструменты', icon: 'settings' },
       { path: '/admin/agents', label: 'Агенты', icon: 'sparkles' },
       { path: '/admin/collections', label: 'Коллекции', icon: 'database' },
-      { path: '/admin/policies', label: 'Ограничения', icon: 'shield' },
+      { path: '/admin/policies', label: 'Политики', icon: 'shield' },
     ],
   },
   {
@@ -68,16 +68,6 @@ export function AdminSidebar() {
 
   return (
     <aside className={styles.sidebar}>
-      <div className={styles.logo}>
-        <div className={styles.logoIcon}>
-          <Icon name="sparkles" size={24} />
-        </div>
-        <div className={styles.logoText}>
-          <span className={styles.logoTitle}>ML Portal</span>
-          <span className={styles.logoSubtitle}>Админ-панель</span>
-        </div>
-      </div>
-
       <nav className={styles.nav}>
         {navigation.map((group) => (
           <div key={group.title} className={styles.group}>
@@ -101,13 +91,6 @@ export function AdminSidebar() {
           </div>
         ))}
       </nav>
-
-      <div className={styles.footer}>
-        <NavLink to="/gpt/chat" className={styles.backLink}>
-          <Icon name="chevron-left" size={16} />
-          <span>Вернуться в приложение</span>
-        </NavLink>
-      </div>
     </aside>
   );
 }

@@ -1,25 +1,42 @@
+/**
+ * AgentEditorPage - View/Edit/Create agent with EntityPage
+ * 
+ * Unified page for all agent operations:
+ * - View: /admin/agents/:slug (readonly)
+ * - Edit: /admin/agents/:slug?mode=edit
+ * - Create: /admin/agents/new
+ */
 import React, { useState, useEffect } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { agentsApi, promptsApi, toolsApi, collectionsApi, AgentCreate } from '@/shared/api';
 import { qk } from '@/shared/api/keys';
 import Button from '@/shared/ui/Button';
 import Input from '@/shared/ui/Input';
 import Textarea from '@/shared/ui/Textarea';
+import Select from '@/shared/ui/Select';
+import Switch from '@/shared/ui/Switch';
 import Badge from '@/shared/ui/Badge';
 import Modal from '@/shared/ui/Modal';
+import { Icon } from '@/shared/ui/Icon';
 import { Tabs, TabPanel } from '@/shared/ui/Tabs';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
+import { EntityPage, type EntityPageMode } from '@/shared/ui/EntityPage';
 import styles from './AgentEditorPage.module.css';
 
 export function AgentEditorPage() {
   const { slug } = useParams<{ slug: string }>();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const showError = useErrorToast();
   const showSuccess = useSuccessToast();
   
-  const isNew = !slug || slug === 'new';
+  // Determine mode
+  const isCreate = !slug || slug === 'new';
+  const isEditMode = searchParams.get('mode') === 'edit';
+  const mode: EntityPageMode = isCreate ? 'create' : isEditMode ? 'edit' : 'view';
+  const isEditable = mode === 'edit' || mode === 'create';
 
   const [formData, setFormData] = useState<AgentCreate>({
     slug: '',
@@ -37,7 +54,7 @@ export function AgentEditorPage() {
   // Load metadata for selectors
   const { data: prompts } = useQuery({
     queryKey: ['prompts', 'list'],
-    queryFn: () => promptsApi.list(),
+    queryFn: () => promptsApi.listPrompts(),
   });
 
   const { data: tools } = useQuery({
@@ -50,11 +67,13 @@ export function AgentEditorPage() {
     queryFn: () => collectionsApi.list(),
   });
 
+  const [saving, setSaving] = useState(false);
+
   // Load agent data if editing
-  const { data: existingAgent, isLoading } = useQuery({
+  const { data: existingAgent, isLoading, refetch } = useQuery({
     queryKey: ['agents', slug],
     queryFn: () => agentsApi.get(slug!),
-    enabled: !isNew,
+    enabled: !isCreate,
   });
 
   useEffect(() => {
@@ -74,28 +93,66 @@ export function AgentEditorPage() {
     }
   }, [existingAgent]);
 
-  const saveMutation = useMutation({
-    mutationFn: (data: AgentCreate) => {
-        if (isNew) return agentsApi.create(data);
-        return agentsApi.update(slug!, data);
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['agents'] });
-      showSuccess('Agent saved successfully');
-      navigate('/admin/agents');
-    },
-    onError: (err) => {
-      showError('Error saving agent');
-      console.error(err);
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      if (mode === 'create') {
+        await agentsApi.create(formData);
+        showSuccess('Агент создан');
+        queryClient.invalidateQueries({ queryKey: ['agents'] });
+        navigate('/admin/agents');
+      } else {
+        await agentsApi.update(slug!, formData);
+        showSuccess('Агент обновлён');
+        queryClient.invalidateQueries({ queryKey: ['agents'] });
+        setSearchParams({});
+        refetch();
+      }
+    } catch (err) {
+      showError(err instanceof Error ? err.message : 'Ошибка сохранения');
+    } finally {
+      setSaving(false);
     }
-  });
+  };
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    saveMutation.mutate(formData);
+  const handleEdit = () => {
+    setSearchParams({ mode: 'edit' });
+  };
+
+  const handleCancel = () => {
+    if (mode === 'edit' && existingAgent) {
+      setFormData({
+        slug: existingAgent.slug,
+        name: existingAgent.name,
+        description: existingAgent.description || '',
+        system_prompt_slug: existingAgent.system_prompt_slug,
+        baseline_prompt_id: existingAgent.baseline_prompt_id || null,
+        tools: existingAgent.tools,
+        available_collections: existingAgent.available_collections || [],
+        generation_config: existingAgent.generation_config || {},
+        is_active: existingAgent.is_active,
+        enable_logging: existingAgent.enable_logging,
+      });
+      setSearchParams({});
+    } else if (mode === 'create') {
+      navigate('/admin/agents');
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!confirm('Удалить этого агента?')) return;
+    try {
+      await agentsApi.delete(slug!);
+      showSuccess('Агент удалён');
+      queryClient.invalidateQueries({ queryKey: ['agents'] });
+      navigate('/admin/agents');
+    } catch (err) {
+      showError(err instanceof Error ? err.message : 'Ошибка удаления');
+    }
   };
 
   const toggleTool = (toolSlug: string) => {
+    if (!isEditable) return;
     const currentTools = formData.tools;
     if (currentTools.includes(toolSlug)) {
       setFormData({ ...formData, tools: currentTools.filter(t => t !== toolSlug) });
@@ -105,6 +162,7 @@ export function AgentEditorPage() {
   };
 
   const toggleCollection = (collectionSlug: string) => {
+    if (!isEditable) return;
     const currentCollections = formData.available_collections || [];
     if (currentCollections.includes(collectionSlug)) {
       setFormData({ ...formData, available_collections: currentCollections.filter(c => c !== collectionSlug) });
@@ -123,17 +181,17 @@ export function AgentEditorPage() {
   const { data: generatedPrompt } = useQuery({
     queryKey: qk.agents.detail(slug || ''),
     queryFn: () => agentsApi.getGeneratedPrompt(slug!),
-    enabled: !isNew && !!slug && showPromptModal,
+    enabled: !isCreate && !!slug && showPromptModal,
   });
 
   // Get selected prompt info
-  const selectedPrompt = prompts?.find(p => p.slug === formData.system_prompt_slug);
+  const selectedPrompt = prompts?.find((p: { slug: string }) => p.slug === formData.system_prompt_slug);
   
   // Filter baseline prompts (type='baseline')
-  const baselinePrompts = prompts?.filter((p: any) => p.type === 'baseline') || [];
-  const selectedBaseline = prompts?.find((p: any) => p.id === formData.baseline_prompt_id);
+  const baselinePrompts = prompts?.filter((p: { type?: string }) => p.type === 'baseline') || [];
+  const selectedBaseline = prompts?.find((p: { id: string }) => p.id === formData.baseline_prompt_id);
 
-  if (!isNew && isLoading) {
+  if (!isCreate && isLoading) {
     return <div className={styles.emptyState}>Загрузка агента...</div>;
   }
 
@@ -143,9 +201,9 @@ export function AgentEditorPage() {
       <div className={styles.header}>
         <div>
           <h1 className={styles.title}>
-            {isNew ? 'Создать Агента' : formData.name || slug}
+            {isCreate ? 'Создать Агента' : formData.name || slug}
           </h1>
-          {!isNew && <p className={styles.subtitle}><code>{slug}</code></p>}
+          {!isCreate && <p className={styles.subtitle}><code>{slug}</code></p>}
         </div>
         <div className={styles.headerActions}>
           <Link to="/admin/agents">
@@ -154,7 +212,7 @@ export function AgentEditorPage() {
         </div>
       </div>
 
-      <form onSubmit={handleSubmit}>
+      <form onSubmit={(e) => { e.preventDefault(); handleSave(); }}>
         <div className={styles.content}>
           {/* Basic Info Card */}
           <div className={styles.card}>
@@ -168,7 +226,7 @@ export function AgentEditorPage() {
                 <Input 
                   value={formData.slug} 
                   onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormData({...formData, slug: e.target.value})}
-                  disabled={!isNew}
+                  disabled={!isCreate}
                   placeholder="network-assistant"
                   required
                 />
@@ -216,7 +274,7 @@ export function AgentEditorPage() {
                     <option key={p.slug} value={p.slug}>{p.name}</option>
                   ))}
                 </select>
-                {formData.system_prompt_slug && !isNew && (
+                {formData.system_prompt_slug && !isCreate && (
                   <Button 
                     type="button" 
                     variant="outline" 
@@ -378,9 +436,9 @@ export function AgentEditorPage() {
             <Button 
               type="submit" 
               variant="primary" 
-              disabled={saveMutation.isPending}
+              disabled={saving}
             >
-              {saveMutation.isPending ? 'Сохранение...' : 'Сохранить'}
+              {saving ? 'Сохранение...' : 'Сохранить'}
             </Button>
           </div>
         </div>

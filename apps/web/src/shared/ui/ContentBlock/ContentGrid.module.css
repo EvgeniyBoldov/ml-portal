@@ -1,0 +1,37 @@
+/**
+ * ContentGrid styles
+ * 
+ * 12-column CSS Grid for flexible block layout
+ */
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+  align-items: stretch; /* Блоки растягиваются по высоте до самого высокого в строке */
+}
+
+/* Gap variants */
+.gap-sm {
+  gap: 0.75rem;
+}
+
+.gap-md {
+  gap: 1rem;
+}
+
+.gap-lg {
+  gap: 1.5rem;
+}
+
+/* Responsive */
+@media (max-width: 1200px) {
+  .grid {
+    grid-template-columns: repeat(12, 1fr);
+  }
+}
+
+@media (max-width: 768px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+}

@@ -1,7 +1,65 @@
-.layout {
+.shell {
   display: flex;
+  flex-direction: column;
   min-height: 100vh;
   background: var(--bg);
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.75rem 1.5rem;
+  background: var(--panel);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg, 8px);
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.brand img {
+  height: 32px;
+  width: auto;
+  display: block;
+}
+
+.brandName {
+  font-size: 1.125rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--color-text);
+}
+
+.right {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.user {
+  font-size: 0.875rem;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+.layout {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  margin: 12px;
+  background: var(--panel);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg, 8px);
 }
 
 .main {
@@ -13,6 +71,11 @@
 }
 
 @media (max-width: 1024px) {
+  .shell {
+    padding: 0 8px 8px 8px;
+    gap: 8px;
+  }
+  
   .layout {
     flex-direction: column;
   }

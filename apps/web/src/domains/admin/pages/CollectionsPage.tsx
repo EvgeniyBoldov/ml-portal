@@ -4,8 +4,8 @@
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { AdminPage } from '@/shared/ui';
 import Button from '@shared/ui/Button';
-import Input from '@shared/ui/Input';
 import Badge from '@shared/ui/Badge';
 import { Skeleton } from '@shared/ui/Skeleton';
 import { useErrorToast, useSuccessToast } from '@shared/ui/Toast';
@@ -106,29 +106,21 @@ export function CollectionsPage() {
   }
 
   return (
-    <div className={styles.wrap}>
-      <div className={styles.card}>
-        <div className={styles.header}>
-          <div className={styles.headerLeft}>
-            <h1 className={styles.title}>Коллекции</h1>
-            <p className={styles.subtitle}>Управление базами знаний и векторными хранилищами</p>
-          </div>
-          <div className={styles.controls}>
-            <Input
-              placeholder="Поиск коллекций..."
-              value={q}
-              onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
-                setQ(event.target.value)
-              }
-              className={styles.search}
-            />
-            <Link to="/admin/collections/new">
-              <Button>Создать</Button>
-            </Link>
-          </div>
-        </div>
-
-        <div className={styles.tableWrap}>
+    <AdminPage
+      title="Коллекции"
+      subtitle="Управление базами знаний и векторными хранилищами"
+      searchValue={q}
+      onSearchChange={setQ}
+      searchPlaceholder="Поиск коллекций..."
+      actions={[
+        {
+          label: 'Создать',
+          onClick: () => navigate('/admin/collections/new'),
+          variant: 'primary',
+        },
+      ]}
+    >
+      <div className={styles.tableWrap}>
           <table className={styles.table}>
             <thead>
               <tr>
@@ -215,9 +207,8 @@ export function CollectionsPage() {
               )}
             </tbody>
           </table>
-        </div>
       </div>
-    </div>
+    </AdminPage>
   );
 }
 

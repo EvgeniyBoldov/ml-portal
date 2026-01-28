@@ -1,26 +1,36 @@
 /**
- * PolicyEditorPage - Create/Edit permission policy
+ * PolicyEditorPage - View/Edit/Create permission policy with EntityPage
+ * 
+ * Unified page for all policy operations:
+ * - View: /admin/policies/:id (readonly)
+ * - Edit: /admin/policies/:id?mode=edit
+ * - Create: /admin/policies/new
  */
 import { useState, useEffect } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { permissionsApi, toolsApi, type PermissionSetCreate } from '@/shared/api';
 import { qk } from '@/shared/api/keys';
 import Button from '@/shared/ui/Button';
-import Input from '@/shared/ui/Input';
-import Alert from '@/shared/ui/Alert';
-import { Skeleton } from '@/shared/ui/Skeleton';
+import Badge from '@/shared/ui/Badge';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
-import styles from './PromptEditorPage.module.css';
+import { EntityPage, type EntityPageMode } from '@/shared/ui/EntityPage';
+import { ContentBlock, ContentGrid, type FieldDefinition } from '@/shared/ui/ContentBlock';
+import styles from './PolicyEditorPage.module.css';
 
 export function PolicyEditorPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const showError = useErrorToast();
   const showSuccess = useSuccessToast();
 
-  const isNew = !id || id === 'new';
+  // Determine mode
+  const isCreate = !id;
+  const isEditMode = searchParams.get('mode') === 'edit';
+  const mode: EntityPageMode = isCreate ? 'create' : isEditMode ? 'edit' : 'view';
+  const isEditable = mode === 'edit' || mode === 'create';
 
   const [formData, setFormData] = useState<PermissionSetCreate>({
     scope: 'default',
@@ -32,6 +42,7 @@ export function PolicyEditorPage() {
     denied_collections: [],
     is_active: true,
   });
+  const [saving, setSaving] = useState(false);
 
   // Load tools for selection
   const { data: tools } = useQuery({
@@ -39,11 +50,11 @@ export function PolicyEditorPage() {
     queryFn: () => toolsApi.list(),
   });
 
-  // Load existing policy if editing
-  const { data: existingPolicy, isLoading } = useQuery({
+  // Load existing policy
+  const { data: existingPolicy, isLoading, refetch } = useQuery({
     queryKey: qk.permissions.detail(id!),
     queryFn: () => permissionsApi.get(id!),
-    enabled: !isNew,
+    enabled: !isCreate,
   });
 
   useEffect(() => {
@@ -61,194 +72,207 @@ export function PolicyEditorPage() {
     }
   }, [existingPolicy]);
 
-  const saveMutation = useMutation({
-    mutationFn: (data: PermissionSetCreate) => {
-      if (isNew) return permissionsApi.create(data);
-      return permissionsApi.update(id!, data);
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.permissions.all() });
-      showSuccess('Политика сохранена');
-      navigate('/admin/policies');
-    },
-    onError: () => showError('Ошибка сохранения'),
-  });
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      const data = {
+        ...formData,
+        tenant_id: formData.scope === 'tenant' || formData.scope === 'user' ? formData.tenant_id : undefined,
+        user_id: formData.scope === 'user' ? formData.user_id : undefined,
+      };
+      
+      if (mode === 'create') {
+        await permissionsApi.create(data);
+        showSuccess('Политика создана');
+        queryClient.invalidateQueries({ queryKey: qk.permissions.all() });
+        navigate('/admin/policies');
+      } else {
+        await permissionsApi.update(id!, data);
+        showSuccess('Политика обновлена');
+        queryClient.invalidateQueries({ queryKey: qk.permissions.all() });
+        setSearchParams({});
+        refetch();
+      }
+    } catch (err) {
+      showError(err instanceof Error ? err.message : 'Ошибка сохранения');
+    } finally {
+      setSaving(false);
+    }
+  };
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    saveMutation.mutate({
-      ...formData,
-      tenant_id: formData.scope === 'tenant' || formData.scope === 'user' ? formData.tenant_id : undefined,
-      user_id: formData.scope === 'user' ? formData.user_id : undefined,
-    });
+  const handleEdit = () => {
+    setSearchParams({ mode: 'edit' });
+  };
+
+  const handleCancel = () => {
+    if (mode === 'edit' && existingPolicy) {
+      setFormData({
+        scope: existingPolicy.scope,
+        tenant_id: existingPolicy.tenant_id,
+        user_id: existingPolicy.user_id,
+        allowed_tools: existingPolicy.allowed_tools || [],
+        denied_tools: existingPolicy.denied_tools || [],
+        allowed_collections: existingPolicy.allowed_collections || [],
+        denied_collections: existingPolicy.denied_collections || [],
+        is_active: existingPolicy.is_active,
+      });
+      setSearchParams({});
+    } else if (mode === 'create') {
+      navigate('/admin/policies');
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!confirm('Удалить эту политику?')) return;
+    try {
+      await permissionsApi.delete(id!);
+      showSuccess('Политика удалена');
+      queryClient.invalidateQueries({ queryKey: qk.permissions.all() });
+      navigate('/admin/policies');
+    } catch (err) {
+      showError(err instanceof Error ? err.message : 'Ошибка удаления');
+    }
   };
 
   const toggleTool = (slug: string, list: 'allowed' | 'denied') => {
+    if (!isEditable) return;
     const key = list === 'allowed' ? 'allowed_tools' : 'denied_tools';
     const otherKey = list === 'allowed' ? 'denied_tools' : 'allowed_tools';
     const current = formData[key] || [];
     const other = formData[otherKey] || [];
 
     if (current.includes(slug)) {
-      setFormData({ ...formData, [key]: current.filter(t => t !== slug) });
+      setFormData({ ...formData, [key]: current.filter((t: string) => t !== slug) });
     } else {
       setFormData({
         ...formData,
         [key]: [...current, slug],
-        [otherKey]: other.filter(t => t !== slug),
+        [otherKey]: other.filter((t: string) => t !== slug),
       });
     }
   };
 
-  if (!isNew && isLoading) {
-    return (
-      <div className={styles.wrap}>
-        <Skeleton variant="card" />
-      </div>
-    );
-  }
+  const handleFieldChange = (key: string, value: any) => {
+    setFormData((prev: PermissionSetCreate) => ({ ...prev, [key]: value }));
+  };
+
+  // Field definitions
+  const scopeFields: FieldDefinition[] = [
+    {
+      key: 'scope',
+      label: 'Уровень',
+      type: 'select',
+      required: true,
+      disabled: mode !== 'create',
+      options: [
+        { value: 'default', label: 'По умолчанию (для всех)' },
+        { value: 'tenant', label: 'Тенант' },
+        { value: 'user', label: 'Пользователь' },
+      ],
+    },
+    ...(formData.scope === 'tenant' || formData.scope === 'user' ? [{
+      key: 'tenant_id',
+      label: 'Tenant ID',
+      type: 'text' as const,
+      required: true,
+      placeholder: 'UUID тенанта',
+    }] : []),
+    ...(formData.scope === 'user' ? [{
+      key: 'user_id',
+      label: 'User ID',
+      type: 'text' as const,
+      required: true,
+      placeholder: 'UUID пользователя',
+    }] : []),
+    {
+      key: 'is_active',
+      label: 'Активна',
+      type: 'boolean',
+      description: 'Политика применяется к пользователям',
+    },
+  ];
 
   return (
-    <div className={styles.wrap}>
-      <div className={styles.header}>
-        <div>
-          <h1 className={styles.title}>
-            {isNew ? 'Создать политику' : 'Редактировать политику'}
-          </h1>
-          <p className={styles.description}>
-            Политика определяет доступ к инструментам и коллекциям
-          </p>
-        </div>
-        <Link to="/admin/policies">
-          <Button variant="outline">Назад</Button>
-        </Link>
-      </div>
+    <EntityPage
+      mode={mode}
+      entityName={existingPolicy ? `Политика ${existingPolicy.scope}` : 'Новая политика'}
+      entityTypeLabel="политики"
+      backPath="/admin/policies"
+      loading={!isCreate && isLoading}
+      saving={saving}
+      onEdit={handleEdit}
+      onSave={handleSave}
+      onCancel={handleCancel}
+      onDelete={handleDelete}
+      showDelete={mode === 'view' && !!id && existingPolicy?.scope !== 'default'}
+    >
+      <ContentGrid>
+        {/* Scope - 1/3 (только выпадашки и переключатели) */}
+        <ContentBlock
+          width="1/3"
+          title="Область применения"
+          icon="shield"
+          editable={isEditable}
+          fields={scopeFields}
+          data={formData}
+          onChange={handleFieldChange}
+        />
 
-      <form onSubmit={handleSubmit} className={styles.grid}>
-        <div className={styles.card}>
-          <div className={styles.cardHeader}>
-            <h2 className={styles.cardTitle}>Область применения</h2>
-          </div>
-
-          <div className={styles.formGroup}>
-            <label className={styles.label}>Уровень *</label>
-            <select
-              className={styles.select}
-              value={formData.scope}
-              onChange={e => setFormData({ ...formData, scope: e.target.value as 'default' | 'tenant' | 'user' })}
-              disabled={!isNew && existingPolicy?.scope === 'default'}
-            >
-              <option value="default">По умолчанию (для всех)</option>
-              <option value="tenant">Тенант</option>
-              <option value="user">Пользователь</option>
-            </select>
-          </div>
-
-          {(formData.scope === 'tenant' || formData.scope === 'user') && (
-            <div className={styles.formGroup}>
-              <label className={styles.label}>Tenant ID *</label>
-              <Input
-                value={formData.tenant_id || ''}
-                onChange={e => setFormData({ ...formData, tenant_id: e.target.value || undefined })}
-                placeholder="UUID тенанта"
-                required
-              />
-            </div>
-          )}
-
-          {formData.scope === 'user' && (
-            <div className={styles.formGroup}>
-              <label className={styles.label}>User ID *</label>
-              <Input
-                value={formData.user_id || ''}
-                onChange={e => setFormData({ ...formData, user_id: e.target.value || undefined })}
-                placeholder="UUID пользователя"
-                required
-              />
-            </div>
-          )}
-
-          <div className={styles.formGroup}>
-            <label className={styles.checkboxLabel}>
-              <input
-                type="checkbox"
-                checked={formData.is_active}
-                onChange={e => setFormData({ ...formData, is_active: e.target.checked })}
-              />
-              <span>Активна</span>
-            </label>
-          </div>
-        </div>
-
-        <div className={styles.card}>
-          <div className={styles.cardHeader}>
-            <h2 className={styles.cardTitle}>Инструменты</h2>
-            <p className={styles.cardDescription}>
-              Выберите разрешённые и запрещённые инструменты
-            </p>
-          </div>
-
+        {/* Tools - 2/3 (кастомный контент) */}
+        <ContentBlock
+          width="2/3"
+          title="Инструменты"
+          icon="tool"
+        >
           {tools?.length ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-              {tools.map(tool => {
+            <div className={styles.toolsList}>
+              {tools.map((tool: { slug: string; name: string }) => {
                 const isAllowed = formData.allowed_tools?.includes(tool.slug);
                 const isDenied = formData.denied_tools?.includes(tool.slug);
                 return (
-                  <div
-                    key={tool.slug}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      padding: '0.75rem',
-                      background: 'var(--color-bg-secondary)',
-                      borderRadius: '8px',
-                    }}
-                  >
-                    <div>
-                      <strong>{tool.name}</strong>
-                      <span style={{ color: 'var(--color-text-secondary)', marginLeft: '0.5rem' }}>
-                        {tool.slug}
-                      </span>
+                  <div key={tool.slug} className={styles.toolItem}>
+                    <div className={styles.toolInfo}>
+                      <span className={styles.toolName}>{tool.name}</span>
+                      <code className={styles.toolSlug}>{tool.slug}</code>
                     </div>
-                    <div style={{ display: 'flex', gap: '0.5rem' }}>
-                      <Button
-                        type="button"
-                        variant={isAllowed ? 'primary' : 'outline'}
-                        size="sm"
-                        onClick={() => toggleTool(tool.slug, 'allowed')}
-                      >
-                        ✓ Разрешить
-                      </Button>
-                      <Button
-                        type="button"
-                        variant={isDenied ? 'danger' : 'outline'}
-                        size="sm"
-                        onClick={() => toggleTool(tool.slug, 'denied')}
-                      >
-                        ✗ Запретить
-                      </Button>
-                    </div>
+                    {isEditable ? (
+                      <div className={styles.toolActions}>
+                        <Button
+                          type="button"
+                          variant={isAllowed ? 'primary' : 'outline'}
+                          size="sm"
+                          onClick={() => toggleTool(tool.slug, 'allowed')}
+                        >
+                          ✓ Разрешить
+                        </Button>
+                        <Button
+                          type="button"
+                          variant={isDenied ? 'danger' : 'outline'}
+                          size="sm"
+                          onClick={() => toggleTool(tool.slug, 'denied')}
+                        >
+                          ✗ Запретить
+                        </Button>
+                      </div>
+                    ) : (
+                      <div>
+                        {isAllowed && <Badge tone="success" size="small">Разрешён</Badge>}
+                        {isDenied && <Badge tone="danger" size="small">Запрещён</Badge>}
+                        {!isAllowed && !isDenied && <Badge tone="neutral" size="small">Не задано</Badge>}
+                      </div>
+                    )}
                   </div>
                 );
               })}
             </div>
           ) : (
-            <Alert variant="info" title="Нет инструментов" description="Сначала создайте инструменты" />
+            <div className={styles.emptyState}>
+              Нет доступных инструментов
+            </div>
           )}
-
-          <div className={styles.actions} style={{ marginTop: '1.5rem' }}>
-            <Button
-              type="submit"
-              variant="primary"
-              disabled={saveMutation.isPending}
-            >
-              {saveMutation.isPending ? 'Сохранение...' : 'Сохранить'}
-            </Button>
-          </div>
-        </div>
-      </form>
-    </div>
+        </ContentBlock>
+      </ContentGrid>
+    </EntityPage>
   );
 }
 

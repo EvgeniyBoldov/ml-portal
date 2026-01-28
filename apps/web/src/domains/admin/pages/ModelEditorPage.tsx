@@ -1,13 +1,19 @@
+/**
+ * ModelEditorPage - View/Edit/Create model with EntityPage
+ * 
+ * Unified page for all model operations:
+ * - View: /admin/models/:id (readonly)
+ * - Edit: /admin/models/:id?mode=edit
+ * - Create: /admin/models/new
+ */
 import { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { adminApi, type Model, type ModelCreate, type ModelUpdate, type ModelType, type ModelStatus } from '@/shared/api/admin';
+import { adminApi, type ModelCreate, type ModelUpdate, type ModelType, type ModelStatus } from '@/shared/api/admin';
 import { qk } from '@/shared/api/keys';
-import Button from '@/shared/ui/Button';
-import Input from '@/shared/ui/Input';
-import { Skeleton } from '@/shared/ui/Skeleton';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
-import styles from './ModelEditorPage.module.css';
+import { EntityPage, type EntityPageMode } from '@/shared/ui/EntityPage';
+import { ContentBlock, ContentGrid, type FieldDefinition } from '@/shared/ui/ContentBlock';
 
 const MODEL_TYPES: { value: ModelType; label: string }[] = [
   { value: 'llm_chat', label: 'LLM Chat' },
@@ -15,10 +21,10 @@ const MODEL_TYPES: { value: ModelType; label: string }[] = [
 ];
 
 const MODEL_STATUSES: { value: ModelStatus; label: string }[] = [
-  { value: 'available', label: 'Available' },
-  { value: 'unavailable', label: 'Unavailable' },
-  { value: 'deprecated', label: 'Deprecated' },
-  { value: 'maintenance', label: 'Maintenance' },
+  { value: 'available', label: 'Доступна' },
+  { value: 'unavailable', label: 'Недоступна' },
+  { value: 'deprecated', label: 'Устарела' },
+  { value: 'maintenance', label: 'Обслуживание' },
 ];
 
 const PROVIDERS = [
@@ -31,11 +37,16 @@ const PROVIDERS = [
 export function ModelEditorPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const showError = useErrorToast();
   const showSuccess = useSuccessToast();
   
-  const isNew = id === 'new';
+  // Determine mode
+  const isCreate = !id;
+  const isEditMode = searchParams.get('mode') === 'edit';
+  const mode: EntityPageMode = isCreate ? 'create' : isEditMode ? 'edit' : 'view';
+  const isEditable = mode === 'edit' || mode === 'create';
   
   // Form state
   const [formData, setFormData] = useState<Partial<ModelCreate>>({
@@ -53,15 +64,14 @@ export function ModelEditorPage() {
     description: '',
     extra_config: {},
   });
-  
-  // Extra config for embedding models
   const [vectorDim, setVectorDim] = useState<string>('');
+  const [saving, setSaving] = useState(false);
   
   // Load existing model
-  const { data: model, isLoading } = useQuery({
+  const { data: model, isLoading, refetch } = useQuery({
     queryKey: qk.admin.models.detail(id || ''),
     queryFn: () => adminApi.getModel(id!),
-    enabled: !isNew && !!id,
+    enabled: !isCreate && !!id,
   });
   
   // Populate form when model loads
@@ -92,12 +102,7 @@ export function ModelEditorPage() {
   const createMutation = useMutation({
     mutationFn: (data: ModelCreate) => adminApi.createModel(data),
     onSuccess: () => {
-      showSuccess('Model created successfully');
       queryClient.invalidateQueries({ queryKey: qk.admin.models.all() });
-      navigate('/admin/models');
-    },
-    onError: (error: Error) => {
-      showError(error.message || 'Failed to create model');
     },
   });
   
@@ -105,257 +110,267 @@ export function ModelEditorPage() {
   const updateMutation = useMutation({
     mutationFn: (data: ModelUpdate) => adminApi.updateModel(id!, data),
     onSuccess: () => {
-      showSuccess('Model updated successfully');
       queryClient.invalidateQueries({ queryKey: qk.admin.models.all() });
       queryClient.invalidateQueries({ queryKey: qk.admin.models.detail(id!) });
-      navigate('/admin/models');
-    },
-    onError: (error: Error) => {
-      showError(error.message || 'Failed to update model');
     },
   });
   
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    
-    // Build extra_config
-    const extra_config: Record<string, unknown> = { ...formData.extra_config };
-    if (formData.type === 'embedding' && vectorDim) {
-      extra_config.vector_dim = parseInt(vectorDim, 10);
-    }
-    
-    const data = {
-      ...formData,
-      extra_config: Object.keys(extra_config).length > 0 ? extra_config : undefined,
-    } as ModelCreate;
-    
-    if (isNew) {
-      createMutation.mutate(data);
-    } else {
-      // For update, only send changed fields
-      const updateData: ModelUpdate = {};
-      if (formData.name !== model?.name) updateData.name = formData.name;
-      if (formData.provider !== model?.provider) updateData.provider = formData.provider;
-      if (formData.provider_model_name !== model?.provider_model_name) updateData.provider_model_name = formData.provider_model_name;
-      if (formData.base_url !== model?.base_url) updateData.base_url = formData.base_url;
-      if (formData.api_key_ref !== model?.api_key_ref) updateData.api_key_ref = formData.api_key_ref;
-      if (formData.status !== model?.status) updateData.status = formData.status;
-      if (formData.enabled !== model?.enabled) updateData.enabled = formData.enabled;
-      if (formData.default_for_type !== model?.default_for_type) updateData.default_for_type = formData.default_for_type;
-      if (formData.model_version !== model?.model_version) updateData.model_version = formData.model_version;
-      if (formData.description !== model?.description) updateData.description = formData.description;
-      
-      // Always include extra_config if embedding
-      if (formData.type === 'embedding') {
-        updateData.extra_config = extra_config;
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      const extra_config: Record<string, unknown> = { ...formData.extra_config };
+      if (formData.type === 'embedding' && vectorDim) {
+        extra_config.vector_dim = parseInt(vectorDim, 10);
       }
       
-      updateMutation.mutate(updateData);
+      if (mode === 'create') {
+        const data = {
+          ...formData,
+          extra_config: Object.keys(extra_config).length > 0 ? extra_config : undefined,
+        } as ModelCreate;
+        await createMutation.mutateAsync(data);
+        showSuccess('Модель создана');
+        navigate('/admin/models');
+      } else {
+        const updateData: ModelUpdate = {
+          name: formData.name,
+          provider: formData.provider,
+          provider_model_name: formData.provider_model_name,
+          base_url: formData.base_url,
+          api_key_ref: formData.api_key_ref,
+          status: formData.status,
+          enabled: formData.enabled,
+          default_for_type: formData.default_for_type,
+          model_version: formData.model_version,
+          description: formData.description,
+        };
+        if (formData.type === 'embedding') {
+          updateData.extra_config = extra_config;
+        }
+        await updateMutation.mutateAsync(updateData);
+        showSuccess('Модель обновлена');
+        setSearchParams({});
+        refetch();
+      }
+    } catch (err) {
+      showError(err instanceof Error ? err.message : 'Ошибка сохранения');
+    } finally {
+      setSaving(false);
     }
   };
   
-  const updateField = <K extends keyof ModelCreate>(field: K, value: ModelCreate[K]) => {
-    setFormData(prev => ({ ...prev, [field]: value }));
+  const handleEdit = () => {
+    setSearchParams({ mode: 'edit' });
   };
   
-  if (!isNew && isLoading) {
-    return (
-      <div className={styles.wrap}>
-        <div className={styles.card}>
-          <Skeleton width={200} height={32} />
-          <Skeleton width="100%" height={400} />
-        </div>
-      </div>
-    );
-  }
+  const handleCancel = () => {
+    if (mode === 'edit' && model) {
+      setFormData({
+        alias: model.alias,
+        name: model.name,
+        type: model.type,
+        provider: model.provider,
+        provider_model_name: model.provider_model_name,
+        base_url: model.base_url,
+        api_key_ref: model.api_key_ref || '',
+        status: model.status,
+        enabled: model.enabled,
+        default_for_type: model.default_for_type,
+        model_version: model.model_version || '',
+        description: model.description || '',
+        extra_config: model.extra_config || {},
+      });
+      setSearchParams({});
+    } else if (mode === 'create') {
+      navigate('/admin/models');
+    }
+  };
   
-  const isPending = createMutation.isPending || updateMutation.isPending;
+  const handleDelete = async () => {
+    if (!confirm('Удалить эту модель?')) return;
+    try {
+      await adminApi.deleteModel(id!);
+      showSuccess('Модель удалена');
+      queryClient.invalidateQueries({ queryKey: qk.admin.models.all() });
+      navigate('/admin/models');
+    } catch (err) {
+      showError(err instanceof Error ? err.message : 'Ошибка удаления');
+    }
+  };
+  
+  const handleFieldChange = (key: string, value: any) => {
+    setFormData((prev: Partial<ModelCreate>) => ({ ...prev, [key]: value }));
+  };
+
+  // Field definitions
+  const basicInfoFields: FieldDefinition[] = [
+    {
+      key: 'alias',
+      label: 'Алиас',
+      type: 'text',
+      required: true,
+      placeholder: 'llm.chat.default',
+      disabled: mode !== 'create',
+      description: mode === 'create' ? 'Уникальный идентификатор. Нельзя изменить после создания.' : undefined,
+    },
+    {
+      key: 'name',
+      label: 'Название',
+      type: 'text',
+      required: true,
+      placeholder: 'GPT-4 Turbo',
+    },
+    {
+      key: 'type',
+      label: 'Тип',
+      type: 'select',
+      required: true,
+      disabled: mode !== 'create',
+      options: MODEL_TYPES.map(t => ({ value: t.value, label: t.label })),
+    },
+    {
+      key: 'description',
+      label: 'Описание',
+      type: 'textarea',
+      placeholder: 'Описание модели...',
+      rows: 3,
+    },
+  ];
+
+  const providerFields: FieldDefinition[] = [
+    {
+      key: 'provider',
+      label: 'Провайдер',
+      type: 'select',
+      required: true,
+      options: PROVIDERS.map(p => ({ value: p.value, label: p.label })),
+    },
+    {
+      key: 'provider_model_name',
+      label: 'Имя модели у провайдера',
+      type: 'text',
+      required: true,
+      placeholder: 'gpt-4-turbo-preview',
+    },
+    {
+      key: 'base_url',
+      label: 'Base URL',
+      type: 'text',
+      required: true,
+      placeholder: 'https://api.openai.com/v1',
+    },
+    {
+      key: 'api_key_ref',
+      label: 'API Key Reference',
+      type: 'text',
+      placeholder: 'OPENAI_API_KEY',
+      description: 'Имя переменной окружения (не сам ключ)',
+    },
+  ];
+
+  const statusFields: FieldDefinition[] = [
+    {
+      key: 'status',
+      label: 'Статус',
+      type: 'select',
+      options: MODEL_STATUSES.map(s => ({ value: s.value, label: s.label })),
+    },
+    {
+      key: 'enabled',
+      label: 'Включена',
+      type: 'boolean',
+      description: 'Модель доступна для использования',
+    },
+    {
+      key: 'default_for_type',
+      label: 'По умолчанию для типа',
+      type: 'boolean',
+      description: 'Используется по умолчанию для данного типа моделей',
+    },
+  ];
+
+  const embeddingFields: FieldDefinition[] = [
+    {
+      key: 'vector_dim',
+      label: 'Размерность вектора',
+      type: 'number',
+      required: true,
+      placeholder: '1536',
+      render: (value, editable, onChange) => {
+        if (!editable) return vectorDim || '—';
+        return null; // Use default rendering
+      },
+    },
+  ];
   
   return (
-    <div className={styles.wrap}>
-      <div className={styles.header}>
-        <h1 className={styles.title}>{isNew ? 'Create Model' : 'Edit Model'}</h1>
-        <Button variant="outline" onClick={() => navigate('/admin/models')}>
-          Cancel
-        </Button>
-      </div>
-      
-      <form onSubmit={handleSubmit} className={styles.form}>
-        <div className={styles.grid}>
-          {/* Left column - Main fields */}
-          <div className={styles.card}>
-            <h2 className={styles.sectionTitle}>Basic Information</h2>
-            
-            <div className={styles.formGroup}>
-              <label className={styles.label}>Alias *</label>
-              <Input
-                value={formData.alias || ''}
-                onChange={(e) => updateField('alias', e.target.value)}
-                placeholder="e.g., llm.chat.default"
-                disabled={!isNew}
-                required
-              />
-              <span className={styles.hint}>Unique identifier. Cannot be changed after creation.</span>
-            </div>
-            
-            <div className={styles.formGroup}>
-              <label className={styles.label}>Display Name *</label>
-              <Input
-                value={formData.name || ''}
-                onChange={(e) => updateField('name', e.target.value)}
-                placeholder="e.g., GPT-4 Turbo"
-                required
-              />
-            </div>
-            
-            <div className={styles.formGroup}>
-              <label className={styles.label}>Type *</label>
-              <select
-                className={styles.select}
-                value={formData.type}
-                onChange={(e) => updateField('type', e.target.value as ModelType)}
-                disabled={!isNew}
-              >
-                {MODEL_TYPES.map(t => (
-                  <option key={t.value} value={t.value}>{t.label}</option>
-                ))}
-              </select>
-            </div>
-            
-            <div className={styles.formGroup}>
-              <label className={styles.label}>Description</label>
-              <textarea
-                className={styles.textarea}
-                value={formData.description || ''}
-                onChange={(e) => updateField('description', e.target.value)}
-                placeholder="Optional description..."
-                rows={3}
-              />
-            </div>
-          </div>
-          
-          {/* Right column - Provider & Config */}
-          <div className={styles.card}>
-            <h2 className={styles.sectionTitle}>Provider Configuration</h2>
-            
-            <div className={styles.formGroup}>
-              <label className={styles.label}>Provider *</label>
-              <select
-                className={styles.select}
-                value={formData.provider}
-                onChange={(e) => updateField('provider', e.target.value)}
-              >
-                {PROVIDERS.map(p => (
-                  <option key={p.value} value={p.value}>{p.label}</option>
-                ))}
-              </select>
-            </div>
-            
-            <div className={styles.formGroup}>
-              <label className={styles.label}>Provider Model Name *</label>
-              <Input
-                value={formData.provider_model_name || ''}
-                onChange={(e) => updateField('provider_model_name', e.target.value)}
-                placeholder="e.g., gpt-4-turbo-preview"
-                required
-              />
-            </div>
-            
-            <div className={styles.formGroup}>
-              <label className={styles.label}>Base URL *</label>
-              <Input
-                value={formData.base_url || ''}
-                onChange={(e) => updateField('base_url', e.target.value)}
-                placeholder="e.g., https://api.openai.com/v1"
-                required
-              />
-            </div>
-            
-            <div className={styles.formGroup}>
-              <label className={styles.label}>API Key Reference</label>
-              <Input
-                value={formData.api_key_ref || ''}
-                onChange={(e) => updateField('api_key_ref', e.target.value)}
-                placeholder="e.g., OPENAI_API_KEY"
-              />
-              <span className={styles.hint}>Environment variable name (not the actual key)</span>
-            </div>
-            
-            <div className={styles.formGroup}>
-              <label className={styles.label}>Model Version</label>
-              <Input
-                value={formData.model_version || ''}
-                onChange={(e) => updateField('model_version', e.target.value)}
-                placeholder="e.g., v1.0"
-              />
-            </div>
-            
-            {formData.type === 'embedding' && (
-              <div className={styles.formGroup}>
-                <label className={styles.label}>Vector Dimensions *</label>
-                <Input
-                  type="number"
-                  value={vectorDim}
-                  onChange={(e) => setVectorDim(e.target.value)}
-                  placeholder="e.g., 1536"
-                  required
-                />
-              </div>
-            )}
-          </div>
-        </div>
-        
-        {/* Status section */}
-        <div className={styles.card}>
-          <h2 className={styles.sectionTitle}>Status & Flags</h2>
-          
-          <div className={styles.row}>
-            <div className={styles.formGroup}>
-              <label className={styles.label}>Status</label>
-              <select
-                className={styles.select}
-                value={formData.status}
-                onChange={(e) => updateField('status', e.target.value as ModelStatus)}
-              >
-                {MODEL_STATUSES.map(s => (
-                  <option key={s.value} value={s.value}>{s.label}</option>
-                ))}
-              </select>
-            </div>
-            
-            <div className={styles.checkboxGroup}>
-              <label className={styles.checkboxLabel}>
-                <input
-                  type="checkbox"
-                  checked={formData.enabled}
-                  onChange={(e) => updateField('enabled', e.target.checked)}
-                />
-                <span>Enabled</span>
-              </label>
-              
-              <label className={styles.checkboxLabel}>
-                <input
-                  type="checkbox"
-                  checked={formData.default_for_type}
-                  onChange={(e) => updateField('default_for_type', e.target.checked)}
-                />
-                <span>Default for type</span>
-              </label>
-            </div>
-          </div>
-        </div>
-        
-        {/* Actions */}
-        <div className={styles.actions}>
-          <Button variant="outline" type="button" onClick={() => navigate('/admin/models')}>
-            Cancel
-          </Button>
-          <Button type="submit" disabled={isPending}>
-            {isPending ? 'Saving...' : isNew ? 'Create Model' : 'Save Changes'}
-          </Button>
-        </div>
-      </form>
-    </div>
+    <EntityPage
+      mode={mode}
+      entityName={model?.alias || 'Новая модель'}
+      entityTypeLabel="модели"
+      backPath="/admin/models"
+      loading={!isCreate && isLoading}
+      saving={saving}
+      onEdit={handleEdit}
+      onSave={handleSave}
+      onCancel={handleCancel}
+      onDelete={handleDelete}
+      showDelete={mode === 'view' && !!id && !model?.is_system}
+    >
+      <ContentGrid>
+        {/* Basic Info - 1/2 (есть текстовые поля) */}
+        <ContentBlock
+          width="1/2"
+          title="Основная информация"
+          icon="info"
+          editable={isEditable}
+          fields={basicInfoFields}
+          data={formData}
+          onChange={handleFieldChange}
+        />
+
+        {/* Provider - 1/2 (есть текстовые поля) */}
+        <ContentBlock
+          width="1/2"
+          title="Провайдер"
+          icon="server"
+          editable={isEditable}
+          fields={providerFields}
+          data={formData}
+          onChange={handleFieldChange}
+        />
+
+        {/* Status - 1/3 (только переключатели и выпадашки) */}
+        <ContentBlock
+          width="1/3"
+          title="Статус и флаги"
+          icon="settings"
+          editable={isEditable}
+          fields={statusFields}
+          data={formData}
+          onChange={handleFieldChange}
+        />
+
+        {/* Embedding config - 1/3 (только для embedding) */}
+        {formData.type === 'embedding' && (
+          <ContentBlock
+            width="1/3"
+            title="Настройки эмбеддинга"
+            icon="cpu"
+            editable={isEditable}
+            fields={[{
+              key: 'vector_dim',
+              label: 'Размерность вектора',
+              type: 'number',
+              required: true,
+              placeholder: '1536',
+            }]}
+            data={{ vector_dim: vectorDim }}
+            onChange={(key, value) => setVectorDim(value)}
+          />
+        )}
+      </ContentGrid>
+    </EntityPage>
   );
 }
 

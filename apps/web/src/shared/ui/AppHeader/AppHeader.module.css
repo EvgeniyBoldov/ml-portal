@@ -1,0 +1,88 @@
+/**
+ * AppHeader styles
+ * 
+ * Supports two variants:
+ * - default: full-width with border-bottom
+ * - contained: with border-radius and margins
+ */
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4, 1rem);
+  padding: var(--space-3, 0.75rem) var(--space-5, 1.5rem);
+  background: var(--panel);
+  border-bottom: 1px solid var(--border, var(--color-border));
+}
+
+.contained {
+  border: 1px solid var(--border, var(--color-border));
+  border-radius: var(--radius-lg, 8px);
+  border-bottom: 1px solid var(--border, var(--color-border));
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3, 0.75rem);
+  min-width: 0;
+}
+
+.brand img {
+  height: 32px;
+  width: auto;
+  display: block;
+}
+
+.brandName {
+  font-size: var(--text-lg, 1.125rem);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text, var(--color-text));
+}
+
+.center {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+}
+
+/* Spacer when no center content - pushes right to the end */
+.spacer {
+  flex: 1;
+}
+
+.right {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3, 0.75rem);
+}
+
+.user {
+  font-size: var(--text-sm, 0.875rem);
+  color: var(--muted, var(--color-text-muted));
+  white-space: nowrap;
+}
+
+@media (max-width: 768px) {
+  .header {
+    grid-template-columns: auto auto;
+    gap: var(--space-2, 0.5rem);
+    padding: var(--space-2, 0.5rem) var(--space-3, 0.75rem);
+  }
+
+  .center {
+    display: none;
+  }
+
+  .brandName {
+    display: none;
+  }
+
+  .user {
+    display: none;
+  }
+}

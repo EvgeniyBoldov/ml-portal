@@ -8,43 +8,47 @@
   -webkit-appearance: none;
   appearance: none;
   width: 100%;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  color: var(--text);
-  border-radius: var(--radius);
-  padding: var(--space-2) var(--space-8) var(--space-2) var(--space-3);
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: var(--text-primary);
+  border-radius: var(--radius-md, 6px);
+  padding: 0.5rem 2.5rem 0.5rem 0.75rem;
   font-family: inherit;
-  font-size: var(--text-base);
+  font-size: 0.9375rem;
   line-height: 1.5;
   outline: none;
-  transition: all var(--transition);
+  transition: all 0.2s ease;
   cursor: pointer;
 }
 
 .select::placeholder {
-  color: var(--muted);
+  color: var(--text-tertiary);
 }
 
-.select:hover {
-  border-color: var(--border-hover);
+.select:hover:not(:disabled) {
+  border-color: rgba(255, 255, 255, 0.25);
+  background: rgba(255, 255, 255, 0.03);
 }
 
-.select:focus {
-  border-color: var(--border-focus);
-  box-shadow: 0 0 0 3px var(--primary-light);
+.select:focus:not(:disabled) {
+  border-color: var(--color-primary);
+  background: rgba(255, 255, 255, 0.05);
+  box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.1);
 }
 
 .select:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-  background: var(--bg-hover);
+  cursor: default;
+  background: transparent;
+  border-color: rgba(255, 255, 255, 0.12);
+  color: var(--text-primary);
+  opacity: 0.85;
 }
 
 .arrow {
   position: absolute;
-  right: var(--space-3);
+  right: 0.75rem;
   top: 50%;
   transform: translateY(-50%);
   pointer-events: none;
-  color: var(--muted);
+  color: var(--text-tertiary);
 }

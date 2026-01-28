@@ -3,6 +3,7 @@
  */
 import { useQuery } from '@tanstack/react-query';
 import { http } from '@/shared/api/client';
+import { AdminPage } from '@/shared/ui';
 import Badge from '@/shared/ui/Badge';
 import DataTable, { type DataTableColumn } from '@/shared/ui/DataTable/DataTable';
 import styles from './RegistryPage.module.css';
@@ -105,16 +106,11 @@ export function RoutingLogsPage() {
   ];
 
   return (
-    <div className={styles.wrap}>
-      <div className={styles.card}>
-        <div className={styles.header}>
-          <div className={styles.headerLeft}>
-            <h1 className={styles.title}>Routing Logs</h1>
-            <p className={styles.subtitle}>Логи решений маршрутизатора</p>
-          </div>
-        </div>
-
-        <div className={styles.tableWrap}>
+    <AdminPage
+      title="Routing Logs"
+      subtitle="Логи решений маршрутизатора"
+    >
+      <div className={styles.tableWrap}>
           <DataTable
             columns={columns}
             data={logs || []}
@@ -126,9 +122,8 @@ export function RoutingLogsPage() {
             paginated
             pageSize={50}
           />
-        </div>
       </div>
-    </div>
+    </AdminPage>
   );
 }
 

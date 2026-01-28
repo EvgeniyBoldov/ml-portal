@@ -1,136 +1,144 @@
 /**
- * PoliciesPage - Ограничения доступа для агентов
+ * PoliciesPage - Политики доступа для агентов
+ * 
+ * Единый стиль с остальными админ-реестрами.
+ * Клик по строке → View страница, редактирование через кнопку на View.
  */
-import { Link } from 'react-router-dom';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useState, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import { permissionsApi } from '@/shared/api';
 import { qk } from '@/shared/api/keys';
-import Button from '@/shared/ui/Button';
+import { AdminPage } from '@/shared/ui';
 import Badge from '@/shared/ui/Badge';
-import DataTable, { type DataTableColumn } from '@/shared/ui/DataTable/DataTable';
-import { RowActions } from '@/shared/ui/RowActions';
-import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
-import styles from './RegistryPage.module.css';
+import { AdminTable, type AdminTableColumn } from '@/shared/ui/AdminTable';
 
+interface Policy {
+  id: string;
+  name?: string;
+  allowed_tools?: string[];
+  denied_tools?: string[];
+  is_active: boolean;
+}
 
 export function PoliciesPage() {
-  const queryClient = useQueryClient();
-  const showError = useErrorToast();
-  const showSuccess = useSuccessToast();
+  const navigate = useNavigate();
+  const [q, setQ] = useState('');
   
-  const { data: policies, isLoading } = useQuery({
+  const { data: policies, isLoading, error } = useQuery({
     queryKey: qk.permissions.list({}),
     queryFn: () => permissionsApi.list({}),
   });
 
-  const deleteMutation = useMutation({
-    mutationFn: (id: string) => permissionsApi.delete(id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.permissions.all() });
-      showSuccess('Политика удалена');
-    },
-    onError: () => showError('Ошибка удаления'),
-  });
+  const filteredPolicies = useMemo(() => {
+    if (!policies) return [];
+    if (!q.trim()) return policies;
+    const query = q.toLowerCase();
+    return policies.filter((p: Policy) => 
+      p.name?.toLowerCase().includes(query) ||
+      p.id.toLowerCase().includes(query) ||
+      p.allowed_tools?.some(t => t.toLowerCase().includes(query)) ||
+      p.denied_tools?.some(t => t.toLowerCase().includes(query))
+    );
+  }, [policies, q]);
 
-  const filteredPolicies = policies || [];
+  const handleRowClick = (policy: Policy) => {
+    navigate(`/admin/policies/${policy.id}`);
+  };
 
-  const columns: DataTableColumn[] = [
+  const columns: AdminTableColumn<Policy>[] = [
     {
       key: 'name',
-      label: 'Название',
-      render: (row) => (
-        <div className={styles.cellStack}>
-          <span className={styles.cellPrimary}>
-            {row.name || `Ограничение #${row.id.slice(0, 8)}`}
+      label: 'НАЗВАНИЕ',
+      sortable: true,
+      render: (policy) => (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+          <span style={{ fontWeight: 500 }}>
+            {policy.name || `Ограничение #${policy.id.slice(0, 8)}`}
           </span>
-          <code className={styles.code}>{row.id.slice(0, 8)}...</code>
+          <code style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>
+            {policy.id.slice(0, 8)}...
+          </code>
         </div>
       ),
     },
     {
       key: 'allowed_tools',
-      label: 'Разрешённые инструменты',
-      render: (row) => (
+      label: 'РАЗРЕШЁННЫЕ',
+      render: (policy) => (
         <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
-          {row.allowed_tools?.slice(0, 3).map((tool: string) => (
-            <Badge key={tool} variant="success">{tool}</Badge>
+          {policy.allowed_tools?.slice(0, 3).map((tool: string) => (
+            <Badge key={tool} tone="success" size="small">{tool}</Badge>
           ))}
-          {(row.allowed_tools?.length || 0) > 3 && (
-            <Badge variant="outline">+{row.allowed_tools.length - 3}</Badge>
+          {(policy.allowed_tools?.length || 0) > 3 && (
+            <Badge tone="neutral" size="small">+{policy.allowed_tools!.length - 3}</Badge>
           )}
-          {!row.allowed_tools?.length && <span className={styles.muted}>Все</span>}
+          {!policy.allowed_tools?.length && <span style={{ color: 'var(--muted)' }}>Все</span>}
         </div>
       ),
     },
     {
       key: 'denied_tools',
-      label: 'Запрещённые',
-      render: (row) => (
+      label: 'ЗАПРЕЩЁННЫЕ',
+      render: (policy) => (
         <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
-          {row.denied_tools?.slice(0, 2).map((tool: string) => (
-            <Badge key={tool} variant="error">{tool}</Badge>
+          {policy.denied_tools?.slice(0, 2).map((tool: string) => (
+            <Badge key={tool} tone="danger" size="small">{tool}</Badge>
           ))}
-          {(row.denied_tools?.length || 0) > 2 && (
-            <Badge variant="outline">+{row.denied_tools.length - 2}</Badge>
+          {(policy.denied_tools?.length || 0) > 2 && (
+            <Badge tone="neutral" size="small">+{policy.denied_tools!.length - 2}</Badge>
           )}
-          {!row.denied_tools?.length && <span className={styles.muted}>—</span>}
+          {!policy.denied_tools?.length && <span style={{ color: 'var(--muted)' }}>—</span>}
         </div>
       ),
     },
     {
       key: 'is_active',
-      label: 'Статус',
+      label: 'СТАТУС',
       width: 100,
-      render: (row) => (
-        <Badge variant={row.is_active ? 'success' : 'secondary'}>
-          {row.is_active ? 'Активно' : 'Неактивно'}
+      sortable: true,
+      render: (policy) => (
+        <Badge tone={policy.is_active ? 'success' : 'neutral'} size="small">
+          {policy.is_active ? 'Активно' : 'Неактивно'}
         </Badge>
-      ),
-    },
-    {
-      key: 'actions',
-      label: '',
-      width: 50,
-      align: 'right',
-      render: (row) => (
-        <RowActions
-          basePath="/admin/policies"
-          id={row.id}
-          onDelete={() => deleteMutation.mutate(row.id)}
-          deleteLoading={deleteMutation.isPending}
-        />
       ),
     },
   ];
 
   return (
-    <div className={styles.wrap}>
-      <div className={styles.card}>
-        <div className={styles.header}>
-          <div className={styles.headerLeft}>
-            <h1 className={styles.title}>Ограничения</h1>
-            <p className={styles.subtitle}>Настройка доступа к инструментам для агентов</p>
-          </div>
-          <div className={styles.controls}>
-            <Link to="/admin/policies/new">
-              <Button>Создать</Button>
-            </Link>
-          </div>
+    <AdminPage
+      title="Политики"
+      subtitle="Настройка доступа к инструментам для агентов"
+      searchValue={q}
+      onSearchChange={setQ}
+      searchPlaceholder="Поиск ограничений..."
+      actions={[
+        {
+          label: 'Создать',
+          onClick: () => navigate('/admin/policies/new'),
+          variant: 'primary',
+        },
+      ]}
+    >
+      {error && (
+        <div style={{ padding: '16px', background: 'var(--danger-bg)', borderRadius: '8px', marginBottom: '16px' }}>
+          Не удалось загрузить политики. Попробуйте снова.
         </div>
+      )}
 
-        <div className={styles.tableWrap}>
-          <DataTable
-            columns={columns}
-            data={filteredPolicies}
-            keyField="id"
-            loading={isLoading}
-            emptyText="Нет ограничений"
-            searchable
-            searchPlaceholder="Поиск..."
-          />
-        </div>
-      </div>
-    </div>
+      <AdminTable
+        columns={columns}
+        data={filteredPolicies}
+        keyField="id"
+        loading={isLoading}
+        emptyText="Политики не найдены. Нажмите «Создать» для добавления."
+        paginated
+        pageSize={20}
+        defaultSortKey="name"
+        defaultSortDirection="asc"
+        onRowClick={handleRowClick}
+      />
+    </AdminPage>
   );
 }
 
