@@ -1,19 +1,28 @@
 /**
  * ViewCollectionPage - View collection details in admin
+ * 
+ * Uses EntityPage pattern for consistency
  */
 import React from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import Button from '@shared/ui/Button';
 import Badge from '@shared/ui/Badge';
-import { Skeleton } from '@shared/ui/Skeleton';
+import { EntityPage } from '@shared/ui/EntityPage';
+import { ContentBlock, ContentGrid } from '@shared/ui/ContentBlock';
+import { DataTable, type DataTableColumn } from '@shared/ui/DataTable';
 import { collectionsApi } from '@shared/api/collections';
 import { adminApi } from '@shared/api/admin';
-import styles from './ViewCollectionPage.module.css';
+
+interface CollectionField {
+  name: string;
+  type: string;
+  required: boolean;
+  search_modes?: string[];
+  description?: string;
+}
 
 export function ViewCollectionPage() {
   const { id } = useParams<{ id: string }>();
-  const navigate = useNavigate();
 
   const { data: collection, isLoading } = useQuery({
     queryKey: ['admin', 'collections', id],
@@ -29,197 +38,148 @@ export function ViewCollectionPage() {
   const tenants = tenantsData?.items ?? [];
   const tenant = tenants.find(t => t.id === collection?.tenant_id);
 
-  if (isLoading) {
-    return (
-      <div className={styles.wrap}>
-        <div className={styles.card}>
-          <Skeleton width={400} height={300} />
+  const fieldColumns: DataTableColumn<CollectionField>[] = [
+    {
+      key: 'name',
+      label: 'Поле',
+      render: (row) => <code style={{ fontSize: '0.875rem' }}>{row.name}</code>,
+    },
+    {
+      key: 'type',
+      label: 'Тип',
+      width: 100,
+      render: (row) => <Badge variant="default">{row.type}</Badge>,
+    },
+    {
+      key: 'required',
+      label: 'Обязательное',
+      width: 120,
+      render: (row) => (
+        <Badge variant={row.required ? 'warning' : 'default'}>
+          {row.required ? 'Да' : 'Нет'}
+        </Badge>
+      ),
+    },
+    {
+      key: 'search_modes',
+      label: 'Режимы поиска',
+      width: 150,
+      render: (row) => (
+        <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+          {row.search_modes?.map(mode => (
+            <Badge key={mode} variant={mode === 'vector' ? 'warning' : 'info'}>
+              {mode}
+            </Badge>
+          )) || '—'}
         </div>
-      </div>
-    );
-  }
-
-  if (!collection) {
-    return (
-      <div className={styles.wrap}>
-        <div className={styles.card}>
-          <div className={styles.emptyState}>
-            <h2>Collection not found</h2>
-            <Button onClick={() => navigate('/admin/collections')}>
-              Back to Collections
-            </Button>
-          </div>
-        </div>
-      </div>
-    );
-  }
+      ),
+    },
+    {
+      key: 'description',
+      label: 'Описание',
+      render: (row) => row.description || '—',
+    },
+  ];
 
   return (
-    <div className={styles.wrap}>
-      <div className={styles.card}>
-        <div className={styles.header}>
-          <div className={styles.headerLeft}>
-            <Button
-              variant="secondary"
-              onClick={() => navigate('/admin/collections')}
-            >
-              ← Back
-            </Button>
-            <h1 className={styles.title}>{collection.name}</h1>
-          </div>
-        </div>
-
-        <div className={styles.content}>
-          <div className={styles.section}>
-            <h3 className={styles.sectionTitle}>Basic Information</h3>
-            <div className={styles.grid}>
-              <div className={styles.field}>
-                <label>Slug</label>
-                <div className={styles.value}>
-                  <code>{collection.slug}</code>
-                </div>
+    <EntityPage
+      mode="view"
+      entityName={collection?.name || 'Коллекция'}
+      entityTypeLabel="коллекции"
+      backPath="/admin/collections"
+      loading={isLoading}
+    >
+      <ContentGrid>
+        {/* Basic Info - 2/3 */}
+        <ContentBlock
+          width="2/3"
+          title="Основная информация"
+          icon="database"
+        >
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+            <div>
+              <label style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', textTransform: 'uppercase' }}>Slug</label>
+              <div style={{ marginTop: '0.25rem' }}><code>{collection?.slug}</code></div>
+            </div>
+            <div>
+              <label style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', textTransform: 'uppercase' }}>Название</label>
+              <div style={{ marginTop: '0.25rem' }}>{collection?.name}</div>
+            </div>
+            <div>
+              <label style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', textTransform: 'uppercase' }}>Тенант</label>
+              <div style={{ marginTop: '0.25rem' }}>
+                {tenant ? tenant.name : collection?.tenant_id}
               </div>
-
-              <div className={styles.field}>
-                <label>Name</label>
-                <div className={styles.value}>{collection.name}</div>
-              </div>
-
-              <div className={styles.field}>
-                <label>Tenant</label>
-                <div className={styles.value}>
-                  {tenant ? (
-                    <>
-                      <strong>{tenant.name}</strong>
-                      <br />
-                      <small style={{ color: 'var(--text-secondary)' }}>
-                        {tenant.id}
-                      </small>
-                    </>
-                  ) : (
-                    <code>{collection.tenant_id}</code>
-                  )}
-                </div>
-              </div>
-
-              <div className={styles.field}>
-                <label>Search Capabilities</label>
-                <div className={styles.value}>
-                  <div className={styles.badges}>
-                    <Badge tone="info" size="small">SQL</Badge>
-                    {collection.has_vector_search && (
-                      <Badge tone="warning" size="small">VECTOR</Badge>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              <div className={styles.field}>
-                <label>Status</label>
-                <div className={styles.value}>
-                  <Badge
-                    tone={collection.is_active ? 'success' : 'neutral'}
-                    size="small"
-                  >
-                    {collection.is_active ? 'Active' : 'Inactive'}
-                  </Badge>
-                </div>
-              </div>
-
-              <div className={styles.field}>
-                <label>Row Count</label>
-                <div className={styles.value}>
-                  {collection.row_count.toLocaleString()}
-                </div>
-              </div>
-
-              <div className={styles.field}>
-                <label>Table Name</label>
-                <div className={styles.value}>
-                  <code>{collection.table_name || '—'}</code>
-                </div>
-              </div>
-
-              <div className={styles.field}>
-                <label>Created At</label>
-                <div className={styles.value}>
-                  {new Date(collection.created_at).toLocaleString()}
-                </div>
-              </div>
-
-              <div className={styles.field}>
-                <label>Updated At</label>
-                <div className={styles.value}>
-                  {new Date(collection.updated_at).toLocaleString()}
-                </div>
+            </div>
+            <div>
+              <label style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', textTransform: 'uppercase' }}>Таблица</label>
+              <div style={{ marginTop: '0.25rem' }}><code>{collection?.table_name || '—'}</code></div>
+            </div>
+            <div>
+              <label style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', textTransform: 'uppercase' }}>Записей</label>
+              <div style={{ marginTop: '0.25rem' }}>{collection?.row_count?.toLocaleString() || 0}</div>
+            </div>
+            <div>
+              <label style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', textTransform: 'uppercase' }}>Создана</label>
+              <div style={{ marginTop: '0.25rem' }}>
+                {collection?.created_at ? new Date(collection.created_at).toLocaleString('ru-RU') : '—'}
               </div>
             </div>
           </div>
-
-          {collection.description && (
-            <div className={styles.section}>
-              <h3 className={styles.sectionTitle}>Description</h3>
-              <p className={styles.description}>{collection.description}</p>
+          {collection?.description && (
+            <div style={{ marginTop: '1rem' }}>
+              <label style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', textTransform: 'uppercase' }}>Описание</label>
+              <p style={{ marginTop: '0.25rem', color: 'var(--color-text-muted)' }}>{collection.description}</p>
             </div>
           )}
+        </ContentBlock>
 
-          <div className={styles.section}>
-            <h3 className={styles.sectionTitle}>
-              Fields ({collection.fields.length})
-            </h3>
-            <div className={styles.fieldsTable}>
-              <table>
-                <thead>
-                  <tr>
-                    <th>Name</th>
-                    <th>Type</th>
-                    <th>Required</th>
-                    <th>Search Modes</th>
-                    <th>Description</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {collection.fields.map(field => (
-                    <tr key={field.name}>
-                      <td>
-                        <code>{field.name}</code>
-                      </td>
-                      <td>
-                        <Badge tone="neutral" size="small">
-                          {field.type}
-                        </Badge>
-                      </td>
-                      <td>
-                        <Badge
-                          tone={field.required ? 'warning' : 'neutral'}
-                          size="small"
-                        >
-                          {field.required ? 'Yes' : 'No'}
-                        </Badge>
-                      </td>
-                      <td>
-                        <div className={styles.searchModesList}>
-                          {field.search_modes?.map(mode => (
-                            <Badge
-                              key={mode}
-                              tone={mode === 'vector' ? 'warning' : 'info'}
-                              size="small"
-                            >
-                              {mode}
-                            </Badge>
-                          )) || <span>—</span>}
-                        </div>
-                      </td>
-                      <td>{field.description || '—'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+        {/* Status - 1/3 */}
+        <ContentBlock
+          width="1/3"
+          title="Статус и возможности"
+          icon="shield"
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            <div>
+              <label style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', textTransform: 'uppercase' }}>Статус</label>
+              <div style={{ marginTop: '0.25rem' }}>
+                <Badge variant={collection?.is_active ? 'success' : 'default'}>
+                  {collection?.is_active ? 'Активна' : 'Неактивна'}
+                </Badge>
+              </div>
+            </div>
+            <div>
+              <label style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', textTransform: 'uppercase' }}>Поиск</label>
+              <div style={{ marginTop: '0.25rem', display: 'flex', gap: '0.5rem' }}>
+                <Badge variant="info">SQL</Badge>
+                {collection?.has_vector_search && <Badge variant="warning">VECTOR</Badge>}
+              </div>
+            </div>
+            <div>
+              <label style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', textTransform: 'uppercase' }}>Обновлена</label>
+              <div style={{ marginTop: '0.25rem' }}>
+                {collection?.updated_at ? new Date(collection.updated_at).toLocaleString('ru-RU') : '—'}
+              </div>
             </div>
           </div>
-        </div>
-      </div>
-    </div>
+        </ContentBlock>
+
+        {/* Fields Table - full width */}
+        <ContentBlock
+          width="full"
+          title={`Поля (${collection?.fields?.length || 0})`}
+          icon="clipboard-list"
+        >
+          <DataTable
+            columns={fieldColumns}
+            data={collection?.fields || []}
+            keyField="name"
+            emptyText="Нет полей"
+          />
+        </ContentBlock>
+      </ContentGrid>
+    </EntityPage>
   );
 }
 
