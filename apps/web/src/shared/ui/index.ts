@@ -74,3 +74,18 @@ export { RowActions } from './RowActions';
 // RbacRulesEditor
 export { RbacRulesEditor } from './RbacRulesEditor';
 export type { RbacPermissions } from './RbacRulesEditor';
+
+// Tooltip
+export { Tooltip } from './Tooltip';
+
+// Stepper
+export { Stepper } from './Stepper';
+export type { Step } from './Stepper';
+
+// Breadcrumbs
+export { Breadcrumbs } from './Breadcrumbs';
+export type { BreadcrumbItem } from './Breadcrumbs';
+
+// Combobox
+export { Combobox } from './Combobox';
+export type { ComboboxOption } from './Combobox';

@@ -16,22 +16,17 @@ class PromptStatus(str, Enum):
     ARCHIVED = "archived"  # Архивный - только для истории
 
 
-class PromptType(str, Enum):
-    """Prompt type"""
-    PROMPT = "prompt"      # Обычный системный промпт
-    BASELINE = "baseline"  # Ограничения и запреты (что нельзя делать)
-
-
 class Prompt(Base):
     """
-    Prompt container - holds metadata for a prompt.
+    Prompt container - holds metadata for a system prompt.
     
     A prompt is identified by a unique slug and contains:
     - name: Display name
     - description: Documentation
-    - type: PROMPT or BASELINE
     
     Each prompt can have multiple versions (PromptVersion).
+    
+    Note: Baseline restrictions are now a separate entity (see baseline.py).
     """
     __tablename__ = "prompts"
 
@@ -47,13 +42,6 @@ class Prompt(Base):
     
     # Description for internal usage (MLOps documentation)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    
-    # Classification: prompt (instructions) or baseline (restrictions)
-    type: Mapped[str] = mapped_column(
-        String(50), 
-        default=PromptType.PROMPT.value, 
-        nullable=False
-    )
     
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
@@ -74,7 +62,7 @@ class Prompt(Base):
     )
 
     def __repr__(self):
-        return f"<Prompt {self.slug} ({self.type})>"
+        return f"<Prompt {self.slug}>"
 
 
 class PromptVersion(Base):
