@@ -26,7 +26,7 @@ export interface Agent {
   name: string;
   description?: string;
   system_prompt_slug: string;
-  baseline_prompt_id?: string | null;
+  baseline_id?: string | null;
   policy_id?: string | null;
   capabilities: string[];
   supports_partial_mode: boolean;
@@ -43,7 +43,7 @@ export interface AgentCreate {
   name: string;
   description?: string;
   system_prompt_slug: string;
-  baseline_prompt_id?: string | null;
+  baseline_id?: string | null;
   policy_id?: string | null;
   capabilities?: string[];
   supports_partial_mode?: boolean;
@@ -57,7 +57,7 @@ export interface AgentUpdate {
   name?: string;
   description?: string;
   system_prompt_slug?: string;
-  baseline_prompt_id?: string | null;
+  baseline_id?: string | null;
   policy_id?: string | null;
   capabilities?: string[];
   supports_partial_mode?: boolean;

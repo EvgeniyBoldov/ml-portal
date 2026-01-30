@@ -84,6 +84,15 @@ export const qk = {
     list: (params?: { is_active?: boolean }) => ['policies', 'list', params] as const,
     detail: (id: string) => ['policies', 'detail', id] as const,
   },
+  baselines: {
+    all: () => ['baselines'] as const,
+    list: (params?: { scope?: string; tenant_id?: string; user_id?: string; is_active?: boolean }) =>
+      ['baselines', 'list', params] as const,
+    detail: (slug: string) => ['baselines', 'detail', slug] as const,
+    versions: (slug: string) => ['baselines', 'versions', slug] as const,
+    effective: (params?: { tenant_id?: string; user_id?: string }) =>
+      ['baselines', 'effective', params] as const,
+  },
   routingLogs: {
     all: () => ['routing-logs'] as const,
     list: (params?: { agentSlug?: string; status?: string; tenantId?: string }) =>

@@ -10,6 +10,7 @@ export * from './toolGroups';
 export * from './credentials';
 export * from './permissions';
 export * from './policies';
+export * from './baselines';
 export * from './agents';
 export * from './agentRuns';
 
