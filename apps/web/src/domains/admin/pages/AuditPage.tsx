@@ -5,13 +5,7 @@ import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { adminApi, type AuditLog } from '@shared/api';
 import { qk } from '@shared/api/keys';
-import { AdminPage } from '@/shared/ui';
-import DataTable, { type DataTableColumn } from '@shared/ui/DataTable';
-import Badge from '@shared/ui/Badge';
-import Input from '@shared/ui/Input';
-import Button from '@shared/ui/Button';
-import Modal from '@shared/ui/Modal';
-import styles from './RegistryPage.module.css';
+import { AdminPage, DataTable, type DataTableColumn, Badge, Input, Button, Modal } from '@/shared/ui';
 
 export function AuditPage() {
   const [page, setPage] = useState(1);
@@ -39,7 +33,7 @@ export function AuditPage() {
       label: 'Время',
       width: 180,
       render: (log) => (
-        <span className={styles.muted}>
+        <span style={{ color: 'var(--color-text-muted)' }}>
           {new Date(log.ts).toLocaleString('ru-RU', {
             year: 'numeric',
             month: '2-digit',
@@ -68,7 +62,7 @@ export function AuditPage() {
       label: 'Пользователь',
       width: 120,
       render: (log) => (
-        <code className={styles.code}>
+        <code style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', background: 'var(--bg-subtle)', padding: '2px 6px', borderRadius: '4px' }}>
           {log.actor_user_id ? log.actor_user_id.substring(0, 8) : '—'}
         </code>
       ),
@@ -84,7 +78,7 @@ export function AuditPage() {
       label: 'IP',
       width: 120,
       render: (log) => (
-        <code className={styles.code}>{log.ip || '—'}</code>
+        <code style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', background: 'var(--bg-subtle)', padding: '2px 6px', borderRadius: '4px' }}>{log.ip || '—'}</code>
       ),
     },
     {
@@ -124,7 +118,7 @@ export function AuditPage() {
       }
     >
       {error && (
-        <div className={styles.errorState}>
+        <div style={{ padding: '24px', textAlign: 'center', color: 'var(--color-danger)' }}>
           Не удалось загрузить логи аудита
         </div>
       )}

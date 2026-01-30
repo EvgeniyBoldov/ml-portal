@@ -6,8 +6,10 @@ export * from './errors';
 export * from './prompts';
 export * from './tools';
 export * from './toolInstances';
+export * from './toolGroups';
 export * from './credentials';
 export * from './permissions';
+export * from './policies';
 export * from './agents';
 export * from './agentRuns';
 

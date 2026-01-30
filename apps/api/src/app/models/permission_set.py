@@ -1,9 +1,9 @@
 """
-PermissionSet model - набор разрешений для tools и collections
+PermissionSet model - RBAC permissions for tool instances
 """
 import uuid
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional, Dict
 from enum import Enum
 
 from sqlalchemy import String, DateTime, ForeignKey, func, CheckConstraint, UniqueConstraint
@@ -14,26 +14,41 @@ from app.models.base import Base
 
 
 class PermissionScope(str, Enum):
-    """Scope уровень для PermissionSet"""
+    """Scope level for PermissionSet"""
     DEFAULT = "default"
     TENANT = "tenant"
     USER = "user"
 
 
+class PermissionValue(str, Enum):
+    """Permission value for instance access"""
+    ALLOWED = "allowed"
+    DENIED = "denied"
+    UNDEFINED = "undefined"  # Only for tenant/user scope, inherits from parent
+
+
 class PermissionSet(Base):
     """
-    Набор разрешений для tools и collections.
+    RBAC permissions for tool instances.
     
-    Иерархия наследования: default → tenant → user
-    Приоритет при резолве: user > tenant > default
+    Hierarchy: default → tenant → user
+    Resolution priority: user > tenant > default
     
-    Логика резолва:
-    1. Проверяем user level - если есть явное разрешение/запрет, используем его
-    2. Если на user level не указано - проверяем tenant level
-    3. Если на tenant level не указано - проверяем default level
-    4. Если нигде не указано - запрещено по умолчанию
+    Resolution logic:
+    1. Check user level - if explicit allowed/denied, use it
+    2. If undefined at user level - check tenant level
+    3. If undefined at tenant level - check default level
+    4. If not specified anywhere - denied by default
     
-    Deny всегда побеждает allow на том же уровне.
+    Default scope can only have 'allowed' or 'denied' (no 'undefined').
+    Tenant/User scope can have 'allowed', 'denied', or 'undefined'.
+    
+    instance_permissions format:
+    {
+        "jira-prod": "allowed",
+        "jira-staging": "denied",
+        "rag-main": "undefined"  # inherits from parent scope
+    }
     """
     __tablename__ = "permission_sets"
 
@@ -49,11 +64,11 @@ class PermissionSet(Base):
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True
     )
     
-    allowed_tools: Mapped[List[str]] = mapped_column(JSONB, default=list)
-    denied_tools: Mapped[List[str]] = mapped_column(JSONB, default=list)
+    # Instance permissions: {"instance_slug": "allowed" | "denied" | "undefined"}
+    instance_permissions: Mapped[Dict[str, str]] = mapped_column(JSONB, default=dict, nullable=False)
     
-    allowed_collections: Mapped[List[str]] = mapped_column(JSONB, default=list)
-    denied_collections: Mapped[List[str]] = mapped_column(JSONB, default=list)
+    # Agent permissions: {"agent_slug": "allowed" | "denied" | "undefined"}
+    agent_permissions: Mapped[Dict[str, str]] = mapped_column(JSONB, default=dict, nullable=False)
     
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

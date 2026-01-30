@@ -12,7 +12,6 @@ from app.services.tool_instance_service import (
     ToolInstanceService,
     ToolInstanceError,
     ToolInstanceNotFoundError,
-    ToolNotFoundError,
 )
 from app.schemas.tool_instances import (
     ToolInstanceCreate,
@@ -28,9 +27,7 @@ router = APIRouter(tags=["tool-instances"])
 async def list_tool_instances(
     skip: int = 0,
     limit: int = 100,
-    tool_slug: Optional[str] = Query(None, description="Filter by tool slug"),
-    scope: Optional[str] = Query(None, description="Filter by scope"),
-    tenant_id: Optional[UUID] = Query(None, description="Filter by tenant"),
+    tool_group_id: Optional[UUID] = Query(None, description="Filter by tool group"),
     is_active: Optional[bool] = Query(None, description="Filter by active status"),
     db: AsyncSession = Depends(db_session),
     _: UserCtx = Depends(require_admin),
@@ -40,9 +37,7 @@ async def list_tool_instances(
     instances, _ = await service.list_instances(
         skip=skip,
         limit=limit,
-        tool_slug=tool_slug,
-        scope=scope,
-        tenant_id=tenant_id,
+        tool_group_id=tool_group_id,
         is_active=is_active,
     )
     return instances
@@ -58,20 +53,15 @@ async def create_tool_instance(
     service = ToolInstanceService(db)
     try:
         instance = await service.create_instance(
-            tool_slug=data.tool_slug,
+            tool_group_id=data.tool_group_id,
             slug=data.slug,
             name=data.name,
-            scope=data.scope,
             connection_config=data.connection_config,
-            tenant_id=data.tenant_id,
-            user_id=data.user_id,
             description=data.description,
-            is_default=data.is_default,
+            instance_metadata=data.instance_metadata,
         )
         await db.commit()
         return instance
-    except ToolNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
     except ToolInstanceError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -105,7 +95,7 @@ async def update_tool_instance(
             name=data.name,
             description=data.description,
             connection_config=data.connection_config,
-            is_default=data.is_default,
+            instance_metadata=data.instance_metadata,
             is_active=data.is_active,
         )
         await db.commit()

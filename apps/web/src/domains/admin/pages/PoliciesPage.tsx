@@ -1,44 +1,33 @@
 /**
- * PoliciesPage - Политики доступа для агентов
+ * PoliciesPage - Политики выполнения агентов
  * 
+ * Лимиты: max_steps, max_tool_calls, timeouts, budgets
  * Единый стиль с остальными админ-реестрами.
- * Клик по строке → View страница, редактирование через кнопку на View.
  */
 import { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { permissionsApi } from '@/shared/api';
+import { policiesApi, type Policy } from '@/shared/api';
 import { qk } from '@/shared/api/keys';
-import { AdminPage } from '@/shared/ui';
-import Badge from '@/shared/ui/Badge';
-import { AdminTable, type AdminTableColumn } from '@/shared/ui/AdminTable';
-
-interface Policy {
-  id: string;
-  name?: string;
-  allowed_tools?: string[];
-  denied_tools?: string[];
-  is_active: boolean;
-}
+import { AdminPage, DataTable, type DataTableColumn, Badge } from '@/shared/ui';
 
 export function PoliciesPage() {
   const navigate = useNavigate();
   const [q, setQ] = useState('');
   
   const { data: policies, isLoading, error } = useQuery({
-    queryKey: qk.permissions.list({}),
-    queryFn: () => permissionsApi.list({}),
+    queryKey: qk.policies.list({}),
+    queryFn: () => policiesApi.list({}),
   });
 
   const filteredPolicies = useMemo(() => {
     if (!policies) return [];
     if (!q.trim()) return policies;
     const query = q.toLowerCase();
-    return policies.filter((p: Policy) => 
-      p.name?.toLowerCase().includes(query) ||
-      p.id.toLowerCase().includes(query) ||
-      p.allowed_tools?.some(t => t.toLowerCase().includes(query)) ||
-      p.denied_tools?.some(t => t.toLowerCase().includes(query))
+    return policies.filter((p) => 
+      p.name.toLowerCase().includes(query) ||
+      p.slug.toLowerCase().includes(query) ||
+      p.description?.toLowerCase().includes(query)
     );
   }, [policies, q]);
 
@@ -46,51 +35,51 @@ export function PoliciesPage() {
     navigate(`/admin/policies/${policy.id}`);
   };
 
-  const columns: AdminTableColumn<Policy>[] = [
+  const formatLimit = (value: number | undefined | null, suffix = '') => {
+    if (value === undefined || value === null) return '—';
+    return `${value.toLocaleString()}${suffix}`;
+  };
+
+  const columns: DataTableColumn<Policy>[] = [
     {
       key: 'name',
       label: 'НАЗВАНИЕ',
+      width: 280,
       sortable: true,
       render: (policy) => (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-          <span style={{ fontWeight: 500 }}>
-            {policy.name || `Ограничение #${policy.id.slice(0, 8)}`}
-          </span>
+          <span style={{ fontWeight: 500 }}>{policy.name}</span>
           <code style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>
-            {policy.id.slice(0, 8)}...
+            {policy.slug}
           </code>
         </div>
       ),
     },
     {
-      key: 'allowed_tools',
-      label: 'РАЗРЕШЁННЫЕ',
-      render: (policy) => (
-        <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
-          {policy.allowed_tools?.slice(0, 3).map((tool: string) => (
-            <Badge key={tool} tone="success" size="small">{tool}</Badge>
-          ))}
-          {(policy.allowed_tools?.length || 0) > 3 && (
-            <Badge tone="neutral" size="small">+{policy.allowed_tools!.length - 3}</Badge>
-          )}
-          {!policy.allowed_tools?.length && <span style={{ color: 'var(--muted)' }}>Все</span>}
-        </div>
-      ),
+      key: 'max_steps',
+      label: 'ШАГИ',
+      width: 80,
+      render: (policy) => formatLimit(policy.max_steps),
     },
     {
-      key: 'denied_tools',
-      label: 'ЗАПРЕЩЁННЫЕ',
-      render: (policy) => (
-        <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
-          {policy.denied_tools?.slice(0, 2).map((tool: string) => (
-            <Badge key={tool} tone="danger" size="small">{tool}</Badge>
-          ))}
-          {(policy.denied_tools?.length || 0) > 2 && (
-            <Badge tone="neutral" size="small">+{policy.denied_tools!.length - 2}</Badge>
-          )}
-          {!policy.denied_tools?.length && <span style={{ color: 'var(--muted)' }}>—</span>}
-        </div>
-      ),
+      key: 'max_tool_calls',
+      label: 'ВЫЗОВЫ',
+      width: 80,
+      render: (policy) => formatLimit(policy.max_tool_calls),
+    },
+    {
+      key: 'max_wall_time_ms',
+      label: 'ТАЙМАУТ',
+      width: 100,
+      render: (policy) => policy.max_wall_time_ms 
+        ? `${Math.round(policy.max_wall_time_ms / 1000)}с`
+        : '—',
+    },
+    {
+      key: 'budget_tokens',
+      label: 'ТОКЕНЫ',
+      width: 100,
+      render: (policy) => formatLimit(policy.budget_tokens),
     },
     {
       key: 'is_active',
@@ -98,7 +87,7 @@ export function PoliciesPage() {
       width: 100,
       sortable: true,
       render: (policy) => (
-        <Badge tone={policy.is_active ? 'success' : 'neutral'} size="small">
+        <Badge tone={policy.is_active ? 'success' : 'neutral'}>
           {policy.is_active ? 'Активно' : 'Неактивно'}
         </Badge>
       ),
@@ -108,10 +97,10 @@ export function PoliciesPage() {
   return (
     <AdminPage
       title="Политики"
-      subtitle="Настройка доступа к инструментам для агентов"
+      subtitle="Лимиты выполнения агентов: шаги, вызовы, таймауты, бюджеты"
       searchValue={q}
       onSearchChange={setQ}
-      searchPlaceholder="Поиск ограничений..."
+      searchPlaceholder="Поиск политик..."
       actions={[
         {
           label: 'Создать',
@@ -126,7 +115,7 @@ export function PoliciesPage() {
         </div>
       )}
 
-      <AdminTable
+      <DataTable
         columns={columns}
         data={filteredPolicies}
         keyField="id"
@@ -134,8 +123,6 @@ export function PoliciesPage() {
         emptyText="Политики не найдены. Нажмите «Создать» для добавления."
         paginated
         pageSize={20}
-        defaultSortKey="name"
-        defaultSortDirection="asc"
         onRowClick={handleRowClick}
       />
     </AdminPage>

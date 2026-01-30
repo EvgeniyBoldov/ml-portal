@@ -8,14 +8,18 @@
  */
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useUser, useUpdateUser, useDeleteUser, useCreateUser } from '@shared/api/hooks/useAdmin';
 import { useTenants } from '@shared/hooks/useTenants';
+import { permissionsApi } from '@shared/api';
+import { qk } from '@shared/api/keys';
 import Input from '@shared/ui/Input';
 import Button from '@shared/ui/Button';
 import { Icon } from '@shared/ui/Icon';
 import { useErrorToast, useSuccessToast } from '@shared/ui/Toast';
 import { EntityPage, type EntityPageMode } from '@shared/ui/EntityPage';
 import { ContentBlock, ContentGrid, type FieldDefinition } from '@shared/ui/ContentBlock';
+import { RbacRulesEditor, type RbacPermissions } from '@shared/ui/RbacRulesEditor';
 import type { User, Tenant } from '@shared/api/admin';
 import styles from './UserEditorPage.module.css';
 
@@ -63,6 +67,56 @@ export function UserEditorPage() {
   });
   const [newPassword, setNewPassword] = useState('');
   const [saving, setSaving] = useState(false);
+  
+  // RBAC state
+  const queryClient = useQueryClient();
+  const [rbacPermissions, setRbacPermissions] = useState<RbacPermissions>({
+    instance_permissions: {},
+    agent_permissions: {},
+  });
+  const [editingRbac, setEditingRbac] = useState(false);
+  
+  // Load user's permission set
+  const { data: userPermissions } = useQuery({
+    queryKey: qk.permissions.list({ scope: 'user', user_id: id }),
+    queryFn: () => permissionsApi.list({ scope: 'user', user_id: id }),
+    enabled: !!id && !isCreate,
+  });
+  
+  const userPermSet = userPermissions?.find((p: any) => p.scope === 'user' && p.user_id === id);
+  
+  // Save RBAC mutation
+  const saveRbacMutation = useMutation({
+    mutationFn: async () => {
+      if (userPermSet) {
+        return permissionsApi.update(userPermSet.id, {
+          instance_permissions: rbacPermissions.instance_permissions,
+          agent_permissions: rbacPermissions.agent_permissions,
+        });
+      } else {
+        return permissionsApi.create({
+          scope: 'user',
+          user_id: id!,
+          instance_permissions: rbacPermissions.instance_permissions,
+          agent_permissions: rbacPermissions.agent_permissions,
+        });
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: qk.permissions.list({ scope: 'user', user_id: id }) });
+      showSuccess('Права доступа сохранены');
+      setEditingRbac(false);
+    },
+    onError: () => showError('Ошибка сохранения прав доступа'),
+  });
+  
+  const startEditingRbac = () => {
+    setRbacPermissions({
+      instance_permissions: userPermSet?.instance_permissions || {},
+      agent_permissions: userPermSet?.agent_permissions || {},
+    });
+    setEditingRbac(true);
+  };
 
   // Field change handler
   const handleFieldChange = (key: string, value: any) => {
@@ -291,6 +345,58 @@ export function UserEditorPage() {
                 Сбросить
               </Button>
             </div>
+          </ContentBlock>
+        )}
+
+        {/* RBAC Permissions - full width, only for existing users */}
+        {!isCreate && id && (
+          <ContentBlock
+            width="full"
+            title="Права доступа"
+            icon="shield"
+          >
+            <p className={styles.formHint}>
+              Индивидуальные права пользователя. Переопределяют права тенанта и default.
+            </p>
+            {!editingRbac ? (
+              <>
+                <RbacRulesEditor
+                  scope="user"
+                  permissions={{
+                    instance_permissions: userPermSet?.instance_permissions || {},
+                    agent_permissions: userPermSet?.agent_permissions || {},
+                  }}
+                  onChange={() => {}}
+                  editable={false}
+                />
+                <div className={styles.rbacActions}>
+                  <Button variant="outline" onClick={startEditingRbac}>
+                    Редактировать права
+                  </Button>
+                </div>
+              </>
+            ) : (
+              <>
+                <RbacRulesEditor
+                  scope="user"
+                  permissions={rbacPermissions}
+                  onChange={setRbacPermissions}
+                  editable={true}
+                />
+                <div className={styles.rbacActions}>
+                  <Button variant="outline" onClick={() => setEditingRbac(false)}>
+                    Отмена
+                  </Button>
+                  <Button 
+                    variant="primary" 
+                    onClick={() => saveRbacMutation.mutate()}
+                    disabled={saveRbacMutation.isPending}
+                  >
+                    {saveRbacMutation.isPending ? 'Сохранение...' : 'Сохранить права'}
+                  </Button>
+                </div>
+              </>
+            )}
           </ContentBlock>
         )}
       </ContentGrid>

@@ -1,7 +1,7 @@
 import { apiRequest } from './http';
 
 export type AuthType = 'token' | 'basic' | 'oauth' | 'api_key';
-export type CredentialScope = 'tenant' | 'user';
+export type CredentialScope = 'default' | 'tenant' | 'user';
 
 export interface CredentialSet {
   id: string;
@@ -10,6 +10,7 @@ export interface CredentialSet {
   tenant_id?: string;
   user_id?: string;
   auth_type: AuthType;
+  is_default: boolean;
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -22,6 +23,7 @@ export interface CredentialSetCreate {
   scope: CredentialScope;
   tenant_id?: string;
   user_id?: string;
+  is_default?: boolean;
 }
 
 export interface CredentialSetUpdate {

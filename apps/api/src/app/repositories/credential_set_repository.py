@@ -72,7 +72,7 @@ class CredentialSetRepository:
     ) -> Optional[CredentialSet]:
         """
         Get credentials for a tool instance following priority:
-        User > Tenant
+        User > Tenant > Default
         
         Args:
             tool_instance_id: ID of the tool instance
@@ -87,6 +87,7 @@ class CredentialSetRepository:
             CredentialSet.is_active == True,
         ]
         
+        # Try user scope first
         if user_id and tenant_id:
             user_stmt = select(CredentialSet).where(
                 and_(
@@ -101,6 +102,7 @@ class CredentialSetRepository:
             if user_creds:
                 return user_creds
         
+        # Try tenant scope
         if tenant_id:
             tenant_stmt = select(CredentialSet).where(
                 and_(
@@ -110,9 +112,21 @@ class CredentialSetRepository:
                 )
             )
             result = await self.session.execute(tenant_stmt)
-            return result.scalar_one_or_none()
+            tenant_creds = result.scalar_one_or_none()
+            if tenant_creds:
+                return tenant_creds
         
-        return None
+        # Try default scope
+        default_stmt = select(CredentialSet).where(
+            and_(
+                *conditions,
+                CredentialSet.scope == CredentialScope.DEFAULT.value,
+                CredentialSet.tenant_id.is_(None),
+                CredentialSet.user_id.is_(None),
+            )
+        )
+        result = await self.session.execute(default_stmt)
+        return result.scalar_one_or_none()
 
     async def get_all_for_instance(
         self,

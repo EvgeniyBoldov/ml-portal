@@ -3,13 +3,18 @@ from dataclasses import dataclass
 from uuid import UUID
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
 
 from app.models.agent import Agent
 from app.models.prompt import Prompt
+from app.models.permission_set import PermissionSet
 from app.repositories.agent_repository import AgentRepository
 from app.repositories.prompt_repository import PromptRepository
 from app.services.prompt_service import PromptService
 from app.schemas.agents import AgentCreate, AgentUpdate
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -77,7 +82,40 @@ class AgentService:
             raise HTTPException(status_code=400, detail=f"Agent with slug '{data.slug}' already exists")
             
         agent = Agent(**data.model_dump())
-        return await self.repo.create(agent)
+        created_agent = await self.repo.create(agent)
+        
+        # Auto-add agent to default permissions as 'denied'
+        await self._add_agent_to_default_permissions(created_agent.slug)
+        
+        return created_agent
+    
+    async def _add_agent_to_default_permissions(self, agent_slug: str):
+        """Add new agent to default permission set with 'denied' status"""
+        stmt = select(PermissionSet).where(
+            PermissionSet.scope == "default",
+            PermissionSet.tenant_id.is_(None),
+            PermissionSet.user_id.is_(None)
+        )
+        result = await self.session.execute(stmt)
+        default_perms = result.scalar_one_or_none()
+        
+        if not default_perms:
+            logger.warning("Default permission set not found, skipping auto-add for agent")
+            return
+        
+        # Check if agent already in permissions
+        agent_permissions = dict(default_perms.agent_permissions or {})
+        if agent_slug in agent_permissions:
+            return
+        
+        # Add with 'denied' status by default
+        agent_permissions[agent_slug] = "denied"
+        default_perms.agent_permissions = agent_permissions
+        
+        self.session.add(default_perms)
+        await self.session.flush()
+        
+        logger.info(f"Added agent '{agent_slug}' to default permissions (status: denied)")
 
     async def update_agent(self, identifier: str, data: AgentUpdate) -> Agent:
         agent = await self.get_agent(identifier)

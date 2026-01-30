@@ -7,20 +7,9 @@
 import { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { toolInstancesApi } from '@/shared/api';
+import { toolInstancesApi, type ToolInstance } from '@/shared/api';
 import { qk } from '@/shared/api/keys';
-import { AdminPage } from '@/shared/ui';
-import Badge from '@/shared/ui/Badge';
-import { AdminTable, type AdminTableColumn } from '@/shared/ui/AdminTable';
-
-interface ToolInstance {
-  id: string;
-  tool_id: string;
-  tool?: { name: string };
-  is_active: boolean;
-  health_status?: string;
-  last_health_check?: string;
-}
+import { AdminPage, DataTable, type DataTableColumn, Badge } from '@/shared/ui';
 
 export function InstancesPage() {
   const navigate = useNavigate();
@@ -36,9 +25,9 @@ export function InstancesPage() {
     if (!q.trim()) return instances;
     const query = q.toLowerCase();
     return instances.filter((inst: ToolInstance) => 
-      inst.tool?.name?.toLowerCase().includes(query) ||
-      inst.id.toLowerCase().includes(query) ||
-      inst.tool_id.toLowerCase().includes(query)
+      inst.name?.toLowerCase().includes(query) ||
+      inst.slug?.toLowerCase().includes(query) ||
+      inst.tool_group_name?.toLowerCase().includes(query)
     );
   }, [instances, q]);
 
@@ -46,21 +35,27 @@ export function InstancesPage() {
     navigate(`/admin/instances/${instance.id}`);
   };
 
-  const columns: AdminTableColumn<ToolInstance>[] = [
+  const columns: DataTableColumn<ToolInstance>[] = [
     {
-      key: 'tool',
-      label: 'ИНСТРУМЕНТ',
+      key: 'name',
+      label: 'SLUG / ИМЯ',
       sortable: true,
-      sortFn: (a, b) => (a.tool?.name || a.tool_id).localeCompare(b.tool?.name || b.tool_id),
       render: (instance) => (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-          <span style={{ fontWeight: 500 }}>
-            {instance.tool?.name || instance.tool_id.slice(0, 8)}
+          <span style={{ fontWeight: 500 }}>{instance.slug}</span>
+          <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
+            {instance.name}
           </span>
-          <code style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>
-            {instance.id.slice(0, 8)}...
-          </code>
         </div>
+      ),
+    },
+    {
+      key: 'tool_group',
+      label: 'ГРУППА',
+      width: 150,
+      sortable: true,
+      render: (instance) => (
+        <span>{instance.tool_group_name || instance.tool_group_slug || '—'}</span>
       ),
     },
     {
@@ -69,7 +64,7 @@ export function InstancesPage() {
       width: 100,
       sortable: true,
       render: (instance) => (
-        <Badge tone={instance.is_active ? 'success' : 'neutral'} size="small">
+        <Badge variant={instance.is_active ? 'success' : 'default'} size="small">
           {instance.is_active ? 'Активен' : 'Неактивен'}
         </Badge>
       ),
@@ -81,23 +76,24 @@ export function InstancesPage() {
       sortable: true,
       render: (instance) => instance.health_status ? (
         <Badge 
-          tone={instance.health_status === 'healthy' ? 'success' : 'danger'} 
+          variant={instance.health_status === 'healthy' ? 'success' : 'warning'} 
           size="small"
         >
           {instance.health_status}
         </Badge>
       ) : (
-        <span style={{ color: 'var(--muted)' }}>—</span>
+        <span style={{ color: 'var(--color-text-muted)' }}>—</span>
       ),
     },
     {
-      key: 'last_health_check',
-      label: 'ПОСЛЕДНЯЯ ПРОВЕРКА',
+      key: 'last_health_check_at',
+      label: 'ПРОВЕРКА',
+      width: 150,
       sortable: true,
       render: (instance) => (
-        <span style={{ color: 'var(--muted)' }}>
-          {instance.last_health_check 
-            ? new Date(instance.last_health_check).toLocaleString('ru-RU')
+        <span style={{ color: 'var(--color-text-muted)' }}>
+          {instance.last_health_check_at 
+            ? new Date(instance.last_health_check_at).toLocaleString('ru-RU')
             : '—'}
         </span>
       ),
@@ -125,7 +121,7 @@ export function InstancesPage() {
         </div>
       )}
 
-      <AdminTable
+      <DataTable
         columns={columns}
         data={filteredInstances}
         keyField="id"

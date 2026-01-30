@@ -1,5 +1,5 @@
 """
-Collection Search Tool - универсальный поиск по SQL-коллекциям
+Collection Search Tool - универсальный поиск по SQL-коллекциям с DSL фильтрами
 """
 from __future__ import annotations
 from typing import Any, Dict, List, ClassVar, Optional
@@ -12,18 +12,26 @@ from app.models.collection import Collection, SearchMode
 
 logger = get_logger(__name__)
 
+DEFAULT_LIMIT = 50
+MAX_LIMIT = 100
+MAX_OFFSET = 1000
+
 
 class CollectionSearchTool(ToolHandler):
     """
-    Динамический Tool для поиска по SQL-коллекциям.
+    Tool для поиска по SQL-коллекциям с DSL фильтрами.
     
-    Этот tool создаётся динамически для каждой коллекции,
-    input_schema генерируется из схемы полей коллекции.
+    Поддерживает:
+    - Структурные фильтры через DSL (and/or условия)
+    - Текстовый поиск по text полям
+    - Сортировку и пагинацию
+    - Guardrails (лимиты, таймауты, обязательные фильтры)
     """
     
     slug: ClassVar[str] = "collection.search"
     name: ClassVar[str] = "Collection Search"
-    description: ClassVar[str] = "Search in a data collection"
+    tool_group: ClassVar[str] = "collection"
+    description: ClassVar[str] = "Search in a data collection with filters and text search"
     
     input_schema: ClassVar[Dict[str, Any]] = {
         "type": "object",
@@ -34,19 +42,54 @@ class CollectionSearchTool(ToolHandler):
             },
             "query": {
                 "type": "string",
-                "description": "Search query (searches in text fields with LIKE)"
+                "description": "Text search query (searches in text fields with ILIKE)"
             },
             "filters": {
                 "type": "object",
-                "description": "Field-specific filters",
-                "additionalProperties": True
+                "description": "Structured filter conditions using DSL",
+                "properties": {
+                    "and": {
+                        "type": "array",
+                        "description": "List of conditions joined with AND",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "field": {"type": "string"},
+                                "op": {"type": "string", "enum": ["eq", "neq", "in", "not_in", "like", "contains", "gt", "gte", "lt", "lte", "range", "is_null"]},
+                                "value": {}
+                            }
+                        }
+                    },
+                    "or": {
+                        "type": "array",
+                        "description": "List of conditions joined with OR"
+                    }
+                }
+            },
+            "sort": {
+                "type": "array",
+                "description": "Sort order",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "field": {"type": "string"},
+                        "order": {"type": "string", "enum": ["asc", "desc"]}
+                    }
+                }
             },
             "limit": {
                 "type": "integer",
-                "description": "Maximum number of results (default: 50)",
+                "description": "Maximum number of results (default: 50, max: 100)",
                 "default": 50,
                 "minimum": 1,
                 "maximum": 100
+            },
+            "offset": {
+                "type": "integer",
+                "description": "Number of results to skip (max: 1000)",
+                "default": 0,
+                "minimum": 0,
+                "maximum": 1000
             }
         },
         "required": ["collection_slug"]
@@ -60,7 +103,9 @@ class CollectionSearchTool(ToolHandler):
                 "items": {"type": "object"}
             },
             "total": {"type": "integer"},
-            "collection": {"type": "string"}
+            "returned": {"type": "integer"},
+            "collection": {"type": "string"},
+            "has_more": {"type": "boolean"}
         }
     }
 
@@ -124,20 +169,23 @@ class CollectionSearchTool(ToolHandler):
 
     async def execute(self, ctx: ToolContext, args: Dict[str, Any]) -> ToolResult:
         """
-        Выполнить поиск по коллекции.
+        Выполнить поиск по коллекции с DSL фильтрами и guardrails.
         """
+        from sqlalchemy import text
         from app.core.db import get_session_factory
         from app.services.collection_service import CollectionService
         
         collection_slug = args.get("collection_slug")
         query = args.get("query")
         filters = args.get("filters", {})
-        limit = min(args.get("limit", 50), 100)
+        sort = args.get("sort", [])
+        limit = min(args.get("limit", DEFAULT_LIMIT), MAX_LIMIT)
+        offset = min(args.get("offset", 0), MAX_OFFSET)
         
         logger.info(
             f"Collection search: collection={collection_slug}, "
-            f"query='{query[:50] if query else ''}', filters={filters}, "
-            f"tenant={ctx.tenant_id}"
+            f"query='{query[:50] if query else ''}', filters={bool(filters)}, "
+            f"limit={limit}, offset={offset}, tenant={ctx.tenant_id}"
         )
         
         try:
@@ -151,27 +199,50 @@ class CollectionSearchTool(ToolHandler):
                         f"Collection '{collection_slug}' not found"
                     )
                 
-                search_filters = self._build_filters(collection, args)
+                # Apply guardrails
+                effective_limit = min(limit, collection.max_limit)
                 
-                rows = await service.search(
-                    collection=collection,
-                    filters=search_filters,
-                    limit=limit,
-                    query=query,
+                # Check if filters required
+                has_filters = bool(filters.get("and") or filters.get("or") or query)
+                if not collection.allow_unfiltered_search and not has_filters:
+                    return ToolResult.fail(
+                        "Filters or query are required for this collection. "
+                        "Please specify at least one filter condition or search query."
+                    )
+                
+                # Validate filters against collection schema
+                validation_error = self._validate_filters(collection, filters)
+                if validation_error:
+                    return ToolResult.fail(validation_error)
+                
+                # Build SQL query
+                sql, params = self._build_search_sql(
+                    collection, filters, query, sort, effective_limit, offset
                 )
                 
-                total = await service.count(collection, search_filters, query=query)
+                # Execute with timeout
+                timeout_sql = f"SET LOCAL statement_timeout = '{collection.query_timeout_seconds}s'"
+                await session.execute(text(timeout_sql))
+                
+                result = await session.execute(text(sql), params)
+                rows = [dict(r) for r in result.mappings().all()]
+                
+                # Get total count (without limit/offset)
+                count_sql, count_params = self._build_count_sql(collection, filters, query)
+                count_result = await session.execute(text(count_sql), count_params)
+                total = count_result.scalar() or 0
                 
                 formatted_rows = self._format_rows(rows, collection)
                 
-                logger.info(f"Collection search found {len(formatted_rows)} results")
+                logger.info(f"Collection search found {len(formatted_rows)} of {total} results")
                 
                 return ToolResult.ok(
                     data={
                         "rows": formatted_rows,
                         "total": total,
-                        "collection": collection.name,
                         "returned": len(formatted_rows),
+                        "collection": collection.name,
+                        "has_more": (offset + len(formatted_rows)) < total,
                     }
                 )
                 
@@ -179,33 +250,224 @@ class CollectionSearchTool(ToolHandler):
             logger.error(f"Collection search failed: {e}", exc_info=True)
             return ToolResult.fail(f"Search failed: {str(e)}")
 
-    def _build_filters(
+    def _validate_filters(self, collection: Collection, filters: Dict) -> Optional[str]:
+        """Validate filters against collection schema"""
+        if not filters:
+            return None
+        
+        allowed_fields = {f["name"] for f in collection.fields}
+        allowed_fields.add("id")  # Always allow id
+        
+        def validate_condition(cond: Dict) -> Optional[str]:
+            field = cond.get("field")
+            if not field:
+                return "Filter condition missing 'field'"
+            if field not in allowed_fields:
+                return f"Unknown field '{field}' in filter"
+            return None
+        
+        # Validate 'and' conditions
+        for cond in filters.get("and", []):
+            error = validate_condition(cond)
+            if error:
+                return error
+        
+        # Validate 'or' conditions
+        for cond in filters.get("or", []):
+            error = validate_condition(cond)
+            if error:
+                return error
+        
+        return None
+
+    def _build_search_sql(
         self,
         collection: Collection,
-        args: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        """Build filters dict from args (specific field filters only)"""
-        filters = {}
+        filters: Dict,
+        query: Optional[str],
+        sort: List[Dict],
+        limit: int,
+        offset: int
+    ) -> tuple[str, Dict]:
+        """Build search SQL with DSL filters"""
+        table_name = collection.table_name
+        params = {}
+        param_idx = 0
         
-        for field in collection.get_searchable_fields():
-            field_name = field["name"]
-            search_mode = field.get("search_mode", SearchMode.EXACT.value)
-            
-            if search_mode == SearchMode.RANGE.value:
-                range_filter = {}
-                if f"{field_name}_from" in args:
-                    range_filter["from"] = args[f"{field_name}_from"]
-                if f"{field_name}_to" in args:
-                    range_filter["to"] = args[f"{field_name}_to"]
-                if range_filter:
-                    filters[field_name] = range_filter
-            elif field_name in args:
-                filters[field_name] = args[field_name]
+        # Build WHERE clause
+        where_parts = []
         
-        if "filters" in args and isinstance(args["filters"], dict):
-            filters.update(args["filters"])
+        # Process DSL filters
+        if filters:
+            filter_parts, params, param_idx = self._build_where_from_dsl(filters, params, param_idx)
+            where_parts.extend(filter_parts)
         
-        return filters
+        # Add text search
+        if query:
+            text_fields = [f["name"] for f in collection.fields if f.get("type") == "text"]
+            if text_fields:
+                text_conditions = []
+                params[f"query_{param_idx}"] = f"%{query}%"
+                for tf in text_fields:
+                    text_conditions.append(f"{tf} ILIKE :query_{param_idx}")
+                where_parts.append(f"({' OR '.join(text_conditions)})")
+                param_idx += 1
+        
+        where_clause = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
+        
+        # Build ORDER BY
+        order_parts = []
+        if sort:
+            for s in sort:
+                field = s.get("field")
+                order = s.get("order", "asc").upper()
+                if field and order in ("ASC", "DESC"):
+                    order_parts.append(f"{field} {order}")
+        
+        if not order_parts and collection.default_sort:
+            ds = collection.default_sort
+            order_parts.append(f"{ds.get('field', 'id')} {ds.get('order', 'desc').upper()}")
+        
+        order_clause = f"ORDER BY {', '.join(order_parts)}" if order_parts else ""
+        
+        sql = f"""
+            SELECT * FROM {table_name}
+            {where_clause}
+            {order_clause}
+            LIMIT {limit} OFFSET {offset}
+        """
+        
+        return sql.strip(), params
+
+    def _build_count_sql(
+        self,
+        collection: Collection,
+        filters: Dict,
+        query: Optional[str]
+    ) -> tuple[str, Dict]:
+        """Build count SQL"""
+        table_name = collection.table_name
+        params = {}
+        param_idx = 0
+        
+        where_parts = []
+        
+        if filters:
+            filter_parts, params, param_idx = self._build_where_from_dsl(filters, params, param_idx)
+            where_parts.extend(filter_parts)
+        
+        if query:
+            text_fields = [f["name"] for f in collection.fields if f.get("type") == "text"]
+            if text_fields:
+                text_conditions = []
+                params[f"query_{param_idx}"] = f"%{query}%"
+                for tf in text_fields:
+                    text_conditions.append(f"{tf} ILIKE :query_{param_idx}")
+                where_parts.append(f"({' OR '.join(text_conditions)})")
+        
+        where_clause = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
+        
+        sql = f"SELECT COUNT(*) FROM {table_name} {where_clause}"
+        return sql.strip(), params
+
+    def _build_where_from_dsl(
+        self,
+        filters: Dict,
+        params: Dict,
+        param_idx: int
+    ) -> tuple[List[str], Dict, int]:
+        """Build WHERE parts from DSL filters"""
+        where_parts = []
+        
+        # Handle 'and' conditions
+        for cond in filters.get("and", []):
+            part, params, param_idx = self._build_condition(cond, params, param_idx)
+            if part:
+                where_parts.append(part)
+        
+        # Handle 'or' conditions
+        or_conditions = filters.get("or", [])
+        if or_conditions:
+            or_parts = []
+            for cond in or_conditions:
+                part, params, param_idx = self._build_condition(cond, params, param_idx)
+                if part:
+                    or_parts.append(part)
+            if or_parts:
+                where_parts.append(f"({' OR '.join(or_parts)})")
+        
+        return where_parts, params, param_idx
+
+    def _build_condition(
+        self,
+        cond: Dict,
+        params: Dict,
+        param_idx: int
+    ) -> tuple[str, Dict, int]:
+        """Build a single SQL condition from DSL"""
+        field = cond.get("field")
+        op = cond.get("op", "eq")
+        value = cond.get("value")
+        
+        if not field:
+            return "", params, param_idx
+        
+        param_name = f"p{param_idx}"
+        param_idx += 1
+        
+        if op == "eq":
+            params[param_name] = value
+            return f"{field} = :{param_name}", params, param_idx
+        elif op == "neq":
+            params[param_name] = value
+            return f"{field} != :{param_name}", params, param_idx
+        elif op == "in":
+            params[param_name] = tuple(value) if isinstance(value, list) else (value,)
+            return f"{field} IN :{param_name}", params, param_idx
+        elif op == "not_in":
+            params[param_name] = tuple(value) if isinstance(value, list) else (value,)
+            return f"{field} NOT IN :{param_name}", params, param_idx
+        elif op == "gt":
+            params[param_name] = value
+            return f"{field} > :{param_name}", params, param_idx
+        elif op == "gte":
+            params[param_name] = value
+            return f"{field} >= :{param_name}", params, param_idx
+        elif op == "lt":
+            params[param_name] = value
+            return f"{field} < :{param_name}", params, param_idx
+        elif op == "lte":
+            params[param_name] = value
+            return f"{field} <= :{param_name}", params, param_idx
+        elif op == "range":
+            parts = []
+            if isinstance(value, dict):
+                if "gte" in value:
+                    params[f"{param_name}_gte"] = value["gte"]
+                    parts.append(f"{field} >= :{param_name}_gte")
+                if "gt" in value:
+                    params[f"{param_name}_gt"] = value["gt"]
+                    parts.append(f"{field} > :{param_name}_gt")
+                if "lte" in value:
+                    params[f"{param_name}_lte"] = value["lte"]
+                    parts.append(f"{field} <= :{param_name}_lte")
+                if "lt" in value:
+                    params[f"{param_name}_lt"] = value["lt"]
+                    parts.append(f"{field} < :{param_name}_lt")
+            return f"({' AND '.join(parts)})" if parts else "", params, param_idx
+        elif op == "like":
+            params[param_name] = f"%{value}%"
+            return f"{field} ILIKE :{param_name}", params, param_idx
+        elif op == "contains":
+            params[param_name] = f"%{value}%"
+            return f"{field} ILIKE :{param_name}", params, param_idx
+        elif op == "is_null":
+            if value:
+                return f"{field} IS NULL", params, param_idx
+            else:
+                return f"{field} IS NOT NULL", params, param_idx
+        
+        return "", params, param_idx
 
     def _format_rows(
         self,
@@ -217,11 +479,16 @@ class CollectionSearchTool(ToolHandler):
         
         for row in rows:
             formatted_row = {}
+            
+            # Always include id
+            if "id" in row:
+                formatted_row["id"] = str(row["id"]) if isinstance(row["id"], uuid.UUID) else row["id"]
+            
             for field in collection.fields:
                 field_name = field["name"]
                 if field_name in row:
                     value = row[field_name]
-                    if isinstance(value, (uuid.UUID,)):
+                    if isinstance(value, uuid.UUID):
                         value = str(value)
                     if field["type"] == "text" and value and len(str(value)) > 500:
                         value = str(value)[:497] + "..."

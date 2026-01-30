@@ -23,6 +23,7 @@ class AuthType(str, Enum):
 
 class CredentialScope(str, Enum):
     """Scope уровень для CredentialSet"""
+    DEFAULT = "default"  # Admin-level credentials
     TENANT = "tenant"
     USER = "user"
 
@@ -35,10 +36,11 @@ class CredentialSet(Base):
     Мастер-ключ для шифрования берется из переменных окружения.
     
     Scope определяет владельца credentials:
+    - default: админские креды (глобальные)
     - tenant: общие креды для всего тенанта
     - user: персональные креды пользователя
     
-    Приоритет при резолве: user > tenant
+    Приоритет при резолве: user > tenant > default
     """
     __tablename__ = "credential_sets"
 
@@ -73,11 +75,12 @@ class CredentialSet(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "scope IN ('tenant', 'user')",
+            "scope IN ('default', 'tenant', 'user')",
             name="credential_sets_scope_check"
         ),
         CheckConstraint(
             """
+            (scope = 'default' AND tenant_id IS NULL AND user_id IS NULL) OR
             (scope = 'tenant' AND tenant_id IS NOT NULL AND user_id IS NULL) OR
             (scope = 'user' AND tenant_id IS NOT NULL AND user_id IS NOT NULL)
             """,

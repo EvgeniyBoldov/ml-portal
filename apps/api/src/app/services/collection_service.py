@@ -12,18 +12,23 @@ from sqlalchemy.future import select
 
 from app.models.collection import Collection, FieldType, SearchMode
 from app.models.permission_set import PermissionSet
+from app.models.tool_instance import ToolInstance, InstanceType
+from app.models.tool_group import ToolGroup
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
 
 FIELD_TYPE_TO_PG = {
+    FieldType.STRING.value: "VARCHAR(255)",
     FieldType.TEXT.value: "TEXT",
     FieldType.INTEGER.value: "BIGINT",
     FieldType.FLOAT.value: "DOUBLE PRECISION",
     FieldType.BOOLEAN.value: "BOOLEAN",
     FieldType.DATETIME.value: "TIMESTAMPTZ",
     FieldType.DATE.value: "DATE",
+    FieldType.ENUM.value: "VARCHAR(100)",
+    FieldType.JSON.value: "JSONB",
 }
 
 VALID_SLUG_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -292,13 +297,20 @@ class CollectionService:
         self.session.add(collection)
         await self.session.flush()
         
-        # Auto-add to default permission set
-        await self._add_collection_to_default_permissions(tenant_id, slug)
+        # Auto-create ToolInstance for this collection
+        tool_instance = await self._create_tool_instance_for_collection(collection)
+        if tool_instance:
+            collection.tool_instance_id = tool_instance.id
+            await self.session.flush()
+        
+        # Auto-add instance to default permission set (use instance slug, not collection slug)
+        if tool_instance:
+            await self._add_instance_to_default_permissions(tool_instance.slug)
 
         return collection
     
-    async def _add_collection_to_default_permissions(self, tenant_id: uuid.UUID, collection_slug: str):
-        """Add new collection to default permission set with 'denied' status"""
+    async def _add_instance_to_default_permissions(self, instance_slug: str):
+        """Add new instance to default permission set with 'denied' status"""
         # Get default permission set
         stmt = select(PermissionSet).where(
             PermissionSet.scope == "default",
@@ -312,19 +324,76 @@ class CollectionService:
             logger.warning("Default permission set not found, skipping auto-add")
             return
         
-        # Check if collection already in permissions
-        collections_permissions = default_perms.collections_permissions or {}
-        if collection_slug in collections_permissions:
+        # Check if instance already in permissions
+        instance_permissions = dict(default_perms.instance_permissions or {})
+        if instance_slug in instance_permissions:
             return
         
         # Add with 'denied' status by default
-        collections_permissions[collection_slug] = "denied"
-        default_perms.collections_permissions = collections_permissions
+        instance_permissions[instance_slug] = "denied"
+        default_perms.instance_permissions = instance_permissions
         
         self.session.add(default_perms)
         await self.session.flush()
         
-        logger.info(f"Added collection '{collection_slug}' to default permissions (status: denied)")
+        logger.info(f"Added instance '{instance_slug}' to default permissions (status: denied)")
+
+    async def _create_tool_instance_for_collection(self, collection: Collection) -> Optional[ToolInstance]:
+        """
+        Auto-create ToolInstance for a collection.
+        
+        Each collection gets its own ToolInstance in the 'collection' tool group.
+        This allows binding collections to agents through the standard bindings mechanism.
+        """
+        # Get or create 'collection' tool group
+        stmt = select(ToolGroup).where(ToolGroup.slug == "collection")
+        result = await self.session.execute(stmt)
+        tool_group = result.scalar_one_or_none()
+        
+        if not tool_group:
+            logger.warning("ToolGroup 'collection' not found, cannot create ToolInstance for collection")
+            return None
+        
+        # Create ToolInstance
+        instance_slug = f"collection-{collection.slug}"
+        
+        # Check if instance already exists
+        stmt = select(ToolInstance).where(ToolInstance.slug == instance_slug)
+        result = await self.session.execute(stmt)
+        existing = result.scalar_one_or_none()
+        
+        if existing:
+            logger.info(f"ToolInstance '{instance_slug}' already exists, reusing")
+            return existing
+        
+        tool_instance = ToolInstance(
+            id=uuid.uuid4(),
+            tool_group_id=tool_group.id,
+            slug=instance_slug,
+            name=f"Collection: {collection.name}",
+            description=collection.description or f"Data collection: {collection.name}",
+            connection_config={
+                "collection_id": str(collection.id),
+                "collection_slug": collection.slug,
+                "tenant_id": str(collection.tenant_id),
+                "table_name": collection.table_name,
+            },
+            instance_metadata={
+                "entity_type": collection.entity_type,
+                "row_count": collection.row_count,
+                "has_vector_search": collection.has_vector_search,
+                "primary_key_field": collection.primary_key_field,
+                "time_column": collection.time_column,
+            },
+            instance_type=InstanceType.LOCAL.value,  # Collections are always local
+            is_active=True,
+        )
+        
+        self.session.add(tool_instance)
+        await self.session.flush()
+        
+        logger.info(f"Created ToolInstance '{instance_slug}' for collection '{collection.slug}'")
+        return tool_instance
 
     async def get_by_id(self, collection_id: uuid.UUID) -> Optional[Collection]:
         """Get collection by ID"""

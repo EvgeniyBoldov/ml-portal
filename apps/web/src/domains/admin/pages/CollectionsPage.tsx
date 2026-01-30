@@ -1,116 +1,106 @@
 /**
- * CollectionsPage - Управление коллекциями
+ * CollectionsPage - Управление коллекциями (Admin)
+ * 
+ * Uses DataTable like PromptsListPage
  */
-import React, { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { AdminPage } from '@/shared/ui';
-import Button from '@shared/ui/Button';
-import Badge from '@shared/ui/Badge';
-import { Skeleton } from '@shared/ui/Skeleton';
-import { useErrorToast, useSuccessToast } from '@shared/ui/Toast';
-import { ActionsButton, type ActionItem } from '@shared/ui/ActionsButton';
-import { useAppStore } from '@app/store/app.store';
-import Alert from '@shared/ui/Alert';
-import { collectionsApi, type Collection } from '@shared/api/collections';
-import { adminApi } from '@shared/api/admin';
-import styles from './RegistryPage.module.css';
+import { useState, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
+import { 
+  AdminPage,
+  DataTable, 
+  Badge,
+  type DataTableColumn,
+} from '@/shared/ui';
+import { collectionsApi, type Collection } from '@/shared/api/collections';
+import { qk } from '@/shared/api/keys';
 
 export function CollectionsPage() {
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
-  const showError = useErrorToast();
-  const showSuccess = useSuccessToast();
-  const showConfirmDialog = useAppStore(state => state.showConfirmDialog);
-  const [q, setQ] = useState('');
+  const [search, setSearch] = useState('');
 
-  const { data, isLoading, error } = useQuery({
-    queryKey: ['admin', 'collections'],
+  const { data, isLoading } = useQuery({
+    queryKey: qk.collections.list(),
     queryFn: () => collectionsApi.listAll({ size: 100 }),
-  });
-
-  const { data: tenantsData } = useQuery({
-    queryKey: ['admin', 'tenants'],
-    queryFn: () => adminApi.getTenants(),
-  });
-
-  const tenants = tenantsData?.items ?? [];
-  const getTenantName = (tenantId?: string) => {
-    if (!tenantId) return '—';
-    const tenant = tenants.find(t => t.id === tenantId);
-    return tenant?.name || tenantId.slice(0, 8);
-  };
-
-  const deleteMutation = useMutation({
-    mutationFn: (id: string) => collectionsApi.delete(id, true),
-    onSuccess: () => {
-      showSuccess('Коллекция удалена');
-      queryClient.invalidateQueries({ queryKey: ['admin', 'collections'] });
-    },
-    onError: (err: Error) => {
-      showError(err.message || 'Не удалось удалить коллекцию');
-    },
   });
 
   const collections = data?.items ?? [];
 
-  const filteredCollections = React.useMemo(() => {
-    if (!q.trim()) return collections;
-    const query = q.toLowerCase();
-    return collections.filter((c: Collection) => {
-      const name = c.name?.toLowerCase() ?? '';
-      const slug = c.slug?.toLowerCase() ?? '';
-      return name.includes(query) || slug.includes(query);
-    });
-  }, [collections, q]);
+  const filteredCollections = useMemo(() => {
+    if (!search.trim()) return collections;
+    const q = search.toLowerCase();
+    return collections.filter((c: Collection) =>
+      c.name.toLowerCase().includes(q) ||
+      c.slug.toLowerCase().includes(q) ||
+      c.description?.toLowerCase().includes(q)
+    );
+  }, [collections, search]);
 
-  const getActions = (collection: Collection): ActionItem[] => [
+  const columns: DataTableColumn<Collection>[] = [
     {
-      label: 'Просмотр',
-      onClick: () => navigate(`/admin/collections/${collection.id}`),
+      key: 'slug',
+      label: 'SLUG / ИМЯ',
+      width: 250,
+      sortable: true,
+      render: (row) => (
+        <div>
+          <div style={{ fontWeight: 500 }}>{row.slug}</div>
+          <div style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)' }}>{row.name}</div>
+        </div>
+      ),
     },
     {
-      label: 'Удалить',
-      variant: 'danger',
-      onClick: () =>
-        showConfirmDialog({
-          title: `Удалить коллекцию «${collection.name}»?`,
-          confirmLabel: 'Удалить',
-          cancelLabel: 'Отмена',
-          variant: 'danger',
-          message: (
-            <Alert
-              variant="danger"
-              title="Действие необратимо"
-              description={
-                <>
-                  Коллекция и все её данные будут удалены окончательно.
-                  Таблица <code>{collection.table_name}</code> будет удалена из базы данных.
-                </>
-              }
-            />
-          ),
-          onConfirm: async () => {
-            await deleteMutation.mutateAsync(collection.id);
-          },
-        }),
+      key: 'fields',
+      label: 'ПОЛЯ',
+      width: 200,
+      render: (row) => {
+        const fields = row.fields ?? [];
+        return (
+          <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+            {fields.slice(0, 3).map(f => (
+              <Badge key={f.name} variant="default" size="small">{f.name}</Badge>
+            ))}
+            {fields.length > 3 && (
+              <Badge variant="default" size="small">+{fields.length - 3}</Badge>
+            )}
+          </div>
+        );
+      },
+    },
+    {
+      key: 'row_count',
+      label: 'ЗАПИСЕЙ',
+      width: 100,
+      render: (row) => row.row_count?.toLocaleString() ?? '0',
+    },
+    {
+      key: 'vector',
+      label: 'ВЕКТОР',
+      width: 80,
+      render: (row) => (
+        <Badge variant={row.has_vector_search ? 'success' : 'default'} size="small">
+          {row.has_vector_search ? 'Да' : 'Нет'}
+        </Badge>
+      ),
+    },
+    {
+      key: 'status',
+      label: 'СТАТУС',
+      width: 100,
+      render: (row) => (
+        <Badge variant={row.is_active ? 'success' : 'warning'} size="small">
+          {row.is_active ? 'Активна' : 'Неактивна'}
+        </Badge>
+      ),
     },
   ];
-
-  if (error) {
-    return (
-      <div className={styles.wrap}>
-        <div className={styles.errorState}>Не удалось загрузить коллекции</div>
-      </div>
-    );
-  }
 
   return (
     <AdminPage
       title="Коллекции"
-      subtitle="Управление базами знаний и векторными хранилищами"
-      searchValue={q}
-      onSearchChange={setQ}
+      subtitle="Управление структурированными данными"
+      searchValue={search}
+      onSearchChange={setSearch}
       searchPlaceholder="Поиск коллекций..."
       actions={[
         {
@@ -120,94 +110,16 @@ export function CollectionsPage() {
         },
       ]}
     >
-      <div className={styles.tableWrap}>
-          <table className={styles.table}>
-            <thead>
-              <tr>
-                <th>SLUG / ИМЯ</th>
-                <th>ТЕНАНТ</th>
-                <th>ПОИСК</th>
-                <th>ПОЛЯ</th>
-                <th>ЗАПИСЕЙ</th>
-                <th>СТАТУС</th>
-                <th>ДЕЙСТВИЯ</th>
-              </tr>
-            </thead>
-            <tbody>
-              {isLoading ? (
-                Array.from({ length: 3 }).map((_, i) => (
-                  <tr key={i}>
-                    <td><Skeleton width={100} /></td>
-                    <td><Skeleton width={150} /></td>
-                    <td><Skeleton width={100} /></td>
-                    <td><Skeleton width={60} /></td>
-                    <td><Skeleton width={120} /></td>
-                    <td><Skeleton width={60} /></td>
-                    <td><Skeleton width={60} /></td>
-                    <td><Skeleton width={100} /></td>
-                    <td><Skeleton width={80} /></td>
-                  </tr>
-                ))
-              ) : filteredCollections.length === 0 ? (
-                <tr>
-                  <td colSpan={7} className={styles.emptyState}>
-                    Коллекции не найдены
-                  </td>
-                </tr>
-              ) : (
-                filteredCollections.map((collection: Collection) => (
-                  <tr key={collection.id}>
-                    <td>
-                      <div className={styles.cellStack}>
-                        <span className={styles.cellPrimary}>{collection.slug}</span>
-                        <span className={styles.cellSecondary}>{collection.name}</span>
-                      </div>
-                    </td>
-                    <td>
-                      <Badge tone="info" size="small">
-                        {getTenantName(collection.tenant_id)}
-                      </Badge>
-                    </td>
-                    <td>
-                      <div className={styles.searchBadges}>
-                        <Badge tone="info" size="small">SQL</Badge>
-                        {collection.has_vector_search && (
-                          <Badge tone="warning" size="small">VECTOR</Badge>
-                        )}
-                      </div>
-                    </td>
-                    <td>
-                      <div className={styles.fieldsList}>
-                        {collection.fields.slice(0, 3).map(f => (
-                          <Badge key={f.name} tone="neutral" size="small">
-                            {f.name}
-                          </Badge>
-                        ))}
-                        {collection.fields.length > 3 && (
-                          <Badge tone="neutral" size="small">
-                            +{collection.fields.length - 3}
-                          </Badge>
-                        )}
-                      </div>
-                    </td>
-                    <td>{collection.row_count.toLocaleString()}</td>
-                    <td>
-                      <Badge
-                        tone={collection.is_active ? 'success' : 'neutral'}
-                        size="small"
-                      >
-                        {collection.is_active ? 'Активна' : 'Неактивна'}
-                      </Badge>
-                    </td>
-                    <td>
-                      <ActionsButton actions={getActions(collection)} />
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-      </div>
+      <DataTable
+        columns={columns}
+        data={filteredCollections}
+        keyField="id"
+        loading={isLoading}
+        emptyText="Коллекции не найдены"
+        paginated
+        pageSize={20}
+        onRowClick={(row) => navigate(`/admin/collections/${row.id}`)}
+      />
     </AdminPage>
   );
 }

@@ -284,7 +284,10 @@ class CredentialService:
         user_id: Optional[UUID],
     ) -> None:
         """Validate scope and required IDs"""
-        if scope == CredentialScope.TENANT.value:
+        if scope == CredentialScope.DEFAULT.value:
+            if tenant_id or user_id:
+                raise CredentialError("Default scope cannot have tenant_id or user_id")
+        elif scope == CredentialScope.TENANT.value:
             if not tenant_id:
                 raise CredentialError("Tenant scope requires tenant_id")
             if user_id:
@@ -338,7 +341,13 @@ class CredentialService:
             )
         )
         
-        if scope == "tenant":
+        if scope == "default":
+            # Default scope has no tenant_id or user_id
+            stmt = stmt.where(
+                CredentialSet.tenant_id.is_(None),
+                CredentialSet.user_id.is_(None),
+            )
+        elif scope == "tenant":
             stmt = stmt.where(CredentialSet.tenant_id == tenant_id)
         elif scope == "user":
             stmt = stmt.where(

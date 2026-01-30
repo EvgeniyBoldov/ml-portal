@@ -8,7 +8,7 @@ import { useCreateUser } from '@shared/api/hooks/useAdmin';
 import { useTenants } from '@shared/hooks/useTenants';
 import Button from '@shared/ui/Button';
 import Input from '@shared/ui/Input';
-import Select from '@shared/ui/Select';
+import { Select } from '@shared/ui';
 import Switch from '@shared/ui/Switch';
 import { useErrorToast, useSuccessToast } from '@shared/ui/Toast';
 import styles from './CreateUserPage.module.css';
@@ -169,16 +169,13 @@ export function CreateUserPage() {
               <label className={`${styles.formLabel} ${styles.required}`}>Тенант</label>
               <Select
                 value={formData.tenant_id}
-                onChange={e => updateField('tenant_id', e.target.value)}
-                className={styles.formSelect}
-              >
-                <option value="">Выберите тенант</option>
-                {tenants.map(tenant => (
-                  <option key={tenant.id} value={tenant.id}>
-                    {tenant.name}
-                  </option>
-                ))}
-              </Select>
+                onChange={(value) => updateField('tenant_id', value)}
+                placeholder="Выберите тенант"
+                options={[
+                  { value: '', label: 'Выберите тенант' },
+                  ...tenants.map(tenant => ({ value: tenant.id, label: tenant.name }))
+                ]}
+              />
               {errors.tenant_id && <span className={styles.formError}>{errors.tenant_id}</span>}
             </div>
 

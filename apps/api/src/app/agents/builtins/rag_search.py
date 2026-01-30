@@ -24,6 +24,7 @@ class RagSearchTool(ToolHandler):
     
     slug: ClassVar[str] = "rag.search"
     name: ClassVar[str] = "Knowledge Base Search"
+    tool_group: ClassVar[str] = "rag"
     description: ClassVar[str] = (
         "Search the company knowledge base for relevant information. "
         "Use this tool when you need to find documentation, policies, "

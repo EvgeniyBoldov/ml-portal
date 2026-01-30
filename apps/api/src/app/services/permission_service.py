@@ -1,20 +1,20 @@
 """
-PermissionService - резолв прав доступа к tools и collections
+PermissionService - RBAC for tool instances
 
-Логика резолва:
-- Приоритет: User > Tenant > Default
-- Если на уровне User есть явное разрешение/запрет - используем его
-- Иначе проверяем Tenant, затем Default
-- Если нигде не указано - запрещено по умолчанию
+Resolution logic:
+- Priority: User > Tenant > Default
+- Values: allowed, denied, undefined
+- Default scope: only allowed/denied (no undefined), default is denied
+- Tenant/User scope: can have undefined which inherits from parent
 """
 from dataclasses import dataclass, field
-from typing import List, Optional, Set
+from typing import Dict, List, Optional, Set
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
-from app.models.permission_set import PermissionSet, PermissionScope
+from app.models.permission_set import PermissionSet, PermissionScope, PermissionValue
 from app.repositories.permission_set_repository import PermissionSetRepository
 
 logger = get_logger(__name__)
@@ -22,46 +22,63 @@ logger = get_logger(__name__)
 
 @dataclass
 class EffectivePermissions:
-    """Результат резолва прав для контекста user/tenant"""
-    allowed_tools: Set[str] = field(default_factory=set)
-    denied_tools: Set[str] = field(default_factory=set)
-    allowed_collections: Set[str] = field(default_factory=set)
-    denied_collections: Set[str] = field(default_factory=set)
+    """Result of permission resolution for user/tenant context"""
+    # instance_slug -> is_allowed
+    instance_permissions: Dict[str, bool] = field(default_factory=dict)
+    # agent_slug -> is_allowed
+    agent_permissions: Dict[str, bool] = field(default_factory=dict)
     
-    def is_tool_allowed(self, tool_slug: str) -> bool:
-        """Check if tool is allowed"""
-        if tool_slug in self.denied_tools:
-            return False
-        return tool_slug in self.allowed_tools
+    def is_instance_allowed(self, instance_slug: str) -> bool:
+        """Check if instance is allowed. Default is denied."""
+        return self.instance_permissions.get(instance_slug, False)
     
-    def is_collection_allowed(self, collection_slug: str) -> bool:
-        """Check if collection is allowed"""
-        if collection_slug in self.denied_collections:
-            return False
-        return collection_slug in self.allowed_collections
+    def is_agent_allowed(self, agent_slug: str) -> bool:
+        """Check if agent is allowed. Default is denied."""
+        return self.agent_permissions.get(agent_slug, False)
     
-    def filter_tools(self, tool_slugs: List[str]) -> List[str]:
-        """Filter list of tools to only allowed ones"""
-        return [t for t in tool_slugs if self.is_tool_allowed(t)]
+    def get_allowed_instances(self) -> List[str]:
+        """Get list of allowed instance slugs"""
+        return [slug for slug, allowed in self.instance_permissions.items() if allowed]
     
-    def filter_collections(self, collection_slugs: List[str]) -> List[str]:
-        """Filter list of collections to only allowed ones"""
-        return [c for c in collection_slugs if self.is_collection_allowed(c)]
+    def get_denied_instances(self) -> List[str]:
+        """Get list of denied instance slugs"""
+        return [slug for slug, allowed in self.instance_permissions.items() if not allowed]
+    
+    def get_allowed_agents(self) -> List[str]:
+        """Get list of allowed agent slugs"""
+        return [slug for slug, allowed in self.agent_permissions.items() if allowed]
+    
+    def get_denied_agents(self) -> List[str]:
+        """Get list of denied agent slugs"""
+        return [slug for slug, allowed in self.agent_permissions.items() if not allowed]
+    
+    def filter_instances(self, instance_slugs: List[str]) -> List[str]:
+        """Filter list of instances to only allowed ones"""
+        return [i for i in instance_slugs if self.is_instance_allowed(i)]
+    
+    def filter_agents(self, agent_slugs: List[str]) -> List[str]:
+        """Filter list of agents to only allowed ones"""
+        return [a for a in agent_slugs if self.is_agent_allowed(a)]
 
 
 class PermissionService:
     """
-    Сервис для работы с правами доступа.
+    RBAC service for tool instances.
     
-    Иерархия наследования: Default → Tenant → User
-    Приоритет при резолве: User > Tenant > Default
+    Hierarchy: Default → Tenant → User
+    Resolution priority: User > Tenant > Default
     
-    Пример:
+    Values:
+    - allowed: instance is accessible
+    - denied: instance is not accessible
+    - undefined: inherit from parent scope (only for tenant/user)
+    
+    Example:
         service = PermissionService(session)
         perms = await service.resolve_permissions(user_id, tenant_id)
         
-        if perms.is_tool_allowed("jira.create"):
-            # Tool доступен
+        if perms.is_instance_allowed("jira-prod"):
+            # Instance is accessible
             pass
     """
     
@@ -79,10 +96,10 @@ class PermissionService:
         
         Priority: User > Tenant > Default
         
-        For each tool/collection:
-        1. Check User level - if explicitly allowed/denied, use it
-        2. If not specified at User level, check Tenant level
-        3. If not specified at Tenant level, check Default level
+        For each instance:
+        1. Check User level - if allowed/denied, use it
+        2. If undefined at User level, check Tenant level
+        3. If undefined at Tenant level, check Default level
         4. If not specified anywhere - denied by default
         """
         perm_sets = await self.repo.get_all_for_context(user_id, tenant_id)
@@ -99,153 +116,247 @@ class PermissionService:
             elif ps.scope == PermissionScope.USER.value:
                 user_perm = ps
         
+        # Collect all instance slugs from all scopes
+        all_instances: Set[str] = set()
+        for ps in [default_perm, tenant_perm, user_perm]:
+            if ps and ps.instance_permissions:
+                all_instances.update(ps.instance_permissions.keys())
+        
+        # Collect all agent slugs from all scopes
+        all_agents: Set[str] = set()
+        for ps in [default_perm, tenant_perm, user_perm]:
+            if ps and ps.agent_permissions:
+                all_agents.update(ps.agent_permissions.keys())
+        
         effective = EffectivePermissions()
         
-        all_tools = self._collect_all_items(
-            default_perm, tenant_perm, user_perm, "tools"
-        )
-        for tool_slug in all_tools:
-            allowed = self._resolve_item_permission(
-                tool_slug, default_perm, tenant_perm, user_perm, "tools"
+        # Resolve instance permissions
+        for instance_slug in all_instances:
+            allowed = self._resolve_permission(
+                instance_slug, 'instance', default_perm, tenant_perm, user_perm
             )
-            if allowed:
-                effective.allowed_tools.add(tool_slug)
-            else:
-                effective.denied_tools.add(tool_slug)
+            effective.instance_permissions[instance_slug] = allowed
         
-        all_collections = self._collect_all_items(
-            default_perm, tenant_perm, user_perm, "collections"
-        )
-        for coll_slug in all_collections:
-            allowed = self._resolve_item_permission(
-                coll_slug, default_perm, tenant_perm, user_perm, "collections"
+        # Resolve agent permissions
+        for agent_slug in all_agents:
+            allowed = self._resolve_permission(
+                agent_slug, 'agent', default_perm, tenant_perm, user_perm
             )
-            if allowed:
-                effective.allowed_collections.add(coll_slug)
-            else:
-                effective.denied_collections.add(coll_slug)
+            effective.agent_permissions[agent_slug] = allowed
         
         logger.debug(
             f"Resolved permissions for user={user_id}, tenant={tenant_id}: "
-            f"tools={len(effective.allowed_tools)}, collections={len(effective.allowed_collections)}"
+            f"instances: allowed={len(effective.get_allowed_instances())}, denied={len(effective.get_denied_instances())}; "
+            f"agents: allowed={len(effective.get_allowed_agents())}, denied={len(effective.get_denied_agents())}"
         )
         
         return effective
     
-    def _collect_all_items(
+    def _resolve_permission(
         self,
+        slug: str,
+        perm_type: str,  # 'instance' or 'agent'
         default_perm: Optional[PermissionSet],
         tenant_perm: Optional[PermissionSet],
         user_perm: Optional[PermissionSet],
-        item_type: str,
-    ) -> Set[str]:
-        """Collect all unique items from all permission sets"""
-        items = set()
-        
-        for ps in [default_perm, tenant_perm, user_perm]:
-            if ps:
-                allowed = getattr(ps, f"allowed_{item_type}", []) or []
-                denied = getattr(ps, f"denied_{item_type}", []) or []
-                items.update(allowed)
-                items.update(denied)
-        
-        return items
-    
-    def _resolve_item_permission(
-        self,
-        item_slug: str,
-        default_perm: Optional[PermissionSet],
-        tenant_perm: Optional[PermissionSet],
-        user_perm: Optional[PermissionSet],
-        item_type: str,
     ) -> bool:
         """
-        Resolve permission for a single item.
+        Resolve permission for a single instance or agent.
         
         Priority: User > Tenant > Default
         Returns True if allowed, False if denied.
         """
-        for ps in [user_perm, tenant_perm, default_perm]:
-            if ps is None:
-                continue
-            
-            denied = getattr(ps, f"denied_{item_type}", []) or []
-            if item_slug in denied:
-                return False
-            
-            allowed = getattr(ps, f"allowed_{item_type}", []) or []
-            if item_slug in allowed:
-                return True
+        def get_perms(ps: Optional[PermissionSet]) -> Optional[Dict[str, str]]:
+            if not ps:
+                return None
+            if perm_type == 'instance':
+                return ps.instance_permissions
+            elif perm_type == 'agent':
+                return ps.agent_permissions
+            return None
         
+        # Check user level first
+        user_perms = get_perms(user_perm)
+        if user_perms:
+            value = user_perms.get(slug)
+            if value == PermissionValue.ALLOWED.value:
+                return True
+            elif value == PermissionValue.DENIED.value:
+                return False
+            # undefined -> fall through to tenant
+        
+        # Check tenant level
+        tenant_perms = get_perms(tenant_perm)
+        if tenant_perms:
+            value = tenant_perms.get(slug)
+            if value == PermissionValue.ALLOWED.value:
+                return True
+            elif value == PermissionValue.DENIED.value:
+                return False
+            # undefined -> fall through to default
+        
+        # Check default level
+        default_perms = get_perms(default_perm)
+        if default_perms:
+            value = default_perms.get(slug)
+            if value == PermissionValue.ALLOWED.value:
+                return True
+            # denied or not specified -> denied
+        
+        # Not specified anywhere -> denied by default
         return False
     
-    async def check_tool_permission(
+    async def check_instance_permission(
         self,
-        tool_slug: str,
+        instance_slug: str,
         user_id: Optional[UUID] = None,
         tenant_id: Optional[UUID] = None,
     ) -> bool:
-        """Quick check if a single tool is allowed"""
+        """Quick check if a single instance is allowed"""
         perms = await self.resolve_permissions(user_id, tenant_id)
-        return perms.is_tool_allowed(tool_slug)
+        return perms.is_instance_allowed(instance_slug)
     
-    async def check_collection_permission(
+    async def check_agent_permission(
         self,
-        collection_slug: str,
+        agent_slug: str,
         user_id: Optional[UUID] = None,
         tenant_id: Optional[UUID] = None,
     ) -> bool:
-        """Quick check if a single collection is allowed"""
+        """Quick check if a single agent is allowed"""
         perms = await self.resolve_permissions(user_id, tenant_id)
-        return perms.is_collection_allowed(collection_slug)
+        return perms.is_agent_allowed(agent_slug)
     
-    async def add_tool_permission(
+    async def set_instance_permission(
         self,
-        tool_slug: str,
+        instance_slug: str,
+        value: str,
         scope: str,
-        allow: bool = True,
         tenant_id: Optional[UUID] = None,
         user_id: Optional[UUID] = None,
     ) -> PermissionSet:
-        """Add or update tool permission"""
+        """
+        Set permission for an instance.
+        
+        Args:
+            instance_slug: Instance slug
+            value: "allowed", "denied", or "undefined" (only for tenant/user)
+            scope: "default", "tenant", or "user"
+            tenant_id: Required for tenant/user scope
+            user_id: Required for user scope
+        """
+        # Validate value
+        if scope == PermissionScope.DEFAULT.value:
+            if value not in [PermissionValue.ALLOWED.value, PermissionValue.DENIED.value]:
+                raise ValueError("Default scope can only have 'allowed' or 'denied'")
+        else:
+            if value not in [PermissionValue.ALLOWED.value, PermissionValue.DENIED.value, PermissionValue.UNDEFINED.value]:
+                raise ValueError("Invalid permission value")
+        
         perm_set = await self._get_or_create_perm_set(scope, tenant_id, user_id)
         
-        if allow:
-            if tool_slug not in perm_set.allowed_tools:
-                perm_set.allowed_tools = list(perm_set.allowed_tools) + [tool_slug]
-            if tool_slug in perm_set.denied_tools:
-                perm_set.denied_tools = [t for t in perm_set.denied_tools if t != tool_slug]
-        else:
-            if tool_slug not in perm_set.denied_tools:
-                perm_set.denied_tools = list(perm_set.denied_tools) + [tool_slug]
-            if tool_slug in perm_set.allowed_tools:
-                perm_set.allowed_tools = [t for t in perm_set.allowed_tools if t != tool_slug]
+        # Update instance_permissions
+        perms = dict(perm_set.instance_permissions or {})
         
+        if value == PermissionValue.UNDEFINED.value:
+            # Remove from dict to inherit from parent
+            perms.pop(instance_slug, None)
+        else:
+            perms[instance_slug] = value
+        
+        perm_set.instance_permissions = perms
         return await self.repo.update(perm_set)
     
-    async def add_collection_permission(
+    async def set_agent_permission(
         self,
-        collection_slug: str,
+        agent_slug: str,
+        value: str,
         scope: str,
-        allow: bool = True,
         tenant_id: Optional[UUID] = None,
         user_id: Optional[UUID] = None,
     ) -> PermissionSet:
-        """Add or update collection permission"""
+        """
+        Set permission for an agent.
+        
+        Args:
+            agent_slug: Agent slug
+            value: "allowed", "denied", or "undefined" (only for tenant/user)
+            scope: "default", "tenant", or "user"
+            tenant_id: Required for tenant/user scope
+            user_id: Required for user scope
+        """
+        # Validate value
+        if scope == PermissionScope.DEFAULT.value:
+            if value not in [PermissionValue.ALLOWED.value, PermissionValue.DENIED.value]:
+                raise ValueError("Default scope can only have 'allowed' or 'denied'")
+        else:
+            if value not in [PermissionValue.ALLOWED.value, PermissionValue.DENIED.value, PermissionValue.UNDEFINED.value]:
+                raise ValueError("Invalid permission value")
+        
         perm_set = await self._get_or_create_perm_set(scope, tenant_id, user_id)
         
-        if allow:
-            if collection_slug not in perm_set.allowed_collections:
-                perm_set.allowed_collections = list(perm_set.allowed_collections) + [collection_slug]
-            if collection_slug in perm_set.denied_collections:
-                perm_set.denied_collections = [c for c in perm_set.denied_collections if c != collection_slug]
-        else:
-            if collection_slug not in perm_set.denied_collections:
-                perm_set.denied_collections = list(perm_set.denied_collections) + [collection_slug]
-            if collection_slug in perm_set.allowed_collections:
-                perm_set.allowed_collections = [c for c in perm_set.allowed_collections if c != collection_slug]
+        # Update agent_permissions
+        perms = dict(perm_set.agent_permissions or {})
         
+        if value == PermissionValue.UNDEFINED.value:
+            # Remove from dict to inherit from parent
+            perms.pop(agent_slug, None)
+        else:
+            perms[agent_slug] = value
+        
+        perm_set.agent_permissions = perms
         return await self.repo.update(perm_set)
+    
+    async def bulk_set_instance_permissions(
+        self,
+        permissions: Dict[str, str],
+        scope: str,
+        tenant_id: Optional[UUID] = None,
+        user_id: Optional[UUID] = None,
+    ) -> PermissionSet:
+        """
+        Set multiple instance permissions at once.
+        
+        Args:
+            permissions: Dict of {instance_slug: value}
+            scope: "default", "tenant", or "user"
+        """
+        perm_set = await self._get_or_create_perm_set(scope, tenant_id, user_id)
+        
+        perms = dict(perm_set.instance_permissions or {})
+        
+        for instance_slug, value in permissions.items():
+            # Validate
+            if scope == PermissionScope.DEFAULT.value:
+                if value not in [PermissionValue.ALLOWED.value, PermissionValue.DENIED.value]:
+                    raise ValueError(f"Default scope can only have 'allowed' or 'denied' for {instance_slug}")
+            
+            if value == PermissionValue.UNDEFINED.value:
+                perms.pop(instance_slug, None)
+            else:
+                perms[instance_slug] = value
+        
+        perm_set.instance_permissions = perms
+        return await self.repo.update(perm_set)
+    
+    async def get_permission_set(
+        self,
+        scope: str,
+        tenant_id: Optional[UUID] = None,
+        user_id: Optional[UUID] = None,
+    ) -> Optional[PermissionSet]:
+        """Get permission set for given scope"""
+        if scope == PermissionScope.DEFAULT.value:
+            return await self.repo.get_default()
+        elif scope == PermissionScope.TENANT.value:
+            if not tenant_id:
+                raise ValueError("tenant_id required for tenant scope")
+            return await self.repo.get_for_tenant(tenant_id)
+        elif scope == PermissionScope.USER.value:
+            if not user_id or not tenant_id:
+                raise ValueError("user_id and tenant_id required for user scope")
+            return await self.repo.get_for_user(user_id, tenant_id)
+        else:
+            raise ValueError(f"Invalid scope: {scope}")
     
     async def _get_or_create_perm_set(
         self,

@@ -38,6 +38,7 @@ class ToolHandler(ABC):
     slug: ClassVar[str]
     name: ClassVar[str]
     description: ClassVar[str]
+    tool_group: ClassVar[str]  # Group slug (e.g., "rag", "collection")
     input_schema: ClassVar[Dict[str, Any]]
     output_schema: ClassVar[Optional[Dict[str, Any]]] = None
     

@@ -21,7 +21,8 @@ export { default as Modal } from './Modal';
 export { default as Popover } from './Popover';
 export { default as RoleBadge } from './RoleBadge';
 export { default as RoundButton } from './RoundButton';
-export { default as Select } from './Select';
+export { Select } from './Select';
+export type { SelectProps, SelectOption } from './Select';
 export { default as Skeleton } from './Skeleton';
 export { default as StatusBadge } from './StatusBadge';
 export { default as Table } from './Table';
@@ -48,9 +49,9 @@ export type { FilterBarProps, FilterConfig, FilterOption } from './FilterBar';
 export { default as DataTable } from './DataTable/DataTable';
 export type { DataTableColumn, DataTableProps } from './DataTable/DataTable';
 
-// AdminTable
-export { AdminTable } from './AdminTable';
-export type { AdminTableColumn, AdminTableProps, SortDirection } from './AdminTable';
+// TableHeader
+export { TableHeader } from './TableHeader';
+export type { TableHeaderProps } from './TableHeader';
 
 // AppHeader
 export { AppHeader } from './AppHeader';
@@ -69,3 +70,7 @@ export type { ContentBlockProps, ContentGridProps, FieldDefinition, FieldType, B
 
 // Row Actions
 export { RowActions } from './RowActions';
+
+// RbacRulesEditor
+export { RbacRulesEditor } from './RbacRulesEditor';
+export type { RbacPermissions } from './RbacRulesEditor';

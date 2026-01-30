@@ -7,9 +7,7 @@
 import React, { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTenants } from '@shared/hooks/useTenants';
-import { AdminPage } from '@shared/ui';
-import Badge from '@shared/ui/Badge';
-import { AdminTable, type AdminTableColumn } from '@shared/ui/AdminTable';
+import { AdminPage, DataTable, type DataTableColumn, Badge } from '@/shared/ui';
 import type { Tenant } from '@shared/api/admin';
 
 export function TenantsPage() {
@@ -38,7 +36,7 @@ export function TenantsPage() {
     navigate(`/admin/tenants/${tenant.id}`);
   };
 
-  const columns: AdminTableColumn<Tenant>[] = [
+  const columns: DataTableColumn<Tenant>[] = [
     {
       key: 'name',
       label: 'НАЗВАНИЕ',
@@ -101,7 +99,7 @@ export function TenantsPage() {
         </div>
       )}
 
-      <AdminTable
+      <DataTable
         columns={columns}
         data={filteredTenants}
         keyField="id"
@@ -109,8 +107,6 @@ export function TenantsPage() {
         emptyText="Тенанты не найдены. Нажмите «Создать» для добавления."
         paginated
         pageSize={20}
-        defaultSortKey="name"
-        defaultSortDirection="asc"
         onRowClick={handleRowClick}
       />
     </AdminPage>

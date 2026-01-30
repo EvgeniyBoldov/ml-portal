@@ -6,6 +6,7 @@ import { useNavigate } from 'react-router-dom';
 import { useMutation, useQueryClient, useQuery } from '@tanstack/react-query';
 import Button from '@shared/ui/Button';
 import Input from '@shared/ui/Input';
+import { Select } from '@shared/ui';
 import FieldEditor from '@shared/ui/FieldEditor';
 import FieldCard from '@shared/ui/FieldCard';
 import { useErrorToast, useSuccessToast } from '@shared/ui/Toast';
@@ -203,20 +204,15 @@ export function CreateCollectionPage() {
               <label className={`${styles.formLabel} ${styles.required}`}>
                 Tenant
               </label>
-              <select
-                className={styles.formSelect}
+              <Select
                 value={formData.tenant_id}
-                onChange={e =>
-                  setFormData({ ...formData, tenant_id: e.target.value })
-                }
-              >
-                <option value="">Select tenant...</option>
-                {tenants?.map(t => (
-                  <option key={t.id} value={t.id}>
-                    {t.name}
-                  </option>
-                ))}
-              </select>
+                onChange={(value) => setFormData({ ...formData, tenant_id: value })}
+                placeholder="Select tenant..."
+                options={[
+                  { value: '', label: 'Select tenant...' },
+                  ...(tenants?.map(t => ({ value: t.id, label: t.name })) || [])
+                ]}
+              />
             </div>
 
             <div className={styles.formGroup}>

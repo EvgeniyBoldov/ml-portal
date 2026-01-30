@@ -1,23 +1,16 @@
 """
-ToolInstance model - конкретное подключение к инструменту
+ToolInstance model - конкретное подключение к системе
 """
 import uuid
 from datetime import datetime
 from typing import Optional, Dict, Any
 from enum import Enum
 
-from sqlalchemy import String, Boolean, DateTime, Text, ForeignKey, func, UniqueConstraint, CheckConstraint
+from sqlalchemy import String, Boolean, DateTime, Text, ForeignKey, func
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
-
-
-class InstanceScope(str, Enum):
-    """Scope уровень для ToolInstance"""
-    DEFAULT = "default"
-    TENANT = "tenant"
-    USER = "user"
 
 
 class HealthStatus(str, Enum):
@@ -27,19 +20,24 @@ class HealthStatus(str, Enum):
     UNKNOWN = "unknown"
 
 
+class InstanceType(str, Enum):
+    """Тип инстанса"""
+    LOCAL = "local"      # Локальный (коллекции, внутренние сервисы)
+    HTTP = "http"        # Внешний HTTP API
+    CUSTOM = "custom"    # Кастомный тип
+
+
 class ToolInstance(Base):
     """
-    Конкретный instance инструмента с настройками подключения.
+    Конкретный instance системы с настройками подключения.
     
     Примеры:
     - "jira-prod" - Jira Production
     - "jira-staging" - Jira Staging  
     - "netbox-main" - NetBox основной
+    - "remedy-1", "remedy-2" - несколько инстансов Remedy
     
-    Scope определяет уровень доступности:
-    - default: глобальный, доступен всем
-    - tenant: доступен конкретному тенанту
-    - user: доступен конкретному пользователю
+    Инстансы глобальные, креды привязываются через CredentialSet.
     """
     __tablename__ = "tool_instances"
 
@@ -47,26 +45,28 @@ class ToolInstance(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     
-    tool_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("tools.id", ondelete="CASCADE"), nullable=False, index=True
+    # FK to ToolGroup (e.g., "jira", "rag", "netbox")
+    tool_group_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tool_groups.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True
     )
     
     slug: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     
-    scope: Mapped[str] = mapped_column(String(20), nullable=False)
-    tenant_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True, index=True
-    )
-    user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True
-    )
-    
+    # Connection configuration (url, project mappings, etc.)
     connection_config: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
     
-    is_default: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Instance metadata (env=prod/stage/dev, region, etc.)
+    instance_metadata: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
+    
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    
+    # Instance type: local (collections), http (external APIs), custom
+    instance_type: Mapped[str] = mapped_column(String(20), default=InstanceType.HTTP.value, nullable=False)
     
     health_status: Mapped[str] = mapped_column(String(20), default=HealthStatus.UNKNOWN.value)
     last_health_check_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -79,20 +79,5 @@ class ToolInstance(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
 
-    __table_args__ = (
-        CheckConstraint(
-            "scope IN ('default', 'tenant', 'user')",
-            name="tool_instances_scope_check"
-        ),
-        CheckConstraint(
-            """
-            (scope = 'default' AND tenant_id IS NULL AND user_id IS NULL) OR
-            (scope = 'tenant' AND tenant_id IS NOT NULL AND user_id IS NULL) OR
-            (scope = 'user' AND tenant_id IS NOT NULL AND user_id IS NOT NULL)
-            """,
-            name="tool_instances_scope_refs_check"
-        ),
-    )
-
     def __repr__(self) -> str:
-        return f"<ToolInstance {self.slug} ({self.scope})>"
+        return f"<ToolInstance {self.slug}>"

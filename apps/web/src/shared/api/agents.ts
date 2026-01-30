@@ -1,5 +1,25 @@
 import { apiRequest } from './http';
 
+export interface AgentBindingInput {
+  tool_id: string;
+  tool_instance_id: string;
+  credential_strategy: 'user_only' | 'tenant_only' | 'default_only' | 'prefer_user' | 'prefer_tenant' | 'any';
+  required: boolean;
+}
+
+export interface AgentBindingResponse {
+  id: string;
+  tool_id: string;
+  tool_slug: string;
+  tool_name: string;
+  tool_group_slug: string;
+  tool_instance_id: string;
+  instance_slug: string;
+  instance_name: string;
+  credential_strategy: string;
+  required: boolean;
+}
+
 export interface Agent {
   id: string;
   slug: string;
@@ -7,13 +27,15 @@ export interface Agent {
   description?: string;
   system_prompt_slug: string;
   baseline_prompt_id?: string | null;
-  tools: string[];
-  available_collections: string[];
-  generation_config?: Record<string, any>;
+  policy_id?: string | null;
+  capabilities: string[];
+  supports_partial_mode: boolean;
+  generation_config?: Record<string, unknown>;
   is_active: boolean;
   enable_logging: boolean;
   created_at: string;
   updated_at: string;
+  bindings?: AgentBindingResponse[];
 }
 
 export interface AgentCreate {
@@ -22,11 +44,13 @@ export interface AgentCreate {
   description?: string;
   system_prompt_slug: string;
   baseline_prompt_id?: string | null;
-  tools: string[];
-  available_collections?: string[];
-  generation_config?: Record<string, any>;
+  policy_id?: string | null;
+  capabilities?: string[];
+  supports_partial_mode?: boolean;
+  generation_config?: Record<string, unknown>;
   is_active?: boolean;
   enable_logging?: boolean;
+  bindings?: AgentBindingInput[];
 }
 
 export interface AgentUpdate {
@@ -34,11 +58,13 @@ export interface AgentUpdate {
   description?: string;
   system_prompt_slug?: string;
   baseline_prompt_id?: string | null;
-  tools?: string[];
-  available_collections?: string[];
-  generation_config?: Record<string, any>;
+  policy_id?: string | null;
+  capabilities?: string[];
+  supports_partial_mode?: boolean;
+  generation_config?: Record<string, unknown>;
   is_active?: boolean;
   enable_logging?: boolean;
+  bindings?: AgentBindingInput[];
 }
 
 export const agentsApi = {

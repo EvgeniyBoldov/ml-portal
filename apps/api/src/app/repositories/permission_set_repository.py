@@ -128,10 +128,7 @@ class PermissionSetRepository:
         
         default_perm = PermissionSet(
             scope=PermissionScope.DEFAULT.value,
-            allowed_tools=[],
-            denied_tools=[],
-            allowed_collections=[],
-            denied_collections=[],
+            instance_permissions={},
         )
         return await self.create(default_perm)
 
@@ -144,10 +141,7 @@ class PermissionSetRepository:
         tenant_perm = PermissionSet(
             scope=PermissionScope.TENANT.value,
             tenant_id=tenant_id,
-            allowed_tools=[],
-            denied_tools=[],
-            allowed_collections=[],
-            denied_collections=[],
+            instance_permissions={},
         )
         return await self.create(tenant_perm)
 
@@ -165,9 +159,6 @@ class PermissionSetRepository:
             scope=PermissionScope.USER.value,
             user_id=user_id,
             tenant_id=tenant_id,
-            allowed_tools=[],
-            denied_tools=[],
-            allowed_collections=[],
-            denied_collections=[],
+            instance_permissions={},
         )
         return await self.create(user_perm)

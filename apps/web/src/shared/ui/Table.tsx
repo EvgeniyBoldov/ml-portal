@@ -1,4 +1,5 @@
 import React from 'react';
+import { TableHeader } from './TableHeader';
 import styles from './Table.module.css';
 
 export interface TableColumn<T = unknown> {
@@ -105,27 +106,17 @@ export function Table<T = unknown>({
     <thead className={styles.tableHeader}>
       <tr>
         {columns.map(column => (
-          <th
+          <TableHeader
             key={column.key}
-            className={`
-              ${styles.tableHeaderCell}
-              ${column.sortable ? styles.sortable : ''}
-              ${sortBy === column.key ? styles.active : ''}
-              ${column.className || ''}
-            `}
-            style={{
-              width: column.width,
-              textAlign: column.align || 'left',
-            }}
-            onClick={column.sortable ? () => handleSort(column.key) : undefined}
-          >
-            {column.title}
-            {column.sortable && sortBy === column.key && (
-              <span style={{ marginLeft: '4px' }}>
-                {sortOrder === 'asc' ? '↑' : '↓'}
-              </span>
-            )}
-          </th>
+            label={column.title}
+            width={column.width}
+            align={column.align}
+            sortable={column.sortable}
+            sortActive={sortBy === column.key}
+            sortOrder={sortOrder}
+            onSort={column.sortable ? () => handleSort(column.key) : undefined}
+            className={column.className}
+          />
         ))}
       </tr>
     </thead>

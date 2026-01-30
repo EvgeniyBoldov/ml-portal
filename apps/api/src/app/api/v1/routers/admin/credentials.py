@@ -53,7 +53,7 @@ async def create_credentials(
     db: AsyncSession = Depends(db_session),
     _: UserCtx = Depends(require_admin),
 ):
-    """Create new credentials. Admin only."""
+    """Create new credentials. Admin only. Scope can be 'default', 'tenant', or 'user'."""
     service = CredentialService(db)
     try:
         cred_set = await service.create_credentials(
@@ -63,6 +63,7 @@ async def create_credentials(
             scope=data.scope,
             tenant_id=data.tenant_id,
             user_id=data.user_id,
+            is_default=data.is_default,
         )
         await db.commit()
         return cred_set

@@ -14,19 +14,41 @@ from .base import Base
 
 
 class FieldType(str, Enum):
-    TEXT = "text"
-    INTEGER = "integer"
-    FLOAT = "float"
-    BOOLEAN = "boolean"
-    DATETIME = "datetime"
-    DATE = "date"
+    """Supported field types for collections"""
+    STRING = "string"      # Short text (name, hostname) - VARCHAR(255)
+    TEXT = "text"          # Long text (body, description) - TEXT
+    INTEGER = "integer"    # Integer - INTEGER
+    FLOAT = "float"        # Float - DOUBLE PRECISION
+    BOOLEAN = "boolean"    # Boolean - BOOLEAN
+    DATETIME = "datetime"  # Datetime with timezone - TIMESTAMPTZ
+    DATE = "date"          # Date only - DATE
+    ENUM = "enum"          # Enum (limited values) - VARCHAR(100)
+    JSON = "json"          # JSON data - JSONB (avoid on MVP)
 
 
 class SearchMode(str, Enum):
-    EXACT = "exact"
-    LIKE = "like"
-    RANGE = "range"
-    VECTOR = "vector"
+    """Supported search modes for fields"""
+    EXACT = "exact"        # Exact match (=)
+    LIKE = "like"          # ILIKE search
+    CONTAINS = "contains"  # Contains substring (ILIKE %value%)
+    RANGE = "range"        # Range queries (>, <, >=, <=, BETWEEN)
+    VECTOR = "vector"      # Vector similarity search (Qdrant)
+
+
+class FilterOperator(str, Enum):
+    """Supported filter operators for DSL"""
+    EQ = "eq"              # Equal
+    NEQ = "neq"            # Not equal
+    IN = "in"              # In list
+    NOT_IN = "not_in"      # Not in list
+    LIKE = "like"          # LIKE pattern
+    CONTAINS = "contains"  # Contains substring (ILIKE %value%)
+    GT = "gt"              # Greater than
+    GTE = "gte"            # Greater than or equal
+    LT = "lt"              # Less than
+    LTE = "lte"            # Less than or equal
+    RANGE = "range"        # Range (gte + lt)
+    IS_NULL = "is_null"    # Is null / is not null
 
 
 class Collection(Base):
@@ -92,6 +114,26 @@ class Collection(Base):
     vectorized_rows: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     total_chunks: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     failed_rows: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    
+    # Primary key and time column configuration
+    primary_key_field: Mapped[str] = mapped_column(String(100), nullable=False, default="id")
+    time_column: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    
+    # Default sort configuration: {"field": "created_at", "order": "desc"}
+    default_sort: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    
+    # Entity type for LLM context (e.g., "ticket", "device", "user")
+    entity_type: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    
+    # Guardrails
+    allow_unfiltered_search: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    max_limit: Mapped[int] = mapped_column(Integer, nullable=False, default=100)
+    query_timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=10)
+    
+    # Link to auto-created ToolInstance
+    tool_instance_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tool_instances.id", ondelete="SET NULL"), nullable=True
+    )
     
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(

@@ -9,15 +9,13 @@ from pydantic import BaseModel, Field
 
 class ToolInstanceCreate(BaseModel):
     """Schema for creating a tool instance"""
-    tool_slug: str = Field(..., description="Slug of the tool")
+    tool_group_id: UUID = Field(..., description="FK to ToolGroup")
     slug: str = Field(..., description="Unique slug for this instance")
     name: str = Field(..., description="Display name")
     description: Optional[str] = None
-    scope: str = Field(..., description="Scope: default, tenant, user")
-    tenant_id: Optional[UUID] = None
-    user_id: Optional[UUID] = None
     connection_config: Dict[str, Any] = Field(default_factory=dict)
-    is_default: bool = False
+    instance_metadata: Dict[str, Any] = Field(default_factory=dict, description="Metadata (env, region, etc.)")
+    instance_type: str = Field(default="http", description="Instance type: local, http, custom")
 
 
 class ToolInstanceUpdate(BaseModel):
@@ -25,23 +23,21 @@ class ToolInstanceUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     connection_config: Optional[Dict[str, Any]] = None
-    is_default: Optional[bool] = None
+    instance_metadata: Optional[Dict[str, Any]] = None
     is_active: Optional[bool] = None
 
 
 class ToolInstanceResponse(BaseModel):
     """Schema for tool instance response"""
     id: UUID
-    tool_id: UUID
+    tool_group_id: UUID
     slug: str
     name: str
     description: Optional[str]
-    scope: str
-    tenant_id: Optional[UUID]
-    user_id: Optional[UUID]
     connection_config: Dict[str, Any]
-    is_default: bool
+    instance_metadata: Dict[str, Any]
     is_active: bool
+    instance_type: str
     health_status: str
     last_health_check_at: Optional[datetime]
     health_check_error: Optional[str]
@@ -50,6 +46,12 @@ class ToolInstanceResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class ToolInstanceDetailResponse(ToolInstanceResponse):
+    """Tool instance response with group details"""
+    tool_group_slug: Optional[str] = None
+    tool_group_name: Optional[str] = None
 
 
 class HealthCheckResponse(BaseModel):
@@ -64,9 +66,10 @@ class CredentialSetCreate(BaseModel):
     tool_instance_id: UUID
     auth_type: str = Field(..., description="Auth type: token, basic, oauth, api_key")
     payload: Dict[str, Any] = Field(..., description="Credentials payload")
-    scope: str = Field(..., description="Scope: tenant, user")
+    scope: str = Field(..., description="Scope: default, tenant, user")
     tenant_id: Optional[UUID] = None
     user_id: Optional[UUID] = None
+    is_default: bool = True
 
 
 class CredentialSetUpdate(BaseModel):
@@ -84,6 +87,7 @@ class CredentialSetResponse(BaseModel):
     tenant_id: Optional[UUID]
     user_id: Optional[UUID]
     auth_type: str
+    is_default: bool
     is_active: bool
     created_at: datetime
     updated_at: datetime
@@ -97,18 +101,26 @@ class PermissionSetCreate(BaseModel):
     scope: str = Field(..., description="Scope: default, tenant, user")
     tenant_id: Optional[UUID] = None
     user_id: Optional[UUID] = None
-    allowed_tools: List[str] = Field(default_factory=list)
-    denied_tools: List[str] = Field(default_factory=list)
-    allowed_collections: List[str] = Field(default_factory=list)
-    denied_collections: List[str] = Field(default_factory=list)
+    instance_permissions: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Map of instance_slug -> 'allowed'|'denied'|'undefined'"
+    )
+    agent_permissions: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Map of agent_slug -> 'allowed'|'denied'|'undefined'"
+    )
 
 
 class PermissionSetUpdate(BaseModel):
     """Schema for updating permission set"""
-    allowed_tools: Optional[List[str]] = None
-    denied_tools: Optional[List[str]] = None
-    allowed_collections: Optional[List[str]] = None
-    denied_collections: Optional[List[str]] = None
+    instance_permissions: Optional[Dict[str, str]] = Field(
+        None,
+        description="Map of instance_slug -> 'allowed'|'denied'|'undefined'"
+    )
+    agent_permissions: Optional[Dict[str, str]] = Field(
+        None,
+        description="Map of agent_slug -> 'allowed'|'denied'|'undefined'"
+    )
 
 
 class PermissionSetResponse(BaseModel):
@@ -117,10 +129,8 @@ class PermissionSetResponse(BaseModel):
     scope: str
     tenant_id: Optional[UUID]
     user_id: Optional[UUID]
-    allowed_tools: List[str]
-    denied_tools: List[str]
-    allowed_collections: List[str]
-    denied_collections: List[str]
+    instance_permissions: Dict[str, str]
+    agent_permissions: Dict[str, str]
     created_at: datetime
     updated_at: datetime
 
@@ -130,10 +140,18 @@ class PermissionSetResponse(BaseModel):
 
 class EffectivePermissionsResponse(BaseModel):
     """Schema for resolved effective permissions"""
-    allowed_tools: List[str]
-    denied_tools: List[str]
-    allowed_collections: List[str]
-    denied_collections: List[str]
+    instance_permissions: Dict[str, bool] = Field(
+        ...,
+        description="Map of instance_slug -> is_allowed (True/False)"
+    )
+    agent_permissions: Dict[str, bool] = Field(
+        ...,
+        description="Map of agent_slug -> is_allowed (True/False)"
+    )
+    allowed_instances: List[str]
+    denied_instances: List[str]
+    allowed_agents: List[str]
+    denied_agents: List[str]
 
 
 class RoutingLogResponse(BaseModel):

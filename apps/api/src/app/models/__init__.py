@@ -9,16 +9,19 @@ from .rag_ingest import Source, Chunk, EmbStatus, RAGStatus
 from .model_registry import ModelRegistry
 from .events import EventOutbox
 from .prompt import Prompt
+from .tool_group import ToolGroup
 from .tool import Tool
+from .tool_instance import ToolInstance, HealthStatus, InstanceType
 from .agent import Agent
+from .agent_binding import AgentBinding, CredentialStrategy
 from .agent_run import AgentRun, AgentRunStep
 from .api_key import APIKey
 from .api_token import ApiToken
 from .collection import Collection, FieldType, SearchMode
-from .tool_instance import ToolInstance, InstanceScope, HealthStatus
 from .credential_set import CredentialSet, AuthType, CredentialScope
-from .permission_set import PermissionSet, PermissionScope
+from .permission_set import PermissionSet, PermissionScope, PermissionValue
 from .routing_log import RoutingLog
+from .policy import Policy
 
 __all__ = [
     "Base",
@@ -37,8 +40,14 @@ __all__ = [
     "ModelRegistry",
     "EventOutbox",
     "Prompt",
+    "ToolGroup",
     "Tool",
+    "ToolInstance",
+    "HealthStatus",
+    "InstanceType",
     "Agent",
+    "AgentBinding",
+    "CredentialStrategy",
     "AgentRun",
     "AgentRunStep",
     "APIKey",
@@ -46,13 +55,12 @@ __all__ = [
     "Collection",
     "FieldType",
     "SearchMode",
-    "ToolInstance",
-    "InstanceScope",
-    "HealthStatus",
     "CredentialSet",
     "AuthType",
     "CredentialScope",
     "PermissionSet",
     "PermissionScope",
+    "PermissionValue",
     "RoutingLog",
+    "Policy",
 ]

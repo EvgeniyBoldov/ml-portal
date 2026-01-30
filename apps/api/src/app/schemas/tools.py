@@ -5,7 +5,8 @@ from pydantic import BaseModel, Field
 
 
 class ToolBase(BaseModel):
-    slug: str = Field(..., description="Unique identifier", example="netbox.get_device")
+    slug: str = Field(..., description="Unique identifier", example="jira.create")
+    tool_group_id: UUID = Field(..., description="FK to ToolGroup")
     name: str = Field(..., description="Display name")
     description: Optional[str] = None
     type: str = Field("api", description="Tool type: api, function, database")
@@ -20,6 +21,7 @@ class ToolCreate(ToolBase):
 
 
 class ToolUpdate(BaseModel):
+    tool_group_id: Optional[UUID] = None
     name: Optional[str] = None
     description: Optional[str] = None
     type: Optional[str] = None
@@ -36,3 +38,9 @@ class ToolResponse(ToolBase):
 
     class Config:
         from_attributes = True
+
+
+class ToolDetailResponse(ToolResponse):
+    """Tool response with group details"""
+    tool_group_slug: Optional[str] = None
+    tool_group_name: Optional[str] = None

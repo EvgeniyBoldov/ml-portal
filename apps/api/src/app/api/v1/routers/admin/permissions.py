@@ -55,10 +55,7 @@ async def create_permission_set(
         scope=data.scope,
         tenant_id=data.tenant_id,
         user_id=data.user_id,
-        allowed_tools=data.allowed_tools,
-        denied_tools=data.denied_tools,
-        allowed_collections=data.allowed_collections,
-        denied_collections=data.denied_collections,
+        instance_permissions=data.instance_permissions,
     )
     
     try:
@@ -80,10 +77,9 @@ async def get_effective_permissions(
     service = PermissionService(db)
     perms = await service.resolve_permissions(user_id=user_id, tenant_id=tenant_id)
     return EffectivePermissionsResponse(
-        allowed_tools=list(perms.allowed_tools),
-        denied_tools=list(perms.denied_tools),
-        allowed_collections=list(perms.allowed_collections),
-        denied_collections=list(perms.denied_collections),
+        instance_permissions=perms.instance_permissions,
+        allowed_instances=perms.get_allowed_instances(),
+        denied_instances=perms.get_denied_instances(),
     )
 
 
@@ -114,14 +110,8 @@ async def update_permission_set(
     if not perm_set:
         raise HTTPException(status_code=404, detail="Permission set not found")
     
-    if data.allowed_tools is not None:
-        perm_set.allowed_tools = data.allowed_tools
-    if data.denied_tools is not None:
-        perm_set.denied_tools = data.denied_tools
-    if data.allowed_collections is not None:
-        perm_set.allowed_collections = data.allowed_collections
-    if data.denied_collections is not None:
-        perm_set.denied_collections = data.denied_collections
+    if data.instance_permissions is not None:
+        perm_set.instance_permissions = data.instance_permissions
     
     result = await repo.update(perm_set)
     await db.commit()

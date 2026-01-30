@@ -5,10 +5,11 @@ export interface Tool {
   slug: string;
   name: string;
   description?: string;
-  type: 'api' | 'function' | 'database';
-  input_schema: Record<string, any>;
-  output_schema?: Record<string, any>;
-  config?: Record<string, any>;
+  type: 'api' | 'function' | 'database' | 'builtin';
+  tool_group_id?: string;
+  input_schema: Record<string, unknown>;
+  output_schema?: Record<string, unknown>;
+  config?: Record<string, unknown>;
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -40,11 +41,13 @@ export const toolsApi = {
     skip?: number;
     limit?: number;
     type?: string;
+    tool_group_id?: string;
   } = {}): Promise<Tool[]> {
     const searchParams = new URLSearchParams();
     if (params.skip) searchParams.set('skip', String(params.skip));
     if (params.limit) searchParams.set('limit', String(params.limit));
     if (params.type) searchParams.set('type', params.type);
+    if (params.tool_group_id) searchParams.set('tool_group_id', params.tool_group_id);
     
     return apiRequest(`/admin/tools?${searchParams.toString()}`);
   },

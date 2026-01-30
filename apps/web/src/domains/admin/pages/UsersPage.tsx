@@ -1,17 +1,12 @@
 /**
  * UsersPage - Управление пользователями
- * 
- * Единый стиль с остальными админ-реестрами.
- * Клик по строке → View страница, редактирование через кнопку на View.
  */
 import React, { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { User } from '@shared/api/admin';
 import { useUsers } from '@shared/api/hooks/useAdmin';
 import { useTenants } from '@shared/hooks/useTenants';
-import { AdminPage } from '@shared/ui';
-import Badge from '@shared/ui/Badge';
-import { AdminTable, type AdminTableColumn } from '@shared/ui/AdminTable';
+import { AdminPage, DataTable, type DataTableColumn, Badge } from '@/shared/ui';
 
 const ROLE_CONFIG: Record<string, { label: string; tone: 'danger' | 'warn' | 'info' | 'neutral' }> = {
   admin: { label: 'Админ', tone: 'danger' },
@@ -55,10 +50,11 @@ export function UsersPage() {
     navigate(`/admin/users/${user.id}`);
   };
 
-  const columns: AdminTableColumn<User>[] = [
+  const columns: DataTableColumn<User>[] = [
     {
       key: 'login',
       label: 'ЛОГИН / EMAIL',
+      width: 280,
       sortable: true,
       render: (user) => (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
@@ -139,7 +135,7 @@ export function UsersPage() {
         </div>
       )}
 
-      <AdminTable
+      <DataTable
         columns={columns}
         data={users}
         keyField="id"
@@ -147,8 +143,6 @@ export function UsersPage() {
         emptyText="Пользователи не найдены. Нажмите «Создать» для добавления."
         paginated
         pageSize={20}
-        defaultSortKey="login"
-        defaultSortDirection="asc"
         onRowClick={handleRowClick}
       />
     </AdminPage>

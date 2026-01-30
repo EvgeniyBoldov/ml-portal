@@ -1,28 +1,34 @@
 /**
- * AgentEditorPage - View/Edit/Create agent with EntityPage
+ * AgentEditorPage - View/Edit/Create agent
  * 
- * Unified page for all agent operations:
- * - View: /admin/agents/:slug (readonly)
- * - Edit: /admin/agents/:slug?mode=edit
- * - Create: /admin/agents/new
+ * Layout similar to PromptEditorPage:
+ * - Left column (1/2): Agent info + Prompts
+ * - Right column (1/2): Bindings table + Settings
  */
-import React, { useState, useEffect } from 'react';
-import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { agentsApi, promptsApi, toolsApi, collectionsApi, AgentCreate } from '@/shared/api';
+import { useState, useEffect } from 'react';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { 
+  agentsApi, 
+  promptsApi, 
+  toolsApi,
+  toolInstancesApi,
+  toolGroupsApi,
+  type AgentCreate, 
+  type AgentBindingInput, 
+  type AgentBindingResponse,
+  type Tool,
+  type ToolInstance,
+  type ToolGroup,
+} from '@/shared/api';
 import { qk } from '@/shared/api/keys';
-import Button from '@/shared/ui/Button';
-import Input from '@/shared/ui/Input';
-import Textarea from '@/shared/ui/Textarea';
-import Select from '@/shared/ui/Select';
-import Switch from '@/shared/ui/Switch';
-import Badge from '@/shared/ui/Badge';
-import Modal from '@/shared/ui/Modal';
-import { Icon } from '@/shared/ui/Icon';
-import { Tabs, TabPanel } from '@/shared/ui/Tabs';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
 import { EntityPage, type EntityPageMode } from '@/shared/ui/EntityPage';
-import styles from './AgentEditorPage.module.css';
+import { ContentBlock, ContentGrid, type FieldDefinition } from '@/shared/ui/ContentBlock';
+import { Select, type SelectOption } from '@/shared/ui';
+import Badge from '@/shared/ui/Badge';
+import Button from '@/shared/ui/Button';
+import styles from './PromptEditorPage.module.css';
 
 export function AgentEditorPage() {
   const { slug } = useParams<{ slug: string }>();
@@ -33,9 +39,9 @@ export function AgentEditorPage() {
   const showSuccess = useSuccessToast();
   
   // Determine mode
-  const isCreate = !slug || slug === 'new';
+  const isNew = !slug || slug === 'new';
   const isEditMode = searchParams.get('mode') === 'edit';
-  const mode: EntityPageMode = isCreate ? 'create' : isEditMode ? 'edit' : 'view';
+  const mode: EntityPageMode = isNew ? 'create' : isEditMode ? 'edit' : 'view';
   const isEditable = mode === 'edit' || mode === 'create';
 
   const [formData, setFormData] = useState<AgentCreate>({
@@ -44,438 +50,505 @@ export function AgentEditorPage() {
     description: '',
     system_prompt_slug: '',
     baseline_prompt_id: null,
-    tools: [],
-    available_collections: [],
+    policy_id: null,
+    capabilities: [],
+    supports_partial_mode: false,
     generation_config: {},
     is_active: true,
     enable_logging: true,
+    bindings: [],
   });
 
-  // Load metadata for selectors
-  const { data: prompts } = useQuery({
-    queryKey: ['prompts', 'list'],
+  // Load prompts for selectors
+  const { data: prompts = [] } = useQuery({
+    queryKey: qk.prompts.list({}),
     queryFn: () => promptsApi.listPrompts(),
   });
 
-  const { data: tools } = useQuery({
-    queryKey: ['tools', 'list'],
+  const systemPrompts = prompts.filter((p: any) => p.type === 'system') || [];
+  const baselinePrompts = prompts.filter((p: any) => p.type === 'baseline') || [];
+
+  // Load tools and tool instances for bindings
+  const { data: tools = [] } = useQuery({
+    queryKey: qk.tools.list({}),
     queryFn: () => toolsApi.list(),
   });
 
-  const { data: collections } = useQuery({
-    queryKey: ['collections', 'list'],
-    queryFn: () => collectionsApi.list(),
+  const { data: toolInstances = [] } = useQuery({
+    queryKey: qk.toolInstances.list({}),
+    queryFn: () => toolInstancesApi.list(),
+  });
+
+  const { data: toolGroups = [] } = useQuery({
+    queryKey: qk.toolGroups.list({}),
+    queryFn: () => toolGroupsApi.list(),
   });
 
   const [saving, setSaving] = useState(false);
-
-  // Load agent data if editing
-  const { data: existingAgent, isLoading, refetch } = useQuery({
-    queryKey: ['agents', slug],
-    queryFn: () => agentsApi.get(slug!),
-    enabled: !isCreate,
+  const [showAddBinding, setShowAddBinding] = useState(false);
+  const [selectedGroupId, setSelectedGroupId] = useState<string>('');
+  const [newBinding, setNewBinding] = useState<AgentBindingInput>({
+    tool_id: '',
+    tool_instance_id: '',
+    credential_strategy: 'any',
+    required: false,
   });
 
+  // Filter tools and instances by selected group
+  const filteredTools = selectedGroupId 
+    ? tools.filter((t: Tool) => t.tool_group_id === selectedGroupId)
+    : tools;
+  
+  const filteredInstances = selectedGroupId
+    ? toolInstances.filter((i: ToolInstance) => i.tool_group_id === selectedGroupId)
+    : toolInstances;
+
+  // Load agent data
+  const { data: agent, isLoading } = useQuery({
+    queryKey: qk.agents.detail(slug!),
+    queryFn: () => agentsApi.get(slug!),
+    enabled: !isNew,
+  });
+
+  // Sync form data
   useEffect(() => {
-    if (existingAgent) {
+    if (agent) {
       setFormData({
-        slug: existingAgent.slug,
-        name: existingAgent.name,
-        description: existingAgent.description || '',
-        system_prompt_slug: existingAgent.system_prompt_slug,
-        baseline_prompt_id: existingAgent.baseline_prompt_id || null,
-        tools: existingAgent.tools,
-        available_collections: existingAgent.available_collections || [],
-        generation_config: existingAgent.generation_config || {},
-        is_active: existingAgent.is_active,
-        enable_logging: existingAgent.enable_logging,
+        slug: agent.slug,
+        name: agent.name,
+        description: agent.description || '',
+        system_prompt_slug: agent.system_prompt_slug,
+        baseline_prompt_id: agent.baseline_prompt_id || null,
+        policy_id: agent.policy_id || null,
+        capabilities: agent.capabilities || [],
+        supports_partial_mode: agent.supports_partial_mode || false,
+        generation_config: agent.generation_config || {},
+        is_active: agent.is_active,
+        enable_logging: agent.enable_logging,
+        bindings: agent.bindings?.map((b: AgentBindingResponse) => ({
+          tool_id: b.tool_id,
+          tool_instance_id: b.tool_instance_id,
+          credential_strategy: b.credential_strategy as AgentBindingInput['credential_strategy'],
+          required: b.required,
+        })) || [],
       });
     }
-  }, [existingAgent]);
+  }, [agent]);
 
+  // Mutations
+  const createMutation = useMutation({
+    mutationFn: () => agentsApi.create(formData),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: qk.agents.list({}) });
+      showSuccess('Агент создан');
+      navigate('/admin/agents');
+    },
+    onError: (err: Error) => showError(err?.message || 'Ошибка создания'),
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: () => agentsApi.update(slug!, formData),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: qk.agents.detail(slug!) });
+      queryClient.invalidateQueries({ queryKey: qk.agents.list({}) });
+      showSuccess('Агент обновлён');
+      setSearchParams({});
+    },
+    onError: (err: Error) => showError(err?.message || 'Ошибка обновления'),
+  });
+
+  // Handlers
   const handleSave = async () => {
     setSaving(true);
     try {
-      if (mode === 'create') {
-        await agentsApi.create(formData);
-        showSuccess('Агент создан');
-        queryClient.invalidateQueries({ queryKey: ['agents'] });
-        navigate('/admin/agents');
+      if (isNew) {
+        await createMutation.mutateAsync();
       } else {
-        await agentsApi.update(slug!, formData);
-        showSuccess('Агент обновлён');
-        queryClient.invalidateQueries({ queryKey: ['agents'] });
-        setSearchParams({});
-        refetch();
+        await updateMutation.mutateAsync();
       }
-    } catch (err) {
-      showError(err instanceof Error ? err.message : 'Ошибка сохранения');
     } finally {
       setSaving(false);
     }
   };
 
-  const handleEdit = () => {
-    setSearchParams({ mode: 'edit' });
-  };
+  const handleEdit = () => setSearchParams({ mode: 'edit' });
 
   const handleCancel = () => {
-    if (mode === 'edit' && existingAgent) {
-      setFormData({
-        slug: existingAgent.slug,
-        name: existingAgent.name,
-        description: existingAgent.description || '',
-        system_prompt_slug: existingAgent.system_prompt_slug,
-        baseline_prompt_id: existingAgent.baseline_prompt_id || null,
-        tools: existingAgent.tools,
-        available_collections: existingAgent.available_collections || [],
-        generation_config: existingAgent.generation_config || {},
-        is_active: existingAgent.is_active,
-        enable_logging: existingAgent.enable_logging,
-      });
+    if (isNew) {
+      navigate('/admin/agents');
+    } else {
+      if (agent) {
+        setFormData({
+          slug: agent.slug,
+          name: agent.name,
+          description: agent.description || '',
+          system_prompt_slug: agent.system_prompt_slug,
+          baseline_prompt_id: agent.baseline_prompt_id || null,
+          policy_id: agent.policy_id || null,
+          capabilities: agent.capabilities || [],
+          supports_partial_mode: agent.supports_partial_mode || false,
+          generation_config: agent.generation_config || {},
+          is_active: agent.is_active,
+          enable_logging: agent.enable_logging,
+          bindings: agent.bindings?.map((b: AgentBindingResponse) => ({
+            tool_id: b.tool_id,
+            tool_instance_id: b.tool_instance_id,
+            credential_strategy: b.credential_strategy as AgentBindingInput['credential_strategy'],
+            required: b.required,
+          })) || [],
+        });
+      }
       setSearchParams({});
-    } else if (mode === 'create') {
-      navigate('/admin/agents');
     }
   };
 
-  const handleDelete = async () => {
-    if (!confirm('Удалить этого агента?')) return;
-    try {
-      await agentsApi.delete(slug!);
-      showSuccess('Агент удалён');
-      queryClient.invalidateQueries({ queryKey: ['agents'] });
-      navigate('/admin/agents');
-    } catch (err) {
-      showError(err instanceof Error ? err.message : 'Ошибка удаления');
-    }
+  const handleFieldChange = (key: string, value: string | boolean | null) => {
+    setFormData((prev: AgentCreate) => ({ ...prev, [key]: value }));
   };
 
-  const toggleTool = (toolSlug: string) => {
-    if (!isEditable) return;
-    const currentTools = formData.tools;
-    if (currentTools.includes(toolSlug)) {
-      setFormData({ ...formData, tools: currentTools.filter(t => t !== toolSlug) });
-    } else {
-      setFormData({ ...formData, tools: [...currentTools, toolSlug] });
+  // Binding management
+  const handleAddBinding = () => {
+    if (!newBinding.tool_id || !newBinding.tool_instance_id) return;
+    
+    // Check if binding already exists
+    const exists = formData.bindings?.some(
+      (b: AgentBindingInput) => b.tool_id === newBinding.tool_id && b.tool_instance_id === newBinding.tool_instance_id
+    );
+    if (exists) {
+      showError('Такая привязка уже существует');
+      return;
     }
+
+    setFormData((prev: AgentCreate) => ({
+      ...prev,
+      bindings: [...(prev.bindings || []), { ...newBinding }],
+    }));
+    setNewBinding({
+      tool_id: '',
+      tool_instance_id: '',
+      credential_strategy: 'inherit',
+      required: false,
+    });
+    setShowAddBinding(false);
   };
 
-  const toggleCollection = (collectionSlug: string) => {
-    if (!isEditable) return;
-    const currentCollections = formData.available_collections || [];
-    if (currentCollections.includes(collectionSlug)) {
-      setFormData({ ...formData, available_collections: currentCollections.filter(c => c !== collectionSlug) });
-    } else {
-      setFormData({ ...formData, available_collections: [...currentCollections, collectionSlug] });
-    }
+  const handleRemoveBinding = (index: number) => {
+    setFormData((prev: AgentCreate) => ({
+      ...prev,
+      bindings: prev.bindings?.filter((_: AgentBindingInput, i: number) => i !== index) || [],
+    }));
   };
 
-  const hasCollectionSearchTool = formData.tools.includes('collection.search');
+  // Get tool/instance names for display
+  const getToolName = (toolId: string) => {
+    const tool = tools.find((t: Tool) => t.id === toolId);
+    return tool ? `${tool.slug} (${tool.name})` : toolId;
+  };
 
-  // Modal state for prompt preview
-  const [showPromptModal, setShowPromptModal] = useState(false);
-  const [promptTab, setPromptTab] = useState<'base' | 'generated'>('base');
+  const getInstanceName = (instanceId: string) => {
+    const instance = toolInstances.find((i: ToolInstance) => i.id === instanceId);
+    return instance ? `${instance.slug} (${instance.name})` : instanceId;
+  };
 
-  // Load generated prompt for preview (only when modal is open)
-  const { data: generatedPrompt } = useQuery({
-    queryKey: qk.agents.detail(slug || ''),
-    queryFn: () => agentsApi.getGeneratedPrompt(slug!),
-    enabled: !isCreate && !!slug && showPromptModal,
-  });
+  // Field definitions
+  const agentFields: FieldDefinition[] = [
+    {
+      key: 'slug',
+      label: 'Slug (ID)',
+      type: 'text',
+      required: true,
+      disabled: !isNew,
+      placeholder: 'network-assistant',
+      description: isNew ? 'Уникальный идентификатор (нельзя изменить после создания)' : undefined,
+    },
+    {
+      key: 'name',
+      label: 'Название',
+      type: 'text',
+      required: true,
+      placeholder: 'Network Engineer Helper',
+    },
+    {
+      key: 'description',
+      label: 'Описание',
+      type: 'textarea',
+      placeholder: 'Описание агента...',
+      rows: 2,
+    },
+    {
+      key: 'system_prompt_slug',
+      label: 'Системный промпт',
+      type: 'select',
+      required: true,
+      options: [
+        { value: '', label: 'Выберите промпт...' },
+        ...systemPrompts.map((p: { slug: string; name: string }) => ({
+          value: p.slug,
+          label: p.name,
+        })),
+      ],
+    },
+    {
+      key: 'baseline_prompt_id',
+      label: 'Baseline промпт',
+      type: 'select',
+      description: 'Ограничения и запреты для агента',
+      options: [
+        { value: '', label: 'Не выбран' },
+        ...baselinePrompts.map((p: { id: string; name: string; slug: string }) => ({
+          value: p.id,
+          label: `${p.name} (${p.slug})`,
+        })),
+      ],
+    },
+  ];
 
-  // Get selected prompt info
-  const selectedPrompt = prompts?.find((p: { slug: string }) => p.slug === formData.system_prompt_slug);
-  
-  // Filter baseline prompts (type='baseline')
-  const baselinePrompts = prompts?.filter((p: { type?: string }) => p.type === 'baseline') || [];
-  const selectedBaseline = prompts?.find((p: { id: string }) => p.id === formData.baseline_prompt_id);
-
-  if (!isCreate && isLoading) {
-    return <div className={styles.emptyState}>Загрузка агента...</div>;
-  }
+  const settingsFields: FieldDefinition[] = [
+    {
+      key: 'is_active',
+      label: 'Активен',
+      type: 'boolean',
+    },
+    {
+      key: 'enable_logging',
+      label: 'Логирование',
+      type: 'boolean',
+    },
+    {
+      key: 'supports_partial_mode',
+      label: 'Частичный режим',
+      type: 'boolean',
+      description: 'Разрешить работу при недоступности некоторых инструментов',
+    },
+  ];
 
   return (
-    <div className={styles.wrap}>
-      {/* Header */}
-      <div className={styles.header}>
-        <div>
-          <h1 className={styles.title}>
-            {isCreate ? 'Создать Агента' : formData.name || slug}
-          </h1>
-          {!isCreate && <p className={styles.subtitle}><code>{slug}</code></p>}
-        </div>
-        <div className={styles.headerActions}>
-          <Link to="/admin/agents">
-            <Button variant="outline">← Назад</Button>
-          </Link>
-        </div>
-      </div>
+    <EntityPage
+      mode={mode}
+      entityName={agent?.name || 'Новый агент'}
+      entityTypeLabel="агента"
+      backPath="/admin/agents"
+      loading={!isNew && isLoading}
+      saving={saving}
+      onEdit={handleEdit}
+      onSave={handleSave}
+      onCancel={handleCancel}
+      showDelete={false}
+    >
+      <ContentGrid>
+        {/* Agent Info - 1/2 */}
+        <ContentBlock
+          width="1/2"
+          title="Информация об агенте"
+          icon="bot"
+          editable={isEditable}
+          fields={agentFields}
+          data={formData}
+          onChange={handleFieldChange}
+        />
 
-      <form onSubmit={(e) => { e.preventDefault(); handleSave(); }}>
-        <div className={styles.content}>
-          {/* Basic Info Card */}
-          <div className={styles.card}>
-            <div className={styles.cardHeader}>
-              <h2 className={styles.cardTitle}>Основная информация</h2>
-            </div>
-
-            <div className={styles.formRow}>
-              <div className={styles.formGroup}>
-                <label className={styles.label}>Slug (ID)</label>
-                <Input 
-                  value={formData.slug} 
-                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormData({...formData, slug: e.target.value})}
-                  disabled={!isCreate}
-                  placeholder="network-assistant"
-                  required
-                />
-              </div>
-              <div className={styles.formGroup}>
-                <label className={styles.label}>Название</label>
-                <Input 
-                  value={formData.name} 
-                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormData({...formData, name: e.target.value})}
-                  placeholder="Network Engineer Helper"
-                  required
-                />
-              </div>
-            </div>
-
-            <div className={styles.formGroup}>
-              <label className={styles.label}>Описание</label>
-              <Textarea 
-                value={formData.description} 
-                onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setFormData({...formData, description: e.target.value})}
-                rows={2}
-                placeholder="Краткое описание агента..."
-              />
-            </div>
-          </div>
-
-          {/* System Prompt Card */}
-          <div className={styles.card}>
-            <div className={styles.cardHeader}>
-              <h2 className={styles.cardTitle}>Системный промпт</h2>
-              <p className={styles.cardDescription}>Определяет личность и инструкции поведения</p>
-            </div>
-
-            <div className={styles.formGroup}>
-              <label className={styles.label}>Системный промпт</label>
-              <div className={styles.promptSelector}>
-                <select 
-                  className={styles.select}
-                  value={formData.system_prompt_slug}
-                  onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setFormData({...formData, system_prompt_slug: e.target.value})}
-                  required
-                >
-                  <option value="">Выберите промпт...</option>
-                  {prompts?.filter((p: any) => p.type !== 'baseline').map((p: { slug: string; name: string }) => (
-                    <option key={p.slug} value={p.slug}>{p.name}</option>
+        {/* Bindings Table - 1/2 */}
+        <ContentBlock
+          width="1/2"
+          title="Привязки инструментов"
+          icon="link"
+        >
+          {formData.bindings && formData.bindings.length > 0 ? (
+            <div className={styles.versionsTable}>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Инструмент</th>
+                    <th>Инстанс</th>
+                    <th>Стратегия</th>
+                    <th>Обяз.</th>
+                    {isEditable && <th></th>}
+                  </tr>
+                </thead>
+                <tbody>
+                  {formData.bindings.map((binding: AgentBindingInput, index: number) => (
+                    <tr key={`${binding.tool_id}-${binding.tool_instance_id}`}>
+                      <td>{getToolName(binding.tool_id)}</td>
+                      <td>{getInstanceName(binding.tool_instance_id)}</td>
+                      <td>
+                        <Badge variant="default" size="small">
+                          {{
+                            user_only: 'Личные',
+                            tenant_only: 'Тенанта',
+                            default_only: 'Общие',
+                            prefer_user: 'Предп. личные',
+                            prefer_tenant: 'Предп. тенанта',
+                            any: 'Любые',
+                          }[binding.credential_strategy] || binding.credential_strategy}
+                        </Badge>
+                      </td>
+                      <td>
+                        <Badge variant={binding.required ? 'warning' : 'default'} size="small">
+                          {binding.required ? 'Да' : 'Нет'}
+                        </Badge>
+                      </td>
+                      {isEditable && (
+                        <td>
+                          <Button
+                            variant="ghost"
+                            size="small"
+                            onClick={() => handleRemoveBinding(index)}
+                          >
+                            ✕
+                          </Button>
+                        </td>
+                      )}
+                    </tr>
                   ))}
-                </select>
-                {formData.system_prompt_slug && !isCreate && (
-                  <Button 
-                    type="button" 
-                    variant="outline" 
-                    onClick={() => setShowPromptModal(true)}
-                  >
-                    Превью
-                  </Button>
-                )}
-              </div>
-              {selectedPrompt && (
-                <div className={styles.promptInfo}>
-                  <Badge tone="info">{selectedPrompt.slug}</Badge>
-                  <Link to={`/admin/prompts/${selectedPrompt.slug}`}>
-                    <Button variant="link" size="small">Открыть →</Button>
-                  </Link>
-                </div>
-              )}
+                </tbody>
+              </table>
             </div>
-
-            <div className={styles.formGroup}>
-              <label className={styles.label}>Baseline промпт <span className={styles.optional}>(опционально)</span></label>
-              <p className={styles.fieldHint}>Ограничения и запреты для агента (что НЕЛЬЗЯ делать)</p>
-              <div className={styles.promptSelector}>
-                <select 
-                  className={styles.select}
-                  value={formData.baseline_prompt_id || ''}
-                  onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setFormData({...formData, baseline_prompt_id: e.target.value || null})}
-                >
-                  <option value="">Не выбран</option>
-                  {baselinePrompts.map((p: { id: string; slug: string; name: string }) => (
-                    <option key={p.id} value={p.id}>{p.name} ({p.slug})</option>
-                  ))}
-                </select>
-              </div>
-              {selectedBaseline && (
-                <div className={styles.promptInfo}>
-                  <Badge tone="warning">{selectedBaseline.slug}</Badge>
-                  <Link to={`/admin/prompts/${selectedBaseline.slug}`}>
-                    <Button variant="link" size="small">Открыть →</Button>
-                  </Link>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Tools Card */}
-          <div className={styles.card}>
-            <div className={styles.cardHeader}>
-              <h2 className={styles.cardTitle}>Инструменты</h2>
-              <p className={styles.cardDescription}>
-                Выбрано: {formData.tools.length} из {tools?.length || 0}
-              </p>
-            </div>
-
-            <div className={styles.toolsGrid}>
-              {tools?.length === 0 && (
-                <div className={styles.emptyState}>Нет доступных инструментов</div>
-              )}
-              {tools?.map((tool: { slug: string; name: string }) => {
-                const isSelected = formData.tools.includes(tool.slug);
-                return (
-                  <div 
-                    key={tool.slug} 
-                    className={`${styles.toolChip} ${isSelected ? styles.selected : ''}`}
-                    onClick={() => toggleTool(tool.slug)}
-                  >
-                    <input 
-                      type="checkbox"
-                      checked={isSelected}
-                      onChange={() => toggleTool(tool.slug)}
-                      onClick={(e: React.MouseEvent) => e.stopPropagation()}
-                    />
-                    <div className={styles.toolChipInfo}>
-                      <div className={styles.toolChipName}>{tool.name}</div>
-                      <div className={styles.toolChipSlug}>{tool.slug}</div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Collections Card (only if collection.search tool selected) */}
-          {hasCollectionSearchTool && (
-            <div className={styles.card}>
-              <div className={styles.cardHeader}>
-                <h2 className={styles.cardTitle}>Коллекции</h2>
-                <p className={styles.cardDescription}>
-                  Доступ для collection.search
-                </p>
-              </div>
-
-              <div className={styles.collectionsGrid}>
-                {collections?.items?.length === 0 && (
-                  <div className={styles.emptyState}>Нет доступных коллекций</div>
-                )}
-                {collections?.items?.map((collection: { slug: string; name: string }) => {
-                  const isSelected = (formData.available_collections || []).includes(collection.slug);
-                  return (
-                    <div 
-                      key={collection.slug} 
-                      className={`${styles.toolChip} ${isSelected ? styles.selected : ''}`}
-                      onClick={() => toggleCollection(collection.slug)}
-                    >
-                      <input 
-                        type="checkbox"
-                        checked={isSelected}
-                        onChange={() => toggleCollection(collection.slug)}
-                        onClick={(e: React.MouseEvent) => e.stopPropagation()}
-                      />
-                      <div className={styles.toolChipInfo}>
-                        <div className={styles.toolChipName}>{collection.name}</div>
-                        <div className={styles.toolChipSlug}>{collection.slug}</div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
+          ) : (
+            <p style={{ color: 'var(--color-text-muted)', fontSize: '0.875rem' }}>
+              Нет привязанных инструментов
+            </p>
           )}
 
-          {/* Options Card */}
-          <div className={styles.card}>
-            <div className={styles.cardHeader}>
-              <h2 className={styles.cardTitle}>Настройки</h2>
+          {/* Add binding form */}
+          {isEditable && (
+            <div style={{ marginTop: '1rem' }}>
+              {showAddBinding ? (
+                <div style={{ 
+                  display: 'flex', 
+                  flexDirection: 'column', 
+                  gap: '0.75rem',
+                  padding: '1rem',
+                  background: 'rgba(255, 255, 255, 0.02)',
+                  borderRadius: '8px',
+                  border: '1px solid rgba(255, 255, 255, 0.06)'
+                }}>
+                  <div style={{ fontSize: '0.875rem', fontWeight: 500, marginBottom: '0.25rem' }}>
+                    Новая привязка инструмента
+                  </div>
+                  
+                  {/* Group filter */}
+                  <div>
+                    <label style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)', marginBottom: '0.25rem', display: 'block' }}>
+                      Группа (фильтр)
+                    </label>
+                    <Select
+                      value={selectedGroupId}
+                      onChange={(value) => {
+                        setSelectedGroupId(value);
+                        setNewBinding({ ...newBinding, tool_id: '', tool_instance_id: '' });
+                      }}
+                      placeholder="Все группы"
+                      options={[
+                        { value: '', label: 'Все группы' },
+                        ...toolGroups.map((g: ToolGroup) => ({ value: g.id, label: g.name }))
+                      ]}
+                    />
+                  </div>
+
+                  {/* Tool select */}
+                  <div>
+                    <label style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)', marginBottom: '0.25rem', display: 'block' }}>
+                      Инструмент *
+                    </label>
+                    <Select
+                      value={newBinding.tool_id}
+                      onChange={(value) => setNewBinding({ ...newBinding, tool_id: value, tool_instance_id: '' })}
+                      placeholder="Выберите инструмент..."
+                      options={[
+                        { value: '', label: 'Выберите инструмент...' },
+                        ...filteredTools.map((t: Tool) => ({ value: t.id, label: `${t.slug} — ${t.name}` }))
+                      ]}
+                    />
+                  </div>
+
+                  {/* Instance select */}
+                  <div>
+                    <label style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)', marginBottom: '0.25rem', display: 'block' }}>
+                      Инстанс *
+                    </label>
+                    <Select
+                      value={newBinding.tool_instance_id}
+                      onChange={(value) => setNewBinding({ ...newBinding, tool_instance_id: value })}
+                      placeholder="Выберите инстанс..."
+                      options={[
+                        { value: '', label: 'Выберите инстанс...' },
+                        ...filteredInstances.map((i: ToolInstance) => ({ value: i.id, label: `${i.slug} — ${i.name}` }))
+                      ]}
+                    />
+                  </div>
+
+                  {/* Credential strategy - уровень прав */}
+                  <div>
+                    <label style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)', marginBottom: '0.25rem', display: 'block' }}>
+                      Уровень прав
+                    </label>
+                    <Select
+                      value={newBinding.credential_strategy}
+                      onChange={(value) => setNewBinding({ ...newBinding, credential_strategy: value as AgentBindingInput['credential_strategy'] })}
+                      options={[
+                        { value: 'any', label: 'Любые (по умолчанию)' },
+                        { value: 'user_only', label: 'Только личные' },
+                        { value: 'tenant_only', label: 'Только тенанта' },
+                        { value: 'default_only', label: 'Только общие' },
+                        { value: 'prefer_user', label: 'Предпочитать личные' },
+                        { value: 'prefer_tenant', label: 'Предпочитать тенанта' },
+                      ]}
+                    />
+                  </div>
+
+                  {/* Required checkbox */}
+                  <label style={{ 
+                    display: 'flex', 
+                    alignItems: 'center', 
+                    gap: '0.5rem',
+                    fontSize: '0.875rem',
+                    cursor: 'pointer'
+                  }}>
+                    <input
+                      type="checkbox"
+                      checked={newBinding.required}
+                      onChange={(e) => setNewBinding({ ...newBinding, required: e.target.checked })}
+                      style={{ width: '16px', height: '16px' }}
+                    />
+                    Обязательный инструмент
+                  </label>
+
+                  {/* Actions */}
+                  <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
+                    <Button variant="primary" size="small" onClick={handleAddBinding}>
+                      Добавить
+                    </Button>
+                    <Button variant="ghost" size="small" onClick={() => {
+                      setShowAddBinding(false);
+                      setSelectedGroupId('');
+                      setNewBinding({ tool_id: '', tool_instance_id: '', credential_strategy: 'any', required: false });
+                    }}>
+                      Отмена
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <Button variant="ghost" size="small" onClick={() => setShowAddBinding(true)}>
+                  + Добавить привязку
+                </Button>
+              )}
             </div>
+          )}
+        </ContentBlock>
 
-            <div className={styles.optionsRow}>
-              <div 
-                className={`${styles.optionItem} ${formData.is_active ? styles.active : ''}`}
-                onClick={() => setFormData({ ...formData, is_active: !formData.is_active })}
-              >
-                <input 
-                  type="checkbox"
-                  checked={formData.is_active}
-                  onChange={() => setFormData({ ...formData, is_active: !formData.is_active })}
-                />
-                <span>Активен</span>
-              </div>
-              <div 
-                className={`${styles.optionItem} ${formData.enable_logging ? styles.active : ''}`}
-                onClick={() => setFormData({ ...formData, enable_logging: !formData.enable_logging })}
-              >
-                <input 
-                  type="checkbox"
-                  checked={formData.enable_logging ?? true}
-                  onChange={() => setFormData({ ...formData, enable_logging: !formData.enable_logging })}
-                />
-                <span>Логирование</span>
-              </div>
-            </div>
-          </div>
-
-          {/* Actions */}
-          <div className={styles.actions}>
-            <Link to="/admin/agents">
-              <Button type="button" variant="outline">Отмена</Button>
-            </Link>
-            <Button 
-              type="submit" 
-              variant="primary" 
-              disabled={saving}
-            >
-              {saving ? 'Сохранение...' : 'Сохранить'}
-            </Button>
-          </div>
-        </div>
-      </form>
-
-      {/* Prompt Preview Modal */}
-      <Modal 
-        open={showPromptModal} 
-        onClose={() => setShowPromptModal(false)} 
-        title="Превью промпта"
-        size="lg"
-      >
-        <Tabs
-          tabs={[
-            { id: 'base', label: 'Базовый' },
-            { id: 'generated', label: 'Сгенерированный' },
-          ]}
-          activeTab={promptTab}
-          onChange={(tab) => setPromptTab(tab as 'base' | 'generated')}
-        >
-          <TabPanel id="base" activeTab={promptTab}>
-            <div className={styles.promptPreview}>
-              <pre>{generatedPrompt?.base_prompt || 'Загрузка...'}</pre>
-            </div>
-          </TabPanel>
-
-          <TabPanel id="generated" activeTab={promptTab}>
-            {generatedPrompt ? (
-              <div className={styles.promptPreview}>
-                <pre>{generatedPrompt.final_prompt}</pre>
-              </div>
-            ) : (
-              <div className={styles.emptyState}>Загрузка...</div>
-            )}
-          </TabPanel>
-        </Tabs>
-      </Modal>
-    </div>
+        {/* Settings - 1/2 */}
+        <ContentBlock
+          width="1/2"
+          title="Настройки"
+          icon="settings"
+          editable={isEditable}
+          fields={settingsFields}
+          data={formData}
+          onChange={handleFieldChange}
+        />
+      </ContentGrid>
+    </EntityPage>
   );
 }
+
+export default AgentEditorPage;

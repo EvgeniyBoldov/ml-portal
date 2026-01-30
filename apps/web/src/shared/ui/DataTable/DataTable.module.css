@@ -79,16 +79,7 @@
   border-bottom: 1px solid var(--border);
 }
 
-.table thead th {
-  padding: var(--space-3) var(--space-4);
-  text-align: left;
-  font-weight: 600;
-  font-size: var(--text-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--text-secondary);
-  white-space: nowrap;
-}
+/* Table headers are now styled via TableHeader component */
 
 .table tbody tr {
   border-bottom: 1px solid var(--border);
@@ -161,7 +152,8 @@
   padding: var(--space-3) var(--space-4);
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-top: none;
+  border-radius: 0 0 var(--radius) var(--radius);
   font-size: var(--text-sm);
 }
 

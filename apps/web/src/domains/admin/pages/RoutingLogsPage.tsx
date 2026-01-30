@@ -3,10 +3,7 @@
  */
 import { useQuery } from '@tanstack/react-query';
 import { http } from '@/shared/api/client';
-import { AdminPage } from '@/shared/ui';
-import Badge from '@/shared/ui/Badge';
-import DataTable, { type DataTableColumn } from '@/shared/ui/DataTable/DataTable';
-import styles from './RegistryPage.module.css';
+import { AdminPage, DataTable, type DataTableColumn, Badge } from '@/shared/ui';
 
 interface RoutingLog {
   id: string;
@@ -56,12 +53,12 @@ export function RoutingLogsPage() {
     {
       key: 'agent_id',
       label: 'Агент',
-      render: (row) => <code className={styles.code}>{row.agent_id.slice(0, 8)}...</code>,
+      render: (row) => <code style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', background: 'var(--bg-subtle)', padding: '2px 6px', borderRadius: '4px' }}>{row.agent_id.slice(0, 8)}...</code>,
     },
     {
       key: 'user_id',
       label: 'Пользователь',
-      render: (row) => <code className={styles.code}>{row.user_id.slice(0, 8)}...</code>,
+      render: (row) => <code style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', background: 'var(--bg-subtle)', padding: '2px 6px', borderRadius: '4px' }}>{row.user_id.slice(0, 8)}...</code>,
     },
     {
       key: 'execution_mode',
@@ -84,7 +81,7 @@ export function RoutingLogsPage() {
           {(row.available_tools?.length || 0) > 2 && (
             <Badge variant="outline">+{row.available_tools.length - 2}</Badge>
           )}
-          {!row.available_tools?.length && <span className={styles.muted}>—</span>}
+          {!row.available_tools?.length && <span style={{ color: 'var(--color-text-muted)' }}>—</span>}
         </div>
       ),
     },
@@ -99,7 +96,7 @@ export function RoutingLogsPage() {
           {(row.unavailable_tools?.length || 0) > 2 && (
             <Badge variant="outline">+{row.unavailable_tools.length - 2}</Badge>
           )}
-          {!row.unavailable_tools?.length && <span className={styles.muted}>—</span>}
+          {!row.unavailable_tools?.length && <span style={{ color: 'var(--color-text-muted)' }}>—</span>}
         </div>
       ),
     },
@@ -110,8 +107,7 @@ export function RoutingLogsPage() {
       title="Routing Logs"
       subtitle="Логи решений маршрутизатора"
     >
-      <div className={styles.tableWrap}>
-          <DataTable
+      <DataTable
             columns={columns}
             data={logs || []}
             keyField="id"
@@ -121,8 +117,7 @@ export function RoutingLogsPage() {
             searchPlaceholder="Поиск..."
             paginated
             pageSize={50}
-          />
-      </div>
+      />
     </AdminPage>
   );
 }

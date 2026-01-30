@@ -238,9 +238,9 @@ export default function CollectionDataPage() {
             <h1 className={styles.title}>{collection.name}</h1>
             <div className={styles.subtitle}>
               <span>{collection.slug}</span>
-              <Badge tone="info" size="small">
-                {collection.type.toUpperCase()}
-              </Badge>
+              {collection.has_vector_search && (
+                <Badge variant="success" size="small">Vector</Badge>
+              )}
               <span>{total.toLocaleString()} записей</span>
             </div>
           </div>

@@ -1,4 +1,5 @@
 from typing import List, Optional
+from uuid import UUID
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,12 +16,13 @@ async def list_tools(
     skip: int = 0,
     limit: int = 100,
     type: Optional[str] = Query(None, description="Filter by type"),
+    tool_group_id: Optional[UUID] = Query(None, description="Filter by tool group"),
     db: AsyncSession = Depends(db_session),
     _: UserCtx = Depends(require_admin),
 ):
     """List all tools. Admin only."""
     service = ToolService(db)
-    tools, _ = await service.list_tools(skip=skip, limit=limit, type_filter=type)
+    tools, _ = await service.list_tools(skip=skip, limit=limit, type_filter=type, tool_group_id=tool_group_id)
     return tools
 
 

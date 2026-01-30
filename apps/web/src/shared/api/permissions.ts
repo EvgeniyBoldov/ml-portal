@@ -1,16 +1,15 @@
 import { apiRequest } from './http';
 
 export type PermissionScope = 'default' | 'tenant' | 'user';
+export type PermissionValue = 'allowed' | 'denied' | 'undefined';
 
 export interface PermissionSet {
   id: string;
   scope: PermissionScope;
   tenant_id?: string;
   user_id?: string;
-  allowed_tools: string[];
-  denied_tools: string[];
-  allowed_collections: string[];
-  denied_collections: string[];
+  instance_permissions: Record<string, PermissionValue>;
+  agent_permissions: Record<string, PermissionValue>;
   created_at: string;
   updated_at: string;
 }
@@ -19,24 +18,22 @@ export interface PermissionSetCreate {
   scope: PermissionScope;
   tenant_id?: string;
   user_id?: string;
-  allowed_tools?: string[];
-  denied_tools?: string[];
-  allowed_collections?: string[];
-  denied_collections?: string[];
+  instance_permissions?: Record<string, PermissionValue>;
+  agent_permissions?: Record<string, PermissionValue>;
 }
 
 export interface PermissionSetUpdate {
-  allowed_tools?: string[];
-  denied_tools?: string[];
-  allowed_collections?: string[];
-  denied_collections?: string[];
+  instance_permissions?: Record<string, PermissionValue>;
+  agent_permissions?: Record<string, PermissionValue>;
 }
 
 export interface EffectivePermissions {
-  allowed_tools: string[];
-  denied_tools: string[];
-  allowed_collections: string[];
-  denied_collections: string[];
+  instance_permissions: Record<string, boolean>;
+  agent_permissions: Record<string, boolean>;
+  allowed_instances: string[];
+  denied_instances: string[];
+  allowed_agents: string[];
+  denied_agents: string[];
 }
 
 export const permissionsApi = {
@@ -45,12 +42,14 @@ export const permissionsApi = {
     limit?: number;
     scope?: string;
     tenant_id?: string;
+    user_id?: string;
   } = {}): Promise<PermissionSet[]> {
     const searchParams = new URLSearchParams();
     if (params.skip) searchParams.set('skip', String(params.skip));
     if (params.limit) searchParams.set('limit', String(params.limit));
     if (params.scope) searchParams.set('scope', params.scope);
     if (params.tenant_id) searchParams.set('tenant_id', params.tenant_id);
+    if (params.user_id) searchParams.set('user_id', params.user_id);
     
     return apiRequest(`/admin/permissions?${searchParams.toString()}`);
   },

@@ -11,6 +11,10 @@ def register_builtins() -> None:
     """
     from app.agents.builtins.rag_search import RagSearchTool
     from app.agents.builtins.collection_search import CollectionSearchTool
+    from app.agents.builtins.collection_get import CollectionGetTool
+    from app.agents.builtins.collection_aggregate import CollectionAggregateTool
     
     ToolRegistry.register(RagSearchTool())
     ToolRegistry.register(CollectionSearchTool())
+    ToolRegistry.register(CollectionGetTool())
+    ToolRegistry.register(CollectionAggregateTool())

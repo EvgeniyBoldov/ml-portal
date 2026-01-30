@@ -16,9 +16,10 @@ class ToolService:
         self, 
         skip: int = 0, 
         limit: int = 100,
-        type_filter: Optional[str] = None
+        type_filter: Optional[str] = None,
+        tool_group_id: Optional[UUID] = None,
     ) -> Tuple[List[Tool], int]:
-        return await self.repo.list_tools(skip, limit, type_filter)
+        return await self.repo.list_tools(skip, limit, type_filter, tool_group_id)
 
     async def get_tool(self, identifier: str) -> Tool:
         """Get tool by ID or slug"""

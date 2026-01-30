@@ -11,7 +11,7 @@ import { Icon } from '../Icon';
 import Input from '../Input';
 import Textarea from '../Textarea';
 import Switch from '../Switch';
-import Select from '../Select';
+import { Select } from '../Select';
 import Badge from '../Badge';
 import styles from './ContentBlock.module.css';
 
@@ -139,7 +139,7 @@ export function ContentBlock({
             <code className={styles.codeValue}>{value || '—'}</code>
           );
         case 'select':
-          const option = field.options?.find(o => o.value === value);
+          const option = field.options?.find((o: any) => o.value === value);
           return (
             <div className={styles.fieldValue}>{option?.label || value || '—'}</div>
           );
@@ -185,14 +185,14 @@ export function ContentBlock({
         return (
           <Select
             value={value ?? ''}
-            onChange={(e: React.ChangeEvent<HTMLSelectElement>) => handleChange(field.key, e.target.value)}
+            onChange={(val) => handleChange(field.key, val)}
+            placeholder="Выберите..."
+            options={[
+              { value: '', label: 'Выберите...' },
+              ...(field.options || [])
+            ]}
             disabled={isDisabled}
-          >
-            <option value="">Выберите...</option>
-            {field.options?.map(opt => (
-              <option key={opt.value} value={opt.value}>{opt.label}</option>
-            ))}
-          </Select>
+          />
         );
       case 'badge':
         return value ? (

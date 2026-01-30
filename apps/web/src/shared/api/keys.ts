@@ -55,9 +55,15 @@ export const qk = {
   },
   toolInstances: {
     all: () => ['tool-instances'] as const,
-    list: (params?: { toolSlug?: string; scope?: string; tenantId?: string }) =>
+    list: (params?: { tool_group_id?: string; is_active?: boolean }) =>
       ['tool-instances', 'list', params] as const,
     detail: (id: string) => ['tool-instances', 'detail', id] as const,
+  },
+  toolGroups: {
+    all: () => ['tool-groups'] as const,
+    list: (params?: { skip?: number; limit?: number }) =>
+      ['tool-groups', 'list', params] as const,
+    detail: (id: string) => ['tool-groups', 'detail', id] as const,
   },
   credentials: {
     all: () => ['credentials'] as const,
@@ -67,11 +73,16 @@ export const qk = {
   },
   permissions: {
     all: () => ['permissions'] as const,
-    list: (params?: { scope?: string; tenantId?: string }) =>
+    list: (params?: { scope?: string; tenant_id?: string; user_id?: string }) =>
       ['permissions', 'list', params] as const,
     detail: (id: string) => ['permissions', 'detail', id] as const,
-    effective: (params?: { userId?: string; tenantId?: string }) =>
+    effective: (params?: { user_id?: string; tenant_id?: string }) =>
       ['permissions', 'effective', params] as const,
+  },
+  policies: {
+    all: () => ['policies'] as const,
+    list: (params?: { is_active?: boolean }) => ['policies', 'list', params] as const,
+    detail: (id: string) => ['policies', 'detail', id] as const,
   },
   routingLogs: {
     all: () => ['routing-logs'] as const,
@@ -85,6 +96,14 @@ export const qk = {
     list: (q?: string) => ['chats', 'list', q] as const,
     detail: (id: string) => ['chats', 'detail', id] as const,
     messages: (chatId: string) => ['chats', 'messages', chatId] as const,
+  },
+  collections: {
+    all: () => ['collections'] as const,
+    list: (params?: { tenant_id?: string; is_active?: boolean }) =>
+      ['collections', 'list', params] as const,
+    detail: (slug: string) => ['collections', 'detail', slug] as const,
+    data: (slug: string, params?: { limit?: number; offset?: number }) =>
+      ['collections', 'data', slug, params] as const,
   },
   auth: {
     me: () => ['auth', 'me'] as const,

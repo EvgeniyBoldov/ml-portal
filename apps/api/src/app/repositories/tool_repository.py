@@ -41,11 +41,14 @@ class ToolRepository:
         self, 
         skip: int = 0, 
         limit: int = 100,
-        type_filter: Optional[str] = None
+        type_filter: Optional[str] = None,
+        tool_group_id: Optional[UUID] = None,
     ) -> Tuple[List[Tool], int]:
         stmt = select(Tool)
         if type_filter:
             stmt = stmt.where(Tool.type == type_filter)
+        if tool_group_id:
+            stmt = stmt.where(Tool.tool_group_id == tool_group_id)
         
         # Count
         count_stmt = select(func.count()).select_from(stmt.subquery())
@@ -56,3 +59,16 @@ class ToolRepository:
         result = await self.session.execute(stmt)
         
         return list(result.scalars().all()), total
+
+    async def get_by_tool_group(
+        self,
+        tool_group_id: UUID,
+        is_active: bool = True,
+    ) -> List[Tool]:
+        """Get all tools for a tool group"""
+        stmt = select(Tool).where(
+            Tool.tool_group_id == tool_group_id,
+            Tool.is_active == is_active,
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())

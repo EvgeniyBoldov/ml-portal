@@ -6,14 +6,8 @@
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { agentRunsApi, AgentRun, AgentRunDetail, AgentRunFilter } from '@/shared/api';
-import { AdminPage } from '@/shared/ui';
-import Button from '@/shared/ui/Button';
-import Badge from '@/shared/ui/Badge';
-import Modal from '@/shared/ui/Modal';
-import { Skeleton } from '@/shared/ui/Skeleton';
-import { ActionsButton, type ActionItem } from '@/shared/ui/ActionsButton';
+import { AdminPage, DataTable, type DataTableColumn, Badge, Button, Modal, ActionsButton, type ActionItem } from '@/shared/ui';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
-import styles from './RegistryPage.module.css';
 
 function formatDuration(ms?: number): string {
   if (!ms) return '—';
@@ -259,6 +253,66 @@ export function AgentRunsPage() {
     },
   ];
 
+  const columns: DataTableColumn<AgentRun>[] = [
+    {
+      key: 'agent_slug',
+      label: 'АГЕНТ',
+      render: (run) => (
+        <code style={{ 
+          fontFamily: 'var(--font-mono, monospace)', 
+          fontSize: '0.75rem',
+          background: 'var(--bg-subtle)',
+          padding: '2px 6px',
+          borderRadius: '4px',
+        }}>
+          {run.agent_slug}
+        </code>
+      ),
+    },
+    {
+      key: 'status',
+      label: 'СТАТУС',
+      width: 100,
+      render: (run) => (
+        <Badge variant={STATUS_TONES[run.status] === 'success' ? 'success' : STATUS_TONES[run.status] === 'danger' ? 'danger' : 'default'} size="small">
+          {run.status}
+        </Badge>
+      ),
+    },
+    {
+      key: 'total_steps',
+      label: 'ШАГИ',
+      width: 80,
+    },
+    {
+      key: 'total_tool_calls',
+      label: 'TOOL CALLS',
+      width: 100,
+    },
+    {
+      key: 'duration_ms',
+      label: 'ВРЕМЯ',
+      width: 100,
+      render: (run) => (
+        <span style={{ color: 'var(--color-text-muted)' }}>{formatDuration(run.duration_ms)}</span>
+      ),
+    },
+    {
+      key: 'started_at',
+      label: 'НАЧАТ',
+      width: 150,
+      render: (run) => (
+        <span style={{ color: 'var(--color-text-muted)' }}>{formatDate(run.started_at)}</span>
+      ),
+    },
+    {
+      key: 'actions',
+      label: '',
+      width: 50,
+      render: (run) => <ActionsButton actions={getActions(run)} />,
+    },
+  ];
+
   return (
     <AdminPage
       title="Запуски агентов"
@@ -303,89 +357,19 @@ export function AgentRunsPage() {
       )}
 
       {/* Table */}
-      <div className={styles.tableWrap}>
-        <table className={styles.table}>
-          <thead>
-            <tr>
-              <th>АГЕНТ</th>
-              <th>СТАТУС</th>
-              <th>ШАГИ</th>
-              <th>TOOL CALLS</th>
-              <th>ВРЕМЯ</th>
-              <th>НАЧАТ</th>
-              <th>ДЕЙСТВИЯ</th>
-            </tr>
-          </thead>
-          <tbody>
-            {isLoading ? (
-              Array.from({ length: 3 }).map((_, i) => (
-                <tr key={i}>
-                  {Array.from({ length: 7 }).map((__, j) => (
-                    <td key={j}>
-                      <Skeleton width={j === 0 ? 120 : 80} />
-                    </td>
-                  ))}
-                </tr>
-              ))
-            ) : !runsData?.items.length ? (
-              <tr>
-                <td colSpan={7} className={styles.emptyState}>
-                  Запуски не найдены. Они появятся после выполнения агентов.
-                </td>
-              </tr>
-            ) : (
-              runsData.items.map((run) => (
-                <tr key={run.id} onClick={() => setSelectedRunId(run.id)} style={{ cursor: 'pointer' }}>
-                  <td>
-                    <code className={styles.code}>{run.agent_slug}</code>
-                  </td>
-                  <td>
-                    <Badge tone={STATUS_TONES[run.status] || 'neutral'} size="small">
-                      {run.status}
-                    </Badge>
-                  </td>
-                  <td>{run.total_steps}</td>
-                  <td>{run.total_tool_calls}</td>
-                  <td>
-                    <span className={styles.muted}>{formatDuration(run.duration_ms)}</span>
-                  </td>
-                  <td>
-                    <span className={styles.muted}>{formatDate(run.started_at)}</span>
-                  </td>
-                  <td>
-                    <ActionsButton actions={getActions(run)} />
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
-
-      {/* Pagination */}
-      {totalPages > 1 && (
-        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '16px', marginTop: '16px' }}>
-          <Button
-            variant="outline"
-            size="small"
-            disabled={filters.page === 1}
-            onClick={() => setFilters({ ...filters, page: (filters.page || 1) - 1 })}
-          >
-            Назад
-          </Button>
-          <span style={{ color: 'var(--muted)' }}>
-            Страница {filters.page} из {totalPages}
-          </span>
-          <Button
-            variant="outline"
-            size="small"
-            disabled={filters.page === totalPages}
-            onClick={() => setFilters({ ...filters, page: (filters.page || 1) + 1 })}
-          >
-            Вперёд
-          </Button>
-        </div>
-      )}
+      <DataTable
+        columns={columns}
+        data={runsData?.items || []}
+        keyField="id"
+        loading={isLoading}
+        emptyText="Запуски не найдены. Они появятся после выполнения агентов."
+        onRowClick={(run) => setSelectedRunId(run.id)}
+        paginated
+        pageSize={filters.page_size}
+        currentPage={filters.page}
+        totalItems={runsData?.total}
+        onPageChange={(page) => setFilters({ ...filters, page })}
+      />
 
       {/* Detail Modal */}
       {selectedRunId && selectedRun && !isLoadingDetail && (

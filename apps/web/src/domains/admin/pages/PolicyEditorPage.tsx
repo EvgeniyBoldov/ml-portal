@@ -1,5 +1,5 @@
 /**
- * PolicyEditorPage - View/Edit/Create permission policy with EntityPage
+ * PolicyEditorPage - View/Edit/Create execution policy with EntityPage
  * 
  * Unified page for all policy operations:
  * - View: /admin/policies/:id (readonly)
@@ -9,14 +9,15 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { permissionsApi, toolsApi, type PermissionSetCreate } from '@/shared/api';
+import { policiesApi, type PolicyCreate } from '@/shared/api';
 import { qk } from '@/shared/api/keys';
-import Button from '@/shared/ui/Button';
-import Badge from '@/shared/ui/Badge';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
 import { EntityPage, type EntityPageMode } from '@/shared/ui/EntityPage';
 import { ContentBlock, ContentGrid, type FieldDefinition } from '@/shared/ui/ContentBlock';
-import styles from './PolicyEditorPage.module.css';
+
+interface FormData extends PolicyCreate {
+  is_active?: boolean;
+}
 
 export function PolicyEditorPage() {
   const { id } = useParams<{ id: string }>();
@@ -32,41 +33,43 @@ export function PolicyEditorPage() {
   const mode: EntityPageMode = isCreate ? 'create' : isEditMode ? 'edit' : 'view';
   const isEditable = mode === 'edit' || mode === 'create';
 
-  const [formData, setFormData] = useState<PermissionSetCreate>({
-    scope: 'default',
-    tenant_id: undefined,
-    user_id: undefined,
-    allowed_tools: [],
-    denied_tools: [],
-    allowed_collections: [],
-    denied_collections: [],
+  const [formData, setFormData] = useState<FormData>({
+    slug: '',
+    name: '',
+    description: '',
+    max_steps: 20,
+    max_tool_calls: 50,
+    max_wall_time_ms: 300000,
+    tool_timeout_ms: 30000,
+    max_retries: 3,
+    budget_tokens: undefined,
+    budget_cost_cents: undefined,
+    extra_config: {},
     is_active: true,
   });
   const [saving, setSaving] = useState(false);
 
-  // Load tools for selection
-  const { data: tools } = useQuery({
-    queryKey: qk.tools.list(),
-    queryFn: () => toolsApi.list(),
-  });
-
   // Load existing policy
   const { data: existingPolicy, isLoading, refetch } = useQuery({
-    queryKey: qk.permissions.detail(id!),
-    queryFn: () => permissionsApi.get(id!),
+    queryKey: qk.policies.detail(id!),
+    queryFn: () => policiesApi.get(id!),
     enabled: !isCreate,
   });
 
   useEffect(() => {
     if (existingPolicy) {
       setFormData({
-        scope: existingPolicy.scope,
-        tenant_id: existingPolicy.tenant_id,
-        user_id: existingPolicy.user_id,
-        allowed_tools: existingPolicy.allowed_tools || [],
-        denied_tools: existingPolicy.denied_tools || [],
-        allowed_collections: existingPolicy.allowed_collections || [],
-        denied_collections: existingPolicy.denied_collections || [],
+        slug: existingPolicy.slug,
+        name: existingPolicy.name,
+        description: existingPolicy.description || '',
+        max_steps: existingPolicy.max_steps ?? undefined,
+        max_tool_calls: existingPolicy.max_tool_calls ?? undefined,
+        max_wall_time_ms: existingPolicy.max_wall_time_ms ?? undefined,
+        tool_timeout_ms: existingPolicy.tool_timeout_ms ?? undefined,
+        max_retries: existingPolicy.max_retries ?? undefined,
+        budget_tokens: existingPolicy.budget_tokens ?? undefined,
+        budget_cost_cents: existingPolicy.budget_cost_cents ?? undefined,
+        extra_config: existingPolicy.extra_config || {},
         is_active: existingPolicy.is_active,
       });
     }
@@ -75,21 +78,39 @@ export function PolicyEditorPage() {
   const handleSave = async () => {
     setSaving(true);
     try {
-      const data = {
-        ...formData,
-        tenant_id: formData.scope === 'tenant' || formData.scope === 'user' ? formData.tenant_id : undefined,
-        user_id: formData.scope === 'user' ? formData.user_id : undefined,
-      };
-      
       if (mode === 'create') {
-        await permissionsApi.create(data);
+        await policiesApi.create({
+          slug: formData.slug,
+          name: formData.name,
+          description: formData.description || undefined,
+          max_steps: formData.max_steps,
+          max_tool_calls: formData.max_tool_calls,
+          max_wall_time_ms: formData.max_wall_time_ms,
+          tool_timeout_ms: formData.tool_timeout_ms,
+          max_retries: formData.max_retries,
+          budget_tokens: formData.budget_tokens,
+          budget_cost_cents: formData.budget_cost_cents,
+          extra_config: formData.extra_config,
+        });
         showSuccess('Политика создана');
-        queryClient.invalidateQueries({ queryKey: qk.permissions.all() });
+        queryClient.invalidateQueries({ queryKey: qk.policies.all() });
         navigate('/admin/policies');
       } else {
-        await permissionsApi.update(id!, data);
+        await policiesApi.update(id!, {
+          name: formData.name,
+          description: formData.description || undefined,
+          max_steps: formData.max_steps,
+          max_tool_calls: formData.max_tool_calls,
+          max_wall_time_ms: formData.max_wall_time_ms,
+          tool_timeout_ms: formData.tool_timeout_ms,
+          max_retries: formData.max_retries,
+          budget_tokens: formData.budget_tokens,
+          budget_cost_cents: formData.budget_cost_cents,
+          extra_config: formData.extra_config,
+          is_active: formData.is_active,
+        });
         showSuccess('Политика обновлена');
-        queryClient.invalidateQueries({ queryKey: qk.permissions.all() });
+        queryClient.invalidateQueries({ queryKey: qk.policies.all() });
         setSearchParams({});
         refetch();
       }
@@ -107,13 +128,17 @@ export function PolicyEditorPage() {
   const handleCancel = () => {
     if (mode === 'edit' && existingPolicy) {
       setFormData({
-        scope: existingPolicy.scope,
-        tenant_id: existingPolicy.tenant_id,
-        user_id: existingPolicy.user_id,
-        allowed_tools: existingPolicy.allowed_tools || [],
-        denied_tools: existingPolicy.denied_tools || [],
-        allowed_collections: existingPolicy.allowed_collections || [],
-        denied_collections: existingPolicy.denied_collections || [],
+        slug: existingPolicy.slug,
+        name: existingPolicy.name,
+        description: existingPolicy.description || '',
+        max_steps: existingPolicy.max_steps ?? undefined,
+        max_tool_calls: existingPolicy.max_tool_calls ?? undefined,
+        max_wall_time_ms: existingPolicy.max_wall_time_ms ?? undefined,
+        tool_timeout_ms: existingPolicy.tool_timeout_ms ?? undefined,
+        max_retries: existingPolicy.max_retries ?? undefined,
+        budget_tokens: existingPolicy.budget_tokens ?? undefined,
+        budget_cost_cents: existingPolicy.budget_cost_cents ?? undefined,
+        extra_config: existingPolicy.extra_config || {},
         is_active: existingPolicy.is_active,
       });
       setSearchParams({});
@@ -125,77 +150,113 @@ export function PolicyEditorPage() {
   const handleDelete = async () => {
     if (!confirm('Удалить эту политику?')) return;
     try {
-      await permissionsApi.delete(id!);
+      await policiesApi.delete(id!);
       showSuccess('Политика удалена');
-      queryClient.invalidateQueries({ queryKey: qk.permissions.all() });
+      queryClient.invalidateQueries({ queryKey: qk.policies.all() });
       navigate('/admin/policies');
     } catch (err) {
       showError(err instanceof Error ? err.message : 'Ошибка удаления');
     }
   };
 
-  const toggleTool = (slug: string, list: 'allowed' | 'denied') => {
-    if (!isEditable) return;
-    const key = list === 'allowed' ? 'allowed_tools' : 'denied_tools';
-    const otherKey = list === 'allowed' ? 'denied_tools' : 'allowed_tools';
-    const current = formData[key] || [];
-    const other = formData[otherKey] || [];
-
-    if (current.includes(slug)) {
-      setFormData({ ...formData, [key]: current.filter((t: string) => t !== slug) });
-    } else {
-      setFormData({
-        ...formData,
-        [key]: [...current, slug],
-        [otherKey]: other.filter((t: string) => t !== slug),
-      });
-    }
-  };
-
   const handleFieldChange = (key: string, value: any) => {
-    setFormData((prev: PermissionSetCreate) => ({ ...prev, [key]: value }));
+    setFormData((prev) => ({ ...prev, [key]: value }));
   };
 
   // Field definitions
-  const scopeFields: FieldDefinition[] = [
+  const basicFields: FieldDefinition[] = [
     {
-      key: 'scope',
-      label: 'Уровень',
-      type: 'select',
+      key: 'slug',
+      label: 'Slug',
+      type: 'text',
       required: true,
       disabled: mode !== 'create',
-      options: [
-        { value: 'default', label: 'По умолчанию (для всех)' },
-        { value: 'tenant', label: 'Тенант' },
-        { value: 'user', label: 'Пользователь' },
-      ],
+      placeholder: 'my-policy',
+      description: 'Уникальный идентификатор',
     },
-    ...(formData.scope === 'tenant' || formData.scope === 'user' ? [{
-      key: 'tenant_id',
-      label: 'Tenant ID',
-      type: 'text' as const,
+    {
+      key: 'name',
+      label: 'Название',
+      type: 'text',
       required: true,
-      placeholder: 'UUID тенанта',
-    }] : []),
-    ...(formData.scope === 'user' ? [{
-      key: 'user_id',
-      label: 'User ID',
-      type: 'text' as const,
-      required: true,
-      placeholder: 'UUID пользователя',
-    }] : []),
+      placeholder: 'Моя политика',
+    },
+    {
+      key: 'description',
+      label: 'Описание',
+      type: 'textarea',
+      placeholder: 'Описание политики...',
+    },
     {
       key: 'is_active',
       label: 'Активна',
       type: 'boolean',
-      description: 'Политика применяется к пользователям',
+      description: 'Политика доступна для использования',
+    },
+  ];
+
+  const limitsFields: FieldDefinition[] = [
+    {
+      key: 'max_steps',
+      label: 'Макс. шагов',
+      type: 'number',
+      placeholder: '20',
+      description: 'Максимальное количество шагов агента',
+    },
+    {
+      key: 'max_tool_calls',
+      label: 'Макс. вызовов',
+      type: 'number',
+      placeholder: '50',
+      description: 'Максимальное количество вызовов инструментов',
+    },
+    {
+      key: 'max_retries',
+      label: 'Макс. повторов',
+      type: 'number',
+      placeholder: '3',
+      description: 'Количество повторных попыток при ошибке',
+    },
+  ];
+
+  const timeoutFields: FieldDefinition[] = [
+    {
+      key: 'max_wall_time_ms',
+      label: 'Общий таймаут (мс)',
+      type: 'number',
+      placeholder: '300000',
+      description: 'Максимальное время выполнения в миллисекундах',
+    },
+    {
+      key: 'tool_timeout_ms',
+      label: 'Таймаут инструмента (мс)',
+      type: 'number',
+      placeholder: '30000',
+      description: 'Таймаут для одного вызова инструмента',
+    },
+  ];
+
+  const budgetFields: FieldDefinition[] = [
+    {
+      key: 'budget_tokens',
+      label: 'Лимит токенов',
+      type: 'number',
+      placeholder: 'Без лимита',
+      description: 'Максимальное количество токенов',
+    },
+    {
+      key: 'budget_cost_cents',
+      label: 'Лимит стоимости (центы)',
+      type: 'number',
+      placeholder: 'Без лимита',
+      description: 'Максимальная стоимость в центах',
     },
   ];
 
   return (
     <EntityPage
       mode={mode}
-      entityName={existingPolicy ? `Политика ${existingPolicy.scope}` : 'Новая политика'}
+      entityName={existingPolicy ? existingPolicy.name : 'Новая политика'}
       entityTypeLabel="политики"
       backPath="/admin/policies"
       loading={!isCreate && isLoading}
@@ -204,73 +265,48 @@ export function PolicyEditorPage() {
       onSave={handleSave}
       onCancel={handleCancel}
       onDelete={handleDelete}
-      showDelete={mode === 'view' && !!id && existingPolicy?.scope !== 'default'}
+      showDelete={mode === 'view' && !!id && existingPolicy?.slug !== 'default'}
     >
       <ContentGrid>
-        {/* Scope - 1/3 (только выпадашки и переключатели) */}
         <ContentBlock
-          width="1/3"
-          title="Область применения"
-          icon="shield"
+          width="1/2"
+          title="Основное"
+          icon="file"
           editable={isEditable}
-          fields={scopeFields}
+          fields={basicFields}
           data={formData}
           onChange={handleFieldChange}
         />
 
-        {/* Tools - 2/3 (кастомный контент) */}
         <ContentBlock
-          width="2/3"
-          title="Инструменты"
-          icon="tool"
-        >
-          {tools?.length ? (
-            <div className={styles.toolsList}>
-              {tools.map((tool: { slug: string; name: string }) => {
-                const isAllowed = formData.allowed_tools?.includes(tool.slug);
-                const isDenied = formData.denied_tools?.includes(tool.slug);
-                return (
-                  <div key={tool.slug} className={styles.toolItem}>
-                    <div className={styles.toolInfo}>
-                      <span className={styles.toolName}>{tool.name}</span>
-                      <code className={styles.toolSlug}>{tool.slug}</code>
-                    </div>
-                    {isEditable ? (
-                      <div className={styles.toolActions}>
-                        <Button
-                          type="button"
-                          variant={isAllowed ? 'primary' : 'outline'}
-                          size="sm"
-                          onClick={() => toggleTool(tool.slug, 'allowed')}
-                        >
-                          ✓ Разрешить
-                        </Button>
-                        <Button
-                          type="button"
-                          variant={isDenied ? 'danger' : 'outline'}
-                          size="sm"
-                          onClick={() => toggleTool(tool.slug, 'denied')}
-                        >
-                          ✗ Запретить
-                        </Button>
-                      </div>
-                    ) : (
-                      <div>
-                        {isAllowed && <Badge tone="success" size="small">Разрешён</Badge>}
-                        {isDenied && <Badge tone="danger" size="small">Запрещён</Badge>}
-                        {!isAllowed && !isDenied && <Badge tone="neutral" size="small">Не задано</Badge>}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          ) : (
-            <div className={styles.emptyState}>
-              Нет доступных инструментов
-            </div>
-          )}
-        </ContentBlock>
+          width="1/2"
+          title="Лимиты выполнения"
+          icon="shield"
+          editable={isEditable}
+          fields={limitsFields}
+          data={formData}
+          onChange={handleFieldChange}
+        />
+
+        <ContentBlock
+          width="1/2"
+          title="Таймауты"
+          icon="clock"
+          editable={isEditable}
+          fields={timeoutFields}
+          data={formData}
+          onChange={handleFieldChange}
+        />
+
+        <ContentBlock
+          width="1/2"
+          title="Бюджет"
+          icon="dollar"
+          editable={isEditable}
+          fields={budgetFields}
+          data={formData}
+          onChange={handleFieldChange}
+        />
       </ContentGrid>
     </EntityPage>
   );

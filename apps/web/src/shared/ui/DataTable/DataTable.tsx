@@ -29,6 +29,7 @@ import React, { useState, useMemo, useCallback } from 'react';
 import Input from '../Input';
 import Button from '../Button';
 import { Icon } from '../Icon';
+import { TableHeader } from '../TableHeader';
 import styles from './DataTable.module.css';
 
 export interface DataTableColumn<T = any> {
@@ -117,6 +118,8 @@ export default function DataTable<T = any>({
   const [internalSearchValue, setInternalSearchValue] = useState('');
   const [internalCurrentPage, setInternalCurrentPage] = useState(1);
   const [internalPageSize, setInternalPageSize] = useState(controlledPageSize);
+  const [sortKey, setSortKey] = useState<string | null>(null);
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
 
   // Use controlled or internal state
   const selectedKeys = controlledSelectedKeys ?? internalSelectedKeys;
@@ -159,6 +162,16 @@ export default function DataTable<T = any>({
     }
   }, [onPageSizeChange]);
 
+  // Handle sort
+  const handleSort = useCallback((key: string) => {
+    if (sortKey === key) {
+      setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortKey(key);
+      setSortOrder('asc');
+    }
+  }, [sortKey]);
+
   // Filter data
   const filteredData = useMemo(() => {
     if (!searchable || !searchValue) return data;
@@ -182,12 +195,37 @@ export default function DataTable<T = any>({
     });
   }, [data, searchValue, searchable, searchFilter]);
 
+  // Sort data
+  const sortedData = useMemo(() => {
+    if (!sortKey) return filteredData;
+    
+    return [...filteredData].sort((a, b) => {
+      const aVal = (a as any)[sortKey];
+      const bVal = (b as any)[sortKey];
+      
+      if (aVal == null && bVal == null) return 0;
+      if (aVal == null) return 1;
+      if (bVal == null) return -1;
+      
+      let cmp = 0;
+      if (typeof aVal === 'string' && typeof bVal === 'string') {
+        cmp = aVal.localeCompare(bVal);
+      } else if (typeof aVal === 'number' && typeof bVal === 'number') {
+        cmp = aVal - bVal;
+      } else {
+        cmp = String(aVal).localeCompare(String(bVal));
+      }
+      
+      return sortOrder === 'asc' ? cmp : -cmp;
+    });
+  }, [filteredData, sortKey, sortOrder]);
+
   // Paginate data
   const paginatedData = useMemo(() => {
-    if (!paginated) return filteredData;
+    if (!paginated) return sortedData;
     const start = (currentPage - 1) * pageSize;
-    return filteredData.slice(start, start + pageSize);
-  }, [filteredData, paginated, currentPage, pageSize]);
+    return sortedData.slice(start, start + pageSize);
+  }, [sortedData, paginated, currentPage, pageSize]);
 
   const total = totalItems ?? filteredData.length;
   const totalPages = Math.ceil(total / pageSize);
@@ -315,16 +353,17 @@ export default function DataTable<T = any>({
                   </th>
                 )}
                 {columns.map(col => (
-                  <th
+                  <TableHeader
                     key={col.key}
-                    style={{
-                      width: col.width,
-                      textAlign: col.align || 'left',
-                    }}
+                    label={col.label}
+                    width={col.width}
+                    align={col.align}
+                    sortable={col.sortable}
+                    sortActive={sortKey === col.key}
+                    sortOrder={sortKey === col.key ? sortOrder : undefined}
+                    onSort={col.sortable ? () => handleSort(col.key) : undefined}
                     className={col.className}
-                  >
-                    {col.label}
-                  </th>
+                  />
                 ))}
               </tr>
             </thead>

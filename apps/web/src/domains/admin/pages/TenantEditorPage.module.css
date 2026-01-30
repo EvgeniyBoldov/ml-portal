@@ -317,3 +317,13 @@
   gap: 12px;
   padding-top: 8px;
 }
+
+/* RBAC Actions */
+.rbacActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--color-border);
+}

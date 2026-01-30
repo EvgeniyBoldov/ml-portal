@@ -1,68 +1,63 @@
 import { apiRequest } from './http';
 
-export type InstanceScope = 'default' | 'tenant' | 'user';
 export type ToolInstanceHealthStatus = 'healthy' | 'unhealthy' | 'unknown';
+export type ToolInstanceType = 'local' | 'http' | 'custom';
 
 export interface ToolInstance {
   id: string;
-  tool_id: string;
+  tool_group_id: string;
   slug: string;
   name: string;
   description?: string;
-  scope: InstanceScope;
-  tenant_id?: string;
-  user_id?: string;
-  connection_config: Record<string, any>;
-  is_default: boolean;
+  connection_config: Record<string, unknown>;
+  instance_metadata: Record<string, unknown>;
   is_active: boolean;
+  instance_type: ToolInstanceType;
   health_status: ToolInstanceHealthStatus;
   last_health_check_at?: string;
   health_check_error?: string;
   created_at: string;
   updated_at: string;
+  // Optional joined fields
+  tool_group_slug?: string;
+  tool_group_name?: string;
 }
 
 export interface ToolInstanceCreate {
-  tool_slug: string;
+  tool_group_id: string;
   slug: string;
   name: string;
   description?: string;
-  scope: InstanceScope;
-  tenant_id?: string;
-  user_id?: string;
-  connection_config: Record<string, any>;
-  is_default?: boolean;
+  connection_config: Record<string, unknown>;
+  instance_metadata?: Record<string, unknown>;
+  instance_type?: ToolInstanceType;
 }
 
 export interface ToolInstanceUpdate {
   name?: string;
   description?: string;
-  connection_config?: Record<string, any>;
-  is_default?: boolean;
+  connection_config?: Record<string, unknown>;
+  instance_metadata?: Record<string, unknown>;
   is_active?: boolean;
 }
 
 export interface HealthCheckResult {
   status: ToolInstanceHealthStatus;
   message?: string;
-  details?: Record<string, any>;
+  details?: Record<string, unknown>;
 }
 
 export const toolInstancesApi = {
   async list(params: {
     skip?: number;
     limit?: number;
-    tool_slug?: string;
-    scope?: string;
-    tenant_id?: string;
+    tool_group_id?: string;
     is_active?: boolean;
   } = {}): Promise<ToolInstance[]> {
     const searchParams = new URLSearchParams();
     if (params.skip) searchParams.set('skip', String(params.skip));
     if (params.limit) searchParams.set('limit', String(params.limit));
-    if (params.tool_slug) searchParams.set('tool_slug', params.tool_slug);
-    if (params.scope) searchParams.set('scope', params.scope);
-    if (params.tenant_id) searchParams.set('tenant_id', params.tenant_id);
+    if (params.tool_group_id) searchParams.set('tool_group_id', params.tool_group_id);
     if (params.is_active !== undefined) searchParams.set('is_active', String(params.is_active));
     
     return apiRequest(`/admin/tool-instances?${searchParams.toString()}`);

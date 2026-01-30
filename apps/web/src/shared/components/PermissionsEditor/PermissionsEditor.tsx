@@ -1,15 +1,16 @@
 /**
- * PermissionsEditor - Reusable component for editing tool/collection permissions
+ * PermissionsEditor - Reusable component for editing instance permissions
  * 
  * Used in: DefaultsPage, TenantEditorPage, UserDetailPage
+ * 
+ * New RBAC model: instance_permissions is a map of instance_slug -> 'allowed' | 'denied' | 'undefined'
  */
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { permissionsApi, toolsApi, collectionsApi } from '@/shared/api';
+import { permissionsApi, toolInstancesApi, type PermissionValue } from '@/shared/api';
 import { qk } from '@/shared/api/keys';
 import Button from '@/shared/ui/Button';
 import Badge from '@/shared/ui/Badge';
-import Switch from '@/shared/ui/Switch';
 import { Skeleton } from '@/shared/ui/Skeleton';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
 import styles from './PermissionsEditor.module.css';
@@ -34,8 +35,7 @@ export function PermissionsEditor({
   const showSuccess = useSuccessToast();
 
   const [isEditing, setIsEditing] = useState(false);
-  const [toolPermissions, setToolPermissions] = useState<Record<string, boolean>>({});
-  const [collectionPermissions, setCollectionPermissions] = useState<Record<string, boolean>>({});
+  const [instancePermissions, setInstancePermissions] = useState<Record<string, PermissionValue>>({});
 
   // Load permissions for scope
   const { data: policies, isLoading: policiesLoading } = useQuery({
@@ -43,43 +43,39 @@ export function PermissionsEditor({
     queryFn: () => permissionsApi.list({ scope, ...(scopeId && { [`${scope}_id`]: scopeId }) }),
   });
 
-  // Load all tools
-  const { data: allTools, isLoading: toolsLoading } = useQuery({
-    queryKey: ['tools', 'list'],
-    queryFn: () => toolsApi.list(),
+  // Load all tool instances
+  const { data: allInstances, isLoading: instancesLoading } = useQuery({
+    queryKey: qk.toolInstances.list({}),
+    queryFn: () => toolInstancesApi.list({}),
   });
 
-  // Load all collections
-  const { data: allCollections, isLoading: collectionsLoading } = useQuery({
-    queryKey: ['collections', 'list'],
-    queryFn: () => collectionsApi.list(),
-  });
-
-  const policy = policies?.find((p: any) => p.scope === scope);
-  const isLoading = policiesLoading || toolsLoading || collectionsLoading;
+  const policy = policies?.find((p) => p.scope === scope);
+  const isLoading = policiesLoading || instancesLoading;
 
   // Initialize permissions when entering edit mode
   const startEditing = () => {
-    const tools: Record<string, boolean> = {};
-    const collections: Record<string, boolean> = {};
+    const perms: Record<string, PermissionValue> = {};
 
-    allTools?.forEach((t: any) => {
-      tools[t.slug] = policy?.allowed_tools?.includes(t.slug) || false;
+    allInstances?.forEach((inst) => {
+      const currentValue = policy?.instance_permissions?.[inst.slug];
+      perms[inst.slug] = currentValue || 'undefined';
     });
 
-    allCollections?.items?.forEach((c: any) => {
-      collections[c.slug] = policy?.allowed_collections?.includes(c.slug) || false;
-    });
-
-    setToolPermissions(tools);
-    setCollectionPermissions(collections);
+    setInstancePermissions(perms);
     setIsEditing(true);
   };
 
   const cancelEditing = () => {
     setIsEditing(false);
-    setToolPermissions({});
-    setCollectionPermissions({});
+    setInstancePermissions({});
+  };
+
+  const cyclePermission = (slug: string) => {
+    const current = instancePermissions[slug] || 'undefined';
+    const next: PermissionValue = 
+      current === 'undefined' ? 'allowed' :
+      current === 'allowed' ? 'denied' : 'undefined';
+    setInstancePermissions(prev => ({ ...prev, [slug]: next }));
   };
 
   // Save permissions
@@ -87,17 +83,16 @@ export function PermissionsEditor({
     mutationFn: async () => {
       if (!policy) throw new Error('No policy found');
 
-      const allowedTools = Object.entries(toolPermissions)
-        .filter(([_, allowed]) => allowed)
-        .map(([slug]) => slug);
-
-      const allowedCollections = Object.entries(collectionPermissions)
-        .filter(([_, allowed]) => allowed)
-        .map(([slug]) => slug);
+      // Filter out 'undefined' values for cleaner storage
+      const cleanPerms: Record<string, PermissionValue> = {};
+      Object.entries(instancePermissions).forEach(([slug, value]) => {
+        if (value !== 'undefined') {
+          cleanPerms[slug] = value;
+        }
+      });
 
       return permissionsApi.update(policy.id, {
-        allowed_tools: allowedTools,
-        allowed_collections: allowedCollections,
+        instance_permissions: cleanPerms,
       });
     },
     onSuccess: () => {
@@ -107,6 +102,17 @@ export function PermissionsEditor({
     },
     onError: () => showError('Ошибка сохранения прав'),
   });
+
+  const getPermissionBadge = (value: PermissionValue | undefined) => {
+    switch (value) {
+      case 'allowed':
+        return <Badge tone="success">Разрешён</Badge>;
+      case 'denied':
+        return <Badge tone="danger">Запрещён</Badge>;
+      default:
+        return <Badge tone="neutral">Не задано</Badge>;
+    }
+  };
 
   if (isLoading) {
     return (
@@ -125,6 +131,10 @@ export function PermissionsEditor({
       </div>
     );
   }
+
+  const allowedCount = Object.values(
+    isEditing ? instancePermissions : (policy.instance_permissions || {})
+  ).filter(v => v === 'allowed').length;
 
   return (
     <div className={styles.card}>
@@ -152,87 +162,43 @@ export function PermissionsEditor({
         )}
       </div>
 
-      {/* Tools Section */}
+      {/* Instances Section */}
       <div className={styles.section}>
         <h4 className={styles.sectionTitle}>
-          Инструменты
-          <Badge variant="secondary" size="small">
-            {isEditing 
-              ? Object.values(toolPermissions).filter(Boolean).length
-              : policy.allowed_tools?.length || 0
-            } / {allTools?.length || 0}
+          Инстансы инструментов
+          <Badge tone="neutral">
+            {allowedCount} разрешено / {allInstances?.length || 0} всего
           </Badge>
         </h4>
         <div className={styles.grid}>
-          {allTools?.map((tool: any) => {
-            const isAllowed = isEditing 
-              ? toolPermissions[tool.slug] 
-              : policy.allowed_tools?.includes(tool.slug);
+          {allInstances?.map((instance) => {
+            const permValue = isEditing 
+              ? instancePermissions[instance.slug] 
+              : policy.instance_permissions?.[instance.slug];
 
             return (
-              <div key={tool.slug} className={styles.item}>
+              <div key={instance.slug} className={styles.item}>
                 <div className={styles.itemInfo}>
-                  <span className={styles.itemName}>{tool.name}</span>
-                  <code className={styles.itemSlug}>{tool.slug}</code>
+                  <span className={styles.itemName}>{instance.name}</span>
+                  <code className={styles.itemSlug}>{instance.slug}</code>
+                  <span className={styles.itemMeta}>{instance.tool_type} • {instance.scope}</span>
                 </div>
                 {isEditing ? (
-                  <Switch
-                    checked={toolPermissions[tool.slug] || false}
-                    onChange={(checked) => 
-                      setToolPermissions(prev => ({ ...prev, [tool.slug]: checked }))
-                    }
-                  />
+                  <Button
+                    variant="outline"
+                    size="small"
+                    onClick={() => cyclePermission(instance.slug)}
+                  >
+                    {getPermissionBadge(instancePermissions[instance.slug])}
+                  </Button>
                 ) : (
-                  <Badge variant={isAllowed ? 'success' : 'secondary'} size="small">
-                    {isAllowed ? 'Разрешён' : 'Запрещён'}
-                  </Badge>
+                  getPermissionBadge(permValue as PermissionValue)
                 )}
               </div>
             );
           })}
-        </div>
-      </div>
-
-      {/* Collections Section */}
-      <div className={styles.section}>
-        <h4 className={styles.sectionTitle}>
-          Коллекции
-          <Badge variant="secondary" size="small">
-            {isEditing 
-              ? Object.values(collectionPermissions).filter(Boolean).length
-              : policy.allowed_collections?.length || 0
-            } / {allCollections?.items?.length || 0}
-          </Badge>
-        </h4>
-        <div className={styles.grid}>
-          {allCollections?.items?.map((collection: any) => {
-            const isAllowed = isEditing 
-              ? collectionPermissions[collection.slug] 
-              : policy.allowed_collections?.includes(collection.slug);
-
-            return (
-              <div key={collection.slug} className={styles.item}>
-                <div className={styles.itemInfo}>
-                  <span className={styles.itemName}>{collection.name}</span>
-                  <code className={styles.itemSlug}>{collection.slug}</code>
-                </div>
-                {isEditing ? (
-                  <Switch
-                    checked={collectionPermissions[collection.slug] || false}
-                    onChange={(checked) => 
-                      setCollectionPermissions(prev => ({ ...prev, [collection.slug]: checked }))
-                    }
-                  />
-                ) : (
-                  <Badge variant={isAllowed ? 'success' : 'secondary'} size="small">
-                    {isAllowed ? 'Разрешена' : 'Запрещена'}
-                  </Badge>
-                )}
-              </div>
-            );
-          })}
-          {(!allCollections?.items || allCollections.items.length === 0) && (
-            <p className={styles.empty}>Нет коллекций</p>
+          {(!allInstances || allInstances.length === 0) && (
+            <p className={styles.empty}>Нет инстансов инструментов</p>
           )}
         </div>
       </div>

@@ -14,12 +14,8 @@ import {
   useHealthCheckModel,
   useHealthCheckAllModels,
 } from '@shared/api/hooks/useAdmin';
-import { AdminPage } from '@shared/ui';
-import Badge from '@shared/ui/Badge';
+import { AdminPage, DataTable, type DataTableColumn, Badge, Alert, ActionsButton, type ActionItem } from '@/shared/ui';
 import { useErrorToast, useSuccessToast } from '@shared/ui/Toast';
-import Alert from '@shared/ui/Alert';
-import { ActionsButton, type ActionItem } from '@shared/ui/ActionsButton';
-import { AdminTable, type AdminTableColumn } from '@shared/ui/AdminTable';
 import { useAppStore } from '@app/store/app.store';
 
 const TYPE_LABELS: Record<string, string> = {
@@ -239,7 +235,7 @@ export function ModelsPage() {
     return actions;
   };
 
-  const columns: AdminTableColumn<Model>[] = [
+  const columns: DataTableColumn<Model>[] = [
     {
       key: 'alias',
       label: 'АЛИАС / ИМЯ',
@@ -351,7 +347,7 @@ export function ModelsPage() {
         </div>
       )}
 
-      <AdminTable
+      <DataTable
         columns={columns}
         data={models}
         keyField="id"
@@ -359,8 +355,6 @@ export function ModelsPage() {
         emptyText="Модели не найдены. Нажмите «Добавить модель» для создания."
         paginated
         pageSize={20}
-        defaultSortKey="alias"
-        defaultSortDirection="asc"
         onRowClick={(model) => navigate(`/admin/models/${model.id}`)}
       />
     </AdminPage>

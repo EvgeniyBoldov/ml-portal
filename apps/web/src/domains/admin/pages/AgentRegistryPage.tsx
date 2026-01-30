@@ -9,9 +9,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { agentsApi, type Agent } from '@/shared/api';
 import { qk } from '@/shared/api/keys';
-import { AdminPage } from '@/shared/ui';
-import Badge from '@/shared/ui/Badge';
-import { AdminTable, type AdminTableColumn } from '@/shared/ui/AdminTable';
+import { AdminPage, DataTable, type DataTableColumn, Badge } from '@/shared/ui';
 
 export function AgentRegistryPage() {
   const navigate = useNavigate();
@@ -37,7 +35,7 @@ export function AgentRegistryPage() {
     navigate(`/admin/agents/${agent.slug}`);
   };
 
-  const columns: AdminTableColumn<Agent>[] = [
+  const columns: DataTableColumn<Agent>[] = [
     {
       key: 'slug',
       label: 'SLUG / ИМЯ',
@@ -117,7 +115,7 @@ export function AgentRegistryPage() {
         </div>
       )}
 
-      <AdminTable
+      <DataTable
         columns={columns}
         data={filteredAgents}
         keyField="id"
@@ -125,8 +123,6 @@ export function AgentRegistryPage() {
         emptyText="Агенты не найдены. Нажмите «Создать агента» для создания."
         paginated
         pageSize={20}
-        defaultSortKey="slug"
-        defaultSortDirection="asc"
         onRowClick={handleRowClick}
       />
     </AdminPage>
