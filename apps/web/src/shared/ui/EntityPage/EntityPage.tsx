@@ -10,7 +10,6 @@ import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import Button from '../Button';
 import { Icon } from '../Icon';
-import { Breadcrumbs, type BreadcrumbItem } from '../Breadcrumbs';
 import styles from './EntityPage.module.css';
 
 export type EntityPageMode = 'view' | 'edit' | 'create';
@@ -24,8 +23,6 @@ export interface EntityPageProps {
   entityTypeLabel: string;
   /** Back navigation path */
   backPath: string;
-  /** Breadcrumbs navigation */
-  breadcrumbs?: BreadcrumbItem[];
   /** Loading state */
   loading?: boolean;
   /** Saving state */
@@ -51,7 +48,6 @@ export function EntityPage({
   entityName,
   entityTypeLabel,
   backPath,
-  breadcrumbs,
   loading = false,
   saving = false,
   onEdit,
@@ -96,11 +92,6 @@ export function EntityPage({
 
   return (
     <div className={styles.wrap}>
-      {/* Breadcrumbs */}
-      {breadcrumbs && breadcrumbs.length > 0 && (
-        <Breadcrumbs items={breadcrumbs} className={styles.breadcrumbs} />
-      )}
-      
       {/* Content Header */}
       <header className={styles.header}>
         <div className={styles.headerLeft}>

@@ -9,7 +9,6 @@ import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import Button from '../Button';
 import Input from '../Input';
-import { Breadcrumbs, type BreadcrumbItem } from '../Breadcrumbs';
 import styles from './PageHeader.module.css';
 
 export interface PageHeaderAction {
@@ -24,8 +23,6 @@ export interface PageHeaderProps {
   subtitle?: string;
   backTo?: string;
   
-  // Breadcrumbs navigation
-  breadcrumbs?: BreadcrumbItem[];
   
   // Search
   searchValue?: string;
@@ -43,7 +40,6 @@ export function PageHeader({
   title,
   subtitle,
   backTo,
-  breadcrumbs,
   searchValue,
   onSearchChange,
   searchPlaceholder = 'Поиск...',
@@ -54,9 +50,6 @@ export function PageHeader({
 
   return (
     <div className={styles.header}>
-      {breadcrumbs && breadcrumbs.length > 0 && (
-        <Breadcrumbs items={breadcrumbs} className={styles.breadcrumbs} />
-      )}
       <div className={styles.headerRow}>
         <div className={styles.left}>
           {backTo && (

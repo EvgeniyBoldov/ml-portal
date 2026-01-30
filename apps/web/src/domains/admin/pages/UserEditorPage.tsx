@@ -283,19 +283,12 @@ export function UserEditorPage() {
     }
   };
 
-  const breadcrumbs = [
-    { label: 'Админ', href: '/admin' },
-    { label: 'Пользователи', href: '/admin/users' },
-    { label: isCreate ? 'Новый' : user?.login || '...' },
-  ];
-
   return (
     <EntityPage
       mode={mode}
       entityName={user?.login || 'Новый пользователь'}
       entityTypeLabel="пользователя"
       backPath="/admin/users"
-      breadcrumbs={breadcrumbs}
       loading={!isCreate && isLoading}
       saving={saving}
       onEdit={handleEdit}
