@@ -33,6 +33,7 @@ const navigation: NavGroup[] = [
     items: [
       { path: '/admin/models', label: 'Модели', icon: 'bot' },
       { path: '/admin/prompts', label: 'Промпты', icon: 'file-text' },
+      { path: '/admin/baselines', label: 'Бейслайны', icon: 'shield-check' },
       { path: '/admin/tools', label: 'Инструменты', icon: 'settings' },
       { path: '/admin/agents', label: 'Агенты', icon: 'sparkles' },
       { path: '/admin/collections', label: 'Коллекции', icon: 'database' },

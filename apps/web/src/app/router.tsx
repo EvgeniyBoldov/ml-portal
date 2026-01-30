@@ -45,6 +45,8 @@ const PoliciesPage = lazy(() => import('@/domains/admin/pages/PoliciesPage').the
 const PolicyEditorPage = lazy(() => import('@/domains/admin/pages/PolicyEditorPage').then(m => ({ default: m.PolicyEditorPage })));
 const DefaultsPage = lazy(() => import('@/domains/admin/pages/DefaultsPage').then(m => ({ default: m.DefaultsPage })));
 const RoutingLogsPage = lazy(() => import('@/domains/admin/pages/RoutingLogsPage').then(m => ({ default: m.RoutingLogsPage })));
+const BaselinesListPage = lazy(() => import('@/domains/admin/pages/BaselinesListPage').then(m => ({ default: m.BaselinesListPage })));
+const BaselineEditorPage = lazy(() => import('@/domains/admin/pages/BaselineEditorPage').then(m => ({ default: m.BaselineEditorPage })));
 
 // Collections pages (user-facing)
 const CollectionsListPage = lazy(() => import('@/domains/collections/pages/CollectionsListPage'));
@@ -112,6 +114,9 @@ const router = createBrowserRouter([
       { path: 'instances/:id', element: withSuspense(<InstanceEditorPage />) },
       { path: 'defaults', element: withSuspense(<DefaultsPage />) },
       { path: 'routing-logs', element: withSuspense(<RoutingLogsPage />) },
+      { path: 'baselines', element: withSuspense(<BaselinesListPage />) },
+      { path: 'baselines/new', element: withSuspense(<BaselineEditorPage />) },
+      { path: 'baselines/:slug', element: withSuspense(<BaselineEditorPage />) },
       { path: 'settings/email', element: withSuspense(<EmailSettingsPage />) },
     ],
   },
