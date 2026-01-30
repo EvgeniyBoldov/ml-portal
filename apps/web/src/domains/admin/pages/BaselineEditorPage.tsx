@@ -202,12 +202,19 @@ export function BaselineEditorPage() {
   const title = isNew ? 'Создать бейслайн' : baseline!.name;
   const subtitle = isNew ? 'Новый бейслайн' : `${baseline!.slug} • ${baseline!.scope}`;
 
+  const breadcrumbs = [
+    { label: 'Админ', href: '/admin' },
+    { label: 'Бейслайны', href: '/admin/baselines' },
+    { label: isNew ? 'Новый' : baseline!.name },
+  ];
+
   return (
     <PageContent>
       <PageHeader
         title={title}
         subtitle={subtitle}
         backTo="/admin/baselines"
+        breadcrumbs={breadcrumbs}
         actions={
           mode === 'view'
             ? [

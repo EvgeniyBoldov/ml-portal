@@ -1,9 +1,19 @@
 .header {
   display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.headerRow {
+  display: flex;
   justify-content: space-between;
   align-items: center;
   gap: 1rem;
-  margin-bottom: 1rem;
+}
+
+.breadcrumbs {
+  margin-bottom: 0.25rem;
 }
 
 .left {
