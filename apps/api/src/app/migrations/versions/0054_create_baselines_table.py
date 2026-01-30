@@ -2,15 +2,15 @@
 Create baselines table and baseline_versions table.
 Baseline is a separate entity from Prompt for managing restrictions and rules.
 
-Revision ID: 0042
-Revises: 0041
+Revision ID: 0054
+Revises: 0053
 """
 from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
-revision = '0042'
-down_revision = '0041'
+revision = '0054'
+down_revision = '0053'
 branch_labels = None
 depends_on = None
 
@@ -49,47 +49,9 @@ def upgrade() -> None:
         sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
         sa.UniqueConstraint('baseline_id', 'version', name='uix_baseline_version'),
     )
-    
-    # Rename baseline_prompt_id to baseline_id and change FK
-    # First, drop old FK constraint if exists
-    try:
-        op.drop_constraint('agents_baseline_prompt_id_fkey', 'agents', type_='foreignkey')
-    except Exception:
-        pass  # Constraint may not exist
-    
-    # Rename column
-    op.alter_column('agents', 'baseline_prompt_id', new_column_name='baseline_id')
-    
-    # Add new FK constraint to baselines table
-    op.create_foreign_key(
-        'agents_baseline_id_fkey',
-        'agents', 'baselines',
-        ['baseline_id'], ['id'],
-        ondelete='SET NULL'
-    )
-    
-    # Create index on baseline_id
-    op.create_index('ix_agents_baseline_id', 'agents', ['baseline_id'])
 
 
 def downgrade() -> None:
-    # Drop index
-    op.drop_index('ix_agents_baseline_id', 'agents')
-    
-    # Drop FK constraint
-    op.drop_constraint('agents_baseline_id_fkey', 'agents', type_='foreignkey')
-    
-    # Rename column back
-    op.alter_column('agents', 'baseline_id', new_column_name='baseline_prompt_id')
-    
-    # Restore old FK constraint to prompts
-    op.create_foreign_key(
-        'agents_baseline_prompt_id_fkey',
-        'agents', 'prompts',
-        ['baseline_prompt_id'], ['id'],
-        ondelete='SET NULL'
-    )
-    
     # Drop tables
     op.drop_table('baseline_versions')
     op.drop_table('baselines')
