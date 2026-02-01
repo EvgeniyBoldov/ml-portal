@@ -78,3 +78,7 @@ export type { RbacPermissions } from './RbacRulesEditor';
 // FormField
 export { FormField } from './FormField';
 export type { FormFieldProps, FormFieldType } from './FormField';
+
+// ShortEntityBlock
+export { ShortEntityBlock } from './ShortEntityBlock';
+export type { ShortEntityBlockProps, ShortEntityBlockItem } from './ShortEntityBlock';
