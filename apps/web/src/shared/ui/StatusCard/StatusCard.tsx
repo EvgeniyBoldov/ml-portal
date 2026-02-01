@@ -30,8 +30,8 @@ export interface StatusAction {
 }
 
 export interface StatusCardProps {
-  /** Card title */
-  title: string;
+  /** Card title (optional, if not provided only status is shown) */
+  title?: string;
   /** Card width */
   width?: BlockWidth;
   /** Current status value */
@@ -78,6 +78,34 @@ export function StatusCard({
     return true;
   });
 
+  // Compact mode: no title, just status in body
+  if (!title) {
+    return (
+      <ContentBlock
+        width={width}
+        title=""
+        className={className}
+      >
+        <div className={styles.compactContent}>
+          <div className={styles.statusLabel}>Статус</div>
+          {editable ? (
+            <Select
+              value={status}
+              onChange={(val) => onStatusChange?.(val)}
+              options={statusOptions.map(o => ({ value: o.value, label: o.label }))}
+              className={styles.statusSelect}
+            />
+          ) : (
+            <Badge tone={tone}>
+              {currentOption?.label || status}
+            </Badge>
+          )}
+        </div>
+      </ContentBlock>
+    );
+  }
+
+  // Full mode: with title and header actions
   const renderHeaderActions = () => (
     <div className={styles.headerActions}>
       {editable ? (

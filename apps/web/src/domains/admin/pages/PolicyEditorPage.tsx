@@ -346,10 +346,9 @@ export function PolicyEditorPage() {
                 onChange={handleFieldChange}
               />
 
-              {/* Right column: Status block - 1/2 */}
+              {/* Right column: Status block - 1/2 (compact mode) */}
               <StatusCard
                 width="1/2"
-                title="Статус"
                 status={formData.is_active ? 'active' : 'inactive'}
                 statusOptions={policyStatusOptions}
                 editable={isEditable}
