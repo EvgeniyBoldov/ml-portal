@@ -88,6 +88,13 @@
   flex-shrink: 0;
 }
 
+.actionBar {
+  padding: 1rem 1.5rem;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border, var(--color-border));
+  flex-shrink: 0;
+}
+
 .content {
   flex: 1;
   overflow-y: auto;

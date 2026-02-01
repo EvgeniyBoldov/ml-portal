@@ -47,6 +47,8 @@ export interface EntityPageProps {
   headerActions?: React.ReactNode;
   /** Breadcrumbs for navigation */
   breadcrumbs?: BreadcrumbItem[];
+  /** Action buttons bar between header and content */
+  actionBar?: React.ReactNode;
 }
 
 export function EntityPage({
@@ -64,6 +66,7 @@ export function EntityPage({
   children,
   headerActions,
   breadcrumbs,
+  actionBar,
 }: EntityPageProps) {
   const navigate = useNavigate();
 
@@ -139,6 +142,13 @@ export function EntityPage({
           )}
         </div>
       </header>
+
+      {/* Action Bar */}
+      {actionBar && (
+        <div className={styles.actionBar}>
+          {actionBar}
+        </div>
+      )}
 
       {/* Content */}
       <div className={styles.content}>
