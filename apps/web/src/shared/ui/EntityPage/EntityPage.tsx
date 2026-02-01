@@ -14,6 +14,11 @@ import styles from './EntityPage.module.css';
 
 export type EntityPageMode = 'view' | 'edit' | 'create';
 
+export interface BreadcrumbItem {
+  label: string;
+  href?: string;
+}
+
 export interface EntityPageProps {
   /** Page mode */
   mode: EntityPageMode;
@@ -41,6 +46,8 @@ export interface EntityPageProps {
   children: React.ReactNode;
   /** Additional actions in header */
   headerActions?: React.ReactNode;
+  /** Breadcrumbs for navigation */
+  breadcrumbs?: BreadcrumbItem[];
 }
 
 export function EntityPage({
@@ -57,6 +64,7 @@ export function EntityPage({
   showDelete = false,
   children,
   headerActions,
+  breadcrumbs,
 }: EntityPageProps) {
   const navigate = useNavigate();
 
@@ -92,6 +100,27 @@ export function EntityPage({
 
   return (
     <div className={styles.wrap}>
+      {/* Breadcrumbs */}
+      {breadcrumbs && breadcrumbs.length > 0 && (
+        <nav className={styles.breadcrumbs}>
+          {breadcrumbs.map((item, idx) => (
+            <React.Fragment key={idx}>
+              {item.href ? (
+                <a href={item.href} onClick={(e) => {
+                  e.preventDefault();
+                  navigate(item.href!);
+                }}>
+                  {item.label}
+                </a>
+              ) : (
+                <span>{item.label}</span>
+              )}
+              {idx < breadcrumbs.length - 1 && <span className={styles.separator}>/</span>}
+            </React.Fragment>
+          ))}
+        </nav>
+      )}
+
       {/* Content Header */}
       <header className={styles.header}>
         <div className={styles.headerLeft}>

@@ -309,6 +309,16 @@ export function PolicyEditorPage() {
     { id: 'versions', label: `Версии (${policy?.versions?.length || 0})` },
   ];
 
+  const breadcrumbs = isCreate
+    ? [
+        { label: 'Политики', href: '/admin/policies' },
+        { label: 'Новая политика' },
+      ]
+    : [
+        { label: 'Политики', href: '/admin/policies' },
+        { label: policy?.name || slug || '' },
+      ];
+
   return (
     <EntityPage
       mode={mode}
@@ -322,6 +332,7 @@ export function PolicyEditorPage() {
       onCancel={handleCancel}
       onDelete={handleDelete}
       showDelete={mode === 'view' && !!slug && policy?.slug !== 'default'}
+      breadcrumbs={breadcrumbs}
     >
 
       {isCreate ? (

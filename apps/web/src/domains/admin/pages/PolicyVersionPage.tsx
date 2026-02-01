@@ -303,6 +303,12 @@ export function PolicyVersionPage() {
     );
   };
 
+  const breadcrumbs = [
+    { label: 'Политики', href: '/admin/policies' },
+    { label: policy?.name || slug || '', href: `/admin/policies/${slug}` },
+    { label: isCreate ? 'Новая версия' : `Версия ${versionNumber}` },
+  ];
+
   return (
     <EntityPage
       mode={mode}
@@ -316,6 +322,7 @@ export function PolicyVersionPage() {
       onCancel={handleCancel}
       onDelete={existingVersion?.status !== 'active' ? handleDelete : undefined}
       showDelete={mode === 'view' && existingVersion?.status !== 'active'}
+      breadcrumbs={breadcrumbs}
     >
       {renderStatusActions()}
 
