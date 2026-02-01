@@ -21,7 +21,7 @@ import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
 import { EntityPage, type EntityPageMode } from '@/shared/ui/EntityPage';
 import { ContentBlock, ContentGrid, type FieldDefinition } from '@/shared/ui/ContentBlock';
 import { Tabs, TabPanel } from '@/shared/ui/Tabs';
-import { StatusCard, type StatusOption } from '@/shared/ui/StatusCard';
+import { StatusBadgeCard, type StatusOption } from '@/shared/ui/StatusBadgeCard';
 import Badge from '@/shared/ui/Badge';
 import Button from '@/shared/ui/Button';
 import DataTable from '@/shared/ui/DataTable/DataTable';
@@ -341,6 +341,17 @@ export function PromptEditorPage() {
                 fields={containerFields}
                 data={formData}
                 onChange={handleFieldChange}
+              />
+
+              {/* Right column: Status badge (compact) */}
+              <StatusBadgeCard
+                label="Тип"
+                status={formData.type}
+                statusOptions={[
+                  { value: 'prompt', label: 'Prompt', tone: 'info' },
+                  { value: 'baseline', label: 'Baseline', tone: 'warn' },
+                ]}
+                editable={false}
               />
 
               {/* Right column: Active version preview - 1/2 */}
