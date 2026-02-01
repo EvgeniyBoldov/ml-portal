@@ -9,7 +9,6 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import Button from '../Button';
-import { Icon } from '../Icon';
 import styles from './EntityPage.module.css';
 
 export type EntityPageMode = 'view' | 'edit' | 'create';
@@ -68,35 +67,7 @@ export function EntityPage({
 }: EntityPageProps) {
   const navigate = useNavigate();
 
-  const getTitle = () => {
-    switch (mode) {
-      case 'create':
-        return `Создание ${entityTypeLabel}`;
-      case 'edit':
-        return `Редактирование ${entityTypeLabel}`;
-      default:
-        return entityName;
-    }
-  };
-
-  const getSubtitle = () => {
-    switch (mode) {
-      case 'create':
-        return 'Заполните данные для создания';
-      case 'edit':
-        return entityName;
-      default:
-        return entityTypeLabel;
-    }
-  };
-
-  const handleBack = () => {
-    if (mode === 'edit' && onCancel) {
-      onCancel();
-    } else {
-      navigate(backPath);
-    }
-  };
+  // Title is always entity name, no subtitle needed
 
   return (
     <div className={styles.wrap}>
@@ -124,19 +95,9 @@ export function EntityPage({
       {/* Content Header */}
       <header className={styles.header}>
         <div className={styles.headerLeft}>
-          <button 
-            className={styles.backButton} 
-            onClick={handleBack}
-            title="Назад"
-          >
-            <Icon name="arrow-left" size={20} />
-          </button>
-          <div className={styles.titleBlock}>
-            <h1 className={styles.title}>{getTitle()}</h1>
-            <span className={styles.subtitle}>{getSubtitle()}</span>
-          </div>
+          <h1 className={styles.title}>{entityName}</h1>
           {mode === 'edit' && (
-            <span className={styles.editBadge}>Режим редактирования</span>
+            <span className={styles.editBadge}>Редактирование</span>
           )}
         </div>
 
