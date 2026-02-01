@@ -25,8 +25,6 @@ import { StatusBadgeCard, type StatusOption } from '@/shared/ui/StatusBadgeCard'
 import Badge from '@/shared/ui/Badge';
 import Button from '@/shared/ui/Button';
 import DataTable from '@/shared/ui/DataTable/DataTable';
-import Modal from '@/shared/ui/Modal';
-import Textarea from '@/shared/ui/Textarea';
 import styles from './PromptEditorPage.module.css';
 
 const STATUS_LABELS: Record<string, string> = {
@@ -69,9 +67,6 @@ export function PromptEditorPage() {
   // Tab state
   const [activeTab, setActiveTab] = useState('overview');
 
-  // New version modal
-  const [showNewVersionModal, setShowNewVersionModal] = useState(false);
-  const [newVersionTemplate, setNewVersionTemplate] = useState('');
 
   // Load prompt container
   const { data: prompt, isLoading, refetch } = useQuery({
@@ -128,35 +123,6 @@ export function PromptEditorPage() {
     onError: (err: any) => showError(err?.message || 'Ошибка обновления'),
   });
 
-  const createVersionMutation = useMutation({
-    mutationFn: (template: string) => promptsApi.createVersion(slug!, { template }),
-    onSuccess: (version) => {
-      queryClient.invalidateQueries({ queryKey: qk.prompts.detail(slug!) });
-      showSuccess(`Версия ${version.version} создана`);
-      setShowNewVersionModal(false);
-      setNewVersionTemplate('');
-      setSelectedVersionNum(version.version);
-    },
-    onError: (err: any) => showError(err?.message || 'Ошибка создания версии'),
-  });
-
-  const activateVersionMutation = useMutation({
-    mutationFn: (versionId: string) => promptsApi.activateVersion(versionId),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.prompts.detail(slug!) });
-      showSuccess('Версия активирована');
-    },
-    onError: (err: any) => showError(err?.message || 'Ошибка активации'),
-  });
-
-  const archiveVersionMutation = useMutation({
-    mutationFn: (versionId: string) => promptsApi.archiveVersion(versionId),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.prompts.detail(slug!) });
-      showSuccess('Версия архивирована');
-    },
-    onError: (err: any) => showError(err?.message || 'Ошибка архивации'),
-  });
 
   // Handlers
   const handleSave = async () => {
@@ -194,20 +160,6 @@ export function PromptEditorPage() {
     setFormData(prev => ({ ...prev, [key]: value }));
   };
 
-  const handleCreateVersion = () => {
-    if (!newVersionTemplate.trim()) {
-      showError('Введите текст промпта');
-      return;
-    }
-    createVersionMutation.mutate(newVersionTemplate);
-  };
-
-  const handleCreateFromCurrent = () => {
-    if (selectedVersion) {
-      setNewVersionTemplate(selectedVersion.template);
-      setShowNewVersionModal(true);
-    }
-  };
 
   // Field definitions
   const containerFields: FieldDefinition[] = [
@@ -271,38 +223,6 @@ export function PromptEditorPage() {
       label: 'Создана',
       render: (v: PromptVersionInfo) => new Date(v.created_at).toLocaleDateString('ru'),
     },
-    {
-      key: 'actions',
-      label: '',
-      render: (v: PromptVersionInfo) => (
-        <div style={{ display: 'flex', gap: '0.5rem' }}>
-          {v.status === 'draft' && (
-            <Button
-              size="small"
-              variant="primary"
-              onClick={(e: React.MouseEvent) => {
-                e.stopPropagation();
-                activateVersionMutation.mutate(v.id);
-              }}
-            >
-              Активировать
-            </Button>
-          )}
-          {v.status === 'active' && (
-            <Button
-              size="small"
-              variant="secondary"
-              onClick={(e: React.MouseEvent) => {
-                e.stopPropagation();
-                archiveVersionMutation.mutate(v.id);
-              }}
-            >
-              Архивировать
-            </Button>
-          )}
-        </div>
-      ),
-    },
   ];
 
   return (
@@ -343,128 +263,77 @@ export function PromptEditorPage() {
                 onChange={handleFieldChange}
               />
 
-              {/* Right column: Status badge (compact) */}
-              <StatusBadgeCard
-                label="Тип"
-                status={formData.type}
-                statusOptions={[
-                  { value: 'prompt', label: 'Prompt', tone: 'info' },
-                  { value: 'baseline', label: 'Baseline', tone: 'warn' },
-                ]}
-                editable={false}
-              />
+              {/* Right column: nested grid for Status + Version */}
+              <ContentGrid direction="column" gap="md">
+                {/* Status badge (compact) */}
+                <StatusBadgeCard
+                  label="Тип"
+                  status={formData.type}
+                  statusOptions={[
+                    { value: 'prompt', label: 'Prompt', tone: 'info' },
+                    { value: 'baseline', label: 'Baseline', tone: 'warn' },
+                  ]}
+                  editable={false}
+                />
 
-              {/* Right column: Active version preview - 1/2 */}
-              {selectedVersion ? (
-                <ContentBlock
-                  width="1/2"
-                  title={`Активная версия (v${selectedVersion.version})`}
-                  headerActions={
-                    <Badge tone={STATUS_TONES[selectedVersion.status]}>
-                      {STATUS_LABELS[selectedVersion.status]}
-                    </Badge>
-                  }
-                >
-                  <pre className={styles.templateBlock}>
-                    {selectedVersion.template.substring(0, 500)}
-                    {selectedVersion.template.length > 500 && '...'}
-                  </pre>
-                  <div className={styles.versionActions}>
-                    {selectedVersion.status === 'draft' && (
+                {/* Active version preview */}
+                {selectedVersion ? (
+                  <ContentBlock
+                    width="full"
+                    title={`Активная версия (v${selectedVersion.version})`}
+                    headerActions={
+                      <Badge tone={STATUS_TONES[selectedVersion.status]}>
+                        {STATUS_LABELS[selectedVersion.status]}
+                      </Badge>
+                    }
+                  >
+                    <pre className={styles.templateBlock}>
+                      {selectedVersion.template.substring(0, 500)}
+                      {selectedVersion.template.length > 500 && '...'}
+                    </pre>
+                    <div className={styles.versionActions}>
                       <Button
                         size="small"
-                        variant="primary"
-                        onClick={() => activateVersionMutation.mutate(selectedVersion.id)}
-                        disabled={activateVersionMutation.isPending}
+                        variant="outline"
+                        onClick={() => navigate(`/admin/prompts/${slug}/versions/${selectedVersion.version}`)}
                       >
-                        Активировать
+                        Подробнее
                       </Button>
-                    )}
-                    {selectedVersion.status === 'active' && (
-                      <Button
-                        size="small"
-                        variant="secondary"
-                        onClick={() => archiveVersionMutation.mutate(selectedVersion.id)}
-                        disabled={archiveVersionMutation.isPending}
-                      >
-                        Архивировать
+                    </div>
+                  </ContentBlock>
+                ) : (
+                  <ContentBlock
+                    width="full"
+                    title="Активная версия"
+                  >
+                    <div className={styles.emptyVersion}>
+                      <p>Нет версий</p>
+                      <Button variant="primary" onClick={() => navigate(`/admin/prompts/${slug}/versions/new`)}>
+                        Создать версию
                       </Button>
-                    )}
-                    <Button
-                      size="small"
-                      variant="outline"
-                      onClick={handleCreateFromCurrent}
-                    >
-                      Создать из текущей
-                    </Button>
-                  </div>
-                </ContentBlock>
-              ) : (
-                <ContentBlock
-                  width="1/2"
-                  title="Активная версия"
-                >
-                  <div className={styles.emptyVersion}>
-                    <p>Нет версий</p>
-                    <Button variant="primary" onClick={() => setShowNewVersionModal(true)}>
-                      Создать версию
-                    </Button>
-                  </div>
-                </ContentBlock>
-              )}
+                    </div>
+                  </ContentBlock>
+                )}
+              </ContentGrid>
             </ContentGrid>
           </TabPanel>
 
           <TabPanel id="versions" activeTab={activeTab}>
             <div style={{ marginBottom: '1rem', display: 'flex', justifyContent: 'flex-end' }}>
-              <Button variant="primary" onClick={() => setShowNewVersionModal(true)}>
+              <Button variant="primary" onClick={() => navigate(`/admin/prompts/${slug}/versions/new`)}>
                 Создать версию
               </Button>
             </div>
             <DataTable
               columns={versionColumns}
               data={prompt?.versions || []}
-              onRowClick={(v: PromptVersionInfo) => setSelectedVersionNum(v.version)}
+              onRowClick={(v: PromptVersionInfo) => navigate(`/admin/prompts/${slug}/versions/${v.version}`)}
               emptyMessage="Нет версий. Создайте первую версию промпта."
             />
           </TabPanel>
         </Tabs>
       )}
 
-      {/* New Version Modal */}
-      <Modal
-        open={showNewVersionModal}
-        onClose={() => setShowNewVersionModal(false)}
-        title="Создать новую версию"
-      >
-        <div className={styles.modalContent}>
-          <p className={styles.modalHint}>
-            Новая версия будет создана со статусом "Черновик"
-          </p>
-          <Textarea
-            value={newVersionTemplate}
-            onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setNewVersionTemplate(e.target.value)}
-            placeholder="Введите текст промпта..."
-            rows={12}
-            className={styles.templateInput}
-          />
-          <div className={styles.modalActions}>
-            <Button
-              variant="outline"
-              onClick={() => setShowNewVersionModal(false)}
-            >
-              Отмена
-            </Button>
-            <Button
-              variant="primary"
-              onClick={handleCreateVersion}
-              disabled={createVersionMutation.isPending}
-            >
-              {createVersionMutation.isPending ? 'Создание...' : 'Создать'}
-            </Button>
-          </div>
-        </div>
-      </Modal>
     </EntityPage>
   );
 }
