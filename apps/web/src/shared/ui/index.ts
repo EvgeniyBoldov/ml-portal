@@ -74,3 +74,7 @@ export { RowActions } from './RowActions';
 // RbacRulesEditor
 export { RbacRulesEditor } from './RbacRulesEditor';
 export type { RbacPermissions } from './RbacRulesEditor';
+
+// FormField
+export { FormField } from './FormField';
+export type { FormFieldProps, FormFieldType } from './FormField';
