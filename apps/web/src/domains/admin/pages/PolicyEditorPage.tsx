@@ -22,7 +22,6 @@ import { EntityPage, type EntityPageMode } from '@/shared/ui/EntityPage';
 import { ContentBlock, ContentGrid, type FieldDefinition } from '@/shared/ui/ContentBlock';
 import { Tabs, TabPanel } from '@/shared/ui/Tabs';
 import { Badge, Button, DataTable } from '@/shared/ui';
-import { Breadcrumbs } from '@/shared/ui/Breadcrumbs';
 
 interface FormData extends PolicyCreate {
   is_active?: boolean;
@@ -310,17 +309,6 @@ export function PolicyEditorPage() {
     { id: 'versions', label: `Версии (${policy?.versions?.length || 0})` },
   ];
 
-  // Breadcrumbs for navigation
-  const breadcrumbs = isCreate
-    ? [
-        { label: 'Политики', href: '/admin/policies' },
-        { label: 'Новая политика' },
-      ]
-    : [
-        { label: 'Политики', href: '/admin/policies' },
-        { label: policy?.name || slug || '' },
-      ];
-
   return (
     <EntityPage
       mode={mode}
@@ -335,7 +323,6 @@ export function PolicyEditorPage() {
       onDelete={handleDelete}
       showDelete={mode === 'view' && !!slug && policy?.slug !== 'default'}
     >
-      <Breadcrumbs items={breadcrumbs} />
 
       {isCreate ? (
         <ContentGrid>

@@ -15,7 +15,6 @@ import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
 import { EntityPage, type EntityPageMode } from '@/shared/ui/EntityPage';
 import { ContentBlock, ContentGrid, type FieldDefinition } from '@/shared/ui/ContentBlock';
 import { Badge, Button } from '@/shared/ui';
-import { Breadcrumbs } from '@/shared/ui/Breadcrumbs';
 
 interface FormData extends PolicyVersionCreate {
   notes?: string;
@@ -280,13 +279,6 @@ export function PolicyVersionPage() {
     },
   ];
 
-  // Breadcrumbs
-  const breadcrumbs = [
-    { label: 'Политики', href: '/admin/policies' },
-    { label: policy?.name || slug || '', href: `/admin/policies/${slug}` },
-    { label: isCreate ? 'Новая версия' : `Версия ${versionNumber}` },
-  ];
-
   // Custom actions based on version status
   const renderStatusActions = () => {
     if (isCreate || !existingVersion) return null;
@@ -325,8 +317,6 @@ export function PolicyVersionPage() {
       onDelete={existingVersion?.status !== 'active' ? handleDelete : undefined}
       showDelete={mode === 'view' && existingVersion?.status !== 'active'}
     >
-      <Breadcrumbs items={breadcrumbs} />
-      
       {renderStatusActions()}
 
       <ContentGrid>
