@@ -32,10 +32,10 @@ const STATUS_LABELS: Record<PolicyVersionStatus, string> = {
   inactive: 'Неактивная',
 };
 
-const STATUS_VARIANTS: Record<PolicyVersionStatus, 'default' | 'success' | 'warning' | 'error'> = {
-  draft: 'warning',
+const STATUS_TONES: Record<PolicyVersionStatus, 'neutral' | 'success' | 'warn' | 'danger' | 'info'> = {
+  draft: 'warn',
   active: 'success',
-  inactive: 'default',
+  inactive: 'neutral',
 };
 
 export function PolicyEditorPage() {
@@ -206,7 +206,7 @@ export function PolicyEditorPage() {
       key: 'status',
       header: 'Статус',
       render: (v: PolicyVersion) => (
-        <Badge variant={STATUS_VARIANTS[v.status]}>{STATUS_LABELS[v.status]}</Badge>
+        <Badge tone={STATUS_TONES[v.status]}>{STATUS_LABELS[v.status]}</Badge>
       ),
     },
     {
@@ -286,8 +286,8 @@ export function PolicyEditorPage() {
 
   // Status options for policy
   const policyStatusOptions: StatusOption[] = [
-    { value: 'active', label: 'Активна', variant: 'success' },
-    { value: 'inactive', label: 'Неактивна', variant: 'default' },
+    { value: 'active', label: 'Активна', tone: 'success' },
+    { value: 'inactive', label: 'Неактивна', tone: 'neutral' },
   ];
 
   const tabs = [
@@ -336,33 +336,33 @@ export function PolicyEditorPage() {
         <Tabs tabs={tabs} activeTab={activeTab} onChange={setActiveTab}>
           <TabPanel id="overview" activeTab={activeTab}>
             <ContentGrid>
-              {/* Info + Status - 1/2 */}
-              <StatusCard
+              {/* Left column: Info block - 1/2 */}
+              <ContentBlock
                 width="1/2"
                 title="Основная информация"
+                editable={isEditable}
+                fields={infoFieldsWithoutStatus}
+                data={formData}
+                onChange={handleFieldChange}
+              />
+
+              {/* Right column: Status block - 1/2 */}
+              <StatusCard
+                width="1/2"
+                title="Статус"
                 status={formData.is_active ? 'active' : 'inactive'}
                 statusOptions={policyStatusOptions}
                 editable={isEditable}
                 onStatusChange={(s) => handleFieldChange('is_active', s === 'active')}
-              >
-                <ContentBlock
-                  width="full"
-                  title=""
-                  editable={isEditable}
-                  fields={infoFieldsWithoutStatus}
-                  data={formData}
-                  onChange={handleFieldChange}
-                  compact
-                />
-              </StatusCard>
+              />
 
-              {/* Recommended Version - 1/2 */}
+              {/* Right column: Version block - 1/2 (below status) */}
               {policy?.recommended_version ? (
                 <ContentBlock
                   width="1/2"
                   title={`Основная версия (v${policy.recommended_version.version})`}
                   headerActions={
-                    <Badge variant={STATUS_VARIANTS[policy.recommended_version.status]}>
+                    <Badge tone={STATUS_TONES[policy.recommended_version.status]}>
                       {STATUS_LABELS[policy.recommended_version.status]}
                     </Badge>
                   }

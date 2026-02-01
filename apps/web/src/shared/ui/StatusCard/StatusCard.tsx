@@ -15,7 +15,7 @@ import styles from './StatusCard.module.css';
 export interface StatusOption {
   value: string;
   label: string;
-  variant?: 'default' | 'success' | 'warning' | 'error';
+  tone?: 'neutral' | 'success' | 'warn' | 'danger' | 'info';
 }
 
 export interface StatusAction {
@@ -50,11 +50,11 @@ export interface StatusCardProps {
   className?: string;
 }
 
-const STATUS_VARIANTS: Record<string, 'default' | 'success' | 'warning' | 'error'> = {
-  draft: 'warning',
+const STATUS_TONES: Record<string, 'neutral' | 'success' | 'warn' | 'danger' | 'info'> = {
+  draft: 'warn',
   active: 'success',
-  inactive: 'default',
-  archived: 'default',
+  inactive: 'neutral',
+  archived: 'neutral',
 };
 
 export function StatusCard({
@@ -69,7 +69,7 @@ export function StatusCard({
   className = '',
 }: StatusCardProps) {
   const currentOption = statusOptions.find(o => o.value === status);
-  const variant = currentOption?.variant || STATUS_VARIANTS[status] || 'default';
+  const tone = currentOption?.tone || STATUS_TONES[status] || 'neutral';
 
   // Filter actions based on current status
   const visibleActions = actions.filter(action => {
@@ -88,7 +88,7 @@ export function StatusCard({
           className={styles.statusSelect}
         />
       ) : (
-        <Badge variant={variant}>
+        <Badge tone={tone}>
           {currentOption?.label || status}
         </Badge>
       )}

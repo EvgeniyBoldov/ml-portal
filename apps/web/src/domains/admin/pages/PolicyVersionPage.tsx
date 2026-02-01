@@ -283,13 +283,32 @@ export function PolicyVersionPage() {
     { key: 'notes', label: 'Заметки', type: 'textarea', placeholder: 'Что изменилось в этой версии...', description: 'Описание изменений', rows: 3 },
   ];
 
-  // Render header actions
+  // Render header actions (status actions moved here)
   const renderHeaderActions = () => {
     if (isCreate) return null;
     return (
-      <Button variant="secondary" onClick={() => navigate(`/admin/policies/${slug}/versions/new`)}>
-        Новая версия
-      </Button>
+      <>
+        {existingVersion?.status === 'draft' && (
+          <Button variant="primary" onClick={() => activateMutation.mutate()} disabled={activateMutation.isPending}>
+            Активировать
+          </Button>
+        )}
+        {existingVersion?.status === 'active' && (
+          <>
+            <Button variant="secondary" onClick={() => deactivateMutation.mutate()} disabled={deactivateMutation.isPending}>
+              Деактивировать
+            </Button>
+            {policy?.recommended_version?.version !== versionNumber && (
+              <Button variant="primary" onClick={() => activateMutation.mutate()} disabled={activateMutation.isPending}>
+                Сделать основной
+              </Button>
+            )}
+          </>
+        )}
+        <Button variant="secondary" onClick={() => navigate(`/admin/policies/${slug}/versions/new`)}>
+          Новая версия
+        </Button>
+      </>
     );
   };
 
@@ -317,19 +336,7 @@ export function PolicyVersionPage() {
       headerActions={renderHeaderActions()}
     >
       <ContentGrid>
-        {/* Status Card - only for existing versions */}
-        {!isCreate && existingVersion && (
-          <StatusCard
-            width="full"
-            title="Статус версии"
-            status={existingVersion.status}
-            statusOptions={statusOptions}
-            editable={false}
-            actions={statusActions}
-          />
-        )}
-
-        {/* Limits */}
+        {/* Left column: Limits */}
         <ContentBlock
           width="1/2"
           title="Лимиты выполнения"
@@ -339,17 +346,18 @@ export function PolicyVersionPage() {
           onChange={handleFieldChange}
         />
 
-        {/* Timeouts */}
-        <ContentBlock
-          width="1/2"
-          title="Таймауты"
-          editable={isEditable}
-          fields={timeoutsFields}
-          data={formData}
-          onChange={handleFieldChange}
-        />
+        {/* Right column: Status Card - only for existing versions */}
+        {!isCreate && existingVersion && (
+          <StatusCard
+            width="1/2"
+            title="Статус версии"
+            status={existingVersion.status}
+            statusOptions={statusOptions}
+            editable={false}
+          />
+        )}
 
-        {/* Budget */}
+        {/* Left column: Budget (below Limits) */}
         <ContentBlock
           width="1/2"
           title="Бюджет"
@@ -359,9 +367,19 @@ export function PolicyVersionPage() {
           onChange={handleFieldChange}
         />
 
-        {/* Notes */}
+        {/* Right column: Timeouts (below Status) */}
         <ContentBlock
           width="1/2"
+          title="Таймауты"
+          editable={isEditable}
+          fields={timeoutsFields}
+          data={formData}
+          onChange={handleFieldChange}
+        />
+
+        {/* Notes - full width */}
+        <ContentBlock
+          width="full"
           title="Заметки"
           editable={isEditable}
           fields={notesFields}
