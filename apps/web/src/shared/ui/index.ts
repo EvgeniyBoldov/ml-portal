@@ -98,3 +98,18 @@ export type { StatusCardProps, StatusOption, StatusAction } from './StatusCard';
 // StatusBadgeCard
 export { StatusBadgeCard } from './StatusBadgeCard';
 export type { StatusBadgeCardProps } from './StatusBadgeCard';
+
+// Tooltip
+export { Tooltip } from './Tooltip';
+
+// Stepper
+export { Stepper } from './Stepper';
+export type { Step } from './Stepper';
+
+// Breadcrumbs
+export { Breadcrumbs } from './Breadcrumbs';
+export type { BreadcrumbItem } from './Breadcrumbs';
+
+// Combobox
+export { Combobox } from './Combobox';
+export type { ComboboxOption } from './Combobox';

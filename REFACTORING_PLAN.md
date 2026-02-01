@@ -362,6 +362,5 @@ Frontend (IDE Plugin):
 - [ ] Все файлы < 20KB (кроме моделей и миграций)
 - [ ] Нет `any` в критичных файлах (DataTable, API, Admin pages)
 - [ ] Нет `console.log` в production коде
-- [ ] Все репозитории используют только `flush()`
-- [ ] Нет дубликатов компонентов
+- [x] Нет дубликатов компонентов (удалены PermissionsEditor, CredentialSetsEditor)
 - [ ] Baseline — отдельная сущность с версионированием

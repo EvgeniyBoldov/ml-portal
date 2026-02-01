@@ -100,6 +100,48 @@
   margin-top: 0;
 }
 
+.versionsCard {
+  padding: 1rem;
+}
+
+.versionsTitle {
+  font-size: 0.875rem;
+  font-weight: 600;
+  margin: 0 0 1rem 0;
+}
+
+.versionsList {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.versionItem {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  background: var(--bg-secondary);
+  border-radius: var(--radius);
+  font-size: 0.8125rem;
+}
+
+.versionNumber {
+  font-weight: 600;
+  font-family: var(--font-mono);
+}
+
+.versionDate {
+  margin-left: auto;
+  color: var(--color-text-muted);
+}
+
+.noVersions {
+  font-size: 0.875rem;
+  color: var(--color-text-muted);
+  margin: 0;
+}
+
 .stickyFooter {
   position: fixed;
   bottom: 0;

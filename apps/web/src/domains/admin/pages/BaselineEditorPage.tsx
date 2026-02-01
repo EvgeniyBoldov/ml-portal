@@ -1,5 +1,5 @@
 /**
- * PromptEntityPage - View/Edit/Create prompt container
+ * BaselineEditorPage - View/Edit/Create baseline container
  * 
  * Architecture:
  * - One page = three modes (View/Edit/Create)
@@ -8,10 +8,17 @@
  * - Create mode: Edit mode with empty data
  */
 import { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 
-import { promptsApi, type PromptDetail, type CreatePromptContainerRequest, type UpdatePromptContainerRequest } from '@/shared/api/prompts';
+import { 
+  baselinesApi, 
+  type BaselineDetail, 
+  type CreateBaselineContainerRequest, 
+  type UpdateBaselineContainerRequest,
+  type BaselineScope,
+  type BaselineVersionInfo,
+} from '@/shared/api/baselines';
 import { qk } from '@/shared/api/keys';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
 import {
@@ -25,8 +32,9 @@ import {
   Select,
   Skeleton,
   Alert,
+  Switch,
 } from '@/shared/ui';
-import styles from './PromptEntityPage.module.css';
+import styles from './BaselineEditorPage.module.css';
 
 type Mode = 'view' | 'edit' | 'create';
 
@@ -34,67 +42,82 @@ interface FormData {
   slug: string;
   name: string;
   description: string;
-  type: 'prompt' | 'baseline';
+  scope: BaselineScope;
+  is_active: boolean;
 }
 
-export default function PromptEntityPage() {
+export function BaselineEditorPage() {
   const { slug } = useParams<{ slug: string }>();
+  const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const showError = useErrorToast();
   const showSuccess = useSuccessToast();
 
   const isNew = slug === 'new';
-  const [mode, setMode] = useState<Mode>(isNew ? 'create' : 'view');
+  const initialMode = searchParams.get('mode') === 'edit' ? 'edit' : 'view';
+  const [mode, setMode] = useState<Mode>(isNew ? 'create' : initialMode);
   const [formData, setFormData] = useState<FormData>({
     slug: '',
     name: '',
     description: '',
-    type: 'prompt',
+    scope: 'default',
+    is_active: true,
   });
   const [hasChanges, setHasChanges] = useState(false);
 
   // === QUERIES ===
-  const { data: prompt, isLoading } = useQuery({
-    queryKey: qk.prompts.detail(slug!),
-    queryFn: () => promptsApi.getPrompt(slug!),
+  const { data: baseline, isLoading } = useQuery({
+    queryKey: qk.baselines.detail(slug!),
+    queryFn: () => baselinesApi.get(slug!),
     enabled: !!slug && !isNew,
   });
 
-  // Sync form data with loaded prompt
+  // Sync form data with loaded baseline
   useEffect(() => {
-    if (prompt && mode === 'view') {
+    if (baseline && mode === 'view') {
       setFormData({
-        slug: prompt.slug,
-        name: prompt.name,
-        description: prompt.description || '',
-        type: prompt.type,
+        slug: baseline.slug,
+        name: baseline.name,
+        description: baseline.description || '',
+        scope: baseline.scope,
+        is_active: baseline.is_active,
       });
       setHasChanges(false);
     }
-  }, [prompt, mode]);
+  }, [baseline, mode]);
 
   // === MUTATIONS ===
   const createMutation = useMutation({
-    mutationFn: (data: CreatePromptContainerRequest) => promptsApi.createContainer(data),
+    mutationFn: (data: CreateBaselineContainerRequest) => baselinesApi.createContainer(data),
     onSuccess: (container) => {
-      queryClient.invalidateQueries({ queryKey: qk.prompts.list() });
-      showSuccess('Промпт создан');
-      navigate(`/admin/prompts/${container.slug}`);
+      queryClient.invalidateQueries({ queryKey: qk.baselines.list() });
+      showSuccess('Бейслайн создан');
+      navigate(`/admin/baselines/${container.slug}`);
     },
     onError: (err: any) => showError(err?.message || 'Ошибка создания'),
   });
 
   const updateMutation = useMutation({
-    mutationFn: (data: UpdatePromptContainerRequest) => promptsApi.updateContainer(slug!, data),
+    mutationFn: (data: UpdateBaselineContainerRequest) => baselinesApi.updateContainer(slug!, data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.prompts.detail(slug!) });
-      queryClient.invalidateQueries({ queryKey: qk.prompts.list() });
-      showSuccess('Промпт обновлён');
+      queryClient.invalidateQueries({ queryKey: qk.baselines.detail(slug!) });
+      queryClient.invalidateQueries({ queryKey: qk.baselines.list() });
+      showSuccess('Бейслайн обновлён');
       setMode('view');
       setHasChanges(false);
     },
     onError: (err: any) => showError(err?.message || 'Ошибка обновления'),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: () => baselinesApi.delete(slug!),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: qk.baselines.list() });
+      showSuccess('Бейслайн удалён');
+      navigate('/admin/baselines');
+    },
+    onError: (err: any) => showError(err?.message || 'Ошибка удаления'),
   });
 
   // === HANDLERS ===
@@ -108,15 +131,16 @@ export default function PromptEntityPage() {
     }
     
     if (isNew) {
-      navigate('/admin/prompts');
+      navigate('/admin/baselines');
     } else {
       setMode('view');
-      if (prompt) {
+      if (baseline) {
         setFormData({
-          slug: prompt.slug,
-          name: prompt.name,
-          description: prompt.description || '',
-          type: prompt.type,
+          slug: baseline.slug,
+          name: baseline.name,
+          description: baseline.description || '',
+          scope: baseline.scope,
+          is_active: baseline.is_active,
         });
       }
       setHasChanges(false);
@@ -139,8 +163,14 @@ export default function PromptEntityPage() {
       updateMutation.mutate({
         name: formData.name,
         description: formData.description,
+        is_active: formData.is_active,
       });
     }
+  };
+
+  const handleDelete = () => {
+    if (!confirm('Удалить бейслайн? Это действие необратимо.')) return;
+    deleteMutation.mutate();
   };
 
   const updateField = <K extends keyof FormData>(field: K, value: FormData[K]) => {
@@ -158,26 +188,26 @@ export default function PromptEntityPage() {
     );
   }
 
-  if (!isNew && !prompt) {
+  if (!isNew && !baseline) {
     return (
       <PageContent>
-        <Alert variant="error" title="Промпт не найден">
-          Промпт с таким slug не существует
+        <Alert variant="error" title="Бейслайн не найден">
+          Бейслайн с таким slug не существует
         </Alert>
       </PageContent>
     );
   }
 
   const isEditing = mode === 'edit' || mode === 'create';
-  const title = isNew ? 'Создать промпт' : prompt!.name;
-  const subtitle = isNew ? 'Новый контейнер промпта' : `${prompt!.slug} • ${prompt!.type}`;
+  const title = isNew ? 'Создать бейслайн' : baseline!.name;
+  const subtitle = isNew ? 'Новый бейслайн' : `${baseline!.slug} • ${baseline!.scope}`;
 
   return (
     <PageContent>
       <PageHeader
         title={title}
         subtitle={subtitle}
-        backTo="/admin/prompts"
+        backTo="/admin/baselines"
         actions={
           mode === 'view'
             ? [
@@ -186,6 +216,12 @@ export default function PromptEntityPage() {
                   onClick: handleEdit,
                   variant: 'outline',
                   icon: 'edit',
+                },
+                {
+                  label: 'Удалить',
+                  onClick: handleDelete,
+                  variant: 'danger',
+                  icon: 'trash',
                 },
               ]
             : []
@@ -214,7 +250,7 @@ export default function PromptEntityPage() {
                   id="slug"
                   value={formData.slug}
                   onChange={(e) => updateField('slug', e.target.value)}
-                  placeholder="chat.rag.system"
+                  placeholder="security.no-code"
                   disabled={!isNew}
                 />
                 <p className={styles.hint}>
@@ -233,7 +269,7 @@ export default function PromptEntityPage() {
                 id="name"
                 value={formData.name}
                 onChange={(e) => updateField('name', e.target.value)}
-                placeholder="RAG System Prompt"
+                placeholder="Запрет генерации кода"
               />
             )}
           </div>
@@ -247,36 +283,54 @@ export default function PromptEntityPage() {
                 id="description"
                 value={formData.description}
                 onChange={(e) => updateField('description', e.target.value)}
-                placeholder="Системный промпт для RAG агента"
+                placeholder="Ограничения для агента по генерации кода"
                 rows={3}
               />
             )}
           </div>
 
           <div className={styles.field}>
-            <label htmlFor="type">Тип</label>
+            <label htmlFor="scope">Scope</label>
             {mode === 'view' ? (
               <div className={styles.value}>
-                <Badge variant={formData.type === 'prompt' ? 'default' : 'warning'}>
-                  {formData.type === 'prompt' ? 'Prompt (инструкции)' : 'Baseline (ограничения)'}
+                <Badge variant={formData.scope === 'default' ? 'default' : formData.scope === 'tenant' ? 'warning' : 'success'}>
+                  {formData.scope === 'default' ? 'Default (глобальный)' : formData.scope === 'tenant' ? 'Tenant' : 'User'}
                 </Badge>
               </div>
             ) : (
               <>
                 <Select
-                  id="type"
-                  value={formData.type}
-                  onChange={(e) => updateField('type', e.target.value as 'prompt' | 'baseline')}
+                  id="scope"
+                  value={formData.scope}
+                  onChange={(e) => updateField('scope', e.target.value as BaselineScope)}
                   options={[
-                    { value: 'prompt', label: 'Prompt (инструкции)' },
-                    { value: 'baseline', label: 'Baseline (ограничения)' },
+                    { value: 'default', label: 'Default (глобальный)' },
+                    { value: 'tenant', label: 'Tenant (для тенанта)' },
+                    { value: 'user', label: 'User (для пользователя)' },
                   ]}
                   disabled={!isNew}
                 />
                 <p className={styles.hint}>
-                  {isNew ? 'Prompt — основные инструкции. Baseline — ограничения и запреты.' : 'Тип нельзя изменить'}
+                  {isNew ? 'Default — для всех. Tenant/User — для конкретного тенанта/пользователя.' : 'Scope нельзя изменить'}
                 </p>
               </>
+            )}
+          </div>
+
+          <div className={styles.field}>
+            <label htmlFor="is_active">Активен</label>
+            {mode === 'view' ? (
+              <div className={styles.value}>
+                <Badge variant={formData.is_active ? 'success' : 'default'}>
+                  {formData.is_active ? 'Да' : 'Нет'}
+                </Badge>
+              </div>
+            ) : (
+              <Switch
+                id="is_active"
+                checked={formData.is_active}
+                onChange={(checked) => updateField('is_active', checked)}
+              />
             )}
           </div>
 
@@ -284,11 +338,11 @@ export default function PromptEntityPage() {
             <div className={styles.meta}>
               <div className={styles.metaItem}>
                 <span className={styles.metaLabel}>Создан:</span>
-                <span>{new Date(prompt!.created_at).toLocaleString('ru-RU')}</span>
+                <span>{new Date(baseline!.created_at).toLocaleString('ru-RU')}</span>
               </div>
               <div className={styles.metaItem}>
                 <span className={styles.metaLabel}>Обновлён:</span>
-                <span>{new Date(prompt!.updated_at).toLocaleString('ru-RU')}</span>
+                <span>{new Date(baseline!.updated_at).toLocaleString('ru-RU')}</span>
               </div>
             </div>
           )}
@@ -301,10 +355,40 @@ export default function PromptEntityPage() {
               <p>Отмена вернёт все поля к исходным значениям.</p>
             </Alert>
           ) : (
-            <Alert variant="info" title="Версии">
-              <p>После создания контейнера вы сможете добавить версии с темплейтами.</p>
-              <p>Управление версиями доступно на странице детального просмотра.</p>
-            </Alert>
+            <>
+              <Card className={styles.versionsCard}>
+                <h4 className={styles.versionsTitle}>Версии</h4>
+                {baseline?.versions && baseline.versions.length > 0 ? (
+                  <div className={styles.versionsList}>
+                    {baseline.versions.map((v: BaselineVersionInfo) => (
+                      <div key={v.id} className={styles.versionItem}>
+                        <span className={styles.versionNumber}>v{v.version}</span>
+                        <Badge variant={v.status === 'active' ? 'success' : v.status === 'draft' ? 'warning' : 'default'}>
+                          {v.status}
+                        </Badge>
+                        <span className={styles.versionDate}>
+                          {new Date(v.created_at).toLocaleDateString('ru-RU')}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className={styles.noVersions}>Нет версий</p>
+                )}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => navigate(`/admin/baselines/${slug}/versions/new`)}
+                  style={{ marginTop: '1rem', width: '100%' }}
+                >
+                  Создать версию
+                </Button>
+              </Card>
+              <Alert variant="info" title="Версионирование">
+                <p>Каждый бейслайн может иметь несколько версий.</p>
+                <p>Только одна версия может быть активной.</p>
+              </Alert>
+            </>
           )}
         </div>
       </div>
@@ -326,3 +410,5 @@ export default function PromptEntityPage() {
     </PageContent>
   );
 }
+
+export default BaselineEditorPage;

@@ -32,10 +32,10 @@ class Agent(Base):
     # Reference to system prompt (by slug)
     system_prompt_slug: Mapped[str] = mapped_column(String(255), nullable=False)
     
-    # Optional baseline prompt for restrictions/limitations
-    baseline_prompt_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+    # Optional baseline for restrictions/limitations (separate entity)
+    baseline_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey('prompts.id', ondelete='SET NULL'),
+        ForeignKey('baselines.id', ondelete='SET NULL'),
         nullable=True,
         index=True
     )

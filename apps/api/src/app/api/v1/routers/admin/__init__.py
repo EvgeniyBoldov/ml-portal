@@ -20,6 +20,7 @@ from .credentials import router as credentials_router
 from .permissions import router as permissions_router
 from .routing_logs import router as routing_logs_router
 from .policies import router as policies_router
+from .baselines import router as baselines_router
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -38,5 +39,6 @@ router.include_router(credentials_router, prefix="/credentials", tags=["credenti
 router.include_router(permissions_router, prefix="/permissions", tags=["permissions"])
 router.include_router(routing_logs_router, prefix="/routing-logs", tags=["routing-logs"])
 router.include_router(policies_router, prefix="/policies", tags=["policies"])
+router.include_router(baselines_router, prefix="/baselines", tags=["baselines"])
 
 __all__ = ["router"]

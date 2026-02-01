@@ -8,7 +8,8 @@ from .rag import RAGDocument, RAGChunk
 from .rag_ingest import Source, Chunk, EmbStatus, RAGStatus
 from .model_registry import ModelRegistry
 from .events import EventOutbox
-from .prompt import Prompt
+from .prompt import Prompt, PromptVersion, PromptStatus
+from .baseline import Baseline, BaselineVersion, BaselineStatus, BaselineScope
 from .tool_group import ToolGroup
 from .tool import Tool
 from .tool_instance import ToolInstance, HealthStatus, InstanceType
@@ -40,6 +41,12 @@ __all__ = [
     "ModelRegistry",
     "EventOutbox",
     "Prompt",
+    "PromptVersion",
+    "PromptStatus",
+    "Baseline",
+    "BaselineVersion",
+    "BaselineStatus",
+    "BaselineScope",
     "ToolGroup",
     "Tool",
     "ToolInstance",
