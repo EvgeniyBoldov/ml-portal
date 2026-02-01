@@ -19,9 +19,9 @@ import { policiesApi, type PolicyCreate, type PolicyVersion, type PolicyVersionS
 import { qk } from '@/shared/api/keys';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
 import { EntityPage, type EntityPageMode } from '@/shared/ui/EntityPage';
-import { ContentBlock, ContentGrid, type FieldDefinition } from '@/shared/ui/ContentBlock';
 import { Tabs, TabPanel } from '@/shared/ui/Tabs';
-import { Badge, Button, DataTable } from '@/shared/ui';
+import { Badge, Button, DataTable, FormField, ShortEntityBlock } from '@/shared/ui';
+import styles from './PolicyEditorPage.module.css';
 
 interface FormData extends PolicyCreate {
   is_active?: boolean;
@@ -196,38 +196,6 @@ export function PolicyEditorPage() {
     navigate(`/admin/policies/${slug}/versions/${version.version}`);
   };
 
-  // Field definitions for container
-  const basicFields: FieldDefinition[] = [
-    {
-      key: 'slug',
-      label: 'Slug',
-      type: 'text',
-      required: true,
-      disabled: mode !== 'create',
-      placeholder: 'my-policy',
-      description: 'Уникальный идентификатор',
-    },
-    {
-      key: 'name',
-      label: 'Название',
-      type: 'text',
-      required: true,
-      placeholder: 'Моя политика',
-    },
-    {
-      key: 'description',
-      label: 'Описание',
-      type: 'textarea',
-      placeholder: 'Описание политики...',
-    },
-    {
-      key: 'is_active',
-      label: 'Активна',
-      type: 'boolean',
-      description: 'Политика доступна для использования',
-    },
-  ];
-
   // Versions table columns
   const versionColumns = [
     {
@@ -336,72 +304,105 @@ export function PolicyEditorPage() {
     >
 
       {isCreate ? (
-        <ContentGrid>
-          <ContentBlock
-            width="2/3"
-            title="Основное"
-            icon="file"
-            editable={true}
-            fields={basicFields.filter((f) => f.key !== 'is_active')}
-            data={formData}
-            onChange={handleFieldChange}
-          />
-        </ContentGrid>
+        <div className={styles.grid}>
+          <div className={styles.mainColumn}>
+            <div className={styles.section}>
+              <div className={styles.sectionContent}>
+                <FormField
+                  label="Slug"
+                  value={formData.slug}
+                  editable={true}
+                  required
+                  placeholder="my-policy"
+                  description="Уникальный идентификатор"
+                  onChange={(v) => handleFieldChange('slug', v)}
+                />
+                <FormField
+                  label="Название"
+                  value={formData.name}
+                  editable={true}
+                  required
+                  placeholder="Моя политика"
+                  onChange={(v) => handleFieldChange('name', v)}
+                />
+                <FormField
+                  label="Описание"
+                  value={formData.description}
+                  type="textarea"
+                  editable={true}
+                  placeholder="Описание политики..."
+                  onChange={(v) => handleFieldChange('description', v)}
+                />
+              </div>
+            </div>
+          </div>
+        </div>
       ) : (
         <Tabs tabs={tabs} activeTab={activeTab} onChange={setActiveTab}>
           <TabPanel id="overview" activeTab={activeTab}>
-            <ContentGrid>
-              <ContentBlock
-                width="2/3"
-                title="Основное"
-                icon="file"
-                editable={isEditable}
-                fields={basicFields}
-                data={formData}
-                onChange={handleFieldChange}
-              />
+            <div className={styles.grid}>
+              <div className={styles.mainColumn}>
+                <div className={styles.section}>
+                  <div className={styles.sectionContent}>
+                    <FormField
+                      label="Slug"
+                      value={formData.slug}
+                      editable={false}
+                      required
+                      description="Уникальный идентификатор"
+                    />
+                    <FormField
+                      label="Название"
+                      value={formData.name}
+                      editable={isEditable}
+                      required
+                      onChange={(v) => handleFieldChange('name', v)}
+                    />
+                    <FormField
+                      label="Описание"
+                      value={formData.description}
+                      type="textarea"
+                      editable={isEditable}
+                      onChange={(v) => handleFieldChange('description', v)}
+                    />
+                    <FormField
+                      label="Активна"
+                      value={formData.is_active}
+                      type="switch"
+                      editable={isEditable}
+                      description="Политика доступна для использования"
+                      onChange={(v) => handleFieldChange('is_active', v)}
+                    />
+                  </div>
+                </div>
+              </div>
 
-              <ContentBlock width="1/3" title="Рекомендованная версия" icon="star">
+              <div className={styles.sideColumn}>
                 {policy?.recommended_version ? (
-                  <div style={{ padding: '1rem' }}>
-                    <div style={{ marginBottom: '0.5rem' }}>
-                      <strong>v{policy.recommended_version.version}</strong>
-                      <Badge
-                        variant={STATUS_VARIANTS[policy.recommended_version.status]}
-                        style={{ marginLeft: '0.5rem' }}
-                      >
+                  <ShortEntityBlock
+                    title={`v${policy.recommended_version.version}`}
+                    subtitle={
+                      <Badge variant={STATUS_VARIANTS[policy.recommended_version.status]}>
                         {STATUS_LABELS[policy.recommended_version.status]}
                       </Badge>
-                    </div>
-                    <div style={{ fontSize: '0.85em', color: 'var(--text-secondary)' }}>
-                      Шагов: {policy.recommended_version.max_steps ?? '∞'}
-                      <br />
-                      Вызовов: {policy.recommended_version.max_tool_calls ?? '∞'}
-                      <br />
-                      Таймаут: {policy.recommended_version.max_wall_time_ms ?? '∞'} мс
-                    </div>
-                    <Button
-                      size="small"
-                      variant="secondary"
-                      style={{ marginTop: '0.75rem' }}
-                      onClick={() =>
-                        navigate(`/admin/policies/${slug}/versions/${policy.recommended_version!.version}`)
-                      }
-                    >
-                      Подробнее
-                    </Button>
-                  </div>
+                    }
+                    items={[
+                      { label: 'Шагов', value: policy.recommended_version.max_steps ?? '∞' },
+                      { label: 'Вызовов', value: policy.recommended_version.max_tool_calls ?? '∞' },
+                      { label: 'Таймаут', value: `${policy.recommended_version.max_wall_time_ms ?? '∞'} мс` },
+                    ]}
+                    actionLabel="Подробнее"
+                    onAction={() => navigate(`/admin/policies/${slug}/versions/${policy.recommended_version!.version}`)}
+                  />
                 ) : (
-                  <div style={{ padding: '1rem', color: 'var(--text-secondary)' }}>
-                    Нет рекомендованной версии.
-                    <br />
-                    <Button size="small" variant="primary" style={{ marginTop: '0.5rem' }} onClick={handleCreateVersion}>
+                  <ShortEntityBlock title="Нет версии">
+                    <Button size="small" variant="primary" onClick={handleCreateVersion}>
                       Создать версию
                     </Button>
-                  </div>
+                  </ShortEntityBlock>
                 )}
-              </ContentBlock>
-            </ContentGrid>
+              </div>
+            </div>
           </TabPanel>
 
           <TabPanel id="versions" activeTab={activeTab}>
