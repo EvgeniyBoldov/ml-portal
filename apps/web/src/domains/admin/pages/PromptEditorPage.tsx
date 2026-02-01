@@ -20,8 +20,11 @@ import { qk } from '@/shared/api/keys';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
 import { EntityPage, type EntityPageMode } from '@/shared/ui/EntityPage';
 import { ContentBlock, ContentGrid, type FieldDefinition } from '@/shared/ui/ContentBlock';
+import { Tabs, TabPanel } from '@/shared/ui/Tabs';
+import { StatusCard, type StatusOption } from '@/shared/ui/StatusCard';
 import Badge from '@/shared/ui/Badge';
 import Button from '@/shared/ui/Button';
+import DataTable from '@/shared/ui/DataTable/DataTable';
 import Modal from '@/shared/ui/Modal';
 import Textarea from '@/shared/ui/Textarea';
 import styles from './PromptEditorPage.module.css';
@@ -32,8 +35,8 @@ const STATUS_LABELS: Record<string, string> = {
   archived: 'Архив',
 };
 
-const STATUS_TONES: Record<string, 'warning' | 'success' | 'neutral'> = {
-  draft: 'warning',
+const STATUS_TONES: Record<string, 'warn' | 'success' | 'neutral'> = {
+  draft: 'warn',
   active: 'success',
   archived: 'neutral',
 };
@@ -62,6 +65,9 @@ export function PromptEditorPage() {
   // Selected version
   const [selectedVersionNum, setSelectedVersionNum] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
+  
+  // Tab state
+  const [activeTab, setActiveTab] = useState('overview');
 
   // New version modal
   const [showNewVersionModal, setShowNewVersionModal] = useState(false);
@@ -240,6 +246,65 @@ export function PromptEditorPage() {
     },
   ];
 
+  // Tabs config
+  const tabs = [
+    { id: 'overview', label: 'Обзор' },
+    { id: 'versions', label: `Версии (${prompt?.versions?.length || 0})` },
+  ];
+
+  // Version columns for DataTable
+  const versionColumns = [
+    {
+      key: 'version',
+      label: 'Версия',
+      render: (v: PromptVersionInfo) => `v${v.version}`,
+    },
+    {
+      key: 'status',
+      label: 'Статус',
+      render: (v: PromptVersionInfo) => (
+        <Badge tone={STATUS_TONES[v.status]}>{STATUS_LABELS[v.status]}</Badge>
+      ),
+    },
+    {
+      key: 'created_at',
+      label: 'Создана',
+      render: (v: PromptVersionInfo) => new Date(v.created_at).toLocaleDateString('ru'),
+    },
+    {
+      key: 'actions',
+      label: '',
+      render: (v: PromptVersionInfo) => (
+        <div style={{ display: 'flex', gap: '0.5rem' }}>
+          {v.status === 'draft' && (
+            <Button
+              size="small"
+              variant="primary"
+              onClick={(e: React.MouseEvent) => {
+                e.stopPropagation();
+                activateVersionMutation.mutate(v.id);
+              }}
+            >
+              Активировать
+            </Button>
+          )}
+          {v.status === 'active' && (
+            <Button
+              size="small"
+              variant="secondary"
+              onClick={(e: React.MouseEvent) => {
+                e.stopPropagation();
+                archiveVersionMutation.mutate(v.id);
+              }}
+            >
+              Архивировать
+            </Button>
+          )}
+        </div>
+      ),
+    },
+  ];
+
   return (
     <EntityPage
       mode={mode}
@@ -253,138 +318,107 @@ export function PromptEditorPage() {
       onCancel={handleCancel}
       showDelete={false}
     >
-      <ContentGrid>
-        {/* Container Info - 1/2 */}
-        <ContentBlock
-          width="1/2"
-          title="Контейнер промпта"
-          icon="file-text"
-          editable={isEditable}
-          fields={containerFields}
-          data={formData}
-          onChange={handleFieldChange}
-        />
-
-        {/* Version Template - 1/2 */}
-        {!isNew && (
+      {isNew ? (
+        <ContentGrid>
           <ContentBlock
             width="1/2"
-            title={selectedVersion ? `Версия ${selectedVersion.version}` : 'Шаблон промпта'}
-            icon="code"
-          >
-            {selectedVersion ? (
-              <>
-                <div className={styles.versionHeader}>
-                  <Badge tone={STATUS_TONES[selectedVersion.status]}>
-                    {STATUS_LABELS[selectedVersion.status]}
-                  </Badge>
-                  <span className={styles.versionDate}>
-                    {new Date(selectedVersion.created_at).toLocaleDateString('ru-RU')}
-                  </span>
-                </div>
-                <pre className={styles.templateBlock}>
-                  {selectedVersion.template}
-                </pre>
-                <div className={styles.versionActions}>
-                  {selectedVersion.status === 'draft' && (
-                    <Button
-                      size="sm"
-                      variant="primary"
-                      onClick={() => activateVersionMutation.mutate(selectedVersion.id)}
-                      disabled={activateVersionMutation.isPending}
-                    >
-                      Активировать
-                    </Button>
-                  )}
-                  {selectedVersion.status === 'active' && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => archiveVersionMutation.mutate(selectedVersion.id)}
-                      disabled={archiveVersionMutation.isPending}
-                    >
-                      Архивировать
-                    </Button>
-                  )}
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={handleCreateFromCurrent}
-                  >
-                    Создать из текущей
-                  </Button>
-                </div>
-              </>
-            ) : (
-              <div className={styles.emptyVersion}>
-                <p>Нет версий промпта</p>
-                <Button
-                  size="sm"
-                  variant="primary"
-                  onClick={() => setShowNewVersionModal(true)}
+            title="Основная информация"
+            editable={true}
+            fields={containerFields}
+            data={formData}
+            onChange={handleFieldChange}
+          />
+        </ContentGrid>
+      ) : (
+        <Tabs tabs={tabs} activeTab={activeTab} onChange={setActiveTab}>
+          <TabPanel id="overview" activeTab={activeTab}>
+            <ContentGrid>
+              {/* Left column: Info block - 1/2 */}
+              <ContentBlock
+                width="1/2"
+                title="Основная информация"
+                editable={isEditable}
+                fields={containerFields}
+                data={formData}
+                onChange={handleFieldChange}
+              />
+
+              {/* Right column: Active version preview - 1/2 */}
+              {selectedVersion ? (
+                <ContentBlock
+                  width="1/2"
+                  title={`Активная версия (v${selectedVersion.version})`}
+                  headerActions={
+                    <Badge tone={STATUS_TONES[selectedVersion.status]}>
+                      {STATUS_LABELS[selectedVersion.status]}
+                    </Badge>
+                  }
                 >
-                  Создать первую версию
-                </Button>
-              </div>
-            )}
-          </ContentBlock>
-        )}
+                  <pre className={styles.templateBlock}>
+                    {selectedVersion.template.substring(0, 500)}
+                    {selectedVersion.template.length > 500 && '...'}
+                  </pre>
+                  <div className={styles.versionActions}>
+                    {selectedVersion.status === 'draft' && (
+                      <Button
+                        size="small"
+                        variant="primary"
+                        onClick={() => activateVersionMutation.mutate(selectedVersion.id)}
+                        disabled={activateVersionMutation.isPending}
+                      >
+                        Активировать
+                      </Button>
+                    )}
+                    {selectedVersion.status === 'active' && (
+                      <Button
+                        size="small"
+                        variant="secondary"
+                        onClick={() => archiveVersionMutation.mutate(selectedVersion.id)}
+                        disabled={archiveVersionMutation.isPending}
+                      >
+                        Архивировать
+                      </Button>
+                    )}
+                    <Button
+                      size="small"
+                      variant="outline"
+                      onClick={handleCreateFromCurrent}
+                    >
+                      Создать из текущей
+                    </Button>
+                  </div>
+                </ContentBlock>
+              ) : (
+                <ContentBlock
+                  width="1/2"
+                  title="Активная версия"
+                >
+                  <div className={styles.emptyVersion}>
+                    <p>Нет версий</p>
+                    <Button variant="primary" onClick={() => setShowNewVersionModal(true)}>
+                      Создать версию
+                    </Button>
+                  </div>
+                </ContentBlock>
+              )}
+            </ContentGrid>
+          </TabPanel>
 
-        {/* Versions Table - 1/2 */}
-        {!isNew && (
-          <ContentBlock
-            width="1/2"
-            title="Версии"
-            icon="layers"
-          >
-            {prompt?.versions && prompt.versions.length > 0 ? (
-              <>
-                <div className={styles.versionsTable}>
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Версия</th>
-                        <th>Статус</th>
-                        <th>Дата создания</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {prompt.versions.map((v: PromptVersionInfo) => (
-                        <tr
-                          key={v.id}
-                          className={selectedVersionNum === v.version ? styles.selected : ''}
-                          onClick={() => setSelectedVersionNum(v.version)}
-                        >
-                          <td>v{v.version}</td>
-                          <td>
-                            <Badge tone={STATUS_TONES[v.status]} size="small">
-                              {STATUS_LABELS[v.status]}
-                            </Badge>
-                          </td>
-                          <td>{new Date(v.created_at).toLocaleDateString('ru-RU')}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                <div className={styles.versionActions} style={{ marginTop: '1rem' }}>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => setShowNewVersionModal(true)}
-                  >
-                    + Новая версия
-                  </Button>
-                </div>
-              </>
-            ) : (
-              <p style={{ color: 'var(--muted)', fontSize: '0.875rem' }}>
-                Нет версий. Создайте первую версию в блоке справа.
-              </p>
-            )}
-          </ContentBlock>
-        )}
-      </ContentGrid>
+          <TabPanel id="versions" activeTab={activeTab}>
+            <div style={{ marginBottom: '1rem', display: 'flex', justifyContent: 'flex-end' }}>
+              <Button variant="primary" onClick={() => setShowNewVersionModal(true)}>
+                Создать версию
+              </Button>
+            </div>
+            <DataTable
+              columns={versionColumns}
+              data={prompt?.versions || []}
+              onRowClick={(v: PromptVersionInfo) => setSelectedVersionNum(v.version)}
+              emptyMessage="Нет версий. Создайте первую версию промпта."
+            />
+          </TabPanel>
+        </Tabs>
+      )}
 
       {/* New Version Modal */}
       <Modal
