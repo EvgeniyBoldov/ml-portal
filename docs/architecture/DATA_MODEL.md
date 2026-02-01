@@ -20,24 +20,24 @@
 ### Agents & Prompts
 
 ```
-┌─────────────┐       ┌─────────────┐       ┌─────────────┐
-│   Prompt    │◄──────│    Agent    │──────►│   Policy    │
-├─────────────┤       ├─────────────┤       ├─────────────┤
-│ id          │       │ id          │       │ id          │
-│ slug        │       │ slug        │       │ name        │
-│ name        │       │ name        │       │ max_steps   │
-│ type        │       │ system_     │       │ max_tokens  │
-│ template    │       │ prompt_slug │       │ timeout_ms  │
-│ version     │       │ baseline_   │       │ is_active   │
-│ status      │       │ prompt_id   │       └─────────────┘
-└─────────────┘       │ policy_id   │
-                      │ capabilities│
-                      │ supports_   │
-                      │ partial_mode│
-                      └─────────────┘
-                            │
-                            ▼
-                      ┌─────────────┐
+┌─────────────┐       ┌─────────────┐       ┌─────────────┐       ┌─────────────┐
+│   Prompt    │◄──────│    Agent    │──────►│   Policy    │──────►│PolicyVersion│
+├─────────────┤       ├─────────────┤       ├─────────────┤       ├─────────────┤
+│ id          │       │ id          │       │ id          │       │ id          │
+│ slug        │       │ slug        │       │ slug        │       │ policy_id   │
+│ name        │       │ name        │       │ name        │       │ version     │
+│ type        │       │ system_     │       │ description │       │ status      │
+│ template    │       │ prompt_slug │       │ recommended_│       │ max_steps   │
+│ version     │       │ baseline_   │       │ version_id  │       │ max_tool_   │
+│ status      │       │ prompt_id   │       │ is_active   │       │ calls       │
+└─────────────┘       │ policy_id   │       └─────────────┘       │ max_wall_   │
+                      │ capabilities│                              │ time_ms     │
+                      │ supports_   │                              │ budget_     │
+                      │ partial_mode│                              │ tokens      │
+                      └─────────────┘                              │ notes       │
+                            │                                      │ parent_     │
+                            ▼                                      │ version_id  │
+                      ┌─────────────┐                              └─────────────┘
                       │AgentBinding │
                       ├─────────────┤
                       │ agent_id    │
@@ -49,6 +49,12 @@
                       │ required    │
                       └─────────────┘
 ```
+
+**Policy Versioning Pattern:**
+- `Policy` (container) — метаданные: slug, name, description
+- `PolicyVersion` — версионированные данные: лимиты, таймауты, бюджеты
+- `recommended_version_id` — указывает на версию для использования по умолчанию
+- Статусы версий: `draft` (черновик), `active` (активная), `inactive` (неактивная)
 
 ### Tools & Instances
 
@@ -173,6 +179,11 @@
 - `draft` — черновик
 - `active` — активная версия
 - `archived` — архив
+
+### PolicyVersionStatus
+- `draft` — черновик, можно редактировать
+- `active` — активная версия (только одна на policy)
+- `inactive` — деактивирована, нельзя использовать
 
 ### DocumentStatus
 - `pending` — ожидает
