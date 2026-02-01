@@ -78,17 +78,14 @@ export function StatusCard({
     return true;
   });
 
-  // Compact mode: no title, just status in body
+  // Compact mode: header-only style (like version block)
   if (!title) {
     return (
       <ContentBlock
         width={width}
-        title=""
-        className={className}
-      >
-        <div className={styles.compactContent}>
-          <div className={styles.statusLabel}>Статус</div>
-          {editable ? (
+        title="Статус"
+        headerActions={
+          editable ? (
             <Select
               value={status}
               onChange={(val) => onStatusChange?.(val)}
@@ -99,9 +96,10 @@ export function StatusCard({
             <Badge tone={tone}>
               {currentOption?.label || status}
             </Badge>
-          )}
-        </div>
-      </ContentBlock>
+          )
+        }
+        className={className}
+      />
     );
   }
 
