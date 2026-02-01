@@ -216,12 +216,12 @@ export function PolicyVersionPage() {
     return Math.max(...policy.versions.map((v) => v.version)) + 1;
   }, [policy?.versions]);
 
-  // Render action bar with status and buttons
-  const renderActionBar = () => {
+  // Render header actions (status badge + action buttons)
+  const renderHeaderActions = () => {
     if (isCreate || !existingVersion) return null;
 
     return (
-      <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+      <>
         <Badge variant={STATUS_VARIANTS[existingVersion.status]}>
           {STATUS_LABELS[existingVersion.status]}
         </Badge>
@@ -236,10 +236,7 @@ export function PolicyVersionPage() {
             Деактивировать
           </Button>
         )}
-        <Button variant="secondary" onClick={() => navigate(`/admin/policies/${slug}/versions/new`)}>
-          Создать новую версию
-        </Button>
-      </div>
+      </>
     );
   };
 
@@ -263,7 +260,7 @@ export function PolicyVersionPage() {
       onDelete={existingVersion?.status !== 'active' ? handleDelete : undefined}
       showDelete={mode === 'view' && existingVersion?.status !== 'active'}
       breadcrumbs={breadcrumbs}
-      actionBar={renderActionBar()}
+      headerActions={renderHeaderActions()}
     >
       <div className={styles.grid}>
         <div className={styles.mainColumn}>
