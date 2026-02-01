@@ -216,26 +216,29 @@ export function PolicyVersionPage() {
     return Math.max(...policy.versions.map((v) => v.version)) + 1;
   }, [policy?.versions]);
 
-  // Custom actions based on version status
-  const renderStatusActions = () => {
+  // Render action bar with status and buttons
+  const renderActionBar = () => {
     if (isCreate || !existingVersion) return null;
 
     return (
-      <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
+      <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
         <Badge variant={STATUS_VARIANTS[existingVersion.status]}>
           {STATUS_LABELS[existingVersion.status]}
         </Badge>
         
         {existingVersion.status === 'draft' && (
-          <Button size="small" variant="primary" onClick={() => activateMutation.mutate()}>
+          <Button variant="primary" onClick={() => activateMutation.mutate()} disabled={activateMutation.isPending}>
             Активировать
           </Button>
         )}
         {existingVersion.status === 'active' && (
-          <Button size="small" variant="secondary" onClick={() => deactivateMutation.mutate()}>
+          <Button variant="secondary" onClick={() => deactivateMutation.mutate()} disabled={deactivateMutation.isPending}>
             Деактивировать
           </Button>
         )}
+        <Button variant="secondary" onClick={() => navigate(`/admin/policies/${slug}/versions/new`)}>
+          Создать новую версию
+        </Button>
       </div>
     );
   };
@@ -260,11 +263,10 @@ export function PolicyVersionPage() {
       onDelete={existingVersion?.status !== 'active' ? handleDelete : undefined}
       showDelete={mode === 'view' && existingVersion?.status !== 'active'}
       breadcrumbs={breadcrumbs}
+      actionBar={renderActionBar()}
     >
       <div className={styles.grid}>
         <div className={styles.mainColumn}>
-          {renderStatusActions()}
-
           <div className={styles.section}>
             <h3 className={styles.sectionTitle}>Лимиты выполнения</h3>
             <div className={styles.sectionContent}>
@@ -362,39 +364,6 @@ export function PolicyVersionPage() {
           </div>
         </div>
 
-        {!isCreate && (
-          <div className={styles.sideColumn}>
-            <div className={styles.section}>
-              <h3 className={styles.sectionTitle}>Действия</h3>
-              <div className={styles.sectionContent}>
-                {existingVersion?.status === 'draft' && (
-                  <Button
-                    variant="primary"
-                    onClick={() => activateMutation.mutate()}
-                    disabled={activateMutation.isPending}
-                  >
-                    Активировать
-                  </Button>
-                )}
-                {existingVersion?.status === 'active' && (
-                  <Button
-                    variant="secondary"
-                    onClick={() => deactivateMutation.mutate()}
-                    disabled={deactivateMutation.isPending}
-                  >
-                    Деактивировать
-                  </Button>
-                )}
-                <Button
-                  variant="secondary"
-                  onClick={() => navigate(`/admin/policies/${slug}/versions/new`)}
-                >
-                  Создать новую версию
-                </Button>
-              </div>
-            </div>
-          </div>
-        )}
       </div>
     </EntityPage>
   );
