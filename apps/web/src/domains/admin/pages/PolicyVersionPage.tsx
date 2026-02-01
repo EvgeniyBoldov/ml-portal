@@ -13,7 +13,7 @@ import { policiesApi, type PolicyVersionCreate, type PolicyVersionStatus } from 
 import { qk } from '@/shared/api/keys';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
 import { EntityPage, type EntityPageMode } from '@/shared/ui/EntityPage';
-import { Badge, Button, FormField, VersionSelector, type VersionOption } from '@/shared/ui';
+import { Badge, Button, FormField } from '@/shared/ui';
 import styles from './PolicyVersionPage.module.css';
 
 interface FormData extends PolicyVersionCreate {
@@ -216,19 +216,6 @@ export function PolicyVersionPage() {
     return Math.max(...policy.versions.map((v) => v.version)) + 1;
   }, [policy?.versions]);
 
-  // Version options for selector
-  const versionOptions: VersionOption[] = useMemo(() => {
-    if (!policy?.versions) return [];
-    return policy.versions.map((v) => ({
-      version: v.version,
-      status: v.status,
-    }));
-  }, [policy?.versions]);
-
-  const handleVersionSelect = (version: number) => {
-    navigate(`/admin/policies/${slug}/versions/${version}`);
-  };
-
   // Custom actions based on version status
   const renderStatusActions = () => {
     if (isCreate || !existingVersion) return null;
@@ -375,16 +362,39 @@ export function PolicyVersionPage() {
           </div>
         </div>
 
-        <div className={styles.sideColumn}>
-          {!isCreate && versionOptions.length > 0 && (
-            <VersionSelector
-              versions={versionOptions}
-              selectedVersion={versionNumber}
-              onChange={handleVersionSelect}
-              label="Выбор версии"
-            />
-          )}
-        </div>
+        {!isCreate && (
+          <div className={styles.sideColumn}>
+            <div className={styles.section}>
+              <h3 className={styles.sectionTitle}>Действия</h3>
+              <div className={styles.sectionContent}>
+                {existingVersion?.status === 'draft' && (
+                  <Button
+                    variant="primary"
+                    onClick={() => activateMutation.mutate()}
+                    disabled={activateMutation.isPending}
+                  >
+                    Активировать
+                  </Button>
+                )}
+                {existingVersion?.status === 'active' && (
+                  <Button
+                    variant="secondary"
+                    onClick={() => deactivateMutation.mutate()}
+                    disabled={deactivateMutation.isPending}
+                  >
+                    Деактивировать
+                  </Button>
+                )}
+                <Button
+                  variant="secondary"
+                  onClick={() => navigate(`/admin/policies/${slug}/versions/new`)}
+                >
+                  Создать новую версию
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </EntityPage>
   );
