@@ -82,3 +82,7 @@ export type { FormFieldProps, FormFieldType } from './FormField';
 // ShortEntityBlock
 export { ShortEntityBlock } from './ShortEntityBlock';
 export type { ShortEntityBlockProps, ShortEntityBlockItem } from './ShortEntityBlock';
+
+// VersionSelector
+export { VersionSelector } from './VersionSelector';
+export type { VersionSelectorProps, VersionOption } from './VersionSelector';
