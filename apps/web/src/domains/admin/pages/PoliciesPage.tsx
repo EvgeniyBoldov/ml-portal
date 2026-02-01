@@ -32,7 +32,7 @@ export function PoliciesPage() {
   }, [policies, q]);
 
   const handleRowClick = (policy: Policy) => {
-    navigate(`/admin/policies/${policy.id}`);
+    navigate(`/admin/policies/${policy.slug}`);
   };
 
   const formatLimit = (value: number | undefined | null, suffix = '') => {
