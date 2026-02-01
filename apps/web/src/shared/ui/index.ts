@@ -86,3 +86,7 @@ export type { ShortEntityBlockProps, ShortEntityBlockItem } from './ShortEntityB
 // VersionSelector
 export { VersionSelector } from './VersionSelector';
 export type { VersionSelectorProps, VersionOption } from './VersionSelector';
+
+// EntityInfoCard
+export { EntityInfoCard } from './EntityInfoCard';
+export type { EntityInfoCardProps, EntityInfoCardWidth } from './EntityInfoCard';

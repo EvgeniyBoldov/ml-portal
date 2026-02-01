@@ -20,7 +20,7 @@ import { qk } from '@/shared/api/keys';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
 import { EntityPage, type EntityPageMode } from '@/shared/ui/EntityPage';
 import { Tabs, TabPanel } from '@/shared/ui/Tabs';
-import { Badge, Button, DataTable, FormField, ShortEntityBlock } from '@/shared/ui';
+import { Badge, Button, DataTable, EntityInfoCard, ShortEntityBlock } from '@/shared/ui';
 import styles from './PolicyEditorPage.module.css';
 
 interface FormData extends PolicyCreate {
@@ -306,35 +306,20 @@ export function PolicyEditorPage() {
       {isCreate ? (
         <div className={styles.grid}>
           <div className={styles.mainColumn}>
-            <div className={styles.section}>
-              <div className={styles.sectionContent}>
-                <FormField
-                  label="Slug"
-                  value={formData.slug}
-                  editable={true}
-                  required
-                  placeholder="my-policy"
-                  description="Уникальный идентификатор"
-                  onChange={(v) => handleFieldChange('slug', v)}
-                />
-                <FormField
-                  label="Название"
-                  value={formData.name}
-                  editable={true}
-                  required
-                  placeholder="Моя политика"
-                  onChange={(v) => handleFieldChange('name', v)}
-                />
-                <FormField
-                  label="Описание"
-                  value={formData.description}
-                  type="textarea"
-                  editable={true}
-                  placeholder="Описание политики..."
-                  onChange={(v) => handleFieldChange('description', v)}
-                />
-              </div>
-            </div>
+            <EntityInfoCard
+              name={formData.name}
+              slug={formData.slug}
+              description={formData.description}
+              editable={true}
+              slugEditable={true}
+              showActiveSwitch={false}
+              namePlaceholder="Моя политика"
+              slugPlaceholder="my-policy"
+              descriptionPlaceholder="Описание политики..."
+              onNameChange={(v) => handleFieldChange('name', v)}
+              onSlugChange={(v) => handleFieldChange('slug', v)}
+              onDescriptionChange={(v) => handleFieldChange('description', v)}
+            />
           </div>
         </div>
       ) : (
@@ -342,39 +327,20 @@ export function PolicyEditorPage() {
           <TabPanel id="overview" activeTab={activeTab}>
             <div className={styles.grid}>
               <div className={styles.mainColumn}>
-                <div className={styles.section}>
-                  <div className={styles.sectionContent}>
-                    <FormField
-                      label="Slug"
-                      value={formData.slug}
-                      editable={false}
-                      required
-                      description="Уникальный идентификатор"
-                    />
-                    <FormField
-                      label="Название"
-                      value={formData.name}
-                      editable={isEditable}
-                      required
-                      onChange={(v) => handleFieldChange('name', v)}
-                    />
-                    <FormField
-                      label="Описание"
-                      value={formData.description}
-                      type="textarea"
-                      editable={isEditable}
-                      onChange={(v) => handleFieldChange('description', v)}
-                    />
-                    <FormField
-                      label="Активна"
-                      value={formData.is_active}
-                      type="switch"
-                      editable={isEditable}
-                      description="Политика доступна для использования"
-                      onChange={(v) => handleFieldChange('is_active', v)}
-                    />
-                  </div>
-                </div>
+                <EntityInfoCard
+                  name={formData.name}
+                  slug={formData.slug}
+                  description={formData.description}
+                  isActive={formData.is_active}
+                  editable={isEditable}
+                  slugEditable={false}
+                  showActiveSwitch={true}
+                  activeSwitchLabel="Активна"
+                  activeSwitchDescription="Политика доступна для использования"
+                  onNameChange={(v) => handleFieldChange('name', v)}
+                  onDescriptionChange={(v) => handleFieldChange('description', v)}
+                  onActiveChange={(v) => handleFieldChange('is_active', v)}
+                />
               </div>
 
               <div className={styles.sideColumn}>
