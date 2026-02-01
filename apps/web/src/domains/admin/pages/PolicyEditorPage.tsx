@@ -1,26 +1,47 @@
 /**
- * PolicyEditorPage - View/Edit/Create execution policy with EntityPage
+ * PolicyEditorPage - View/Edit/Create execution policy with versioning support
  * 
- * Unified page for all policy operations:
- * - View: /admin/policies/:id (readonly)
- * - Edit: /admin/policies/:id?mode=edit
- * - Create: /admin/policies/new
+ * Architecture:
+ * - Policy (container) - holds metadata: slug, name, description
+ * - PolicyVersion - holds versioned data: limits, timeouts, budgets
+ * - recommended_version_id - points to the version that should be used by default
+ * 
+ * Routes:
+ * - /admin/policies/new - Create new policy container
+ * - /admin/policies/:slug - View policy with tabs (Overview | Versions)
+ * - /admin/policies/:slug?mode=edit - Edit policy metadata
+ * - /admin/policies/:slug/versions/:version - View/Edit specific version
  */
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { policiesApi, type PolicyCreate } from '@/shared/api';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { policiesApi, type PolicyCreate, type PolicyVersion, type PolicyVersionStatus } from '@/shared/api';
 import { qk } from '@/shared/api/keys';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
 import { EntityPage, type EntityPageMode } from '@/shared/ui/EntityPage';
 import { ContentBlock, ContentGrid, type FieldDefinition } from '@/shared/ui/ContentBlock';
+import { Tabs, TabPanel } from '@/shared/ui/Tabs';
+import { Badge, Button, DataTable } from '@/shared/ui';
+import { Breadcrumbs } from '@/shared/ui/Breadcrumbs';
 
 interface FormData extends PolicyCreate {
   is_active?: boolean;
 }
 
+const STATUS_LABELS: Record<PolicyVersionStatus, string> = {
+  draft: 'Черновик',
+  active: 'Активная',
+  inactive: 'Неактивная',
+};
+
+const STATUS_VARIANTS: Record<PolicyVersionStatus, 'default' | 'success' | 'warning' | 'error'> = {
+  draft: 'warning',
+  active: 'success',
+  inactive: 'default',
+};
+
 export function PolicyEditorPage() {
-  const { id } = useParams<{ id: string }>();
+  const { slug } = useParams<{ slug: string }>();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
@@ -28,118 +49,130 @@ export function PolicyEditorPage() {
   const showSuccess = useSuccessToast();
 
   // Determine mode
-  const isCreate = !id;
+  const isCreate = slug === 'new';
   const isEditMode = searchParams.get('mode') === 'edit';
   const mode: EntityPageMode = isCreate ? 'create' : isEditMode ? 'edit' : 'view';
   const isEditable = mode === 'edit' || mode === 'create';
+
+  // Tab state
+  const [activeTab, setActiveTab] = useState('overview');
 
   const [formData, setFormData] = useState<FormData>({
     slug: '',
     name: '',
     description: '',
-    max_steps: 20,
-    max_tool_calls: 50,
-    max_wall_time_ms: 300000,
-    tool_timeout_ms: 30000,
-    max_retries: 3,
-    budget_tokens: undefined,
-    budget_cost_cents: undefined,
-    extra_config: {},
     is_active: true,
   });
   const [saving, setSaving] = useState(false);
 
-  // Load existing policy
-  const { data: existingPolicy, isLoading, refetch } = useQuery({
-    queryKey: qk.policies.detail(id!),
-    queryFn: () => policiesApi.get(id!),
-    enabled: !isCreate,
+  // Load existing policy with versions
+  const { data: policy, isLoading, refetch } = useQuery({
+    queryKey: qk.policies.detail(slug!),
+    queryFn: () => policiesApi.get(slug!),
+    enabled: !isCreate && !!slug,
   });
 
   useEffect(() => {
-    if (existingPolicy) {
+    if (policy) {
       setFormData({
-        slug: existingPolicy.slug,
-        name: existingPolicy.name,
-        description: existingPolicy.description || '',
-        max_steps: existingPolicy.max_steps ?? undefined,
-        max_tool_calls: existingPolicy.max_tool_calls ?? undefined,
-        max_wall_time_ms: existingPolicy.max_wall_time_ms ?? undefined,
-        tool_timeout_ms: existingPolicy.tool_timeout_ms ?? undefined,
-        max_retries: existingPolicy.max_retries ?? undefined,
-        budget_tokens: existingPolicy.budget_tokens ?? undefined,
-        budget_cost_cents: existingPolicy.budget_cost_cents ?? undefined,
-        extra_config: existingPolicy.extra_config || {},
-        is_active: existingPolicy.is_active,
+        slug: policy.slug,
+        name: policy.name,
+        description: policy.description || '',
+        is_active: policy.is_active,
       });
     }
-  }, [existingPolicy]);
+  }, [policy]);
+
+  // Mutations
+  const createMutation = useMutation({
+    mutationFn: (data: PolicyCreate) => policiesApi.create(data),
+    onSuccess: (created) => {
+      queryClient.invalidateQueries({ queryKey: qk.policies.all() });
+      showSuccess('Политика создана');
+      navigate(`/admin/policies/${created.slug}`);
+    },
+    onError: (err: Error) => showError(err.message),
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: (data: { name?: string; description?: string; is_active?: boolean }) =>
+      policiesApi.update(slug!, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: qk.policies.all() });
+      queryClient.invalidateQueries({ queryKey: qk.policies.detail(slug!) });
+      showSuccess('Политика обновлена');
+      setSearchParams({});
+    },
+    onError: (err: Error) => showError(err.message),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: () => policiesApi.delete(slug!),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: qk.policies.all() });
+      showSuccess('Политика удалена');
+      navigate('/admin/policies');
+    },
+    onError: (err: Error) => showError(err.message),
+  });
+
+  const activateVersionMutation = useMutation({
+    mutationFn: (version: number) => policiesApi.activateVersion(slug!, version),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: qk.policies.detail(slug!) });
+      showSuccess('Версия активирована');
+    },
+    onError: (err: Error) => showError(err.message),
+  });
+
+  const deactivateVersionMutation = useMutation({
+    mutationFn: (version: number) => policiesApi.deactivateVersion(slug!, version),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: qk.policies.detail(slug!) });
+      showSuccess('Версия деактивирована');
+    },
+    onError: (err: Error) => showError(err.message),
+  });
+
+  const deleteVersionMutation = useMutation({
+    mutationFn: (version: number) => policiesApi.deleteVersion(slug!, version),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: qk.policies.detail(slug!) });
+      showSuccess('Версия удалена');
+    },
+    onError: (err: Error) => showError(err.message),
+  });
 
   const handleSave = async () => {
     setSaving(true);
     try {
       if (mode === 'create') {
-        await policiesApi.create({
+        await createMutation.mutateAsync({
           slug: formData.slug,
           name: formData.name,
           description: formData.description || undefined,
-          max_steps: formData.max_steps,
-          max_tool_calls: formData.max_tool_calls,
-          max_wall_time_ms: formData.max_wall_time_ms,
-          tool_timeout_ms: formData.tool_timeout_ms,
-          max_retries: formData.max_retries,
-          budget_tokens: formData.budget_tokens,
-          budget_cost_cents: formData.budget_cost_cents,
-          extra_config: formData.extra_config,
         });
-        showSuccess('Политика создана');
-        queryClient.invalidateQueries({ queryKey: qk.policies.all() });
-        navigate('/admin/policies');
       } else {
-        await policiesApi.update(id!, {
+        await updateMutation.mutateAsync({
           name: formData.name,
           description: formData.description || undefined,
-          max_steps: formData.max_steps,
-          max_tool_calls: formData.max_tool_calls,
-          max_wall_time_ms: formData.max_wall_time_ms,
-          tool_timeout_ms: formData.tool_timeout_ms,
-          max_retries: formData.max_retries,
-          budget_tokens: formData.budget_tokens,
-          budget_cost_cents: formData.budget_cost_cents,
-          extra_config: formData.extra_config,
           is_active: formData.is_active,
         });
-        showSuccess('Политика обновлена');
-        queryClient.invalidateQueries({ queryKey: qk.policies.all() });
-        setSearchParams({});
-        refetch();
       }
-    } catch (err) {
-      showError(err instanceof Error ? err.message : 'Ошибка сохранения');
     } finally {
       setSaving(false);
     }
   };
 
-  const handleEdit = () => {
-    setSearchParams({ mode: 'edit' });
-  };
+  const handleEdit = () => setSearchParams({ mode: 'edit' });
 
   const handleCancel = () => {
-    if (mode === 'edit' && existingPolicy) {
+    if (mode === 'edit' && policy) {
       setFormData({
-        slug: existingPolicy.slug,
-        name: existingPolicy.name,
-        description: existingPolicy.description || '',
-        max_steps: existingPolicy.max_steps ?? undefined,
-        max_tool_calls: existingPolicy.max_tool_calls ?? undefined,
-        max_wall_time_ms: existingPolicy.max_wall_time_ms ?? undefined,
-        tool_timeout_ms: existingPolicy.tool_timeout_ms ?? undefined,
-        max_retries: existingPolicy.max_retries ?? undefined,
-        budget_tokens: existingPolicy.budget_tokens ?? undefined,
-        budget_cost_cents: existingPolicy.budget_cost_cents ?? undefined,
-        extra_config: existingPolicy.extra_config || {},
-        is_active: existingPolicy.is_active,
+        slug: policy.slug,
+        name: policy.name,
+        description: policy.description || '',
+        is_active: policy.is_active,
       });
       setSearchParams({});
     } else if (mode === 'create') {
@@ -148,22 +181,23 @@ export function PolicyEditorPage() {
   };
 
   const handleDelete = async () => {
-    if (!confirm('Удалить эту политику?')) return;
-    try {
-      await policiesApi.delete(id!);
-      showSuccess('Политика удалена');
-      queryClient.invalidateQueries({ queryKey: qk.policies.all() });
-      navigate('/admin/policies');
-    } catch (err) {
-      showError(err instanceof Error ? err.message : 'Ошибка удаления');
-    }
+    if (!confirm('Удалить эту политику и все её версии?')) return;
+    await deleteMutation.mutateAsync();
   };
 
   const handleFieldChange = (key: string, value: any) => {
     setFormData((prev) => ({ ...prev, [key]: value }));
   };
 
-  // Field definitions
+  const handleCreateVersion = () => {
+    navigate(`/admin/policies/${slug}/versions/new`);
+  };
+
+  const handleVersionClick = (version: PolicyVersion) => {
+    navigate(`/admin/policies/${slug}/versions/${version.version}`);
+  };
+
+  // Field definitions for container
   const basicFields: FieldDefinition[] = [
     {
       key: 'slug',
@@ -195,68 +229,102 @@ export function PolicyEditorPage() {
     },
   ];
 
-  const limitsFields: FieldDefinition[] = [
+  // Versions table columns
+  const versionColumns = [
     {
-      key: 'max_steps',
-      label: 'Макс. шагов',
-      type: 'number',
-      placeholder: '20',
-      description: 'Максимальное количество шагов агента',
+      key: 'version',
+      header: 'Версия',
+      render: (v: PolicyVersion) => `v${v.version}`,
     },
     {
-      key: 'max_tool_calls',
-      label: 'Макс. вызовов',
-      type: 'number',
-      placeholder: '50',
-      description: 'Максимальное количество вызовов инструментов',
+      key: 'status',
+      header: 'Статус',
+      render: (v: PolicyVersion) => (
+        <Badge variant={STATUS_VARIANTS[v.status]}>{STATUS_LABELS[v.status]}</Badge>
+      ),
     },
     {
-      key: 'max_retries',
-      label: 'Макс. повторов',
-      type: 'number',
-      placeholder: '3',
-      description: 'Количество повторных попыток при ошибке',
+      key: 'limits',
+      header: 'Лимиты',
+      render: (v: PolicyVersion) => (
+        <span style={{ fontSize: '0.85em', color: 'var(--text-secondary)' }}>
+          {v.max_steps ?? '∞'} шагов, {v.max_tool_calls ?? '∞'} вызовов
+        </span>
+      ),
+    },
+    {
+      key: 'created_at',
+      header: 'Создана',
+      render: (v: PolicyVersion) => new Date(v.created_at).toLocaleDateString('ru'),
+    },
+    {
+      key: 'actions',
+      header: '',
+      render: (v: PolicyVersion) => (
+        <div style={{ display: 'flex', gap: '0.5rem' }}>
+          {v.status === 'draft' && (
+            <Button
+              size="small"
+              variant="primary"
+              onClick={(e) => {
+                e.stopPropagation();
+                activateVersionMutation.mutate(v.version);
+              }}
+            >
+              Активировать
+            </Button>
+          )}
+          {v.status === 'active' && (
+            <Button
+              size="small"
+              variant="secondary"
+              onClick={(e) => {
+                e.stopPropagation();
+                deactivateVersionMutation.mutate(v.version);
+              }}
+            >
+              Деактивировать
+            </Button>
+          )}
+          {v.status !== 'active' && (
+            <Button
+              size="small"
+              variant="ghost"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (confirm('Удалить эту версию?')) {
+                  deleteVersionMutation.mutate(v.version);
+                }
+              }}
+            >
+              Удалить
+            </Button>
+          )}
+        </div>
+      ),
     },
   ];
 
-  const timeoutFields: FieldDefinition[] = [
-    {
-      key: 'max_wall_time_ms',
-      label: 'Общий таймаут (мс)',
-      type: 'number',
-      placeholder: '300000',
-      description: 'Максимальное время выполнения в миллисекундах',
-    },
-    {
-      key: 'tool_timeout_ms',
-      label: 'Таймаут инструмента (мс)',
-      type: 'number',
-      placeholder: '30000',
-      description: 'Таймаут для одного вызова инструмента',
-    },
+  const tabs = [
+    { id: 'overview', label: 'Обзор' },
+    { id: 'versions', label: `Версии (${policy?.versions?.length || 0})` },
   ];
 
-  const budgetFields: FieldDefinition[] = [
-    {
-      key: 'budget_tokens',
-      label: 'Лимит токенов',
-      type: 'number',
-      placeholder: 'Без лимита',
-      description: 'Максимальное количество токенов',
-    },
-    {
-      key: 'budget_cost_cents',
-      label: 'Лимит стоимости (центы)',
-      type: 'number',
-      placeholder: 'Без лимита',
-      description: 'Максимальная стоимость в центах',
-    },
-  ];
+  // Breadcrumbs for navigation
+  const breadcrumbs = isCreate
+    ? [
+        { label: 'Политики', href: '/admin/policies' },
+        { label: 'Новая политика' },
+      ]
+    : [
+        { label: 'Политики', href: '/admin/policies' },
+        { label: policy?.name || slug || '' },
+      ];
 
   return (
     <EntityPage
       mode={mode}
-      entityName={existingPolicy ? existingPolicy.name : 'Новая политика'}
+      entityName={policy ? policy.name : 'Новая политика'}
       entityTypeLabel="политики"
       backPath="/admin/policies"
       loading={!isCreate && isLoading}
@@ -265,49 +333,94 @@ export function PolicyEditorPage() {
       onSave={handleSave}
       onCancel={handleCancel}
       onDelete={handleDelete}
-      showDelete={mode === 'view' && !!id && existingPolicy?.slug !== 'default'}
+      showDelete={mode === 'view' && !!slug && policy?.slug !== 'default'}
     >
-      <ContentGrid>
-        <ContentBlock
-          width="1/2"
-          title="Основное"
-          icon="file"
-          editable={isEditable}
-          fields={basicFields}
-          data={formData}
-          onChange={handleFieldChange}
-        />
+      <Breadcrumbs items={breadcrumbs} />
 
-        <ContentBlock
-          width="1/2"
-          title="Лимиты выполнения"
-          icon="shield"
-          editable={isEditable}
-          fields={limitsFields}
-          data={formData}
-          onChange={handleFieldChange}
-        />
+      {isCreate ? (
+        <ContentGrid>
+          <ContentBlock
+            width="2/3"
+            title="Основное"
+            icon="file"
+            editable={true}
+            fields={basicFields.filter((f) => f.key !== 'is_active')}
+            data={formData}
+            onChange={handleFieldChange}
+          />
+        </ContentGrid>
+      ) : (
+        <Tabs tabs={tabs} activeTab={activeTab} onChange={setActiveTab}>
+          <TabPanel id="overview" activeTab={activeTab}>
+            <ContentGrid>
+              <ContentBlock
+                width="2/3"
+                title="Основное"
+                icon="file"
+                editable={isEditable}
+                fields={basicFields}
+                data={formData}
+                onChange={handleFieldChange}
+              />
 
-        <ContentBlock
-          width="1/2"
-          title="Таймауты"
-          icon="clock"
-          editable={isEditable}
-          fields={timeoutFields}
-          data={formData}
-          onChange={handleFieldChange}
-        />
+              <ContentBlock width="1/3" title="Рекомендованная версия" icon="star">
+                {policy?.recommended_version ? (
+                  <div style={{ padding: '1rem' }}>
+                    <div style={{ marginBottom: '0.5rem' }}>
+                      <strong>v{policy.recommended_version.version}</strong>
+                      <Badge
+                        variant={STATUS_VARIANTS[policy.recommended_version.status]}
+                        style={{ marginLeft: '0.5rem' }}
+                      >
+                        {STATUS_LABELS[policy.recommended_version.status]}
+                      </Badge>
+                    </div>
+                    <div style={{ fontSize: '0.85em', color: 'var(--text-secondary)' }}>
+                      Шагов: {policy.recommended_version.max_steps ?? '∞'}
+                      <br />
+                      Вызовов: {policy.recommended_version.max_tool_calls ?? '∞'}
+                      <br />
+                      Таймаут: {policy.recommended_version.max_wall_time_ms ?? '∞'} мс
+                    </div>
+                    <Button
+                      size="small"
+                      variant="secondary"
+                      style={{ marginTop: '0.75rem' }}
+                      onClick={() =>
+                        navigate(`/admin/policies/${slug}/versions/${policy.recommended_version!.version}`)
+                      }
+                    >
+                      Подробнее
+                    </Button>
+                  </div>
+                ) : (
+                  <div style={{ padding: '1rem', color: 'var(--text-secondary)' }}>
+                    Нет рекомендованной версии.
+                    <br />
+                    <Button size="small" variant="primary" style={{ marginTop: '0.5rem' }} onClick={handleCreateVersion}>
+                      Создать версию
+                    </Button>
+                  </div>
+                )}
+              </ContentBlock>
+            </ContentGrid>
+          </TabPanel>
 
-        <ContentBlock
-          width="1/2"
-          title="Бюджет"
-          icon="dollar"
-          editable={isEditable}
-          fields={budgetFields}
-          data={formData}
-          onChange={handleFieldChange}
-        />
-      </ContentGrid>
+          <TabPanel id="versions" activeTab={activeTab}>
+            <div style={{ marginBottom: '1rem', display: 'flex', justifyContent: 'flex-end' }}>
+              <Button variant="primary" onClick={handleCreateVersion}>
+                Создать версию
+              </Button>
+            </div>
+            <DataTable
+              columns={versionColumns}
+              data={policy?.versions || []}
+              onRowClick={handleVersionClick}
+              emptyMessage="Нет версий. Создайте первую версию политики."
+            />
+          </TabPanel>
+        </Tabs>
+      )}
     </EntityPage>
   );
 }

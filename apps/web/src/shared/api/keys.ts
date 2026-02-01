@@ -82,7 +82,10 @@ export const qk = {
   policies: {
     all: () => ['policies'] as const,
     list: (params?: { is_active?: boolean }) => ['policies', 'list', params] as const,
-    detail: (id: string) => ['policies', 'detail', id] as const,
+    detail: (slug: string) => ['policies', 'detail', slug] as const,
+    versions: (slug: string, params?: { status?: string }) => ['policies', 'versions', slug, params] as const,
+    version: (slug: string, version: number) => ['policies', 'version', slug, version] as const,
+    recommended: (slug: string) => ['policies', 'recommended', slug] as const,
   },
   routingLogs: {
     all: () => ['routing-logs'] as const,

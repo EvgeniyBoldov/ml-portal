@@ -43,6 +43,7 @@ const InstancesPage = lazy(() => import('@/domains/admin/pages/InstancesPage').t
 const InstanceEditorPage = lazy(() => import('@/domains/admin/pages/InstanceEditorPage').then(m => ({ default: m.InstanceEditorPage })));
 const PoliciesPage = lazy(() => import('@/domains/admin/pages/PoliciesPage').then(m => ({ default: m.PoliciesPage })));
 const PolicyEditorPage = lazy(() => import('@/domains/admin/pages/PolicyEditorPage').then(m => ({ default: m.PolicyEditorPage })));
+const PolicyVersionPage = lazy(() => import('@/domains/admin/pages/PolicyVersionPage').then(m => ({ default: m.PolicyVersionPage })));
 const DefaultsPage = lazy(() => import('@/domains/admin/pages/DefaultsPage').then(m => ({ default: m.DefaultsPage })));
 const RoutingLogsPage = lazy(() => import('@/domains/admin/pages/RoutingLogsPage').then(m => ({ default: m.RoutingLogsPage })));
 
@@ -106,7 +107,9 @@ const router = createBrowserRouter([
       { path: 'collections/:id', element: withSuspense(<ViewCollectionPage />) },
       { path: 'policies', element: withSuspense(<PoliciesPage />) },
       { path: 'policies/new', element: withSuspense(<PolicyEditorPage />) },
-      { path: 'policies/:id', element: withSuspense(<PolicyEditorPage />) },
+      { path: 'policies/:slug', element: withSuspense(<PolicyEditorPage />) },
+      { path: 'policies/:slug/versions/new', element: withSuspense(<PolicyVersionPage />) },
+      { path: 'policies/:slug/versions/:version', element: withSuspense(<PolicyVersionPage />) },
       { path: 'instances', element: withSuspense(<InstancesPage />) },
       { path: 'instances/new', element: withSuspense(<InstanceEditorPage />) },
       { path: 'instances/:id', element: withSuspense(<InstanceEditorPage />) },
