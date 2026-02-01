@@ -236,6 +236,9 @@ export function PolicyVersionPage() {
             Деактивировать
           </Button>
         )}
+        <Button variant="secondary" onClick={() => navigate(`/admin/policies/${slug}/versions/new`)}>
+          Новая версия
+        </Button>
       </>
     );
   };
@@ -257,8 +260,8 @@ export function PolicyVersionPage() {
       onEdit={existingVersion?.status === 'draft' ? handleEdit : undefined}
       onSave={handleSave}
       onCancel={handleCancel}
-      onDelete={existingVersion?.status !== 'active' ? handleDelete : undefined}
-      showDelete={mode === 'view' && existingVersion?.status !== 'active'}
+      onDelete={!isCreate && existingVersion?.status !== 'active' ? handleDelete : undefined}
+      showDelete={!isCreate && mode === 'view' && existingVersion?.status !== 'active'}
       breadcrumbs={breadcrumbs}
       headerActions={renderHeaderActions()}
     >

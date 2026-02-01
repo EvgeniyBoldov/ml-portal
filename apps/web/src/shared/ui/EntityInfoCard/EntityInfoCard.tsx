@@ -27,8 +27,6 @@ export interface EntityInfoCardProps {
   showActiveSwitch?: boolean;
   /** Active switch label */
   activeSwitchLabel?: string;
-  /** Active switch description */
-  activeSwitchDescription?: string;
   /** Is form editable */
   editable?: boolean;
   /** Is slug editable (usually only on create) */
@@ -60,7 +58,6 @@ export function EntityInfoCard({
   isActive = true,
   showActiveSwitch = true,
   activeSwitchLabel = 'Активно',
-  activeSwitchDescription,
   editable = false,
   slugEditable = false,
   width = 'full',
@@ -97,7 +94,6 @@ export function EntityInfoCard({
                 value={isActive}
                 type="switch"
                 editable={editable}
-                description={activeSwitchDescription}
                 onChange={onActiveChange}
               />
             </div>

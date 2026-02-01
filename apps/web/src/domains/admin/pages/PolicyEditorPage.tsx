@@ -336,7 +336,6 @@ export function PolicyEditorPage() {
                   slugEditable={false}
                   showActiveSwitch={true}
                   activeSwitchLabel="Активна"
-                  activeSwitchDescription="Политика доступна для использования"
                   onNameChange={(v) => handleFieldChange('name', v)}
                   onDescriptionChange={(v) => handleFieldChange('description', v)}
                   onActiveChange={(v) => handleFieldChange('is_active', v)}
