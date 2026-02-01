@@ -6,15 +6,15 @@
  * - /admin/policies/:slug/versions/:version - View version
  * - /admin/policies/:slug/versions/:version?mode=edit - Edit version (only draft)
  */
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { policiesApi, type PolicyVersionCreate, type PolicyVersion, type PolicyVersionStatus } from '@/shared/api';
+import { policiesApi, type PolicyVersionCreate, type PolicyVersionStatus } from '@/shared/api';
 import { qk } from '@/shared/api/keys';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
 import { EntityPage, type EntityPageMode } from '@/shared/ui/EntityPage';
-import { ContentBlock, ContentGrid, type FieldDefinition } from '@/shared/ui/ContentBlock';
-import { Badge, Button } from '@/shared/ui';
+import { Badge, Button, FormField, VersionSelector, type VersionOption } from '@/shared/ui';
+import styles from './PolicyVersionPage.module.css';
 
 interface FormData extends PolicyVersionCreate {
   notes?: string;
@@ -210,74 +210,24 @@ export function PolicyVersionPage() {
     setFormData((prev) => ({ ...prev, [key]: value }));
   };
 
-  // Field definitions
-  const limitsFields: FieldDefinition[] = [
-    {
-      key: 'max_steps',
-      label: 'Макс. шагов',
-      type: 'number',
-      placeholder: '20',
-      description: 'Максимальное количество шагов агента',
-    },
-    {
-      key: 'max_tool_calls',
-      label: 'Макс. вызовов',
-      type: 'number',
-      placeholder: '50',
-      description: 'Максимальное количество вызовов инструментов',
-    },
-    {
-      key: 'max_retries',
-      label: 'Макс. повторов',
-      type: 'number',
-      placeholder: '3',
-      description: 'Количество повторных попыток при ошибке',
-    },
-  ];
+  // Calculate next version number for create mode
+  const nextVersionNumber = useMemo(() => {
+    if (!policy?.versions?.length) return 1;
+    return Math.max(...policy.versions.map((v) => v.version)) + 1;
+  }, [policy?.versions]);
 
-  const timeoutFields: FieldDefinition[] = [
-    {
-      key: 'max_wall_time_ms',
-      label: 'Общий таймаут (мс)',
-      type: 'number',
-      placeholder: '300000',
-      description: 'Максимальное время выполнения в миллисекундах',
-    },
-    {
-      key: 'tool_timeout_ms',
-      label: 'Таймаут инструмента (мс)',
-      type: 'number',
-      placeholder: '30000',
-      description: 'Таймаут для одного вызова инструмента',
-    },
-  ];
+  // Version options for selector
+  const versionOptions: VersionOption[] = useMemo(() => {
+    if (!policy?.versions) return [];
+    return policy.versions.map((v) => ({
+      version: v.version,
+      status: v.status,
+    }));
+  }, [policy?.versions]);
 
-  const budgetFields: FieldDefinition[] = [
-    {
-      key: 'budget_tokens',
-      label: 'Лимит токенов',
-      type: 'number',
-      placeholder: 'Без лимита',
-      description: 'Максимальное количество токенов',
-    },
-    {
-      key: 'budget_cost_cents',
-      label: 'Лимит стоимости (центы)',
-      type: 'number',
-      placeholder: 'Без лимита',
-      description: 'Максимальная стоимость в центах',
-    },
-  ];
-
-  const notesFields: FieldDefinition[] = [
-    {
-      key: 'notes',
-      label: 'Заметки',
-      type: 'textarea',
-      placeholder: 'Что изменилось в этой версии...',
-      description: 'Описание изменений',
-    },
-  ];
+  const handleVersionSelect = (version: number) => {
+    navigate(`/admin/policies/${slug}/versions/${version}`);
+  };
 
   // Custom actions based on version status
   const renderStatusActions = () => {
@@ -312,7 +262,7 @@ export function PolicyVersionPage() {
   return (
     <EntityPage
       mode={mode}
-      entityName={isCreate ? 'Новая версия' : `Версия ${versionNumber}`}
+      entityName={isCreate ? `Новая версия (v${nextVersionNumber})` : `Версия ${versionNumber}`}
       entityTypeLabel="версии"
       backPath={`/admin/policies/${slug}`}
       loading={!isCreate && isLoading}
@@ -324,49 +274,118 @@ export function PolicyVersionPage() {
       showDelete={mode === 'view' && existingVersion?.status !== 'active'}
       breadcrumbs={breadcrumbs}
     >
-      {renderStatusActions()}
+      <div className={styles.grid}>
+        <div className={styles.mainColumn}>
+          {renderStatusActions()}
 
-      <ContentGrid>
-        <ContentBlock
-          width="1/2"
-          title="Лимиты выполнения"
-          icon="shield"
-          editable={isEditable}
-          fields={limitsFields}
-          data={formData}
-          onChange={handleFieldChange}
-        />
+          <div className={styles.section}>
+            <h3 className={styles.sectionTitle}>Лимиты выполнения</h3>
+            <div className={styles.sectionContent}>
+              <FormField
+                label="Макс. шагов"
+                value={formData.max_steps}
+                type="number"
+                editable={isEditable}
+                placeholder="20"
+                description="Максимальное количество шагов агента"
+                onChange={(v) => handleFieldChange('max_steps', v)}
+              />
+              <FormField
+                label="Макс. вызовов"
+                value={formData.max_tool_calls}
+                type="number"
+                editable={isEditable}
+                placeholder="50"
+                description="Максимальное количество вызовов инструментов"
+                onChange={(v) => handleFieldChange('max_tool_calls', v)}
+              />
+              <FormField
+                label="Макс. повторов"
+                value={formData.max_retries}
+                type="number"
+                editable={isEditable}
+                placeholder="3"
+                description="Количество повторных попыток при ошибке"
+                onChange={(v) => handleFieldChange('max_retries', v)}
+              />
+            </div>
+          </div>
 
-        <ContentBlock
-          width="1/2"
-          title="Таймауты"
-          icon="clock"
-          editable={isEditable}
-          fields={timeoutFields}
-          data={formData}
-          onChange={handleFieldChange}
-        />
+          <div className={styles.section}>
+            <h3 className={styles.sectionTitle}>Таймауты</h3>
+            <div className={styles.sectionContent}>
+              <FormField
+                label="Общий таймаут (мс)"
+                value={formData.max_wall_time_ms}
+                type="number"
+                editable={isEditable}
+                placeholder="300000"
+                description="Максимальное время выполнения в миллисекундах"
+                onChange={(v) => handleFieldChange('max_wall_time_ms', v)}
+              />
+              <FormField
+                label="Таймаут инструмента (мс)"
+                value={formData.tool_timeout_ms}
+                type="number"
+                editable={isEditable}
+                placeholder="30000"
+                description="Таймаут для одного вызова инструмента"
+                onChange={(v) => handleFieldChange('tool_timeout_ms', v)}
+              />
+            </div>
+          </div>
 
-        <ContentBlock
-          width="1/2"
-          title="Бюджет"
-          icon="dollar"
-          editable={isEditable}
-          fields={budgetFields}
-          data={formData}
-          onChange={handleFieldChange}
-        />
+          <div className={styles.section}>
+            <h3 className={styles.sectionTitle}>Бюджет</h3>
+            <div className={styles.sectionContent}>
+              <FormField
+                label="Лимит токенов"
+                value={formData.budget_tokens}
+                type="number"
+                editable={isEditable}
+                placeholder="Без лимита"
+                description="Максимальное количество токенов"
+                onChange={(v) => handleFieldChange('budget_tokens', v)}
+              />
+              <FormField
+                label="Лимит стоимости (центы)"
+                value={formData.budget_cost_cents}
+                type="number"
+                editable={isEditable}
+                placeholder="Без лимита"
+                description="Максимальная стоимость в центах"
+                onChange={(v) => handleFieldChange('budget_cost_cents', v)}
+              />
+            </div>
+          </div>
 
-        <ContentBlock
-          width="1/2"
-          title="Заметки"
-          icon="file"
-          editable={isEditable}
-          fields={notesFields}
-          data={formData}
-          onChange={handleFieldChange}
-        />
-      </ContentGrid>
+          <div className={styles.section}>
+            <h3 className={styles.sectionTitle}>Заметки</h3>
+            <div className={styles.sectionContent}>
+              <FormField
+                label="Заметки"
+                value={formData.notes}
+                type="textarea"
+                editable={isEditable}
+                placeholder="Что изменилось в этой версии..."
+                description="Описание изменений"
+                onChange={(v) => handleFieldChange('notes', v)}
+              />
+            </div>
+          </div>
+        </div>
+
+        <div className={styles.sideColumn}>
+          {!isCreate && versionOptions.length > 0 && (
+            <VersionSelector
+              versions={versionOptions}
+              selectedVersion={versionNumber}
+              onChange={handleVersionSelect}
+              label="Выбор версии"
+            />
+          )}
+        </div>
+      </div>
     </EntityPage>
   );
 }
