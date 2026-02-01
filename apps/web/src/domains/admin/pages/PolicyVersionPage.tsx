@@ -40,8 +40,8 @@ export function PolicyVersionPage() {
   const showError = useErrorToast();
   const showSuccess = useSuccessToast();
 
-  const isCreate = versionParam === 'new';
-  const versionNumber = isCreate ? 0 : parseInt(versionParam || '0', 10);
+  const isCreate = !versionParam;
+  const versionNumber = isCreate ? 0 : parseInt(versionParam, 10);
   const isEditMode = searchParams.get('mode') === 'edit';
   const mode: EntityPageMode = isCreate ? 'create' : isEditMode ? 'edit' : 'view';
   const isEditable = mode === 'edit' || mode === 'create';
