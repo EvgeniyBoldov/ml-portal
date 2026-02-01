@@ -47,11 +47,11 @@ export function PolicyVersionPage() {
   const isEditable = mode === 'edit' || mode === 'create';
 
   const [formData, setFormData] = useState<FormData>({
-    max_steps: 20,
-    max_tool_calls: 50,
-    max_wall_time_ms: 300000,
-    tool_timeout_ms: 30000,
-    max_retries: 3,
+    max_steps: isCreate ? undefined : 20,
+    max_tool_calls: isCreate ? undefined : 50,
+    max_wall_time_ms: isCreate ? undefined : 300000,
+    tool_timeout_ms: isCreate ? undefined : 30000,
+    max_retries: isCreate ? undefined : 3,
     budget_tokens: undefined,
     budget_cost_cents: undefined,
     extra_config: {},
@@ -74,7 +74,21 @@ export function PolicyVersionPage() {
   });
 
   useEffect(() => {
-    if (existingVersion) {
+    if (isCreate) {
+      // Reset form for create mode
+      setFormData({
+        max_steps: undefined,
+        max_tool_calls: undefined,
+        max_wall_time_ms: undefined,
+        tool_timeout_ms: undefined,
+        max_retries: undefined,
+        budget_tokens: undefined,
+        budget_cost_cents: undefined,
+        extra_config: {},
+        notes: '',
+      });
+    } else if (existingVersion) {
+      // Load existing version data
       setFormData({
         max_steps: existingVersion.max_steps ?? undefined,
         max_tool_calls: existingVersion.max_tool_calls ?? undefined,
@@ -87,7 +101,7 @@ export function PolicyVersionPage() {
         notes: existingVersion.notes || '',
       });
     }
-  }, [existingVersion]);
+  }, [existingVersion, isCreate]);
 
   // Mutations
   const createMutation = useMutation({
@@ -253,9 +267,10 @@ export function PolicyVersionPage() {
     <EntityPage
       mode={mode}
       entityName={isCreate ? `Новая версия (v${nextVersionNumber})` : `Версия ${versionNumber}`}
+      key={`version-${isCreate ? 'new' : versionNumber}`}
       entityTypeLabel="версии"
       backPath={`/admin/policies/${slug}`}
-      loading={!isCreate && isLoading}
+      loading={isLoading}
       saving={saving}
       onEdit={existingVersion?.status === 'draft' ? handleEdit : undefined}
       onSave={handleSave}
