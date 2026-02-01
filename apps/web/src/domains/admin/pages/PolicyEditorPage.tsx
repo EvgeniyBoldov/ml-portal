@@ -20,7 +20,7 @@ import { qk } from '@/shared/api/keys';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
 import { EntityPage, type EntityPageMode } from '@/shared/ui/EntityPage';
 import { Tabs, TabPanel } from '@/shared/ui/Tabs';
-import { Badge, Button, DataTable, ContentBlock, ContentGrid, StatusCard, type FieldDefinition, type StatusOption } from '@/shared/ui';
+import { Badge, Button, DataTable, ContentBlock, ContentGrid, StatusBadgeCard, type FieldDefinition, type StatusOption } from '@/shared/ui';
 
 interface FormData extends PolicyCreate {
   is_active?: boolean;
@@ -346,9 +346,8 @@ export function PolicyEditorPage() {
                 onChange={handleFieldChange}
               />
 
-              {/* Right column: Status block - 1/2 (compact mode) */}
-              <StatusCard
-                width="1/2"
+              {/* Right column: Status block (compact) */}
+              <StatusBadgeCard
                 status={formData.is_active ? 'active' : 'inactive'}
                 statusOptions={policyStatusOptions}
                 editable={isEditable}

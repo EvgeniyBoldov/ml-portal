@@ -94,3 +94,7 @@ export type { EntityInfoCardProps, EntityInfoCardWidth } from './EntityInfoCard'
 // StatusCard
 export { StatusCard } from './StatusCard';
 export type { StatusCardProps, StatusOption, StatusAction } from './StatusCard';
+
+// StatusBadgeCard
+export { StatusBadgeCard } from './StatusBadgeCard';
+export type { StatusBadgeCardProps } from './StatusBadgeCard';
