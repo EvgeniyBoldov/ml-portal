@@ -29,6 +29,7 @@ const AuditPage = lazy(() => import('@/domains/admin/pages/AuditPage'));
 const EmailSettingsPage = lazy(() => import('@/domains/admin/pages/EmailSettingsPage'));
 const PromptsListPage = lazy(() => import('@/domains/admin/pages/PromptsListPage'));
 const PromptEditorPage = lazy(() => import('@/domains/admin/pages/PromptEditorPage').then(m => ({ default: m.PromptEditorPage })));
+const PromptVersionPage = lazy(() => import('@/domains/admin/pages/PromptVersionPage').then(m => ({ default: m.PromptVersionPage })));
 const ToolsPage = lazy(() => import('@/domains/admin/pages/ToolsPage').then(m => ({ default: m.ToolsPage })));
 const ToolGroupViewPage = lazy(() => import('@/domains/admin/pages/ToolGroupViewPage').then(m => ({ default: m.ToolGroupViewPage })));
 const ToolViewPage = lazy(() => import('@/domains/admin/pages/ToolViewPage').then(m => ({ default: m.ToolViewPage })));
@@ -94,6 +95,8 @@ const router = createBrowserRouter([
       { path: 'audit', element: withSuspense(<AuditPage />) },
       { path: 'prompts', element: withSuspense(<PromptsListPage />) },
       { path: 'prompts/:slug', element: withSuspense(<PromptEditorPage />) },
+      { path: 'prompts/:slug/versions/new', element: withSuspense(<PromptVersionPage />) },
+      { path: 'prompts/:slug/versions/:version', element: withSuspense(<PromptVersionPage />) },
       { path: 'tools', element: withSuspense(<ToolsPage />) },
       { path: 'tools/groups/:groupId', element: withSuspense(<ToolGroupViewPage />) },
       { path: 'tools/groups/:groupId/tools/:toolSlug', element: withSuspense(<ToolViewPage />) },
