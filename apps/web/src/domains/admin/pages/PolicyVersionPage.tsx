@@ -13,8 +13,8 @@ import { policiesApi, type PolicyVersionCreate, type PolicyVersionStatus } from 
 import { qk } from '@/shared/api/keys';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
 import { EntityPage, type EntityPageMode } from '@/shared/ui/EntityPage';
-import { Badge, Button, FormField } from '@/shared/ui';
-import styles from './PolicyVersionPage.module.css';
+import { ContentBlock, ContentGrid, StatusCard, type FieldDefinition, type StatusOption, type StatusAction } from '@/shared/ui';
+import Button from '@/shared/ui/Button';
 
 interface FormData extends PolicyVersionCreate {
   notes?: string;
@@ -230,30 +230,66 @@ export function PolicyVersionPage() {
     return Math.max(...policy.versions.map((v) => v.version)) + 1;
   }, [policy?.versions]);
 
-  // Render header actions (status badge + action buttons)
-  const renderHeaderActions = () => {
-    if (isCreate || !existingVersion) return null;
+  // Status options for StatusCard
+  const statusOptions: StatusOption[] = [
+    { value: 'draft', label: STATUS_LABELS.draft, variant: 'warning' },
+    { value: 'active', label: STATUS_LABELS.active, variant: 'success' },
+    { value: 'inactive', label: STATUS_LABELS.inactive, variant: 'default' },
+  ];
 
+  // Status actions
+  const statusActions: StatusAction[] = [
+    {
+      label: 'Активировать',
+      onClick: () => activateMutation.mutate(),
+      variant: 'primary',
+      disabled: activateMutation.isPending,
+      showFor: ['draft'],
+    },
+    {
+      label: 'Деактивировать',
+      onClick: () => deactivateMutation.mutate(),
+      variant: 'secondary',
+      disabled: deactivateMutation.isPending,
+      showFor: ['active'],
+    },
+    {
+      label: 'Сделать основной',
+      onClick: () => activateMutation.mutate(),
+      variant: 'primary',
+      disabled: activateMutation.isPending || policy?.recommended_version?.version === versionNumber,
+      showFor: ['active'],
+    },
+  ];
+
+  // Field definitions for ContentBlock
+  const limitsFields: FieldDefinition[] = [
+    { key: 'max_steps', label: 'Макс. шагов', type: 'number', placeholder: '20', description: 'Максимальное количество шагов агента' },
+    { key: 'max_tool_calls', label: 'Макс. вызовов', type: 'number', placeholder: '50', description: 'Максимальное количество вызовов инструментов' },
+    { key: 'max_retries', label: 'Макс. повторов', type: 'number', placeholder: '3', description: 'Количество повторных попыток при ошибке' },
+  ];
+
+  const timeoutsFields: FieldDefinition[] = [
+    { key: 'max_wall_time_ms', label: 'Общий таймаут (мс)', type: 'number', placeholder: '300000', description: 'Максимальное время выполнения' },
+    { key: 'tool_timeout_ms', label: 'Таймаут инструмента (мс)', type: 'number', placeholder: '30000', description: 'Таймаут для одного вызова' },
+  ];
+
+  const budgetFields: FieldDefinition[] = [
+    { key: 'budget_tokens', label: 'Лимит токенов', type: 'number', placeholder: 'Без лимита', description: 'Максимальное количество токенов' },
+    { key: 'budget_cost_cents', label: 'Лимит стоимости (центы)', type: 'number', placeholder: 'Без лимита', description: 'Максимальная стоимость' },
+  ];
+
+  const notesFields: FieldDefinition[] = [
+    { key: 'notes', label: 'Заметки', type: 'textarea', placeholder: 'Что изменилось в этой версии...', description: 'Описание изменений', rows: 3 },
+  ];
+
+  // Render header actions
+  const renderHeaderActions = () => {
+    if (isCreate) return null;
     return (
-      <>
-        <Badge variant={STATUS_VARIANTS[existingVersion.status]}>
-          {STATUS_LABELS[existingVersion.status]}
-        </Badge>
-        
-        {existingVersion.status === 'draft' && (
-          <Button variant="primary" onClick={() => activateMutation.mutate()} disabled={activateMutation.isPending}>
-            Активировать
-          </Button>
-        )}
-        {existingVersion.status === 'active' && (
-          <Button variant="secondary" onClick={() => deactivateMutation.mutate()} disabled={deactivateMutation.isPending}>
-            Деактивировать
-          </Button>
-        )}
-        <Button variant="secondary" onClick={() => navigate(`/admin/policies/${slug}/versions/new`)}>
-          Новая версия
-        </Button>
-      </>
+      <Button variant="secondary" onClick={() => navigate(`/admin/policies/${slug}/versions/new`)}>
+        Новая версия
+      </Button>
     );
   };
 
@@ -280,106 +316,59 @@ export function PolicyVersionPage() {
       breadcrumbs={breadcrumbs}
       headerActions={renderHeaderActions()}
     >
-      <div className={styles.grid}>
-        <div className={styles.mainColumn}>
-          <div className={styles.section}>
-            <h3 className={styles.sectionTitle}>Лимиты выполнения</h3>
-            <div className={styles.sectionContent}>
-              <FormField
-                label="Макс. шагов"
-                value={formData.max_steps}
-                type="number"
-                editable={isEditable}
-                placeholder="20"
-                description="Максимальное количество шагов агента"
-                onChange={(v) => handleFieldChange('max_steps', v)}
-              />
-              <FormField
-                label="Макс. вызовов"
-                value={formData.max_tool_calls}
-                type="number"
-                editable={isEditable}
-                placeholder="50"
-                description="Максимальное количество вызовов инструментов"
-                onChange={(v) => handleFieldChange('max_tool_calls', v)}
-              />
-              <FormField
-                label="Макс. повторов"
-                value={formData.max_retries}
-                type="number"
-                editable={isEditable}
-                placeholder="3"
-                description="Количество повторных попыток при ошибке"
-                onChange={(v) => handleFieldChange('max_retries', v)}
-              />
-            </div>
-          </div>
+      <ContentGrid>
+        {/* Status Card - only for existing versions */}
+        {!isCreate && existingVersion && (
+          <StatusCard
+            width="full"
+            title="Статус версии"
+            status={existingVersion.status}
+            statusOptions={statusOptions}
+            editable={false}
+            actions={statusActions}
+          />
+        )}
 
-          <div className={styles.section}>
-            <h3 className={styles.sectionTitle}>Таймауты</h3>
-            <div className={styles.sectionContent}>
-              <FormField
-                label="Общий таймаут (мс)"
-                value={formData.max_wall_time_ms}
-                type="number"
-                editable={isEditable}
-                placeholder="300000"
-                description="Максимальное время выполнения в миллисекундах"
-                onChange={(v) => handleFieldChange('max_wall_time_ms', v)}
-              />
-              <FormField
-                label="Таймаут инструмента (мс)"
-                value={formData.tool_timeout_ms}
-                type="number"
-                editable={isEditable}
-                placeholder="30000"
-                description="Таймаут для одного вызова инструмента"
-                onChange={(v) => handleFieldChange('tool_timeout_ms', v)}
-              />
-            </div>
-          </div>
+        {/* Limits */}
+        <ContentBlock
+          width="1/2"
+          title="Лимиты выполнения"
+          editable={isEditable}
+          fields={limitsFields}
+          data={formData}
+          onChange={handleFieldChange}
+        />
 
-          <div className={styles.section}>
-            <h3 className={styles.sectionTitle}>Бюджет</h3>
-            <div className={styles.sectionContent}>
-              <FormField
-                label="Лимит токенов"
-                value={formData.budget_tokens}
-                type="number"
-                editable={isEditable}
-                placeholder="Без лимита"
-                description="Максимальное количество токенов"
-                onChange={(v) => handleFieldChange('budget_tokens', v)}
-              />
-              <FormField
-                label="Лимит стоимости (центы)"
-                value={formData.budget_cost_cents}
-                type="number"
-                editable={isEditable}
-                placeholder="Без лимита"
-                description="Максимальная стоимость в центах"
-                onChange={(v) => handleFieldChange('budget_cost_cents', v)}
-              />
-            </div>
-          </div>
+        {/* Timeouts */}
+        <ContentBlock
+          width="1/2"
+          title="Таймауты"
+          editable={isEditable}
+          fields={timeoutsFields}
+          data={formData}
+          onChange={handleFieldChange}
+        />
 
-          <div className={styles.section}>
-            <h3 className={styles.sectionTitle}>Заметки</h3>
-            <div className={styles.sectionContent}>
-              <FormField
-                label="Заметки"
-                value={formData.notes}
-                type="textarea"
-                editable={isEditable}
-                placeholder="Что изменилось в этой версии..."
-                description="Описание изменений"
-                onChange={(v) => handleFieldChange('notes', v)}
-              />
-            </div>
-          </div>
-        </div>
+        {/* Budget */}
+        <ContentBlock
+          width="1/2"
+          title="Бюджет"
+          editable={isEditable}
+          fields={budgetFields}
+          data={formData}
+          onChange={handleFieldChange}
+        />
 
-      </div>
+        {/* Notes */}
+        <ContentBlock
+          width="1/2"
+          title="Заметки"
+          editable={isEditable}
+          fields={notesFields}
+          data={formData}
+          onChange={handleFieldChange}
+        />
+      </ContentGrid>
     </EntityPage>
   );
 }

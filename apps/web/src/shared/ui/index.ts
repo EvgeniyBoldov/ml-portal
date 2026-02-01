@@ -90,3 +90,7 @@ export type { VersionSelectorProps, VersionOption } from './VersionSelector';
 // EntityInfoCard
 export { EntityInfoCard } from './EntityInfoCard';
 export type { EntityInfoCardProps, EntityInfoCardWidth } from './EntityInfoCard';
+
+// StatusCard
+export { StatusCard } from './StatusCard';
+export type { StatusCardProps, StatusOption, StatusAction } from './StatusCard';

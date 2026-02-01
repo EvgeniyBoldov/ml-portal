@@ -20,8 +20,7 @@ import { qk } from '@/shared/api/keys';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
 import { EntityPage, type EntityPageMode } from '@/shared/ui/EntityPage';
 import { Tabs, TabPanel } from '@/shared/ui/Tabs';
-import { Badge, Button, DataTable, EntityInfoCard, ShortEntityBlock } from '@/shared/ui';
-import styles from './PolicyEditorPage.module.css';
+import { Badge, Button, DataTable, ContentBlock, ContentGrid, StatusCard, type FieldDefinition, type StatusOption } from '@/shared/ui';
 
 interface FormData extends PolicyCreate {
   is_active?: boolean;
@@ -272,6 +271,25 @@ export function PolicyEditorPage() {
     },
   ];
 
+  // Field definitions for ContentBlock
+  const infoFields: FieldDefinition[] = [
+    { key: 'name', label: 'Название', type: 'text', required: true, placeholder: 'Моя политика' },
+    { key: 'slug', label: 'Slug', type: 'text', required: true, placeholder: 'my-policy', description: 'Уникальный идентификатор', disabled: !isCreate },
+    { key: 'description', label: 'Описание', type: 'textarea', placeholder: 'Описание политики...', rows: 3 },
+  ];
+
+  const infoFieldsWithoutStatus: FieldDefinition[] = [
+    { key: 'name', label: 'Название', type: 'text', required: true, placeholder: 'Моя политика' },
+    { key: 'slug', label: 'Slug', type: 'text', required: true, placeholder: 'my-policy', description: 'Уникальный идентификатор', disabled: true },
+    { key: 'description', label: 'Описание', type: 'textarea', placeholder: 'Описание политики...', rows: 3 },
+  ];
+
+  // Status options for policy
+  const policyStatusOptions: StatusOption[] = [
+    { value: 'active', label: 'Активна', variant: 'success' },
+    { value: 'inactive', label: 'Неактивна', variant: 'default' },
+  ];
+
   const tabs = [
     { id: 'overview', label: 'Обзор' },
     { id: 'versions', label: `Версии (${policy?.versions?.length || 0})` },
@@ -304,70 +322,98 @@ export function PolicyEditorPage() {
     >
 
       {isCreate ? (
-        <div className={styles.grid}>
-          <div className={styles.mainColumn}>
-            <EntityInfoCard
-              name={formData.name}
-              slug={formData.slug}
-              description={formData.description}
-              editable={true}
-              slugEditable={true}
-              showActiveSwitch={false}
-              namePlaceholder="Моя политика"
-              slugPlaceholder="my-policy"
-              descriptionPlaceholder="Описание политики..."
-              onNameChange={(v) => handleFieldChange('name', v)}
-              onSlugChange={(v) => handleFieldChange('slug', v)}
-              onDescriptionChange={(v) => handleFieldChange('description', v)}
-            />
-          </div>
-        </div>
+        <ContentGrid>
+          <ContentBlock
+            width="1/2"
+            title="Основная информация"
+            editable={true}
+            fields={infoFields}
+            data={formData}
+            onChange={handleFieldChange}
+          />
+        </ContentGrid>
       ) : (
         <Tabs tabs={tabs} activeTab={activeTab} onChange={setActiveTab}>
           <TabPanel id="overview" activeTab={activeTab}>
-            <div className={styles.grid}>
-              <div className={styles.mainColumn}>
-                <EntityInfoCard
-                  name={formData.name}
-                  slug={formData.slug}
-                  description={formData.description}
-                  isActive={formData.is_active}
+            <ContentGrid>
+              {/* Info + Status - 1/2 */}
+              <StatusCard
+                width="1/2"
+                title="Основная информация"
+                status={formData.is_active ? 'active' : 'inactive'}
+                statusOptions={policyStatusOptions}
+                editable={isEditable}
+                onStatusChange={(s) => handleFieldChange('is_active', s === 'active')}
+              >
+                <ContentBlock
+                  width="full"
+                  title=""
                   editable={isEditable}
-                  slugEditable={false}
-                  showActiveSwitch={true}
-                  activeSwitchLabel="Активна"
-                  onNameChange={(v) => handleFieldChange('name', v)}
-                  onDescriptionChange={(v) => handleFieldChange('description', v)}
-                  onActiveChange={(v) => handleFieldChange('is_active', v)}
+                  fields={infoFieldsWithoutStatus}
+                  data={formData}
+                  onChange={handleFieldChange}
+                  compact
                 />
-              </div>
+              </StatusCard>
 
-              <div className={styles.sideColumn}>
-                {policy?.recommended_version ? (
-                  <ShortEntityBlock
-                    title={`v${policy.recommended_version.version}`}
-                    subtitle={
-                      <Badge variant={STATUS_VARIANTS[policy.recommended_version.status]}>
-                        {STATUS_LABELS[policy.recommended_version.status]}
-                      </Badge>
-                    }
-                    items={[
-                      { label: 'Шагов', value: policy.recommended_version.max_steps ?? '∞' },
-                      { label: 'Вызовов', value: policy.recommended_version.max_tool_calls ?? '∞' },
-                      { label: 'Таймаут', value: `${policy.recommended_version.max_wall_time_ms ?? '∞'} мс` },
-                    ]}
-                    actionLabel="Подробнее"
-                    onAction={() => navigate(`/admin/policies/${slug}/versions/${policy.recommended_version!.version}`)}
-                  />
-                ) : (
-                  <ShortEntityBlock title="Нет версии">
-                    <Button size="small" variant="primary" onClick={handleCreateVersion}>
+              {/* Recommended Version - 1/2 */}
+              {policy?.recommended_version ? (
+                <ContentBlock
+                  width="1/2"
+                  title={`Основная версия (v${policy.recommended_version.version})`}
+                  headerActions={
+                    <Badge variant={STATUS_VARIANTS[policy.recommended_version.status]}>
+                      {STATUS_LABELS[policy.recommended_version.status]}
+                    </Badge>
+                  }
+                >
+                  <ContentGrid gap="sm">
+                    <ContentBlock
+                      width="1/2"
+                      title="Лимиты"
+                      compact
+                    >
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                        <div><strong>Шагов:</strong> {policy.recommended_version.max_steps ?? '∞'}</div>
+                        <div><strong>Вызовов:</strong> {policy.recommended_version.max_tool_calls ?? '∞'}</div>
+                        <div><strong>Повторов:</strong> {policy.recommended_version.max_retries ?? '∞'}</div>
+                      </div>
+                    </ContentBlock>
+                    <ContentBlock
+                      width="1/2"
+                      title="Таймауты"
+                      compact
+                    >
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                        <div><strong>Общий:</strong> {policy.recommended_version.max_wall_time_ms ?? '∞'} мс</div>
+                        <div><strong>Инструмент:</strong> {policy.recommended_version.tool_timeout_ms ?? '∞'} мс</div>
+                      </div>
+                    </ContentBlock>
+                  </ContentGrid>
+                  <div style={{ marginTop: '1rem' }}>
+                    <Button
+                      size="small"
+                      variant="outline"
+                      onClick={() => navigate(`/admin/policies/${slug}/versions/${policy.recommended_version!.version}`)}
+                    >
+                      Подробнее
+                    </Button>
+                  </div>
+                </ContentBlock>
+              ) : (
+                <ContentBlock
+                  width="1/2"
+                  title="Основная версия"
+                >
+                  <div style={{ textAlign: 'center', padding: '2rem' }}>
+                    <p style={{ marginBottom: '1rem', color: 'var(--text-secondary)' }}>Нет версии</p>
+                    <Button variant="primary" onClick={handleCreateVersion}>
                       Создать версию
                     </Button>
-                  </ShortEntityBlock>
-                )}
-              </div>
-            </div>
+                  </div>
+                </ContentBlock>
+              )}
+            </ContentGrid>
           </TabPanel>
 
           <TabPanel id="versions" activeTab={activeTab}>

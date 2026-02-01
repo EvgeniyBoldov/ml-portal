@@ -1,0 +1,13 @@
+/**
+ * StatusCard styles
+ */
+
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.statusSelect {
+  min-width: 140px;
+}
