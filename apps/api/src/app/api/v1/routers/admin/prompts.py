@@ -288,3 +288,22 @@ async def render_prompt_version(
     except (NotFoundException, ValidationException) as e:
         status = 404 if isinstance(e, NotFoundException) else 400
         raise HTTPException(status_code=status, detail=str(e))
+
+
+@router.put("/{slug}/recommended", response_model=PromptDetailResponse)
+async def set_recommended_version(
+    slug: str = Path(..., description="Prompt slug"),
+    version_id: UUID = Query(..., description="Version ID to set as recommended"),
+    db: AsyncSession = Depends(db_session),
+    _: UserCtx = Depends(require_admin),
+):
+    """Set the recommended version for a prompt. Version must be active. Admin only."""
+    service = PromptService(db)
+    try:
+        prompt = await service.update_recommended_version(slug, version_id)
+        await db.commit()
+        return prompt
+    except NotFoundException as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValidationException as e:
+        raise HTTPException(status_code=400, detail=str(e))

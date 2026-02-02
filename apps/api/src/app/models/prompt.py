@@ -47,6 +47,14 @@ class Prompt(Base):
     # Type: prompt (instructions) or baseline (restrictions)
     type: Mapped[str] = mapped_column(String(50), nullable=False, default="prompt")
     
+    # Reference to recommended version (for UI display)
+    recommended_version_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey('prompt_versions.id', ondelete='SET NULL', use_alter=True),
+        nullable=True,
+        index=True
+    )
+    
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
     )
@@ -62,7 +70,15 @@ class Prompt(Base):
         "PromptVersion",
         back_populates="prompt",
         cascade="all, delete-orphan",
-        order_by="desc(PromptVersion.version)"
+        order_by="desc(PromptVersion.version)",
+        foreign_keys="PromptVersion.prompt_id"
+    )
+    
+    # Relationship to recommended version
+    recommended_version: Mapped[Optional["PromptVersion"]] = relationship(
+        "PromptVersion",
+        foreign_keys=[recommended_version_id],
+        post_update=True
     )
 
     def __repr__(self):
@@ -137,7 +153,11 @@ class PromptVersion(Base):
     )
     
     # Relationships
-    prompt: Mapped["Prompt"] = relationship("Prompt", back_populates="versions")
+    prompt: Mapped["Prompt"] = relationship(
+        "Prompt",
+        back_populates="versions",
+        foreign_keys=[prompt_id]
+    )
     
     parent_version = relationship(
         "PromptVersion", 

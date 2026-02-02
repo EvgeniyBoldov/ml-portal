@@ -176,4 +176,10 @@ export const promptsApi = {
       body: { variables },
     });
   },
+
+  async setRecommendedVersion(slug: string, versionId: string): Promise<PromptDetail> {
+    return apiRequest<PromptDetail>(`/admin/prompts/${slug}/recommended?version_id=${versionId}`, {
+      method: 'PUT',
+    });
+  },
 };

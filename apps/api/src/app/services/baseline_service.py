@@ -250,6 +250,21 @@ class BaselineService:
         
         return await self.get_version(version_id)
 
+    async def update_recommended_version(self, slug: str, version_id: UUID) -> Baseline:
+        """Set the recommended version for a baseline. Version must be active."""
+        baseline = await self.get_baseline_by_slug(slug)
+        version = await self.get_version(version_id)
+        
+        if version.baseline_id != baseline.id:
+            raise ValidationException("Version does not belong to this baseline")
+        
+        if version.status != BaselineStatus.ACTIVE.value:
+            raise ValidationException("Only active versions can be set as recommended")
+        
+        await self.baseline_repo.update(baseline, {'recommended_version_id': version_id})
+        
+        return await self.get_baseline_by_slug(slug)
+
     # ─────────────────────────────────────────────────────────────────────────
     # RENDERING
     # ─────────────────────────────────────────────────────────────────────────

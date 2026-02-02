@@ -207,4 +207,10 @@ export const baselinesApi = {
       method: 'POST',
     });
   },
+
+  async setRecommendedVersion(slug: string, versionId: string): Promise<BaselineDetail> {
+    return apiRequest<BaselineDetail>(`/admin/baselines/${slug}/recommended?version_id=${versionId}`, {
+      method: 'PUT',
+    });
+  },
 };

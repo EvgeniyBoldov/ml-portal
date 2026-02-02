@@ -145,6 +145,15 @@ export function PolicyVersionPage() {
     onError: (err: Error) => showError(err.message),
   });
 
+  const setRecommendedMutation = useMutation({
+    mutationFn: () => policiesApi.setRecommendedVersion(slug!, existingVersion!.id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: qk.policies.detail(slug!) });
+      showSuccess('Версия установлена как основная');
+    },
+    onError: (err: Error) => showError(err.message),
+  });
+
   const deleteMutation = useMutation({
     mutationFn: () => policiesApi.deleteVersion(slug!, versionNumber),
     onSuccess: () => {
@@ -283,31 +292,35 @@ export function PolicyVersionPage() {
     { key: 'notes', label: 'Заметки', type: 'textarea', placeholder: 'Что изменилось в этой версии...', description: 'Описание изменений', rows: 3 },
   ];
 
-  // Render header actions (status actions moved here)
+  // Check if this version is the recommended one
+  const isRecommended = policy?.recommended_version?.id === existingVersion?.id;
+
+  // Render header actions based on new flow:
+  // Draft: Activate only (edit via onEdit prop)
+  // Active: Set as recommended (if not already), Deactivate
+  // Inactive: nothing
   const renderHeaderActions = () => {
     if (isCreate) return null;
     return (
       <>
         {existingVersion?.status === 'draft' && (
+          <Button variant="primary" onClick={() => activateMutation.mutate()} disabled={activateMutation.isPending}>
+            Активировать
+          </Button>
+        )}
+        {existingVersion?.status === 'active' && (
           <>
-            <Button variant="primary" onClick={() => activateMutation.mutate()} disabled={activateMutation.isPending}>
-              Активировать
-            </Button>
+            {!isRecommended && (
+              <Button variant="primary" onClick={() => setRecommendedMutation.mutate()} disabled={setRecommendedMutation.isPending}>
+                Сделать основной
+              </Button>
+            )}
             <Button variant="secondary" onClick={() => deactivateMutation.mutate()} disabled={deactivateMutation.isPending}>
               Деактивировать
             </Button>
           </>
         )}
-        {existingVersion?.status === 'active' && (
-          <Button variant="secondary" onClick={() => deactivateMutation.mutate()} disabled={deactivateMutation.isPending}>
-            Деактивировать
-          </Button>
-        )}
-        {existingVersion?.status === 'inactive' && (
-          <Button variant="primary" onClick={() => activateMutation.mutate()} disabled={activateMutation.isPending}>
-            Активировать
-          </Button>
-        )}
+        {/* Inactive versions have no actions */}
         <Button variant="secondary" onClick={() => navigate(`/admin/policies/${slug}/versions/new`)}>
           Новая версия
         </Button>

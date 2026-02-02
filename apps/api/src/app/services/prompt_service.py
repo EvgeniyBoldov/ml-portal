@@ -246,6 +246,21 @@ class PromptService:
         
         return version
 
+    async def update_recommended_version(self, slug: str, version_id: UUID) -> Prompt:
+        """Set the recommended version for a prompt. Version must be active."""
+        prompt = await self.get_prompt_by_slug(slug)
+        version = await self.get_version_by_id(version_id)
+        
+        if version.prompt_id != prompt.id:
+            raise ValidationException("Version does not belong to this prompt")
+        
+        if version.status != PromptStatus.ACTIVE.value:
+            raise ValidationException("Only active versions can be set as recommended")
+        
+        await self.prompt_repo.update(prompt, {'recommended_version_id': version_id})
+        
+        return await self.get_prompt_by_slug(slug)
+
     # ─────────────────────────────────────────────────────────────────────────
     # RENDER operations
     # ─────────────────────────────────────────────────────────────────────────

@@ -112,6 +112,15 @@ export function PromptVersionPage() {
     onError: (err: Error) => showError(err.message),
   });
 
+  const setRecommendedMutation = useMutation({
+    mutationFn: () => promptsApi.setRecommendedVersion(slug!, existingVersion!.id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: qk.prompts.detail(slug!) });
+      showSuccess('Версия установлена как основная');
+    },
+    onError: (err: Error) => showError(err.message),
+  });
+
   const handleSave = async () => {
     setSaving(true);
     try {
@@ -172,31 +181,35 @@ export function PromptVersionPage() {
     { label: isCreate ? 'Новая версия' : `Версия ${versionNumber}` },
   ];
 
-  // Render header actions
+  // Check if this version is the recommended one
+  const isRecommended = prompt?.recommended_version?.id === existingVersion?.id;
+
+  // Render header actions based on new flow:
+  // Draft: Activate only (edit via onEdit prop)
+  // Active: Set as recommended (if not already), Archive
+  // Archived: nothing
   const renderHeaderActions = () => {
     if (isCreate) return null;
     return (
       <>
         {existingVersion?.status === 'draft' && (
+          <Button variant="primary" onClick={() => activateMutation.mutate()} disabled={activateMutation.isPending}>
+            Активировать
+          </Button>
+        )}
+        {existingVersion?.status === 'active' && (
           <>
-            <Button variant="primary" onClick={() => activateMutation.mutate()} disabled={activateMutation.isPending}>
-              Активировать
-            </Button>
+            {!isRecommended && (
+              <Button variant="primary" onClick={() => setRecommendedMutation.mutate()} disabled={setRecommendedMutation.isPending}>
+                Сделать основной
+              </Button>
+            )}
             <Button variant="secondary" onClick={() => archiveMutation.mutate()} disabled={archiveMutation.isPending}>
               Архивировать
             </Button>
           </>
         )}
-        {existingVersion?.status === 'active' && (
-          <Button variant="secondary" onClick={() => archiveMutation.mutate()} disabled={archiveMutation.isPending}>
-            Архивировать
-          </Button>
-        )}
-        {existingVersion?.status === 'archived' && (
-          <Button variant="primary" onClick={() => activateMutation.mutate()} disabled={activateMutation.isPending}>
-            Активировать
-          </Button>
-        )}
+        {/* Archived versions have no actions */}
         <Button variant="secondary" onClick={() => navigate(`/admin/prompts/${slug}/versions/new`)}>
           Новая версия
         </Button>

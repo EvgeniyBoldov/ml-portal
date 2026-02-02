@@ -319,3 +319,22 @@ async def archive_baseline_version(
     except (NotFoundException, ValidationException) as e:
         status_code = 404 if isinstance(e, NotFoundException) else 400
         raise HTTPException(status_code=status_code, detail=str(e))
+
+
+@router.put("/{slug}/recommended", response_model=BaselineResponse)
+async def set_recommended_version(
+    slug: str = Path(..., description="Baseline slug"),
+    version_id: UUID = Query(..., description="Version ID to set as recommended"),
+    db: AsyncSession = Depends(db_session),
+    _: UserCtx = Depends(require_admin),
+):
+    """Set the recommended version for a baseline. Version must be active. Admin only."""
+    service = BaselineService(db)
+    try:
+        baseline = await service.update_recommended_version(slug, version_id)
+        await db.commit()
+        return baseline
+    except NotFoundException as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValidationException as e:
+        raise HTTPException(status_code=400, detail=str(e))
