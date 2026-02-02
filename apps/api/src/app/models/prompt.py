@@ -23,6 +23,7 @@ class Prompt(Base):
     A prompt is identified by a unique slug and contains:
     - name: Display name
     - description: Documentation
+    - type: prompt or baseline
     
     Each prompt can have multiple versions (PromptVersion).
     
@@ -42,6 +43,9 @@ class Prompt(Base):
     
     # Description for internal usage (MLOps documentation)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    
+    # Type: prompt (instructions) or baseline (restrictions)
+    type: Mapped[str] = mapped_column(String(50), nullable=False, default="prompt")
     
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
