@@ -9,7 +9,7 @@ import { useQuery } from '@tanstack/react-query';
 import Badge from '@shared/ui/Badge';
 import { EntityPage } from '@shared/ui/EntityPage';
 import { ContentBlock, ContentGrid } from '@shared/ui/ContentBlock';
-import { DataTable, type DataTableColumn } from '@shared/ui/DataTable';
+import DataTable, { type DataTableColumn } from '@shared/ui/DataTable';
 import { collectionsApi } from '@shared/api/collections';
 import { adminApi } from '@shared/api/admin';
 
