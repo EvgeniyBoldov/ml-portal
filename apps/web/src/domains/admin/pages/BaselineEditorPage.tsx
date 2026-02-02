@@ -290,25 +290,25 @@ export function BaselineEditorPage() {
             />
 
             {/* Version block - under status, full width */}
-            {selectedVersion ? (
+            {baseline?.recommended_version ? (
               <ContentBlock
                 width="full"
-                title={`Активная версия (v${selectedVersion.version})`}
+                title={`Основная версия (v${baseline.recommended_version.version})`}
                 headerActions={
-                  <Badge tone={STATUS_TONES[selectedVersion.status]}>
-                    {STATUS_LABELS[selectedVersion.status]}
+                  <Badge tone={STATUS_TONES[baseline.recommended_version.status]}>
+                    {STATUS_LABELS[baseline.recommended_version.status]}
                   </Badge>
                 }
               >
                 <pre className={styles.templateBlock}>
-                  {selectedVersion.template.substring(0, 500)}
-                  {selectedVersion.template.length > 500 && '...'}
+                  {selectedVersion?.template.substring(0, 500)}
+                  {selectedVersion && selectedVersion.template.length > 500 && '...'}
                 </pre>
                 <div className={styles.versionActions}>
                   <Button
                     size="small"
                     variant="outline"
-                    onClick={() => navigate(`/admin/baselines/${slug}/versions/${selectedVersion.version}`)}
+                    onClick={() => navigate(`/admin/baselines/${slug}/versions/${baseline.recommended_version!.version}`)}
                   >
                     Подробнее
                   </Button>
@@ -317,7 +317,7 @@ export function BaselineEditorPage() {
             ) : (
               <ContentBlock
                 width="full"
-                title="Активная версия"
+                title="Основная версия"
               >
                 <div className={styles.emptyVersion}>
                   <p>Нет версий</p>
