@@ -93,6 +93,14 @@ class Baseline(Base):
     # Whether this baseline is active
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     
+    # Reference to recommended version (for UI display)
+    recommended_version_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey('baseline_versions.id', ondelete='SET NULL', use_alter=True),
+        nullable=True,
+        index=True
+    )
+    
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
     )
@@ -108,7 +116,15 @@ class Baseline(Base):
         "BaselineVersion",
         back_populates="baseline",
         cascade="all, delete-orphan",
-        order_by="desc(BaselineVersion.version)"
+        order_by="desc(BaselineVersion.version)",
+        foreign_keys="BaselineVersion.baseline_id"
+    )
+    
+    # Relationship to recommended version
+    recommended_version: Mapped[Optional["BaselineVersion"]] = relationship(
+        "BaselineVersion",
+        foreign_keys=[recommended_version_id],
+        post_update=True
     )
 
     def __repr__(self):

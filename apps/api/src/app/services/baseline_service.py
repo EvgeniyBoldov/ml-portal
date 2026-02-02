@@ -232,6 +232,10 @@ class BaselineService:
         # Activate this version
         await self.version_repo.update_status(version_id, BaselineStatus.ACTIVE.value)
         
+        # Update recommended_version_id in baseline
+        baseline = await self.get_baseline_by_id(version.baseline_id)
+        await self.baseline_repo.update(baseline, {'recommended_version_id': version_id})
+        
         # Refresh and return
         return await self.get_version(version_id)
 
