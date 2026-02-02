@@ -7,7 +7,7 @@ import { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 
-import { promptsApi, type PromptListItem, type PromptType } from '@/shared/api/prompts';
+import { promptsApi, type PromptListItem } from '@/shared/api/prompts';
 import { qk } from '@/shared/api/keys';
 import { 
   AdminPage,
@@ -17,15 +17,10 @@ import {
 } from '@/shared/ui';
 import { RowActions } from '@/shared/ui/RowActions';
 
-const TYPE_CONFIG: Record<PromptType, { label: string; variant: 'default' | 'success' | 'warning' }> = {
-  prompt: { label: 'Prompt', variant: 'default' },
-  baseline: { label: 'Baseline', variant: 'warning' },
-};
-
 const STATUS_CONFIG = {
-  active: { label: 'Активен', variant: 'success' as const },
+  active: { label: 'Активна', variant: 'success' as const },
   draft: { label: 'Черновик', variant: 'warning' as const },
-  none: { label: 'Нет версий', variant: 'default' as const },
+  none: { label: 'Нет версий', variant: 'neutral' as const },
 };
 
 export function PromptsListPage() {
@@ -60,15 +55,6 @@ export function PromptsListPage() {
       ),
     },
     {
-      key: 'type',
-      label: 'ТИП',
-      width: 120,
-      render: (row) => {
-        const config = TYPE_CONFIG[row.type];
-        return <Badge variant={config.variant}>{config.label}</Badge>;
-      },
-    },
-    {
       key: 'versions',
       label: 'ВЕРСИИ',
       width: 100,
@@ -86,7 +72,7 @@ export function PromptsListPage() {
       render: (row) => {
         const status = row.active_version ? 'active' : row.versions_count > 0 ? 'draft' : 'none';
         const config = STATUS_CONFIG[status];
-        return <Badge variant={config.variant}>{config.label}</Badge>;
+        return <Badge tone={config.variant}>{config.label}</Badge>;
       },
     },
     {

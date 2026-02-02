@@ -44,12 +44,10 @@ export function PoliciesPage() {
     {
       key: 'name',
       label: 'НАЗВАНИЕ',
-      width: 280,
-      sortable: true,
       render: (policy) => (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
           <span style={{ fontWeight: 500 }}>{policy.name}</span>
-          <code style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>
+          <code style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
             {policy.slug}
           </code>
         </div>
@@ -85,7 +83,6 @@ export function PoliciesPage() {
       key: 'is_active',
       label: 'СТАТУС',
       width: 100,
-      sortable: true,
       render: (policy) => (
         <Badge tone={policy.is_active ? 'success' : 'neutral'}>
           {policy.is_active ? 'Активно' : 'Неактивно'}
@@ -117,12 +114,10 @@ export function PoliciesPage() {
 
       <DataTable
         columns={columns}
-        data={filteredPolicies}
+        data={filteredPolicies || []}
         keyField="id"
         loading={isLoading}
         emptyText="Политики не найдены. Нажмите «Создать» для добавления."
-        paginated
-        pageSize={20}
         onRowClick={handleRowClick}
       />
     </AdminPage>
