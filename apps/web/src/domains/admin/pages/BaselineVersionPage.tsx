@@ -52,19 +52,24 @@ export function BaselineVersionPage() {
   });
   const [saving, setSaving] = useState(false);
 
-  // Load baseline for breadcrumbs
-  const { data: baseline } = useQuery({
+  // Load baseline for breadcrumbs and to find version ID
+  const { data: baseline, isLoading: baselineLoading } = useQuery({
     queryKey: qk.baselines.detail(slug!),
     queryFn: () => baselinesApi.get(slug!),
     enabled: !!slug,
   });
 
-  // Load existing version
-  const { data: existingVersion, isLoading } = useQuery({
-    queryKey: qk.baselines.versions(slug!),
-    queryFn: () => baselinesApi.getVersion(slug!, versionParam!),
-    enabled: !isCreate && !!slug && !!versionParam,
+  // Find the version ID from baseline versions by version number
+  const versionId = baseline?.versions?.find(v => v.version === versionNumber)?.id;
+
+  // Load existing version (only if we have versionId)
+  const { data: existingVersion, isLoading: versionLoading } = useQuery({
+    queryKey: qk.baselines.version(slug!, versionNumber),
+    queryFn: () => baselinesApi.getVersion(slug!, versionId!),
+    enabled: !isCreate && !!slug && !!versionId,
   });
+
+  const isLoading = baselineLoading || versionLoading;
 
   useEffect(() => {
     if (isCreate) {
@@ -77,7 +82,7 @@ export function BaselineVersionPage() {
   // Mutations
   const createMutation = useMutation({
     mutationFn: (data: { template: string }) => baselinesApi.createVersion(slug!, data),
-    onSuccess: (created: any) => {
+    onSuccess: (created) => {
       queryClient.invalidateQueries({ queryKey: qk.baselines.detail(slug!) });
       showSuccess('Версия создана');
       navigate(`/admin/baselines/${slug}/versions/${created.version}`);
@@ -86,7 +91,7 @@ export function BaselineVersionPage() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: (data: { template: string }) => baselinesApi.updateVersion(slug!, versionParam!, data),
+    mutationFn: (data: { template: string }) => baselinesApi.updateVersion(slug!, existingVersion!.id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: qk.baselines.detail(slug!) });
       showSuccess('Версия обновлена');
@@ -96,7 +101,7 @@ export function BaselineVersionPage() {
   });
 
   const activateMutation = useMutation({
-    mutationFn: () => baselinesApi.activateVersion(slug!, versionParam!),
+    mutationFn: () => baselinesApi.activateVersion(slug!, existingVersion!.id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: qk.baselines.detail(slug!) });
       showSuccess('Версия активирована');
@@ -105,7 +110,7 @@ export function BaselineVersionPage() {
   });
 
   const archiveMutation = useMutation({
-    mutationFn: () => baselinesApi.archiveVersion(slug!, versionParam!),
+    mutationFn: () => baselinesApi.archiveVersion(slug!, existingVersion!.id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: qk.baselines.detail(slug!) });
       showSuccess('Версия архивирована');
@@ -144,7 +149,7 @@ export function BaselineVersionPage() {
   };
 
   const handleFieldChange = (key: string, value: any) => {
-    setFormData((prev: FormData) => ({ ...prev, [key]: value }));
+    setFormData(prev => ({ ...prev, [key]: value }));
   };
 
   // Status options

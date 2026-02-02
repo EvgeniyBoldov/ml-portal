@@ -93,6 +93,7 @@ export const qk = {
       ['baselines', 'list', params] as const,
     detail: (slug: string) => ['baselines', 'detail', slug] as const,
     versions: (slug: string) => ['baselines', 'versions', slug] as const,
+    version: (slug: string, version: number) => ['baselines', 'version', slug, version] as const,
     effective: (params?: { tenant_id?: string; user_id?: string }) =>
       ['baselines', 'effective', params] as const,
   },
