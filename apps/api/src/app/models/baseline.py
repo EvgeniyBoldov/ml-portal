@@ -194,7 +194,11 @@ class BaselineVersion(Base):
     )
     
     # Relationships
-    baseline: Mapped["Baseline"] = relationship("Baseline", back_populates="versions")
+    baseline: Mapped["Baseline"] = relationship(
+        "Baseline",
+        back_populates="versions",
+        foreign_keys=[baseline_id]
+    )
     
     parent_version = relationship(
         "BaselineVersion", 
