@@ -49,6 +49,7 @@ const DefaultsPage = lazy(() => import('@/domains/admin/pages/DefaultsPage').the
 const RoutingLogsPage = lazy(() => import('@/domains/admin/pages/RoutingLogsPage').then(m => ({ default: m.RoutingLogsPage })));
 const BaselinesListPage = lazy(() => import('@/domains/admin/pages/BaselinesListPage').then(m => ({ default: m.BaselinesListPage })));
 const BaselineEditorPage = lazy(() => import('@/domains/admin/pages/BaselineEditorPage').then(m => ({ default: m.BaselineEditorPage })));
+const BaselineVersionPage = lazy(() => import('@/domains/admin/pages/BaselineVersionPage').then(m => ({ default: m.BaselineVersionPage })));
 
 // Collections pages (user-facing)
 const CollectionsListPage = lazy(() => import('@/domains/collections/pages/CollectionsListPage'));
@@ -123,6 +124,8 @@ const router = createBrowserRouter([
       { path: 'baselines', element: withSuspense(<BaselinesListPage />) },
       { path: 'baselines/new', element: withSuspense(<BaselineEditorPage />) },
       { path: 'baselines/:slug', element: withSuspense(<BaselineEditorPage />) },
+      { path: 'baselines/:slug/versions/new', element: withSuspense(<BaselineVersionPage />) },
+      { path: 'baselines/:slug/versions/:version', element: withSuspense(<BaselineVersionPage />) },
       { path: 'settings/email', element: withSuspense(<EmailSettingsPage />) },
     ],
   },
