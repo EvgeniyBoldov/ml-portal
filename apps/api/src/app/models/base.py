@@ -1,7 +1,9 @@
 """
 Base SQLAlchemy model
 """
-from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import registry
 
-Base = declarative_base()
+# Use registry instead of declarative_base for better control
+mapper_registry = registry()
+Base = mapper_registry.generate_base()
 
