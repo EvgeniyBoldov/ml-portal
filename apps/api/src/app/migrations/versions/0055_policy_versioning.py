@@ -8,7 +8,7 @@ This migration:
 4. Removes versioned fields from policies table
 
 Revision ID: 0055
-Revises: 0053
+Revises: 0054
 """
 from alembic import op
 import sqlalchemy as sa
@@ -16,7 +16,7 @@ from sqlalchemy.dialects import postgresql
 import uuid
 
 revision = '0055'
-down_revision = '0053'
+down_revision = '0054'
 branch_labels = None
 depends_on = None
 
