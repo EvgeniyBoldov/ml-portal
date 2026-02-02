@@ -15,6 +15,8 @@ export interface StatusOption {
   tone?: 'neutral' | 'success' | 'warn' | 'danger' | 'info';
 }
 
+export type StatusBadgeCardWidth = '1/3' | '1/2' | '2/3' | 'full';
+
 export interface StatusBadgeCardProps {
   /** Label text (default: "Статус") */
   label?: string;
@@ -26,6 +28,8 @@ export interface StatusBadgeCardProps {
   editable?: boolean;
   /** Status change handler */
   onStatusChange?: (status: string) => void;
+  /** Width in grid (1/3, 1/2, 2/3, full) */
+  width?: StatusBadgeCardWidth;
   /** Additional CSS class */
   className?: string;
 }
@@ -37,19 +41,28 @@ const STATUS_TONES: Record<string, 'neutral' | 'success' | 'warn' | 'danger' | '
   archived: 'neutral',
 };
 
+const widthToSpan: Record<StatusBadgeCardWidth, number> = {
+  '1/3': 4,
+  '1/2': 6,
+  '2/3': 8,
+  'full': 12,
+};
+
 export function StatusBadgeCard({
   label = 'Статус',
   status,
   statusOptions,
   editable = false,
   onStatusChange,
+  width,
   className = '',
 }: StatusBadgeCardProps) {
   const currentOption = statusOptions.find(o => o.value === status);
   const tone = currentOption?.tone || STATUS_TONES[status] || 'neutral';
+  const spanClass = width ? `span-${widthToSpan[width]}` : '';
 
   return (
-    <div className={`${styles.card} ${className}`}>
+    <div className={`${styles.card} ${spanClass ? styles[spanClass] : ''} ${className}`}>
       <span className={styles.label}>{label}</span>
       {editable ? (
         <Select

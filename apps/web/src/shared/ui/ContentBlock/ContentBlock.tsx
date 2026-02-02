@@ -83,8 +83,6 @@ export interface ContentBlockProps {
   className?: string;
   /** Compact mode - less padding */
   compact?: boolean;
-  /** Disable vertical stretch - block takes only needed height */
-  noStretch?: boolean;
 }
 
 const widthToSpan: Record<BlockWidth, number> = {
@@ -107,7 +105,6 @@ export function ContentBlock({
   headerActions,
   className = '',
   compact = false,
-  noStretch = false,
 }: ContentBlockProps) {
   const spanClass = `span-${widthToSpan[width]}`;
 
@@ -252,7 +249,7 @@ export function ContentBlock({
 
   return (
     <div 
-      className={`${styles.block} ${styles[spanClass]} ${compact ? styles.compact : ''} ${noStretch ? styles.noStretch : ''} ${className}`}
+      className={`${styles.block} ${styles[spanClass]} ${compact ? styles.compact : ''} ${className}`}
       style={{ '--span': widthToSpan[width] } as React.CSSProperties}
     >
       <div className={styles.header}>

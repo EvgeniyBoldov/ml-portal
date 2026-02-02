@@ -13,11 +13,6 @@
   flex-direction: column;
 }
 
-/* No stretch - block takes only needed height */
-.noStretch {
-  align-self: flex-start;
-}
-
 /* Grid span classes - 12 column grid */
 .span-4 { grid-column: span 4; }
 .span-6 { grid-column: span 6; }

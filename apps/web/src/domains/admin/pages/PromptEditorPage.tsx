@@ -269,22 +269,17 @@ export function PromptEditorPage() {
                 onChange={handleFieldChange}
               />
 
-              {/* Right column: Status badge (compact, no stretch) - 1/2 */}
-              <ContentBlock
+              {/* Right column: Status badge (compact) - 1/2 */}
+              <StatusBadgeCard
+                label="Тип"
+                status={formData.type}
+                statusOptions={[
+                  { value: 'prompt', label: 'Prompt', tone: 'info' },
+                  { value: 'baseline', label: 'Baseline', tone: 'warn' },
+                ]}
+                editable={false}
                 width="1/2"
-                title="Тип"
-                noStretch
-              >
-                <StatusBadgeCard
-                  label=""
-                  status={formData.type}
-                  statusOptions={[
-                    { value: 'prompt', label: 'Prompt', tone: 'info' },
-                    { value: 'baseline', label: 'Baseline', tone: 'warn' },
-                  ]}
-                  editable={false}
-                />
-              </ContentBlock>
+              />
 
               {/* Active version preview - full width on new row */}
               {selectedVersion ? (

@@ -3,14 +3,21 @@
  */
 
 .card {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: 0.75rem;
   padding: 0.75rem 1rem;
   background: var(--panel, var(--color-bg-primary));
   border: 1px solid var(--border, var(--color-border));
   border-radius: var(--radius-md, 8px);
+  align-self: flex-start; /* Don't stretch vertically */
 }
+
+/* Grid span classes - same as ContentBlock */
+.card.span-4 { grid-column: span 4; }
+.card.span-6 { grid-column: span 6; }
+.card.span-8 { grid-column: span 8; }
+.card.span-12 { grid-column: span 12; }
 
 .label {
   font-size: 0.875rem;
