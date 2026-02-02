@@ -1,81 +1,96 @@
 /**
- * BaselineEditorPage - View/Edit/Create baseline container
+ * BaselineEditorPage - View/Edit baseline container with versions
  * 
- * Architecture:
- * - One page = three modes (View/Edit/Create)
- * - View mode: readonly, safe browsing
- * - Edit mode: editable, sticky footer with Save/Cancel
- * - Create mode: Edit mode with empty data
+ * Layout:
+ * - Left column (1/2): Container info
+ * - Right column (1/2): Selected version status
+ * 
+ * Features:
+ * - View/Edit container (name, description, scope, is_active)
+ * - View versions list with selection
+ * - View selected version template
+ * - Create new version
+ * - Activate/Archive version
  */
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-
-import { 
-  baselinesApi, 
-  type BaselineDetail, 
-  type CreateBaselineContainerRequest, 
-  type UpdateBaselineContainerRequest,
-  type BaselineScope,
-  type BaselineVersionInfo,
-} from '@/shared/api/baselines';
+import { baselinesApi, type BaselineDetail, type BaselineVersion, type BaselineVersionInfo } from '@/shared/api/baselines';
 import { qk } from '@/shared/api/keys';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
-import {
-  PageHeader,
-  PageContent,
-  Card,
-  Badge,
-  Button,
-  Input,
-  Textarea,
-  Select,
-  Skeleton,
-  Alert,
-  Switch,
-} from '@/shared/ui';
-import styles from './BaselineEditorPage.module.css';
+import { EntityPage, type EntityPageMode, type BreadcrumbItem } from '@/shared/ui/EntityPage';
+import { ContentBlock, ContentGrid, type FieldDefinition } from '@/shared/ui/ContentBlock';
+import { Tabs, TabPanel } from '@/shared/ui/Tabs';
+import { StatusBadgeCard, type StatusOption } from '@/shared/ui/StatusBadgeCard';
+import Badge from '@/shared/ui/Badge';
+import Button from '@/shared/ui/Button';
+import DataTable from '@/shared/ui/DataTable/DataTable';
+import styles from './PromptEditorPage.module.css';
 
-type Mode = 'view' | 'edit' | 'create';
+const STATUS_LABELS: Record<string, string> = {
+  draft: 'Черновик',
+  active: 'Активна',
+  archived: 'Архив',
+};
 
-interface FormData {
-  slug: string;
-  name: string;
-  description: string;
-  scope: BaselineScope;
-  is_active: boolean;
-}
+const STATUS_TONES: Record<string, 'warn' | 'success' | 'neutral'> = {
+  draft: 'warn',
+  active: 'success',
+  archived: 'neutral',
+};
+
+const SCOPE_CONFIG: Record<string, { label: string; tone: 'info' | 'warn' | 'success' }> = {
+  default: { label: 'Default', tone: 'info' },
+  tenant: { label: 'Tenant', tone: 'warn' },
+  user: { label: 'User', tone: 'success' },
+};
 
 export function BaselineEditorPage() {
   const { slug } = useParams<{ slug: string }>();
-  const [searchParams] = useSearchParams();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const showError = useErrorToast();
   const showSuccess = useSuccessToast();
 
   const isNew = slug === 'new';
-  const initialMode = searchParams.get('mode') === 'edit' ? 'edit' : 'view';
-  const [mode, setMode] = useState<Mode>(isNew ? 'create' : initialMode);
-  const [formData, setFormData] = useState<FormData>({
+  const isEditMode = searchParams.get('mode') === 'edit';
+  const mode: EntityPageMode = isNew ? 'create' : isEditMode ? 'edit' : 'view';
+  const isEditable = mode === 'edit' || mode === 'create';
+
+  // Form state for container
+  const [formData, setFormData] = useState({
     slug: '',
     name: '',
     description: '',
-    scope: 'default',
+    scope: 'default' as 'default' | 'tenant' | 'user',
     is_active: true,
   });
-  const [hasChanges, setHasChanges] = useState(false);
 
-  // === QUERIES ===
-  const { data: baseline, isLoading } = useQuery({
+  // Selected version
+  const [selectedVersionNum, setSelectedVersionNum] = useState<number | null>(null);
+  const [saving, setSaving] = useState(false);
+  
+  // Tab state
+  const [activeTab, setActiveTab] = useState('overview');
+
+  // Load baseline container
+  const { data: baseline, isLoading, refetch } = useQuery({
     queryKey: qk.baselines.detail(slug!),
     queryFn: () => baselinesApi.get(slug!),
     enabled: !!slug && !isNew,
   });
 
-  // Sync form data with loaded baseline
+  // Load selected version details
+  const { data: selectedVersion } = useQuery({
+    queryKey: ['baselines', slug, 'versions', selectedVersionNum],
+    queryFn: () => baselinesApi.getVersion(slug!, selectedVersionNum!),
+    enabled: !!slug && selectedVersionNum !== null,
+  });
+
+  // Sync form data
   useEffect(() => {
-    if (baseline && mode === 'view') {
+    if (baseline) {
       setFormData({
         slug: baseline.slug,
         name: baseline.name,
@@ -83,13 +98,17 @@ export function BaselineEditorPage() {
         scope: baseline.scope,
         is_active: baseline.is_active,
       });
-      setHasChanges(false);
+      // Select active or latest version
+      if (baseline.versions?.length > 0) {
+        const activeVersion = baseline.versions.find(v => v.status === 'active');
+        setSelectedVersionNum(activeVersion?.version || baseline.versions[0].version);
+      }
     }
-  }, [baseline, mode]);
+  }, [baseline]);
 
-  // === MUTATIONS ===
+  // Mutations
   const createMutation = useMutation({
-    mutationFn: (data: CreateBaselineContainerRequest) => baselinesApi.createContainer(data),
+    mutationFn: (data: any) => baselinesApi.createContainer(data),
     onSuccess: (container) => {
       queryClient.invalidateQueries({ queryKey: qk.baselines.list() });
       showSuccess('Бейслайн создан');
@@ -99,41 +118,23 @@ export function BaselineEditorPage() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: (data: UpdateBaselineContainerRequest) => baselinesApi.updateContainer(slug!, data),
+    mutationFn: (data: any) => baselinesApi.updateContainer(slug!, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: qk.baselines.detail(slug!) });
       queryClient.invalidateQueries({ queryKey: qk.baselines.list() });
       showSuccess('Бейслайн обновлён');
-      setMode('view');
-      setHasChanges(false);
+      setSearchParams({});
+      refetch();
     },
     onError: (err: any) => showError(err?.message || 'Ошибка обновления'),
   });
 
-  const deleteMutation = useMutation({
-    mutationFn: () => baselinesApi.delete(slug!),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.baselines.list() });
-      showSuccess('Бейслайн удалён');
-      navigate('/admin/baselines');
-    },
-    onError: (err: any) => showError(err?.message || 'Ошибка удаления'),
-  });
-
-  // === HANDLERS ===
-  const handleEdit = () => {
-    setMode('edit');
-  };
+  const handleEdit = () => setSearchParams({ mode: 'edit' });
 
   const handleCancel = () => {
-    if (hasChanges) {
-      if (!confirm('Отменить изменения?')) return;
-    }
-    
     if (isNew) {
       navigate('/admin/baselines');
     } else {
-      setMode('view');
       if (baseline) {
         setFormData({
           slug: baseline.slug,
@@ -143,271 +144,207 @@ export function BaselineEditorPage() {
           is_active: baseline.is_active,
         });
       }
-      setHasChanges(false);
+      setSearchParams({});
     }
   };
 
-  const handleSave = () => {
-    if (!formData.name.trim()) {
-      showError('Введите название');
-      return;
-    }
-
-    if (isNew) {
-      if (!formData.slug.trim()) {
-        showError('Введите slug');
-        return;
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      if (isNew) {
+        if (!formData.slug.trim() || !formData.name.trim()) {
+          showError('Заполните все обязательные поля');
+          return;
+        }
+        await createMutation.mutateAsync(formData);
+      } else {
+        await updateMutation.mutateAsync({
+          name: formData.name,
+          description: formData.description,
+          is_active: formData.is_active,
+        });
       }
-      createMutation.mutate(formData);
-    } else {
-      updateMutation.mutate({
-        name: formData.name,
-        description: formData.description,
-        is_active: formData.is_active,
-      });
+    } finally {
+      setSaving(false);
     }
   };
 
-  const handleDelete = () => {
-    if (!confirm('Удалить бейслайн? Это действие необратимо.')) return;
-    deleteMutation.mutate();
+  const handleFieldChange = (key: string, value: any) => {
+    setFormData(prev => ({ ...prev, [key]: value }));
   };
 
-  const updateField = <K extends keyof FormData>(field: K, value: FormData[K]) => {
-    setFormData(prev => ({ ...prev, [field]: value }));
-    setHasChanges(true);
+  const handleCreateVersion = () => {
+    navigate(`/admin/baselines/${slug}/versions/new`);
   };
 
-  // === RENDER ===
-  if (isLoading) {
-    return (
-      <PageContent>
-        <Skeleton height={40} width={300} style={{ marginBottom: '1rem' }} />
-        <Skeleton height={400} />
-      </PageContent>
-    );
-  }
+  // Field definitions
+  const containerFields: FieldDefinition[] = [
+    {
+      key: 'slug',
+      label: 'Slug (ID)',
+      type: 'text',
+      required: true,
+      disabled: !isNew,
+      placeholder: 'security.no-code',
+      description: isNew ? 'Уникальный идентификатор (нельзя изменить после создания)' : undefined,
+    },
+    {
+      key: 'name',
+      label: 'Название',
+      type: 'text',
+      required: true,
+      placeholder: 'Запрет генерации кода',
+    },
+    {
+      key: 'description',
+      label: 'Описание',
+      type: 'textarea',
+      placeholder: 'Ограничения для агента...',
+      rows: 2,
+    },
+    {
+      key: 'scope',
+      label: 'Scope',
+      type: 'select',
+      disabled: !isNew,
+      options: [
+        { value: 'default', label: 'Default (глобальный)' },
+        { value: 'tenant', label: 'Tenant (для тенанта)' },
+        { value: 'user', label: 'User (для пользователя)' },
+      ],
+    },
+  ];
 
-  if (!isNew && !baseline) {
-    return (
-      <PageContent>
-        <Alert variant="error" title="Бейслайн не найден">
-          Бейслайн с таким slug не существует
-        </Alert>
-      </PageContent>
-    );
-  }
+  // Tabs config
+  const tabs = [
+    { id: 'overview', label: 'Обзор' },
+    { id: 'versions', label: `Версии (${baseline?.versions?.length || 0})` },
+  ];
 
-  const isEditing = mode === 'edit' || mode === 'create';
-  const title = isNew ? 'Создать бейслайн' : baseline!.name;
-  const subtitle = isNew ? 'Новый бейслайн' : `${baseline!.slug} • ${baseline!.scope}`;
+  // Version columns for DataTable
+  const versionColumns = [
+    {
+      key: 'version',
+      label: 'Версия',
+      render: (v: BaselineVersionInfo) => `v${v.version}`,
+    },
+    {
+      key: 'status',
+      label: 'Статус',
+      render: (v: BaselineVersionInfo) => (
+        <Badge tone={STATUS_TONES[v.status]}>{STATUS_LABELS[v.status]}</Badge>
+      ),
+    },
+    {
+      key: 'created_at',
+      label: 'Создана',
+      render: (v: BaselineVersionInfo) => new Date(v.created_at).toLocaleDateString('ru-RU'),
+    },
+  ];
+
+  const breadcrumbs: BreadcrumbItem[] = [
+    { label: 'Бейслайны', href: '/admin/baselines' },
+    { label: baseline?.name || 'Новый бейслайн' },
+  ];
 
   return (
-    <PageContent>
-      <PageHeader
-        title={title}
-        subtitle={subtitle}
-        backTo="/admin/baselines"
-        actions={
-          mode === 'view'
-            ? [
-                {
-                  label: 'Редактировать',
-                  onClick: handleEdit,
-                  variant: 'outline',
-                  icon: 'edit',
-                },
-                {
-                  label: 'Удалить',
-                  onClick: handleDelete,
-                  variant: 'danger',
-                  icon: 'trash',
-                },
-              ]
-            : []
-        }
-      />
+    <EntityPage
+      mode={mode}
+      entityName={baseline?.name || 'Новый бейслайн'}
+      entityTypeLabel="бейслайна"
+      backPath="/admin/baselines"
+      breadcrumbs={breadcrumbs}
+      loading={!isNew && isLoading}
+      saving={saving}
+      onEdit={handleEdit}
+      onSave={handleSave}
+      onCancel={handleCancel}
+      showDelete={false}
+    >
+      <Tabs tabs={tabs} activeTab={activeTab} onChange={setActiveTab}>
+        <TabPanel id="overview" activeTab={activeTab}>
+          <ContentGrid>
+            {/* Left column: Info block - 1/2 */}
+            <ContentBlock
+              width="1/2"
+              title="Основная информация"
+              editable={isEditable}
+              fields={containerFields}
+              data={formData}
+              onChange={handleFieldChange}
+            />
 
-      {isEditing && (
-        <div className={styles.modeBadge}>
-          <Badge variant="warning">Режим редактирования</Badge>
-        </div>
-      )}
+            {/* Right column: Status badge (compact) - 1/2 */}
+            <StatusBadgeCard
+              label="Статус"
+              status={formData.is_active ? 'active' : 'inactive'}
+              statusOptions={[
+                { value: 'active', label: 'Активен', tone: 'success' },
+                { value: 'inactive', label: 'Неактивен', tone: 'neutral' },
+              ]}
+              editable={isEditable}
+              onStatusChange={(s) => handleFieldChange('is_active', s === 'active')}
+              width="1/2"
+            />
 
-      <div className={styles.grid}>
-        <Card className={styles.mainCard}>
-          <h3 className={styles.sectionTitle}>Основная информация</h3>
-
-          <div className={styles.field}>
-            <label htmlFor="slug">Slug (ID)</label>
-            {mode === 'view' ? (
-              <div className={styles.value}>
-                <code>{formData.slug}</code>
-              </div>
+            {/* Version block - under status, full width */}
+            {selectedVersion ? (
+              <ContentBlock
+                width="full"
+                title={`Активная версия (v${selectedVersion.version})`}
+                headerActions={
+                  <Badge tone={STATUS_TONES[selectedVersion.status]}>
+                    {STATUS_LABELS[selectedVersion.status]}
+                  </Badge>
+                }
+              >
+                <pre className={styles.templateBlock}>
+                  {selectedVersion.template.substring(0, 500)}
+                  {selectedVersion.template.length > 500 && '...'}
+                </pre>
+                <div className={styles.versionActions}>
+                  <Button
+                    size="small"
+                    variant="outline"
+                    onClick={() => navigate(`/admin/baselines/${slug}/versions/${selectedVersion.version}`)}
+                  >
+                    Подробнее
+                  </Button>
+                </div>
+              </ContentBlock>
             ) : (
-              <>
-                <Input
-                  id="slug"
-                  value={formData.slug}
-                  onChange={(e) => updateField('slug', e.target.value)}
-                  placeholder="security.no-code"
-                  disabled={!isNew}
-                />
-                <p className={styles.hint}>
-                  {isNew ? 'Уникальный идентификатор (нельзя изменить после создания)' : 'Slug нельзя изменить'}
-                </p>
-              </>
+              <ContentBlock
+                width="full"
+                title="Активная версия"
+              >
+                <div className={styles.emptyVersion}>
+                  <p>Нет версий</p>
+                  <Button variant="primary" onClick={handleCreateVersion}>
+                    Создать версию
+                  </Button>
+                </div>
+              </ContentBlock>
             )}
-          </div>
+          </ContentGrid>
+        </TabPanel>
 
-          <div className={styles.field}>
-            <label htmlFor="name">Название</label>
-            {mode === 'view' ? (
-              <div className={styles.value}>{formData.name}</div>
-            ) : (
-              <Input
-                id="name"
-                value={formData.name}
-                onChange={(e) => updateField('name', e.target.value)}
-                placeholder="Запрет генерации кода"
-              />
-            )}
-          </div>
-
-          <div className={styles.field}>
-            <label htmlFor="description">Описание</label>
-            {mode === 'view' ? (
-              <div className={styles.value}>{formData.description || '—'}</div>
-            ) : (
-              <Textarea
-                id="description"
-                value={formData.description}
-                onChange={(e) => updateField('description', e.target.value)}
-                placeholder="Ограничения для агента по генерации кода"
-                rows={3}
-              />
-            )}
-          </div>
-
-          <div className={styles.field}>
-            <label htmlFor="scope">Scope</label>
-            {mode === 'view' ? (
-              <div className={styles.value}>
-                <Badge variant={formData.scope === 'default' ? 'default' : formData.scope === 'tenant' ? 'warning' : 'success'}>
-                  {formData.scope === 'default' ? 'Default (глобальный)' : formData.scope === 'tenant' ? 'Tenant' : 'User'}
-                </Badge>
-              </div>
-            ) : (
-              <>
-                <Select
-                  id="scope"
-                  value={formData.scope}
-                  onChange={(e) => updateField('scope', e.target.value as BaselineScope)}
-                  options={[
-                    { value: 'default', label: 'Default (глобальный)' },
-                    { value: 'tenant', label: 'Tenant (для тенанта)' },
-                    { value: 'user', label: 'User (для пользователя)' },
-                  ]}
-                  disabled={!isNew}
-                />
-                <p className={styles.hint}>
-                  {isNew ? 'Default — для всех. Tenant/User — для конкретного тенанта/пользователя.' : 'Scope нельзя изменить'}
-                </p>
-              </>
-            )}
-          </div>
-
-          <div className={styles.field}>
-            <label htmlFor="is_active">Активен</label>
-            {mode === 'view' ? (
-              <div className={styles.value}>
-                <Badge variant={formData.is_active ? 'success' : 'default'}>
-                  {formData.is_active ? 'Да' : 'Нет'}
-                </Badge>
-              </div>
-            ) : (
-              <Switch
-                id="is_active"
-                checked={formData.is_active}
-                onChange={(checked) => updateField('is_active', checked)}
-              />
-            )}
-          </div>
-
-          {!isNew && mode === 'view' && (
-            <div className={styles.meta}>
-              <div className={styles.metaItem}>
-                <span className={styles.metaLabel}>Создан:</span>
-                <span>{new Date(baseline!.created_at).toLocaleString('ru-RU')}</span>
-              </div>
-              <div className={styles.metaItem}>
-                <span className={styles.metaLabel}>Обновлён:</span>
-                <span>{new Date(baseline!.updated_at).toLocaleString('ru-RU')}</span>
-              </div>
+        <TabPanel id="versions" activeTab={activeTab}>
+          <ContentBlock width="full" title="Версии">
+            <DataTable
+              columns={versionColumns}
+              data={baseline?.versions || []}
+              keyField="id"
+              onRowClick={(v: BaselineVersionInfo) => navigate(`/admin/baselines/${slug}/versions/${v.version}`)}
+            />
+            <div style={{ marginTop: '1rem' }}>
+              <Button variant="primary" onClick={handleCreateVersion}>
+                Создать версию
+              </Button>
             </div>
-          )}
-        </Card>
-
-        <div className={styles.sidebar}>
-          {isEditing ? (
-            <Alert variant="info" title="Сохранение">
-              <p>Изменения будут применены после нажатия кнопки "Сохранить".</p>
-              <p>Отмена вернёт все поля к исходным значениям.</p>
-            </Alert>
-          ) : (
-            <>
-              <Card className={styles.versionsCard}>
-                <h4 className={styles.versionsTitle}>Версии</h4>
-                {baseline?.versions && baseline.versions.length > 0 ? (
-                  <div className={styles.versionsList}>
-                    {baseline.versions.map((v: BaselineVersionInfo) => (
-                      <div key={v.id} className={styles.versionItem}>
-                        <span className={styles.versionNumber}>v{v.version}</span>
-                        <Badge variant={v.status === 'active' ? 'success' : v.status === 'draft' ? 'warning' : 'default'}>
-                          {v.status}
-                        </Badge>
-                        <span className={styles.versionDate}>
-                          {new Date(v.created_at).toLocaleDateString('ru-RU')}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <p className={styles.noVersions}>Нет версий</p>
-                )}
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => navigate(`/admin/baselines/${slug}/versions/new`)}
-                  style={{ marginTop: '1rem', width: '100%' }}
-                >
-                  Создать версию
-                </Button>
-              </Card>
-              <Alert variant="info" title="Версионирование">
-                <p>Каждый бейслайн может иметь несколько версий.</p>
-                <p>Только одна версия может быть активной.</p>
-              </Alert>
-            </>
-          )}
-        </div>
-      </div>
-
-      {isEditing && (
-        <div className={styles.stickyFooter}>
-          <Button variant="outline" onClick={handleCancel} disabled={createMutation.isPending || updateMutation.isPending}>
-            Отмена
-          </Button>
-          <Button
-            variant="primary"
-            onClick={handleSave}
-            disabled={createMutation.isPending || updateMutation.isPending}
-          >
-            {createMutation.isPending || updateMutation.isPending ? 'Сохранение...' : 'Сохранить'}
-          </Button>
-        </div>
-      )}
-    </PageContent>
+          </ContentBlock>
+        </TabPanel>
+      </Tabs>
+    </EntityPage>
   );
 }
 
