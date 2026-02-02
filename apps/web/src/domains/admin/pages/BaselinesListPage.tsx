@@ -17,17 +17,11 @@ import {
 } from '@/shared/ui';
 import { RowActions } from '@/shared/ui/RowActions';
 
-const SCOPE_CONFIG: Record<BaselineScope, { label: string; variant: 'default' | 'success' | 'warning' }> = {
-  default: { label: 'Default', variant: 'default' },
-  tenant: { label: 'Tenant', variant: 'warning' },
-  user: { label: 'User', variant: 'success' },
-};
-
 const STATUS_CONFIG = {
-  active: { label: 'Активен', variant: 'success' as const },
+  active: { label: 'Активна', variant: 'success' as const },
   draft: { label: 'Черновик', variant: 'warning' as const },
-  none: { label: 'Нет версий', variant: 'default' as const },
-  inactive: { label: 'Неактивен', variant: 'default' as const },
+  none: { label: 'Нет версий', variant: 'neutral' as const },
+  inactive: { label: 'Неактивен', variant: 'neutral' as const },
 };
 
 export function BaselinesListPage() {
@@ -62,15 +56,6 @@ export function BaselinesListPage() {
       ),
     },
     {
-      key: 'scope',
-      label: 'SCOPE',
-      width: 100,
-      render: (row) => {
-        const config = SCOPE_CONFIG[row.scope];
-        return <Badge variant={config.variant}>{config.label}</Badge>;
-      },
-    },
-    {
       key: 'versions',
       label: 'ВЕРСИИ',
       width: 100,
@@ -87,11 +72,11 @@ export function BaselinesListPage() {
       width: 120,
       render: (row) => {
         if (!row.is_active) {
-          return <Badge variant="default">Неактивен</Badge>;
+          return <Badge tone="neutral">Неактивен</Badge>;
         }
         const status = row.active_version ? 'active' : row.versions_count > 0 ? 'draft' : 'none';
         const config = STATUS_CONFIG[status];
-        return <Badge variant={config.variant}>{config.label}</Badge>;
+        return <Badge tone={config.variant}>{config.label}</Badge>;
       },
     },
     {
