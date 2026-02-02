@@ -12,6 +12,8 @@ export interface ContentGridProps {
   children: React.ReactNode;
   /** Gap between blocks */
   gap?: 'sm' | 'md' | 'lg';
+  /** Grid direction - row (horizontal) or column (vertical) */
+  direction?: 'row' | 'column';
   /** Additional CSS class */
   className?: string;
 }
@@ -19,10 +21,11 @@ export interface ContentGridProps {
 export function ContentGrid({
   children,
   gap = 'md',
+  direction = 'row',
   className = '',
 }: ContentGridProps) {
   return (
-    <div className={`${styles.grid} ${styles[`gap-${gap}`]} ${className}`}>
+    <div className={`${styles.grid} ${styles[`gap-${gap}`]} ${styles[`direction-${direction}`]} ${className}`}>
       {children}
     </div>
   );

@@ -346,15 +346,22 @@ export function PolicyEditorPage() {
                 onChange={handleFieldChange}
               />
 
-              {/* Right column: Status block (compact) */}
-              <StatusBadgeCard
-                status={formData.is_active ? 'active' : 'inactive'}
-                statusOptions={policyStatusOptions}
-                editable={isEditable}
-                onStatusChange={(s) => handleFieldChange('is_active', s === 'active')}
-              />
+              {/* Right column: Status block (compact, no stretch) - 1/2 */}
+              <ContentBlock
+                width="1/2"
+                title="Статус"
+                noStretch
+              >
+                <StatusBadgeCard
+                  label=""
+                  status={formData.is_active ? 'active' : 'inactive'}
+                  statusOptions={policyStatusOptions}
+                  editable={isEditable}
+                  onStatusChange={(s) => handleFieldChange('is_active', s === 'active')}
+                />
+              </ContentBlock>
 
-              {/* Right column: Version block - 1/2 (below status) */}
+              {/* Version block - full width on new row */}
               {policy?.recommended_version ? (
                 <ContentBlock
                   width="1/2"

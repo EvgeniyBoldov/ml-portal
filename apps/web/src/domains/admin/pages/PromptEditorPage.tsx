@@ -18,7 +18,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { promptsApi, type PromptDetail, type PromptVersion, type PromptVersionInfo } from '@/shared/api/prompts';
 import { qk } from '@/shared/api/keys';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
-import { EntityPage, type EntityPageMode } from '@/shared/ui/EntityPage';
+import { EntityPage, type EntityPageMode, type BreadcrumbItem } from '@/shared/ui/EntityPage';
 import { ContentBlock, ContentGrid, type FieldDefinition } from '@/shared/ui/ContentBlock';
 import { Tabs, TabPanel } from '@/shared/ui/Tabs';
 import { StatusBadgeCard, type StatusOption } from '@/shared/ui/StatusBadgeCard';
@@ -225,12 +225,18 @@ export function PromptEditorPage() {
     },
   ];
 
+  const breadcrumbs: BreadcrumbItem[] = [
+    { label: 'Промпты', href: '/admin/prompts' },
+    { label: prompt?.name || 'Новый промпт' },
+  ];
+
   return (
     <EntityPage
       mode={mode}
       entityName={prompt?.name || 'Новый промпт'}
       entityTypeLabel="промпта"
       backPath="/admin/prompts"
+      breadcrumbs={breadcrumbs}
       loading={!isNew && isLoading}
       saving={saving}
       onEdit={handleEdit}
@@ -263,11 +269,14 @@ export function PromptEditorPage() {
                 onChange={handleFieldChange}
               />
 
-              {/* Right column: nested grid for Status + Version */}
-              <ContentGrid direction="column" gap="md">
-                {/* Status badge (compact) */}
+              {/* Right column: Status badge (compact, no stretch) - 1/2 */}
+              <ContentBlock
+                width="1/2"
+                title="Тип"
+                noStretch
+              >
                 <StatusBadgeCard
-                  label="Тип"
+                  label=""
                   status={formData.type}
                   statusOptions={[
                     { value: 'prompt', label: 'Prompt', tone: 'info' },
@@ -275,46 +284,46 @@ export function PromptEditorPage() {
                   ]}
                   editable={false}
                 />
+              </ContentBlock>
 
-                {/* Active version preview */}
-                {selectedVersion ? (
-                  <ContentBlock
-                    width="full"
-                    title={`Активная версия (v${selectedVersion.version})`}
-                    headerActions={
-                      <Badge tone={STATUS_TONES[selectedVersion.status]}>
-                        {STATUS_LABELS[selectedVersion.status]}
-                      </Badge>
-                    }
-                  >
-                    <pre className={styles.templateBlock}>
-                      {selectedVersion.template.substring(0, 500)}
-                      {selectedVersion.template.length > 500 && '...'}
-                    </pre>
-                    <div className={styles.versionActions}>
-                      <Button
-                        size="small"
-                        variant="outline"
-                        onClick={() => navigate(`/admin/prompts/${slug}/versions/${selectedVersion.version}`)}
-                      >
-                        Подробнее
-                      </Button>
-                    </div>
-                  </ContentBlock>
-                ) : (
-                  <ContentBlock
-                    width="full"
-                    title="Активная версия"
-                  >
-                    <div className={styles.emptyVersion}>
-                      <p>Нет версий</p>
-                      <Button variant="primary" onClick={() => navigate(`/admin/prompts/${slug}/versions/new`)}>
-                        Создать версию
-                      </Button>
-                    </div>
-                  </ContentBlock>
-                )}
-              </ContentGrid>
+              {/* Active version preview - full width on new row */}
+              {selectedVersion ? (
+                <ContentBlock
+                  width="full"
+                  title={`Активная версия (v${selectedVersion.version})`}
+                  headerActions={
+                    <Badge tone={STATUS_TONES[selectedVersion.status]}>
+                      {STATUS_LABELS[selectedVersion.status]}
+                    </Badge>
+                  }
+                >
+                  <pre className={styles.templateBlock}>
+                    {selectedVersion.template.substring(0, 500)}
+                    {selectedVersion.template.length > 500 && '...'}
+                  </pre>
+                  <div className={styles.versionActions}>
+                    <Button
+                      size="small"
+                      variant="outline"
+                      onClick={() => navigate(`/admin/prompts/${slug}/versions/${selectedVersion.version}`)}
+                    >
+                      Подробнее
+                    </Button>
+                  </div>
+                </ContentBlock>
+              ) : (
+                <ContentBlock
+                  width="full"
+                  title="Активная версия"
+                >
+                  <div className={styles.emptyVersion}>
+                    <p>Нет версий</p>
+                    <Button variant="primary" onClick={() => navigate(`/admin/prompts/${slug}/versions/new`)}>
+                      Создать версию
+                    </Button>
+                  </div>
+                </ContentBlock>
+              )}
             </ContentGrid>
           </TabPanel>
 

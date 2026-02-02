@@ -7,7 +7,19 @@
 .grid {
   display: grid;
   grid-template-columns: repeat(12, 1fr);
+}
+
+/* Direction: row (horizontal, default) */
+.direction-row {
+  grid-auto-flow: row;
   align-items: stretch; /* Блоки растягиваются по высоте до самого высокого в строке */
+}
+
+/* Direction: column (vertical) */
+.direction-column {
+  grid-auto-flow: row;
+  grid-template-columns: 1fr;
+  align-items: stretch;
 }
 
 /* Gap variants */

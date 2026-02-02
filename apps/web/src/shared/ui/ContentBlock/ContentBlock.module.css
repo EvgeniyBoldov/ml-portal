@@ -9,6 +9,13 @@
   border: 1px solid var(--border, var(--color-border));
   border-radius: var(--radius-lg, 8px);
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* No stretch - block takes only needed height */
+.noStretch {
+  align-self: flex-start;
 }
 
 /* Grid span classes - 12 column grid */
