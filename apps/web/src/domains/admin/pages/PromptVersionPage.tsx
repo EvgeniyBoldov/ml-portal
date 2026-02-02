@@ -161,7 +161,7 @@ export function PromptVersionPage() {
       type: 'textarea',
       required: true,
       placeholder: 'Введите текст промпта...',
-      rows: 12,
+      rows: 16, // More rows for 2/3 width
       description: 'Поддерживает переменные в формате {{variable_name}}',
     },
   ];
@@ -209,9 +209,9 @@ export function PromptVersionPage() {
       headerActions={renderHeaderActions()}
     >
       <ContentGrid>
-        {/* Left column: Template */}
+        {/* Left column: Template - 2/3 */}
         <ContentBlock
-          width="1/2"
+          width="2/3"
           title="Текст промпта"
           editable={isEditable}
           fields={templateFields}
@@ -219,29 +219,14 @@ export function PromptVersionPage() {
           onChange={handleFieldChange}
         />
 
-        {/* Right column: Status + Preview */}
-        <ContentGrid direction="column" gap="md">
-          {/* Status badge */}
-          {!isCreate && existingVersion && (
-            <StatusBadgeCard
-              label="Статус"
-              status={existingVersion.status}
-              statusOptions={statusOptions}
-              editable={false}
-            />
-          )}
-
-          {/* Preview */}
-          <ContentBlock
-            width="full"
-            title="Предпросмотр"
-            compact
-          >
-            <pre style={{ fontSize: '0.85rem', lineHeight: 1.5, whiteSpace: 'pre-wrap', wordWrap: 'break-word' }}>
-              {formData.template || '(пусто)'}
-            </pre>
-          </ContentBlock>
-        </ContentGrid>
+        {/* Right column: Status - 1/3 */}
+        <StatusBadgeCard
+          label="Статус"
+          status={isCreate ? 'draft' : (existingVersion?.status || 'draft')}
+          statusOptions={statusOptions}
+          editable={false}
+          width="1/3"
+        />
       </ContentGrid>
     </EntityPage>
   );

@@ -186,16 +186,6 @@ export function PromptEditorPage() {
       placeholder: 'Описание промпта...',
       rows: 2,
     },
-    {
-      key: 'type',
-      label: 'Тип',
-      type: 'select',
-      disabled: !isNew,
-      options: [
-        { value: 'prompt', label: 'Prompt (инструкции)' },
-        { value: 'baseline', label: 'Baseline (ограничения)' },
-      ],
-    },
   ];
 
   // Tabs config
@@ -271,11 +261,12 @@ export function PromptEditorPage() {
 
               {/* Right column: Status badge (compact) - 1/2 */}
               <StatusBadgeCard
-                label="Тип"
-                status={formData.type}
+                label="Статус"
+                status={selectedVersion?.status || 'draft'}
                 statusOptions={[
-                  { value: 'prompt', label: 'Prompt', tone: 'info' },
-                  { value: 'baseline', label: 'Baseline', tone: 'warn' },
+                  { value: 'draft', label: 'Черновик', tone: 'warn' },
+                  { value: 'active', label: 'Активна', tone: 'success' },
+                  { value: 'archived', label: 'Архив', tone: 'neutral' },
                 ]}
                 editable={false}
                 width="1/2"

@@ -356,10 +356,10 @@ export function PolicyEditorPage() {
                 width="1/2"
               />
 
-              {/* Version block - full width on new row */}
+              {/* Version block - under status, full width */}
               {policy?.recommended_version ? (
                 <ContentBlock
-                  width="1/2"
+                  width="full"
                   title={`Основная версия (v${policy.recommended_version.version})`}
                   headerActions={
                     <Badge tone={STATUS_TONES[policy.recommended_version.status]}>
