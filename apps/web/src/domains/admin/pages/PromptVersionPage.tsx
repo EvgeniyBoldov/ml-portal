@@ -178,13 +178,23 @@ export function PromptVersionPage() {
     return (
       <>
         {existingVersion?.status === 'draft' && (
-          <Button variant="primary" onClick={() => activateMutation.mutate()} disabled={activateMutation.isPending}>
-            Активировать
-          </Button>
+          <>
+            <Button variant="primary" onClick={() => activateMutation.mutate()} disabled={activateMutation.isPending}>
+              Активировать
+            </Button>
+            <Button variant="secondary" onClick={() => archiveMutation.mutate()} disabled={archiveMutation.isPending}>
+              Архивировать
+            </Button>
+          </>
         )}
         {existingVersion?.status === 'active' && (
           <Button variant="secondary" onClick={() => archiveMutation.mutate()} disabled={archiveMutation.isPending}>
             Архивировать
+          </Button>
+        )}
+        {existingVersion?.status === 'archived' && (
+          <Button variant="primary" onClick={() => activateMutation.mutate()} disabled={activateMutation.isPending}>
+            Активировать
           </Button>
         )}
         <Button variant="secondary" onClick={() => navigate(`/admin/prompts/${slug}/versions/new`)}>

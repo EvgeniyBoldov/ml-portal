@@ -289,21 +289,24 @@ export function PolicyVersionPage() {
     return (
       <>
         {existingVersion?.status === 'draft' && (
-          <Button variant="primary" onClick={() => activateMutation.mutate()} disabled={activateMutation.isPending}>
-            Активировать
-          </Button>
-        )}
-        {existingVersion?.status === 'active' && (
           <>
+            <Button variant="primary" onClick={() => activateMutation.mutate()} disabled={activateMutation.isPending}>
+              Активировать
+            </Button>
             <Button variant="secondary" onClick={() => deactivateMutation.mutate()} disabled={deactivateMutation.isPending}>
               Деактивировать
             </Button>
-            {policy?.recommended_version?.version !== versionNumber && (
-              <Button variant="primary" onClick={() => activateMutation.mutate()} disabled={activateMutation.isPending}>
-                Сделать основной
-              </Button>
-            )}
           </>
+        )}
+        {existingVersion?.status === 'active' && (
+          <Button variant="secondary" onClick={() => deactivateMutation.mutate()} disabled={deactivateMutation.isPending}>
+            Деактивировать
+          </Button>
+        )}
+        {existingVersion?.status === 'inactive' && (
+          <Button variant="primary" onClick={() => activateMutation.mutate()} disabled={activateMutation.isPending}>
+            Активировать
+          </Button>
         )}
         <Button variant="secondary" onClick={() => navigate(`/admin/policies/${slug}/versions/new`)}>
           Новая версия
