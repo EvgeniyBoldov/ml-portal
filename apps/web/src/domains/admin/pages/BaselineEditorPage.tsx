@@ -110,6 +110,8 @@ export function BaselineEditorPage() {
   const createMutation = useMutation({
     mutationFn: (data: any) => baselinesApi.createContainer(data),
     onSuccess: (container) => {
+      // Кэшируем созданный контейнер перед навигацией
+      queryClient.setQueryData(qk.baselines.detail(container.slug), container);
       queryClient.invalidateQueries({ queryKey: qk.baselines.list() });
       showSuccess('Бейслайн создан');
       navigate(`/admin/baselines/${container.slug}`);
