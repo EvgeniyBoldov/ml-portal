@@ -321,7 +321,7 @@ async def archive_baseline_version(
         raise HTTPException(status_code=status_code, detail=str(e))
 
 
-@router.put("/{slug}/recommended", response_model=BaselineResponse)
+@router.put("/{slug}/recommended", response_model=BaselineDetailResponse)
 async def set_recommended_version(
     slug: str = Path(..., description="Baseline slug"),
     version_id: UUID = Query(..., description="Version ID to set as recommended"),

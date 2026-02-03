@@ -27,6 +27,8 @@ export { default as Skeleton } from './Skeleton';
 export { default as StatusBadge } from './StatusBadge';
 export { default as Table } from './Table';
 export { default as TagBadge } from './TagBadge';
+export { Tag } from './Tag';
+export type { TagProps } from './Tag';
 export { default as Textarea } from './Textarea';
 export { default as ThemeSwitch } from './ThemeSwitch';
 export { Toast, ToastProvider, useToast } from './Toast';

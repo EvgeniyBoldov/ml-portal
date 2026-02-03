@@ -33,7 +33,7 @@ const PromptVersionPage = lazy(() => import('@/domains/admin/pages/PromptVersion
 const ToolsPage = lazy(() => import('@/domains/admin/pages/ToolsPage').then(m => ({ default: m.ToolsPage })));
 const ToolGroupViewPage = lazy(() => import('@/domains/admin/pages/ToolGroupViewPage').then(m => ({ default: m.ToolGroupViewPage })));
 const ToolViewPage = lazy(() => import('@/domains/admin/pages/ToolViewPage').then(m => ({ default: m.ToolViewPage })));
-const ToolEditorPage = lazy(() => import('@/domains/admin/pages/ToolEditorPage').then(m => ({ default: m.ToolEditorPage })));
+const ToolReleasePage = lazy(() => import('@/domains/admin/pages/ToolReleasePage').then(m => ({ default: m.ToolReleasePage })));
 const AgentRegistryPage = lazy(() => import('@/domains/admin/pages/AgentRegistryPage').then(m => ({ default: m.AgentRegistryPage })));
 const AgentEditorPage = lazy(() => import('@/domains/admin/pages/AgentEditorPage').then(m => ({ default: m.AgentEditorPage })));
 const AgentRunsPage = lazy(() => import('@/domains/admin/pages/AgentRunsPage').then(m => ({ default: m.AgentRunsPage })));
@@ -101,9 +101,10 @@ const router = createBrowserRouter([
       { path: 'prompts/:slug/versions/new', element: withSuspense(<PromptVersionPage />) },
       { path: 'prompts/:slug/versions/:version', element: withSuspense(<PromptVersionPage />) },
       { path: 'tools', element: withSuspense(<ToolsPage />) },
-      { path: 'tools/groups/:groupId', element: withSuspense(<ToolGroupViewPage />) },
-      { path: 'tools/groups/:groupId/tools/:toolSlug', element: withSuspense(<ToolViewPage />) },
-      { path: 'tools/:slug', element: withSuspense(<ToolEditorPage />) },
+      { path: 'tools/groups/:groupSlug', element: withSuspense(<ToolGroupViewPage />) },
+      { path: 'tools/:toolSlug', element: withSuspense(<ToolViewPage />) },
+      { path: 'tools/:toolSlug/versions/new', element: withSuspense(<ToolReleasePage />) },
+      { path: 'tools/:toolSlug/versions/:version', element: withSuspense(<ToolReleasePage />) },
       { path: 'agents', element: withSuspense(<AgentRegistryPage />) },
       { path: 'agents/new', element: withSuspense(<AgentEditorPage />) },
       { path: 'agents/:slug', element: withSuspense(<AgentEditorPage />) },

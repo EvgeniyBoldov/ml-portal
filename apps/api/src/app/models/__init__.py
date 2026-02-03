@@ -13,6 +13,7 @@ from .baseline import Baseline, BaselineVersion, BaselineStatus, BaselineScope
 from .tool_group import ToolGroup
 from .tool import Tool
 from .tool_instance import ToolInstance, HealthStatus, InstanceType
+from .tool_release import ToolBackendRelease, ToolRelease, ToolReleaseStatus
 from .agent import Agent
 from .agent_binding import AgentBinding, CredentialStrategy
 from .agent_run import AgentRun, AgentRunStep
@@ -52,6 +53,9 @@ __all__ = [
     "ToolInstance",
     "HealthStatus",
     "InstanceType",
+    "ToolBackendRelease",
+    "ToolRelease",
+    "ToolReleaseStatus",
     "Agent",
     "AgentBinding",
     "CredentialStrategy",

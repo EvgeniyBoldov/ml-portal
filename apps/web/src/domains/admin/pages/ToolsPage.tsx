@@ -7,8 +7,11 @@
 import { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { toolGroupsApi, type ToolGroup } from '@/shared/api';
-import { qk } from '@/shared/api/keys';
+import { 
+  toolReleasesApi, 
+  toolReleasesKeys,
+  type ToolGroupListItem,
+} from '@/shared/api/toolReleases';
 import { 
   AdminPage,
   DataTable,
@@ -20,22 +23,22 @@ export function ToolsPage() {
   const navigate = useNavigate();
   
   const { data: groups = [], isLoading } = useQuery({
-    queryKey: qk.toolGroups.list({}),
-    queryFn: () => toolGroupsApi.list(),
+    queryKey: toolReleasesKeys.groupsList(),
+    queryFn: () => toolReleasesApi.listGroups(),
     staleTime: 60000,
   });
 
   const filteredGroups = useMemo(() => {
     if (!search.trim()) return groups;
     const q = search.toLowerCase();
-    return groups.filter((g: ToolGroup) => 
+    return groups.filter((g: ToolGroupListItem) => 
       g.name.toLowerCase().includes(q) || 
       g.slug.toLowerCase().includes(q) ||
       (g.description?.toLowerCase().includes(q))
     );
   }, [groups, search]);
 
-  const columns: DataTableColumn<ToolGroup>[] = [
+  const columns: DataTableColumn<ToolGroupListItem>[] = [
     {
       key: 'slug',
       label: 'SLUG / ИМЯ',
@@ -46,6 +49,16 @@ export function ToolsPage() {
           <div style={{ fontWeight: 500 }}>{row.slug}</div>
           <div style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)' }}>{row.name}</div>
         </div>
+      ),
+    },
+    {
+      key: 'tools_count',
+      label: 'ИНСТРУМЕНТЫ',
+      width: 120,
+      render: (row) => (
+        <span style={{ color: 'var(--color-text-muted)' }}>
+          {row.tools_count || 0}
+        </span>
       ),
     },
     {
@@ -75,7 +88,7 @@ export function ToolsPage() {
         emptyText="Группы инструментов не найдены"
         paginated
         pageSize={20}
-        onRowClick={(row) => navigate(`/admin/tools/groups/${row.id}`)}
+        onRowClick={(row) => navigate(`/admin/tools/groups/${row.slug}`)}
       />
     </AdminPage>
   );

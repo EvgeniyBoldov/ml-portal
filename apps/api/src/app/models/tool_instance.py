@@ -3,14 +3,17 @@ ToolInstance model - конкретное подключение к систем
 """
 import uuid
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, TYPE_CHECKING
 from enum import Enum
 
 from sqlalchemy import String, Boolean, DateTime, Text, ForeignKey, func
 from sqlalchemy.dialects.postgresql import UUID, JSONB
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
+
+if TYPE_CHECKING:
+    from app.models.tool_group import ToolGroup
 
 
 class HealthStatus(str, Enum):
@@ -77,6 +80,13 @@ class ToolInstance(Base):
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+    
+    # Relationships
+    tool_group: Mapped["ToolGroup"] = relationship(
+        "ToolGroup",
+        back_populates="instances",
+        foreign_keys=[tool_group_id]
     )
 
     def __repr__(self) -> str:
