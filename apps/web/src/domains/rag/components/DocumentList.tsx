@@ -1,10 +1,10 @@
 import React, { useState, memo } from 'react';
 import Badge from '@shared/ui/Badge';
 import { MoreVerticalIcon } from '@shared/ui/Icon';
-import TagBadge from '@shared/ui/TagBadge';
+import Tag from '@shared/ui/Tag';
 import { RagDocument } from '@shared/api/types/rag';
 import { isPartial } from '@shared/lib/ragStatus';
-import { StatusModal } from './StatusModal';
+import { StatusModalNew } from './StatusModalNew';
 import StatusButton from './StatusButton';
 import styles from './DocumentList.module.css';
 
@@ -15,7 +15,7 @@ interface DocumentListProps {
 }
 
 // Memoized components for performance
-const MemoizedTagBadge = memo(TagBadge);
+const MemoizedTag = memo(Tag);
 
 export default function DocumentList({
   documents,
@@ -103,7 +103,7 @@ export default function DocumentList({
                   <div className="flex flex-wrap gap-1">
                     {doc.tags && doc.tags.length > 0 ? (
                       doc.tags.map(tag => (
-                        <MemoizedTagBadge key={tag} tag={tag} />
+                        <MemoizedTag key={tag} label={tag} variant="auto" />
                       ))
                     ) : (
                       <span className="text-gray-500 text-sm">—</span>
@@ -147,7 +147,7 @@ export default function DocumentList({
 
       {/* Status Modal */}
       {statusModalOpen && selectedDoc && (
-        <StatusModal docId={selectedDoc.id} onClose={handleCloseStatusModal} />
+        <StatusModalNew docId={selectedDoc.id} onClose={handleCloseStatusModal} />
       )}
     </>
   );

@@ -9,7 +9,7 @@ import { useTenants } from '@shared/hooks/useTenants';
 import Button from '@shared/ui/Button';
 import Input from '@shared/ui/Input';
 import { Select } from '@shared/ui';
-import Switch from '@shared/ui/Switch';
+import Toggle from '@shared/ui/Toggle';
 import { useErrorToast, useSuccessToast } from '@shared/ui/Toast';
 import styles from './CreateUserPage.module.css';
 
@@ -180,7 +180,7 @@ export function CreateUserPage() {
             </div>
 
             <div className={`${styles.formGroup} ${styles.fullWidth}`}>
-              <Switch
+              <Toggle
                 checked={formData.is_active}
                 onChange={checked => updateField('is_active', checked)}
                 label="Активен"

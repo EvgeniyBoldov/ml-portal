@@ -10,7 +10,7 @@ import React from 'react';
 import { Icon } from '../Icon';
 import Input from '../Input';
 import Textarea from '../Textarea';
-import Switch from '../Switch';
+import Toggle from '../Toggle';
 import { Select } from '../Select';
 import Badge from '../Badge';
 import styles from './ContentBlock.module.css';
@@ -126,7 +126,7 @@ export function ContentBlock({
       switch (field.type) {
         case 'boolean':
           return (
-            <Switch checked={!!value} onChange={() => {}} disabled />
+            <Toggle checked={!!value} onChange={() => {}} disabled />
           );
         case 'badge':
           return value ? (
@@ -175,7 +175,7 @@ export function ContentBlock({
         );
       case 'boolean':
         return (
-          <Switch
+          <Toggle
             checked={!!value}
             onChange={(checked) => handleChange(field.key, checked)}
             disabled={isDisabled}
