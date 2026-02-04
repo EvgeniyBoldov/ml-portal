@@ -85,11 +85,81 @@ export interface ContentBlockProps {
   compact?: boolean;
 }
 
-const widthToSpan: Record<BlockWidth, number> = {
-  '1/3': 4,
-  '1/2': 6,
-  '2/3': 8,
-  'full': 12,
+const FieldEditor = ({
+  field,
+  value,
+  onChange,
+  editable,
+}: {
+  field: FieldDefinition;
+  value: any;
+  onChange: (value: any) => void;
+  editable: boolean;
+}) => {
+  const isDisabled = !editable || field.disabled;
+
+  switch (field.type) {
+    case 'text':
+      return (
+        <Input
+          value={value ?? ''}
+          onChange={(e: React.ChangeEvent<HTMLInputElement>) => onChange(e.target.value)}
+          placeholder={field.placeholder}
+          disabled={isDisabled}
+        />
+      );
+    case 'textarea':
+      return (
+        <Textarea
+          value={value ?? ''}
+          onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => onChange(e.target.value)}
+          placeholder={field.placeholder}
+          rows={field.rows || 3}
+          disabled={isDisabled}
+        />
+      );
+    case 'boolean':
+      return (
+        <Toggle
+          checked={!!value}
+          onChange={(checked) => onChange(checked)}
+          disabled={isDisabled}
+        />
+      );
+    case 'select':
+      return (
+        <Select
+          value={value ?? ''}
+          onChange={(val) => onChange(val)}
+          placeholder="Выберите..."
+          options={[
+            { value: '', label: 'Выберите...' },
+            ...(field.options || [])
+          ]}
+          disabled={isDisabled}
+        />
+      );
+    case 'badge':
+      return value ? (
+        <Badge tone={field.badgeTone || 'neutral'}>{String(value)}</Badge>
+      ) : (
+        <span className={styles.emptyValue}>—</span>
+      );
+    case 'code':
+      return (
+        <Input
+          value={value ?? ''}
+          onChange={(e: React.ChangeEvent<HTMLInputElement>) => onChange(e.target.value)}
+          placeholder={field.placeholder}
+          disabled={isDisabled}
+          className={styles.codeInput}
+        />
+      );
+    default:
+      return (
+        <div className={styles.fieldValue}>{value || '—'}</div>
+      );
+  }
 };
 
 export function ContentBlock({
@@ -97,160 +167,22 @@ export function ContentBlock({
   title,
   icon,
   iconVariant = 'primary',
-  editable = false,
-  fields,
-  data = {},
-  onChange,
   children,
+  fields,
+  data,
+  onChange,
+  editable = false,
   headerActions,
   className = '',
   compact = false,
 }: ContentBlockProps) {
-  const spanClass = `span-${widthToSpan[width]}`;
-
   const handleChange = (key: string, value: any) => {
     onChange?.(key, value);
   };
 
-  const renderFieldValue = (field: FieldDefinition) => {
-    const value = data[field.key];
-    const isDisabled = field.disabled || !editable;
-
-    // Custom render
-    if (field.render) {
-      return field.render(value, editable && !field.disabled, (v) => handleChange(field.key, v));
-    }
-
-    // View mode
-    if (!editable) {
-      switch (field.type) {
-        case 'boolean':
-          return (
-            <Toggle checked={!!value} onChange={() => {}} disabled />
-          );
-        case 'badge':
-          return value ? (
-            <Badge tone={field.badgeTone || 'neutral'}>{String(value)}</Badge>
-          ) : (
-            <span className={styles.emptyValue}>—</span>
-          );
-        case 'code':
-          return (
-            <code className={styles.codeValue}>{value || '—'}</code>
-          );
-        case 'select':
-          const option = field.options?.find((o: any) => o.value === value);
-          return (
-            <div className={styles.fieldValue}>{option?.label || value || '—'}</div>
-          );
-        default:
-          return (
-            <div className={styles.fieldValue}>{value || '—'}</div>
-          );
-      }
-    }
-
-    // Edit mode
-    switch (field.type) {
-      case 'text':
-      case 'number':
-        return (
-          <Input
-            type={field.type === 'number' ? 'number' : 'text'}
-            value={value ?? ''}
-            onChange={(e: React.ChangeEvent<HTMLInputElement>) => handleChange(field.key, e.target.value)}
-            placeholder={field.placeholder}
-            disabled={isDisabled}
-          />
-        );
-      case 'textarea':
-        return (
-          <Textarea
-            value={value ?? ''}
-            onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => handleChange(field.key, e.target.value)}
-            placeholder={field.placeholder}
-            rows={field.rows || 3}
-            disabled={isDisabled}
-          />
-        );
-      case 'boolean':
-        return (
-          <Toggle
-            checked={!!value}
-            onChange={(checked) => handleChange(field.key, checked)}
-            disabled={isDisabled}
-          />
-        );
-      case 'select':
-        return (
-          <Select
-            value={value ?? ''}
-            onChange={(val) => handleChange(field.key, val)}
-            placeholder="Выберите..."
-            options={[
-              { value: '', label: 'Выберите...' },
-              ...(field.options || [])
-            ]}
-            disabled={isDisabled}
-          />
-        );
-      case 'badge':
-        return value ? (
-          <Badge tone={field.badgeTone || 'neutral'}>{String(value)}</Badge>
-        ) : (
-          <span className={styles.emptyValue}>—</span>
-        );
-      case 'code':
-        return (
-          <Input
-            value={value ?? ''}
-            onChange={(e: React.ChangeEvent<HTMLInputElement>) => handleChange(field.key, e.target.value)}
-            placeholder={field.placeholder}
-            disabled={isDisabled}
-            className={styles.codeInput}
-          />
-        );
-      default:
-        return (
-          <div className={styles.fieldValue}>{value || '—'}</div>
-        );
-    }
-  };
-
-  const renderField = (field: FieldDefinition) => {
-    // Boolean fields render inline (row layout)
-    if (field.type === 'boolean') {
-      return (
-        <div key={field.key} className={styles.fieldRow}>
-          <div className={styles.fieldRowLabel}>
-            <span className={styles.fieldTitle}>{field.label}</span>
-            {field.description && (
-              <span className={styles.fieldDescription}>{field.description}</span>
-            )}
-          </div>
-          {renderFieldValue(field)}
-        </div>
-      );
-    }
-
-    // Other fields render stacked
-    return (
-      <div key={field.key} className={styles.fieldGroup}>
-        <label className={`${styles.fieldLabel} ${field.required ? styles.required : ''}`}>
-          {field.label}
-        </label>
-        {renderFieldValue(field)}
-        {field.description && editable && (
-          <span className={styles.fieldHint}>{field.description}</span>
-        )}
-      </div>
-    );
-  };
-
   return (
     <div 
-      className={`${styles.block} ${styles[spanClass]} ${compact ? styles.compact : ''} ${className}`}
-      style={{ '--span': widthToSpan[width] } as React.CSSProperties}
+      className={`${styles.block} ${compact ? styles.compact : ''} ${className}`}
     >
       <div className={styles.header}>
         {icon && (
@@ -260,12 +192,36 @@ export function ContentBlock({
         )}
         <h3 className={styles.title}>{title}</h3>
         {headerActions && (
-          <div className={styles.headerActions}>{headerActions}</div>
+          <div className={styles.headerActions}>
+            {headerActions}
+          </div>
         )}
       </div>
+
       <div className={styles.content}>
-        {children || (
-          fields?.map(field => renderField(field))
+        {fields && data ? (
+          <div className={styles.fields}>
+            {fields.map((field) => (
+              <div key={field.key} className={styles.fieldRow}>
+                <div className={styles.fieldRowLabel}>
+                  <div className={styles.fieldTitle}>{field.label}</div>
+                  {field.description && (
+                    <div className={styles.fieldDescription}>{field.description}</div>
+                  )}
+                </div>
+                <div className={styles.fieldRowValue}>
+                  <FieldEditor
+                    field={field}
+                    value={data[field.key]}
+                    onChange={(value) => handleChange(field.key, value)}
+                    editable={editable}
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          children
         )}
       </div>
     </div>

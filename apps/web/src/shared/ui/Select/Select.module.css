@@ -6,8 +6,8 @@
   gap: 8px;
   width: 100%;
   padding: 0.5rem 0.75rem;
-  background: transparent;
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: var(--radius-md, 6px);
   color: var(--text-primary);
   font-family: inherit;
@@ -20,25 +20,28 @@
 }
 
 .trigger:hover:not(:disabled) {
-  border-color: rgba(255, 255, 255, 0.25);
-  background: rgba(255, 255, 255, 0.03);
+  border-color: rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.05);
 }
 
 .trigger:focus:not(:disabled) {
   border-color: var(--color-primary);
   background: rgba(255, 255, 255, 0.05);
-  box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.1);
+  box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.15);
 }
 
 .trigger.open {
   border-color: var(--color-primary);
   background: rgba(255, 255, 255, 0.05);
+  box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.15);
 }
 
 .trigger:disabled {
-  cursor: not-allowed;
-  opacity: 0.6;
-  background: transparent;
+  cursor: default;
+  background: rgba(255, 255, 255, 0.02);
+  border-color: transparent;
+  color: var(--text-secondary);
+  opacity: 1;
 }
 
 .trigger.error {

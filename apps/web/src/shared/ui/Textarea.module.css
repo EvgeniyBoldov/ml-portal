@@ -1,6 +1,6 @@
 .textarea {
-  background: transparent;
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   color: var(--text-primary);
   padding: 0.625rem 0.75rem;
   border-radius: var(--radius-md, 6px);
@@ -18,19 +18,19 @@
   color: var(--text-tertiary);
 }
 .textarea:hover:not(:disabled):not(:read-only) {
-  border-color: rgba(255, 255, 255, 0.25);
-  background: rgba(255, 255, 255, 0.03);
+  border-color: rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.05);
 }
 .textarea:focus:not(:disabled):not(:read-only) {
   border-color: var(--color-primary);
   background: rgba(255, 255, 255, 0.05);
-  box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.1);
+  box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.15);
 }
 .textarea:disabled,
 .textarea:read-only {
   cursor: default;
-  background: transparent;
-  border-color: rgba(255, 255, 255, 0.12);
-  color: var(--text-primary);
-  opacity: 0.85;
+  background: rgba(255, 255, 255, 0.02);
+  border-color: transparent;
+  color: var(--text-secondary);
+  opacity: 1; /* Override default browser opacity */
 }

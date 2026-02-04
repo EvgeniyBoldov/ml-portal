@@ -1,16 +1,16 @@
 /**
  * PolicyEditorPage - View/Edit/Create execution policy with versioning support
  * 
- * Architecture:
- * - Policy (container) - holds metadata: slug, name, description
- * - PolicyVersion - holds versioned data: limits, timeouts, budgets
- * - recommended_version_id - points to the version that should be used by default
+ * NEW ARCHITECTURE:
+ * - Uses TabsLayout for all modes (policy naturally has tabs)
+ * - EntityInfoBlock for container metadata
+ * - VersionsBlock for versions list
+ * - StatusBlock for status display
  * 
- * Routes:
- * - /admin/policies/new - Create new policy container
- * - /admin/policies/:slug - View policy with tabs (Overview | Versions)
- * - /admin/policies/:slug?mode=edit - Edit policy metadata
- * - /admin/policies/:slug/versions/:version - View/Edit specific version
+ * OLD ARCHITECTURE (deprecated):
+ * - Manual Tabs with ContentGrid layout
+ * - Duplicated status constants
+ * - Inline DataTable
  */
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
@@ -20,23 +20,19 @@ import { qk } from '@/shared/api/keys';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
 import { EntityPage, type EntityPageMode } from '@/shared/ui/EntityPage';
 import { Tabs, TabPanel } from '@/shared/ui/Tabs';
-import { Badge, Button, DataTable, ContentBlock, ContentGrid, StatusBadgeCard, type FieldDefinition, type StatusOption } from '@/shared/ui';
+import { TabsLayout } from '@/shared/ui/BaseLayout';
+import { EntityInfoBlock, type EntityInfo } from '@/shared/ui/EntityInfoBlock/EntityInfoBlock';
+import { VersionsBlock, type VersionInfo } from '@/shared/ui/VersionsBlock/VersionsBlock';
+import { StatusBlock } from '@/shared/ui/StatusBlock/StatusBlock';
+import { ContentBlock, type FieldDefinition } from '@/shared/ui';
+import Badge from '@/shared/ui/Badge';
+import Button from '@/shared/ui/Button';
+import { useStatusConfig } from '@/shared/hooks/useStatusConfig';
+import styles from './PolicyEditorPage.module.css';
 
 interface FormData extends PolicyCreate {
   is_active?: boolean;
 }
-
-const STATUS_LABELS: Record<PolicyVersionStatus, string> = {
-  draft: 'Черновик',
-  active: 'Активная',
-  inactive: 'Неактивная',
-};
-
-const STATUS_TONES: Record<PolicyVersionStatus, 'neutral' | 'success' | 'warn' | 'danger' | 'info'> = {
-  draft: 'warn',
-  active: 'success',
-  inactive: 'neutral',
-};
 
 export function PolicyEditorPage() {
   const { slug } = useParams<{ slug: string }>();
@@ -45,6 +41,7 @@ export function PolicyEditorPage() {
   const queryClient = useQueryClient();
   const showError = useErrorToast();
   const showSuccess = useSuccessToast();
+  const statusConfig = useStatusConfig('policy');
 
   // Determine mode
   const isCreate = slug === 'new';
@@ -206,7 +203,7 @@ export function PolicyEditorPage() {
       key: 'status',
       header: 'Статус',
       render: (v: PolicyVersion) => (
-        <Badge tone={STATUS_TONES[v.status]}>{STATUS_LABELS[v.status]}</Badge>
+        <Badge tone={statusConfig.tones[v.status]}>{statusConfig.labels[v.status]}</Badge>
       ),
     },
     {
@@ -276,18 +273,13 @@ export function PolicyEditorPage() {
     { key: 'name', label: 'Название', type: 'text', required: true, placeholder: 'Моя политика' },
     { key: 'slug', label: 'Slug', type: 'text', required: true, placeholder: 'my-policy', description: 'Уникальный идентификатор', disabled: !isCreate },
     { key: 'description', label: 'Описание', type: 'textarea', placeholder: 'Описание политики...', rows: 3 },
+    { key: 'is_active', label: 'Статус', type: 'boolean', disabled: !isEditable },
   ];
 
   const infoFieldsWithoutStatus: FieldDefinition[] = [
     { key: 'name', label: 'Название', type: 'text', required: true, placeholder: 'Моя политика' },
     { key: 'slug', label: 'Slug', type: 'text', required: true, placeholder: 'my-policy', description: 'Уникальный идентификатор', disabled: true },
     { key: 'description', label: 'Описание', type: 'textarea', placeholder: 'Описание политики...', rows: 3 },
-  ];
-
-  // Status options for policy
-  const policyStatusOptions: StatusOption[] = [
-    { value: 'active', label: 'Активна', tone: 'success' },
-    { value: 'inactive', label: 'Неактивна', tone: 'neutral' },
   ];
 
   const tabs = [
@@ -320,116 +312,63 @@ export function PolicyEditorPage() {
       showDelete={mode === 'view' && !!slug && policy?.slug !== 'default'}
       breadcrumbs={breadcrumbs}
     >
-
       {isCreate ? (
-        <ContentGrid>
-          <ContentBlock
-            width="1/2"
-            title="Основная информация"
-            editable={true}
-            fields={infoFields}
-            data={formData}
-            onChange={handleFieldChange}
-          />
-        </ContentGrid>
+        // Create mode - simple entity info without tabs
+        <EntityInfoBlock
+          entity={formData}
+          entityType="policy"
+          editable={true}
+          fields={infoFields}
+          onFieldChange={handleFieldChange}
+        />
       ) : (
-        <Tabs tabs={tabs} activeTab={activeTab} onChange={setActiveTab}>
-          <TabPanel id="overview" activeTab={activeTab}>
-            <ContentGrid>
-              {/* Left column: Info block - 1/2 */}
-              <ContentBlock
-                width="1/2"
-                title="Основная информация"
-                editable={isEditable}
-                fields={infoFieldsWithoutStatus}
-                data={formData}
-                onChange={handleFieldChange}
-              />
-
-              {/* Right column: Status badge (compact) - 1/2 */}
-              <StatusBadgeCard
-                label="Статус"
-                status={formData.is_active ? 'active' : 'inactive'}
-                statusOptions={policyStatusOptions}
-                editable={isEditable}
-                onStatusChange={(s) => handleFieldChange('is_active', s === 'active')}
-                width="1/2"
-              />
-
-              {/* Version block - under status, full width */}
-              {policy?.recommended_version ? (
-                <ContentBlock
-                  width="full"
-                  title={`Основная версия (v${policy.recommended_version.version})`}
-                  headerActions={
-                    <Badge tone={STATUS_TONES[policy.recommended_version.status]}>
-                      {STATUS_LABELS[policy.recommended_version.status]}
-                    </Badge>
-                  }
-                >
-                  <ContentGrid gap="sm">
-                    <ContentBlock
-                      width="1/2"
-                      title="Лимиты"
-                      compact
-                    >
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                        <div><strong>Шагов:</strong> {policy.recommended_version.max_steps ?? '∞'}</div>
-                        <div><strong>Вызовов:</strong> {policy.recommended_version.max_tool_calls ?? '∞'}</div>
-                        <div><strong>Повторов:</strong> {policy.recommended_version.max_retries ?? '∞'}</div>
-                      </div>
-                    </ContentBlock>
-                    <ContentBlock
-                      width="1/2"
-                      title="Таймауты"
-                      compact
-                    >
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                        <div><strong>Общий:</strong> {policy.recommended_version.max_wall_time_ms ?? '∞'} мс</div>
-                        <div><strong>Инструмент:</strong> {policy.recommended_version.tool_timeout_ms ?? '∞'} мс</div>
-                      </div>
-                    </ContentBlock>
-                  </ContentGrid>
-                  <div style={{ marginTop: '1rem' }}>
+        // Edit/View modes - tabs layout
+        <TabsLayout
+          tabs={[
+            {
+              id: 'overview',
+              label: 'Обзор',
+              content: (
+                <EntityInfoBlock
+                  entity={formData}
+                  entityType="policy"
+                  editable={isEditable}
+                  fields={infoFields}
+                  onFieldChange={handleFieldChange}
+                  showStatus={true}
+                  status={formData.is_active ? 'active' : 'inactive'}
+                  statusVersion={undefined}
+                />
+              ),
+            },
+            {
+              id: 'versions',
+              label: `Версии (${policy?.versions?.length || 0})`,
+              content: (
+                <div className={styles.versionsSection}>
+                  <div className={styles.versionsHeader}>
                     <Button
-                      size="small"
-                      variant="outline"
-                      onClick={() => navigate(`/admin/policies/${slug}/versions/${policy.recommended_version!.version}`)}
+                      variant="primary"
+                      onClick={() => navigate(`/admin/policies/${slug}/versions/new`)}
+                      disabled={!isEditable}
                     >
-                      Подробнее
-                    </Button>
-                  </div>
-                </ContentBlock>
-              ) : (
-                <ContentBlock
-                  width="1/2"
-                  title="Основная версия"
-                >
-                  <div style={{ textAlign: 'center', padding: '2rem' }}>
-                    <p style={{ marginBottom: '1rem', color: 'var(--text-secondary)' }}>Нет версии</p>
-                    <Button variant="primary" onClick={handleCreateVersion}>
                       Создать версию
                     </Button>
                   </div>
-                </ContentBlock>
-              )}
-            </ContentGrid>
-          </TabPanel>
-
-          <TabPanel id="versions" activeTab={activeTab}>
-            <div style={{ marginBottom: '1rem', display: 'flex', justifyContent: 'flex-end' }}>
-              <Button variant="primary" onClick={handleCreateVersion}>
-                Создать версию
-              </Button>
-            </div>
-            <DataTable
-              columns={versionColumns}
-              data={policy?.versions || []}
-              onRowClick={handleVersionClick}
-              emptyMessage="Нет версий. Создайте первую версию политики."
-            />
-          </TabPanel>
-        </Tabs>
+                  <VersionsBlock
+                    entityType="policy"
+                    versions={policy?.versions || []}
+                    onSelectVersion={(version) => {
+                      navigate(`/admin/policies/${slug}/versions/${version.version}`);
+                    }}
+                  />
+                </div>
+              ),
+            },
+          ]}
+          activeTab={activeTab}
+          onTabChange={setActiveTab}
+        />
       )}
     </EntityPage>
   );

@@ -9,29 +9,18 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { baselinesApi, type BaselineVersionInfo } from '@/shared/api/baselines';
+import { baselinesApi, type BaselineVersion } from '@/shared/api/baselines';
 import { qk } from '@/shared/api/keys';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
 import { EntityPage, type EntityPageMode } from '@/shared/ui/EntityPage';
-import { ContentBlock, ContentGrid, StatusBadgeCard, type FieldDefinition, type StatusOption } from '@/shared/ui';
-import Button from '@/shared/ui/Button';
-import styles from './PromptVersionPage.module.css';
+import { ContentBlock, ContentGrid, type FieldDefinition } from '@/shared/ui/ContentBlock';
+import { Badge, Button, StatusCard, type StatusOption } from '@/shared/ui';
+import { useStatusConfig } from '@/shared/hooks/useStatusConfig';
+import styles from './BaselineVersionPage.module.css';
 
 interface FormData {
   template: string;
 }
-
-const STATUS_LABELS: Record<string, string> = {
-  draft: 'Черновик',
-  active: 'Активна',
-  archived: 'Архив',
-};
-
-const STATUS_TONES: Record<string, 'warn' | 'success' | 'neutral'> = {
-  draft: 'warn',
-  active: 'success',
-  archived: 'neutral',
-};
 
 export function BaselineVersionPage() {
   const { slug, version: versionParam } = useParams<{ slug: string; version: string }>();
@@ -40,6 +29,7 @@ export function BaselineVersionPage() {
   const queryClient = useQueryClient();
   const showError = useErrorToast();
   const showSuccess = useSuccessToast();
+  const statusConfig = useStatusConfig('baseline');
 
   const isCreate = !versionParam;
   const versionNumber = isCreate ? 0 : parseInt(versionParam, 10);

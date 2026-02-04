@@ -44,6 +44,8 @@ export { PageContent } from './PageContent';
 export type { PageContentProps } from './PageContent';
 export { FilterBar } from './FilterBar';
 export type { FilterBarProps, FilterConfig, FilterOption } from './FilterBar';
+export { BaseLayout, SplitLayout, TabsLayout } from './BaseLayout';
+export type { BaseLayoutType, BaseLayoutProps, SplitLayoutProps, TabsLayoutProps } from './BaseLayout';
 
 // DataTable
 export { default as DataTable } from './DataTable/DataTable';
@@ -113,3 +115,11 @@ export type { BreadcrumbItem } from './Breadcrumbs';
 // Combobox
 export { Combobox } from './Combobox';
 export type { ComboboxOption } from './Combobox';
+
+// MasonryGrid
+export { MasonryGrid } from './MasonryGrid';
+export type { MasonryGridProps } from './MasonryGrid';
+
+// CompactStatusBlock
+export { CompactStatusBlock } from './CompactStatusBlock';
+export type { CompactStatusBlockProps } from './CompactStatusBlock';

@@ -18,6 +18,22 @@
   border-radius: 8px;
   padding: 1rem;
   font-size: 0.8rem;
+}
+
+.versionsSection {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+  margin-top: 1.5rem;
+}
+
+.versionsHeader {
+  display: flex;
+  justify-content: flex-end;
+  padding-bottom: var(--spacing-md);
+}
+
+.templateBlock {
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
   overflow: auto;
   max-height: 300px;

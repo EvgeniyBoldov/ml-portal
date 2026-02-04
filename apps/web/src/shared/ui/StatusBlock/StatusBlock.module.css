@@ -1,0 +1,120 @@
+/* StatusBlock - Reusable status display component */
+
+.statusBlock {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+}
+
+.statusBlock.compact {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-md);
+}
+
+.statusHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+}
+
+.version {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.statusContent {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+}
+
+.metadata {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+}
+
+.metadataItem {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--spacing-xs) 0;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.metadataItem:last-child {
+  border-bottom: none;
+}
+
+.metadataLabel {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.metadataValue {
+  font-size: 0.875rem;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.actions {
+  display: flex;
+  gap: var(--spacing-sm);
+  flex-wrap: wrap;
+}
+
+.compact .actions {
+  gap: var(--spacing-xs);
+}
+
+/* Responsive behavior */
+@media (max-width: 768px) {
+  .statusBlock:not(.compact) {
+    gap: var(--spacing-sm);
+  }
+  
+  .metadataItem {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--spacing-xs);
+  }
+  
+  .actions {
+    flex-direction: column;
+    width: 100%;
+  }
+  
+  .actions button {
+    width: 100%;
+  }
+  
+  .statusBlock.compact {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--spacing-sm);
+  }
+  
+  .statusBlock.compact .actions {
+    width: 100%;
+  }
+}
+
+/* Animation */
+.statusContent {
+  animation: fadeIn 0.2s ease-in-out;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

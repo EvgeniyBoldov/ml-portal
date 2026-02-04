@@ -1,16 +1,16 @@
 /**
  * PromptEditorPage - View/Edit prompt container with versions
  * 
- * Layout:
- * - Left column (1/2): Container info + Versions table
- * - Right column (1/2): Selected version template + status
+ * NEW ARCHITECTURE:
+ * - Uses SplitLayout for container + versions
+ * - EntityInfoBlock for container metadata
+ * - VersionsBlock for versions list
+ * - StatusBlock for status display
  * 
- * Features:
- * - View/Edit container (name, description)
- * - View versions list with selection
- * - View selected version template
- * - Create new version via modal
- * - Activate/Archive version
+ * OLD ARCHITECTURE (deprecated):
+ * - Manual ContentGrid layout
+ * - Duplicated status constants
+ * - Inline DataTable
  */
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
@@ -19,25 +19,16 @@ import { promptsApi, type PromptDetail, type PromptVersion, type PromptVersionIn
 import { qk } from '@/shared/api/keys';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
 import { EntityPage, type EntityPageMode, type BreadcrumbItem } from '@/shared/ui/EntityPage';
-import { ContentBlock, ContentGrid, type FieldDefinition } from '@/shared/ui/ContentBlock';
+import { ContentBlock, type FieldDefinition } from '@/shared/ui/ContentBlock';
 import { Tabs, TabPanel } from '@/shared/ui/Tabs';
-import { StatusBadgeCard, type StatusOption } from '@/shared/ui/StatusBadgeCard';
+import { SplitLayout, TabsLayout } from '@/shared/ui/BaseLayout';
+import { EntityInfoBlock, type EntityInfo } from '@/shared/ui/EntityInfoBlock/EntityInfoBlock';
+import { VersionsBlock, type VersionInfo } from '@/shared/ui/VersionsBlock/VersionsBlock';
+import { StatusBlock } from '@/shared/ui/StatusBlock/StatusBlock';
 import Badge from '@/shared/ui/Badge';
 import Button from '@/shared/ui/Button';
-import DataTable from '@/shared/ui/DataTable/DataTable';
+import { useStatusConfig } from '@/shared/hooks/useStatusConfig';
 import styles from './PromptEditorPage.module.css';
-
-const STATUS_LABELS: Record<string, string> = {
-  draft: 'Черновик',
-  active: 'Активна',
-  archived: 'Архив',
-};
-
-const STATUS_TONES: Record<string, 'warn' | 'success' | 'neutral'> = {
-  draft: 'warn',
-  active: 'success',
-  archived: 'neutral',
-};
 
 export function PromptEditorPage() {
   const { slug } = useParams<{ slug: string }>();
@@ -46,6 +37,7 @@ export function PromptEditorPage() {
   const queryClient = useQueryClient();
   const showError = useErrorToast();
   const showSuccess = useSuccessToast();
+  const statusConfig = useStatusConfig('prompt');
 
   const isNew = slug === 'new';
   const isEditMode = searchParams.get('mode') === 'edit';
@@ -160,6 +152,28 @@ export function PromptEditorPage() {
     setFormData(prev => ({ ...prev, [key]: value }));
   };
 
+  const handleToggleVersion = async (version: PromptVersionInfo) => {
+    if (version.status === 'active') {
+      // Archive version
+      try {
+        await promptsApi.archiveVersion(version.id);
+        showSuccess('Версия архивирована');
+        queryClient.invalidateQueries({ queryKey: qk.prompts.detail(slug!) });
+      } catch (err: any) {
+        showError(err?.message || 'Ошибка архивации');
+      }
+    } else if (version.status === 'draft') {
+      // Activate version
+      try {
+        await promptsApi.activateVersion(version.id);
+        showSuccess('Версия активирована');
+        queryClient.invalidateQueries({ queryKey: qk.prompts.detail(slug!) });
+      } catch (err: any) {
+        showError(err?.message || 'Ошибка активации');
+      }
+    }
+  };
+
 
   // Field definitions
   const containerFields: FieldDefinition[] = [
@@ -205,7 +219,7 @@ export function PromptEditorPage() {
       key: 'status',
       label: 'Статус',
       render: (v: PromptVersionInfo) => (
-        <Badge tone={STATUS_TONES[v.status]}>{STATUS_LABELS[v.status]}</Badge>
+        <Badge tone={statusConfig.tones[v.status]}>{statusConfig.labels[v.status]}</Badge>
       ),
     },
     {
@@ -235,100 +249,104 @@ export function PromptEditorPage() {
       showDelete={false}
     >
       {isNew ? (
-        <ContentGrid>
-          <ContentBlock
-            width="1/2"
-            title="Основная информация"
-            editable={true}
-            fields={containerFields}
-            data={formData}
-            onChange={handleFieldChange}
-          />
-        </ContentGrid>
+        // NEW: Create mode - simple entity info
+        <EntityInfoBlock
+          entity={formData}
+          entityType="prompt"
+          editable={true}
+          fields={containerFields}
+          onFieldChange={handleFieldChange}
+        />
       ) : (
-        <Tabs tabs={tabs} activeTab={activeTab} onChange={setActiveTab}>
-          <TabPanel id="overview" activeTab={activeTab}>
-            <ContentGrid>
-              {/* Left column: Info block - 1/2 */}
-              <ContentBlock
-                width="1/2"
-                title="Основная информация"
-                editable={isEditable}
-                fields={containerFields}
-                data={formData}
-                onChange={handleFieldChange}
-              />
-
-              {/* Right column: Status badge (compact) - 1/2 */}
-              <StatusBadgeCard
-                label="Статус"
-                status={selectedVersion?.status || 'draft'}
-                statusOptions={[
-                  { value: 'draft', label: 'Черновик', tone: 'warn' },
-                  { value: 'active', label: 'Активна', tone: 'success' },
-                  { value: 'archived', label: 'Архив', tone: 'neutral' },
-                ]}
-                editable={false}
-                width="1/2"
-              />
-
-              {/* Active version preview - full width on new row */}
-              {selectedVersion ? (
-                <ContentBlock
-                  width="full"
-                  title={`Активная версия (v${selectedVersion.version})`}
-                  headerActions={
-                    <Badge tone={STATUS_TONES[selectedVersion.status]}>
-                      {STATUS_LABELS[selectedVersion.status]}
-                    </Badge>
-                  }
-                >
-                  <pre className={styles.templateBlock}>
-                    {selectedVersion.template.substring(0, 500)}
-                    {selectedVersion.template.length > 500 && '...'}
-                  </pre>
-                  <div className={styles.versionActions}>
-                    <Button
-                      size="small"
-                      variant="outline"
-                      onClick={() => navigate(`/admin/prompts/${slug}/versions/${selectedVersion.version}`)}
+        // EDIT & VIEW MODES: Use TabsLayout for consistency
+        <TabsLayout
+          tabs={[
+            {
+              id: 'overview',
+              label: 'Обзор',
+              content: (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
+                  <SplitLayout
+                    left={
+                      <EntityInfoBlock
+                        entity={formData}
+                        entityType="prompt"
+                        editable={isEditable}
+                        fields={containerFields}
+                        onFieldChange={handleFieldChange}
+                        showStatus={false}
+                      />
+                    }
+                    right={
+                      selectedVersion ? (
+                        <ContentBlock
+                          width="full"
+                          title={`Версия v${selectedVersion.version}`}
+                          headerActions={
+                            <Badge tone={statusConfig.tones[selectedVersion.status]}>
+                              {statusConfig.labels[selectedVersion.status]}
+                            </Badge>
+                          }
+                        >
+                          <div className={styles.versionMeta} style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
+                            <div>Создана: {new Date(selectedVersion.created_at).toLocaleDateString('ru-RU')}</div>
+                            {selectedVersion.updated_at && (
+                              <div>Обновлена: {new Date(selectedVersion.updated_at).toLocaleDateString('ru-RU')}</div>
+                            )}
+                          </div>
+                        </ContentBlock>
+                      ) : (
+                        <ContentBlock
+                          width="full"
+                          title="Версия"
+                        >
+                          <div style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
+                            Нет активной версии
+                          </div>
+                        </ContentBlock>
+                      )
+                    }
+                  />
+                  
+                  {selectedVersion && (
+                    <ContentBlock
+                      width="full"
+                      title="Шаблон промпта"
                     >
-                      Подробнее
-                    </Button>
-                  </div>
-                </ContentBlock>
-              ) : (
-                <ContentBlock
-                  width="full"
-                  title="Активная версия"
-                >
-                  <div className={styles.emptyVersion}>
-                    <p>Нет версий</p>
-                    <Button variant="primary" onClick={() => navigate(`/admin/prompts/${slug}/versions/new`)}>
+                      <pre className={styles.templateBlock}>
+                        {selectedVersion.template}
+                      </pre>
+                    </ContentBlock>
+                  )}
+                </div>
+              ),
+            },
+            {
+              id: 'versions',
+              label: `Версии (${prompt?.versions?.length || 0})`,
+              content: (
+                <div className={styles.versionsSection}>
+                  <div className={styles.versionsHeader}>
+                    <Button
+                      variant="primary"
+                      onClick={() => navigate(`/admin/prompts/${slug}/versions/new`)}
+                    >
                       Создать версию
                     </Button>
                   </div>
-                </ContentBlock>
-              )}
-            </ContentGrid>
-          </TabPanel>
-
-          <TabPanel id="versions" activeTab={activeTab}>
-            <div style={{ marginBottom: '1rem', display: 'flex', justifyContent: 'flex-end' }}>
-              <Button variant="primary" onClick={() => navigate(`/admin/prompts/${slug}/versions/new`)}>
-                Создать версию
-              </Button>
-            </div>
-            <DataTable
-              columns={versionColumns}
-              data={prompt?.versions || []}
-              onRowClick={(v: PromptVersionInfo) => navigate(`/admin/prompts/${slug}/versions/${v.version}`)}
-              emptyMessage="Нет версий. Создайте первую версию промпта."
-            />
-          </TabPanel>
-        </Tabs>
+                  <VersionsBlock
+                    entityType="prompt"
+                    versions={prompt?.versions || []}
+                    onSelectVersion={(version) => {
+                      navigate(`/admin/prompts/${slug}/versions/${version.version}`);
+                    }}
+                  />
+                </div>
+              ),
+            },
+          ]}
+        />
       )}
-
     </EntityPage>
   );
 }

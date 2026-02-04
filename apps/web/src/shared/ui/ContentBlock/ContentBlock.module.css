@@ -1,7 +1,7 @@
 /**
  * ContentBlock styles
  * 
- * Grid-based block with flexible width
+ * Flexbox-based block with flexible width
  */
 
 .block {
@@ -11,13 +11,8 @@
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  width: 100%;
 }
-
-/* Grid span classes - 12 column grid */
-.span-4 { grid-column: span 4; }
-.span-6 { grid-column: span 6; }
-.span-8 { grid-column: span 8; }
-.span-12 { grid-column: span 12; }
 
 /* Header */
 .header {
@@ -146,10 +141,9 @@
 /* Row layout for boolean/switch fields */
 .fieldRow {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  padding: 0.75rem 0;
+  align-items: flex-start;
+  gap: 1.5rem;
+  padding: 1rem 0;
   border-bottom: 1px solid var(--border-light, rgba(255, 255, 255, 0.05));
 }
 
@@ -165,13 +159,25 @@
 .fieldRowLabel {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
+  flex: 0 0 200px;
+  max-width: 30%;
+  padding-top: 0.5rem; /* Align with input text */
+}
+
+.fieldRowValue {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
 }
 
 .fieldTitle {
   font-size: 0.875rem;
   font-weight: 500;
   color: var(--text, var(--color-text));
+  line-height: 1.5;
 }
 
 .fieldDescription {
@@ -179,20 +185,18 @@
   color: var(--muted, var(--color-text-muted));
 }
 
-/* Responsive */
+/* Responsive behavior */
 @media (max-width: 1200px) {
-  .span-4 { grid-column: span 6; }
-  .span-8 { grid-column: span 12; }
+  .content {
+    padding: 1rem;
+  }
+
+  .header {
+    padding: 0.875rem 1rem;
+  }
 }
 
 @media (max-width: 768px) {
-  .span-4,
-  .span-6,
-  .span-8,
-  .span-12 {
-    grid-column: span 12;
-  }
-
   .content {
     padding: 1rem;
   }

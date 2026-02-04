@@ -1,0 +1,93 @@
+/* BaseLayout - Unified layout system for admin pages */
+
+.baseLayout {
+  width: 100%;
+  min-height: 0;
+}
+
+/* Split layout - two columns */
+.layout-split {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-lg);
+}
+
+.layout-split .grid {
+  flex: 1;
+  min-height: 0;
+}
+
+/* Tabs layout - tabbed interface */
+.layout-tabs {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.layout-tabs .tabs {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.layout-tabs .tabPanel {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* Split layout columns */
+.splitLeft {
+  grid-column: span 8;
+  min-width: 0;
+}
+
+.splitRight {
+  grid-column: span 4;
+  min-width: 0;
+}
+
+/* Responsive behavior */
+@media (max-width: 1024px) {
+  .splitLeft,
+  .splitRight {
+    grid-column: span 12;
+  }
+}
+
+@media (max-width: 768px) {
+  .layout-split .grid.direction-row {
+    grid-template-columns: 1fr;
+    gap: var(--spacing-md);
+  }
+  
+  .layout-split .grid.direction-row > :first-child {
+    grid-column: 1 / -1;
+  }
+  
+  .layout-split .grid.direction-row > :last-child {
+    grid-column: 1 / -1;
+  }
+}
+
+/* Ensure proper spacing in different contexts */
+.baseLayout + .baseLayout {
+  margin-top: var(--spacing-xl);
+}
+
+/* Animation for tab transitions */
+.layout-tabs .tabPanel {
+  animation: fadeIn 0.2s ease-in-out;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

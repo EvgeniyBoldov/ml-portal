@@ -9,28 +9,18 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { promptsApi, type PromptVersionInfo } from '@/shared/api/prompts';
+import { promptsApi, type PromptVersion } from '@/shared/api/prompts';
 import { qk } from '@/shared/api/keys';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
 import { EntityPage, type EntityPageMode } from '@/shared/ui/EntityPage';
-import { ContentBlock, ContentGrid, StatusBadgeCard, type FieldDefinition, type StatusOption } from '@/shared/ui';
-import Button from '@/shared/ui/Button';
+import { ContentBlock, ContentGrid, type FieldDefinition } from '@/shared/ui/ContentBlock';
+import { Badge, Button, StatusCard, StatusBadgeCard, type StatusOption } from '@/shared/ui';
+import { useStatusConfig } from '@/shared/hooks/useStatusConfig';
+import styles from './PromptVersionPage.module.css';
 
 interface FormData {
   template: string;
 }
-
-const STATUS_LABELS: Record<string, string> = {
-  draft: 'Черновик',
-  active: 'Активна',
-  archived: 'Архив',
-};
-
-const STATUS_TONES: Record<string, 'warn' | 'success' | 'neutral'> = {
-  draft: 'warn',
-  active: 'success',
-  archived: 'neutral',
-};
 
 export function PromptVersionPage() {
   const { slug, version: versionParam } = useParams<{ slug: string; version: string }>();
@@ -39,6 +29,7 @@ export function PromptVersionPage() {
   const queryClient = useQueryClient();
   const showError = useErrorToast();
   const showSuccess = useSuccessToast();
+  const statusConfig = useStatusConfig('prompt');
 
   const isCreate = !versionParam;
   const versionNumber = isCreate ? 0 : parseInt(versionParam, 10);

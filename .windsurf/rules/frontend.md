@@ -33,9 +33,19 @@ UI & STYLES
   - Modal/Drawer → anything large (graphs, long forms, tabs)
 - All interactive components must be keyboard-accessible (Esc to close, focus return, aria-*).
 - CSS-modules naming: .module.css, classes in dash-case; no global CSS leaks.
+- **CRITICAL**: Use proper CSS variables: --bg-primary, --text-primary, --border-color (NOT --color-bg, --color-text, --border)
+
+ADMIN PAGES ARCHITECTURE
+- **UNIFIED LAYOUTS**: Use BaseLayout components for all admin pages:
+  - <BaseLayout type="split"> for Prompt/Baseline entities
+  - <BaseLayout type="tabs"> for Policy entities
+- **NO DUPLICATION**: Never import styles from other pages (e.g., './PromptEditorPage.module.css')
+- **SHARED BLOCKS**: Use StatusBlock, VersionsBlock, EntityInfoBlock for entity management
+- **CONFIG HOOKS**: Use useStatusConfig(type) instead of inline STATUS_LABELS/STATUS_TONES objects
+- **CONSISTENT PATTERNS**: All entity pages follow same structure: PageHeader > BaseLayout > ContentBlocks
 
 API CONTRACTS
-- Align endpoints/types with backend. No client-side “fake detail” via list filtering.
+- Align endpoints/types with backend. No client-side "fake detail" via list filtering.
 - All API modules in src/shared/api: auth.ts, chats.ts, rag.ts, admin.ts, etc. Barrel export from src/shared/api/index.ts.
 - Errors → map to typed ApiError; surface via toast and field errors.
 - Use idempotency key for POST/PUT as helper.
@@ -49,6 +59,7 @@ FILES & NAMING
 - Index files only for barrel exports; never hide logic in index.tsx.
 - One component per file; keep component length < 250 lines; extract subviews/hooks.
 - Remove dead code and legacy configs: vite.config.js, empty .storybook/* unless set up.
+- **ADMIN CSS**: Each page gets its own .module.css file. NO SHARING between pages.
 
 TESTS
 - Unit: Vitest + RTL + MSW for api/client, SSE reducer/applyEvents, key hooks.

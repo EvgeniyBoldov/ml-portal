@@ -1,0 +1,98 @@
+/* VersionsBlock - Simple versions table component */
+
+.versionsBlock {
+  width: 100%;
+}
+
+.versionsTable {
+  width: 100%;
+}
+
+/* Clickable rows */
+.versionsTable :global(.data-table tbody tr) {
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+}
+
+.versionsTable :global(.data-table tbody tr:hover) {
+  background-color: var(--bg-tertiary);
+}
+
+/* Animation */
+.versionsTable {
+  animation: fadeIn 0.2s ease-in-out;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Responsive behavior */
+@media (max-width: 768px) {
+  .versionsBlock {
+    gap: var(--spacing-sm);
+  }
+  
+  .header {
+    flex-direction: column;
+    gap: var(--spacing-sm);
+    align-items: stretch;
+  }
+  
+  .createButton {
+    margin-left: 0;
+    width: 100%;
+  }
+  
+  .versionActions {
+    flex-direction: column;
+    gap: var(--spacing-xs);
+  }
+  
+  .versionActions button {
+    width: 100%;
+  }
+  
+  .selectedInfo {
+    margin-top: var(--spacing-sm);
+    padding: var(--spacing-sm);
+  }
+  
+  .selectedDetails {
+    gap: var(--spacing-xs);
+  }
+}
+
+/* Animation */
+.versionsBlock {
+  animation: fadeIn 0.2s ease-in-out;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Table row hover effect */
+.versionsTable :global(.table-row:hover) {
+  background-color: var(--bg-hover);
+  cursor: pointer;
+}
+
+.versionsTable :global(.table-row.selected) {
+  background-color: var(--bg-selected);
+  border-color: var(--border-accent);
+}

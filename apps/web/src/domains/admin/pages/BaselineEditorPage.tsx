@@ -1,16 +1,16 @@
 /**
  * BaselineEditorPage - View/Edit baseline container with versions
  * 
- * Layout:
- * - Left column (1/2): Container info
- * - Right column (1/2): Selected version status
+ * NEW ARCHITECTURE:
+ * - Uses SplitLayout for container + versions
+ * - EntityInfoBlock for container metadata
+ * - VersionsBlock for versions list
+ * - StatusBlock for status display
  * 
- * Features:
- * - View/Edit container (name, description, scope, is_active)
- * - View versions list with selection
- * - View selected version template
- * - Create new version
- * - Activate/Archive version
+ * OLD ARCHITECTURE (deprecated):
+ * - Manual ContentGrid layout
+ * - Duplicated status constants
+ * - Inline DataTable
  */
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
@@ -19,25 +19,16 @@ import { baselinesApi, type BaselineDetail, type BaselineVersion, type BaselineV
 import { qk } from '@/shared/api/keys';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
 import { EntityPage, type EntityPageMode, type BreadcrumbItem } from '@/shared/ui/EntityPage';
-import { ContentBlock, ContentGrid, type FieldDefinition } from '@/shared/ui/ContentBlock';
+import { ContentBlock, type FieldDefinition } from '@/shared/ui/ContentBlock';
 import { Tabs, TabPanel } from '@/shared/ui/Tabs';
-import { StatusBadgeCard, type StatusOption } from '@/shared/ui/StatusBadgeCard';
+import { SplitLayout, TabsLayout } from '@/shared/ui/BaseLayout';
+import { EntityInfoBlock, type EntityInfo } from '@/shared/ui/EntityInfoBlock/EntityInfoBlock';
+import { VersionsBlock, type VersionInfo } from '@/shared/ui/VersionsBlock/VersionsBlock';
+import { StatusBlock } from '@/shared/ui/StatusBlock/StatusBlock';
 import Badge from '@/shared/ui/Badge';
 import Button from '@/shared/ui/Button';
-import DataTable from '@/shared/ui/DataTable/DataTable';
-import styles from './PromptEditorPage.module.css';
-
-const STATUS_LABELS: Record<string, string> = {
-  draft: 'Черновик',
-  active: 'Активна',
-  archived: 'Архив',
-};
-
-const STATUS_TONES: Record<string, 'warn' | 'success' | 'neutral'> = {
-  draft: 'warn',
-  active: 'success',
-  archived: 'neutral',
-};
+import { useStatusConfig } from '@/shared/hooks/useStatusConfig';
+import styles from './BaselineEditorPage.module.css';
 
 const SCOPE_CONFIG: Record<string, { label: string; tone: 'info' | 'warn' | 'success' }> = {
   default: { label: 'Default', tone: 'info' },
@@ -52,6 +43,7 @@ export function BaselineEditorPage() {
   const queryClient = useQueryClient();
   const showError = useErrorToast();
   const showSuccess = useSuccessToast();
+  const statusConfig = useStatusConfig('baseline');
 
   const isNew = slug === 'new';
   const isEditMode = searchParams.get('mode') === 'edit';
@@ -84,7 +76,7 @@ export function BaselineEditorPage() {
   // Load selected version details
   const { data: selectedVersion } = useQuery({
     queryKey: ['baselines', slug, 'versions', selectedVersionNum],
-    queryFn: () => baselinesApi.getVersion(slug!, selectedVersionNum!),
+    queryFn: () => baselinesApi.getVersion(slug!, String(selectedVersionNum!)),
     enabled: !!slug && selectedVersionNum !== null,
   });
 
@@ -100,7 +92,7 @@ export function BaselineEditorPage() {
       });
       // Select active or latest version
       if (baseline.versions?.length > 0) {
-        const activeVersion = baseline.versions.find(v => v.status === 'active');
+        const activeVersion = baseline.versions.find((v: BaselineVersionInfo) => v.status === 'active');
         setSelectedVersionNum(activeVersion?.version || baseline.versions[0].version);
       }
     }
@@ -109,7 +101,7 @@ export function BaselineEditorPage() {
   // Mutations
   const createMutation = useMutation({
     mutationFn: (data: any) => baselinesApi.createContainer(data),
-    onSuccess: (container) => {
+    onSuccess: (container: BaselineDetail) => {
       queryClient.invalidateQueries({ queryKey: qk.baselines.list() });
       showSuccess('Бейслайн создан');
       // Инвалидируем detail query, чтобы он загрузился свежим
@@ -172,7 +164,29 @@ export function BaselineEditorPage() {
   };
 
   const handleFieldChange = (key: string, value: any) => {
-    setFormData(prev => ({ ...prev, [key]: value }));
+    setFormData((prev: any) => ({ ...prev, [key]: value }));
+  };
+
+  const handleToggleVersion = async (version: BaselineVersionInfo) => {
+    if (version.status === 'active') {
+      // Archive version
+      try {
+        await baselinesApi.archiveVersion(slug!, String(version.version));
+        showSuccess('Версия архивирована');
+        queryClient.invalidateQueries({ queryKey: qk.baselines.detail(slug!) });
+      } catch (err: any) {
+        showError(err?.message || 'Ошибка архивации');
+      }
+    } else if (version.status === 'draft') {
+      // Activate version
+      try {
+        await baselinesApi.activateVersion(slug!, String(version.version));
+        showSuccess('Версия активирована');
+        queryClient.invalidateQueries({ queryKey: qk.baselines.detail(slug!) });
+      } catch (err: any) {
+        showError(err?.message || 'Ошибка активации');
+      }
+    }
   };
 
   const handleCreateVersion = () => {
@@ -234,7 +248,7 @@ export function BaselineEditorPage() {
       key: 'status',
       label: 'Статус',
       render: (v: BaselineVersionInfo) => (
-        <Badge tone={STATUS_TONES[v.status]}>{STATUS_LABELS[v.status]}</Badge>
+        <Badge tone={statusConfig.tones[v.status]}>{statusConfig.labels[v.status]}</Badge>
       ),
     },
     {
@@ -263,89 +277,117 @@ export function BaselineEditorPage() {
       onCancel={handleCancel}
       showDelete={false}
     >
-      <Tabs tabs={tabs} activeTab={activeTab} onChange={setActiveTab}>
-        <TabPanel id="overview" activeTab={activeTab}>
-          <ContentGrid>
-            {/* Left column: Info block - 1/2 */}
-            <ContentBlock
-              width="1/2"
-              title="Основная информация"
-              editable={isEditable}
-              fields={containerFields}
-              data={formData}
-              onChange={handleFieldChange}
-            />
+      {isNew ? (
+        // NEW: Create mode - simple entity info
+        <EntityInfoBlock
+          entity={formData}
+          entityType="baseline"
+          editable={true}
+          fields={containerFields}
+          onFieldChange={handleFieldChange}
+        />
+      ) : (
+        // EDIT & VIEW MODES: Use TabsLayout for consistency
+        <TabsLayout
+          tabs={[
+            {
+              id: 'overview',
+              label: 'Обзор',
+              content: (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
+                  <SplitLayout
+                    left={
+                      <EntityInfoBlock
+                        entity={formData}
+                        entityType="baseline"
+                        editable={isEditable}
+                        fields={containerFields}
+                        onFieldChange={handleFieldChange}
+                        showStatus={false}
+                      />
+                    }
+                    right={
+                      selectedVersion ? (
+                        <ContentBlock
+                          width="full"
+                          title={`Версия v${selectedVersion.version}`}
+                          headerActions={
+                            <Badge tone={statusConfig.tones[selectedVersion.status]}>
+                              {statusConfig.labels[selectedVersion.status]}
+                            </Badge>
+                          }
+                        >
+                          <div className={styles.versionMeta} style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
+                            <div>Создана: {new Date(selectedVersion.created_at).toLocaleDateString('ru-RU')}</div>
+                            {selectedVersion.updated_at && (
+                              <div>Обновлена: {new Date(selectedVersion.updated_at).toLocaleDateString('ru-RU')}</div>
+                            )}
+                            {selectedVersion.notes && (
+                              <div style={{ marginTop: '0.5rem' }}>
+                                <div style={{ fontWeight: 500, marginBottom: '0.25rem' }}>Заметки:</div>
+                                <div>{selectedVersion.notes}</div>
+                              </div>
+                            )}
+                          </div>
+                        </ContentBlock>
+                      ) : (
+                        <ContentBlock
+                          width="full"
+                          title="Версия"
+                        >
+                          <div className={styles.emptyState}>
+                            <p>Нет активной версии</p>
+                            <Button
+                              variant="primary"
+                              onClick={() => navigate(`/admin/baselines/${slug}/versions/new`)}
+                            >
+                              Создать версию
+                            </Button>
+                          </div>
+                        </ContentBlock>
+                      )
+                    }
+                  />
 
-            {/* Right column: Status badge (compact) - 1/2 */}
-            <StatusBadgeCard
-              label="Статус"
-              status={formData.is_active ? 'active' : 'inactive'}
-              statusOptions={[
-                { value: 'active', label: 'Активен', tone: 'success' },
-                { value: 'inactive', label: 'Неактивен', tone: 'neutral' },
-              ]}
-              editable={isEditable}
-              onStatusChange={(s) => handleFieldChange('is_active', s === 'active')}
-              width="1/2"
-            />
-
-            {/* Version block - under status, full width */}
-            {baseline?.recommended_version ? (
-              <ContentBlock
-                width="full"
-                title={`Основная версия (v${baseline.recommended_version.version})`}
-                headerActions={
-                  <Badge tone={STATUS_TONES[baseline.recommended_version.status]}>
-                    {STATUS_LABELS[baseline.recommended_version.status]}
-                  </Badge>
-                }
-              >
-                <pre className={styles.templateBlock}>
-                  {selectedVersion?.template.substring(0, 500)}
-                  {selectedVersion && selectedVersion.template.length > 500 && '...'}
-                </pre>
-                <div className={styles.versionActions}>
-                  <Button
-                    size="small"
-                    variant="outline"
-                    onClick={() => navigate(`/admin/baselines/${slug}/versions/${baseline.recommended_version!.version}`)}
-                  >
-                    Подробнее
-                  </Button>
+                  {selectedVersion && (
+                    <ContentBlock
+                      width="full"
+                      title="Шаблон бейслайна"
+                    >
+                      <pre className={styles.templateBlock}>
+                        {selectedVersion.template}
+                      </pre>
+                    </ContentBlock>
+                  )}
                 </div>
-              </ContentBlock>
-            ) : (
-              <ContentBlock
-                width="full"
-                title="Основная версия"
-              >
-                <div className={styles.emptyVersion}>
-                  <p>Нет версий</p>
-                  <Button variant="primary" onClick={handleCreateVersion}>
-                    Создать версию
-                  </Button>
+              ),
+            },
+            {
+              id: 'versions',
+              label: `Версии (${baseline?.versions?.length || 0})`,
+              content: (
+                <div className={styles.versionsSection}>
+                  <div className={styles.versionsHeader}>
+                    <Button
+                      variant="primary"
+                      onClick={() => navigate(`/admin/baselines/${slug}/versions/new`)}
+                    >
+                      Создать версию
+                    </Button>
+                  </div>
+                  <VersionsBlock
+                    entityType="baseline"
+                    versions={baseline?.versions || []}
+                    onSelectVersion={(version) => {
+                      navigate(`/admin/baselines/${slug}/versions/${version.version}`);
+                    }}
+                  />
                 </div>
-              </ContentBlock>
-            )}
-          </ContentGrid>
-        </TabPanel>
-
-        <TabPanel id="versions" activeTab={activeTab}>
-          <ContentBlock width="full" title="Версии">
-            <DataTable
-              columns={versionColumns}
-              data={baseline?.versions || []}
-              keyField="id"
-              onRowClick={(v: BaselineVersionInfo) => navigate(`/admin/baselines/${slug}/versions/${v.version}`)}
-            />
-            <div style={{ marginTop: '1rem' }}>
-              <Button variant="primary" onClick={handleCreateVersion}>
-                Создать версию
-              </Button>
-            </div>
-          </ContentBlock>
-        </TabPanel>
-      </Tabs>
+              ),
+            },
+          ]}
+        />
+      )}
     </EntityPage>
   );
 }
