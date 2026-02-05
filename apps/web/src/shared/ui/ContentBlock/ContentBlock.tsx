@@ -182,7 +182,7 @@ export function ContentBlock({
 
   return (
     <div 
-      className={`${styles.block} ${compact ? styles.compact : ''} ${className}`}
+      className={`${styles.block} ${styles[`width${width.replace('/', '_')}`]} ${compact ? styles.compact : ''} ${className}`}
     >
       <div className={styles.header}>
         {icon && (

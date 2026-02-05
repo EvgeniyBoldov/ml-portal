@@ -1,0 +1,86 @@
+/**
+ * VersionCard Styles
+ */
+
+.versionCard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+.metadata {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.content {
+  margin-top: var(--sp-2);
+}
+
+/* Empty state */
+.emptyState {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-6) var(--sp-4);
+  text-align: center;
+}
+
+.emptyText {
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+  margin: 0;
+}
+
+/* Template preview (Prompt/Baseline) */
+.templatePreview {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.templateLabel {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--text-secondary);
+}
+
+.templateContent {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: var(--sp-3);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+/* Limits table (Policy) */
+.limitsTable {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.limitsLabel {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--text-secondary);
+}
+
+.limitsGrid {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: var(--sp-2) var(--sp-3);
+}

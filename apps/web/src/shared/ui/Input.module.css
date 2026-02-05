@@ -1,39 +1,39 @@
 .input {
   width: 100%;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  color: var(--text-primary);
-  padding: 0.5rem 0.75rem;
+  background: var(--input-bg, #ffffff);
+  border: 1px solid var(--border-color, #e5e7eb);
+  color: var(--text-primary, #111827);
+  padding: var(--sp-2) var(--sp-3);
   border-radius: var(--radius-md, 6px);
   font-family: inherit;
-  font-size: 0.9375rem;
+  font-size: var(--font-size-md);
   line-height: 1.5;
   outline: none;
-  transition: all 0.2s ease;
+  transition: all var(--transition-fast);
 }
 
 .input::placeholder {
-  color: var(--text-tertiary);
+  color: var(--text-tertiary, #9ca3af);
 }
 
 .input:hover:not(:disabled):not(:read-only) {
-  border-color: rgba(255, 255, 255, 0.2);
-  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--border-color, #e5e7eb);
+  background: var(--input-bg-hover, #f9fafb);
 }
 
 .input:focus:not(:disabled):not(:read-only) {
-  border-color: var(--color-primary);
-  background: rgba(255, 255, 255, 0.05);
-  box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.15);
+  border-color: var(--color-primary, #8b5cf6);
+  background: var(--input-bg-focus, #ffffff);
+  box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.15);
 }
 
 /* Disabled/readonly state */
 .input:disabled,
 .input:read-only {
   cursor: default;
-  background: rgba(255, 255, 255, 0.02); /* Very subtle background */
-  border-color: transparent; /* No border for disabled to look cleaner */
-  color: var(--text-secondary);
+  background: var(--bg-disabled, #f3f4f6);
+  border-color: var(--border-color, #e5e7eb);
+  color: var(--text-secondary, #6b7280);
 }
 
 /* If inside a form that is actively being edited, we might want disabled fields (like slug) to look "locked" rather than just "view" */

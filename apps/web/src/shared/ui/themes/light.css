@@ -11,12 +11,25 @@
   --bg-tertiary: #f3f4f6;
   --bg-hover: #f3f4f6;
   --bg-active: #e5e7eb;
+  --bg-disabled: #f3f4f6;
+
+  /* Chat-specific colors from RGB values */
+  --chat-user-bg: rgba(79, 124, 255, 0.12);
+  --chat-user-border: rgba(79, 124, 255, 0.25);
+  --chat-assistant-bg: rgba(0, 0, 0, 0.04);
+  --chat-assistant-border: rgba(0, 0, 0, 0.08);
 
   /* Text colors */
   --text-primary: #111827;
   --text-secondary: #6b7280;
   --text-tertiary: #9ca3af;
   --text-inverse: #ffffff;
+
+  /* Legacy variables for chat compatibility */
+  --color-text: #111827;
+  --color-bg-secondary: #f4f6f8;
+  --muted: #6b7280;
+  --color-bg-hover: rgba(0, 0, 0, 0.02);
 
   /* Border colors */
   --border-color: #e5e7eb;
@@ -53,6 +66,8 @@
 
   /* Component-specific */
   --input-bg: #ffffff;
+  --input-bg-hover: #f9fafb;
+  --input-bg-focus: #ffffff;
   --input-border: #d1d5db;
   --input-focus-border: var(--color-primary);
   --input-disabled-bg: #f3f4f6;

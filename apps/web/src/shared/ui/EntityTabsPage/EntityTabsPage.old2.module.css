@@ -1,0 +1,129 @@
+/**
+ * EntityTabsPage styles
+ * 
+ * REDESIGNED: Hanging tabs, unified action buttons
+ */
+
+.tabsContainer {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  position: relative;
+}
+
+/* Hanging tabs - свисают сверху */
+.hangingTabs {
+  display: flex;
+  gap: var(--sp-1);
+  margin-top: -var(--sp-2);
+  margin-bottom: var(--sp-4);
+  z-index: 10;
+  position: relative;
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--bg-secondary, #f9fafb);
+  border: 1px solid var(--border-color, #e5e7eb);
+  border-bottom: none;
+  margin-bottom: -1px;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--text-secondary, #6b7280);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  position: relative;
+  top: 1px;
+}
+
+.tab:hover {
+  color: var(--text-primary, #111827);
+  background: var(--bg-hover, #f3f4f6);
+  border-color: var(--border-color, #e5e7eb);
+}
+
+.tab.active {
+  color: var(--color-primary, #8b5cf6);
+  background: var(--bg-primary, #ffffff);
+  border-color: var(--border-color, #e5e7eb);
+  border-bottom: 1px solid var(--bg-primary, #ffffff);
+  position: relative;
+  top: 1px;
+  z-index: 2;
+}
+
+.tab.active::after {
+  content: '';
+  position: absolute;
+  bottom: -1px;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: var(--bg-primary, #ffffff);
+}
+
+/* Tab content */
+.tabContent {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg-primary, #ffffff);
+  border: 1px solid var(--border-color, #e5e7eb);
+  border-radius: 0 0 var(--radius-md, 6px) var(--radius-md, 6px);
+  overflow: hidden;
+}
+
+.overviewTab {
+  height: 100%;
+  overflow: auto;
+}
+
+.versionsTab {
+  height: 100%;
+  overflow: auto;
+  padding: var(--sp-4);
+}
+
+/* Empty version state */
+.emptyVersion {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-4);
+  padding: var(--sp-8);
+  color: var(--text-secondary, #6b7280);
+  text-align: center;
+  height: 100%;
+}
+
+.emptyVersion p {
+  margin: 0;
+  font-size: var(--font-size-md);
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .hangingTabs {
+    margin-top: -var(--sp-1);
+    margin-bottom: var(--sp-3);
+  }
+
+  .tab {
+    padding: var(--sp-2) var(--sp-3);
+    font-size: var(--font-size-xs);
+  }
+
+  .tabContent {
+    border-radius: 0 0 var(--radius-sm, 4px) var(--radius-sm, 4px);
+  }
+
+  .versionsTab {
+    padding: var(--sp-3);
+  }
+}

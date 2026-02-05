@@ -1,0 +1,101 @@
+/**
+ * Shared Typography Utilities
+ * Text styles to replace inline styles
+ */
+
+/* Text Colors */
+.textPrimary {
+  color: var(--text-primary);
+}
+
+.textSecondary {
+  color: var(--text-secondary);
+}
+
+.textTertiary {
+  color: var(--text-tertiary);
+}
+
+.textMuted {
+  color: var(--text-secondary);
+}
+
+/* Font Sizes */
+.textXs {
+  font-size: var(--font-size-xs);
+}
+
+.textSm {
+  font-size: var(--font-size-sm);
+}
+
+.textMd {
+  font-size: var(--font-size-md);
+}
+
+.textLg {
+  font-size: var(--font-size-lg);
+}
+
+.textXl {
+  font-size: var(--font-size-xl);
+}
+
+/* Font Weights */
+.fontNormal {
+  font-weight: var(--font-weight-normal);
+}
+
+.fontMedium {
+  font-weight: var(--font-weight-medium);
+}
+
+.fontSemibold {
+  font-weight: var(--font-weight-semibold);
+}
+
+.fontBold {
+  font-weight: var(--font-weight-bold);
+}
+
+/* Combined Patterns */
+.textSmMuted {
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+}
+
+.textSmBold {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+}
+
+.textXsMuted {
+  font-size: var(--font-size-xs);
+  color: var(--text-tertiary);
+}
+
+/* Text Alignment */
+.textLeft {
+  text-align: left;
+}
+
+.textCenter {
+  text-align: center;
+}
+
+.textRight {
+  text-align: right;
+}
+
+/* Line Height */
+.lineHeightTight {
+  line-height: var(--line-height-tight);
+}
+
+.lineHeightNormal {
+  line-height: var(--line-height-normal);
+}
+
+.lineHeightRelaxed {
+  line-height: var(--line-height-relaxed);
+}

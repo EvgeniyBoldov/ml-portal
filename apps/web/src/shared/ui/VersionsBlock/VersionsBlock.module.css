@@ -2,10 +2,15 @@
 
 .versionsBlock {
   width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
 }
 
 .versionsTable {
   width: 100%;
+  flex: 1;
+  min-height: 0;
 }
 
 /* Clickable rows */
@@ -15,7 +20,7 @@
 }
 
 .versionsTable :global(.data-table tbody tr:hover) {
-  background-color: var(--bg-tertiary);
+  background-color: var(--bg-tertiary, var(--color-bg-secondary));
 }
 
 /* Animation */
@@ -70,29 +75,13 @@
   }
 }
 
-/* Animation */
-.versionsBlock {
-  animation: fadeIn 0.2s ease-in-out;
-}
-
-@keyframes fadeIn {
-  from {
-    opacity: 0;
-    transform: translateY(4px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
 /* Table row hover effect */
 .versionsTable :global(.table-row:hover) {
-  background-color: var(--bg-hover);
+  background-color: var(--bg-hover, var(--color-bg-secondary));
   cursor: pointer;
 }
 
 .versionsTable :global(.table-row.selected) {
-  background-color: var(--bg-selected);
-  border-color: var(--border-accent);
+  background-color: var(--bg-selected, var(--color-bg-secondary));
+  border-color: var(--border-accent, var(--color-border));
 }

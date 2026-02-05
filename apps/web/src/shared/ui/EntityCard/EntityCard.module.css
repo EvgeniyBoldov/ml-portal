@@ -1,0 +1,99 @@
+/**
+ * EntityCard Styles
+ */
+
+.card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.cardHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--sp-4);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.cardTitle {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.cardTitle h2 {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.cardIcon {
+  display: flex;
+  align-items: center;
+  color: var(--text-secondary);
+}
+
+.cardActions {
+  display: flex;
+  gap: var(--sp-2);
+}
+
+.cardContent {
+  padding: var(--sp-4);
+}
+
+/* List Item */
+.listItem {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--sp-3) 0;
+  border-bottom: 1px solid var(--border-color);
+  transition: background-color var(--transition-fast);
+}
+
+.listItem:last-child {
+  border-bottom: none;
+}
+
+.listItem.clickable {
+  cursor: pointer;
+  padding: var(--sp-3);
+  margin: 0 calc(var(--sp-3) * -1);
+  border-radius: var(--radius-md);
+}
+
+.listItem.clickable:hover {
+  background-color: var(--bg-hover);
+}
+
+.listItemMain {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  flex: 1;
+}
+
+.listItemTitle {
+  font-weight: var(--font-weight-medium);
+  color: var(--text-primary);
+}
+
+.listItemSub {
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+}
+
+.listItemBadge {
+  display: flex;
+  align-items: center;
+}
+
+.listItemBadges {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+}

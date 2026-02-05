@@ -45,6 +45,8 @@ export interface EntityPageProps {
   children: React.ReactNode;
   /** Additional actions in header */
   headerActions?: React.ReactNode;
+  /** Custom action buttons (overrides default buttons) */
+  actionButtons?: React.ReactNode;
   /** Breadcrumbs for navigation */
   breadcrumbs?: BreadcrumbItem[];
 }
@@ -63,6 +65,7 @@ export function EntityPage({
   showDelete = false,
   children,
   headerActions,
+  actionButtons,
   breadcrumbs,
 }: EntityPageProps) {
   const navigate = useNavigate();
@@ -104,38 +107,45 @@ export function EntityPage({
         <div className={styles.headerRight}>
           {headerActions}
           
-          {mode === 'view' && onEdit && (
-            <Button variant="primary" onClick={onEdit}>
-              Редактировать
-            </Button>
-          )}
-
-          {mode === 'edit' && (
+          {/* Custom action buttons override default ones */}
+          {actionButtons ? (
+            <div className={styles.actionButtons}>{actionButtons}</div>
+          ) : (
             <>
-              <Button variant="outline" onClick={onCancel} disabled={saving}>
-                Отмена
-              </Button>
-              <Button variant="primary" onClick={onSave} disabled={saving}>
-                {saving ? 'Сохранение...' : 'Сохранить'}
-              </Button>
-            </>
-          )}
+              {mode === 'view' && onEdit && (
+                <Button variant="primary" onClick={onEdit}>
+                  Редактировать
+                </Button>
+              )}
 
-          {mode === 'create' && (
-            <>
-              <Button variant="outline" onClick={() => navigate(backPath)}>
-                Отмена
-              </Button>
-              <Button variant="primary" onClick={onSave} disabled={saving}>
-                {saving ? 'Создание...' : 'Создать'}
-              </Button>
-            </>
-          )}
+              {mode === 'edit' && (
+                <>
+                  <Button variant="outline" onClick={onCancel} disabled={saving}>
+                    Отмена
+                  </Button>
+                  <Button variant="primary" onClick={onSave} disabled={saving}>
+                    {saving ? 'Сохранение...' : 'Сохранить'}
+                  </Button>
+                </>
+              )}
 
-          {showDelete && mode === 'view' && onDelete && (
-            <Button variant="danger" onClick={onDelete}>
-              Удалить
-            </Button>
+              {mode === 'create' && (
+                <>
+                  <Button variant="outline" onClick={() => navigate(backPath)}>
+                    Отмена
+                  </Button>
+                  <Button variant="primary" onClick={onSave} disabled={saving}>
+                    {saving ? 'Создание...' : 'Создать'}
+                  </Button>
+                </>
+              )}
+
+              {showDelete && mode === 'view' && onDelete && (
+                <Button variant="danger" onClick={onDelete}>
+                  Удалить
+                </Button>
+              )}
+            </>
           )}
         </div>
       </header>

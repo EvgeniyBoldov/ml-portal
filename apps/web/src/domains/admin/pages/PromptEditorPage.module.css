@@ -1,38 +1,3 @@
-.versionHeader {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 1rem;
-  padding-bottom: 0.75rem;
-  border-bottom: 1px solid var(--border);
-}
-
-.versionDate {
-  font-size: 0.75rem;
-  color: var(--muted);
-}
-
-.templateBlock {
-  background: var(--bg-hover);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 1rem;
-  font-size: 0.8rem;
-}
-
-.versionsSection {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-md);
-  margin-top: 1.5rem;
-}
-
-.versionsHeader {
-  display: flex;
-  justify-content: flex-end;
-  padding-bottom: var(--spacing-md);
-}
-
 .templateBlock {
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
   overflow: auto;
@@ -40,96 +5,9 @@
   margin: 0 0 1rem 0;
   white-space: pre-wrap;
   word-break: break-word;
-}
-
-.versionActions {
-  display: flex;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-}
-
-.versionsTable {
-  overflow: auto;
-  max-height: 200px;
-}
-
-.versionsTable table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.875rem;
-}
-
-.versionsTable th {
-  text-align: left;
-  padding: 0.5rem 0.75rem;
-  background: var(--bg-subtle);
-  font-weight: 500;
-  font-size: 0.75rem;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--muted);
-  position: sticky;
-  top: 0;
-}
-
-.versionsTable td {
-  padding: 0.5rem 0.75rem;
-  border-top: 1px solid var(--border);
-}
-
-.versionsTable tr {
-  cursor: pointer;
-  transition: background 0.15s;
-}
-
-.versionsTable tr:hover {
   background: var(--bg-hover);
-}
-
-.versionsTable tr.selected {
-  background: var(--primary-bg);
-}
-
-.versionsTable tr.selected td {
-  color: var(--primary);
-}
-
-.modalContent {
-  display: flex;
-  flex-direction: column;
-  gap: 1rem;
-}
-
-.modalHint {
-  font-size: 0.875rem;
-  color: var(--muted);
-  margin: 0;
-}
-
-.templateInput {
-  font-family: 'JetBrains Mono', 'Fira Code', monospace;
-  font-size: 0.85rem;
-}
-
-.modalActions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 0.5rem;
-  margin-top: 0.5rem;
-}
-
-.emptyVersion {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 2rem;
-  text-align: center;
-  color: var(--muted);
-  gap: 1rem;
-}
-
-.emptyVersion p {
-  margin: 0;
-  font-size: 0.875rem;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 1rem;
+  font-size: 0.8rem;
 }

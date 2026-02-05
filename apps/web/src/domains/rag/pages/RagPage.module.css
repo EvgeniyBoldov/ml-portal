@@ -3,7 +3,7 @@
   display: flex;
   flex-direction: column;
   height: 100%;
-  background: var(--color-bg);
+  background: var(--bg-primary);
   position: relative;
   overflow: hidden;
 }
@@ -16,8 +16,8 @@
 .dropOverlay {
   position: absolute;
   inset: 0;
-  background: rgba(var(--primary-rgb, 99, 102, 241), 0.1);
-  border: 3px dashed var(--primary);
+  background: rgba(139, 92, 246, 0.1);
+  border: 3px dashed var(--color-primary);
   border-radius: var(--radius-lg);
   z-index: 100;
   display: flex;
@@ -31,7 +31,7 @@
   flex-direction: column;
   align-items: center;
   gap: 12px;
-  color: var(--primary);
+  color: var(--color-primary);
   font-size: 18px;
   font-weight: 600;
 }
@@ -42,8 +42,8 @@
   justify-content: space-between;
   align-items: center;
   padding: 20px 24px;
-  border-bottom: 1px solid var(--color-border);
-  background: var(--panel);
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-secondary);
   flex-shrink: 0;
 }
 
@@ -56,13 +56,13 @@
 .title {
   font-size: 24px;
   font-weight: 700;
-  color: var(--text);
+  color: var(--text-primary);
   margin: 0;
 }
 
 .subtitle {
   font-size: 14px;
-  color: var(--muted);
+  color: var(--text-secondary);
 }
 
 .headerRight {
@@ -83,8 +83,8 @@
   grid-template-columns: repeat(4, 1fr);
   gap: 16px;
   padding: 20px 24px;
-  background: var(--panel);
-  border-bottom: 1px solid var(--color-border);
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
 }
 
 .statCard {
@@ -93,7 +93,7 @@
   align-items: center;
   gap: 4px;
   padding: 16px;
-  background: var(--color-bg);
+  background: var(--bg-primary);
   border: 2px solid transparent;
   border-radius: var(--radius-md);
   cursor: pointer;
@@ -101,19 +101,19 @@
 }
 
 .statCard:hover {
-  border-color: var(--color-border);
+  border-color: var(--border-color);
 }
 
 .statCard.active {
-  border-color: var(--primary);
-  background: var(--color-bg-secondary);
+  border-color: var(--color-primary);
+  background: var(--bg-tertiary);
 }
 
-.statCard.neutral .statValue { color: var(--text); }
-.statCard.success .statValue { color: var(--success); }
-.statCard.warning .statValue { color: var(--warning); }
-.statCard.danger .statValue { color: var(--danger); }
-.statCard.primary .statValue { color: var(--primary); }
+.statCard.neutral .statValue { color: var(--text-primary); }
+.statCard.success .statValue { color: var(--color-success); }
+.statCard.warning .statValue { color: var(--color-warning); }
+.statCard.danger .statValue { color: var(--color-danger); }
+.statCard.primary .statValue { color: var(--color-primary); }
 
 .statValue {
   font-size: 28px;
@@ -123,7 +123,7 @@
 
 .statLabel {
   font-size: 12px;
-  color: var(--muted);
+  color: var(--text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
@@ -134,8 +134,8 @@
   justify-content: space-between;
   align-items: center;
   padding: 16px 24px;
-  background: var(--panel);
-  border-bottom: 1px solid var(--color-border);
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
   gap: 16px;
 }
 
@@ -151,17 +151,17 @@
 
 .select {
   padding: 8px 12px;
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
-  background: var(--color-bg);
-  color: var(--text);
+  background: var(--bg-primary);
+  color: var(--text-primary);
   font-size: 14px;
   cursor: pointer;
 }
 
 .select:focus {
   outline: none;
-  border-color: var(--primary);
+  border-color: var(--color-primary);
 }
 
 .toolbarRight {
@@ -175,21 +175,21 @@
   align-items: center;
   gap: 12px;
   padding: 8px 16px;
-  background: var(--color-bg-secondary);
+  background: var(--bg-tertiary);
   border-radius: var(--radius-md);
 }
 
 .selectedCount {
   font-size: 14px;
   font-weight: 500;
-  color: var(--text);
+  color: var(--text-primary);
 }
 
 /* Table Container */
 .tableContainer {
   flex: 1;
   overflow: auto;
-  background: var(--panel);
+  background: var(--bg-secondary);
 }
 
 .loading,
@@ -200,14 +200,14 @@
   justify-content: center;
   height: 300px;
   gap: 16px;
-  color: var(--muted);
+  color: var(--text-secondary);
 }
 
 .spinner {
   width: 32px;
   height: 32px;
   border: 3px solid var(--color-border);
-  border-top-color: var(--primary);
+  border-top-color: var(--color-primary);
   border-radius: 50%;
   animation: spin 1s linear infinite;
 }
@@ -219,7 +219,7 @@
 .empty h3 {
   margin: 0;
   font-size: 18px;
-  color: var(--text);
+  color: var(--text-primary);
 }
 
 .empty p {
@@ -241,16 +241,16 @@
 .table td {
   padding: 12px 16px;
   text-align: left;
-  border-bottom: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--border-color);
 }
 
 .table th {
   font-size: 12px;
   font-weight: 600;
-  color: var(--muted);
+  color: var(--text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  background: var(--color-bg-secondary);
+  background: var(--bg-tertiary);
   position: sticky;
   top: 0;
   z-index: 10;
@@ -262,7 +262,7 @@
 }
 
 .table th.sortable:hover {
-  color: var(--text);
+  color: var(--text-primary);
 }
 
 .table th.sortable svg {
@@ -275,11 +275,11 @@
 }
 
 .table tbody tr:hover {
-  background: var(--color-bg-secondary);
+  background: var(--bg-tertiary);
 }
 
 .table tbody tr.selected {
-  background: rgba(var(--primary-rgb, 99, 102, 241), 0.1);
+  background: rgba(139, 92, 246, 0.1);
 }
 
 .checkboxCell {
@@ -301,7 +301,7 @@
   background: none;
   border: none;
   padding: 0;
-  color: var(--text);
+  color: var(--text-primary);
   font-weight: 500;
   cursor: pointer;
   text-align: left;
@@ -313,7 +313,7 @@
 }
 
 .nameButton:hover {
-  color: var(--primary);
+  color: var(--color-primary);
   text-decoration: underline;
 }
 
@@ -340,22 +340,22 @@
 
 .tag {
   padding: 2px 8px;
-  background: var(--color-bg-secondary);
+  background: var(--bg-tertiary);
   border-radius: 12px;
   font-size: 12px;
-  color: var(--muted);
+  color: var(--text-secondary);
 }
 
 .tagMore {
   padding: 2px 8px;
-  background: var(--primary);
+  background: var(--color-primary);
   color: white;
   border-radius: 12px;
   font-size: 12px;
 }
 
 .muted {
-  color: var(--muted);
+  color: var(--text-secondary);
   font-size: 13px;
 }
 
@@ -376,21 +376,21 @@
   background: none;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
-  color: var(--muted);
+  color: var(--text-secondary);
   cursor: pointer;
   transition: all 0.15s ease;
 }
 
 .actionBtn:hover {
-  background: var(--color-bg-secondary);
-  border-color: var(--color-border);
-  color: var(--text);
+  background: var(--bg-tertiary);
+  border-color: var(--border-color);
+  color: var(--text-primary);
 }
 
 .actionBtn.danger:hover {
-  background: rgba(var(--danger-rgb, 239, 68, 68), 0.1);
-  border-color: var(--danger);
-  color: var(--danger);
+  background: rgba(239, 68, 68, 0.1);
+  border-color: var(--color-danger);
+  color: var(--color-danger);
 }
 
 /* Pulsing animation for processing status */
@@ -417,12 +417,12 @@
   justify-content: center;
   gap: 8px;
   padding: 32px;
-  border: 2px dashed var(--color-border);
+  border: 2px dashed var(--border-color);
   border-radius: var(--radius-md);
-  background: var(--color-bg);
+  background: var(--bg-primary);
   cursor: pointer;
   transition: all 0.2s ease;
-  color: var(--muted);
+  color: var(--text-secondary);
   user-select: none;
 }
 
@@ -431,8 +431,8 @@
 }
 
 .dropZone:hover {
-  border-color: var(--primary);
-  background: var(--color-bg-secondary);
+  border-color: var(--color-primary);
+  background: var(--bg-tertiary);
 }
 
 .dropZoneHint {
@@ -453,7 +453,7 @@
   align-items: center;
   gap: 8px;
   padding: 8px 12px;
-  background: var(--color-bg-secondary);
+  background: var(--bg-tertiary);
   border-radius: var(--radius-sm);
   font-size: 14px;
 }
@@ -466,7 +466,7 @@
 }
 
 .fileSize {
-  color: var(--muted);
+  color: var(--text-secondary);
   font-size: 12px;
 }
 
@@ -480,13 +480,13 @@
   background: none;
   border: none;
   border-radius: var(--radius-sm);
-  color: var(--muted);
+  color: var(--text-secondary);
   cursor: pointer;
 }
 
 .fileRemove:hover {
-  background: var(--color-bg);
-  color: var(--danger);
+  background: var(--bg-primary);
+  color: var(--color-danger);
 }
 
 .formGroup {
@@ -498,7 +498,7 @@
 .formGroup label {
   font-size: 13px;
   font-weight: 500;
-  color: var(--text);
+  color: var(--text-primary);
 }
 
 /* Responsive */

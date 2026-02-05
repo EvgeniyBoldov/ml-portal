@@ -1,10 +1,7 @@
 /**
  * BaselineVersionPage - View/Edit/Create baseline version
  * 
- * Routes:
- * - /admin/baselines/:slug/versions/new - Create new version
- * - /admin/baselines/:slug/versions/:version - View version
- * - /admin/baselines/:slug/versions/:version?mode=edit - Edit version (only draft)
+ * REFACTORED: Simplified with shared components
  */
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
@@ -12,15 +9,9 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { baselinesApi, type BaselineVersion } from '@/shared/api/baselines';
 import { qk } from '@/shared/api/keys';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
-import { EntityPage, type EntityPageMode } from '@/shared/ui/EntityPage';
-import { ContentBlock, ContentGrid, type FieldDefinition } from '@/shared/ui/ContentBlock';
-import { Badge, Button, StatusCard, type StatusOption } from '@/shared/ui';
+import { EntityPage, ContentBlock, ContentGrid, Textarea, type EntityPageMode, type BreadcrumbItem } from '@/shared/ui';
+import { StatusBadgeCard, type StatusOption } from '@/shared/ui';
 import { useStatusConfig } from '@/shared/hooks/useStatusConfig';
-import styles from './BaselineVersionPage.module.css';
-
-interface FormData {
-  template: string;
-}
 
 export function BaselineVersionPage() {
   const { slug, version: versionParam } = useParams<{ slug: string; version: string }>();
@@ -37,29 +28,22 @@ export function BaselineVersionPage() {
   const mode: EntityPageMode = isCreate ? 'create' : isEditMode ? 'edit' : 'view';
   const isEditable = mode === 'edit' || mode === 'create';
 
-  const [formData, setFormData] = useState<FormData>({
-    template: '',
-  });
+  const [formData, setFormData] = useState({ template: '' });
   const [saving, setSaving] = useState(false);
 
-  // Load baseline for breadcrumbs and to find version ID
-  const { data: baseline, isLoading: baselineLoading } = useQuery({
+  // Load baseline for breadcrumbs
+  const { data: baseline } = useQuery({
     queryKey: qk.baselines.detail(slug!),
     queryFn: () => baselinesApi.get(slug!),
     enabled: !!slug,
   });
 
-  // Find the version ID from baseline versions by version number
-  const versionId = baseline?.versions?.find(v => v.version === versionNumber)?.id;
-
-  // Load existing version (only if we have versionId)
-  const { data: existingVersion, isLoading: versionLoading } = useQuery({
-    queryKey: qk.baselines.version(slug!, versionNumber),
-    queryFn: () => baselinesApi.getVersion(slug!, versionId!),
-    enabled: !isCreate && !!slug && !!versionId,
+  // Load existing version
+  const { data: existingVersion, isLoading } = useQuery({
+    queryKey: ['baselines', slug, 'versions', versionNumber],
+    queryFn: () => baselinesApi.getVersion(slug!, String(versionNumber)),
+    enabled: !isCreate && !!slug && versionNumber > 0,
   });
-
-  const isLoading = baselineLoading || versionLoading;
 
   useEffect(() => {
     if (isCreate) {
@@ -72,7 +56,7 @@ export function BaselineVersionPage() {
   // Mutations
   const createMutation = useMutation({
     mutationFn: (data: { template: string }) => baselinesApi.createVersion(slug!, data),
-    onSuccess: (created) => {
+    onSuccess: (created: BaselineVersion) => {
       queryClient.invalidateQueries({ queryKey: qk.baselines.detail(slug!) });
       showSuccess('Версия создана');
       navigate(`/admin/baselines/${slug}/versions/${created.version}`);
@@ -81,8 +65,9 @@ export function BaselineVersionPage() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: (data: { template: string }) => baselinesApi.updateVersion(slug!, existingVersion!.id, data),
+    mutationFn: (data: { template: string }) => baselinesApi.updateVersion(existingVersion!.id, data),
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['baselines', slug, 'versions', versionNumber] });
       queryClient.invalidateQueries({ queryKey: qk.baselines.detail(slug!) });
       showSuccess('Версия обновлена');
       setSearchParams({});
@@ -90,162 +75,106 @@ export function BaselineVersionPage() {
     onError: (err: Error) => showError(err.message),
   });
 
-  const activateMutation = useMutation({
-    mutationFn: () => baselinesApi.activateVersion(slug!, existingVersion!.id),
+  const changeStatusMutation = useMutation({
+    mutationFn: (status: string) => baselinesApi.updateVersionStatus(existingVersion!.id, status),
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['baselines', slug, 'versions', versionNumber] });
       queryClient.invalidateQueries({ queryKey: qk.baselines.detail(slug!) });
-      showSuccess('Версия активирована');
+      showSuccess('Статус изменен');
     },
     onError: (err: Error) => showError(err.message),
   });
 
-  const archiveMutation = useMutation({
-    mutationFn: () => baselinesApi.archiveVersion(slug!, existingVersion!.id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.baselines.detail(slug!) });
-      showSuccess('Версия архивирована');
-    },
-    onError: (err: Error) => showError(err.message),
-  });
-
-  const setRecommendedMutation = useMutation({
-    mutationFn: () => baselinesApi.setRecommendedVersion(slug!, existingVersion!.id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.baselines.detail(slug!) });
-      showSuccess('Версия установлена как основная');
-    },
-    onError: (err: Error) => showError(err.message),
-  });
-
+  // Handlers
   const handleSave = async () => {
+    if (!formData.template.trim()) {
+      showError('Template не может быть пустым');
+      return;
+    }
     setSaving(true);
     try {
-      if (mode === 'create') {
-        await createMutation.mutateAsync({ template: formData.template });
+      if (isCreate) {
+        await createMutation.mutateAsync(formData);
       } else {
-        await updateMutation.mutateAsync({ template: formData.template });
+        await updateMutation.mutateAsync(formData);
       }
     } finally {
       setSaving(false);
     }
   };
 
-  const handleEdit = () => {
-    if (existingVersion?.status !== 'draft') {
-      showError('Только черновики можно редактировать');
-      return;
-    }
-    setSearchParams({ mode: 'edit' });
-  };
-
+  const handleEdit = () => setSearchParams({ mode: 'edit' });
+  
   const handleCancel = () => {
-    if (mode === 'edit' && existingVersion) {
-      setFormData({ template: existingVersion.template });
+    if (isCreate) {
+      navigate(`/admin/prompts/${slug}`);
+    } else {
+      if (existingVersion) {
+        setFormData({ template: existingVersion.template });
+      }
       setSearchParams({});
-    } else if (mode === 'create') {
-      navigate(`/admin/baselines/${slug}`);
     }
   };
 
-  const handleFieldChange = (key: string, value: any) => {
-    setFormData(prev => ({ ...prev, [key]: value }));
-  };
-
-  // Status options
   const statusOptions: StatusOption[] = [
-    { value: 'draft', label: 'Черновик', tone: 'warn' },
-    { value: 'active', label: 'Активна', tone: 'success' },
-    { value: 'archived', label: 'Архив', tone: 'neutral' },
+    { value: 'draft', label: statusConfig.labels.draft, tone: statusConfig.tones.draft },
+    { value: 'active', label: statusConfig.labels.active, tone: statusConfig.tones.active },
+    { value: 'archived', label: statusConfig.labels.archived, tone: statusConfig.tones.archived },
   ];
 
-  // Field definitions
-  const templateFields: FieldDefinition[] = [
-    {
-      key: 'template',
-      label: 'Текст бейслайна',
-      type: 'textarea',
-      required: true,
-      placeholder: 'Введите текст бейслайна...',
-      rows: 16,
-      description: 'Ограничения и правила для агента',
-    },
-  ];
-
-  const breadcrumbs = [
-    { label: 'Бейслайны', href: '/admin/baselines' },
-    { label: baseline?.name || slug || '', href: `/admin/baselines/${slug}` },
+  const breadcrumbs: BreadcrumbItem[] = [
+    { label: 'Промпты', href: '/admin/prompts' },
+    { label: prompt?.name || slug || '', href: `/admin/prompts/${slug}` },
     { label: isCreate ? 'Новая версия' : `Версия ${versionNumber}` },
   ];
-
-  // Check if this version is the recommended one
-  const isRecommended = baseline?.recommended_version?.id === existingVersion?.id;
-
-  // Render header actions based on new flow:
-  // Draft: Activate only (edit via onEdit prop)
-  // Active: Set as recommended (if not already), Archive
-  // Archived: nothing
-  const renderHeaderActions = () => {
-    if (isCreate) return null;
-    return (
-      <>
-        {existingVersion?.status === 'draft' && (
-          <Button variant="primary" onClick={() => activateMutation.mutate()} disabled={activateMutation.isPending}>
-            Активировать
-          </Button>
-        )}
-        {existingVersion?.status === 'active' && (
-          <>
-            {!isRecommended && (
-              <Button variant="primary" onClick={() => setRecommendedMutation.mutate()} disabled={setRecommendedMutation.isPending}>
-                Сделать основной
-              </Button>
-            )}
-            <Button variant="secondary" onClick={() => archiveMutation.mutate()} disabled={archiveMutation.isPending}>
-              Архивировать
-            </Button>
-          </>
-        )}
-        {/* Archived versions have no actions */}
-        <Button variant="secondary" onClick={() => navigate(`/admin/baselines/${slug}/versions/new`)}>
-          Новая версия
-        </Button>
-      </>
-    );
-  };
 
   return (
     <EntityPage
       mode={mode}
       entityName={isCreate ? 'Новая версия' : `Версия ${versionNumber}`}
       entityTypeLabel="версии"
-      backPath={`/admin/baselines/${slug}`}
-      loading={isLoading}
+      backPath={`/admin/prompts/${slug}`}
+      breadcrumbs={breadcrumbs}
+      loading={!isCreate && isLoading}
       saving={saving}
-      onEdit={existingVersion?.status === 'draft' ? handleEdit : undefined}
+      onEdit={handleEdit}
       onSave={handleSave}
       onCancel={handleCancel}
-      breadcrumbs={breadcrumbs}
-      headerActions={renderHeaderActions()}
     >
       <ContentGrid>
-        {/* Left column: Template - 2/3 */}
-        <ContentBlock
-          width="2/3"
-          title="Текст бейслайна"
-          editable={isEditable}
-          fields={templateFields}
-          data={formData}
-          onChange={handleFieldChange}
-        />
+        {/* Template - 2/3 width */}
+        <ContentBlock width="2/3" title="Template" icon="file-text">
+          {isEditable ? (
+            <Textarea
+              value={formData.template}
+              onChange={(e) => setFormData({ template: e.target.value })}
+              placeholder="Введите template промпта..."
+              rows={20}
+              style={{ fontFamily: 'monospace' }}
+            />
+          ) : (
+            <pre style={{ 
+              whiteSpace: 'pre-wrap', 
+              wordBreak: 'break-word',
+              fontFamily: 'monospace',
+              fontSize: '0.875rem',
+              lineHeight: '1.5',
+            }}>
+              {existingVersion?.template || 'Нет template'}
+            </pre>
+          )}
+        </ContentBlock>
 
-        {/* Right column: Status - 1/3 */}
-        <StatusBadgeCard
-          label="Статус"
-          status={isCreate ? 'draft' : (existingVersion?.status || 'draft')}
-          statusOptions={statusOptions}
-          editable={false}
-          width="1/3"
-        />
+        {/* Status - 1/3 width */}
+        {!isCreate && existingVersion && (
+          <StatusBadgeCard
+            label="Статус"
+            status={existingVersion.status}
+            statusOptions={statusOptions}
+            onChangeStatus={(status) => changeStatusMutation.mutate(status)}
+            disabled={changeStatusMutation.isPending}
+          />
+        )}
       </ContentGrid>
     </EntityPage>
   );

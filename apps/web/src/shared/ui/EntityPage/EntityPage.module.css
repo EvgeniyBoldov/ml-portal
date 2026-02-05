@@ -83,14 +83,20 @@
 .headerRight {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: var(--sp-2);
   flex-shrink: 0;
 }
 
+.actionButtons {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
 .actionBar {
-  padding: 1rem 1.5rem;
-  background: var(--panel);
-  border-bottom: 1px solid var(--border, var(--color-border));
+  padding: var(--sp-4) var(--sp-6);
+  background: var(--bg-secondary, #f9fafb);
+  border-bottom: 1px solid var(--border-color, #e5e7eb);
   flex-shrink: 0;
 }
 

@@ -29,6 +29,8 @@ export interface VersionsBlockProps {
   selectedVersion?: VersionInfo;
   /** On version selection */
   onSelectVersion?: (version: VersionInfo) => void;
+  /** Custom columns override */
+  columns?: DataTableColumn<VersionInfo>[];
   /** Additional CSS class */
   className?: string;
 }
@@ -38,11 +40,12 @@ export function VersionsBlock({
   versions,
   selectedVersion,
   onSelectVersion,
+  columns: customColumns,
   className = '',
 }: VersionsBlockProps) {
   const statusConfig = useStatusConfig(entityType);
 
-  const columns: DataTableColumn<VersionInfo>[] = [
+  const defaultColumns: DataTableColumn<VersionInfo>[] = [
     {
       key: 'version',
       label: 'Версия',
@@ -70,6 +73,8 @@ export function VersionsBlock({
         : '-',
     },
   ];
+
+  const columns = customColumns || defaultColumns;
 
   return (
     <div className={`${styles.versionsBlock} ${className}`}>

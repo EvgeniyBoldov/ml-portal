@@ -1,34 +1,34 @@
 .header {
-  padding: 12px 16px;
+  padding: var(--sp-3) var(--sp-4);
   text-align: left;
-  font-weight: 500;
-  font-size: 0.75rem;
-  color: var(--muted, #8b8b9a);
+  font-weight: var(--font-weight-medium);
+  font-size: var(--font-size-xs);
+  color: var(--text-tertiary);
   text-transform: uppercase;
   letter-spacing: 0.05em;
   white-space: nowrap;
   background: transparent;
-  border-bottom: 1px solid var(--border, #2a2a3e);
+  border-bottom: 1px solid var(--border-color);
   vertical-align: middle;
 }
 
 .header.sortable {
   cursor: pointer;
   user-select: none;
-  transition: color 0.15s ease;
+  transition: color var(--transition-fast);
 }
 
 .header.sortable:hover {
-  color: var(--text, #e4e4e7);
+  color: var(--text-primary);
 }
 
 .header.sortable:focus-visible {
-  outline: 2px solid var(--primary, #8b5cf6);
+  outline: 2px solid var(--color-primary);
   outline-offset: -2px;
 }
 
 .header.active {
-  color: var(--primary, #8b5cf6);
+  color: var(--color-primary);
 }
 
 .label {
@@ -37,7 +37,7 @@
 
 .sortIcon {
   display: inline-block;
-  margin-left: 4px;
+  margin-left: var(--sp-1);
   vertical-align: middle;
   opacity: 0.6;
   font-size: 10px;

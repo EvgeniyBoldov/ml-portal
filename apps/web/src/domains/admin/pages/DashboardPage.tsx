@@ -1,12 +1,9 @@
 import React from 'react';
-import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { adminApi } from '@shared/api/admin';
 import { qk } from '@shared/api/keys';
 import { StatCard } from '../components';
-import { AdminPage } from '@/shared/ui';
-import Button from '@shared/ui/Button';
-import Badge from '@shared/ui/Badge';
+import { AdminPage, EntityCard, QuickAction, QuickActionGrid, Badge, Button } from '@/shared/ui';
 import styles from './DashboardPage.module.css';
 
 export function DashboardPage() {
@@ -72,111 +69,82 @@ export function DashboardPage() {
         </section>
 
         <div className={styles.grid}>
-          <section className={styles.card}>
-            <div className={styles.cardHeader}>
-              <h2 className={styles.cardTitle}>Последние пользователи</h2>
-              <Link to="/admin/users">
-                <Button variant="outline" size="small">Все пользователи</Button>
-              </Link>
-            </div>
-            <div className={styles.cardContent}>
-              {users?.users?.slice(0, 5).map(user => (
-                <div key={user.id} className={styles.listItem}>
-                  <div className={styles.listItemMain}>
-                    <span className={styles.listItemTitle}>{user.login}</span>
-                    <span className={styles.listItemSub}>{user.email || '—'}</span>
-                  </div>
+          <EntityCard
+            title="Последние пользователи"
+            actions={<Button variant="outline" size="small" onClick={() => window.location.href = '/admin/users'}>Все пользователи</Button>}
+          >
+            {users?.users?.slice(0, 5).map(user => (
+              <EntityCard.Item
+                key={user.id}
+                title={user.login}
+                subtitle={user.email || '—'}
+                badge={
                   <Badge tone={user.is_active ? 'success' : 'neutral'}>
                     {user.is_active ? 'Активен' : 'Неактивен'}
                   </Badge>
-                </div>
-              ))}
-              {(!users?.users || users.users.length === 0) && (
-                <div className={styles.empty}>Нет пользователей</div>
-              )}
-            </div>
-          </section>
+                }
+              />
+            ))}
+            {(!users?.users || users.users.length === 0) && (
+              <div className={styles.empty}>Нет пользователей</div>
+            )}
+          </EntityCard>
 
-          <section className={styles.card}>
-            <div className={styles.cardHeader}>
-              <h2 className={styles.cardTitle}>Модели</h2>
-              <Link to="/admin/models">
-                <Button variant="outline" size="small">Все модели</Button>
-              </Link>
-            </div>
-            <div className={styles.cardContent}>
-              {models?.items?.slice(0, 5).map(model => (
-                <div key={model.id} className={styles.listItem}>
-                  <div className={styles.listItemMain}>
-                    <span className={styles.listItemTitle}>{model.alias}</span>
-                    <span className={styles.listItemSub}>{model.provider}</span>
-                  </div>
-                  <div className={styles.listItemBadges}>
-                    <Badge tone={model.type === 'llm_chat' ? 'info' : 'success'} size="small">
+          <EntityCard
+            title="Модели"
+            actions={<Button variant="outline" size="small" onClick={() => window.location.href = '/admin/models'}>Все модели</Button>}
+          >
+            {models?.items?.slice(0, 5).map(model => (
+              <EntityCard.Item
+                key={model.id}
+                title={model.alias}
+                subtitle={model.provider}
+                badges={
+                  <>
+                    <Badge tone={model.type === 'llm_chat' ? 'info' : 'success'}>
                       {model.type === 'llm_chat' ? 'LLM' : 'Embed'}
                     </Badge>
                     {model.default_for_type && (
-                      <Badge tone="warning" size="small">Default</Badge>
+                      <Badge tone="warn">Default</Badge>
                     )}
-                  </div>
-                </div>
-              ))}
-              {(!models?.items || models.items.length === 0) && (
-                <div className={styles.empty}>Нет моделей</div>
-              )}
-            </div>
-          </section>
+                  </>
+                }
+              />
+            ))}
+            {(!models?.items || models.items.length === 0) && (
+              <div className={styles.empty}>Нет моделей</div>
+            )}
+          </EntityCard>
 
-          <section className={styles.card}>
-            <div className={styles.cardHeader}>
-              <h2 className={styles.cardTitle}>Тенанты</h2>
-              <Link to="/admin/tenants">
-                <Button variant="outline" size="small">Все тенанты</Button>
-              </Link>
-            </div>
-            <div className={styles.cardContent}>
-              {tenants?.items?.slice(0, 5).map(tenant => (
-                <div key={tenant.id} className={styles.listItem}>
-                  <div className={styles.listItemMain}>
-                    <span className={styles.listItemTitle}>{tenant.name}</span>
-                    <span className={styles.listItemSub}>{tenant.description || '—'}</span>
-                  </div>
+          <EntityCard
+            title="Тенанты"
+            actions={<Button variant="outline" size="small" onClick={() => window.location.href = '/admin/tenants'}>Все тенанты</Button>}
+          >
+            {tenants?.items?.slice(0, 5).map(tenant => (
+              <EntityCard.Item
+                key={tenant.id}
+                title={tenant.name}
+                subtitle={tenant.description || '—'}
+                badge={
                   <Badge tone={tenant.is_active ? 'success' : 'neutral'}>
                     {tenant.is_active ? 'Активен' : 'Неактивен'}
                   </Badge>
-                </div>
-              ))}
-              {(!tenants?.items || tenants.items.length === 0) && (
-                <div className={styles.empty}>Нет тенантов</div>
-              )}
-            </div>
-          </section>
+                }
+              />
+            ))}
+            {(!tenants?.items || tenants.items.length === 0) && (
+              <div className={styles.empty}>Нет тенантов</div>
+            )}
+          </EntityCard>
 
-          <section className={styles.card}>
-            <div className={styles.cardHeader}>
-              <h2 className={styles.cardTitle}>Быстрые действия</h2>
-            </div>
-            <div className={styles.cardContent}>
-              <div className={styles.quickActions}>
-                <Link to="/admin/users/new" className={styles.quickAction}>
-                  <span className={styles.quickActionIcon}>👤</span>
-                  <span>Новый пользователь</span>
-                </Link>
-                <Link to="/admin/tenants/new" className={styles.quickAction}>
-                  <span className={styles.quickActionIcon}>🏢</span>
-                  <span>Новый тенант</span>
-                </Link>
-                <Link to="/admin/models/new" className={styles.quickAction}>
-                  <span className={styles.quickActionIcon}>🤖</span>
-                  <span>Новая модель</span>
-                </Link>
-                <Link to="/admin/agents/new" className={styles.quickAction}>
-                  <span className={styles.quickActionIcon}>🕵️</span>
-                  <span>Новый агент</span>
-                </Link>
-              </div>
-            </div>
-          </section>
+          <EntityCard title="Быстрые действия">
+            <QuickActionGrid>
+              <QuickAction icon="👤" label="Новый пользователь" href="/admin/users/new" />
+              <QuickAction icon="🏢" label="Новый тенант" href="/admin/tenants/new" />
+              <QuickAction icon="🤖" label="Новая модель" href="/admin/models/new" />
+              <QuickAction icon="🕵️" label="Новый агент" href="/admin/agents/new" />
+            </QuickActionGrid>
+          </EntityCard>
         </div>
       </div>
     </AdminPage>

@@ -1,7 +1,9 @@
+/* DataTable - Reusable table component with proper CSS variables */
+
 .container {
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
+  gap: var(--sp-4);
   width: 100%;
 }
 
@@ -10,32 +12,32 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-4);
-  padding: var(--space-3) var(--space-4);
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+  gap: var(--sp-4, 1rem);
+  padding: var(--sp-3, 0.75rem) var(--sp-4, 1rem);
+  background: var(--bg-secondary, #f9fafb);
+  border: 1px solid var(--border-color, #e5e7eb);
+  border-radius: var(--radius-md, 6px);
 }
 
 .toolbarLeft {
   display: flex;
   align-items: center;
-  gap: var(--space-4);
+  gap: var(--sp-4);
   flex: 1;
 }
 
 .toolbarRight {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
+  gap: var(--sp-3);
 }
 
 .selectAll {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  font-size: var(--text-sm);
-  font-weight: 500;
+  gap: var(--sp-2);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
   cursor: pointer;
   user-select: none;
 }
@@ -45,15 +47,15 @@
 }
 
 .selectedCount {
-  font-size: var(--text-sm);
-  color: var(--primary);
-  font-weight: 600;
+  font-size: var(--font-size-sm);
+  color: var(--color-primary);
+  font-weight: var(--font-weight-semibold);
 }
 
 .bulkActions {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--sp-2);
 }
 
 .search {
@@ -62,28 +64,26 @@
 
 /* Table */
 .tableWrapper {
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border: 1px solid var(--border-color, #e5e7eb);
+  border-radius: var(--radius-md, 6px);
   overflow: hidden;
-  background: var(--panel);
+  background: var(--bg-secondary, #f9fafb);
 }
 
 .table {
   width: 100%;
   border-collapse: collapse;
-  font-size: var(--text-sm);
+  font-size: var(--font-size-sm);
 }
 
 .table thead {
-  background: var(--bg-subtle);
-  border-bottom: 1px solid var(--border);
+  background: var(--bg-tertiary, #f3f4f6);
+  border-bottom: 1px solid var(--border-color, #e5e7eb);
 }
 
-/* Table headers are now styled via TableHeader component */
-
 .table tbody tr {
-  border-bottom: 1px solid var(--border);
-  transition: background-color var(--transition);
+  border-bottom: 1px solid var(--border-color, #e5e7eb);
+  transition: background-color var(--transition-fast);
 }
 
 .table tbody tr:last-child {
@@ -91,16 +91,16 @@
 }
 
 .table tbody tr:hover {
-  background: var(--bg-subtle);
+  background: var(--bg-hover, #f3f4f6);
 }
 
 .table tbody tr.selected {
-  background: var(--primary-light);
+  background: rgba(139, 92, 246, 0.1);
 }
 
 .table tbody td {
-  padding: var(--space-3) var(--space-4);
-  color: var(--text);
+  padding: var(--sp-3, 0.75rem) var(--sp-4, 1rem);
+  color: var(--text-primary, #111827);
 }
 
 .checkboxCol {
@@ -118,19 +118,19 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: var(--space-12);
+  padding: var(--sp-8);
   color: var(--text-secondary);
   text-align: center;
 }
 
 .empty svg {
-  margin-bottom: var(--space-4);
+  margin-bottom: var(--sp-4);
   opacity: 0.5;
 }
 
 .empty p {
   margin: 0;
-  font-size: var(--text-base);
+  font-size: var(--font-size-md);
 }
 
 /* Loading */
@@ -138,9 +138,9 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: var(--space-12);
+  padding: var(--sp-8);
   color: var(--text-secondary);
-  font-size: var(--text-sm);
+  font-size: var(--font-size-sm);
 }
 
 /* Pagination */
@@ -148,111 +148,94 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-4);
-  padding: var(--space-3) var(--space-4);
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-top: none;
-  border-radius: 0 0 var(--radius) var(--radius);
-  font-size: var(--text-sm);
+  gap: var(--sp-4);
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-sm);
 }
 
 .paginationInfo {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
   color: var(--text-secondary);
 }
 
 .paginationControls {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--sp-3);
 }
 
 .paginationBtn {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   justify-content: center;
   width: 32px;
   height: 32px;
-  padding: 0;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary);
   border-radius: var(--radius-sm);
-  background: var(--panel);
-  color: var(--text);
   cursor: pointer;
-  transition: all var(--transition);
+  transition: all var(--transition-fast);
+  color: var(--text-primary);
 }
 
 .paginationBtn:hover:not(:disabled) {
-  background: var(--bg-subtle);
-  border-color: var(--primary);
-  color: var(--primary);
+  background: var(--bg-hover);
 }
 
 .paginationBtn:disabled {
-  opacity: 0.4;
+  opacity: 0.5;
   cursor: not-allowed;
-}
-
-.pageInfo {
-  margin: 0 var(--space-2);
-  font-size: var(--text-sm);
-  color: var(--text);
 }
 
 .pageSize {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--sp-3);
   color: var(--text-secondary);
 }
 
 .pageSize select {
-  padding: var(--space-1) var(--space-2);
-  border: 1px solid var(--border);
+  padding: var(--sp-1) var(--sp-3);
+  border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
-  background: var(--panel);
-  color: var(--text);
-  font-size: var(--text-sm);
-  cursor: pointer;
-  transition: border-color var(--transition);
-}
-
-.pageSize select:hover {
-  border-color: var(--primary);
-}
-
-.pageSize select:focus {
-  outline: none;
-  border-color: var(--primary);
-  box-shadow: 0 0 0 3px var(--primary-light);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: var(--font-size-sm);
 }
 
 /* Responsive */
 @media (max-width: 768px) {
+  .container {
+    gap: var(--sp-3);
+  }
+
   .toolbar {
     flex-direction: column;
     align-items: stretch;
+    gap: var(--sp-3);
   }
 
   .toolbarLeft,
   .toolbarRight {
-    width: 100%;
-  }
-
-  .search {
-    width: 100%;
-    min-width: 0;
+    justify-content: center;
   }
 
   .pagination {
     flex-direction: column;
-    align-items: stretch;
-    gap: var(--space-3);
+    gap: var(--sp-3);
+    text-align: center;
   }
 
-  .paginationInfo,
-  .paginationControls,
-  .pageSize {
+  .paginationControls {
     justify-content: center;
+  }
+
+  .search {
+    min-width: 100%;
   }
 }

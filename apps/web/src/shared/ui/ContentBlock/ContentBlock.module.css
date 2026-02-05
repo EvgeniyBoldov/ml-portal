@@ -5,8 +5,8 @@
  */
 
 .block {
-  background: var(--panel);
-  border: 1px solid var(--border, var(--color-border));
+  background: var(--bg-secondary, #f9fafb);
+  border: 1px solid var(--border-color, #e5e7eb);
   border-radius: var(--radius-lg, 8px);
   overflow: hidden;
   display: flex;
@@ -18,9 +18,9 @@
 .header {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
-  padding: 1rem 1.25rem;
-  border-bottom: 1px solid var(--border, var(--color-border));
+  gap: var(--sp-3);
+  padding: var(--sp-4) var(--sp-5);
+  border-bottom: 1px solid var(--border-color);
 }
 
 .icon {
@@ -59,27 +59,28 @@
 }
 
 .title {
-  font-size: 0.9375rem;
-  font-weight: 600;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
   margin: 0;
-  color: var(--text, var(--color-text));
+  color: var(--text-primary);
   flex: 1;
 }
 
 .headerActions {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: var(--sp-2);
   margin-left: auto;
 }
 
 /* Content */
 .content {
-  padding: 1.25rem;
+  padding: var(--sp-5, 1.5rem);
+  background: var(--bg-primary, #ffffff);
 }
 
 .compact .content {
-  padding: 1rem;
+  padding: var(--sp-4);
 }
 
 /* Field styles */
@@ -93,10 +94,10 @@
 
 .fieldLabel {
   display: block;
-  font-size: 0.875rem;
-  font-weight: 500;
-  margin-bottom: 0.5rem;
-  color: var(--text, var(--color-text));
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  margin-bottom: var(--sp-2);
+  color: var(--text-primary);
 }
 
 .fieldLabel.required::after {
@@ -106,7 +107,7 @@
 
 .fieldValue {
   font-size: 0.9375rem;
-  color: var(--text-primary);
+  color: var(--text-primary, var(--color-text));
   padding: 0.5rem 0.75rem;
   background: transparent;
   border: 1px solid rgba(255, 255, 255, 0.12);
@@ -117,12 +118,12 @@
 .fieldHint {
   display: block;
   font-size: 0.8125rem;
-  color: var(--muted, var(--color-text-muted));
+  color: var(--text-secondary, var(--color-text-muted));
   margin-top: 0.375rem;
 }
 
 .emptyValue {
-  color: var(--muted, var(--color-text-muted));
+  color: var(--text-secondary, var(--color-text-muted));
 }
 
 .codeValue {
@@ -182,7 +183,24 @@
 
 .fieldDescription {
   font-size: 0.8125rem;
-  color: var(--muted, var(--color-text-muted));
+  color: var(--text-secondary, var(--color-text-muted));
+}
+
+/* Width variants for grid layout */
+.width1_3 {
+  grid-column: span 4;
+}
+
+.width1_2 {
+  grid-column: span 6;
+}
+
+.width2_3 {
+  grid-column: span 8;
+}
+
+.widthFull {
+  grid-column: span 12;
 }
 
 /* Responsive behavior */
@@ -194,6 +212,12 @@
   .header {
     padding: 0.875rem 1rem;
   }
+
+  .width1_3,
+  .width1_2,
+  .width2_3 {
+    grid-column: span 6;
+  }
 }
 
 @media (max-width: 768px) {
@@ -203,5 +227,12 @@
 
   .header {
     padding: 0.875rem 1rem;
+  }
+
+  .width1_3,
+  .width1_2,
+  .width2_3,
+  .widthFull {
+    grid-column: span 12;
   }
 }

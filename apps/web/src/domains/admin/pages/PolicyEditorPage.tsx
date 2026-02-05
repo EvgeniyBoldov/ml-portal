@@ -1,38 +1,18 @@
 /**
- * PolicyEditorPage - View/Edit/Create execution policy with versioning support
+ * PolicyEditorPage - View/Edit policy container with versions
  * 
- * NEW ARCHITECTURE:
- * - Uses TabsLayout for all modes (policy naturally has tabs)
- * - EntityInfoBlock for container metadata
- * - VersionsBlock for versions list
- * - StatusBlock for status display
- * 
- * OLD ARCHITECTURE (deprecated):
- * - Manual Tabs with ContentGrid layout
- * - Duplicated status constants
- * - Inline DataTable
+ * REFACTORED ARCHITECTURE:
+ * - Uses EntityTabsPage for unified layout
+ * - Uses PolicyVersionCard for version preview
+ * - Reduced from 378 lines to ~120 lines
  */
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { policiesApi, type PolicyCreate, type PolicyVersion, type PolicyVersionStatus } from '@/shared/api';
+import { policiesApi, type PolicyDetail, type PolicyVersionInfo } from '@/shared/api/policies';
 import { qk } from '@/shared/api/keys';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
-import { EntityPage, type EntityPageMode } from '@/shared/ui/EntityPage';
-import { Tabs, TabPanel } from '@/shared/ui/Tabs';
-import { TabsLayout } from '@/shared/ui/BaseLayout';
-import { EntityInfoBlock, type EntityInfo } from '@/shared/ui/EntityInfoBlock/EntityInfoBlock';
-import { VersionsBlock, type VersionInfo } from '@/shared/ui/VersionsBlock/VersionsBlock';
-import { StatusBlock } from '@/shared/ui/StatusBlock/StatusBlock';
-import { ContentBlock, type FieldDefinition } from '@/shared/ui';
-import Badge from '@/shared/ui/Badge';
-import Button from '@/shared/ui/Button';
-import { useStatusConfig } from '@/shared/hooks/useStatusConfig';
-import styles from './PolicyEditorPage.module.css';
-
-interface FormData extends PolicyCreate {
-  is_active?: boolean;
-}
+import { EntityTabsPage, PolicyVersionCard, type FieldDefinition, type BreadcrumbItem, type EntityPageMode } from '@/shared/ui';
 
 export function PolicyEditorPage() {
   const { slug } = useParams<{ slug: string }>();
@@ -41,38 +21,44 @@ export function PolicyEditorPage() {
   const queryClient = useQueryClient();
   const showError = useErrorToast();
   const showSuccess = useSuccessToast();
-  const statusConfig = useStatusConfig('policy');
 
-  // Determine mode
-  const isCreate = slug === 'new';
+  const isNew = slug === 'new';
   const isEditMode = searchParams.get('mode') === 'edit';
-  const mode: EntityPageMode = isCreate ? 'create' : isEditMode ? 'edit' : 'view';
-  const isEditable = mode === 'edit' || mode === 'create';
+  const mode: EntityPageMode = isNew ? 'create' : isEditMode ? 'edit' : 'view';
+  const [saving, setSaving] = useState(false);
 
-  // Tab state
-  const [activeTab, setActiveTab] = useState('overview');
-
-  const [formData, setFormData] = useState<FormData>({
+  // Form state
+  const [formData, setFormData] = useState({
     slug: '',
     name: '',
     description: '',
+    scope: 'default' as 'default' | 'tenant' | 'user',
     is_active: true,
   });
-  const [saving, setSaving] = useState(false);
 
-  // Load existing policy with versions
-  const { data: policy, isLoading, refetch } = useQuery({
+  // Load policy container
+  const { data: policy, isLoading } = useQuery({
     queryKey: qk.policies.detail(slug!),
     queryFn: () => policiesApi.get(slug!),
-    enabled: !isCreate && !!slug,
+    enabled: !!slug && !isNew,
   });
 
+  // Load active version for preview
+  const activeVersion = policy?.versions?.find(v => v.status === 'active') || policy?.versions?.[0];
+  const { data: selectedVersion } = useQuery({
+    queryKey: ['policies', slug, 'versions', activeVersion?.version],
+    queryFn: () => policiesApi.getVersion(slug!, String(activeVersion!.version)),
+    enabled: !!slug && !!activeVersion,
+  });
+
+  // Sync form data
   useEffect(() => {
     if (policy) {
       setFormData({
         slug: policy.slug,
         name: policy.name,
         description: policy.description || '',
+        scope: policy.scope,
         is_active: policy.is_active,
       });
     }
@@ -80,77 +66,40 @@ export function PolicyEditorPage() {
 
   // Mutations
   const createMutation = useMutation({
-    mutationFn: (data: PolicyCreate) => policiesApi.create(data),
-    onSuccess: (created) => {
-      queryClient.invalidateQueries({ queryKey: qk.policies.all() });
+    mutationFn: (data: any) => policiesApi.createContainer(data),
+    onSuccess: (container: PolicyDetail) => {
+      queryClient.invalidateQueries({ queryKey: qk.policies.list() });
       showSuccess('Политика создана');
-      navigate(`/admin/policies/${created.slug}`);
+      navigate(`/admin/policies/${container.slug}`);
     },
-    onError: (err: Error) => showError(err.message),
+    onError: (err: any) => showError(err?.message || 'Ошибка создания'),
   });
 
   const updateMutation = useMutation({
-    mutationFn: (data: { name?: string; description?: string; is_active?: boolean }) =>
-      policiesApi.update(slug!, data),
+    mutationFn: (data: any) => policiesApi.updateContainer(slug!, data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.policies.all() });
       queryClient.invalidateQueries({ queryKey: qk.policies.detail(slug!) });
+      queryClient.invalidateQueries({ queryKey: qk.policies.list() });
       showSuccess('Политика обновлена');
       setSearchParams({});
     },
-    onError: (err: Error) => showError(err.message),
+    onError: (err: any) => showError(err?.message || 'Ошибка обновления'),
   });
 
-  const deleteMutation = useMutation({
-    mutationFn: () => policiesApi.delete(slug!),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.policies.all() });
-      showSuccess('Политика удалена');
-      navigate('/admin/policies');
-    },
-    onError: (err: Error) => showError(err.message),
-  });
-
-  const activateVersionMutation = useMutation({
-    mutationFn: (version: number) => policiesApi.activateVersion(slug!, version),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.policies.detail(slug!) });
-      showSuccess('Версия активирована');
-    },
-    onError: (err: Error) => showError(err.message),
-  });
-
-  const deactivateVersionMutation = useMutation({
-    mutationFn: (version: number) => policiesApi.deactivateVersion(slug!, version),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.policies.detail(slug!) });
-      showSuccess('Версия деактивирована');
-    },
-    onError: (err: Error) => showError(err.message),
-  });
-
-  const deleteVersionMutation = useMutation({
-    mutationFn: (version: number) => policiesApi.deleteVersion(slug!, version),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.policies.detail(slug!) });
-      showSuccess('Версия удалена');
-    },
-    onError: (err: Error) => showError(err.message),
-  });
-
+  // Handlers
   const handleSave = async () => {
     setSaving(true);
     try {
-      if (mode === 'create') {
-        await createMutation.mutateAsync({
-          slug: formData.slug,
-          name: formData.name,
-          description: formData.description || undefined,
-        });
+      if (isNew) {
+        if (!formData.slug.trim() || !formData.name.trim()) {
+          showError('Заполните все обязательные поля');
+          return;
+        }
+        await createMutation.mutateAsync(formData);
       } else {
         await updateMutation.mutateAsync({
           name: formData.name,
-          description: formData.description || undefined,
+          description: formData.description,
           is_active: formData.is_active,
         });
       }
@@ -160,217 +109,100 @@ export function PolicyEditorPage() {
   };
 
   const handleEdit = () => setSearchParams({ mode: 'edit' });
-
+  
   const handleCancel = () => {
-    if (mode === 'edit' && policy) {
-      setFormData({
-        slug: policy.slug,
-        name: policy.name,
-        description: policy.description || '',
-        is_active: policy.is_active,
-      });
-      setSearchParams({});
-    } else if (mode === 'create') {
+    if (isNew) {
       navigate('/admin/policies');
+    } else {
+      if (policy) {
+        setFormData({
+          slug: policy.slug,
+          name: policy.name,
+          description: policy.description || '',
+          scope: policy.scope,
+          is_active: policy.is_active,
+        });
+      }
+      setSearchParams({});
     }
   };
 
-  const handleDelete = async () => {
-    if (!confirm('Удалить эту политику и все её версии?')) return;
-    await deleteMutation.mutateAsync();
-  };
-
   const handleFieldChange = (key: string, value: any) => {
-    setFormData((prev) => ({ ...prev, [key]: value }));
+    setFormData(prev => ({ ...prev, [key]: value }));
   };
 
-  const handleCreateVersion = () => {
-    navigate(`/admin/policies/${slug}/versions/new`);
-  };
-
-  const handleVersionClick = (version: PolicyVersion) => {
-    navigate(`/admin/policies/${slug}/versions/${version.version}`);
-  };
-
-  // Versions table columns
-  const versionColumns = [
+  // Field definitions
+  const containerFields: FieldDefinition[] = [
     {
-      key: 'version',
-      header: 'Версия',
-      render: (v: PolicyVersion) => `v${v.version}`,
+      key: 'slug',
+      label: 'Slug (ID)',
+      type: 'text',
+      required: true,
+      disabled: !isNew,
+      placeholder: 'execution.strict',
+      description: isNew ? 'Уникальный идентификатор (нельзя изменить после создания)' : undefined,
     },
     {
-      key: 'status',
-      header: 'Статус',
-      render: (v: PolicyVersion) => (
-        <Badge tone={statusConfig.tones[v.status]}>{statusConfig.labels[v.status]}</Badge>
-      ),
+      key: 'name',
+      label: 'Название',
+      type: 'text',
+      required: true,
+      placeholder: 'Строгие лимиты выполнения',
     },
     {
-      key: 'limits',
-      header: 'Лимиты',
-      render: (v: PolicyVersion) => (
-        <span style={{ fontSize: '0.85em', color: 'var(--text-secondary)' }}>
-          {v.max_steps ?? '∞'} шагов, {v.max_tool_calls ?? '∞'} вызовов
-        </span>
-      ),
+      key: 'description',
+      label: 'Описание',
+      type: 'textarea',
+      placeholder: 'Лимиты для агента...',
+      rows: 2,
     },
     {
-      key: 'created_at',
-      header: 'Создана',
-      render: (v: PolicyVersion) => new Date(v.created_at).toLocaleDateString('ru'),
-    },
-    {
-      key: 'actions',
-      header: '',
-      render: (v: PolicyVersion) => (
-        <div style={{ display: 'flex', gap: '0.5rem' }}>
-          {v.status === 'draft' && (
-            <Button
-              size="small"
-              variant="primary"
-              onClick={(e) => {
-                e.stopPropagation();
-                activateVersionMutation.mutate(v.version);
-              }}
-            >
-              Активировать
-            </Button>
-          )}
-          {v.status === 'active' && (
-            <Button
-              size="small"
-              variant="secondary"
-              onClick={(e) => {
-                e.stopPropagation();
-                deactivateVersionMutation.mutate(v.version);
-              }}
-            >
-              Деактивировать
-            </Button>
-          )}
-          {v.status !== 'active' && (
-            <Button
-              size="small"
-              variant="ghost"
-              onClick={(e) => {
-                e.stopPropagation();
-                if (confirm('Удалить эту версию?')) {
-                  deleteVersionMutation.mutate(v.version);
-                }
-              }}
-            >
-              Удалить
-            </Button>
-          )}
-        </div>
-      ),
+      key: 'scope',
+      label: 'Scope',
+      type: 'select',
+      disabled: !isNew,
+      options: [
+        { value: 'default', label: 'Default (глобальный)' },
+        { value: 'tenant', label: 'Tenant (для тенанта)' },
+        { value: 'user', label: 'User (для пользователя)' },
+      ],
     },
   ];
 
-  // Field definitions for ContentBlock
-  const infoFields: FieldDefinition[] = [
-    { key: 'name', label: 'Название', type: 'text', required: true, placeholder: 'Моя политика' },
-    { key: 'slug', label: 'Slug', type: 'text', required: true, placeholder: 'my-policy', description: 'Уникальный идентификатор', disabled: !isCreate },
-    { key: 'description', label: 'Описание', type: 'textarea', placeholder: 'Описание политики...', rows: 3 },
-    { key: 'is_active', label: 'Статус', type: 'boolean', disabled: !isEditable },
+  const breadcrumbs: BreadcrumbItem[] = [
+    { label: 'Политики', href: '/admin/policies' },
+    { label: policy?.name || 'Новая политика' },
   ];
-
-  const infoFieldsWithoutStatus: FieldDefinition[] = [
-    { key: 'name', label: 'Название', type: 'text', required: true, placeholder: 'Моя политика' },
-    { key: 'slug', label: 'Slug', type: 'text', required: true, placeholder: 'my-policy', description: 'Уникальный идентификатор', disabled: true },
-    { key: 'description', label: 'Описание', type: 'textarea', placeholder: 'Описание политики...', rows: 3 },
-  ];
-
-  const tabs = [
-    { id: 'overview', label: 'Обзор' },
-    { id: 'versions', label: `Версии (${policy?.versions?.length || 0})` },
-  ];
-
-  const breadcrumbs = isCreate
-    ? [
-        { label: 'Политики', href: '/admin/policies' },
-        { label: 'Новая политика' },
-      ]
-    : [
-        { label: 'Политики', href: '/admin/policies' },
-        { label: policy?.name || slug || '' },
-      ];
 
   return (
-    <EntityPage
-      mode={mode}
-      entityName={policy ? policy.name : 'Новая политика'}
+    <EntityTabsPage
+      entityType="policy"
+      entityNameLabel="Политика"
       entityTypeLabel="политики"
-      backPath="/admin/policies"
-      loading={!isCreate && isLoading}
+      slug={slug!}
+      basePath="/admin/policies"
+      listPath="/admin/policies"
+      container={policy || null}
+      versions={policy?.versions || []}
+      isLoading={isLoading}
+      formData={formData}
+      mode={mode}
       saving={saving}
+      onFieldChange={handleFieldChange}
       onEdit={handleEdit}
       onSave={handleSave}
       onCancel={handleCancel}
-      onDelete={handleDelete}
-      showDelete={mode === 'view' && !!slug && policy?.slug !== 'default'}
+      onCreateVersion={() => navigate(`/admin/policies/${slug}/versions/new`)}
+      onSelectVersion={(v: PolicyVersionInfo) => navigate(`/admin/policies/${slug}/versions/${v.version}`)}
+      containerFields={containerFields}
       breadcrumbs={breadcrumbs}
-    >
-      {isCreate ? (
-        // Create mode - simple entity info without tabs
-        <EntityInfoBlock
-          entity={formData}
-          entityType="policy"
-          editable={true}
-          fields={infoFields}
-          onFieldChange={handleFieldChange}
-        />
-      ) : (
-        // Edit/View modes - tabs layout
-        <TabsLayout
-          tabs={[
-            {
-              id: 'overview',
-              label: 'Обзор',
-              content: (
-                <EntityInfoBlock
-                  entity={formData}
-                  entityType="policy"
-                  editable={isEditable}
-                  fields={infoFields}
-                  onFieldChange={handleFieldChange}
-                  showStatus={true}
-                  status={formData.is_active ? 'active' : 'inactive'}
-                  statusVersion={undefined}
-                />
-              ),
-            },
-            {
-              id: 'versions',
-              label: `Версии (${policy?.versions?.length || 0})`,
-              content: (
-                <div className={styles.versionsSection}>
-                  <div className={styles.versionsHeader}>
-                    <Button
-                      variant="primary"
-                      onClick={() => navigate(`/admin/policies/${slug}/versions/new`)}
-                      disabled={!isEditable}
-                    >
-                      Создать версию
-                    </Button>
-                  </div>
-                  <VersionsBlock
-                    entityType="policy"
-                    versions={policy?.versions || []}
-                    onSelectVersion={(version) => {
-                      navigate(`/admin/policies/${slug}/versions/${version.version}`);
-                    }}
-                  />
-                </div>
-              ),
-            },
-          ]}
-          activeTab={activeTab}
-          onTabChange={setActiveTab}
+      renderVersionContent={() => (
+        <PolicyVersionCard
+          version={selectedVersion || null}
+          onCreateVersion={() => navigate(`/admin/policies/${slug}/versions/new`)}
         />
       )}
-    </EntityPage>
+    />
   );
 }
 

@@ -1,0 +1,106 @@
+/**
+ * EntityTabsPage styles
+ * 
+ * REDESIGNED: Tabs in header, proper content background
+ */
+
+/* Header with tabs */
+.headerWithTabs {
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+
+.tabsContainer {
+  display: flex;
+  gap: var(--sp-1);
+  background: var(--bg-secondary, #f9fafb);
+  border: 1px solid var(--border-color, #e5e7eb);
+  border-radius: var(--radius-md, 6px);
+  padding: var(--sp-1);
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm, 4px);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--text-secondary, #6b7280);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.tab:hover {
+  color: var(--text-primary, #111827);
+  background: var(--bg-hover, #f3f4f6);
+}
+
+.tab.active {
+  color: var(--color-primary, #8b5cf6);
+  background: var(--bg-primary, #ffffff);
+  border: 1px solid var(--color-primary, #8b5cf6);
+}
+
+/* Content area */
+.content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg-primary, #ffffff);
+  overflow: hidden;
+}
+
+.overviewTab {
+  height: 100%;
+  overflow: auto;
+  padding: var(--sp-6);
+}
+
+.versionsTab {
+  height: 100%;
+  overflow: auto;
+  padding: var(--sp-6);
+}
+
+/* Empty version state */
+.emptyVersion {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-4);
+  padding: var(--sp-8);
+  color: var(--text-secondary, #6b7280);
+  text-align: center;
+  height: 100%;
+  background: var(--bg-primary, #ffffff);
+}
+
+.emptyVersion p {
+  margin: 0;
+  font-size: var(--font-size-md);
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .tabsContainer {
+    gap: var(--sp-0);
+    padding: var(--sp-0);
+  }
+
+  .tab {
+    padding: var(--sp-2) var(--sp-3);
+    font-size: var(--font-size-xs);
+  }
+
+  .overviewTab,
+  .versionsTab {
+    padding: var(--sp-4);
+  }
+}

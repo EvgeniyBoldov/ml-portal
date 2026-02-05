@@ -1,5 +1,6 @@
 .content {
-  padding: 0 2rem 2rem 2rem;
+  padding: 0 var(--sp-6) var(--sp-6) var(--sp-6);
   flex: 1;
   overflow-y: auto;
+  min-height: 0;
 }

@@ -1,0 +1,38 @@
+/**
+ * MetaRow Styles
+ */
+
+.metaRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--sp-2) 0;
+  gap: var(--sp-4);
+}
+
+.metaLabel {
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  flex-shrink: 0;
+}
+
+.metaValue {
+  color: var(--text-primary);
+  font-size: var(--font-size-sm);
+  text-align: right;
+}
+
+.metaList {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.metaList .metaRow {
+  border-bottom: 1px solid var(--border-color);
+}
+
+.metaList .metaRow:last-child {
+  border-bottom: none;
+}

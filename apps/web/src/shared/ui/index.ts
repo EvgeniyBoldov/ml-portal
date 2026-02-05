@@ -123,3 +123,35 @@ export type { MasonryGridProps } from './MasonryGrid';
 // CompactStatusBlock
 export { CompactStatusBlock } from './CompactStatusBlock';
 export type { CompactStatusBlockProps } from './CompactStatusBlock';
+
+// EntityCard
+export { EntityCard, EntityCardItem } from './EntityCard';
+export type { EntityCardProps, EntityCardItemProps } from './EntityCard';
+
+// MetaRow
+export { MetaRow, MetaList } from './MetaRow';
+export type { MetaRowProps, MetaListProps } from './MetaRow';
+
+// QuickAction
+export { QuickAction, QuickActionGrid } from './QuickAction';
+export type { QuickActionProps, QuickActionGridProps } from './QuickAction';
+
+// EntityInfoBlock
+export { EntityInfoBlock } from './EntityInfoBlock/EntityInfoBlock';
+export type { EntityInfo, EntityInfoBlockProps } from './EntityInfoBlock/EntityInfoBlock';
+
+// VersionsBlock
+export { VersionsBlock } from './VersionsBlock/VersionsBlock';
+export type { VersionInfo, VersionsBlockProps } from './VersionsBlock/VersionsBlock';
+
+// StatusBlock
+export { StatusBlock } from './StatusBlock/StatusBlock';
+export type { EntityType, StatusBlockProps } from './StatusBlock/StatusBlock';
+
+// EntityTabsPage
+export { EntityTabsPage } from './EntityTabsPage';
+export type { EntityTabsPageProps } from './EntityTabsPage';
+
+// VersionCard
+export { VersionCard, PromptVersionCard, PolicyVersionCard } from './VersionCard';
+export type { VersionCardProps, VersionCardEntityType, PromptVersionCardProps, PolicyVersionCardProps } from './VersionCard';
