@@ -5,31 +5,49 @@
 
 .dark,
 [data-theme='dark'] {
-  /* Background colors */
-  --bg-primary: #0f1419;
-  --bg-secondary: #1a1f2e;
-  --bg-tertiary: #252b3b;
-  --bg-hover: #252b3b;
-  --bg-active: #2d3548;
-  --bg-disabled: #374151;
+  /* ===== Original Color Palette from main ===== */
+  --bg: #0b1020;
+  --bg-elevated: #11172a;
+  --bg-hover: rgba(255, 255, 255, 0.04);
+  --bg-active: rgba(255, 255, 255, 0.08);
+  
+  --text: #e9ecf8;
+  --text-secondary: #b4bcd0;
+  --muted: #7a8597;
+  
+  /* Brand colors */
+  --primary: #6366f1;
+  --primary-hover: #4f46e5;
+  --primary-light: rgba(99, 102, 241, 0.12);
+  --primary-text: #ffffff;
+  
+  /* Panels & Surfaces */
+  --panel: #11172a;
+  --panel-alt: #0e1424;
+  --panel-hover: #161d32;
+  --chat-panel-bg: var(--panel-alt);
+  --chat-panel-border: var(--border);
+  
+  /* Borders */
+  --border: rgba(255, 255, 255, 0.08);
+  --border-hover: rgba(255, 255, 255, 0.16);
+  --border-focus: var(--primary);
 
-  /* Chat-specific colors from RGB values */
-  --chat-user-bg: rgba(79, 124, 255, 0.12);
-  --chat-user-border: rgba(79, 124, 255, 0.25);
-  --chat-assistant-bg: rgba(0, 0, 0, 0.04);
-  --chat-assistant-border: rgba(0, 0, 0, 0.08);
+  /* Legacy aliases for compatibility */
+  --color-border: var(--border);
+  --color-bg-secondary: var(--bg-hover);
+  --color-primary-light: var(--primary-light);
+  --color-text: var(--text);
+  --color-primary: var(--primary);
 
-  /* Text colors */
-  --text-primary: #f9fafb;
-  --text-secondary: #d1d5db;
-  --text-tertiary: #9ca3af;
-  --text-inverse: #111827;
-
-  /* Legacy variables for chat compatibility */
-  --color-text: #f9fafb;
-  --color-bg-secondary: #252b3b;
-  --muted: #9ca3af;
-  --color-bg-hover: rgba(255, 255, 255, 0.02);
+  /* New standardized variables */
+  --bg-primary: var(--bg);
+  --bg-secondary: var(--panel);
+  --bg-tertiary: var(--panel-hover);
+  --text-primary: var(--text);
+  --text-tertiary: var(--muted);
+  --text-inverse: var(--primary-text);
+  --bg-disabled: var(--bg-hover);
 
   /* Border colors */
   --border-color: #374151;

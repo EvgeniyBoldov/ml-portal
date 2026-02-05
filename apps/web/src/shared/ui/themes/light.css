@@ -5,31 +5,49 @@
 
 [data-theme='light'],
 :root {
-  /* Background colors */
-  --bg-primary: #ffffff;
-  --bg-secondary: #f9fafb;
-  --bg-tertiary: #f3f4f6;
-  --bg-hover: #f3f4f6;
-  --bg-active: #e5e7eb;
-  --bg-disabled: #f3f4f6;
-
-  /* Chat-specific colors from RGB values */
-  --chat-user-bg: rgba(79, 124, 255, 0.12);
-  --chat-user-border: rgba(79, 124, 255, 0.25);
-  --chat-assistant-bg: rgba(0, 0, 0, 0.04);
-  --chat-assistant-border: rgba(0, 0, 0, 0.08);
-
-  /* Text colors */
-  --text-primary: #111827;
+  /* ===== Original Color Palette from main ===== */
+  --bg: #ffffff;
+  --bg-elevated: #f8fafc;
+  --bg-hover: rgba(0, 0, 0, 0.04);
+  --bg-active: rgba(0, 0, 0, 0.08);
+  
+  --text: #111827;
   --text-secondary: #6b7280;
-  --text-tertiary: #9ca3af;
-  --text-inverse: #ffffff;
-
-  /* Legacy variables for chat compatibility */
-  --color-text: #111827;
-  --color-bg-secondary: #f4f6f8;
   --muted: #6b7280;
-  --color-bg-hover: rgba(0, 0, 0, 0.02);
+  
+  /* Brand colors */
+  --primary: #3b82f6;
+  --primary-hover: #2563eb;
+  --primary-light: rgba(59, 130, 246, 0.12);
+  --primary-text: #ffffff;
+  
+  /* Panels & Surfaces */
+  --panel: #f8fafc;
+  --panel-alt: #ffffff;
+  --panel-hover: #f1f5f9;
+  --chat-panel-bg: var(--panel-alt);
+  --chat-panel-border: var(--border);
+  
+  /* Borders */
+  --border: rgba(0, 0, 0, 0.1);
+  --border-hover: rgba(0, 0, 0, 0.16);
+  --border-focus: var(--primary);
+
+  /* Legacy aliases for compatibility */
+  --color-border: var(--border);
+  --color-bg-secondary: var(--bg-hover);
+  --color-primary-light: var(--primary-light);
+  --color-text: var(--text);
+  --color-primary: var(--primary);
+
+  /* New standardized variables */
+  --bg-primary: var(--bg);
+  --bg-secondary: var(--panel);
+  --bg-tertiary: var(--panel-hover);
+  --text-primary: var(--text);
+  --text-tertiary: var(--muted);
+  --text-inverse: var(--primary-text);
+  --bg-disabled: var(--bg-hover);
 
   /* Border colors */
   --border-color: #e5e7eb;
