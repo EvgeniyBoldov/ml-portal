@@ -1,23 +1,24 @@
 /**
  * EntityTabsPage styles
  * 
- * REDESIGNED: Tabs in header, proper content background
+ * REDESIGNED: Tabs between header and content, no top border radius
  */
 
-/* Header with tabs */
-.headerWithTabs {
-  display: flex;
-  align-items: center;
-  width: 100%;
+/* Tabs section - between header and content */
+.tabsSection {
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+  padding: 0 var(--sp-6);
 }
 
 .tabsContainer {
   display: flex;
   gap: var(--sp-1);
-  background: var(--bg-secondary, #f9fafb);
-  border: 1px solid var(--border-color, #e5e7eb);
-  border-radius: var(--radius-md, 6px);
-  padding: var(--sp-1);
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 0 0 var(--radius-md) var(--radius-md); /* Only bottom corners */
+  padding: var(--sp-1) var(--sp-1) var(--sp-1) var(--sp-1);
+  margin-top: var(--sp-1);
 }
 
 .tab {
@@ -41,9 +42,16 @@
 }
 
 .tab.active {
-  color: var(--color-primary, #8b5cf6);
-  background: var(--bg-primary, #ffffff);
-  border: 1px solid var(--color-primary, #8b5cf6);
+  color: var(--color-primary);
+  background: var(--bg-primary);
+  border: 1px solid var(--color-primary);
+}
+
+/* Tab content wrapper */
+.tabContent {
+  background: var(--bg-primary);
+  flex: 1;
+  overflow: hidden;
 }
 
 /* Content area */

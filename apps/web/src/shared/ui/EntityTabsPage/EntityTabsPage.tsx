@@ -158,9 +158,9 @@ export function EntityTabsPage<
     return buttons;
   };
 
-  // Custom header with tabs
-  const customHeader = !isNew && (
-    <div className={styles.headerWithTabs}>
+  // Tabs section (between header and content)
+  const tabsSection = !isNew && (
+    <div className={styles.tabsSection}>
       <div className={styles.tabsContainer}>
         <button
           className={`${styles.tab} ${activeTab === 'overview' ? styles.active : ''}`}
@@ -193,8 +193,8 @@ export function EntityTabsPage<
       showDelete={false} // Убираем дублирование кнопок
       onDelete={undefined}
       actionButtons={getActionButtons()} // Передаем единый блок кнопок
-      headerActions={customHeader} // Передаем табы в хедер
     >
+      {tabsSection}
       {isNew ? (
         // Create mode - simple entity info
         <div className={styles.content}>
@@ -207,42 +207,34 @@ export function EntityTabsPage<
           />
         </div>
       ) : (
-        // Edit & View modes - tab content without tabs
-        <div className={styles.content}>
+        // Edit/View mode - tabs with content wrapper
+        <div className={styles.tabContent}>
           {activeTab === 'overview' && (
-            <div className={styles.overviewTab}>
-              <SplitLayout
-                left={
-                  <EntityInfoBlock
-                    entity={formData}
-                    entityType={entityType}
-                    editable={isEditable}
-                    fields={containerFields}
-                    onFieldChange={onFieldChange}
-                    showStatus={false}
-                  />
-                }
-                right={
-                  renderVersionContent && versions.length > 0
-                    ? renderVersionContent(versions[0] as TVersion)
-                    : (
-                      <div className={styles.emptyVersion}>
-                        <p>Нет версий</p>
-                        <Button variant="primary" onClick={onCreateVersion}>
-                          Создать версию
-                        </Button>
-                      </div>
-                    )
-                }
-              />
-            </div>
+            <SplitLayout
+              left={
+                <EntityInfoBlock
+                  entity={container}
+                  entityType={entityType}
+                  editable={mode === 'edit'}
+                  fields={containerFields}
+                  onFieldChange={onFieldChange}
+                />
+              }
+              right={
+                <div className={styles.content}>
+                  {renderVersionContent ? (
+                    renderVersionContent(versions[0] as TVersion)
+                  ) : (
+                    <div>Version content placeholder</div>
+                  )}
+                </div>
+              }
+            />
           )}
-
+          
           {activeTab === 'versions' && (
-            <div className={styles.versionsTab}>
+            <div className={styles.content}>
               <VersionsBlock
-                entity={container}
-                entityType={entityType}
                 versions={versions}
                 onSelectVersion={onSelectVersion}
                 columns={versionColumns}

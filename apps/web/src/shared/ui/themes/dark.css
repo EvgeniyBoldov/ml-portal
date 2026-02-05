@@ -39,6 +39,7 @@
   --color-primary-light: var(--primary-light);
   --color-text: var(--text);
   --color-primary: var(--primary);
+  --color-bg: var(--bg);  /* Для RAG - такой же как основной фон */
 
   /* New standardized variables */
   --bg-primary: var(--bg);
@@ -87,6 +88,34 @@
   --tooltip-text: #f9fafb;
 
   /* Code */
-  --code-bg: #374151;
-  --code-text: #fca5a5;
+  --code-bg: #1f2937;
+  --code-text: #f472b6;
+
+  /* Typography */
+  --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+  
+  --text-xs: 11px;
+  --text-sm: 13px;
+  --text-base: 14px;
+  --text-md: 16px;
+  --text-lg: 18px;
+  --text-xl: 20px;
+  --text-2xl: 24px;
+  --text-3xl: 30px;
+
+  /* Font weights */
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+
+  /* Font sizes (alias for compatibility) */
+  --font-size-xs: var(--text-xs);
+  --font-size-sm: var(--text-sm);
+  --font-size-md: var(--text-md);
+  --font-size-lg: var(--text-lg);
+  --font-size-xl: var(--text-xl);
+  --font-size-2xl: var(--text-2xl);
+  --font-size-3xl: var(--text-3xl);
 }

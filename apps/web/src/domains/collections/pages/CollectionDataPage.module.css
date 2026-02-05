@@ -52,8 +52,8 @@
 }
 
 .title {
-  font-size: 20px;
-  font-weight: 700;
+  font-size: var(--text-xl);
+  font-weight: var(--font-weight-bold);
   color: var(--text);
   margin: 0;
   white-space: nowrap;
@@ -62,7 +62,7 @@
 }
 
 .subtitle {
-  font-size: 13px;
+  font-size: var(--text-sm);
   color: var(--muted);
   display: flex;
   align-items: center;
@@ -109,7 +109,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 13px;
+  font-size: var(--text-sm);
   color: var(--muted);
   cursor: pointer;
 }
@@ -121,9 +121,9 @@
 }
 
 .selectedCount {
-  font-size: 13px;
+  font-size: var(--text-sm);
   color: var(--primary);
-  font-weight: 500;
+  font-weight: var(--font-weight-medium);
 }
 
 /* Bulk Actions */
@@ -137,7 +137,7 @@
 }
 
 .bulkActions button {
-  font-size: 13px;
+  font-size: var(--text-sm);
 }
 
 /* Table Container */
@@ -308,14 +308,14 @@
 }
 
 .emptyTitle {
-  font-size: 18px;
-  font-weight: 600;
+  font-size: var(--text-lg);
+  font-weight: var(--font-weight-semibold);
   color: var(--text);
   margin-bottom: 8px;
 }
 
 .emptyText {
-  font-size: 14px;
+  font-size: var(--text-sm);
   max-width: 400px;
   margin-bottom: 24px;
 }
@@ -345,7 +345,7 @@
 }
 
 .filterLabel {
-  font-size: 12px;
+  font-size: var(--text-xs);
   color: var(--muted);
   text-transform: uppercase;
 }
@@ -366,7 +366,7 @@
 }
 
 .clearFilters {
-  font-size: 13px;
+  font-size: var(--text-sm);
   color: var(--primary);
   cursor: pointer;
   background: none;
@@ -395,19 +395,19 @@
 }
 
 .uploadIcon {
-  font-size: 48px;
+  font-size: var(--text-3xl);
   color: var(--muted);
   margin-bottom: 16px;
 }
 
 .uploadText {
-  font-size: 16px;
+  font-size: var(--text-base);
   color: var(--text);
   margin-bottom: 8px;
 }
 
 .uploadHint {
-  font-size: 13px;
+  font-size: var(--text-sm);
   color: var(--muted);
 }
 
