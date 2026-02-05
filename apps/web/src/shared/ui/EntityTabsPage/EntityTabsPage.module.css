@@ -1,114 +1,124 @@
 /**
  * EntityTabsPage styles
- * 
- * REDESIGNED: Tabs between header and content, no top border radius
+ * Clean, modern tabs design
  */
 
-/* Tabs section - between header and content */
+/* Tabs bar - directly under header */
 .tabsSection {
-  background: var(--bg-secondary);
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  padding: 0 24px;
+  background: var(--panel);
   border-bottom: 1px solid var(--border-color);
-  padding: 0 var(--sp-6);
 }
 
-.tabsContainer {
-  display: flex;
-  gap: var(--sp-1);
-  background: var(--bg-primary);
-  border: 1px solid var(--border-color);
-  border-radius: 0 0 var(--radius-md) var(--radius-md); /* Only bottom corners */
-  padding: var(--sp-1) var(--sp-1) var(--sp-1) var(--sp-1);
-  margin-top: var(--sp-1);
-}
-
+/* Individual tab */
 .tab {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: var(--sp-2);
-  padding: var(--sp-2) var(--sp-3);
+  gap: 8px;
+  padding: 12px 20px;
   background: transparent;
   border: none;
-  border-radius: var(--radius-sm, 4px);
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-medium);
-  color: var(--text-secondary, #6b7280);
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--muted);
   cursor: pointer;
-  transition: all var(--transition-fast);
+  transition: all 0.15s ease;
+  white-space: nowrap;
 }
 
 .tab:hover {
-  color: var(--text-primary, #111827);
-  background: var(--bg-hover, #f3f4f6);
+  color: var(--text);
 }
 
 .tab.active {
-  color: var(--color-primary);
-  background: var(--bg-primary);
-  border: 1px solid var(--color-primary);
+  color: var(--primary);
+  border-bottom-color: var(--primary);
 }
 
-/* Tab content wrapper */
+.tabCount {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  background: var(--bg-hover);
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.tab.active .tabCount {
+  background: var(--primary-light);
+  color: var(--primary);
+}
+
+/* Content wrapper */
 .tabContent {
-  background: var(--bg-primary);
-  flex: 1;
-  overflow: hidden;
-}
-
-/* Content area */
-.content {
   flex: 1;
   display: flex;
   flex-direction: column;
-  min-height: 0;
-  background: var(--bg-primary, #ffffff);
   overflow: hidden;
+  background: var(--bg);
+}
+
+/* Content area with scroll */
+.content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px;
 }
 
 .overviewTab {
   height: 100%;
   overflow: auto;
-  padding: var(--sp-6);
+  padding: 24px;
 }
 
 .versionsTab {
   height: 100%;
   overflow: auto;
-  padding: var(--sp-6);
+  padding: 24px;
 }
 
-/* Empty version state */
+/* Empty state */
 .emptyVersion {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: var(--sp-4);
-  padding: var(--sp-8);
-  color: var(--text-secondary, #6b7280);
+  gap: 16px;
+  padding: 48px;
+  color: var(--muted);
   text-align: center;
   height: 100%;
-  background: var(--bg-primary, #ffffff);
 }
 
 .emptyVersion p {
   margin: 0;
-  font-size: var(--font-size-md);
+  font-size: 15px;
 }
 
 /* Responsive */
 @media (max-width: 768px) {
-  .tabsContainer {
-    gap: var(--sp-0);
-    padding: var(--sp-0);
+  .tabsSection {
+    padding: 0 16px;
+    overflow-x: auto;
   }
 
   .tab {
-    padding: var(--sp-2) var(--sp-3);
-    font-size: var(--font-size-xs);
+    padding: 10px 16px;
+    font-size: 13px;
   }
 
   .overviewTab,
-  .versionsTab {
-    padding: var(--sp-4);
+  .versionsTab,
+  .content {
+    padding: 16px;
   }
 }

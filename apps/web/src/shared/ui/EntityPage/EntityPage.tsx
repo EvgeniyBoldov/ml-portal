@@ -49,6 +49,10 @@ export interface EntityPageProps {
   actionButtons?: React.ReactNode;
   /** Breadcrumbs for navigation */
   breadcrumbs?: BreadcrumbItem[];
+  /** Tabs bar (rendered between header and content) */
+  tabsBar?: React.ReactNode;
+  /** Disable content padding (for custom layouts) */
+  noPadding?: boolean;
 }
 
 export function EntityPage({
@@ -67,6 +71,8 @@ export function EntityPage({
   headerActions,
   actionButtons,
   breadcrumbs,
+  tabsBar,
+  noPadding = false,
 }: EntityPageProps) {
   const navigate = useNavigate();
 
@@ -150,8 +156,11 @@ export function EntityPage({
         </div>
       </header>
 
+      {/* Tabs Bar (between header and content) */}
+      {tabsBar}
+
       {/* Content */}
-      <div className={styles.content}>
+      <div className={noPadding ? styles.contentNoPadding : styles.content}>
         {loading ? (
           <div className={styles.loading}>Загрузка...</div>
         ) : (

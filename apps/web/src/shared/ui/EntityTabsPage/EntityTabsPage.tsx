@@ -161,20 +161,19 @@ export function EntityTabsPage<
   // Tabs section (between header and content)
   const tabsSection = !isNew && (
     <div className={styles.tabsSection}>
-      <div className={styles.tabsContainer}>
-        <button
-          className={`${styles.tab} ${activeTab === 'overview' ? styles.active : ''}`}
-          onClick={() => setActiveTab('overview')}
-        >
-          Обзор
-        </button>
-        <button
-          className={`${styles.tab} ${activeTab === 'versions' ? styles.active : ''}`}
-          onClick={() => setActiveTab('versions')}
-        >
-          Версии ({versions.length})
-        </button>
-      </div>
+      <button
+        className={`${styles.tab} ${activeTab === 'overview' ? styles.active : ''}`}
+        onClick={() => setActiveTab('overview')}
+      >
+        Обзор
+      </button>
+      <button
+        className={`${styles.tab} ${activeTab === 'versions' ? styles.active : ''}`}
+        onClick={() => setActiveTab('versions')}
+      >
+        Версии
+        <span className={styles.tabCount}>{versions.length}</span>
+      </button>
     </div>
   );
 
@@ -190,11 +189,12 @@ export function EntityTabsPage<
       onEdit={onEdit}
       onSave={onSave}
       onCancel={onCancel}
-      showDelete={false} // Убираем дублирование кнопок
+      showDelete={false}
       onDelete={undefined}
-      actionButtons={getActionButtons()} // Передаем единый блок кнопок
+      actionButtons={getActionButtons()}
+      tabsBar={tabsSection}
+      noPadding={!isNew}
     >
-      {tabsSection}
       {isNew ? (
         // Create mode - simple entity info
         <div className={styles.content}>
