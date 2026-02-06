@@ -68,6 +68,20 @@ class BaselineService:
             raise NotFoundException(f"Baseline '{slug}' not found")
         return baseline
 
+    async def get_baseline_with_recommended(self, slug: str) -> Baseline:
+        """Get baseline container by slug with eager-loaded recommended_version"""
+        from sqlalchemy import select
+        from sqlalchemy.orm import selectinload
+        
+        stmt = select(Baseline).where(Baseline.slug == slug).options(
+            selectinload(Baseline.recommended_version)
+        )
+        result = await self.session.execute(stmt)
+        baseline = result.scalar_one_or_none()
+        if not baseline:
+            raise NotFoundException(f"Baseline '{slug}' not found")
+        return baseline
+
     async def get_baseline_by_id(self, baseline_id: UUID) -> Baseline:
         """Get baseline container by ID"""
         baseline = await self.baseline_repo.get_by_id(baseline_id)
@@ -252,7 +266,20 @@ class BaselineService:
 
     async def update_recommended_version(self, slug: str, version_id: UUID) -> Baseline:
         """Set the recommended version for a baseline. Version must be active."""
-        baseline = await self.get_baseline_by_slug(slug)
+        # Use eager loading to avoid MissingGreenlet error
+        from sqlalchemy import select
+        from sqlalchemy.orm import selectinload
+        
+        stmt = select(Baseline).where(Baseline.slug == slug).options(
+            selectinload(Baseline.versions),
+            selectinload(Baseline.recommended_version)
+        )
+        result = await self.session.execute(stmt)
+        baseline = result.scalar_one_or_none()
+        
+        if not baseline:
+            raise NotFoundException(f"Baseline '{slug}' not found")
+            
         version = await self.get_version(version_id)
         
         if version.baseline_id != baseline.id:
@@ -263,7 +290,13 @@ class BaselineService:
         
         await self.baseline_repo.update(baseline, {'recommended_version_id': version_id})
         
-        return await self.get_baseline_by_slug(slug)
+        # Return the baseline with eager loaded relationships
+        stmt = select(Baseline).where(Baseline.slug == slug).options(
+            selectinload(Baseline.versions),
+            selectinload(Baseline.recommended_version)
+        )
+        result = await self.session.execute(stmt)
+        return result.scalar_one()
 
     # ─────────────────────────────────────────────────────────────────────────
     # RENDERING

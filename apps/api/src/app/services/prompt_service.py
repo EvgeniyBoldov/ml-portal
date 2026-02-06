@@ -73,6 +73,20 @@ class PromptService:
             raise NotFoundException(f"Prompt '{slug}' not found")
         return prompt
 
+    async def get_prompt_with_recommended(self, slug: str) -> Prompt:
+        """Get prompt container by slug with eager-loaded recommended_version"""
+        from sqlalchemy import select
+        from sqlalchemy.orm import selectinload
+        
+        stmt = select(Prompt).where(Prompt.slug == slug).options(
+            selectinload(Prompt.recommended_version)
+        )
+        result = await self.session.execute(stmt)
+        prompt = result.scalar_one_or_none()
+        if not prompt:
+            raise NotFoundException(f"Prompt '{slug}' not found")
+        return prompt
+
     async def get_prompt_by_id(self, prompt_id: UUID) -> Prompt:
         """Get prompt container by ID"""
         prompt = await self.prompt_repo.get_by_id(prompt_id)
@@ -248,7 +262,20 @@ class PromptService:
 
     async def update_recommended_version(self, slug: str, version_id: UUID) -> Prompt:
         """Set the recommended version for a prompt. Version must be active."""
-        prompt = await self.get_prompt_by_slug(slug)
+        # Use eager loading to avoid MissingGreenlet error
+        from sqlalchemy import select
+        from sqlalchemy.orm import selectinload
+        
+        stmt = select(Prompt).where(Prompt.slug == slug).options(
+            selectinload(Prompt.versions),
+            selectinload(Prompt.recommended_version)
+        )
+        result = await self.session.execute(stmt)
+        prompt = result.scalar_one_or_none()
+        
+        if not prompt:
+            raise NotFoundException(f"Prompt '{slug}' not found")
+            
         version = await self.get_version_by_id(version_id)
         
         if version.prompt_id != prompt.id:
@@ -259,7 +286,13 @@ class PromptService:
         
         await self.prompt_repo.update(prompt, {'recommended_version_id': version_id})
         
-        return await self.get_prompt_by_slug(slug)
+        # Return the prompt with eager loaded relationships
+        stmt = select(Prompt).where(Prompt.slug == slug).options(
+            selectinload(Prompt.versions),
+            selectinload(Prompt.recommended_version)
+        )
+        result = await self.session.execute(stmt)
+        return result.scalar_one()
 
     # ─────────────────────────────────────────────────────────────────────────
     # RENDER operations

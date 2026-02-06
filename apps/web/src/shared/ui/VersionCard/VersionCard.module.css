@@ -84,3 +84,83 @@
   border-radius: var(--radius-md);
   padding: var(--sp-2) var(--sp-3);
 }
+
+.notesText {
+  padding: var(--sp-2) var(--sp-3);
+  color: var(--text, var(--color-text));
+  font-size: 0.875rem;
+  line-height: 1.4;
+  white-space: pre-wrap;
+}
+
+/* Short version card styles */
+.shortVersionCard {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+/* Template input for prompt/baseline */
+.templateInput {
+  width: 100%;
+  padding: 0.75rem;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  background: var(--bg, #ffffff);
+  border: 1px solid var(--border-color, #e5e7eb);
+  border-radius: var(--radius-md, 6px);
+  color: var(--text, var(--color-text));
+  resize: vertical;
+}
+
+.templateInput:focus {
+  outline: none;
+  border-color: var(--primary, #3b82f6);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
+}
+
+/* Limits table for policy */
+.limitsTable {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+.tableRow {
+  border-bottom: 1px solid var(--border-color, #e5e7eb);
+}
+
+.tableRow:last-child {
+  border-bottom: none;
+}
+
+.tableKey {
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+  color: var(--muted, var(--color-text-muted));
+  font-weight: 500;
+  width: 40%;
+}
+
+.tableValue {
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+  color: var(--text, var(--color-text));
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-size: 0.8125rem;
+  word-break: break-word;
+}
+
+/* Empty state */
+.emptyText {
+  padding: 1rem;
+  text-align: center;
+  color: var(--muted, var(--color-text-muted));
+  font-size: 0.875rem;
+}

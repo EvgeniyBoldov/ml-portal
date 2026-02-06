@@ -1,6 +1,6 @@
 /**
  * EntityTabsPage styles
- * Clean, modern tabs design
+ * Clean, modern tabs with proper content layout
  */
 
 /* Tabs bar - directly under header */
@@ -58,32 +58,84 @@
   color: var(--primary);
 }
 
-/* Content wrapper */
+/* Main content wrapper - fills remaining space */
 .tabContent {
   flex: 1;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
-  background: var(--bg);
+  min-height: 0;
+  background: var(--panel); /* Единый фон как у хедера и табов */
 }
 
-/* Content area with scroll */
-.content {
+/* Overview tab - split layout */
+.overviewTab {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 24px;
+  gap: 24px;
+}
+
+/* Split layout container */
+.splitLayout {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  min-height: 0;
+}
+
+/* Split columns */
+.splitLeft,
+.splitRight {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* Content blocks inside split */
+.contentBlock {
+  background: var(--bg);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  padding: 24px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.contentBlockHeader {
+  font-size: var(--text-lg);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text);
+  margin: 0 0 16px 0;
+}
+
+.contentBlockContent {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+/* Versions tab */
+.versionsTab {
   flex: 1;
   overflow-y: auto;
   padding: 24px;
 }
 
-.overviewTab {
-  height: 100%;
-  overflow: auto;
+/* Create mode - single column */
+.createTab {
+  flex: 1;
+  overflow-y: auto;
   padding: 24px;
 }
 
-.versionsTab {
-  height: 100%;
-  overflow: auto;
-  padding: 24px;
+.createTab .contentBlock {
+  max-width: 800px;
+  margin: 0 auto;
 }
 
 /* Empty state */
@@ -105,6 +157,13 @@
 }
 
 /* Responsive */
+@media (max-width: 1024px) {
+  .splitLayout {
+    grid-template-columns: 1fr;
+    gap: 20px;
+  }
+}
+
 @media (max-width: 768px) {
   .tabsSection {
     padding: 0 16px;
@@ -118,7 +177,16 @@
 
   .overviewTab,
   .versionsTab,
-  .content {
+  .createTab {
+    padding: 16px;
+    gap: 16px;
+  }
+
+  .splitLayout {
+    gap: 16px;
+  }
+
+  .contentBlock {
     padding: 16px;
   }
 }

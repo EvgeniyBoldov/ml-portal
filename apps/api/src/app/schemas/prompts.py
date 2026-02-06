@@ -87,6 +87,7 @@ class PromptVersionInfo(BaseModel):
     id: UUID
     version: int
     status: PromptStatusType
+    template: Optional[str] = None
     created_at: datetime
     
     class Config:
@@ -123,6 +124,10 @@ class PromptDetailResponse(BaseModel):
     type: PromptTypeType
     created_at: datetime
     updated_at: datetime
+    
+    # Recommended version
+    recommended_version_id: Optional[UUID] = None
+    recommended_version: Optional[PromptVersionInfo] = None
     
     # Versions
     versions: List[PromptVersionInfo]

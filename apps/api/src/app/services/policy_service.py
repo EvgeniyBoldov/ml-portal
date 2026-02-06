@@ -330,7 +330,20 @@ class PolicyService:
         version_id: UUID
     ) -> Policy:
         """Update the recommended version for a policy"""
-        policy = await self.get_policy_by_slug(policy_slug)
+        # Use eager loading to avoid MissingGreenlet error
+        from sqlalchemy import select
+        from sqlalchemy.orm import selectinload
+        
+        stmt = select(Policy).where(Policy.slug == policy_slug).options(
+            selectinload(Policy.versions),
+            selectinload(Policy.recommended_version)
+        )
+        result = await self.session.execute(stmt)
+        policy = result.scalar_one_or_none()
+        
+        if not policy:
+            raise PolicyError(f"Policy '{policy_slug}' not found")
+            
         version = await self.get_version(version_id)
         
         # Verify version belongs to this policy
@@ -341,7 +354,15 @@ class PolicyService:
         if version.status == PolicyStatus.INACTIVE.value:
             raise PolicyError("Cannot set inactive version as recommended")
         
-        return await self.policy_repo.update(policy, {'recommended_version_id': version_id})
+        await self.policy_repo.update(policy, {'recommended_version_id': version_id})
+        
+        # Return the policy with eager loaded relationships
+        stmt = select(Policy).where(Policy.slug == policy_slug).options(
+            selectinload(Policy.versions),
+            selectinload(Policy.recommended_version)
+        )
+        result = await self.session.execute(stmt)
+        return result.scalar_one()
 
     # ─────────────────────────────────────────────────────────────────────────
     # EFFECTIVE LIMITS (for runtime)

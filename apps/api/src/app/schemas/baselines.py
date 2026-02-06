@@ -96,6 +96,7 @@ class BaselineVersionInfo(BaseModel):
     version: int
     status: BaselineStatusType
     notes: Optional[str] = None
+    template: Optional[str] = None
     created_at: datetime
     
     class Config:
@@ -137,6 +138,11 @@ class BaselineDetailResponse(BaseModel):
     is_active: bool
     created_at: datetime
     updated_at: datetime
+    
+    # Recommended version
+    recommended_version_id: Optional[UUID] = None
+    recommended_version: Optional[BaselineVersionInfo] = None
+    
     versions: List[BaselineVersionInfo]
 
 

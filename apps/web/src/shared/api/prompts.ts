@@ -34,6 +34,7 @@ export interface PromptVersionInfo {
   id: string;
   version: number;
   status: PromptStatus;
+  template?: string;
   created_at: string;
 }
 
@@ -57,6 +58,8 @@ export interface PromptDetail {
   type: PromptType;
   created_at: string;
   updated_at: string;
+  recommended_version_id?: string;
+  recommended_version?: PromptVersionInfo;
   versions: PromptVersionInfo[];
 }
 

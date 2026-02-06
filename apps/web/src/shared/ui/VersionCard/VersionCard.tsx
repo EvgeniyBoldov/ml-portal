@@ -29,6 +29,8 @@ export interface VersionCardProps {
   onCreateVersion?: () => void;
   children?: React.ReactNode;
   className?: string;
+  /** Render without ContentBlock wrapper */
+  noWrapper?: boolean;
 }
 
 export function VersionCard({
@@ -37,6 +39,7 @@ export function VersionCard({
   onCreateVersion,
   children,
   className = '',
+  noWrapper = false,
 }: VersionCardProps) {
   const statusConfig = useStatusConfig(entityType);
 
@@ -59,6 +62,38 @@ export function VersionCard({
     );
   }
 
+  const cardContent = (
+    <div className={styles.versionCard}>
+      {/* Metadata */}
+      <div className={styles.metadata}>
+        <MetaRow
+          label="Создана"
+          value={new Date(version.created_at).toLocaleDateString('ru-RU')}
+        />
+        {version.updated_at && (
+          <MetaRow
+            label="Обновлена"
+            value={new Date(version.updated_at).toLocaleDateString('ru-RU')}
+          />
+        )}
+        {version.notes && (
+          <MetaRow label="Заметки" value={version.notes} />
+        )}
+      </div>
+
+      {/* Custom content */}
+      {children && (
+        <div className={styles.content}>
+          {children}
+        </div>
+      )}
+    </div>
+  );
+
+  if (noWrapper) {
+    return cardContent;
+  }
+
   return (
     <ContentBlock
       width="full"
@@ -70,31 +105,7 @@ export function VersionCard({
       }
       className={className}
     >
-      <div className={styles.versionCard}>
-        {/* Metadata */}
-        <div className={styles.metadata}>
-          <MetaRow
-            label="Создана"
-            value={new Date(version.created_at).toLocaleDateString('ru-RU')}
-          />
-          {version.updated_at && (
-            <MetaRow
-              label="Обновлена"
-              value={new Date(version.updated_at).toLocaleDateString('ru-RU')}
-            />
-          )}
-          {version.notes && (
-            <MetaRow label="Заметки" value={version.notes} />
-          )}
-        </div>
-
-        {/* Custom content */}
-        {children && (
-          <div className={styles.content}>
-            {children}
-          </div>
-        )}
-      </div>
+      {cardContent}
     </ContentBlock>
   );
 }
@@ -118,6 +129,7 @@ export function PromptVersionCard({ version, onCreateVersion }: PromptVersionCar
       entityType="prompt"
       version={version}
       onCreateVersion={onCreateVersion}
+      noWrapper={true}
     >
       {version?.template && (
         <div className={styles.templatePreview}>
@@ -142,6 +154,11 @@ export interface PolicyVersionCardProps {
     max_steps?: number;
     max_tool_calls?: number;
     max_wall_time_ms?: number;
+    tool_timeout_ms?: number;
+    max_retries?: number;
+    budget_tokens?: number;
+    budget_cost_cents?: number;
+    notes?: string;
   } | null;
   onCreateVersion?: () => void;
 }
@@ -165,13 +182,44 @@ export function PolicyVersionCard({ version, onCreateVersion }: PolicyVersionCar
               label="Макс. вызовов"
               value={version.max_tool_calls ?? '∞'}
             />
-            {version.max_wall_time_ms && (
-              <MetaRow
-                label="Таймаут"
-                value={`${version.max_wall_time_ms / 1000}s`}
-              />
-            )}
+            <MetaRow
+              label="Макс. повторов"
+              value={version.max_retries ?? '∞'}
+            />
           </div>
+          
+          <div className={styles.limitsLabel}>Таймауты:</div>
+          <div className={styles.limitsGrid}>
+            <MetaRow
+              label="Общий таймаут"
+              value={version.max_wall_time_ms ? `${version.max_wall_time_ms / 1000}s` : '∞'}
+            />
+            <MetaRow
+              label="Таймаут инструмента"
+              value={version.tool_timeout_ms ? `${version.tool_timeout_ms / 1000}s` : '∞'}
+            />
+          </div>
+          
+          <div className={styles.limitsLabel}>Бюджет:</div>
+          <div className={styles.limitsGrid}>
+            <MetaRow
+              label="Лимит токенов"
+              value={version.budget_tokens ?? '∞'}
+            />
+            <MetaRow
+              label="Лимит стоимости"
+              value={version.budget_cost_cents ? `${version.budget_cost_cents}¢` : '∞'}
+            />
+          </div>
+          
+          {version.notes && (
+            <div className={styles.limitsLabel}>Заметки:</div>
+          )}
+          {version.notes && (
+            <div className={styles.limitsGrid}>
+              <div className={styles.notesText}>{version.notes}</div>
+            </div>
+          )}
         </div>
       )}
     </VersionCard>

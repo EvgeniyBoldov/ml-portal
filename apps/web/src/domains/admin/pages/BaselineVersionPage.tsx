@@ -9,9 +9,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { baselinesApi, type BaselineVersion } from '@/shared/api/baselines';
 import { qk } from '@/shared/api/keys';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
-import { EntityPage, ContentBlock, ContentGrid, Textarea, type EntityPageMode, type BreadcrumbItem } from '@/shared/ui';
-import { StatusBadgeCard, type StatusOption } from '@/shared/ui';
-import { useStatusConfig } from '@/shared/hooks/useStatusConfig';
+import { EntityPage, ContentBlock, ContentGrid, Textarea, Button, type EntityPageMode, type BreadcrumbItem } from '@/shared/ui';
 
 export function BaselineVersionPage() {
   const { slug, version: versionParam } = useParams<{ slug: string; version: string }>();
@@ -20,7 +18,6 @@ export function BaselineVersionPage() {
   const queryClient = useQueryClient();
   const showError = useErrorToast();
   const showSuccess = useSuccessToast();
-  const statusConfig = useStatusConfig('baseline');
 
   const isCreate = !versionParam;
   const versionNumber = isCreate ? 0 : parseInt(versionParam, 10);
@@ -75,12 +72,31 @@ export function BaselineVersionPage() {
     onError: (err: Error) => showError(err.message),
   });
 
-  const changeStatusMutation = useMutation({
-    mutationFn: (status: string) => baselinesApi.updateVersionStatus(existingVersion!.id, status),
+  const activateMutation = useMutation({
+    mutationFn: () => baselinesApi.activateVersion(existingVersion!.id),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['baselines', slug, 'versions', versionNumber] });
       queryClient.invalidateQueries({ queryKey: qk.baselines.detail(slug!) });
-      showSuccess('Статус изменен');
+      queryClient.invalidateQueries({ queryKey: ['baselines', slug, 'versions', versionNumber] });
+      showSuccess('Версия активирована');
+    },
+    onError: (err: Error) => showError(err.message),
+  });
+
+  const deactivateMutation = useMutation({
+    mutationFn: () => baselinesApi.archiveVersion(existingVersion!.id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: qk.baselines.detail(slug!) });
+      queryClient.invalidateQueries({ queryKey: ['baselines', slug, 'versions', versionNumber] });
+      showSuccess('Версия архивирована');
+    },
+    onError: (err: Error) => showError(err.message),
+  });
+
+  const setRecommendedMutation = useMutation({
+    mutationFn: () => baselinesApi.setRecommendedVersion(slug!, existingVersion!.id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: qk.baselines.detail(slug!) });
+      showSuccess('Основная версия установлена');
     },
     onError: (err: Error) => showError(err.message),
   });
@@ -107,7 +123,7 @@ export function BaselineVersionPage() {
   
   const handleCancel = () => {
     if (isCreate) {
-      navigate(`/admin/prompts/${slug}`);
+      navigate(`/admin/baselines/${slug}`);
     } else {
       if (existingVersion) {
         setFormData({ template: existingVersion.template });
@@ -116,30 +132,101 @@ export function BaselineVersionPage() {
     }
   };
 
-  const statusOptions: StatusOption[] = [
-    { value: 'draft', label: statusConfig.labels.draft, tone: statusConfig.tones.draft },
-    { value: 'active', label: statusConfig.labels.active, tone: statusConfig.tones.active },
-    { value: 'archived', label: statusConfig.labels.archived, tone: statusConfig.tones.archived },
-  ];
-
   const breadcrumbs: BreadcrumbItem[] = [
-    { label: 'Промпты', href: '/admin/prompts' },
-    { label: prompt?.name || slug || '', href: `/admin/prompts/${slug}` },
+    { label: 'Бейслайны', href: '/admin/baselines' },
+    { label: baseline?.name || slug || '', href: `/admin/baselines/${slug}` },
     { label: isCreate ? 'Новая версия' : `Версия ${versionNumber}` },
   ];
+
+  // Generate action buttons for version management
+  const getVersionActionButtons = () => {
+    if (isCreate || !existingVersion) return null;
+
+    const buttons = [];
+    const isRecommended = baseline?.recommended_version?.id === existingVersion.id;
+
+    switch (existingVersion.status) {
+      case 'draft':
+        buttons.push(
+          <Button
+            key="activate"
+            variant="primary"
+            onClick={() => activateMutation.mutate()}
+            disabled={activateMutation.isPending}
+            loading={activateMutation.isPending}
+          >
+            Активировать
+          </Button>
+        );
+        buttons.push(
+          <Button
+            key="edit"
+            variant="outline"
+            onClick={() => setSearchParams({ mode: 'edit' })}
+          >
+            Редактировать
+          </Button>
+        );
+        break;
+
+      case 'active':
+        if (!isRecommended) {
+          buttons.push(
+            <Button
+              key="setRecommended"
+              variant="outline"
+              onClick={() => setRecommendedMutation.mutate()}
+              disabled={setRecommendedMutation.isPending}
+              loading={setRecommendedMutation.isPending}
+            >
+              Сделать основной
+            </Button>
+          );
+          buttons.push(
+            <Button
+              key="archive"
+              variant="danger"
+              onClick={() => deactivateMutation.mutate()}
+              disabled={deactivateMutation.isPending}
+              loading={deactivateMutation.isPending}
+            >
+              Архивировать
+            </Button>
+          );
+        }
+        break;
+
+      case 'archived':
+        buttons.push(
+          <Button
+            key="reactivate"
+            variant="primary"
+            onClick={() => activateMutation.mutate()}
+            disabled={activateMutation.isPending}
+            loading={activateMutation.isPending}
+          >
+            Активировать
+          </Button>
+        );
+        break;
+    }
+
+    return buttons.length > 0 ? buttons : null;
+  };
 
   return (
     <EntityPage
       mode={mode}
       entityName={isCreate ? 'Новая версия' : `Версия ${versionNumber}`}
       entityTypeLabel="версии"
-      backPath={`/admin/prompts/${slug}`}
+      backPath={`/admin/baselines/${slug}`}
       breadcrumbs={breadcrumbs}
       loading={!isCreate && isLoading}
       saving={saving}
       onEdit={handleEdit}
       onSave={handleSave}
       onCancel={handleCancel}
+      actionButtons={getVersionActionButtons()}
     >
       <ContentGrid>
         {/* Template - 2/3 width */}
@@ -165,16 +252,6 @@ export function BaselineVersionPage() {
           )}
         </ContentBlock>
 
-        {/* Status - 1/3 width */}
-        {!isCreate && existingVersion && (
-          <StatusBadgeCard
-            label="Статус"
-            status={existingVersion.status}
-            statusOptions={statusOptions}
-            onChangeStatus={(status) => changeStatusMutation.mutate(status)}
-            disabled={changeStatusMutation.isPending}
-          />
-        )}
       </ContentGrid>
     </EntityPage>
   );

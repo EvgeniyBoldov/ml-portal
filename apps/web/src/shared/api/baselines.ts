@@ -37,6 +37,7 @@ export interface BaselineVersionInfo {
   version: number;
   status: BaselineStatus;
   notes?: string;
+  template?: string;
   created_at: string;
 }
 
@@ -66,6 +67,8 @@ export interface BaselineDetail {
   is_active: boolean;
   created_at: string;
   updated_at: string;
+  recommended_version_id?: string;
+  recommended_version?: BaselineVersionInfo;
   versions: BaselineVersionInfo[];
 }
 

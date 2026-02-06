@@ -1,36 +1,23 @@
 /**
  * PolicyVersionPage - View/Edit/Create policy version
  * 
+ * REFACTORED: Simplified with shared components
  * Routes:
  * - /admin/policies/:slug/versions/new - Create new version
  * - /admin/policies/:slug/versions/:version - View version
  * - /admin/policies/:slug/versions/:version?mode=edit - Edit version (only draft)
  */
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { policiesApi, type PolicyVersionCreate, type PolicyVersionStatus } from '@/shared/api';
+import { policiesApi, type PolicyVersionCreate } from '@/shared/api';
 import { qk } from '@/shared/api/keys';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
-import { EntityPage, type EntityPageMode } from '@/shared/ui/EntityPage';
-import { ContentBlock, ContentGrid, StatusCard, type FieldDefinition, type StatusOption, type StatusAction } from '@/shared/ui';
-import Button from '@/shared/ui/Button';
+import { EntityPage, ContentBlock, Input, Textarea, Button, type EntityPageMode, type BreadcrumbItem } from '@/shared/ui';
 
 interface FormData extends PolicyVersionCreate {
   notes?: string;
 }
-
-const STATUS_LABELS: Record<PolicyVersionStatus, string> = {
-  draft: 'Черновик',
-  active: 'Активная',
-  inactive: 'Неактивная',
-};
-
-const STATUS_VARIANTS: Record<PolicyVersionStatus, 'default' | 'success' | 'warning' | 'error'> = {
-  draft: 'warning',
-  active: 'success',
-  inactive: 'default',
-};
 
 export function PolicyVersionPage() {
   const { slug, version: versionParam } = useParams<{ slug: string; version: string }>();
@@ -149,7 +136,7 @@ export function PolicyVersionPage() {
     mutationFn: () => policiesApi.setRecommendedVersion(slug!, existingVersion!.id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: qk.policies.detail(slug!) });
-      showSuccess('Версия установлена как основная');
+      showSuccess('Основная версия установлена');
     },
     onError: (err: Error) => showError(err.message),
   });
@@ -193,33 +180,6 @@ export function PolicyVersionPage() {
     }
   };
 
-  const handleEdit = () => {
-    if (existingVersion?.status !== 'draft') {
-      showError('Только черновики можно редактировать');
-      return;
-    }
-    setSearchParams({ mode: 'edit' });
-  };
-
-  const handleCancel = () => {
-    if (mode === 'edit' && existingVersion) {
-      setFormData({
-        max_steps: existingVersion.max_steps ?? undefined,
-        max_tool_calls: existingVersion.max_tool_calls ?? undefined,
-        max_wall_time_ms: existingVersion.max_wall_time_ms ?? undefined,
-        tool_timeout_ms: existingVersion.tool_timeout_ms ?? undefined,
-        max_retries: existingVersion.max_retries ?? undefined,
-        budget_tokens: existingVersion.budget_tokens ?? undefined,
-        budget_cost_cents: existingVersion.budget_cost_cents ?? undefined,
-        extra_config: existingVersion.extra_config || {},
-        notes: existingVersion.notes || '',
-      });
-      setSearchParams({});
-    } else if (mode === 'create') {
-      navigate(`/admin/policies/${slug}`);
-    }
-  };
-
   const handleDelete = async () => {
     if (existingVersion?.status === 'active') {
       showError('Нельзя удалить активную версию');
@@ -233,176 +193,222 @@ export function PolicyVersionPage() {
     setFormData((prev) => ({ ...prev, [key]: value }));
   };
 
-  // Calculate next version number for create mode
-  const nextVersionNumber = useMemo(() => {
-    if (!policy?.versions?.length) return 1;
-    return Math.max(...policy.versions.map((v) => v.version)) + 1;
-  }, [policy?.versions]);
-
-  // Status options for StatusCard
-  const statusOptions: StatusOption[] = [
-    { value: 'draft', label: STATUS_LABELS.draft, variant: 'warning' },
-    { value: 'active', label: STATUS_LABELS.active, variant: 'success' },
-    { value: 'inactive', label: STATUS_LABELS.inactive, variant: 'default' },
-  ];
-
-  // Status actions
-  const statusActions: StatusAction[] = [
-    {
-      label: 'Активировать',
-      onClick: () => activateMutation.mutate(),
-      variant: 'primary',
-      disabled: activateMutation.isPending,
-      showFor: ['draft'],
-    },
-    {
-      label: 'Деактивировать',
-      onClick: () => deactivateMutation.mutate(),
-      variant: 'secondary',
-      disabled: deactivateMutation.isPending,
-      showFor: ['active'],
-    },
-    {
-      label: 'Сделать основной',
-      onClick: () => activateMutation.mutate(),
-      variant: 'primary',
-      disabled: activateMutation.isPending || policy?.recommended_version?.version === versionNumber,
-      showFor: ['active'],
-    },
-  ];
-
-  // Field definitions for ContentBlock
-  const limitsFields: FieldDefinition[] = [
-    { key: 'max_steps', label: 'Макс. шагов', type: 'number', placeholder: '20', description: 'Максимальное количество шагов агента' },
-    { key: 'max_tool_calls', label: 'Макс. вызовов', type: 'number', placeholder: '50', description: 'Максимальное количество вызовов инструментов' },
-    { key: 'max_retries', label: 'Макс. повторов', type: 'number', placeholder: '3', description: 'Количество повторных попыток при ошибке' },
-  ];
-
-  const timeoutsFields: FieldDefinition[] = [
-    { key: 'max_wall_time_ms', label: 'Общий таймаут (мс)', type: 'number', placeholder: '300000', description: 'Максимальное время выполнения' },
-    { key: 'tool_timeout_ms', label: 'Таймаут инструмента (мс)', type: 'number', placeholder: '30000', description: 'Таймаут для одного вызова' },
-  ];
-
-  const budgetFields: FieldDefinition[] = [
-    { key: 'budget_tokens', label: 'Лимит токенов', type: 'number', placeholder: 'Без лимита', description: 'Максимальное количество токенов' },
-    { key: 'budget_cost_cents', label: 'Лимит стоимости (центы)', type: 'number', placeholder: 'Без лимита', description: 'Максимальная стоимость' },
-  ];
-
-  const notesFields: FieldDefinition[] = [
-    { key: 'notes', label: 'Заметки', type: 'textarea', placeholder: 'Что изменилось в этой версии...', description: 'Описание изменений', rows: 3 },
-  ];
-
-  // Check if this version is the recommended one
-  const isRecommended = policy?.recommended_version?.id === existingVersion?.id;
-
-  // Render header actions based on new flow:
-  // Draft: Activate only (edit via onEdit prop)
-  // Active: Set as recommended (if not already), Deactivate
-  // Inactive: nothing
-  const renderHeaderActions = () => {
-    if (isCreate) return null;
-    return (
-      <>
-        {existingVersion?.status === 'draft' && (
-          <Button variant="primary" onClick={() => activateMutation.mutate()} disabled={activateMutation.isPending}>
-            Активировать
-          </Button>
-        )}
-        {existingVersion?.status === 'active' && (
-          <>
-            {!isRecommended && (
-              <Button variant="primary" onClick={() => setRecommendedMutation.mutate()} disabled={setRecommendedMutation.isPending}>
-                Сделать основной
-              </Button>
-            )}
-            <Button variant="secondary" onClick={() => deactivateMutation.mutate()} disabled={deactivateMutation.isPending}>
-              Деактивировать
-            </Button>
-          </>
-        )}
-        {/* Inactive versions have no actions */}
-        <Button variant="secondary" onClick={() => navigate(`/admin/policies/${slug}/versions/new`)}>
-          Новая версия
-        </Button>
-      </>
-    );
+  const handleEdit = () => setSearchParams({ mode: 'edit' });
+  
+  const handleCancel = () => {
+    if (isCreate) {
+      navigate(`/admin/policies/${slug}`);
+    } else {
+      if (existingVersion) {
+        setFormData({
+          max_steps: existingVersion.max_steps ?? undefined,
+          max_tool_calls: existingVersion.max_tool_calls ?? undefined,
+          max_wall_time_ms: existingVersion.max_wall_time_ms ?? undefined,
+          tool_timeout_ms: existingVersion.tool_timeout_ms ?? undefined,
+          max_retries: existingVersion.max_retries ?? undefined,
+          budget_tokens: existingVersion.budget_tokens ?? undefined,
+          budget_cost_cents: existingVersion.budget_cost_cents ?? undefined,
+          extra_config: existingVersion.extra_config || {},
+          notes: existingVersion.notes || '',
+        });
+      }
+      setSearchParams({});
+    }
   };
 
-  const breadcrumbs = [
+  
+  const breadcrumbs: BreadcrumbItem[] = [
     { label: 'Политики', href: '/admin/policies' },
     { label: policy?.name || slug || '', href: `/admin/policies/${slug}` },
     { label: isCreate ? 'Новая версия' : `Версия ${versionNumber}` },
   ];
 
+  // Generate action buttons for version management
+  const getVersionActionButtons = () => {
+    if (isCreate || !existingVersion) return null;
+
+    const buttons = [];
+    const isRecommended = policy?.recommended_version?.id === existingVersion.id;
+
+    switch (existingVersion.status) {
+      case 'draft':
+        buttons.push(
+          <Button
+            key="activate"
+            variant="primary"
+            onClick={() => activateMutation.mutate()}
+            disabled={activateMutation.isPending}
+            loading={activateMutation.isPending}
+          >
+            Активировать
+          </Button>
+        );
+        buttons.push(
+          <Button
+            key="edit"
+            variant="outline"
+            onClick={() => setSearchParams({ mode: 'edit' })}
+          >
+            Редактировать
+          </Button>
+        );
+        break;
+
+      case 'active':
+        if (!isRecommended) {
+          buttons.push(
+            <Button
+              key="setRecommended"
+              variant="outline"
+              onClick={() => setRecommendedMutation.mutate()}
+              disabled={setRecommendedMutation.isPending}
+              loading={setRecommendedMutation.isPending}
+            >
+              Сделать основной
+            </Button>
+          );
+          buttons.push(
+            <Button
+              key="deactivate"
+              variant="danger"
+              onClick={() => deactivateMutation.mutate()}
+              disabled={deactivateMutation.isPending}
+              loading={deactivateMutation.isPending}
+            >
+              Деактивировать
+            </Button>
+          );
+        }
+        break;
+
+      case 'inactive':
+        buttons.push(
+          <Button
+            key="reactivate"
+            variant="primary"
+            onClick={() => activateMutation.mutate()}
+            disabled={activateMutation.isPending}
+            loading={activateMutation.isPending}
+          >
+            Активировать
+          </Button>
+        );
+        break;
+    }
+
+    return buttons.length > 0 ? buttons : null;
+  };
+
   return (
     <EntityPage
       mode={mode}
-      entityName={isCreate ? `Новая версия (v${nextVersionNumber})` : `Версия ${versionNumber}`}
-      key={`version-${isCreate ? 'new' : versionNumber}`}
+      entityName={isCreate ? 'Новая версия' : `Версия ${versionNumber}`}
       entityTypeLabel="версии"
       backPath={`/admin/policies/${slug}`}
-      loading={isLoading}
+      breadcrumbs={breadcrumbs}
+      loading={!isCreate && isLoading}
       saving={saving}
-      onEdit={existingVersion?.status === 'draft' ? handleEdit : undefined}
+      onEdit={handleEdit}
       onSave={handleSave}
       onCancel={handleCancel}
-      onDelete={!isCreate && existingVersion?.status !== 'active' ? handleDelete : undefined}
-      showDelete={!isCreate && mode === 'view' && existingVersion?.status !== 'active'}
-      breadcrumbs={breadcrumbs}
-      headerActions={renderHeaderActions()}
+      actionButtons={getVersionActionButtons()}
     >
-      <ContentGrid>
-        {/* Left column: Limits */}
-        <ContentBlock
-          width="1/2"
-          title="Лимиты выполнения"
-          editable={isEditable}
-          fields={limitsFields}
-          data={formData}
-          onChange={handleFieldChange}
-        />
+      <ContentBlock title="Лимиты" icon="settings">
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+          <div>
+            <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', fontWeight: 500 }}>Макс. шагов</label>
+            <Input
+              type="number"
+              value={formData.max_steps ?? ''}
+              onChange={(e) => handleFieldChange('max_steps', e.target.value ? parseInt(e.target.value) : undefined)}
+              disabled={!isEditable}
+              placeholder="Без лимита"
+            />
+          </div>
+          <div>
+            <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', fontWeight: 500 }}>Макс. вызовов</label>
+            <Input
+              type="number"
+              value={formData.max_tool_calls ?? ''}
+              onChange={(e) => handleFieldChange('max_tool_calls', e.target.value ? parseInt(e.target.value) : undefined)}
+              disabled={!isEditable}
+              placeholder="Без лимита"
+            />
+          </div>
+          <div>
+            <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', fontWeight: 500 }}>Макс. повторов</label>
+            <Input
+              type="number"
+              value={formData.max_retries ?? ''}
+              onChange={(e) => handleFieldChange('max_retries', e.target.value ? parseInt(e.target.value) : undefined)}
+              disabled={!isEditable}
+              placeholder="Без лимита"
+            />
+          </div>
+          <div>
+            <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', fontWeight: 500 }}>Таймаут (мс)</label>
+            <Input
+              type="number"
+              value={formData.max_wall_time_ms ?? ''}
+              onChange={(e) => handleFieldChange('max_wall_time_ms', e.target.value ? parseInt(e.target.value) : undefined)}
+              disabled={!isEditable}
+              placeholder="Без лимита"
+            />
+          </div>
+          <div>
+            <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', fontWeight: 500 }}>Таймаут инструмента (мс)</label>
+            <Input
+              type="number"
+              value={formData.tool_timeout_ms ?? ''}
+              onChange={(e) => handleFieldChange('tool_timeout_ms', e.target.value ? parseInt(e.target.value) : undefined)}
+              disabled={!isEditable}
+              placeholder="Без лимита"
+            />
+          </div>
+          <div>
+            <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', fontWeight: 500 }}>Лимит токенов</label>
+            <Input
+              type="number"
+              value={formData.budget_tokens ?? ''}
+              onChange={(e) => handleFieldChange('budget_tokens', e.target.value ? parseInt(e.target.value) : undefined)}
+              disabled={!isEditable}
+              placeholder="Без лимита"
+            />
+          </div>
+          <div>
+            <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', fontWeight: 500 }}>Лимит стоимости (центы)</label>
+            <Input
+              type="number"
+              value={formData.budget_cost_cents ?? ''}
+              onChange={(e) => handleFieldChange('budget_cost_cents', e.target.value ? parseInt(e.target.value) : undefined)}
+              disabled={!isEditable}
+              placeholder="Без лимита"
+            />
+          </div>
+        </div>
+      </ContentBlock>
 
-        {/* Right column: Status Card - only for existing versions */}
-        {!isCreate && existingVersion && (
-          <StatusCard
-            width="1/2"
-            title="Статус версии"
-            status={existingVersion.status}
-            statusOptions={statusOptions}
-            editable={false}
+      <ContentBlock title="Заметки" icon="file-text">
+        {isEditable ? (
+          <Textarea
+            value={formData.notes || ''}
+            onChange={(e) => handleFieldChange('notes', e.target.value)}
+            placeholder="Описание изменений..."
+            rows={6}
+            style={{ fontFamily: 'monospace', fontSize: '0.875rem' }}
           />
+        ) : (
+          <pre style={{ 
+            whiteSpace: 'pre-wrap', 
+            wordBreak: 'break-word',
+            fontFamily: 'monospace',
+            fontSize: '0.875rem',
+            lineHeight: '1.5',
+          }}>
+            {formData.notes || 'Нет заметок'}
+          </pre>
         )}
-
-        {/* Left column: Budget (below Limits) */}
-        <ContentBlock
-          width="1/2"
-          title="Бюджет"
-          editable={isEditable}
-          fields={budgetFields}
-          data={formData}
-          onChange={handleFieldChange}
-        />
-
-        {/* Right column: Timeouts (below Status) */}
-        <ContentBlock
-          width="1/2"
-          title="Таймауты"
-          editable={isEditable}
-          fields={timeoutsFields}
-          data={formData}
-          onChange={handleFieldChange}
-        />
-
-        {/* Notes - full width */}
-        <ContentBlock
-          width="full"
-          title="Заметки"
-          editable={isEditable}
-          fields={notesFields}
-          data={formData}
-          onChange={handleFieldChange}
-        />
-      </ContentGrid>
+      </ContentBlock>
     </EntityPage>
   );
 }

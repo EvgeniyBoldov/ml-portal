@@ -86,6 +86,15 @@ export function PolicyEditorPage() {
     onError: (err: any) => showError(err?.message || 'Ошибка обновления'),
   });
 
+  const setRecommendedMutation = useMutation({
+    mutationFn: (version: PolicyVersionInfo) => policiesApi.setRecommendedVersion(slug!, version.id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: qk.policies.detail(slug!) });
+      showSuccess('Основная версия установлена');
+    },
+    onError: (err: any) => showError(err?.message || 'Ошибка установки основной версии'),
+  });
+
   // Handlers
   const handleSave = async () => {
     setSaving(true);
@@ -194,6 +203,7 @@ export function PolicyEditorPage() {
       onCancel={handleCancel}
       onCreateVersion={() => navigate(`/admin/policies/${slug}/versions/new`)}
       onSelectVersion={(v: PolicyVersionInfo) => navigate(`/admin/policies/${slug}/versions/${v.version}`)}
+      onSetRecommended={(v: PolicyVersionInfo) => setRecommendedMutation.mutate(v)}
       containerFields={containerFields}
       breadcrumbs={breadcrumbs}
       renderVersionContent={() => (

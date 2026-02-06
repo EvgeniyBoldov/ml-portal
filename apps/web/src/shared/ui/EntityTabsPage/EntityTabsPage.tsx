@@ -4,16 +4,18 @@
  * REDESIGNED: Tabs in header, proper content background
  */
 import React, { useState } from 'react';
-import { EntityPage, type EntityPageMode, type BreadcrumbItem } from '../EntityPage';
+import { EntityPage, type EntityPageProps, type EntityPageMode } from '../EntityPage';
+import { EntityInfoBlock, type EntityInfo } from '../EntityInfoBlock';
+import { ShortEntityBlock, type ShortEntityBlockProps } from '../ShortEntityBlock';
+import { ShortVersionCard } from '../VersionCard';
+import { VersionsBlock, type VersionInfo } from '../VersionsBlock';
 import { SplitLayout } from '../BaseLayout';
-import { EntityInfoBlock } from '../EntityInfoBlock/EntityInfoBlock';
-import { VersionsBlock } from '../VersionsBlock/VersionsBlock';
 import Button from '../Button';
 import { type FieldDefinition } from '../ContentBlock/ContentBlock';
 import { type DataTableColumn } from '../DataTable/DataTable';
 import styles from './EntityTabsPage.module.css';
 
-export interface EntityTabsPageProps<TContainer, TVersion> {
+export interface EntityTabsPageProps<TContainer = any, TVersion = any> {
   // Entity identification
   entityType: 'prompt' | 'baseline' | 'policy';
   entityNameLabel: string; // e.g. "Промпт"
@@ -41,6 +43,7 @@ export interface EntityTabsPageProps<TContainer, TVersion> {
   onCancel: () => void;
   onCreateVersion: () => void;
   onSelectVersion: (version: TVersion) => void;
+  onSetRecommended?: (version: TVersion) => void;
   
   // Configuration
   containerFields: FieldDefinition[];
@@ -55,7 +58,7 @@ export interface EntityTabsPageProps<TContainer, TVersion> {
 
 export function EntityTabsPage<
   TContainer extends { slug: string; name: string },
-  TVersion extends { version: number; status: string; created_at: string }
+  TVersion extends { version: number; status: string; created_at: string; id: string }
 >({
   entityType,
   entityNameLabel,
@@ -75,6 +78,7 @@ export function EntityTabsPage<
   onCancel,
   onCreateVersion,
   onSelectVersion,
+  onSetRecommended,
   containerFields,
   breadcrumbs,
   renderVersionContent,
@@ -85,6 +89,7 @@ export function EntityTabsPage<
   const isNew = slug === 'new';
   const isEditable = mode === 'edit' || mode === 'create';
   const [activeTab, setActiveTab] = useState('overview');
+  const [selectedVersion, setSelectedVersion] = useState<TVersion | null>(null);
 
   // Unified action buttons based on active tab and mode
   const getActionButtons = () => {
@@ -98,7 +103,7 @@ export function EntityTabsPage<
         </Button>
       );
       buttons.push(
-        <Button key="cancel" variant="secondary" onClick={onCancel}>
+        <Button key="cancel" variant="outline" onClick={onCancel}>
           Отмена
         </Button>
       );
@@ -111,7 +116,7 @@ export function EntityTabsPage<
           </Button>
         );
         buttons.push(
-          <Button key="cancel" variant="secondary" onClick={onCancel}>
+          <Button key="cancel" variant="outline" onClick={onCancel}>
             Отмена
           </Button>
         );
@@ -144,6 +149,19 @@ export function EntityTabsPage<
             Создать версию
           </Button>
         );
+        
+        // Add "Set as Recommended" button if we have a selected version that's active but not recommended
+        if (selectedVersion && selectedVersion.status === 'active' && selectedVersion.id !== container?.recommended_version?.id && onSetRecommended) {
+          buttons.push(
+            <Button 
+              key="setRecommended" 
+              variant="outline" 
+              onClick={() => onSetRecommended(selectedVersion)}
+            >
+              Сделать основной
+            </Button>
+          );
+        }
       }
       
       if (showDelete && onDelete) {
@@ -196,8 +214,8 @@ export function EntityTabsPage<
       noPadding={!isNew}
     >
       {isNew ? (
-        // Create mode - simple entity info
-        <div className={styles.content}>
+        // Create mode - single column layout
+        <div className={styles.createTab}>
           <EntityInfoBlock
             entity={formData}
             entityType={entityType}
@@ -210,33 +228,59 @@ export function EntityTabsPage<
         // Edit/View mode - tabs with content wrapper
         <div className={styles.tabContent}>
           {activeTab === 'overview' && (
-            <SplitLayout
-              left={
-                <EntityInfoBlock
-                  entity={container}
-                  entityType={entityType}
-                  editable={mode === 'edit'}
-                  fields={containerFields}
-                  onFieldChange={onFieldChange}
-                />
-              }
-              right={
-                <div className={styles.content}>
-                  {renderVersionContent ? (
-                    renderVersionContent(versions[0] as TVersion)
+            <div className={styles.overviewTab}>
+              <div className={styles.splitLayout}>
+                <div className={styles.splitLeft}>
+                  <EntityInfoBlock
+                    entity={container}
+                    entityType={entityType}
+                    editable={mode === 'edit'}
+                    fields={containerFields}
+                    onFieldChange={onFieldChange}
+                  />
+                </div>
+                <div className={styles.splitRight}>
+                  {container?.recommended_version ? (
+                    <ShortEntityBlock
+                      title="Основная версия"
+                      subtitle={`Версия ${container.recommended_version.version}`}
+                      items={[
+                        { label: 'Статус', value: container.recommended_version.status },
+                        { label: 'Создана', value: new Date(container.recommended_version.created_at).toLocaleDateString('ru-RU') },
+                      ]}
+                    >
+                      <ShortVersionCard
+                        entityType={entityType}
+                        version={container.recommended_version}
+                      />
+                    </ShortEntityBlock>
                   ) : (
-                    <div>Version content placeholder</div>
+                    <ShortEntityBlock
+                      title="Основная версия"
+                      subtitle="Нет основной версии"
+                      items={[
+                        { label: 'Статус', value: '—' },
+                        { label: 'Создана', value: '—' },
+                      ]}
+                    />
                   )}
                 </div>
-              }
-            />
+              </div>
+            </div>
           )}
           
           {activeTab === 'versions' && (
-            <div className={styles.content}>
+            <div className={styles.versionsTab}>
               <VersionsBlock
+                entityType={entityType}
                 versions={versions}
-                onSelectVersion={onSelectVersion}
+                onSelectVersion={(version) => {
+                  setSelectedVersion(version);
+                  onSelectVersion?.(version);
+                }}
+                selectedVersion={selectedVersion}
+                recommendedVersionId={container?.recommended_version?.id}
+                onSetRecommended={onSetRecommended}
                 columns={versionColumns}
               />
             </div>

@@ -10,9 +10,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { promptsApi, type PromptVersion } from '@/shared/api/prompts';
 import { qk } from '@/shared/api/keys';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
-import { EntityPage, ContentBlock, ContentGrid, Textarea, type EntityPageMode, type BreadcrumbItem } from '@/shared/ui';
-import { StatusBadgeCard, type StatusOption } from '@/shared/ui';
-import { useStatusConfig } from '@/shared/hooks/useStatusConfig';
+import { EntityPage, ContentBlock, ContentGrid, Textarea, Button, type EntityPageMode, type BreadcrumbItem } from '@/shared/ui';
+import { VersionActionsBlock } from '@/shared/ui';
 import layoutStyles from '@/shared/ui/styles/layouts.module.css';
 
 export function PromptVersionPage() {
@@ -22,7 +21,6 @@ export function PromptVersionPage() {
   const queryClient = useQueryClient();
   const showError = useErrorToast();
   const showSuccess = useSuccessToast();
-  const statusConfig = useStatusConfig('prompt');
 
   const isCreate = !versionParam;
   const versionNumber = isCreate ? 0 : parseInt(versionParam, 10);
@@ -77,12 +75,31 @@ export function PromptVersionPage() {
     onError: (err: Error) => showError(err.message),
   });
 
-  const changeStatusMutation = useMutation({
-    mutationFn: (status: string) => promptsApi.updateVersionStatus(existingVersion!.id, status),
+  const activateMutation = useMutation({
+    mutationFn: () => promptsApi.activateVersion(existingVersion!.id),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.prompts.version(slug!, versionNumber) });
       queryClient.invalidateQueries({ queryKey: qk.prompts.detail(slug!) });
-      showSuccess('Статус изменен');
+      queryClient.invalidateQueries({ queryKey: qk.prompts.version(slug!, versionNumber) });
+      showSuccess('Версия активирована');
+    },
+    onError: (err: Error) => showError(err.message),
+  });
+
+  const deactivateMutation = useMutation({
+    mutationFn: () => promptsApi.archiveVersion(existingVersion!.id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: qk.prompts.detail(slug!) });
+      queryClient.invalidateQueries({ queryKey: qk.prompts.version(slug!, versionNumber) });
+      showSuccess('Версия архивирована');
+    },
+    onError: (err: Error) => showError(err.message),
+  });
+
+  const setRecommendedMutation = useMutation({
+    mutationFn: () => promptsApi.setRecommendedVersion(slug!, existingVersion!.id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: qk.prompts.detail(slug!) });
+      showSuccess('Основная версия установлена');
     },
     onError: (err: Error) => showError(err.message),
   });
@@ -118,17 +135,88 @@ export function PromptVersionPage() {
     }
   };
 
-  const statusOptions: StatusOption[] = [
-    { value: 'draft', label: statusConfig.labels.draft, tone: statusConfig.tones.draft },
-    { value: 'active', label: statusConfig.labels.active, tone: statusConfig.tones.active },
-    { value: 'archived', label: statusConfig.labels.archived, tone: statusConfig.tones.archived },
-  ];
-
+  
   const breadcrumbs: BreadcrumbItem[] = [
     { label: 'Промпты', href: '/admin/prompts' },
     { label: prompt?.name || slug || '', href: `/admin/prompts/${slug}` },
     { label: isCreate ? 'Новая версия' : `Версия ${versionNumber}` },
   ];
+
+  // Generate action buttons for version management
+  const getVersionActionButtons = () => {
+    if (isCreate || !existingVersion) return null;
+
+    const buttons = [];
+    const isRecommended = prompt?.recommended_version?.id === existingVersion.id;
+
+    switch (existingVersion.status) {
+      case 'draft':
+        buttons.push(
+          <Button
+            key="activate"
+            variant="primary"
+            onClick={() => activateMutation.mutate()}
+            disabled={activateMutation.isPending}
+            loading={activateMutation.isPending}
+          >
+            Активировать
+          </Button>
+        );
+        buttons.push(
+          <Button
+            key="edit"
+            variant="outline"
+            onClick={() => setSearchParams({ mode: 'edit' })}
+          >
+            Редактировать
+          </Button>
+        );
+        break;
+
+      case 'active':
+        if (!isRecommended) {
+          buttons.push(
+            <Button
+              key="setRecommended"
+              variant="outline"
+              onClick={() => setRecommendedMutation.mutate()}
+              disabled={setRecommendedMutation.isPending}
+              loading={setRecommendedMutation.isPending}
+            >
+              Сделать основной
+            </Button>
+          );
+          buttons.push(
+            <Button
+              key="archive"
+              variant="danger"
+              onClick={() => deactivateMutation.mutate()}
+              disabled={deactivateMutation.isPending}
+              loading={deactivateMutation.isPending}
+            >
+              Архивировать
+            </Button>
+          );
+        }
+        break;
+
+      case 'archived':
+        buttons.push(
+          <Button
+            key="reactivate"
+            variant="primary"
+            onClick={() => activateMutation.mutate()}
+            disabled={activateMutation.isPending}
+            loading={activateMutation.isPending}
+          >
+            Активировать
+          </Button>
+        );
+        break;
+    }
+
+    return buttons.length > 0 ? buttons : null;
+  };
 
   return (
     <EntityPage
@@ -142,42 +230,29 @@ export function PromptVersionPage() {
       onEdit={handleEdit}
       onSave={handleSave}
       onCancel={handleCancel}
+      actionButtons={getVersionActionButtons()}
     >
-      <ContentGrid>
-        {/* Template - 2/3 width */}
-        <ContentBlock width="2/3" title="Template" icon="file-text">
-          {isEditable ? (
-            <Textarea
-              value={formData.template}
-              onChange={(e) => setFormData({ template: e.target.value })}
-              placeholder="Введите template промпта..."
-              rows={20}
-              style={{ fontFamily: 'monospace' }}
-            />
-          ) : (
-            <pre style={{ 
-              whiteSpace: 'pre-wrap', 
-              wordBreak: 'break-word',
-              fontFamily: 'monospace',
-              fontSize: '0.875rem',
-              lineHeight: '1.5',
-            }}>
-              {existingVersion?.template || 'Нет template'}
-            </pre>
-          )}
-        </ContentBlock>
-
-        {/* Status - 1/3 width */}
-        {!isCreate && existingVersion && (
-          <StatusBadgeCard
-            label="Статус"
-            status={existingVersion.status}
-            statusOptions={statusOptions}
-            onChangeStatus={(status) => changeStatusMutation.mutate(status)}
-            disabled={changeStatusMutation.isPending}
+      <ContentBlock title="Template" icon="file-text">
+        {isEditable ? (
+          <Textarea
+            value={formData.template}
+            onChange={(e) => setFormData({ template: e.target.value })}
+            placeholder="Введите template промпта..."
+            rows={20}
+            style={{ fontFamily: 'monospace' }}
           />
+        ) : (
+          <pre style={{ 
+            whiteSpace: 'pre-wrap', 
+            wordBreak: 'break-word',
+            fontFamily: 'monospace',
+            fontSize: '0.875rem',
+            lineHeight: '1.5',
+          }}>
+            {existingVersion?.template || 'Нет template'}
+          </pre>
         )}
-      </ContentGrid>
+      </ContentBlock>
     </EntityPage>
   );
 }

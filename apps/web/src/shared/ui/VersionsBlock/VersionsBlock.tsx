@@ -29,6 +29,10 @@ export interface VersionsBlockProps {
   selectedVersion?: VersionInfo;
   /** On version selection */
   onSelectVersion?: (version: VersionInfo) => void;
+  /** ID of recommended version */
+  recommendedVersionId?: string;
+  /** On set as recommended */
+  onSetRecommended?: (version: VersionInfo) => void;
   /** Custom columns override */
   columns?: DataTableColumn<VersionInfo>[];
   /** Additional CSS class */
@@ -40,6 +44,8 @@ export function VersionsBlock({
   versions,
   selectedVersion,
   onSelectVersion,
+  recommendedVersionId,
+  onSetRecommended,
   columns: customColumns,
   className = '',
 }: VersionsBlockProps) {
@@ -50,6 +56,14 @@ export function VersionsBlock({
       key: 'version',
       label: 'Версия',
       render: (v: VersionInfo) => `v${v.version}`,
+    },
+    {
+      key: 'recommended',
+      label: 'Основная',
+      width: 100,
+      render: (v: VersionInfo) => recommendedVersionId && v.id === recommendedVersionId ? (
+        <Badge tone="info">Основная</Badge>
+      ) : null,
     },
     {
       key: 'status',

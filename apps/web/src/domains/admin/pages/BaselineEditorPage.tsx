@@ -86,6 +86,15 @@ export function BaselineEditorPage() {
     onError: (err: any) => showError(err?.message || 'Ошибка обновления'),
   });
 
+  const setRecommendedMutation = useMutation({
+    mutationFn: (version: BaselineVersionInfo) => baselinesApi.setRecommendedVersion(slug!, version.id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: qk.baselines.detail(slug!) });
+      showSuccess('Основная версия установлена');
+    },
+    onError: (err: any) => showError(err?.message || 'Ошибка установки основной версии'),
+  });
+
   // Handlers
   const handleSave = async () => {
     setSaving(true);
@@ -194,6 +203,7 @@ export function BaselineEditorPage() {
       onCancel={handleCancel}
       onCreateVersion={() => navigate(`/admin/baselines/${slug}/versions/new`)}
       onSelectVersion={(v: BaselineVersionInfo) => navigate(`/admin/baselines/${slug}/versions/${v.version}`)}
+      onSetRecommended={(v: BaselineVersionInfo) => setRecommendedMutation.mutate(v)}
       containerFields={containerFields}
       breadcrumbs={breadcrumbs}
       renderVersionContent={() => (

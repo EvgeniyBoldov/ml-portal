@@ -95,8 +95,12 @@ async def get_prompt_detail(
     """Get prompt container with all versions. Admin only."""
     service = PromptService(db)
     try:
-        prompt = await service.get_prompt_by_slug(slug)
+        prompt = await service.get_prompt_with_recommended(slug)
         versions = await service.get_all_versions(slug)
+        
+        recommended = None
+        if prompt.recommended_version:
+            recommended = PromptVersionInfo.model_validate(prompt.recommended_version)
         
         return PromptDetailResponse(
             id=prompt.id,
@@ -106,6 +110,8 @@ async def get_prompt_detail(
             type=prompt.type,
             created_at=prompt.created_at,
             updated_at=prompt.updated_at,
+            recommended_version_id=prompt.recommended_version_id,
+            recommended_version=recommended,
             versions=[PromptVersionInfo.model_validate(v) for v in versions]
         )
     except NotFoundException as e:
@@ -300,9 +306,27 @@ async def set_recommended_version(
     """Set the recommended version for a prompt. Version must be active. Admin only."""
     service = PromptService(db)
     try:
-        prompt = await service.update_recommended_version(slug, version_id)
+        await service.update_recommended_version(slug, version_id)
         await db.commit()
-        return prompt
+        
+        prompt = await service.get_prompt_with_recommended(slug)
+        versions = await service.get_all_versions(slug)
+        recommended = None
+        if prompt.recommended_version:
+            recommended = PromptVersionInfo.model_validate(prompt.recommended_version)
+        
+        return PromptDetailResponse(
+            id=prompt.id,
+            slug=prompt.slug,
+            name=prompt.name,
+            description=prompt.description,
+            type=prompt.type,
+            created_at=prompt.created_at,
+            updated_at=prompt.updated_at,
+            recommended_version_id=prompt.recommended_version_id,
+            recommended_version=recommended,
+            versions=[PromptVersionInfo.model_validate(v) for v in versions]
+        )
     except NotFoundException as e:
         raise HTTPException(status_code=404, detail=str(e))
     except ValidationException as e:

@@ -55,11 +55,10 @@
   --border-color-light: #1f2937;
   --border-color-dark: #4b5563;
 
-  /* Brand colors */
-  --color-primary: #60a5fa;
-  --color-primary-hover: #3b82f6;
-  --color-primary-active: #2563eb;
-  --color-primary-light: #1e3a8a;
+  /* Brand colors — derived from --primary */
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-active: #4338ca;
+  --color-primary-light: rgba(99, 102, 241, 0.15);
 
   /* Semantic colors */
   --color-success: #34d399;

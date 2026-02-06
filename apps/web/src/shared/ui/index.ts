@@ -156,3 +156,7 @@ export type { EntityTabsPageProps } from './EntityTabsPage';
 export { VersionCard, PromptVersionCard, PolicyVersionCard } from './VersionCard';
 export type { VersionCardProps, VersionCardEntityType, PromptVersionCardProps, PolicyVersionCardProps } from './VersionCard';
 
+// VersionActionsBlock
+export { VersionActionsBlock } from './VersionActionsBlock';
+export type { VersionActionsBlockProps } from './VersionActionsBlock';
+

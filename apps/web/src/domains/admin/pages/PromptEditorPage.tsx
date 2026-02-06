@@ -86,6 +86,15 @@ export function PromptEditorPage() {
     onError: (err: any) => showError(err?.message || 'Ошибка обновления'),
   });
 
+  const setRecommendedMutation = useMutation({
+    mutationFn: (version: PromptVersionInfo) => promptsApi.setRecommendedVersion(slug!, version.id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: qk.prompts.detail(slug!) });
+      showSuccess('Основная версия установлена');
+    },
+    onError: (err: any) => showError(err?.message || 'Ошибка установки основной версии'),
+  });
+
   // Handlers
   const handleSave = async () => {
     setSaving(true);
@@ -174,6 +183,7 @@ export function PromptEditorPage() {
       onCancel={handleCancel}
       onCreateVersion={() => navigate(`/admin/prompts/${slug}/versions/new`)}
       onSelectVersion={(v: PromptVersionInfo) => navigate(`/admin/prompts/${slug}/versions/${v.version}`)}
+      onSetRecommended={(v: PromptVersionInfo) => setRecommendedMutation.mutate(v)}
       containerFields={containerFields}
       breadcrumbs={breadcrumbs}
       renderVersionContent={() => (

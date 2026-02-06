@@ -16,9 +16,9 @@
   --muted: #6b7280;
   
   /* Brand colors */
-  --primary: #3b82f6;
-  --primary-hover: #2563eb;
-  --primary-light: rgba(59, 130, 246, 0.12);
+  --primary: #6366f1;
+  --primary-hover: #4f46e5;
+  --primary-light: rgba(99, 102, 241, 0.12);
   --primary-text: #ffffff;
   
   /* Panels & Surfaces */
@@ -55,11 +55,10 @@
   --border-color-light: #f3f4f6;
   --border-color-dark: #d1d5db;
 
-  /* Brand colors */
-  --color-primary: #3b82f6;
-  --color-primary-hover: #2563eb;
+  /* Brand colors — derived from --primary */
+  --color-primary-hover: var(--primary-hover);
   --color-primary-active: #1d4ed8;
-  --color-primary-light: #dbeafe;
+  --color-primary-light: var(--primary-light);
 
   /* Semantic colors */
   --color-success: #22c55e;

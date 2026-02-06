@@ -145,8 +145,12 @@ async def get_baseline_detail(
     """Get baseline container with all versions. Admin only."""
     service = BaselineService(db)
     try:
-        baseline = await service.get_baseline_by_slug(slug)
+        baseline = await service.get_baseline_with_recommended(slug)
         versions = await service.get_versions(slug)
+        
+        recommended = None
+        if baseline.recommended_version:
+            recommended = BaselineVersionInfo.model_validate(baseline.recommended_version)
         
         return BaselineDetailResponse(
             id=baseline.id,
@@ -159,6 +163,8 @@ async def get_baseline_detail(
             is_active=baseline.is_active,
             created_at=baseline.created_at,
             updated_at=baseline.updated_at,
+            recommended_version_id=baseline.recommended_version_id,
+            recommended_version=recommended,
             versions=[BaselineVersionInfo.model_validate(v) for v in versions]
         )
     except NotFoundException as e:
@@ -331,9 +337,30 @@ async def set_recommended_version(
     """Set the recommended version for a baseline. Version must be active. Admin only."""
     service = BaselineService(db)
     try:
-        baseline = await service.update_recommended_version(slug, version_id)
+        await service.update_recommended_version(slug, version_id)
         await db.commit()
-        return baseline
+        
+        baseline = await service.get_baseline_with_recommended(slug)
+        versions = await service.get_versions(slug)
+        recommended = None
+        if baseline.recommended_version:
+            recommended = BaselineVersionInfo.model_validate(baseline.recommended_version)
+        
+        return BaselineDetailResponse(
+            id=baseline.id,
+            slug=baseline.slug,
+            name=baseline.name,
+            description=baseline.description,
+            scope=baseline.scope,
+            tenant_id=baseline.tenant_id,
+            user_id=baseline.user_id,
+            is_active=baseline.is_active,
+            created_at=baseline.created_at,
+            updated_at=baseline.updated_at,
+            recommended_version_id=baseline.recommended_version_id,
+            recommended_version=recommended,
+            versions=[BaselineVersionInfo.model_validate(v) for v in versions]
+        )
     except NotFoundException as e:
         raise HTTPException(status_code=404, detail=str(e))
     except ValidationException as e:
