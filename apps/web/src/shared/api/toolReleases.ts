@@ -77,6 +77,9 @@ export interface ToolBackendReleaseListItem {
   description: string | null;
   deprecated: boolean;
   synced_at: string;
+  schema_hash: string | null;
+  worker_build_id: string | null;
+  last_seen_at: string | null;
 }
 
 export interface ToolBackendReleaseDetail {
@@ -90,6 +93,9 @@ export interface ToolBackendReleaseDetail {
   deprecated: boolean;
   deprecation_message: string | null;
   synced_at: string;
+  schema_hash: string | null;
+  worker_build_id: string | null;
+  last_seen_at: string | null;
 }
 
 export interface ToolReleaseListItem {
@@ -102,6 +108,8 @@ export interface ToolReleaseListItem {
   tags: string[];
   notes: string | null;
   created_at: string;
+  expected_schema_hash: string | null;
+  parent_release_id: string | null;
 }
 
 export interface ToolReleaseResponse {
@@ -119,6 +127,8 @@ export interface ToolReleaseResponse {
   return_summary: string | null;
   meta_hash: string | null;
   notes: string | null;
+  expected_schema_hash: string | null;
+  parent_release_id: string | null;
   created_at: string;
   updated_at: string;
   backend_release: ToolBackendReleaseListItem | null;
@@ -126,6 +136,7 @@ export interface ToolReleaseResponse {
 
 export interface ToolReleaseCreate {
   backend_release_id: string;
+  from_release_id?: string;
   config?: Record<string, unknown>;
   description_for_llm?: string | null;
   category?: string | null;

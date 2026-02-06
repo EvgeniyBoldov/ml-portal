@@ -1,139 +1,145 @@
 /**
  * InstanceViewPage - View tool instance details
+ * 
+ * Uses EntityPage + ContentBlock from shared/ui
  */
-import { useParams, Link } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { toolInstancesApi } from '@/shared/api';
 import { qk } from '@/shared/api/keys';
-import Button from '@/shared/ui/Button';
-import Badge from '@/shared/ui/Badge';
-import Alert from '@/shared/ui/Alert';
-import { Skeleton } from '@/shared/ui/Skeleton';
-import styles from './FormPage.module.css';
+import { EntityPage, type BreadcrumbItem } from '@/shared/ui/EntityPage';
+import { ContentBlock, ContentGrid, type FieldDefinition } from '@/shared/ui/ContentBlock';
+import { StatusBadgeCard } from '@/shared/ui';
 
 export function InstanceViewPage() {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
 
-  const { data: instance, isLoading, error } = useQuery({
+  const { data: instance, isLoading } = useQuery({
     queryKey: qk.toolInstances.detail(id!),
     queryFn: () => toolInstancesApi.get(id!),
     enabled: !!id,
   });
 
-  if (isLoading) {
-    return (
-      <div className={styles.wrap}>
-        <Skeleton variant="card" />
-      </div>
-    );
-  }
+  const breadcrumbs: BreadcrumbItem[] = [
+    { label: 'Инстансы', href: '/admin/instances' },
+    { label: instance?.name || instance?.tool?.name || 'Инстанс' },
+  ];
 
-  if (error || !instance) {
-    return (
-      <div className={styles.wrap}>
-        <Alert variant="error" title="Ошибка" description="Инстанс не найден" />
-      </div>
-    );
-  }
+  const infoFields: FieldDefinition[] = [
+    {
+      key: 'tool_name',
+      label: 'Инструмент',
+      type: 'text',
+      disabled: true,
+    },
+    {
+      key: 'name',
+      label: 'Название',
+      type: 'text',
+      disabled: true,
+    },
+    {
+      key: 'description',
+      label: 'Описание',
+      type: 'textarea',
+      disabled: true,
+      rows: 2,
+    },
+  ];
+
+  const formData = {
+    tool_name: instance?.tool?.name || instance?.tool_id || '',
+    name: instance?.name || '',
+    description: instance?.tool?.description || '',
+  };
 
   return (
-    <div className={styles.wrap}>
-      <div className={styles.header}>
-        <div>
-          <h1 className={styles.title}>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}>
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <rect x="2" y="2" width="20" height="8" rx="2" ry="2"/>
-                <rect x="2" y="14" width="20" height="8" rx="2" ry="2"/>
-                <line x1="6" y1="6" x2="6.01" y2="6"/>
-                <line x1="6" y1="18" x2="6.01" y2="18"/>
-              </svg>
-              {instance.tool?.name || 'Инстанс'}
-            </span>
-          </h1>
-          <p className={styles.description}>ID: {instance.id}</p>
-        </div>
-        <div style={{ display: 'flex', gap: '0.5rem' }}>
-          <Link to="/admin/instances">
-            <Button variant="outline">Назад</Button>
-          </Link>
-          <Link to={`/admin/instances/${id}/edit`}>
-            <Button variant="primary">Редактировать</Button>
-          </Link>
-        </div>
-      </div>
+    <EntityPage
+      mode="view"
+      entityName={instance?.name || instance?.tool?.name || 'Инстанс'}
+      entityTypeLabel="инстанса"
+      backPath="/admin/instances"
+      breadcrumbs={breadcrumbs}
+      loading={isLoading}
+      showDelete={false}
+      onEdit={() => navigate(`/admin/instances/${id}/edit`)}
+    >
+      <ContentGrid>
+        <ContentBlock
+          width="2/3"
+          title="Основные параметры"
+          icon="server"
+          fields={infoFields}
+          data={formData}
+        />
+        <StatusBadgeCard
+          label="Статус"
+          status={instance?.is_active ? 'active' : 'inactive'}
+          statusOptions={[
+            { value: 'active', label: 'Активен', tone: 'success' },
+            { value: 'inactive', label: 'Неактивен', tone: 'neutral' },
+          ]}
+          editable={false}
+          width="1/3"
+          description={
+            instance?.is_active
+              ? undefined
+              : 'Неактивные инстансы не используются при выполнении запросов'
+          }
+        />
+      </ContentGrid>
 
-      <div className={styles.grid}>
-        <div className={styles.card}>
-          <div className={styles.cardHeader}>
-            <h2 className={styles.cardTitle}>Основная информация</h2>
-          </div>
-
-          <div className={styles.formGroup}>
-            <label className={styles.label}>Статус</label>
-            <div>
-              <Badge variant={instance.is_active ? 'success' : 'secondary'}>
-                {instance.is_active ? 'Активен' : 'Неактивен'}
-              </Badge>
-            </div>
-          </div>
-
-          <div className={styles.formGroup}>
-            <label className={styles.label}>Инструмент</label>
-            <p>{instance.tool?.name || instance.tool_id}</p>
-          </div>
-
-          {instance.tool?.description && (
-            <div className={styles.formGroup}>
-              <label className={styles.label}>Описание инструмента</label>
-              <p>{instance.tool.description}</p>
-            </div>
-          )}
-
-          <div className={styles.formGroup}>
-            <label className={styles.label}>Health Status</label>
-            <div>
-              {instance.health_status ? (
-                <Badge variant={instance.health_status === 'healthy' ? 'success' : 'error'}>
-                  {instance.health_status}
-                </Badge>
-              ) : (
-                <span style={{ color: 'var(--color-text-secondary)' }}>Не проверялся</span>
-              )}
-            </div>
-          </div>
-
-          {instance.last_health_check && (
-            <div className={styles.formGroup}>
-              <label className={styles.label}>Последняя проверка</label>
-              <p>{new Date(instance.last_health_check).toLocaleString()}</p>
-            </div>
-          )}
-
-          <div className={styles.formGroup}>
-            <label className={styles.label}>Создан</label>
-            <p>{new Date(instance.created_at).toLocaleString()}</p>
-          </div>
-        </div>
-
-        <div className={styles.card}>
-          <div className={styles.cardHeader}>
-            <h2 className={styles.cardTitle}>Конфигурация</h2>
-            <p className={styles.cardDescription}>JSON конфигурация инстанса</p>
-          </div>
-
-          <pre className={styles.codeBlock} style={{ 
-            background: 'var(--color-bg-secondary)', 
-            padding: '1rem', 
+      <ContentGrid>
+        <ContentBlock
+          width="1/1"
+          title="Конфигурация"
+          icon="settings"
+        >
+          <pre style={{
+            background: 'var(--bg-secondary)',
+            padding: '1rem',
             borderRadius: '8px',
             overflow: 'auto',
-            fontSize: '0.875rem'
+            fontSize: '0.875rem',
+            margin: 0,
           }}>
-            {JSON.stringify(instance.config || {}, null, 2)}
+            {JSON.stringify(instance?.config || {}, null, 2)}
           </pre>
-        </div>
-      </div>
-    </div>
+        </ContentBlock>
+      </ContentGrid>
+
+      {instance?.health_status && (
+        <ContentGrid>
+          <ContentBlock
+            width="1/1"
+            title="Health Check"
+            icon="activity"
+            fields={[
+              {
+                key: 'health_status',
+                label: 'Статус',
+                type: 'badge' as any,
+                badgeTone: instance.health_status === 'healthy' ? 'success' : 'danger',
+                disabled: true,
+              },
+              ...(instance.last_health_check ? [{
+                key: 'last_health_check',
+                label: 'Последняя проверка',
+                type: 'text' as any,
+                disabled: true,
+              }] : []),
+            ]}
+            data={{
+              health_status: instance.health_status,
+              last_health_check: instance.last_health_check
+                ? new Date(instance.last_health_check).toLocaleString('ru')
+                : '',
+            }}
+          />
+        </ContentGrid>
+      )}
+    </EntityPage>
   );
 }
 

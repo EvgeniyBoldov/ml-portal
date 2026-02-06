@@ -130,20 +130,33 @@ export function ToolViewPage() {
     {
       key: 'version',
       label: 'ВЕРСИЯ',
-      width: 150,
+      width: 120,
       render: (row) => <strong>{row.version}</strong>,
     },
     {
-      key: 'description',
-      label: 'ОПИСАНИЕ',
+      key: 'schema_hash',
+      label: 'SCHEMA HASH',
+      width: 120,
       render: (row) => (
-        <span style={{ color: 'var(--color-text-muted)' }}>{row.description || '—'}</span>
+        <code style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+          {row.schema_hash ? row.schema_hash.slice(0, 8) : '—'}
+        </code>
+      ),
+    },
+    {
+      key: 'worker_build_id',
+      label: 'BUILD ID',
+      width: 120,
+      render: (row) => (
+        <code style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+          {row.worker_build_id ? row.worker_build_id.slice(0, 12) : '—'}
+        </code>
       ),
     },
     {
       key: 'deprecated',
       label: 'СТАТУС',
-      width: 120,
+      width: 100,
       render: (row) => (
         <Badge tone={row.deprecated ? 'warn' : 'success'} size="small">
           {row.deprecated ? 'Устарела' : 'Актуальна'}
@@ -153,9 +166,9 @@ export function ToolViewPage() {
     {
       key: 'synced_at',
       label: 'СИНХРОНИЗИРОВАНО',
-      width: 180,
+      width: 160,
       render: (row) => (
-        <span style={{ color: 'var(--color-text-muted)', fontSize: '0.8125rem' }}>
+        <span style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>
           {new Date(row.synced_at).toLocaleString('ru')}
         </span>
       ),
@@ -167,21 +180,21 @@ export function ToolViewPage() {
     {
       key: 'version',
       label: 'ВЕРСИЯ',
-      width: 100,
+      width: 80,
       render: (row) => <strong>v{row.version}</strong>,
     },
     {
       key: 'backend_version',
       label: 'БЭКЕНД',
-      width: 120,
+      width: 100,
       render: (row) => (
-        <span style={{ color: 'var(--color-text-muted)' }}>{row.backend_version || '—'}</span>
+        <span style={{ color: 'var(--text-secondary)' }}>{row.backend_version || '—'}</span>
       ),
     },
     {
       key: 'status',
       label: 'СТАТУС',
-      width: 120,
+      width: 100,
       render: (row) => (
         <Badge tone={STATUS_TONES[row.status]} size="small">
           {STATUS_LABELS[row.status]}
@@ -189,9 +202,19 @@ export function ToolViewPage() {
       ),
     },
     {
+      key: 'expected_schema_hash',
+      label: 'SCHEMA',
+      width: 100,
+      render: (row) => (
+        <code style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+          {row.expected_schema_hash ? row.expected_schema_hash.slice(0, 8) : '—'}
+        </code>
+      ),
+    },
+    {
       key: 'recommended',
       label: 'ОСНОВНАЯ',
-      width: 120,
+      width: 100,
       render: (row) => (
         tool?.recommended_release_id === row.id ? (
           <Badge tone="info" size="small">★ Основная</Badge>
@@ -201,9 +224,9 @@ export function ToolViewPage() {
     {
       key: 'created_at',
       label: 'СОЗДАНА',
-      width: 150,
+      width: 140,
       render: (row) => (
-        <span style={{ color: 'var(--color-text-muted)', fontSize: '0.8125rem' }}>
+        <span style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>
           {new Date(row.created_at).toLocaleString('ru')}
         </span>
       ),
@@ -227,25 +250,14 @@ export function ToolViewPage() {
         },
       ]}
       headerActions={
-        <div style={{ display: 'flex', gap: '0.5rem' }}>
-          <button
-            onClick={() => rescanMutation.mutate()}
-            disabled={rescanMutation.isPending}
-            style={{
-              padding: '0.5rem 1rem',
-              borderRadius: '4px',
-              border: '1px solid var(--color-border)',
-              background: 'var(--color-bg)',
-              color: 'var(--color-text)',
-              cursor: rescanMutation.isPending ? 'not-allowed' : 'pointer',
-              opacity: rescanMutation.isPending ? 0.6 : 1,
-              fontSize: '0.875rem',
-              fontWeight: 500,
-            }}
-          >
-            {rescanMutation.isPending ? 'Синхронизация...' : 'Rescan Backend'}
-          </button>
-        </div>
+        <Button
+          variant="outline"
+          size="small"
+          onClick={() => rescanMutation.mutate()}
+          disabled={rescanMutation.isPending}
+        >
+          {rescanMutation.isPending ? 'Синхронизация...' : 'Rescan Backend'}
+        </Button>
       }
     >
       <Tabs tabs={tabs} activeTab={activeTab} onChange={setActiveTab}>
@@ -296,6 +308,14 @@ export function ToolViewPage() {
                   <div style={{ marginBottom: '0.5rem' }}>
                     <strong>Бэкенд:</strong> {tool.recommended_release.backend_release?.version || '—'}
                   </div>
+                  {tool.recommended_release.expected_schema_hash && (
+                    <div style={{ marginBottom: '0.5rem' }}>
+                      <strong>Schema:</strong>{' '}
+                      <code style={{ fontSize: '0.75rem' }}>
+                        {tool.recommended_release.expected_schema_hash.slice(0, 8)}
+                      </code>
+                    </div>
+                  )}
                   <Badge tone={STATUS_TONES[tool.recommended_release.status]}>
                     {STATUS_LABELS[tool.recommended_release.status]}
                   </Badge>
@@ -309,7 +329,7 @@ export function ToolViewPage() {
                   </Button>
                 </div>
               ) : (
-                <p style={{ color: 'var(--color-text-muted)', fontSize: '0.875rem' }}>
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
                   Основной релиз не выбран. Создайте и активируйте версию, затем установите её как основную.
                 </p>
               )}

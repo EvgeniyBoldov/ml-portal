@@ -17,7 +17,7 @@ import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
 import { EntityPage, type EntityPageMode } from '@/shared/ui/EntityPage';
 import { ContentBlock, ContentGrid, type FieldDefinition } from '@/shared/ui/ContentBlock';
 import { Tabs, TabPanel } from '@/shared/ui/Tabs';
-import { Badge, DataTable, StatusBadgeCard, type DataTableColumn, type BreadcrumbItem } from '@/shared/ui';
+import { Badge, Button, DataTable, StatusBadgeCard, type DataTableColumn, type BreadcrumbItem } from '@/shared/ui';
 
 const TYPE_LABELS: Record<string, string> = {
   api: 'API',
@@ -228,25 +228,14 @@ export function ToolGroupViewPage() {
       onCancel={handleCancel}
       showDelete={false}
       headerActions={
-        <div style={{ display: 'flex', gap: '0.5rem' }}>
-          <button
-            onClick={() => rescanMutation.mutate()}
-            disabled={rescanMutation.isPending}
-            style={{
-              padding: '0.5rem 1rem',
-              borderRadius: '4px',
-              border: '1px solid var(--color-border)',
-              background: 'var(--color-bg)',
-              color: 'var(--color-text)',
-              cursor: rescanMutation.isPending ? 'not-allowed' : 'pointer',
-              opacity: rescanMutation.isPending ? 0.6 : 1,
-              fontSize: '0.875rem',
-              fontWeight: 500,
-            }}
-          >
-            {rescanMutation.isPending ? 'Синхронизация...' : 'Rescan'}
-          </button>
-        </div>
+        <Button
+          variant="outline"
+          size="small"
+          onClick={() => rescanMutation.mutate()}
+          disabled={rescanMutation.isPending}
+        >
+          {rescanMutation.isPending ? 'Синхронизация...' : 'Rescan'}
+        </Button>
       }
     >
       <Tabs tabs={tabs} activeTab={activeTab} onChange={setActiveTab}>
