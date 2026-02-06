@@ -1,6 +1,7 @@
 """
 Admin API endpoints for Tool Groups, Tools, and Releases
 """
+import os
 from typing import List
 from uuid import UUID
 
@@ -548,9 +549,9 @@ async def rescan_all_tools(
     session: AsyncSession = Depends(db_session),
     _: UserCtx = Depends(require_admin),
 ):
-    """Rescan all tools from registry and sync to DB"""
-    sync_service = ToolSyncService(session)
-    stats = await sync_service.sync_tools()
+    """Rescan all tools from registry and sync to DB (tools + backend releases)"""
+    sync_service = ToolSyncService(session, worker_build_id=os.getenv("WORKER_BUILD_ID"))
+    stats = await sync_service.sync_all()
     return {
         "message": "Tools synced successfully",
         "stats": stats,
@@ -565,11 +566,11 @@ async def rescan_group_tools(
 ):
     """Rescan tools in a specific group from registry"""
     service = ToolReleaseService(session)
-    sync_service = ToolSyncService(session)
+    sync_service = ToolSyncService(session, worker_build_id=os.getenv("WORKER_BUILD_ID"))
     
     try:
         group = await service.get_group(group_slug)
-        stats = await sync_service.sync_tools()
+        stats = await sync_service.sync_all()
         
         return {
             "message": f"Tools in group '{group_slug}' synced successfully",
@@ -592,9 +593,9 @@ async def rescan_backend_releases(
     try:
         tool = await service.get_tool(slug)
         
-        # Sync backend releases from registry
-        sync_service = ToolSyncService(session)
-        stats = await sync_service.sync_tools()
+        # Sync tools + backend releases from registry
+        sync_service = ToolSyncService(session, worker_build_id=os.getenv("WORKER_BUILD_ID"))
+        stats = await sync_service.sync_all()
         
         # Re-fetch tool with updated backend releases
         updated_tool = await service.get_tool(slug)
