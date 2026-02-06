@@ -1,12 +1,12 @@
 """
-Collection Aggregate Tool - агрегации и статистика по коллекциям
+Collection Aggregate Tool - агрегации и статистика по коллекциям (VersionedTool)
 """
 from __future__ import annotations
 from typing import Any, Dict, List, ClassVar, Optional
 import uuid
 
 from app.core.logging import get_logger
-from app.agents.handlers.base import ToolHandler
+from app.agents.handlers.versioned_tool import VersionedTool, tool_version, register_tool
 from app.agents.context import ToolContext, ToolResult
 
 logger = get_logger(__name__)
@@ -15,8 +15,80 @@ ALLOWED_AGGREGATE_FUNCTIONS = {"count", "count_distinct", "sum", "avg", "min", "
 MAX_GROUP_BY_FIELDS = 3
 MAX_RESULT_GROUPS = 100
 
+_INPUT_SCHEMA_V1 = {
+    "type": "object",
+    "properties": {
+        "collection_slug": {
+            "type": "string",
+            "description": "The collection to aggregate"
+        },
+        "metrics": {
+            "type": "array",
+            "description": "List of metrics to calculate",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "function": {
+                        "type": "string",
+                        "enum": ["count", "count_distinct", "sum", "avg", "min", "max"],
+                        "description": "Aggregate function"
+                    },
+                    "field": {
+                        "type": "string",
+                        "description": "Field to aggregate (not required for count)"
+                    },
+                    "alias": {
+                        "type": "string",
+                        "description": "Result alias name"
+                    }
+                },
+                "required": ["function"]
+            }
+        },
+        "group_by": {
+            "type": "array",
+            "description": "Fields to group by (max 3)",
+            "items": {"type": "string"},
+            "maxItems": 3
+        },
+        "filters": {
+            "type": "object",
+            "description": "Filter conditions (required for large tables)",
+            "properties": {
+                "and": {"type": "array"},
+                "or": {"type": "array"}
+            }
+        },
+        "time_bucket": {
+            "type": "object",
+            "description": "Time bucketing configuration",
+            "properties": {
+                "field": {"type": "string"},
+                "interval": {
+                    "type": "string",
+                    "enum": ["hour", "day", "week", "month", "year"]
+                }
+            }
+        }
+    },
+    "required": ["collection_slug", "metrics"]
+}
 
-class CollectionAggregateTool(ToolHandler):
+_OUTPUT_SCHEMA_V1 = {
+    "type": "object",
+    "properties": {
+        "results": {
+            "type": "array",
+            "items": {"type": "object"}
+        },
+        "total_groups": {"type": "integer"},
+        "collection": {"type": "string"}
+    }
+}
+
+
+@register_tool
+class CollectionAggregateTool(VersionedTool):
     """
     Tool для агрегаций и статистики по коллекциям.
     
@@ -24,83 +96,18 @@ class CollectionAggregateTool(ToolHandler):
     С группировкой по полям и time_bucket.
     """
     
-    slug: ClassVar[str] = "collection.aggregate"
-    name: ClassVar[str] = "Collection Aggregate"
+    tool_slug: ClassVar[str] = "collection.aggregate"
     tool_group: ClassVar[str] = "collection"
+    name: ClassVar[str] = "Collection Aggregate"
     description: ClassVar[str] = "Get aggregated statistics from a collection (count, sum, avg, etc.)"
     
-    input_schema: ClassVar[Dict[str, Any]] = {
-        "type": "object",
-        "properties": {
-            "collection_slug": {
-                "type": "string",
-                "description": "The collection to aggregate"
-            },
-            "metrics": {
-                "type": "array",
-                "description": "List of metrics to calculate",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "function": {
-                            "type": "string",
-                            "enum": ["count", "count_distinct", "sum", "avg", "min", "max"],
-                            "description": "Aggregate function"
-                        },
-                        "field": {
-                            "type": "string",
-                            "description": "Field to aggregate (not required for count)"
-                        },
-                        "alias": {
-                            "type": "string",
-                            "description": "Result alias name"
-                        }
-                    },
-                    "required": ["function"]
-                }
-            },
-            "group_by": {
-                "type": "array",
-                "description": "Fields to group by (max 3)",
-                "items": {"type": "string"},
-                "maxItems": 3
-            },
-            "filters": {
-                "type": "object",
-                "description": "Filter conditions (required for large tables)",
-                "properties": {
-                    "and": {"type": "array"},
-                    "or": {"type": "array"}
-                }
-            },
-            "time_bucket": {
-                "type": "object",
-                "description": "Time bucketing configuration",
-                "properties": {
-                    "field": {"type": "string"},
-                    "interval": {
-                        "type": "string",
-                        "enum": ["hour", "day", "week", "month", "year"]
-                    }
-                }
-            }
-        },
-        "required": ["collection_slug", "metrics"]
-    }
-    
-    output_schema: ClassVar[Dict[str, Any]] = {
-        "type": "object",
-        "properties": {
-            "results": {
-                "type": "array",
-                "items": {"type": "object"}
-            },
-            "total_groups": {"type": "integer"},
-            "collection": {"type": "string"}
-        }
-    }
-
-    async def execute(self, ctx: ToolContext, args: Dict[str, Any]) -> ToolResult:
+    @tool_version(
+        version="1.0.0",
+        input_schema=_INPUT_SCHEMA_V1,
+        output_schema=_OUTPUT_SCHEMA_V1,
+        description="Initial version with count/sum/avg/min/max, group_by, time_bucket, DSL filters",
+    )
+    async def v1_0_0(self, ctx: ToolContext, args: Dict[str, Any]) -> ToolResult:
         """
         Выполнить агрегацию по коллекции.
         """

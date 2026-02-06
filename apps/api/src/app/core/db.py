@@ -106,12 +106,21 @@ async def _ensure_default_admin():
 
 
 async def _sync_tools_from_registry():
-    """Sync tools from ToolRegistry to database"""
+    """Sync tools and backend releases from registries to database"""
     try:
-        from app.services.tool_sync_service import sync_tools_from_registry
+        # Ensure builtins are registered before sync
+        from app.agents.registry import ToolRegistry
+        ToolRegistry._ensure_initialized()
+        
+        from app.services.tool_sync_service import ToolSyncService
+        import os
         
         async with _session_factory() as session:
-            stats = await sync_tools_from_registry(session)
+            service = ToolSyncService(
+                session,
+                worker_build_id=os.getenv("WORKER_BUILD_ID"),
+            )
+            stats = await service.sync_all()
             logger.info(f"Tool sync: {stats}")
     except Exception as e:
         logger.error(f"Failed to sync tools from registry: {e}")

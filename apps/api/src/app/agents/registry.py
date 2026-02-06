@@ -10,6 +10,31 @@ from app.agents.handlers.base import ToolHandler
 logger = get_logger(__name__)
 
 
+class _VersionedToolWrapper(ToolHandler):
+    """
+    Обёртка VersionedTool → ToolHandler для обратной совместимости с runtime.
+    Делегирует execute/validate_args в VersionedTool с фиксированной версией.
+    """
+    
+    def __init__(self, versioned_tool, version: str):
+        self._vt = versioned_tool
+        self._version = version
+        vi = versioned_tool.get_version(version)
+        # Set ToolHandler ClassVar-like attributes on instance
+        self.slug = versioned_tool.tool_slug
+        self.name = versioned_tool.name
+        self.description = versioned_tool.description
+        self.tool_group = versioned_tool.tool_group
+        self.input_schema = vi.input_schema if vi else {}
+        self.output_schema = vi.output_schema if vi else None
+    
+    async def execute(self, ctx, args):
+        return await self._vt.execute(ctx, args, version=self._version)
+    
+    def validate_args(self, args):
+        return self._vt.validate_args(args, version=self._version)
+
+
 class ToolRegistry:
     """
     Singleton реестр tool handlers.
@@ -97,6 +122,10 @@ class ToolRegistry:
     def _ensure_initialized(cls) -> None:
         """
         Ленивая инициализация builtin tools.
+        
+        1. Импортирует builtins (активирует @register_tool → tool_registry)
+        2. Создаёт ToolHandler-совместимые обёртки из VersionedTool
+           для обратной совместимости с runtime
         """
         if cls._initialized:
             return
@@ -104,10 +133,38 @@ class ToolRegistry:
         try:
             from app.agents.builtins import register_builtins
             register_builtins()
+            
+            # Bridge: wrap VersionedTool instances as ToolHandler-compatible
+            cls._bridge_versioned_tools()
+            
             cls._initialized = True
         except ImportError as e:
             logger.error(f"Failed to import builtins: {e}")
             cls._initialized = True
+    
+    @classmethod
+    def _bridge_versioned_tools(cls) -> None:
+        """
+        Создаёт ToolHandler-совместимые обёртки для всех VersionedTool
+        из tool_registry, чтобы runtime мог использовать ToolRegistry.get().
+        """
+        try:
+            from app.agents.handlers.versioned_tool import tool_registry
+            
+            for vt in tool_registry.get_all():
+                if vt.tool_slug in cls._handlers:
+                    continue  # Already registered as ToolHandler
+                
+                latest = vt.get_latest_version()
+                if not latest:
+                    continue
+                
+                # Create a lightweight ToolHandler wrapper
+                wrapper = _VersionedToolWrapper(vt, latest.version)
+                cls._handlers[vt.tool_slug] = wrapper
+                logger.info(f"Bridged VersionedTool as ToolHandler: {vt.tool_slug}@{latest.version}")
+        except ImportError:
+            pass
     
     @classmethod
     def clear(cls) -> None:

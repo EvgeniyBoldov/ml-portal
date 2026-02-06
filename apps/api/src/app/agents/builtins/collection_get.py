@@ -1,65 +1,72 @@
 """
-Collection Get Tool - получение записи по ключу
+Collection Get Tool - получение записи по ключу (VersionedTool)
 """
 from __future__ import annotations
 from typing import Any, Dict, ClassVar
 import uuid
 
 from app.core.logging import get_logger
-from app.agents.handlers.base import ToolHandler
+from app.agents.handlers.versioned_tool import VersionedTool, tool_version, register_tool
 from app.agents.context import ToolContext, ToolResult
 
 logger = get_logger(__name__)
 
+_INPUT_SCHEMA_V1 = {
+    "type": "object",
+    "properties": {
+        "collection_slug": {
+            "type": "string",
+            "description": "The collection to get record from"
+        },
+        "id": {
+            "type": "string",
+            "description": "The primary key value (UUID or other key)"
+        },
+        "id_field": {
+            "type": "string",
+            "description": "Primary key field name (default: uses collection's primary_key_field)"
+        }
+    },
+    "required": ["collection_slug", "id"]
+}
 
-class CollectionGetTool(ToolHandler):
+_OUTPUT_SCHEMA_V1 = {
+    "type": "object",
+    "properties": {
+        "record": {
+            "type": "object",
+            "description": "The found record or null"
+        },
+        "found": {
+            "type": "boolean"
+        },
+        "collection": {
+            "type": "string"
+        }
+    }
+}
+
+
+@register_tool
+class CollectionGetTool(VersionedTool):
     """
     Tool для получения записи из коллекции по первичному ключу.
     
     Используется для точного получения одной записи по ID или другому ключу.
     """
     
-    slug: ClassVar[str] = "collection.get"
-    name: ClassVar[str] = "Collection Get"
+    tool_slug: ClassVar[str] = "collection.get"
     tool_group: ClassVar[str] = "collection"
+    name: ClassVar[str] = "Collection Get"
     description: ClassVar[str] = "Get a single record from a collection by its primary key"
     
-    input_schema: ClassVar[Dict[str, Any]] = {
-        "type": "object",
-        "properties": {
-            "collection_slug": {
-                "type": "string",
-                "description": "The collection to get record from"
-            },
-            "id": {
-                "type": "string",
-                "description": "The primary key value (UUID or other key)"
-            },
-            "id_field": {
-                "type": "string",
-                "description": "Primary key field name (default: uses collection's primary_key_field)"
-            }
-        },
-        "required": ["collection_slug", "id"]
-    }
-    
-    output_schema: ClassVar[Dict[str, Any]] = {
-        "type": "object",
-        "properties": {
-            "record": {
-                "type": "object",
-                "description": "The found record or null"
-            },
-            "found": {
-                "type": "boolean"
-            },
-            "collection": {
-                "type": "string"
-            }
-        }
-    }
-
-    async def execute(self, ctx: ToolContext, args: Dict[str, Any]) -> ToolResult:
+    @tool_version(
+        version="1.0.0",
+        input_schema=_INPUT_SCHEMA_V1,
+        output_schema=_OUTPUT_SCHEMA_V1,
+        description="Initial version with primary key lookup and custom id_field support",
+    )
+    async def v1_0_0(self, ctx: ToolContext, args: Dict[str, Any]) -> ToolResult:
         """
         Получить запись из коллекции по ключу.
         """

@@ -1,12 +1,12 @@
 """
-Collection Search Tool - универсальный поиск по SQL-коллекциям с DSL фильтрами
+Collection Search Tool - универсальный поиск по SQL-коллекциям с DSL фильтрами (VersionedTool)
 """
 from __future__ import annotations
 from typing import Any, Dict, List, ClassVar, Optional
 import uuid
 
 from app.core.logging import get_logger
-from app.agents.handlers.base import ToolHandler
+from app.agents.handlers.versioned_tool import VersionedTool, tool_version, register_tool
 from app.agents.context import ToolContext, ToolResult
 from app.models.collection import Collection, SearchMode
 
@@ -16,8 +16,85 @@ DEFAULT_LIMIT = 50
 MAX_LIMIT = 100
 MAX_OFFSET = 1000
 
+_INPUT_SCHEMA_V1 = {
+    "type": "object",
+    "properties": {
+        "collection_slug": {
+            "type": "string",
+            "description": "The collection to search in"
+        },
+        "query": {
+            "type": "string",
+            "description": "Text search query (searches in text fields with ILIKE)"
+        },
+        "filters": {
+            "type": "object",
+            "description": "Structured filter conditions using DSL",
+            "properties": {
+                "and": {
+                    "type": "array",
+                    "description": "List of conditions joined with AND",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "field": {"type": "string"},
+                            "op": {"type": "string", "enum": ["eq", "neq", "in", "not_in", "like", "contains", "gt", "gte", "lt", "lte", "range", "is_null"]},
+                            "value": {}
+                        }
+                    }
+                },
+                "or": {
+                    "type": "array",
+                    "description": "List of conditions joined with OR"
+                }
+            }
+        },
+        "sort": {
+            "type": "array",
+            "description": "Sort order",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "field": {"type": "string"},
+                    "order": {"type": "string", "enum": ["asc", "desc"]}
+                }
+            }
+        },
+        "limit": {
+            "type": "integer",
+            "description": "Maximum number of results (default: 50, max: 100)",
+            "default": 50,
+            "minimum": 1,
+            "maximum": 100
+        },
+        "offset": {
+            "type": "integer",
+            "description": "Number of results to skip (max: 1000)",
+            "default": 0,
+            "minimum": 0,
+            "maximum": 1000
+        }
+    },
+    "required": ["collection_slug"]
+}
 
-class CollectionSearchTool(ToolHandler):
+_OUTPUT_SCHEMA_V1 = {
+    "type": "object",
+    "properties": {
+        "rows": {
+            "type": "array",
+            "items": {"type": "object"}
+        },
+        "total": {"type": "integer"},
+        "returned": {"type": "integer"},
+        "collection": {"type": "string"},
+        "has_more": {"type": "boolean"}
+    }
+}
+
+
+@register_tool
+class CollectionSearchTool(VersionedTool):
     """
     Tool для поиска по SQL-коллекциям с DSL фильтрами.
     
@@ -28,86 +105,10 @@ class CollectionSearchTool(ToolHandler):
     - Guardrails (лимиты, таймауты, обязательные фильтры)
     """
     
-    slug: ClassVar[str] = "collection.search"
-    name: ClassVar[str] = "Collection Search"
+    tool_slug: ClassVar[str] = "collection.search"
     tool_group: ClassVar[str] = "collection"
+    name: ClassVar[str] = "Collection Search"
     description: ClassVar[str] = "Search in a data collection with filters and text search"
-    
-    input_schema: ClassVar[Dict[str, Any]] = {
-        "type": "object",
-        "properties": {
-            "collection_slug": {
-                "type": "string",
-                "description": "The collection to search in"
-            },
-            "query": {
-                "type": "string",
-                "description": "Text search query (searches in text fields with ILIKE)"
-            },
-            "filters": {
-                "type": "object",
-                "description": "Structured filter conditions using DSL",
-                "properties": {
-                    "and": {
-                        "type": "array",
-                        "description": "List of conditions joined with AND",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "field": {"type": "string"},
-                                "op": {"type": "string", "enum": ["eq", "neq", "in", "not_in", "like", "contains", "gt", "gte", "lt", "lte", "range", "is_null"]},
-                                "value": {}
-                            }
-                        }
-                    },
-                    "or": {
-                        "type": "array",
-                        "description": "List of conditions joined with OR"
-                    }
-                }
-            },
-            "sort": {
-                "type": "array",
-                "description": "Sort order",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "field": {"type": "string"},
-                        "order": {"type": "string", "enum": ["asc", "desc"]}
-                    }
-                }
-            },
-            "limit": {
-                "type": "integer",
-                "description": "Maximum number of results (default: 50, max: 100)",
-                "default": 50,
-                "minimum": 1,
-                "maximum": 100
-            },
-            "offset": {
-                "type": "integer",
-                "description": "Number of results to skip (max: 1000)",
-                "default": 0,
-                "minimum": 0,
-                "maximum": 1000
-            }
-        },
-        "required": ["collection_slug"]
-    }
-    
-    output_schema: ClassVar[Dict[str, Any]] = {
-        "type": "object",
-        "properties": {
-            "rows": {
-                "type": "array",
-                "items": {"type": "object"}
-            },
-            "total": {"type": "integer"},
-            "returned": {"type": "integer"},
-            "collection": {"type": "string"},
-            "has_more": {"type": "boolean"}
-        }
-    }
 
     @classmethod
     def build_schema_for_collection(cls, collection: Collection) -> Dict[str, Any]:
@@ -167,7 +168,13 @@ class CollectionSearchTool(ToolHandler):
         }
         return mapping.get(field_type, "string")
 
-    async def execute(self, ctx: ToolContext, args: Dict[str, Any]) -> ToolResult:
+    @tool_version(
+        version="1.0.0",
+        input_schema=_INPUT_SCHEMA_V1,
+        output_schema=_OUTPUT_SCHEMA_V1,
+        description="Initial version with DSL filters, text search, sorting, pagination, guardrails",
+    )
+    async def v1_0_0(self, ctx: ToolContext, args: Dict[str, Any]) -> ToolResult:
         """
         Выполнить поиск по коллекции с DSL фильтрами и guardrails.
         """
