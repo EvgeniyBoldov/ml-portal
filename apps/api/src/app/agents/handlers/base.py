@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional, ClassVar
 
 from app.agents.context import ToolContext, ToolResult
+from app.core.schema_hash import compute_schema_hash as _compute_hash
 
 
 class ToolHandler(ABC):
@@ -97,6 +98,11 @@ class ToolHandler(ABC):
         if expected is None:
             return True
         return isinstance(value, expected)
+    
+    @property
+    def schema_hash(self) -> str:
+        """SHA256 hash of input_schema + output_schema for observability"""
+        return _compute_hash(self.input_schema, self.output_schema)
     
     def to_llm_schema(self) -> Dict[str, Any]:
         """

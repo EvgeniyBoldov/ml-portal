@@ -34,6 +34,7 @@ from app.schemas.tool_releases import (
     ToolReleaseUpdate,
     ToolReleaseResponse,
     ToolReleaseListItem,
+    SchemaDiffResponse,
 )
 
 router = APIRouter(prefix="/tool-groups", tags=["Tool Groups"])
@@ -206,6 +207,9 @@ async def get_tool(
                 version=br.version,
                 description=br.description,
                 deprecated=br.deprecated,
+                schema_hash=br.schema_hash,
+                worker_build_id=br.worker_build_id,
+                last_seen_at=br.last_seen_at,
                 synced_at=br.synced_at,
             )
             for br in tool.backend_releases
@@ -218,6 +222,8 @@ async def get_tool(
                 status=r.status,
                 backend_release_id=r.backend_release_id,
                 backend_version=r.backend_release.version if r.backend_release else None,
+                expected_schema_hash=r.expected_schema_hash,
+                parent_release_id=r.parent_release_id,
                 notes=r.notes,
                 created_at=r.created_at,
             )
@@ -234,6 +240,8 @@ async def get_tool(
                 backend_release_id=r.backend_release_id,
                 status=r.status,
                 config=r.config,
+                expected_schema_hash=r.expected_schema_hash,
+                parent_release_id=r.parent_release_id,
                 notes=r.notes,
                 created_at=r.created_at,
                 updated_at=r.updated_at,
@@ -242,6 +250,9 @@ async def get_tool(
                     version=r.backend_release.version,
                     description=r.backend_release.description,
                     deprecated=r.backend_release.deprecated,
+                    schema_hash=r.backend_release.schema_hash,
+                    worker_build_id=r.backend_release.worker_build_id,
+                    last_seen_at=r.backend_release.last_seen_at,
                     synced_at=r.backend_release.synced_at,
                 ) if r.backend_release else None,
             )
@@ -307,6 +318,9 @@ async def list_backend_releases(
                 version=r.version,
                 description=r.description,
                 deprecated=r.deprecated,
+                schema_hash=r.schema_hash,
+                worker_build_id=r.worker_build_id,
+                last_seen_at=r.last_seen_at,
                 synced_at=r.synced_at,
             )
             for r in releases
@@ -354,6 +368,8 @@ async def list_releases(
                 status=r.status,
                 backend_release_id=r.backend_release_id,
                 backend_version=r.backend_release.version if r.backend_release else None,
+                expected_schema_hash=r.expected_schema_hash,
+                parent_release_id=r.parent_release_id,
                 notes=r.notes,
                 created_at=r.created_at,
             )
@@ -373,7 +389,7 @@ async def create_release(
     """Create a new release (draft)"""
     service = ToolReleaseService(session)
     try:
-        release = await service.create_release(slug, data)
+        release = await service.create_release(slug, data, from_release_id=data.from_release_id)
         return _release_to_response(release)
     except ToolNotFoundError:
         raise HTTPException(status_code=404, detail=f"Tool '{slug}' not found")
@@ -471,6 +487,9 @@ def _release_to_response(release) -> ToolReleaseResponse:
             version=release.backend_release.version,
             description=release.backend_release.description,
             deprecated=release.backend_release.deprecated,
+            schema_hash=release.backend_release.schema_hash,
+            worker_build_id=release.backend_release.worker_build_id,
+            last_seen_at=release.backend_release.last_seen_at,
             synced_at=release.backend_release.synced_at,
         )
     
@@ -481,11 +500,43 @@ def _release_to_response(release) -> ToolReleaseResponse:
         backend_release_id=release.backend_release_id,
         status=release.status,
         config=release.config,
+        description_for_llm=release.description_for_llm,
+        category=release.category,
+        tags=release.tags or [],
+        field_hints=release.field_hints or {},
+        examples=release.examples or [],
+        return_summary=release.return_summary,
+        meta_hash=release.meta_hash,
+        expected_schema_hash=release.expected_schema_hash,
+        parent_release_id=release.parent_release_id,
         notes=release.notes,
         created_at=release.created_at,
         updated_at=release.updated_at,
         backend_release=backend_release,
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SCHEMA DIFF
+# ─────────────────────────────────────────────────────────────────────────────
+
+@tools_router.get("/{slug}/schema-diff", response_model=SchemaDiffResponse)
+async def get_schema_diff(
+    slug: str,
+    from_backend_release_id: UUID,
+    to_backend_release_id: UUID,
+    session: AsyncSession = Depends(db_session),
+    _: UserCtx = Depends(require_admin),
+):
+    """Get schema diff between two backend releases"""
+    service = ToolReleaseService(session)
+    try:
+        diff = await service.get_schema_diff(slug, from_backend_release_id, to_backend_release_id)
+        return SchemaDiffResponse(**diff)
+    except ToolNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Tool '{slug}' not found")
+    except BackendReleaseNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -554,6 +605,9 @@ async def rescan_backend_releases(
                 version=br.version,
                 description=br.description,
                 deprecated=br.deprecated,
+                schema_hash=br.schema_hash,
+                worker_build_id=br.worker_build_id,
+                last_seen_at=br.last_seen_at,
                 synced_at=br.synced_at,
             )
             for br in updated_tool.backend_releases

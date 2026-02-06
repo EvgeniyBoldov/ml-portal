@@ -22,6 +22,9 @@ class ToolBackendReleaseResponse(BaseModel):
     method_name: str
     deprecated: bool = False
     deprecation_message: Optional[str] = None
+    schema_hash: Optional[str] = None
+    worker_build_id: Optional[str] = None
+    last_seen_at: Optional[datetime] = None
     synced_at: datetime
 
     class Config:
@@ -34,6 +37,9 @@ class ToolBackendReleaseListItem(BaseModel):
     version: str
     description: Optional[str] = None
     deprecated: bool = False
+    schema_hash: Optional[str] = None
+    worker_build_id: Optional[str] = None
+    last_seen_at: Optional[datetime] = None
     synced_at: datetime
 
     class Config:
@@ -47,6 +53,7 @@ class ToolBackendReleaseListItem(BaseModel):
 class ToolReleaseCreate(BaseModel):
     """Create tool release request"""
     backend_release_id: UUID = Field(..., description="Backend release to use")
+    from_release_id: Optional[UUID] = Field(None, description="Parent release to inherit meta-fields from")
     config: Dict[str, Any] = Field(default_factory=dict, description="Additional configuration")
     description_for_llm: Optional[str] = Field(None, description="Description for LLM")
     category: Optional[str] = Field(None, description="Tool category")
@@ -85,6 +92,8 @@ class ToolReleaseResponse(BaseModel):
     examples: List[Dict[str, Any]] = []
     return_summary: Optional[str] = None
     meta_hash: Optional[str] = None
+    expected_schema_hash: Optional[str] = None
+    parent_release_id: Optional[UUID] = None
     notes: Optional[str] = None
     created_at: datetime
     updated_at: datetime
@@ -103,6 +112,8 @@ class ToolReleaseListItem(BaseModel):
     status: str
     backend_release_id: UUID
     backend_version: Optional[str] = None  # From backend_release.version
+    expected_schema_hash: Optional[str] = None
+    parent_release_id: Optional[UUID] = None
     category: Optional[str] = None
     tags: List[str] = []
     notes: Optional[str] = None
@@ -178,6 +189,32 @@ class ToolListItem(BaseModel):
 # ─────────────────────────────────────────────────────────────────────────────
 # TOOL GROUP (with tools)
 # ─────────────────────────────────────────────────────────────────────────────
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SCHEMA DIFF
+# ─────────────────────────────────────────────────────────────────────────────
+
+class SchemaDiffField(BaseModel):
+    """A field in a schema diff"""
+    name: str
+    type: str = "unknown"
+    required: bool = False
+    description: str = ""
+
+
+class SchemaDiffChangedField(BaseModel):
+    """A field whose type changed"""
+    name: str
+    old_type: str
+    new_type: str
+
+
+class SchemaDiffResponse(BaseModel):
+    """Schema diff between two backend releases"""
+    added_fields: List[SchemaDiffField] = []
+    removed_fields: List[SchemaDiffField] = []
+    changed_fields: List[SchemaDiffChangedField] = []
+
 
 class ToolGroupCreate(BaseModel):
     """Create tool group request"""

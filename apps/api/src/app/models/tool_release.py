@@ -71,6 +71,17 @@ class ToolBackendRelease(Base):
     deprecated: Mapped[bool] = mapped_column(Boolean, default=False)
     deprecation_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     
+    # SHA256 от canonical JSON {input_schema, output_schema} — для observability и валидации
+    schema_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    
+    # ID билда воркера (git sha / build id) — для трекинга какой код в проде
+    worker_build_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    
+    # Когда последний раз видели при sync — для детекта "мёртвых" версий
+    last_seen_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    
     # Дата синхронизации из кода в БД
     synced_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), 
@@ -168,6 +179,16 @@ class ToolRelease(Base):
     # Хеш метаданных (для отслеживания изменений)
     meta_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     
+    # Фиксируется при activate из backend_release.schema_hash — для детекта schema drift
+    expected_schema_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    
+    # Ссылка на родительскую версию (для наследования мета-данных)
+    parent_release_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tool_releases.id", ondelete="SET NULL"),
+        nullable=True
+    )
+    
     # Заметки об изменениях
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     
@@ -194,6 +215,12 @@ class ToolRelease(Base):
         "ToolBackendRelease",
         back_populates="releases",
         foreign_keys=[backend_release_id]
+    )
+    
+    parent_release: Mapped[Optional["ToolRelease"]] = relationship(
+        "ToolRelease",
+        remote_side="ToolRelease.id",
+        foreign_keys=[parent_release_id],
     )
 
     @property

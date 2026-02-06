@@ -309,6 +309,10 @@ class AgentRuntime:
                     tool_call.arguments
                 )
                 
+                # Resolve handler for schema_hash logging
+                _handler = next((h for h in tool_handlers if h.slug == tool_call.tool_slug), None)
+                _schema_hash = getattr(_handler, 'schema_hash', None) if _handler else None
+                
                 # Log tool call step
                 if should_log and run_id:
                     try:
@@ -319,6 +323,7 @@ class AgentRuntime:
                                 "tool_slug": tool_call.tool_slug,
                                 "call_id": tool_call.id,
                                 "arguments": tool_call.arguments,
+                                "schema_hash": _schema_hash,
                             }
                         )
                     except Exception as e:
@@ -352,6 +357,7 @@ class AgentRuntime:
                                 "call_id": tool_call.id,
                                 "success": result.success,
                                 "result": result_data,
+                                "schema_hash": _schema_hash,
                             }
                         )
                     except Exception as e:

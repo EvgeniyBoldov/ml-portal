@@ -7,6 +7,7 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
+from app.core.schema_hash import compute_schema_diff
 from app.models.tool import Tool
 from app.models.tool_group import ToolGroup
 from app.models.tool_release import ToolBackendRelease, ToolRelease, ToolReleaseStatus
@@ -205,9 +206,15 @@ class ToolReleaseService:
     async def create_release(
         self, 
         tool_slug: str, 
-        data: ToolReleaseCreate
+        data: ToolReleaseCreate,
+        from_release_id: Optional[UUID] = None,
     ) -> ToolRelease:
-        """Create a new release (draft)"""
+        """
+        Create a new release (draft).
+        
+        If from_release_id is provided, copies meta-fields from parent release
+        and generates field_hints diff for new/removed schema fields.
+        """
         tool = await self.get_tool(tool_slug)
         
         # Verify backend release exists
@@ -220,25 +227,82 @@ class ToolReleaseService:
         # Get next version number
         next_version = await self.release_repo.get_next_version(tool.id)
         
+        # Inherit from parent release if specified
+        parent_release = None
+        if from_release_id:
+            parent_release = await self.release_repo.get_by_id(from_release_id)
+            if not parent_release or parent_release.tool_id != tool.id:
+                raise ReleaseNotFoundError(
+                    f"Parent release not found for tool '{tool_slug}'"
+                )
+        
+        # Build release fields — explicit data takes priority over inherited
+        config = data.config
+        description_for_llm = data.description_for_llm
+        category = data.category
+        tags = data.tags
+        field_hints = data.field_hints
+        examples = data.examples
+        return_summary = data.return_summary
+        notes = data.notes
+        
+        if parent_release:
+            # Inherit fields that were not explicitly provided (empty defaults)
+            if not config:
+                config = parent_release.config or {}
+            if description_for_llm is None:
+                description_for_llm = parent_release.description_for_llm
+            if category is None:
+                category = parent_release.category
+            if not tags:
+                tags = parent_release.tags or []
+            if not field_hints:
+                field_hints = dict(parent_release.field_hints or {})
+            if not examples:
+                examples = list(parent_release.examples or [])
+            if return_summary is None:
+                return_summary = parent_release.return_summary
+            
+            # Generate field_hints diff if backend release changed
+            if parent_release.backend_release_id != data.backend_release_id:
+                old_br = await self.backend_repo.get_by_id(parent_release.backend_release_id)
+                if old_br:
+                    diff = compute_schema_diff(
+                        old_br.input_schema or {},
+                        backend_release.input_schema or {},
+                    )
+                    # Add new fields with empty hints
+                    for added in diff["added_fields"]:
+                        if added["name"] not in field_hints:
+                            field_hints[added["name"]] = ""
+                    # Mark removed fields
+                    for removed in diff["removed_fields"]:
+                        if removed["name"] in field_hints:
+                            field_hints[removed["name"]] = f"[REMOVED] {field_hints[removed['name']]}"
+        
         release = ToolRelease(
             tool_id=tool.id,
             version=next_version,
             backend_release_id=data.backend_release_id,
             status=ToolReleaseStatus.DRAFT.value,
-            config=data.config,
-            description_for_llm=data.description_for_llm,
-            category=data.category,
-            tags=data.tags,
-            field_hints=data.field_hints,
-            examples=data.examples,
-            return_summary=data.return_summary,
-            notes=data.notes,
+            config=config,
+            description_for_llm=description_for_llm,
+            category=category,
+            tags=tags,
+            field_hints=field_hints,
+            examples=examples,
+            return_summary=return_summary,
+            notes=notes,
+            parent_release_id=from_release_id,
         )
         
         await self.release_repo.create(release)
         await self.session.commit()
         
-        logger.info(f"Created release v{next_version} for {tool_slug}")
+        logger.info(
+            f"Created release v{next_version} for {tool_slug}"
+            + (f" (inherited from v{parent_release.version})" if parent_release else "")
+        )
         return await self.get_release(tool_slug, next_version)
     
     async def update_release(
@@ -293,7 +357,7 @@ class ToolReleaseService:
         return await self.get_release(tool_slug, version)
     
     async def activate_release(self, tool_slug: str, version: int) -> ToolRelease:
-        """Activate a release (archive current active)"""
+        """Activate a release (archive current active, fix expected_schema_hash)"""
         release = await self.get_release(tool_slug, version)
         
         if release.status != ToolReleaseStatus.DRAFT.value:
@@ -308,13 +372,48 @@ class ToolReleaseService:
             await self.release_repo.update(current_active)
             logger.info(f"Archived release v{current_active.version} for {tool_slug}")
         
+        # Fix expected_schema_hash from current backend release
+        backend_release = await self.backend_repo.get_by_id(release.backend_release_id)
+        if backend_release and backend_release.schema_hash:
+            release.expected_schema_hash = backend_release.schema_hash
+        
         # Activate new release
         release.status = ToolReleaseStatus.ACTIVE.value
         await self.release_repo.update(release)
         await self.session.commit()
         
-        logger.info(f"Activated release v{version} for {tool_slug}")
+        logger.info(
+            f"Activated release v{version} for {tool_slug}"
+            + (f" (expected_schema_hash={release.expected_schema_hash[:8]})" if release.expected_schema_hash else "")
+        )
         return await self.get_release(tool_slug, version)
+    
+    async def get_schema_diff(
+        self,
+        tool_slug: str,
+        from_backend_release_id: UUID,
+        to_backend_release_id: UUID,
+    ) -> Dict[str, Any]:
+        """
+        Compute schema diff between two backend releases of the same tool.
+        
+        Returns:
+            {"added_fields": [...], "removed_fields": [...], "changed_fields": [...]}
+        """
+        tool = await self.get_tool(tool_slug)
+        
+        from_release = await self.backend_repo.get_by_id(from_backend_release_id)
+        if not from_release or from_release.tool_id != tool.id:
+            raise BackendReleaseNotFoundError("Source backend release not found")
+        
+        to_release = await self.backend_repo.get_by_id(to_backend_release_id)
+        if not to_release or to_release.tool_id != tool.id:
+            raise BackendReleaseNotFoundError("Target backend release not found")
+        
+        return compute_schema_diff(
+            from_release.input_schema or {},
+            to_release.input_schema or {},
+        )
     
     async def archive_release(self, tool_slug: str, version: int) -> ToolRelease:
         """Archive a release"""
