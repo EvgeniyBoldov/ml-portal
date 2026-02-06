@@ -11,7 +11,7 @@ from .permission_service import PermissionService, EffectivePermissions
 from .prompt_service import PromptService
 from .tool_service import ToolService
 from .tool_instance_service import ToolInstanceService
-from .tool_sync_service import ToolSyncService, sync_tools_from_registry
+from .tool_sync_service import ToolSyncService, sync_tools_from_registry, sync_tool_versions, sync_all_tools
 from .model_service import ModelService
 from .model_health_checker import ModelHealthChecker
 from .rag_search_service import RagSearchService
@@ -39,6 +39,8 @@ __all__ = [
     "ToolInstanceService",
     "ToolSyncService",
     "sync_tools_from_registry",
+    "sync_tool_versions",
+    "sync_all_tools",
     "ModelService",
     "ModelHealthChecker",
     "RagSearchService",
