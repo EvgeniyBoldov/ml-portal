@@ -1,22 +1,19 @@
 /**
- * PolicyVersionPage - View/Edit/Create policy version
+ * PolicyVersionPage - now shows LIMIT version editor
  * 
- * REFACTORED: Simplified with shared components
- * Routes:
- * - /admin/policies/:slug/versions/new - Create new version
- * - /admin/policies/:slug/versions/:version - View version
- * - /admin/policies/:slug/versions/:version?mode=edit - Edit version (only draft)
+ * Old Policy version page becomes Limit version page.
+ * Numeric fields: max_steps, max_tool_calls, timeouts
  */
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { policiesApi, type PolicyVersionCreate } from '@/shared/api';
+import { limitsApi, type LimitVersionCreate } from '@/shared/api/limits';
 import { qk } from '@/shared/api/keys';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
 import { EntityPage, ContentBlock, Input, Textarea, Badge, type EntityPageMode, type BreadcrumbItem } from '@/shared/ui';
 import { useVersionActions } from '@/shared/hooks/useVersionActions';
 
-interface FormData extends PolicyVersionCreate {
+interface FormData extends LimitVersionCreate {
   notes?: string;
 }
 
@@ -35,78 +32,67 @@ export function PolicyVersionPage() {
   const isEditable = mode === 'edit' || mode === 'create';
 
   const [formData, setFormData] = useState<FormData>({
-    max_steps: isCreate ? undefined : 20,
-    max_tool_calls: isCreate ? undefined : 50,
-    max_wall_time_ms: isCreate ? undefined : 300000,
-    tool_timeout_ms: isCreate ? undefined : 30000,
-    max_retries: isCreate ? undefined : 3,
-    budget_tokens: undefined,
-    budget_cost_cents: undefined,
+    max_steps: undefined,
+    max_tool_calls: undefined,
+    max_wall_time_ms: undefined,
+    tool_timeout_ms: undefined,
+    max_retries: undefined,
     extra_config: {},
     notes: '',
   });
   const [saving, setSaving] = useState(false);
 
-  // Load policy for breadcrumbs
-  const { data: policy } = useQuery({
-    queryKey: qk.policies.detail(slug!),
-    queryFn: () => policiesApi.get(slug!),
+  const { data: limit } = useQuery({
+    queryKey: qk.limits.detail(slug!),
+    queryFn: () => limitsApi.get(slug!),
     enabled: !!slug,
   });
 
-  // Load existing version
   const { data: existingVersion, isLoading } = useQuery({
-    queryKey: qk.policies.version(slug!, versionNumber),
-    queryFn: () => policiesApi.getVersion(slug!, versionNumber),
+    queryKey: qk.limits.version(slug!, versionNumber),
+    queryFn: () => limitsApi.getVersion(slug!, versionNumber),
     enabled: !isCreate && !!slug && versionNumber > 0,
   });
 
   useEffect(() => {
     if (isCreate) {
-      // Reset form for create mode
       setFormData({
         max_steps: undefined,
         max_tool_calls: undefined,
         max_wall_time_ms: undefined,
         tool_timeout_ms: undefined,
         max_retries: undefined,
-        budget_tokens: undefined,
-        budget_cost_cents: undefined,
         extra_config: {},
         notes: '',
       });
     } else if (existingVersion) {
-      // Load existing version data
       setFormData({
         max_steps: existingVersion.max_steps ?? undefined,
         max_tool_calls: existingVersion.max_tool_calls ?? undefined,
         max_wall_time_ms: existingVersion.max_wall_time_ms ?? undefined,
         tool_timeout_ms: existingVersion.tool_timeout_ms ?? undefined,
         max_retries: existingVersion.max_retries ?? undefined,
-        budget_tokens: existingVersion.budget_tokens ?? undefined,
-        budget_cost_cents: existingVersion.budget_cost_cents ?? undefined,
         extra_config: existingVersion.extra_config || {},
         notes: existingVersion.notes || '',
       });
     }
   }, [existingVersion, isCreate]);
 
-  // Mutations
   const createMutation = useMutation({
-    mutationFn: (data: PolicyVersionCreate) => policiesApi.createVersion(slug!, data),
+    mutationFn: (data: LimitVersionCreate) => limitsApi.createVersion(slug!, data),
     onSuccess: (created) => {
-      queryClient.invalidateQueries({ queryKey: qk.policies.detail(slug!) });
+      queryClient.invalidateQueries({ queryKey: qk.limits.detail(slug!) });
       showSuccess('Версия создана');
-      navigate(`/admin/policies/${slug}/versions/${created.version}`);
+      navigate(`/admin/limits/${slug}/versions/${created.version}`);
     },
     onError: (err: Error) => showError(err.message),
   });
 
   const updateMutation = useMutation({
-    mutationFn: (data: PolicyVersionCreate) => policiesApi.updateVersion(slug!, versionNumber, data),
+    mutationFn: (data: LimitVersionCreate) => limitsApi.updateVersion(slug!, versionNumber, data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.policies.detail(slug!) });
-      queryClient.invalidateQueries({ queryKey: qk.policies.version(slug!, versionNumber) });
+      queryClient.invalidateQueries({ queryKey: qk.limits.detail(slug!) });
+      queryClient.invalidateQueries({ queryKey: qk.limits.version(slug!, versionNumber) });
       showSuccess('Версия обновлена');
       setSearchParams({});
     },
@@ -114,40 +100,31 @@ export function PolicyVersionPage() {
   });
 
   const activateMutation = useMutation({
-    mutationFn: () => policiesApi.activateVersion(slug!, versionNumber),
+    mutationFn: () => limitsApi.activateVersion(slug!, versionNumber),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.policies.detail(slug!) });
-      queryClient.invalidateQueries({ queryKey: qk.policies.version(slug!, versionNumber) });
+      queryClient.invalidateQueries({ queryKey: qk.limits.detail(slug!) });
+      queryClient.invalidateQueries({ queryKey: qk.limits.version(slug!, versionNumber) });
       showSuccess('Версия активирована');
     },
     onError: (err: Error) => showError(err.message),
   });
 
   const deactivateMutation = useMutation({
-    mutationFn: () => policiesApi.deactivateVersion(slug!, versionNumber),
+    mutationFn: () => limitsApi.deactivateVersion(slug!, versionNumber),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.policies.detail(slug!) });
-      queryClient.invalidateQueries({ queryKey: qk.policies.version(slug!, versionNumber) });
+      queryClient.invalidateQueries({ queryKey: qk.limits.detail(slug!) });
+      queryClient.invalidateQueries({ queryKey: qk.limits.version(slug!, versionNumber) });
       showSuccess('Версия деактивирована');
     },
     onError: (err: Error) => showError(err.message),
   });
 
-  const setRecommendedMutation = useMutation({
-    mutationFn: () => policiesApi.setRecommendedVersion(slug!, existingVersion!.id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.policies.detail(slug!) });
-      showSuccess('Основная версия установлена');
-    },
-    onError: (err: Error) => showError(err.message),
-  });
-
   const deleteMutation = useMutation({
-    mutationFn: () => policiesApi.deleteVersion(slug!, versionNumber),
+    mutationFn: () => limitsApi.deleteVersion(slug!, versionNumber),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.policies.detail(slug!) });
+      queryClient.invalidateQueries({ queryKey: qk.limits.detail(slug!) });
       showSuccess('Версия удалена');
-      navigate(`/admin/policies/${slug}`);
+      navigate(`/admin/limits/${slug}`);
     },
     onError: (err: Error) => showError(err.message),
   });
@@ -155,22 +132,19 @@ export function PolicyVersionPage() {
   const handleSave = async () => {
     setSaving(true);
     try {
-      const data: PolicyVersionCreate = {
+      const data: LimitVersionCreate = {
         max_steps: formData.max_steps,
         max_tool_calls: formData.max_tool_calls,
         max_wall_time_ms: formData.max_wall_time_ms,
         tool_timeout_ms: formData.tool_timeout_ms,
         max_retries: formData.max_retries,
-        budget_tokens: formData.budget_tokens,
-        budget_cost_cents: formData.budget_cost_cents,
         extra_config: formData.extra_config,
         notes: formData.notes || undefined,
       };
 
       if (mode === 'create') {
-        // Copy from recommended version if exists
-        if (policy?.recommended_version) {
-          data.parent_version_id = policy.recommended_version.id;
+        if (limit?.current_version) {
+          data.parent_version_id = limit.current_version.id;
         }
         await createMutation.mutateAsync(data);
       } else {
@@ -195,10 +169,10 @@ export function PolicyVersionPage() {
   };
 
   const handleEdit = () => setSearchParams({ mode: 'edit' });
-  
+
   const handleCancel = () => {
     if (isCreate) {
-      navigate(`/admin/policies/${slug}`);
+      navigate(`/admin/limits/${slug}`);
     } else {
       if (existingVersion) {
         setFormData({
@@ -207,8 +181,6 @@ export function PolicyVersionPage() {
           max_wall_time_ms: existingVersion.max_wall_time_ms ?? undefined,
           tool_timeout_ms: existingVersion.tool_timeout_ms ?? undefined,
           max_retries: existingVersion.max_retries ?? undefined,
-          budget_tokens: existingVersion.budget_tokens ?? undefined,
-          budget_cost_cents: existingVersion.budget_cost_cents ?? undefined,
           extra_config: existingVersion.extra_config || {},
           notes: existingVersion.notes || '',
         });
@@ -217,29 +189,26 @@ export function PolicyVersionPage() {
     }
   };
 
-  
   const breadcrumbs: BreadcrumbItem[] = [
-    { label: 'Политики', href: '/admin/policies' },
-    { label: policy?.name || slug || '', href: `/admin/policies/${slug}` },
+    { label: 'Лимиты', href: '/admin/limits' },
+    { label: limit?.name || slug || '', href: `/admin/limits/${slug}` },
     { label: isCreate ? 'Новая версия' : `Версия ${versionNumber}` },
   ];
 
-  const isRecommended = !!(policy?.recommended_version?.id && existingVersion?.id && policy.recommended_version.id === existingVersion.id);
+  const isCurrent = !!(limit?.current_version_id && existingVersion?.id && limit.current_version_id === existingVersion.id);
 
   const actionButtons = useVersionActions({
     status: existingVersion?.status,
-    isRecommended,
+    isRecommended: isCurrent,
     isCreate,
     callbacks: {
       onEdit: () => setSearchParams({ mode: 'edit' }),
       onActivate: () => activateMutation.mutate(),
       onDeactivate: () => deactivateMutation.mutate(),
-      onSetRecommended: () => setRecommendedMutation.mutate(),
     },
     loading: {
       activate: activateMutation.isPending,
       deactivate: deactivateMutation.isPending,
-      setRecommended: setRecommendedMutation.isPending,
     },
   });
 
@@ -248,7 +217,7 @@ export function PolicyVersionPage() {
       mode={mode}
       entityName={isCreate ? 'Новая версия' : `Версия ${versionNumber}`}
       entityTypeLabel="версии"
-      backPath={`/admin/policies/${slug}`}
+      backPath={`/admin/limits/${slug}`}
       breadcrumbs={breadcrumbs}
       loading={!isCreate && isLoading}
       saving={saving}
@@ -319,26 +288,6 @@ export function PolicyVersionPage() {
               placeholder="Без лимита"
             />
           </div>
-          <div>
-            <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', fontWeight: 500 }}>Лимит токенов</label>
-            <Input
-              type="number"
-              value={formData.budget_tokens ?? ''}
-              onChange={(e) => handleFieldChange('budget_tokens', e.target.value ? parseInt(e.target.value) : undefined)}
-              disabled={!isEditable}
-              placeholder="Без лимита"
-            />
-          </div>
-          <div>
-            <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', fontWeight: 500 }}>Лимит стоимости (центы)</label>
-            <Input
-              type="number"
-              value={formData.budget_cost_cents ?? ''}
-              onChange={(e) => handleFieldChange('budget_cost_cents', e.target.value ? parseInt(e.target.value) : undefined)}
-              disabled={!isEditable}
-              placeholder="Без лимита"
-            />
-          </div>
         </div>
       </ContentBlock>
 
@@ -352,8 +301,8 @@ export function PolicyVersionPage() {
             style={{ fontFamily: 'monospace', fontSize: '0.875rem' }}
           />
         ) : (
-          <pre style={{ 
-            whiteSpace: 'pre-wrap', 
+          <pre style={{
+            whiteSpace: 'pre-wrap',
             wordBreak: 'break-word',
             fontFamily: 'monospace',
             fontSize: '0.875rem',

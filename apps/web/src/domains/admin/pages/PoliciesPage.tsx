@@ -1,123 +1,104 @@
 /**
- * PoliciesPage - Политики выполнения агентов
+ * PoliciesPage - now shows LIMITS (execution constraints)
  * 
- * Лимиты: max_steps, max_tool_calls, timeouts, budgets
- * Единый стиль с остальными админ-реестрами.
+ * Old Policy pages become Limits pages.
+ * Limits: max_steps, max_tool_calls, timeouts
  */
 import { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { policiesApi, type Policy } from '@/shared/api';
+import { limitsApi, type LimitListItem } from '@/shared/api/limits';
 import { qk } from '@/shared/api/keys';
 import { AdminPage, DataTable, type DataTableColumn, Badge } from '@/shared/ui';
 
 export function PoliciesPage() {
   const navigate = useNavigate();
   const [q, setQ] = useState('');
-  
-  const { data: policies, isLoading, error } = useQuery({
-    queryKey: qk.policies.list({}),
-    queryFn: () => policiesApi.list({}),
+
+  const { data: limits, isLoading, error } = useQuery({
+    queryKey: qk.limits.list({}),
+    queryFn: () => limitsApi.list({}),
   });
 
-  const filteredPolicies = useMemo(() => {
-    if (!policies) return [];
-    if (!q.trim()) return policies;
+  const filteredLimits = useMemo(() => {
+    if (!limits) return [];
+    if (!q.trim()) return limits;
     const query = q.toLowerCase();
-    return policies.filter((p) => 
-      p.name.toLowerCase().includes(query) ||
-      p.slug.toLowerCase().includes(query) ||
-      p.description?.toLowerCase().includes(query)
+    return limits.filter((l) =>
+      l.name.toLowerCase().includes(query) ||
+      l.slug.toLowerCase().includes(query) ||
+      l.description?.toLowerCase().includes(query)
     );
-  }, [policies, q]);
+  }, [limits, q]);
 
-  const handleRowClick = (policy: Policy) => {
-    navigate(`/admin/policies/${policy.slug}`);
+  const handleRowClick = (limit: LimitListItem) => {
+    navigate(`/admin/limits/${limit.slug}`);
   };
 
-  const formatLimit = (value: number | undefined | null, suffix = '') => {
-    if (value === undefined || value === null) return '—';
-    return `${value.toLocaleString()}${suffix}`;
-  };
-
-  const columns: DataTableColumn<Policy>[] = [
+  const columns: DataTableColumn<LimitListItem>[] = [
     {
       key: 'name',
       label: 'НАЗВАНИЕ',
-      render: (policy) => (
+      render: (limit) => (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-          <span style={{ fontWeight: 500 }}>{policy.name}</span>
-          <code style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
-            {policy.slug}
+          <span style={{ fontWeight: 500 }}>{limit.name}</span>
+          <code style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+            {limit.slug}
           </code>
         </div>
       ),
     },
     {
-      key: 'max_steps',
-      label: 'ШАГИ',
+      key: 'versions_count',
+      label: 'ВЕРСИИ',
       width: 80,
-      render: (policy) => formatLimit(policy.max_steps),
+      render: (limit) => limit.versions_count,
     },
     {
-      key: 'max_tool_calls',
-      label: 'ВЫЗОВЫ',
-      width: 80,
-      render: (policy) => formatLimit(policy.max_tool_calls),
-    },
-    {
-      key: 'max_wall_time_ms',
-      label: 'ТАЙМАУТ',
+      key: 'active_version',
+      label: 'АКТИВНАЯ',
       width: 100,
-      render: (policy) => policy.max_wall_time_ms 
-        ? `${Math.round(policy.max_wall_time_ms / 1000)}с`
-        : '—',
+      render: (limit) => limit.active_version
+        ? <Badge tone="success" size="small">v{limit.active_version}</Badge>
+        : <span style={{ color: 'var(--text-muted)' }}>—</span>,
     },
     {
-      key: 'budget_tokens',
-      label: 'ТОКЕНЫ',
-      width: 100,
-      render: (policy) => formatLimit(policy.budget_tokens),
-    },
-    {
-      key: 'is_active',
-      label: 'СТАТУС',
-      width: 100,
-      render: (policy) => (
-        <Badge tone={policy.is_active ? 'success' : 'neutral'}>
-          {policy.is_active ? 'Активно' : 'Неактивно'}
-        </Badge>
-      ),
+      key: 'updated_at',
+      label: 'ОБНОВЛЕНО',
+      width: 140,
+      render: (limit) => new Date(limit.updated_at).toLocaleDateString('ru-RU', {
+        day: '2-digit', month: '2-digit', year: 'numeric',
+      }),
     },
   ];
 
   return (
     <AdminPage
-      title="Политики"
-      subtitle="Лимиты выполнения агентов: шаги, вызовы, таймауты, бюджеты"
+      title="Лимиты"
+      subtitle="Ограничения выполнения агентов: шаги, вызовы, таймауты"
       searchValue={q}
       onSearchChange={setQ}
-      searchPlaceholder="Поиск политик..."
+      searchPlaceholder="Поиск лимитов..."
       actions={[
         {
           label: 'Создать',
-          onClick: () => navigate('/admin/policies/new'),
+          onClick: () => navigate('/admin/limits/new'),
           variant: 'primary',
         },
       ]}
     >
       {error && (
         <div style={{ padding: '16px', background: 'var(--danger-bg)', borderRadius: '8px', marginBottom: '16px' }}>
-          Не удалось загрузить политики. Попробуйте снова.
+          Не удалось загрузить лимиты. Попробуйте снова.
         </div>
       )}
 
       <DataTable
         columns={columns}
-        data={filteredPolicies || []}
+        data={filteredLimits || []}
         keyField="id"
         loading={isLoading}
-        emptyText="Политики не найдены. Нажмите «Создать» для добавления."
+        emptyText="Лимиты не найдены. Нажмите «Создать» для добавления."
         onRowClick={handleRowClick}
       />
     </AdminPage>

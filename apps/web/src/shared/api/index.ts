@@ -9,7 +9,7 @@ export * from './toolInstances';
 export * from './credentials';
 export * from './permissions';
 export * from './policies';
-export * from './baselines';
+export * from './limits';
 export * from './agents';
 export * from './agentRuns';
 

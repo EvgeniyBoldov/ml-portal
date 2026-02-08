@@ -1,87 +1,63 @@
 /**
- * BaselinesListPage - List of baseline containers
+ * BaselinesListPage - now shows POLICIES (text-based behavioral rules)
  * 
- * Uses AdminPage layout component
+ * Old Baseline list becomes Policy list.
  */
 import { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 
-import { baselinesApi, type BaselineListItem, type BaselineScope } from '@/shared/api/baselines';
+import { policiesApi, type Policy } from '@/shared/api/policies';
 import { qk } from '@/shared/api/keys';
-import { 
+import {
   AdminPage,
-  DataTable, 
-  Badge,
+  DataTable,
   type DataTableColumn,
 } from '@/shared/ui';
 import { RowActions } from '@/shared/ui/RowActions';
-
-const STATUS_CONFIG = {
-  active: { label: 'Активна', variant: 'success' as const },
-  draft: { label: 'Черновик', variant: 'warning' as const },
-  none: { label: 'Нет версий', variant: 'neutral' as const },
-  inactive: { label: 'Неактивен', variant: 'neutral' as const },
-};
 
 export function BaselinesListPage() {
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
 
-  const { data: baselines = [], isLoading } = useQuery({
-    queryKey: qk.baselines.list({}),
-    queryFn: () => baselinesApi.list(),
+  const { data: policies = [], isLoading } = useQuery({
+    queryKey: qk.policies.list({}),
+    queryFn: () => policiesApi.list(),
   });
 
-  // Filter by search
-  const filteredBaselines = useMemo(() => {
-    if (!search.trim()) return baselines;
+  const filteredPolicies = useMemo(() => {
+    if (!search.trim()) return policies;
     const q = search.toLowerCase();
-    return baselines.filter(b => 
-      b.slug.toLowerCase().includes(q) || 
-      b.name.toLowerCase().includes(q) ||
-      b.description?.toLowerCase().includes(q)
+    return policies.filter(p =>
+      p.slug.toLowerCase().includes(q) ||
+      p.name.toLowerCase().includes(q) ||
+      p.description?.toLowerCase().includes(q)
     );
-  }, [baselines, search]);
+  }, [policies, search]);
 
-  const columns: DataTableColumn<BaselineListItem>[] = [
+  const columns: DataTableColumn<Policy>[] = [
     {
       key: 'slug',
       label: 'SLUG / ИМЯ',
       render: (row) => (
         <div>
-          <div style={{ fontWeight: 500 }}>{row.slug}</div>
-          <div style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)' }}>{row.name}</div>
+          <div style={{ fontWeight: 500 }}>{row.name}</div>
+          <div style={{ fontSize: '0.8125rem', color: 'var(--text-muted)' }}>{row.slug}</div>
         </div>
       ),
     },
     {
-      key: 'versions',
-      label: 'ВЕРСИИ',
-      width: 100,
+      key: 'description',
+      label: 'ОПИСАНИЕ',
       render: (row) => (
-        <span>
-          {row.active_version ? `v${row.active_version}` : '—'} 
-          {row.versions_count > 0 && <span style={{ color: 'var(--color-text-muted)' }}> ({row.versions_count})</span>}
+        <span style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>
+          {row.description || '—'}
         </span>
       ),
     },
     {
-      key: 'status',
-      label: 'СТАТУС',
-      width: 120,
-      render: (row) => {
-        if (!row.is_active) {
-          return <Badge tone="neutral">Неактивен</Badge>;
-        }
-        const status = row.active_version ? 'active' : row.versions_count > 0 ? 'draft' : 'none';
-        const config = STATUS_CONFIG[status];
-        return <Badge tone={config.variant}>{config.label}</Badge>;
-      },
-    },
-    {
       key: 'updated_at',
-      label: 'ОБНОВЛЁН',
+      label: 'ОБНОВЛЕНА',
       width: 140,
       render: (row) => new Date(row.updated_at).toLocaleDateString('ru-RU'),
     },
@@ -93,8 +69,8 @@ export function BaselinesListPage() {
       render: (row) => (
         <RowActions
           actions={[
-            { label: 'Открыть', onClick: () => navigate(`/admin/baselines/${row.slug}`) },
-            { label: 'Редактировать', onClick: () => navigate(`/admin/baselines/${row.slug}?mode=edit`) },
+            { label: 'Открыть', onClick: () => navigate(`/admin/policies/${row.slug}`) },
+            { label: 'Редактировать', onClick: () => navigate(`/admin/policies/${row.slug}?mode=edit`) },
           ]}
         />
       ),
@@ -103,26 +79,26 @@ export function BaselinesListPage() {
 
   return (
     <AdminPage
-      title="Бейслайны"
-      subtitle="Ограничения и запреты для агентов"
+      title="Политики"
+      subtitle="Правила и ограничения поведения агентов"
       searchValue={search}
       onSearchChange={setSearch}
-      searchPlaceholder="Поиск бейслайнов..."
+      searchPlaceholder="Поиск политик..."
       actions={[
-        { 
-          label: 'Создать бейслайн', 
-          onClick: () => navigate('/admin/baselines/new'), 
+        {
+          label: 'Создать политику',
+          onClick: () => navigate('/admin/policies/new'),
           variant: 'primary',
         },
       ]}
     >
       <DataTable
         columns={columns}
-        data={filteredBaselines}
+        data={filteredPolicies}
         keyField="id"
         loading={isLoading}
-        emptyText="Бейслайны не найдены"
-        onRowClick={(row) => navigate(`/admin/baselines/${row.slug}`)}
+        emptyText="Политики не найдены"
+        onRowClick={(row) => navigate(`/admin/policies/${row.slug}`)}
       />
     </AdminPage>
   );

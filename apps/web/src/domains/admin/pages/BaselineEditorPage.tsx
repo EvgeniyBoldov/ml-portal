@@ -1,18 +1,16 @@
 /**
- * BaselineEditorPage - View/Edit baseline container with versions
+ * BaselineEditorPage - now shows POLICY editor (text-based behavioral rules)
  * 
- * REFACTORED ARCHITECTURE:
- * - Uses EntityTabsPage for unified layout
- * - Uses PromptVersionCard (baseline uses same template structure)
- * - Reduced from 396 lines to ~120 lines
+ * Old Baseline editor becomes Policy editor.
+ * Uses EntityTabsPage for unified layout.
  */
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { baselinesApi, type BaselineDetail, type BaselineVersionInfo } from '@/shared/api/baselines';
+import { policiesApi, type PolicyDetail, type PolicyVersionInfo } from '@/shared/api/policies';
 import { qk } from '@/shared/api/keys';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
-import { EntityTabsPage, PromptVersionCard, Badge, type FieldDefinition, type BreadcrumbItem, type EntityPageMode } from '@/shared/ui';
+import { EntityTabsPage, PromptVersionCard, type FieldDefinition, type BreadcrumbItem, type EntityPageMode } from '@/shared/ui';
 
 export function BaselineEditorPage() {
   const { slug } = useParams<{ slug: string }>();
@@ -27,75 +25,56 @@ export function BaselineEditorPage() {
   const mode: EntityPageMode = isNew ? 'create' : isEditMode ? 'edit' : 'view';
   const [saving, setSaving] = useState(false);
 
-  // Form state
   const [formData, setFormData] = useState({
     slug: '',
     name: '',
     description: '',
-    scope: 'default' as 'default' | 'tenant' | 'user',
-    is_active: true,
   });
 
-  // Load baseline container
-  const { data: baseline, isLoading } = useQuery({
-    queryKey: qk.baselines.detail(slug!),
-    queryFn: () => baselinesApi.get(slug!),
+  const { data: policy, isLoading } = useQuery({
+    queryKey: qk.policies.detail(slug!),
+    queryFn: () => policiesApi.get(slug!),
     enabled: !!slug && !isNew,
   });
 
-  // Load active version for preview
-  const activeVersion = baseline?.versions?.find(v => v.status === 'active') || baseline?.versions?.[0];
+  const activeVersion = policy?.versions?.find(v => v.status === 'active') || policy?.versions?.[0];
   const { data: selectedVersion } = useQuery({
-    queryKey: ['baselines', slug, 'versions', activeVersion?.version],
-    queryFn: () => baselinesApi.getVersion(slug!, String(activeVersion!.version)),
+    queryKey: qk.policies.version(slug!, activeVersion?.version ?? 0),
+    queryFn: () => policiesApi.getVersion(slug!, activeVersion!.version),
     enabled: !!slug && !!activeVersion,
   });
 
-  // Sync form data
   useEffect(() => {
-    if (baseline) {
+    if (policy) {
       setFormData({
-        slug: baseline.slug,
-        name: baseline.name,
-        description: baseline.description || '',
-        scope: baseline.scope,
-        is_active: baseline.is_active,
+        slug: policy.slug,
+        name: policy.name,
+        description: policy.description || '',
       });
     }
-  }, [baseline]);
+  }, [policy]);
 
-  // Mutations
   const createMutation = useMutation({
-    mutationFn: (data: any) => baselinesApi.createContainer(data),
-    onSuccess: (container: BaselineDetail) => {
-      queryClient.invalidateQueries({ queryKey: qk.baselines.list() });
-      showSuccess('Бейслайн создан');
-      navigate(`/admin/baselines/${container.slug}`);
+    mutationFn: (data: any) => policiesApi.create(data),
+    onSuccess: (created: any) => {
+      queryClient.invalidateQueries({ queryKey: qk.policies.list() });
+      showSuccess('Политика создана');
+      navigate(`/admin/policies/${created.slug}`);
     },
     onError: (err: any) => showError(err?.message || 'Ошибка создания'),
   });
 
   const updateMutation = useMutation({
-    mutationFn: (data: any) => baselinesApi.updateContainer(slug!, data),
+    mutationFn: (data: any) => policiesApi.update(slug!, data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.baselines.detail(slug!) });
-      queryClient.invalidateQueries({ queryKey: qk.baselines.list() });
-      showSuccess('Бейслайн обновлён');
+      queryClient.invalidateQueries({ queryKey: qk.policies.detail(slug!) });
+      queryClient.invalidateQueries({ queryKey: qk.policies.list() });
+      showSuccess('Политика обновлена');
       setSearchParams({});
     },
     onError: (err: any) => showError(err?.message || 'Ошибка обновления'),
   });
 
-  const setRecommendedMutation = useMutation({
-    mutationFn: (version: BaselineVersionInfo) => baselinesApi.setRecommendedVersion(slug!, version.id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.baselines.detail(slug!) });
-      showSuccess('Основная версия установлена');
-    },
-    onError: (err: any) => showError(err?.message || 'Ошибка установки основной версии'),
-  });
-
-  // Handlers
   const handleSave = async () => {
     setSaving(true);
     try {
@@ -109,7 +88,6 @@ export function BaselineEditorPage() {
         await updateMutation.mutateAsync({
           name: formData.name,
           description: formData.description,
-          is_active: formData.is_active,
         });
       }
     } finally {
@@ -118,18 +96,16 @@ export function BaselineEditorPage() {
   };
 
   const handleEdit = () => setSearchParams({ mode: 'edit' });
-  
+
   const handleCancel = () => {
     if (isNew) {
-      navigate('/admin/baselines');
+      navigate('/admin/policies');
     } else {
-      if (baseline) {
+      if (policy) {
         setFormData({
-          slug: baseline.slug,
-          name: baseline.name,
-          description: baseline.description || '',
-          scope: baseline.scope,
-          is_active: baseline.is_active,
+          slug: policy.slug,
+          name: policy.name,
+          description: policy.description || '',
         });
       }
       setSearchParams({});
@@ -140,7 +116,6 @@ export function BaselineEditorPage() {
     setFormData(prev => ({ ...prev, [key]: value }));
   };
 
-  // Field definitions
   const containerFields: FieldDefinition[] = [
     {
       key: 'slug',
@@ -162,37 +137,26 @@ export function BaselineEditorPage() {
       key: 'description',
       label: 'Описание',
       type: 'textarea',
-      placeholder: 'Ограничения для агента...',
+      placeholder: 'Правила поведения агента...',
       rows: 2,
-    },
-    {
-      key: 'scope',
-      label: 'Scope',
-      type: 'select',
-      disabled: !isNew,
-      options: [
-        { value: 'default', label: 'Default (глобальный)' },
-        { value: 'tenant', label: 'Tenant (для тенанта)' },
-        { value: 'user', label: 'User (для пользователя)' },
-      ],
     },
   ];
 
   const breadcrumbs: BreadcrumbItem[] = [
-    { label: 'Бейслайны', href: '/admin/baselines' },
-    { label: baseline?.name || 'Новый бейслайн' },
+    { label: 'Политики', href: '/admin/policies' },
+    { label: policy?.name || 'Новая политика' },
   ];
 
   return (
     <EntityTabsPage
-      entityType="baseline"
-      entityNameLabel="Бейслайн"
-      entityTypeLabel="бейслайна"
+      entityType="policy"
+      entityNameLabel="Политика"
+      entityTypeLabel="политики"
       slug={slug!}
-      basePath="/admin/baselines"
-      listPath="/admin/baselines"
-      container={baseline || null}
-      versions={baseline?.versions || []}
+      basePath="/admin/policies"
+      listPath="/admin/policies"
+      container={policy || null}
+      versions={policy?.versions || []}
       isLoading={isLoading}
       formData={formData}
       mode={mode}
@@ -201,22 +165,14 @@ export function BaselineEditorPage() {
       onEdit={handleEdit}
       onSave={handleSave}
       onCancel={handleCancel}
-      onCreateVersion={() => navigate(`/admin/baselines/${slug}/versions/new`)}
-      onSelectVersion={(v: BaselineVersionInfo) => navigate(`/admin/baselines/${slug}/versions/${v.version}`)}
-      onSetRecommended={(v: BaselineVersionInfo) => setRecommendedMutation.mutate(v)}
+      onCreateVersion={() => navigate(`/admin/policies/${slug}/versions/new`)}
+      onSelectVersion={(v: PolicyVersionInfo) => navigate(`/admin/policies/${slug}/versions/${v.version}`)}
       containerFields={containerFields}
       breadcrumbs={breadcrumbs}
-      statusBadge={
-        !isNew && baseline ? (
-          <Badge tone={baseline.is_active ? 'success' : 'neutral'} size="small">
-            {baseline.is_active ? 'Активен' : 'Неактивен'}
-          </Badge>
-        ) : undefined
-      }
       renderVersionContent={() => (
         <PromptVersionCard
-          version={selectedVersion || null}
-          onCreateVersion={() => navigate(`/admin/baselines/${slug}/versions/new`)}
+          version={selectedVersion ? { ...selectedVersion, template: selectedVersion.policy_text } : null}
+          onCreateVersion={() => navigate(`/admin/policies/${slug}/versions/new`)}
         />
       )}
     />

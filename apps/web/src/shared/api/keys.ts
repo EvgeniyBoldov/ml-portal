@@ -81,21 +81,17 @@ export const qk = {
   },
   policies: {
     all: () => ['policies'] as const,
-    list: (params?: { is_active?: boolean }) => ['policies', 'list', params] as const,
+    list: (params?: Record<string, unknown>) => ['policies', 'list', params] as const,
     detail: (slug: string) => ['policies', 'detail', slug] as const,
     versions: (slug: string, params?: { status?: string }) => ['policies', 'versions', slug, params] as const,
     version: (slug: string, version: number) => ['policies', 'version', slug, version] as const,
-    recommended: (slug: string) => ['policies', 'recommended', slug] as const,
   },
-  baselines: {
-    all: () => ['baselines'] as const,
-    list: (params?: { scope?: string; tenant_id?: string; user_id?: string; is_active?: boolean }) =>
-      ['baselines', 'list', params] as const,
-    detail: (slug: string) => ['baselines', 'detail', slug] as const,
-    versions: (slug: string) => ['baselines', 'versions', slug] as const,
-    version: (slug: string, version: number) => ['baselines', 'version', slug, version] as const,
-    effective: (params?: { tenant_id?: string; user_id?: string }) =>
-      ['baselines', 'effective', params] as const,
+  limits: {
+    all: () => ['limits'] as const,
+    list: (params?: Record<string, unknown>) => ['limits', 'list', params] as const,
+    detail: (slug: string) => ['limits', 'detail', slug] as const,
+    versions: (slug: string, params?: { status?: string }) => ['limits', 'versions', slug, params] as const,
+    version: (slug: string, version: number) => ['limits', 'version', slug, version] as const,
   },
   routingLogs: {
     all: () => ['routing-logs'] as const,

@@ -4,22 +4,29 @@ import { apiRequest } from './http';
 // TYPES
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type PolicyVersionStatus = 'draft' | 'active' | 'inactive';
+export type PolicyVersionStatus = 'draft' | 'active' | 'deprecated';
 
 export interface PolicyVersion {
   id: string;
   policy_id: string;
   version: number;
   status: PolicyVersionStatus;
-  max_steps?: number;
-  max_tool_calls?: number;
-  max_wall_time_ms?: number;
-  tool_timeout_ms?: number;
-  max_retries?: number;
-  budget_tokens?: number;
-  budget_cost_cents?: number;
-  extra_config: Record<string, any>;
+  hash: string;
+  policy_text: string;
+  policy_json?: Record<string, any>;
   parent_version_id?: string;
+  notes?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PolicyVersionInfo {
+  id: string;
+  version: number;
+  status: PolicyVersionStatus;
+  hash: string;
+  policy_text: string;
+  policy_json?: Record<string, any>;
   notes?: string;
   created_at: string;
   updated_at: string;
@@ -30,15 +37,14 @@ export interface Policy {
   slug: string;
   name: string;
   description?: string;
-  recommended_version_id?: string;
-  is_active: boolean;
+  current_version_id?: string;
   created_at: string;
   updated_at: string;
 }
 
 export interface PolicyDetail extends Policy {
-  versions: PolicyVersion[];
-  recommended_version?: PolicyVersion;
+  versions: PolicyVersionInfo[];
+  current_version?: PolicyVersionInfo;
 }
 
 export interface PolicyCreate {
@@ -50,31 +56,18 @@ export interface PolicyCreate {
 export interface PolicyUpdate {
   name?: string;
   description?: string;
-  is_active?: boolean;
 }
 
 export interface PolicyVersionCreate {
-  max_steps?: number;
-  max_tool_calls?: number;
-  max_wall_time_ms?: number;
-  tool_timeout_ms?: number;
-  max_retries?: number;
-  budget_tokens?: number;
-  budget_cost_cents?: number;
-  extra_config?: Record<string, any>;
+  policy_text: string;
+  policy_json?: Record<string, any>;
   notes?: string;
   parent_version_id?: string;
 }
 
 export interface PolicyVersionUpdate {
-  max_steps?: number;
-  max_tool_calls?: number;
-  max_wall_time_ms?: number;
-  tool_timeout_ms?: number;
-  max_retries?: number;
-  budget_tokens?: number;
-  budget_cost_cents?: number;
-  extra_config?: Record<string, any>;
+  policy_text?: string;
+  policy_json?: Record<string, any>;
   notes?: string;
 }
 
@@ -83,17 +76,10 @@ export interface PolicyVersionUpdate {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const policiesApi = {
-  // Policy container operations
-  async list(params: {
-    skip?: number;
-    limit?: number;
-    is_active?: boolean;
-  } = {}): Promise<Policy[]> {
+  async list(params: { skip?: number; limit?: number } = {}): Promise<Policy[]> {
     const searchParams = new URLSearchParams();
     if (params.skip) searchParams.set('skip', String(params.skip));
     if (params.limit) searchParams.set('limit', String(params.limit));
-    if (params.is_active !== undefined) searchParams.set('is_active', String(params.is_active));
-    
     return apiRequest(`/admin/policies?${searchParams.toString()}`);
   },
 
@@ -160,16 +146,6 @@ export const policiesApi = {
   async deactivateVersion(slug: string, versionNumber: number): Promise<PolicyVersion> {
     return apiRequest(`/admin/policies/${slug}/versions/${versionNumber}/deactivate`, {
       method: 'POST',
-    });
-  },
-
-  async getRecommendedVersion(slug: string): Promise<PolicyVersion> {
-    return apiRequest(`/admin/policies/${slug}/recommended`);
-  },
-
-  async setRecommendedVersion(slug: string, versionId: string): Promise<Policy> {
-    return apiRequest(`/admin/policies/${slug}/recommended?version_id=${versionId}`, {
-      method: 'PUT',
     });
   },
 };

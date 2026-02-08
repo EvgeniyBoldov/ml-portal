@@ -1,18 +1,16 @@
 /**
- * PolicyEditorPage - View/Edit policy container with versions
+ * PolicyEditorPage - now shows LIMIT editor (execution constraints)
  * 
- * REFACTORED ARCHITECTURE:
- * - Uses EntityTabsPage for unified layout
- * - Uses PolicyVersionCard for version preview
- * - Reduced from 378 lines to ~120 lines
+ * Old Policy editor becomes Limit editor.
+ * Uses EntityTabsPage for unified layout.
  */
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { policiesApi, type PolicyDetail, type PolicyVersionInfo } from '@/shared/api/policies';
+import { limitsApi, type LimitDetail, type LimitVersionInfo } from '@/shared/api/limits';
 import { qk } from '@/shared/api/keys';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
-import { EntityTabsPage, PolicyVersionCard, Badge, type FieldDefinition, type BreadcrumbItem, type EntityPageMode } from '@/shared/ui';
+import { EntityTabsPage, PolicyVersionCard, type FieldDefinition, type BreadcrumbItem, type EntityPageMode } from '@/shared/ui';
 
 export function PolicyEditorPage() {
   const { slug } = useParams<{ slug: string }>();
@@ -27,75 +25,56 @@ export function PolicyEditorPage() {
   const mode: EntityPageMode = isNew ? 'create' : isEditMode ? 'edit' : 'view';
   const [saving, setSaving] = useState(false);
 
-  // Form state
   const [formData, setFormData] = useState({
     slug: '',
     name: '',
     description: '',
-    scope: 'default' as 'default' | 'tenant' | 'user',
-    is_active: true,
   });
 
-  // Load policy container
-  const { data: policy, isLoading } = useQuery({
-    queryKey: qk.policies.detail(slug!),
-    queryFn: () => policiesApi.get(slug!),
+  const { data: limit, isLoading } = useQuery({
+    queryKey: qk.limits.detail(slug!),
+    queryFn: () => limitsApi.get(slug!),
     enabled: !!slug && !isNew,
   });
 
-  // Load active version for preview
-  const activeVersion = policy?.versions?.find(v => v.status === 'active') || policy?.versions?.[0];
+  const activeVersion = limit?.versions?.find(v => v.status === 'active') || limit?.versions?.[0];
   const { data: selectedVersion } = useQuery({
-    queryKey: ['policies', slug, 'versions', activeVersion?.version],
-    queryFn: () => policiesApi.getVersion(slug!, String(activeVersion!.version)),
+    queryKey: qk.limits.version(slug!, activeVersion?.version ?? 0),
+    queryFn: () => limitsApi.getVersion(slug!, activeVersion!.version),
     enabled: !!slug && !!activeVersion,
   });
 
-  // Sync form data
   useEffect(() => {
-    if (policy) {
+    if (limit) {
       setFormData({
-        slug: policy.slug,
-        name: policy.name,
-        description: policy.description || '',
-        scope: policy.scope,
-        is_active: policy.is_active,
+        slug: limit.slug,
+        name: limit.name,
+        description: limit.description || '',
       });
     }
-  }, [policy]);
+  }, [limit]);
 
-  // Mutations
   const createMutation = useMutation({
-    mutationFn: (data: any) => policiesApi.createContainer(data),
-    onSuccess: (container: PolicyDetail) => {
-      queryClient.invalidateQueries({ queryKey: qk.policies.list() });
-      showSuccess('Политика создана');
-      navigate(`/admin/policies/${container.slug}`);
+    mutationFn: (data: any) => limitsApi.create(data),
+    onSuccess: (created: any) => {
+      queryClient.invalidateQueries({ queryKey: qk.limits.list() });
+      showSuccess('Лимит создан');
+      navigate(`/admin/limits/${created.slug}`);
     },
     onError: (err: any) => showError(err?.message || 'Ошибка создания'),
   });
 
   const updateMutation = useMutation({
-    mutationFn: (data: any) => policiesApi.updateContainer(slug!, data),
+    mutationFn: (data: any) => limitsApi.update(slug!, data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.policies.detail(slug!) });
-      queryClient.invalidateQueries({ queryKey: qk.policies.list() });
-      showSuccess('Политика обновлена');
+      queryClient.invalidateQueries({ queryKey: qk.limits.detail(slug!) });
+      queryClient.invalidateQueries({ queryKey: qk.limits.list() });
+      showSuccess('Лимит обновлён');
       setSearchParams({});
     },
     onError: (err: any) => showError(err?.message || 'Ошибка обновления'),
   });
 
-  const setRecommendedMutation = useMutation({
-    mutationFn: (version: PolicyVersionInfo) => policiesApi.setRecommendedVersion(slug!, version.id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.policies.detail(slug!) });
-      showSuccess('Основная версия установлена');
-    },
-    onError: (err: any) => showError(err?.message || 'Ошибка установки основной версии'),
-  });
-
-  // Handlers
   const handleSave = async () => {
     setSaving(true);
     try {
@@ -109,7 +88,6 @@ export function PolicyEditorPage() {
         await updateMutation.mutateAsync({
           name: formData.name,
           description: formData.description,
-          is_active: formData.is_active,
         });
       }
     } finally {
@@ -118,18 +96,16 @@ export function PolicyEditorPage() {
   };
 
   const handleEdit = () => setSearchParams({ mode: 'edit' });
-  
+
   const handleCancel = () => {
     if (isNew) {
-      navigate('/admin/policies');
+      navigate('/admin/limits');
     } else {
-      if (policy) {
+      if (limit) {
         setFormData({
-          slug: policy.slug,
-          name: policy.name,
-          description: policy.description || '',
-          scope: policy.scope,
-          is_active: policy.is_active,
+          slug: limit.slug,
+          name: limit.name,
+          description: limit.description || '',
         });
       }
       setSearchParams({});
@@ -140,7 +116,6 @@ export function PolicyEditorPage() {
     setFormData(prev => ({ ...prev, [key]: value }));
   };
 
-  // Field definitions
   const containerFields: FieldDefinition[] = [
     {
       key: 'slug',
@@ -165,34 +140,23 @@ export function PolicyEditorPage() {
       placeholder: 'Лимиты для агента...',
       rows: 2,
     },
-    {
-      key: 'scope',
-      label: 'Scope',
-      type: 'select',
-      disabled: !isNew,
-      options: [
-        { value: 'default', label: 'Default (глобальный)' },
-        { value: 'tenant', label: 'Tenant (для тенанта)' },
-        { value: 'user', label: 'User (для пользователя)' },
-      ],
-    },
   ];
 
   const breadcrumbs: BreadcrumbItem[] = [
-    { label: 'Политики', href: '/admin/policies' },
-    { label: policy?.name || 'Новая политика' },
+    { label: 'Лимиты', href: '/admin/limits' },
+    { label: limit?.name || 'Новый лимит' },
   ];
 
   return (
     <EntityTabsPage
       entityType="policy"
-      entityNameLabel="Политика"
-      entityTypeLabel="политики"
+      entityNameLabel="Лимит"
+      entityTypeLabel="лимита"
       slug={slug!}
-      basePath="/admin/policies"
-      listPath="/admin/policies"
-      container={policy || null}
-      versions={policy?.versions || []}
+      basePath="/admin/limits"
+      listPath="/admin/limits"
+      container={limit || null}
+      versions={limit?.versions || []}
       isLoading={isLoading}
       formData={formData}
       mode={mode}
@@ -201,22 +165,14 @@ export function PolicyEditorPage() {
       onEdit={handleEdit}
       onSave={handleSave}
       onCancel={handleCancel}
-      onCreateVersion={() => navigate(`/admin/policies/${slug}/versions/new`)}
-      onSelectVersion={(v: PolicyVersionInfo) => navigate(`/admin/policies/${slug}/versions/${v.version}`)}
-      onSetRecommended={(v: PolicyVersionInfo) => setRecommendedMutation.mutate(v)}
+      onCreateVersion={() => navigate(`/admin/limits/${slug}/versions/new`)}
+      onSelectVersion={(v: LimitVersionInfo) => navigate(`/admin/limits/${slug}/versions/${v.version}`)}
       containerFields={containerFields}
       breadcrumbs={breadcrumbs}
-      statusBadge={
-        !isNew && policy ? (
-          <Badge tone={policy.is_active ? 'success' : 'neutral'} size="small">
-            {policy.is_active ? 'Активна' : 'Неактивна'}
-          </Badge>
-        ) : undefined
-      }
       renderVersionContent={() => (
         <PolicyVersionCard
           version={selectedVersion || null}
-          onCreateVersion={() => navigate(`/admin/policies/${slug}/versions/new`)}
+          onCreateVersion={() => navigate(`/admin/limits/${slug}/versions/new`)}
         />
       )}
     />

@@ -1,12 +1,13 @@
 /**
- * BaselineVersionPage - View/Edit/Create baseline version
+ * BaselineVersionPage - now shows POLICY version editor (text-based rules)
  * 
- * REFACTORED: Simplified with shared components
+ * Old Baseline version page becomes Policy version page.
+ * template → policy_text
  */
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { baselinesApi, type BaselineVersion } from '@/shared/api/baselines';
+import { policiesApi, type PolicyVersion, type PolicyVersionCreate } from '@/shared/api/policies';
 import { qk } from '@/shared/api/keys';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
 import { EntityPage, ContentBlock, Textarea, Badge, type EntityPageMode, type BreadcrumbItem } from '@/shared/ui';
@@ -26,47 +27,47 @@ export function BaselineVersionPage() {
   const mode: EntityPageMode = isCreate ? 'create' : isEditMode ? 'edit' : 'view';
   const isEditable = mode === 'edit' || mode === 'create';
 
-  const [formData, setFormData] = useState({ template: '' });
+  const [formData, setFormData] = useState({ policy_text: '', notes: '' });
   const [saving, setSaving] = useState(false);
 
-  // Load baseline for breadcrumbs
-  const { data: baseline } = useQuery({
-    queryKey: qk.baselines.detail(slug!),
-    queryFn: () => baselinesApi.get(slug!),
+  const { data: policy } = useQuery({
+    queryKey: qk.policies.detail(slug!),
+    queryFn: () => policiesApi.get(slug!),
     enabled: !!slug,
   });
 
-  // Load existing version
   const { data: existingVersion, isLoading } = useQuery({
-    queryKey: ['baselines', slug, 'versions', versionNumber],
-    queryFn: () => baselinesApi.getVersion(slug!, String(versionNumber)),
+    queryKey: qk.policies.version(slug!, versionNumber),
+    queryFn: () => policiesApi.getVersion(slug!, versionNumber),
     enabled: !isCreate && !!slug && versionNumber > 0,
   });
 
   useEffect(() => {
     if (isCreate) {
-      setFormData({ template: '' });
+      setFormData({ policy_text: '', notes: '' });
     } else if (existingVersion) {
-      setFormData({ template: existingVersion.template });
+      setFormData({
+        policy_text: existingVersion.policy_text,
+        notes: existingVersion.notes || '',
+      });
     }
   }, [existingVersion, isCreate]);
 
-  // Mutations
   const createMutation = useMutation({
-    mutationFn: (data: { template: string }) => baselinesApi.createVersion(slug!, data),
-    onSuccess: (created: BaselineVersion) => {
-      queryClient.invalidateQueries({ queryKey: qk.baselines.detail(slug!) });
+    mutationFn: (data: PolicyVersionCreate) => policiesApi.createVersion(slug!, data),
+    onSuccess: (created: PolicyVersion) => {
+      queryClient.invalidateQueries({ queryKey: qk.policies.detail(slug!) });
       showSuccess('Версия создана');
-      navigate(`/admin/baselines/${slug}/versions/${created.version}`);
+      navigate(`/admin/policies/${slug}/versions/${created.version}`);
     },
     onError: (err: Error) => showError(err.message),
   });
 
   const updateMutation = useMutation({
-    mutationFn: (data: { template: string }) => baselinesApi.updateVersion(existingVersion!.id, data),
+    mutationFn: (data: PolicyVersionCreate) => policiesApi.updateVersion(slug!, versionNumber, data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['baselines', slug, 'versions', versionNumber] });
-      queryClient.invalidateQueries({ queryKey: qk.baselines.detail(slug!) });
+      queryClient.invalidateQueries({ queryKey: qk.policies.version(slug!, versionNumber) });
+      queryClient.invalidateQueries({ queryKey: qk.policies.detail(slug!) });
       showSuccess('Версия обновлена');
       setSearchParams({});
     },
@@ -74,46 +75,53 @@ export function BaselineVersionPage() {
   });
 
   const activateMutation = useMutation({
-    mutationFn: () => baselinesApi.activateVersion(existingVersion!.id),
+    mutationFn: () => policiesApi.activateVersion(slug!, versionNumber),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.baselines.detail(slug!) });
-      queryClient.invalidateQueries({ queryKey: ['baselines', slug, 'versions', versionNumber] });
+      queryClient.invalidateQueries({ queryKey: qk.policies.detail(slug!) });
+      queryClient.invalidateQueries({ queryKey: qk.policies.version(slug!, versionNumber) });
       showSuccess('Версия активирована');
     },
     onError: (err: Error) => showError(err.message),
   });
 
   const deactivateMutation = useMutation({
-    mutationFn: () => baselinesApi.archiveVersion(existingVersion!.id),
+    mutationFn: () => policiesApi.deactivateVersion(slug!, versionNumber),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.baselines.detail(slug!) });
-      queryClient.invalidateQueries({ queryKey: ['baselines', slug, 'versions', versionNumber] });
-      showSuccess('Версия архивирована');
+      queryClient.invalidateQueries({ queryKey: qk.policies.detail(slug!) });
+      queryClient.invalidateQueries({ queryKey: qk.policies.version(slug!, versionNumber) });
+      showSuccess('Версия деактивирована');
     },
     onError: (err: Error) => showError(err.message),
   });
 
-  const setRecommendedMutation = useMutation({
-    mutationFn: () => baselinesApi.setRecommendedVersion(slug!, existingVersion!.id),
+  const deleteMutation = useMutation({
+    mutationFn: () => policiesApi.deleteVersion(slug!, versionNumber),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.baselines.detail(slug!) });
-      showSuccess('Основная версия установлена');
+      queryClient.invalidateQueries({ queryKey: qk.policies.detail(slug!) });
+      showSuccess('Версия удалена');
+      navigate(`/admin/policies/${slug}`);
     },
     onError: (err: Error) => showError(err.message),
   });
 
-  // Handlers
   const handleSave = async () => {
-    if (!formData.template.trim()) {
-      showError('Template не может быть пустым');
+    if (!formData.policy_text.trim()) {
+      showError('Текст политики не может быть пустым');
       return;
     }
     setSaving(true);
     try {
+      const data: PolicyVersionCreate = {
+        policy_text: formData.policy_text,
+        notes: formData.notes || undefined,
+      };
       if (isCreate) {
-        await createMutation.mutateAsync(formData);
+        if (policy?.current_version) {
+          data.parent_version_id = policy.current_version.id;
+        }
+        await createMutation.mutateAsync(data);
       } else {
-        await updateMutation.mutateAsync(formData);
+        await updateMutation.mutateAsync(data);
       }
     } finally {
       setSaving(false);
@@ -121,40 +129,41 @@ export function BaselineVersionPage() {
   };
 
   const handleEdit = () => setSearchParams({ mode: 'edit' });
-  
+
   const handleCancel = () => {
     if (isCreate) {
-      navigate(`/admin/baselines/${slug}`);
+      navigate(`/admin/policies/${slug}`);
     } else {
       if (existingVersion) {
-        setFormData({ template: existingVersion.template });
+        setFormData({
+          policy_text: existingVersion.policy_text,
+          notes: existingVersion.notes || '',
+        });
       }
       setSearchParams({});
     }
   };
 
   const breadcrumbs: BreadcrumbItem[] = [
-    { label: 'Бейслайны', href: '/admin/baselines' },
-    { label: baseline?.name || slug || '', href: `/admin/baselines/${slug}` },
+    { label: 'Политики', href: '/admin/policies' },
+    { label: policy?.name || slug || '', href: `/admin/policies/${slug}` },
     { label: isCreate ? 'Новая версия' : `Версия ${versionNumber}` },
   ];
 
-  const isRecommended = !!(baseline?.recommended_version?.id && existingVersion?.id && baseline.recommended_version.id === existingVersion.id);
+  const isCurrent = !!(policy?.current_version_id && existingVersion?.id && policy.current_version_id === existingVersion.id);
 
   const actionButtons = useVersionActions({
     status: existingVersion?.status,
-    isRecommended,
+    isRecommended: isCurrent,
     isCreate,
     callbacks: {
       onEdit: () => setSearchParams({ mode: 'edit' }),
       onActivate: () => activateMutation.mutate(),
       onDeactivate: () => deactivateMutation.mutate(),
-      onSetRecommended: () => setRecommendedMutation.mutate(),
     },
     loading: {
       activate: activateMutation.isPending,
       deactivate: deactivateMutation.isPending,
-      setRecommended: setRecommendedMutation.isPending,
     },
   });
 
@@ -163,7 +172,7 @@ export function BaselineVersionPage() {
       mode={mode}
       entityName={isCreate ? 'Новая версия' : `Версия ${versionNumber}`}
       entityTypeLabel="версии"
-      backPath={`/admin/baselines/${slug}`}
+      backPath={`/admin/policies/${slug}`}
       breadcrumbs={breadcrumbs}
       loading={!isCreate && isLoading}
       saving={saving}
@@ -173,7 +182,7 @@ export function BaselineVersionPage() {
       actionButtons={actionButtons}
     >
       <ContentBlock
-        title="Template"
+        title="Текст политики"
         icon="file-text"
         headerActions={
           !isCreate && existingVersion?.status ? (
@@ -185,23 +194,45 @@ export function BaselineVersionPage() {
       >
           {isEditable ? (
             <Textarea
-              value={formData.template}
-              onChange={(e) => setFormData({ template: e.target.value })}
-              placeholder="Введите template промпта..."
+              value={formData.policy_text}
+              onChange={(e) => setFormData(prev => ({ ...prev, policy_text: e.target.value }))}
+              placeholder="Введите правила и ограничения для агента..."
               rows={20}
               style={{ fontFamily: 'monospace' }}
             />
           ) : (
-            <pre style={{ 
-              whiteSpace: 'pre-wrap', 
+            <pre style={{
+              whiteSpace: 'pre-wrap',
               wordBreak: 'break-word',
               fontFamily: 'monospace',
               fontSize: '0.875rem',
               lineHeight: '1.5',
             }}>
-              {existingVersion?.template || 'Нет template'}
+              {existingVersion?.policy_text || 'Нет текста политики'}
             </pre>
           )}
+      </ContentBlock>
+
+      <ContentBlock title="Заметки" icon="file-text">
+        {isEditable ? (
+          <Textarea
+            value={formData.notes}
+            onChange={(e) => setFormData(prev => ({ ...prev, notes: e.target.value }))}
+            placeholder="Описание изменений..."
+            rows={4}
+            style={{ fontFamily: 'monospace', fontSize: '0.875rem' }}
+          />
+        ) : (
+          <pre style={{
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word',
+            fontFamily: 'monospace',
+            fontSize: '0.875rem',
+            lineHeight: '1.5',
+          }}>
+            {formData.notes || 'Нет заметок'}
+          </pre>
+        )}
       </ContentBlock>
     </EntityPage>
   );
