@@ -25,10 +25,13 @@ from typing import List, Optional, Dict, Any, Tuple
 from uuid import UUID
 from enum import Enum
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
 from app.models.agent import Agent
+from app.models.agent_binding import AgentBinding
+from app.models.tool import Tool
 from app.models.routing_log import RoutingLog
 from app.models.tool_instance import ToolInstance
 from app.services.agent_service import AgentService
@@ -323,6 +326,25 @@ class AgentRouter:
             
             raise AgentRouterError(f"Routing failed: {e}") from e
     
+    async def _get_agent_bindings(
+        self,
+        agent: Agent,
+    ) -> List[Dict[str, Any]]:
+        """Load agent bindings with tool slugs from DB"""
+        stmt = (
+            select(
+                AgentBinding.tool_id,
+                AgentBinding.tool_instance_id,
+                AgentBinding.credential_strategy,
+                AgentBinding.required,
+                Tool.slug.label("tool_slug"),
+            )
+            .join(Tool, AgentBinding.tool_id == Tool.id)
+            .where(AgentBinding.agent_id == agent.id)
+        )
+        result = await self.session.execute(stmt)
+        return [dict(row._mapping) for row in result.all()]
+
     async def _resolve_tools(
         self,
         agent: Agent,
@@ -330,18 +352,16 @@ class AgentRouter:
         tenant_id: UUID,
         effective_perms: EffectivePermissions,
     ) -> Tuple[List[ToolCapability], Dict[str, Dict[str, Any]], MissingRequirements]:
-        """Resolve available tools with instances and credentials"""
+        """Resolve available tools with instances and credentials via AgentBinding"""
         available_tools = []
         tool_instances_map = {}
         missing = MissingRequirements()
         
-        all_tool_slugs = agent.get_all_tool_slugs()
-        tools_config = {tc["tool_slug"]: tc for tc in agent.tools_config}
+        bindings = await self._get_agent_bindings(agent)
         
-        for tool_slug in all_tool_slugs:
-            config = tools_config.get(tool_slug, {})
-            required = config.get("required", False)
-            recommended = config.get("recommended", False)
+        for binding in bindings:
+            tool_slug = binding["tool_slug"]
+            required = binding.get("required", False)
             
             if not effective_perms.is_tool_allowed(tool_slug):
                 if required:
@@ -379,7 +399,7 @@ class AgentRouter:
                 instance_slug=instance.slug if instance else None,
                 has_credentials=has_credentials,
                 required=required,
-                recommended=recommended,
+                recommended=False,
             )
             available_tools.append(capability)
         
@@ -391,24 +411,8 @@ class AgentRouter:
         effective_perms: EffectivePermissions,
         missing: MissingRequirements,
     ) -> List[str]:
-        """Resolve available collections"""
-        available_collections = []
-        
-        all_collection_slugs = agent.get_all_collection_slugs()
-        collections_config = {cc["collection_slug"]: cc for cc in agent.collections_config}
-        
-        for coll_slug in all_collection_slugs:
-            config = collections_config.get(coll_slug, {})
-            required = config.get("required", False)
-            
-            if not effective_perms.is_collection_allowed(coll_slug):
-                if required:
-                    missing.collections.append(coll_slug)
-                continue
-            
-            available_collections.append(coll_slug)
-        
-        return available_collections
+        """Resolve available collections (currently empty — collections are resolved via tools)"""
+        return []
     
     def _determine_execution_mode(
         self,

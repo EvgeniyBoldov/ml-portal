@@ -11,7 +11,7 @@ from app.models.base import Base
 class Agent(Base):
     """
     Agent configuration entity.
-    Combines a System Prompt, Baseline, Policy, and Tool Bindings.
+    Combines a System Prompt, Policy, Limit, and Tool Bindings.
     Acts as a profile for the Chat/LLM interaction.
     
     Tool bindings are stored in AgentBinding table (agent_id → tool_id → instance_id).

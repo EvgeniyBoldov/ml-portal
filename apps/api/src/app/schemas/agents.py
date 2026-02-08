@@ -17,8 +17,8 @@ class AgentBase(BaseModel):
     name: str = Field(..., description="Display name")
     description: Optional[str] = None
     system_prompt_slug: str = Field(..., description="Slug of the System Prompt")
-    baseline_prompt_id: Optional[UUID] = Field(default=None, description="ID of the Baseline Prompt (restrictions)")
-    policy_id: Optional[UUID] = Field(default=None, description="ID of the Policy (execution limits)")
+    policy_id: Optional[UUID] = Field(default=None, description="ID of the Policy (behavioral rules)")
+    limit_id: Optional[UUID] = Field(default=None, description="ID of the Limit (execution constraints)")
     capabilities: List[str] = Field(default=[], description="Agent capabilities for Router matching")
     supports_partial_mode: bool = Field(default=False, description="Allow partial execution if some tools unavailable")
     generation_config: Optional[Dict[str, Any]] = {}
@@ -35,8 +35,8 @@ class AgentUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     system_prompt_slug: Optional[str] = None
-    baseline_prompt_id: Optional[UUID] = None
     policy_id: Optional[UUID] = None
+    limit_id: Optional[UUID] = None
     capabilities: Optional[List[str]] = None
     supports_partial_mode: Optional[bool] = None
     generation_config: Optional[Dict[str, Any]] = None
@@ -61,7 +61,6 @@ class AgentBindingResponse(BaseModel):
 
 class AgentResponse(AgentBase):
     id: UUID
-    policy_id: Optional[UUID]
     created_at: datetime
     updated_at: datetime
 

@@ -17,31 +17,57 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # 1. Drop baseline_id FK from agents
-    op.drop_constraint('agents_baseline_id_fkey', 'agents', type_='foreignkey')
-    op.drop_index('ix_agents_baseline_id', 'agents')
-    op.drop_column('agents', 'baseline_id')
+    # 1. Drop baseline_prompt_id FK from agents (added in migration 0043)
+    # The real constraint name is 'fk_agents_baseline_prompt_id', column is 'baseline_prompt_id'
+    conn = op.get_bind()
 
-    # 2. Add limit_id to agents
-    op.add_column('agents', sa.Column(
-        'limit_id',
-        postgresql.UUID(as_uuid=True),
-        nullable=True,
+    # Check if baseline_prompt_id column exists before trying to drop
+    result = conn.execute(sa.text(
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_name = 'agents' AND column_name = 'baseline_prompt_id'"
     ))
-    op.create_foreign_key(
-        'agents_limit_id_fkey',
-        'agents', 'limits',
-        ['limit_id'], ['id'],
-        ondelete='SET NULL'
-    )
-    op.create_index('ix_agents_limit_id', 'agents', ['limit_id'])
+    if result.fetchone():
+        op.drop_constraint('fk_agents_baseline_prompt_id', 'agents', type_='foreignkey')
+        op.drop_index('ix_agents_baseline_prompt_id', 'agents')
+        op.drop_column('agents', 'baseline_prompt_id')
 
-    # 3. Set default limit for existing agents
-    op.execute("""
-        UPDATE agents 
-        SET limit_id = (SELECT id FROM limits WHERE slug = 'default')
-        WHERE limit_id IS NULL
-    """)
+    # 2. Add policy_id to agents (if not exists)
+    result = conn.execute(sa.text(
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_name = 'agents' AND column_name = 'policy_id'"
+    ))
+    if not result.fetchone():
+        op.add_column('agents', sa.Column(
+            'policy_id',
+            postgresql.UUID(as_uuid=True),
+            nullable=True,
+        ))
+        op.create_foreign_key(
+            'agents_policy_id_fkey',
+            'agents', 'policies',
+            ['policy_id'], ['id'],
+            ondelete='SET NULL'
+        )
+        op.create_index('ix_agents_policy_id', 'agents', ['policy_id'])
+
+    # 3. Add limit_id to agents (if not exists)
+    result = conn.execute(sa.text(
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_name = 'agents' AND column_name = 'limit_id'"
+    ))
+    if not result.fetchone():
+        op.add_column('agents', sa.Column(
+            'limit_id',
+            postgresql.UUID(as_uuid=True),
+            nullable=True,
+        ))
+        op.create_foreign_key(
+            'agents_limit_id_fkey',
+            'agents', 'limits',
+            ['limit_id'], ['id'],
+            ondelete='SET NULL'
+        )
+        op.create_index('ix_agents_limit_id', 'agents', ['limit_id'])
 
     # 4. Drop baseline_versions table first (has FK to baselines)
     op.drop_table('baseline_versions')
@@ -86,21 +112,26 @@ def downgrade() -> None:
         sa.UniqueConstraint('baseline_id', 'version', name='uix_baseline_version'),
     )
 
-    # 3. Add baseline_id back to agents
+    # 3. Add baseline_prompt_id back to agents
     op.add_column('agents', sa.Column(
-        'baseline_id',
+        'baseline_prompt_id',
         postgresql.UUID(as_uuid=True),
         nullable=True,
     ))
     op.create_foreign_key(
-        'agents_baseline_id_fkey',
-        'agents', 'baselines',
-        ['baseline_id'], ['id'],
+        'fk_agents_baseline_prompt_id',
+        'agents', 'prompts',
+        ['baseline_prompt_id'], ['id'],
         ondelete='SET NULL'
     )
-    op.create_index('ix_agents_baseline_id', 'agents', ['baseline_id'])
+    op.create_index('ix_agents_baseline_prompt_id', 'agents', ['baseline_prompt_id'])
 
     # 4. Drop limit_id from agents
     op.drop_constraint('agents_limit_id_fkey', 'agents', type_='foreignkey')
     op.drop_index('ix_agents_limit_id', 'agents')
     op.drop_column('agents', 'limit_id')
+
+    # 5. Drop policy_id from agents
+    op.drop_constraint('agents_policy_id_fkey', 'agents', type_='foreignkey')
+    op.drop_index('ix_agents_policy_id', 'agents')
+    op.drop_column('agents', 'policy_id')

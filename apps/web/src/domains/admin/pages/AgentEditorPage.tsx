@@ -11,6 +11,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { 
   agentsApi, 
   promptsApi, 
+  policiesApi,
+  limitsApi,
   toolsApi,
   toolInstancesApi,
   toolGroupsApi,
@@ -49,8 +51,8 @@ export function AgentEditorPage() {
     name: '',
     description: '',
     system_prompt_slug: '',
-    baseline_id: null,
     policy_id: null,
+    limit_id: null,
     capabilities: [],
     supports_partial_mode: false,
     generation_config: {},
@@ -65,8 +67,18 @@ export function AgentEditorPage() {
     queryFn: () => promptsApi.listPrompts(),
   });
 
-  const systemPrompts = prompts.filter((p: any) => p.type === 'system') || [];
-  const baselinePrompts = prompts.filter((p: any) => p.type === 'baseline') || [];
+  const systemPrompts = prompts.filter((p: any) => p.type !== 'baseline') || [];
+
+  // Load policies and limits for selectors
+  const { data: policies = [] } = useQuery({
+    queryKey: qk.policies.list({}),
+    queryFn: () => policiesApi.list(),
+  });
+
+  const { data: limits = [] } = useQuery({
+    queryKey: qk.limits.list({}),
+    queryFn: () => limitsApi.list({}),
+  });
 
   // Load tools and tool instances for bindings
   const { data: tools = [] } = useQuery({
@@ -118,8 +130,8 @@ export function AgentEditorPage() {
         name: agent.name,
         description: agent.description || '',
         system_prompt_slug: agent.system_prompt_slug,
-        baseline_id: agent.baseline_id || null,
         policy_id: agent.policy_id || null,
+        limit_id: agent.limit_id || null,
         capabilities: agent.capabilities || [],
         supports_partial_mode: agent.supports_partial_mode || false,
         generation_config: agent.generation_config || {},
@@ -183,8 +195,8 @@ export function AgentEditorPage() {
           name: agent.name,
           description: agent.description || '',
           system_prompt_slug: agent.system_prompt_slug,
-          baseline_id: agent.baseline_id || null,
           policy_id: agent.policy_id || null,
+          limit_id: agent.limit_id || null,
           capabilities: agent.capabilities || [],
           supports_partial_mode: agent.supports_partial_mode || false,
           generation_config: agent.generation_config || {},
@@ -289,15 +301,28 @@ export function AgentEditorPage() {
       ],
     },
     {
-      key: 'baseline_id',
-      label: 'Baseline промпт',
+      key: 'policy_id',
+      label: 'Политика',
       type: 'select',
-      description: 'Ограничения и запреты для агента',
+      description: 'Правила поведения агента',
       options: [
-        { value: '', label: 'Не выбран' },
-        ...baselinePrompts.map((p: { id: string; name: string; slug: string }) => ({
+        { value: '', label: 'Не выбрана' },
+        ...policies.map((p: any) => ({
           value: p.id,
           label: `${p.name} (${p.slug})`,
+        })),
+      ],
+    },
+    {
+      key: 'limit_id',
+      label: 'Лимиты',
+      type: 'select',
+      description: 'Ограничения выполнения (шаги, таймауты)',
+      options: [
+        { value: '', label: 'Не выбраны' },
+        ...limits.map((l: any) => ({
+          value: l.id,
+          label: `${l.name} (${l.slug})`,
         })),
       ],
     },

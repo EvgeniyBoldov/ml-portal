@@ -8,7 +8,7 @@
  */
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { permissionsApi, promptsApi, type PermissionValue } from '@/shared/api';
+import { permissionsApi, policiesApi, type PermissionValue } from '@/shared/api';
 import { qk } from '@/shared/api/keys';
 import { AdminPage, Select, RbacRulesEditor, type RbacPermissions } from '@/shared/ui';
 import Button from '@/shared/ui/Button';
@@ -35,20 +35,20 @@ export function DefaultsPage() {
     queryFn: () => permissionsApi.list({ scope: 'default' }),
   });
   
-  // Load baseline prompts
-  const { data: prompts } = useQuery({
-    queryKey: ['prompts', 'list', { type: 'baseline' }],
-    queryFn: () => promptsApi.listPrompts({ type: 'baseline' }),
+  // Load policies for default policy selector
+  const { data: policyList } = useQuery({
+    queryKey: qk.policies.list({}),
+    queryFn: () => policiesApi.list(),
   });
 
-  const defaultPolicy = policies?.find((p: { scope: string }) => p.scope === 'default');
-  const baselinePrompts = prompts || [];
+  const defaultPermSet = policies?.find((p: { scope: string }) => p.scope === 'default');
+  const availablePolicies = policyList || [];
 
   // Initialize permissions state when entering edit mode
   const startEditingPermissions = () => {
     setRbacPermissions({
-      instance_permissions: defaultPolicy?.instance_permissions || {},
-      agent_permissions: defaultPolicy?.agent_permissions || {},
+      instance_permissions: defaultPermSet?.instance_permissions || {},
+      agent_permissions: defaultPermSet?.agent_permissions || {},
     });
     setEditingPermissions(true);
   };
@@ -56,9 +56,9 @@ export function DefaultsPage() {
   // Save permissions mutation
   const savePermissionsMutation = useMutation({
     mutationFn: async () => {
-      if (!defaultPolicy) throw new Error('No default policy');
+      if (!defaultPermSet) throw new Error('No default permission set');
       
-      return permissionsApi.update(defaultPolicy.id, {
+      return permissionsApi.update(defaultPermSet.id, {
         instance_permissions: rbacPermissions.instance_permissions,
         agent_permissions: rbacPermissions.agent_permissions,
       });
@@ -84,36 +84,36 @@ export function DefaultsPage() {
       title="Общие настройки"
       subtitle="Настройки по умолчанию для всех пользователей системы"
     >
-      {/* Default Baseline Prompt */}
+      {/* Default Policy */}
       <div className={styles.card} style={{ marginBottom: '1.5rem' }}>
         <div className={styles.cardHeader}>
-          <h2 className={styles.cardTitle}>Default Baseline Prompt</h2>
+          <h2 className={styles.cardTitle}>Политика по умолчанию</h2>
           <p className={styles.cardDescription}>
-            Глобальные ограничения для всех агентов (что НЕЛЬЗЯ делать)
+            Глобальные правила поведения для всех агентов
           </p>
         </div>
         
         <div className={styles.formGroup}>
-          <label className={styles.label}>Baseline промпт по умолчанию</label>
-          {baselinePrompts.length > 0 ? (
+          <label className={styles.label}>Политика по умолчанию</label>
+          {availablePolicies.length > 0 ? (
             <Select
               value=""
               onChange={() => {}}
-              placeholder="Не выбран (агенты используют свой)"
+              placeholder="Не выбрана (агенты используют свою)"
               options={[
-                { value: '', label: 'Не выбран (агенты используют свой)' },
-                ...baselinePrompts.map((p: any) => ({ value: p.id, label: `${p.name} (${p.slug})` }))
+                { value: '', label: 'Не выбрана (агенты используют свою)' },
+                ...availablePolicies.map((p: any) => ({ value: p.id, label: `${p.name} (${p.slug})` }))
               ]}
             />
           ) : (
             <Alert
               variant="info"
-              title="Нет baseline промптов"
-              description="Создайте baseline промпт в разделе Промпты с типом 'baseline'"
+              title="Нет политик"
+              description="Создайте политику в разделе Политики"
             />
           )}
           <p style={{ fontSize: '0.75rem', color: 'var(--muted)', marginTop: '0.5rem' }}>
-            Этот baseline будет применяться ко всем агентам, у которых не указан собственный baseline
+            Эта политика будет применяться ко всем агентам, у которых не указана собственная
           </p>
         </div>
       </div>
@@ -127,7 +127,7 @@ export function DefaultsPage() {
           </p>
         </div>
 
-        {defaultPolicy ? (
+        {defaultPermSet ? (
           <>
             {!editingPermissions ? (
               <>
@@ -135,8 +135,8 @@ export function DefaultsPage() {
                   <RbacRulesEditor
                     scope="default"
                     permissions={{
-                      instance_permissions: defaultPolicy.instance_permissions || {},
-                      agent_permissions: defaultPolicy.agent_permissions || {},
+                      instance_permissions: defaultPermSet.instance_permissions || {},
+                      agent_permissions: defaultPermSet.agent_permissions || {},
                     }}
                     onChange={() => {}}
                     editable={false}

@@ -26,8 +26,8 @@ export interface Agent {
   name: string;
   description?: string;
   system_prompt_slug: string;
-  baseline_id?: string | null;
   policy_id?: string | null;
+  limit_id?: string | null;
   capabilities: string[];
   supports_partial_mode: boolean;
   generation_config?: Record<string, unknown>;
@@ -43,8 +43,8 @@ export interface AgentCreate {
   name: string;
   description?: string;
   system_prompt_slug: string;
-  baseline_id?: string | null;
   policy_id?: string | null;
+  limit_id?: string | null;
   capabilities?: string[];
   supports_partial_mode?: boolean;
   generation_config?: Record<string, unknown>;
@@ -57,8 +57,8 @@ export interface AgentUpdate {
   name?: string;
   description?: string;
   system_prompt_slug?: string;
-  baseline_id?: string | null;
   policy_id?: string | null;
+  limit_id?: string | null;
   capabilities?: string[];
   supports_partial_mode?: boolean;
   generation_config?: Record<string, unknown>;
@@ -108,13 +108,12 @@ export const agentsApi = {
     agent_name: string;
     base_prompt: string;
     base_prompt_slug: string;
-    baseline_prompt_id: string | null;
-    merged_baseline: string | null;
     tools_section: string | null;
-    collections_section: string | null;
     final_prompt: string;
     tools: string[];
-    available_collections: string[];
+    policy_id: string | null;
+    limit_id: string | null;
+    capabilities: string[];
   }> {
     return apiRequest(`/admin/agents/${slug}/generated-prompt`);
   }
