@@ -42,14 +42,14 @@ const CreateCollectionPage = lazy(() => import('@/domains/admin/pages/CreateColl
 const ViewCollectionPage = lazy(() => import('@/domains/admin/pages/ViewCollectionPage'));
 const InstancesPage = lazy(() => import('@/domains/admin/pages/InstancesPage').then(m => ({ default: m.InstancesPage })));
 const InstanceEditorPage = lazy(() => import('@/domains/admin/pages/InstanceEditorPage').then(m => ({ default: m.InstanceEditorPage })));
-const PoliciesPage = lazy(() => import('@/domains/admin/pages/PoliciesPage').then(m => ({ default: m.PoliciesPage })));
-const PolicyEditorPage = lazy(() => import('@/domains/admin/pages/PolicyEditorPage').then(m => ({ default: m.PolicyEditorPage })));
-const PolicyVersionPage = lazy(() => import('@/domains/admin/pages/PolicyVersionPage').then(m => ({ default: m.PolicyVersionPage })));
+const LimitsListPage = lazy(() => import('@/domains/admin/pages/LimitsListPage').then(m => ({ default: m.LimitsListPage })));
+const LimitEditorPage = lazy(() => import('@/domains/admin/pages/LimitEditorPage').then(m => ({ default: m.LimitEditorPage })));
+const LimitVersionPage = lazy(() => import('@/domains/admin/pages/LimitVersionPage').then(m => ({ default: m.LimitVersionPage })));
 const DefaultsPage = lazy(() => import('@/domains/admin/pages/DefaultsPage').then(m => ({ default: m.DefaultsPage })));
 const RoutingLogsPage = lazy(() => import('@/domains/admin/pages/RoutingLogsPage').then(m => ({ default: m.RoutingLogsPage })));
-const BaselinesListPage = lazy(() => import('@/domains/admin/pages/BaselinesListPage').then(m => ({ default: m.BaselinesListPage })));
-const BaselineEditorPage = lazy(() => import('@/domains/admin/pages/BaselineEditorPage').then(m => ({ default: m.BaselineEditorPage })));
-const BaselineVersionPage = lazy(() => import('@/domains/admin/pages/BaselineVersionPage').then(m => ({ default: m.BaselineVersionPage })));
+const PoliciesListPage = lazy(() => import('@/domains/admin/pages/PoliciesListPage').then(m => ({ default: m.PoliciesListPage })));
+const PolicyEditorPage = lazy(() => import('@/domains/admin/pages/PolicyEditorPage').then(m => ({ default: m.PolicyEditorPage })));
+const PolicyVersionPage = lazy(() => import('@/domains/admin/pages/PolicyVersionPage').then(m => ({ default: m.PolicyVersionPage })));
 
 // Collections pages (user-facing)
 const CollectionsListPage = lazy(() => import('@/domains/collections/pages/CollectionsListPage'));
@@ -112,16 +112,16 @@ const router = createBrowserRouter([
       { path: 'collections', element: withSuspense(<CollectionsPage />) },
       { path: 'collections/new', element: withSuspense(<CreateCollectionPage />) },
       { path: 'collections/:id', element: withSuspense(<ViewCollectionPage />) },
-      { path: 'limits', element: withSuspense(<PoliciesPage />) },
-      { path: 'limits/new', element: withSuspense(<PolicyEditorPage />) },
-      { path: 'limits/:slug', element: withSuspense(<PolicyEditorPage />) },
-      { path: 'limits/:slug/versions/new', element: withSuspense(<PolicyVersionPage />) },
-      { path: 'limits/:slug/versions/:version', element: withSuspense(<PolicyVersionPage />) },
-      { path: 'policies', element: withSuspense(<BaselinesListPage />) },
-      { path: 'policies/new', element: withSuspense(<BaselineEditorPage />) },
-      { path: 'policies/:slug', element: withSuspense(<BaselineEditorPage />) },
-      { path: 'policies/:slug/versions/new', element: withSuspense(<BaselineVersionPage />) },
-      { path: 'policies/:slug/versions/:version', element: withSuspense(<BaselineVersionPage />) },
+      { path: 'limits', element: withSuspense(<LimitsListPage />) },
+      { path: 'limits/new', element: withSuspense(<LimitEditorPage />) },
+      { path: 'limits/:slug', element: withSuspense(<LimitEditorPage />) },
+      { path: 'limits/:slug/versions/new', element: withSuspense(<LimitVersionPage />) },
+      { path: 'limits/:slug/versions/:version', element: withSuspense(<LimitVersionPage />) },
+      { path: 'policies', element: withSuspense(<PoliciesListPage />) },
+      { path: 'policies/new', element: withSuspense(<PolicyEditorPage />) },
+      { path: 'policies/:slug', element: withSuspense(<PolicyEditorPage />) },
+      { path: 'policies/:slug/versions/new', element: withSuspense(<PolicyVersionPage />) },
+      { path: 'policies/:slug/versions/:version', element: withSuspense(<PolicyVersionPage />) },
       { path: 'instances', element: withSuspense(<InstancesPage />) },
       { path: 'instances/new', element: withSuspense(<InstanceEditorPage />) },
       { path: 'instances/:id', element: withSuspense(<InstanceEditorPage />) },

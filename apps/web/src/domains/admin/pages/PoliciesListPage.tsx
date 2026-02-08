@@ -16,7 +16,7 @@ import {
 } from '@/shared/ui';
 import { RowActions } from '@/shared/ui/RowActions';
 
-export function BaselinesListPage() {
+export function PoliciesListPage() {
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
 
@@ -104,4 +104,4 @@ export function BaselinesListPage() {
   );
 }
 
-export default BaselinesListPage;
+export default PoliciesListPage;

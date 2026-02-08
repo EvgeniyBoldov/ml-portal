@@ -11,7 +11,7 @@ import { limitsApi, type LimitListItem } from '@/shared/api/limits';
 import { qk } from '@/shared/api/keys';
 import { AdminPage, DataTable, type DataTableColumn, Badge } from '@/shared/ui';
 
-export function PoliciesPage() {
+export function LimitsListPage() {
   const navigate = useNavigate();
   const [q, setQ] = useState('');
 
@@ -105,4 +105,4 @@ export function PoliciesPage() {
   );
 }
 
-export default PoliciesPage;
+export default LimitsListPage;

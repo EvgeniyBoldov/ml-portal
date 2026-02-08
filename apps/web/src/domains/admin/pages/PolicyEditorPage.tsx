@@ -1,16 +1,16 @@
 /**
- * PolicyEditorPage - now shows LIMIT editor (execution constraints)
+ * BaselineEditorPage - now shows POLICY editor (text-based behavioral rules)
  * 
- * Old Policy editor becomes Limit editor.
+ * Old Baseline editor becomes Policy editor.
  * Uses EntityTabsPage for unified layout.
  */
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { limitsApi, type LimitDetail, type LimitVersionInfo } from '@/shared/api/limits';
+import { policiesApi, type PolicyDetail, type PolicyVersionInfo } from '@/shared/api/policies';
 import { qk } from '@/shared/api/keys';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
-import { EntityTabsPage, PolicyVersionCard, type FieldDefinition, type BreadcrumbItem, type EntityPageMode } from '@/shared/ui';
+import { EntityTabsPage, PromptVersionCard, type FieldDefinition, type BreadcrumbItem, type EntityPageMode } from '@/shared/ui';
 
 export function PolicyEditorPage() {
   const { slug } = useParams<{ slug: string }>();
@@ -31,45 +31,45 @@ export function PolicyEditorPage() {
     description: '',
   });
 
-  const { data: limit, isLoading } = useQuery({
-    queryKey: qk.limits.detail(slug!),
-    queryFn: () => limitsApi.get(slug!),
+  const { data: policy, isLoading } = useQuery({
+    queryKey: qk.policies.detail(slug!),
+    queryFn: () => policiesApi.get(slug!),
     enabled: !!slug && !isNew,
   });
 
-  const activeVersion = limit?.versions?.find(v => v.status === 'active') || limit?.versions?.[0];
+  const activeVersion = policy?.versions?.find(v => v.status === 'active') || policy?.versions?.[0];
   const { data: selectedVersion } = useQuery({
-    queryKey: qk.limits.version(slug!, activeVersion?.version ?? 0),
-    queryFn: () => limitsApi.getVersion(slug!, activeVersion!.version),
+    queryKey: qk.policies.version(slug!, activeVersion?.version ?? 0),
+    queryFn: () => policiesApi.getVersion(slug!, activeVersion!.version),
     enabled: !!slug && !!activeVersion,
   });
 
   useEffect(() => {
-    if (limit) {
+    if (policy) {
       setFormData({
-        slug: limit.slug,
-        name: limit.name,
-        description: limit.description || '',
+        slug: policy.slug,
+        name: policy.name,
+        description: policy.description || '',
       });
     }
-  }, [limit]);
+  }, [policy]);
 
   const createMutation = useMutation({
-    mutationFn: (data: any) => limitsApi.create(data),
+    mutationFn: (data: any) => policiesApi.create(data),
     onSuccess: (created: any) => {
-      queryClient.invalidateQueries({ queryKey: qk.limits.list() });
-      showSuccess('Лимит создан');
-      navigate(`/admin/limits/${created.slug}`);
+      queryClient.invalidateQueries({ queryKey: qk.policies.list() });
+      showSuccess('Политика создана');
+      navigate(`/admin/policies/${created.slug}`);
     },
     onError: (err: any) => showError(err?.message || 'Ошибка создания'),
   });
 
   const updateMutation = useMutation({
-    mutationFn: (data: any) => limitsApi.update(slug!, data),
+    mutationFn: (data: any) => policiesApi.update(slug!, data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.limits.detail(slug!) });
-      queryClient.invalidateQueries({ queryKey: qk.limits.list() });
-      showSuccess('Лимит обновлён');
+      queryClient.invalidateQueries({ queryKey: qk.policies.detail(slug!) });
+      queryClient.invalidateQueries({ queryKey: qk.policies.list() });
+      showSuccess('Политика обновлена');
       setSearchParams({});
     },
     onError: (err: any) => showError(err?.message || 'Ошибка обновления'),
@@ -99,13 +99,13 @@ export function PolicyEditorPage() {
 
   const handleCancel = () => {
     if (isNew) {
-      navigate('/admin/limits');
+      navigate('/admin/policies');
     } else {
-      if (limit) {
+      if (policy) {
         setFormData({
-          slug: limit.slug,
-          name: limit.name,
-          description: limit.description || '',
+          slug: policy.slug,
+          name: policy.name,
+          description: policy.description || '',
         });
       }
       setSearchParams({});
@@ -123,7 +123,7 @@ export function PolicyEditorPage() {
       type: 'text',
       required: true,
       disabled: !isNew,
-      placeholder: 'execution.strict',
+      placeholder: 'security.no-code',
       description: isNew ? 'Уникальный идентификатор (нельзя изменить после создания)' : undefined,
     },
     {
@@ -131,32 +131,32 @@ export function PolicyEditorPage() {
       label: 'Название',
       type: 'text',
       required: true,
-      placeholder: 'Строгие лимиты выполнения',
+      placeholder: 'Запрет генерации кода',
     },
     {
       key: 'description',
       label: 'Описание',
       type: 'textarea',
-      placeholder: 'Лимиты для агента...',
+      placeholder: 'Правила поведения агента...',
       rows: 2,
     },
   ];
 
   const breadcrumbs: BreadcrumbItem[] = [
-    { label: 'Лимиты', href: '/admin/limits' },
-    { label: limit?.name || 'Новый лимит' },
+    { label: 'Политики', href: '/admin/policies' },
+    { label: policy?.name || 'Новая политика' },
   ];
 
   return (
     <EntityTabsPage
       entityType="policy"
-      entityNameLabel="Лимит"
-      entityTypeLabel="лимита"
+      entityNameLabel="Политика"
+      entityTypeLabel="политики"
       slug={slug!}
-      basePath="/admin/limits"
-      listPath="/admin/limits"
-      container={limit || null}
-      versions={limit?.versions || []}
+      basePath="/admin/policies"
+      listPath="/admin/policies"
+      container={policy || null}
+      versions={policy?.versions || []}
       isLoading={isLoading}
       formData={formData}
       mode={mode}
@@ -165,14 +165,14 @@ export function PolicyEditorPage() {
       onEdit={handleEdit}
       onSave={handleSave}
       onCancel={handleCancel}
-      onCreateVersion={() => navigate(`/admin/limits/${slug}/versions/new`)}
-      onSelectVersion={(v: LimitVersionInfo) => navigate(`/admin/limits/${slug}/versions/${v.version}`)}
+      onCreateVersion={() => navigate(`/admin/policies/${slug}/versions/new`)}
+      onSelectVersion={(v: PolicyVersionInfo) => navigate(`/admin/policies/${slug}/versions/${v.version}`)}
       containerFields={containerFields}
       breadcrumbs={breadcrumbs}
       renderVersionContent={() => (
-        <PolicyVersionCard
-          version={selectedVersion || null}
-          onCreateVersion={() => navigate(`/admin/limits/${slug}/versions/new`)}
+        <PromptVersionCard
+          version={selectedVersion ? { ...selectedVersion, template: selectedVersion.policy_text } : null}
+          onCreateVersion={() => navigate(`/admin/policies/${slug}/versions/new`)}
         />
       )}
     />
