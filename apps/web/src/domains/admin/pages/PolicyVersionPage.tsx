@@ -13,7 +13,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { policiesApi, type PolicyVersionCreate } from '@/shared/api';
 import { qk } from '@/shared/api/keys';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
-import { EntityPage, ContentBlock, Input, Textarea, Button, type EntityPageMode, type BreadcrumbItem } from '@/shared/ui';
+import { EntityPage, ContentBlock, Input, Textarea, Badge, type EntityPageMode, type BreadcrumbItem } from '@/shared/ui';
+import { useVersionActions } from '@/shared/hooks/useVersionActions';
 
 interface FormData extends PolicyVersionCreate {
   notes?: string;
@@ -223,81 +224,24 @@ export function PolicyVersionPage() {
     { label: isCreate ? 'Новая версия' : `Версия ${versionNumber}` },
   ];
 
-  // Generate action buttons for version management
-  const getVersionActionButtons = () => {
-    if (isCreate || !existingVersion) return null;
+  const isRecommended = !!(policy?.recommended_version?.id && existingVersion?.id && policy.recommended_version.id === existingVersion.id);
 
-    const buttons = [];
-    const isRecommended = policy?.recommended_version?.id === existingVersion.id;
-
-    switch (existingVersion.status) {
-      case 'draft':
-        buttons.push(
-          <Button
-            key="activate"
-            variant="primary"
-            onClick={() => activateMutation.mutate()}
-            disabled={activateMutation.isPending}
-            loading={activateMutation.isPending}
-          >
-            Активировать
-          </Button>
-        );
-        buttons.push(
-          <Button
-            key="edit"
-            variant="outline"
-            onClick={() => setSearchParams({ mode: 'edit' })}
-          >
-            Редактировать
-          </Button>
-        );
-        break;
-
-      case 'active':
-        if (!isRecommended) {
-          buttons.push(
-            <Button
-              key="setRecommended"
-              variant="outline"
-              onClick={() => setRecommendedMutation.mutate()}
-              disabled={setRecommendedMutation.isPending}
-              loading={setRecommendedMutation.isPending}
-            >
-              Сделать основной
-            </Button>
-          );
-          buttons.push(
-            <Button
-              key="deactivate"
-              variant="danger"
-              onClick={() => deactivateMutation.mutate()}
-              disabled={deactivateMutation.isPending}
-              loading={deactivateMutation.isPending}
-            >
-              Деактивировать
-            </Button>
-          );
-        }
-        break;
-
-      case 'inactive':
-        buttons.push(
-          <Button
-            key="reactivate"
-            variant="primary"
-            onClick={() => activateMutation.mutate()}
-            disabled={activateMutation.isPending}
-            loading={activateMutation.isPending}
-          >
-            Активировать
-          </Button>
-        );
-        break;
-    }
-
-    return buttons.length > 0 ? buttons : null;
-  };
+  const actionButtons = useVersionActions({
+    status: existingVersion?.status,
+    isRecommended,
+    isCreate,
+    callbacks: {
+      onEdit: () => setSearchParams({ mode: 'edit' }),
+      onActivate: () => activateMutation.mutate(),
+      onDeactivate: () => deactivateMutation.mutate(),
+      onSetRecommended: () => setRecommendedMutation.mutate(),
+    },
+    loading: {
+      activate: activateMutation.isPending,
+      deactivate: deactivateMutation.isPending,
+      setRecommended: setRecommendedMutation.isPending,
+    },
+  });
 
   return (
     <EntityPage
@@ -311,9 +255,19 @@ export function PolicyVersionPage() {
       onEdit={handleEdit}
       onSave={handleSave}
       onCancel={handleCancel}
-      actionButtons={getVersionActionButtons()}
+      actionButtons={actionButtons}
     >
-      <ContentBlock title="Лимиты" icon="settings">
+      <ContentBlock
+        title="Лимиты"
+        icon="settings"
+        headerActions={
+          !isCreate && existingVersion?.status ? (
+            <Badge tone={existingVersion.status === 'active' ? 'success' : existingVersion.status === 'draft' ? 'warn' : 'neutral'} size="small">
+              {existingVersion.status === 'active' ? 'Активна' : existingVersion.status === 'draft' ? 'Черновик' : 'Архив'}
+            </Badge>
+          ) : undefined
+        }
+      >
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
           <div>
             <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', fontWeight: 500 }}>Макс. шагов</label>

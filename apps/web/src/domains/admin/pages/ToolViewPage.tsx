@@ -1,10 +1,9 @@
 /**
  * ToolViewPage - View tool details with releases
  * 
- * Layout with tabs:
- * - Обзор: Tool info + status + recommended release
- * - Версии бэкенда: Versions from code (read-only)
- * - Версии: Versions for agents (CRUD)
+ * Layout pattern: same as PromptEditorPage
+ * - Split layout: info block left + status/release block right
+ * - Tabs: Обзор | Версии бэкенда | Версии
  */
 import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
@@ -17,9 +16,9 @@ import {
   type ToolBackendReleaseListItem,
 } from '@/shared/api/toolReleases';
 import { EntityPage, type BreadcrumbItem } from '@/shared/ui/EntityPage';
-import { ContentBlock, ContentGrid, type FieldDefinition } from '@/shared/ui/ContentBlock';
+import { ContentBlock, type FieldDefinition } from '@/shared/ui/ContentBlock';
 import { Tabs, TabPanel } from '@/shared/ui/Tabs';
-import { Badge, Button, DataTable, StatusBadgeCard, type DataTableColumn } from '@/shared/ui';
+import { Badge, Button, DataTable, type DataTableColumn } from '@/shared/ui';
 
 const TYPE_LABELS: Record<string, string> = {
   api: 'API',
@@ -66,14 +65,16 @@ export function ToolViewPage() {
   // Rescan backend releases mutation
   const rescanMutation = useMutation({
     mutationFn: () => toolReleasesApi.rescanBackendReleases(toolSlug!),
-    onSuccess: (data) => {
+    onSuccess: (data: any) => {
       queryClient.invalidateQueries({ queryKey: toolReleasesKeys.toolDetail(toolSlug!) });
-      showSuccess(`Синхронизация завершена: ${data.stats.created} создано, ${data.stats.updated} обновлено`);
+      queryClient.invalidateQueries({ queryKey: toolReleasesKeys.backendReleases(toolSlug!) });
+      const br = data.stats?.backend_releases || {};
+      showSuccess(`Синхронизация завершена: ${br.backend_releases_created || 0} создано, ${br.backend_releases_updated || 0} обновлено`);
     },
     onError: (err: Error) => showError(err?.message || 'Ошибка синхронизации'),
   });
 
-  // Back path - navigate to group if available (using slug)
+  // Back path - navigate to group if available
   const groupSlug = tool?.tool_group_slug;
   const backPath = groupSlug 
     ? `/admin/tools/groups/${groupSlug}` 
@@ -82,14 +83,14 @@ export function ToolViewPage() {
   // Field definitions (readonly)
   const toolFields: FieldDefinition[] = [
     {
-      key: 'name',
-      label: 'Название',
+      key: 'slug',
+      label: 'Slug (ID)',
       type: 'text',
       disabled: true,
     },
     {
-      key: 'slug',
-      label: 'Slug (ID)',
+      key: 'name',
+      label: 'Название',
       type: 'text',
       disabled: true,
     },
@@ -114,11 +115,10 @@ export function ToolViewPage() {
     { id: 'releases', label: `Версии (${tool?.releases?.length || 0})` },
   ];
 
-  // Breadcrumbs
   const breadcrumbs: BreadcrumbItem[] = [
     { label: 'Инструменты', href: '/admin/tools' },
     ...(groupSlug ? [{ label: groupSlug, href: `/admin/tools/groups/${groupSlug}` }] : []),
-    { label: tool?.name || 'Инструмент' },
+    { label: tool?.name || toolSlug || 'Инструмент' },
   ];
 
   const handleReleaseClick = (release: ToolReleaseListItem) => {
@@ -138,7 +138,7 @@ export function ToolViewPage() {
       label: 'SCHEMA HASH',
       width: 120,
       render: (row) => (
-        <code style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+        <code style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>
           {row.schema_hash ? row.schema_hash.slice(0, 8) : '—'}
         </code>
       ),
@@ -148,7 +148,7 @@ export function ToolViewPage() {
       label: 'BUILD ID',
       width: 120,
       render: (row) => (
-        <code style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+        <code style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>
           {row.worker_build_id ? row.worker_build_id.slice(0, 12) : '—'}
         </code>
       ),
@@ -168,7 +168,7 @@ export function ToolViewPage() {
       label: 'СИНХРОНИЗИРОВАНО',
       width: 160,
       render: (row) => (
-        <span style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>
+        <span style={{ fontSize: '0.8125rem', color: 'var(--muted)' }}>
           {new Date(row.synced_at).toLocaleString('ru')}
         </span>
       ),
@@ -188,7 +188,7 @@ export function ToolViewPage() {
       label: 'БЭКЕНД',
       width: 100,
       render: (row) => (
-        <span style={{ color: 'var(--text-secondary)' }}>{row.backend_version || '—'}</span>
+        <span style={{ color: 'var(--muted)' }}>{row.backend_version || '—'}</span>
       ),
     },
     {
@@ -206,7 +206,7 @@ export function ToolViewPage() {
       label: 'SCHEMA',
       width: 100,
       render: (row) => (
-        <code style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+        <code style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>
           {row.expected_schema_hash ? row.expected_schema_hash.slice(0, 8) : '—'}
         </code>
       ),
@@ -226,7 +226,7 @@ export function ToolViewPage() {
       label: 'СОЗДАНА',
       width: 140,
       render: (row) => (
-        <span style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>
+        <span style={{ fontSize: '0.8125rem', color: 'var(--muted)' }}>
           {new Date(row.created_at).toLocaleString('ru')}
         </span>
       ),
@@ -236,19 +236,12 @@ export function ToolViewPage() {
   return (
     <EntityPage
       mode="view"
-      entityName={tool?.name || 'Инструмент'}
+      entityName={tool?.name || toolSlug || 'Инструмент'}
       entityTypeLabel="инструмента"
       backPath={backPath}
       breadcrumbs={breadcrumbs}
       loading={isLoading}
       showDelete={false}
-      actions={[
-        {
-          label: 'Редактировать',
-          icon: 'edit',
-          onClick: () => navigate(`/admin/tools/${toolSlug}/edit`),
-        },
-      ]}
       headerActions={
         <Button
           variant="outline"
@@ -262,79 +255,16 @@ export function ToolViewPage() {
     >
       <Tabs tabs={tabs} activeTab={activeTab} onChange={setActiveTab}>
         <TabPanel id="main" activeTab={activeTab}>
-          <ContentGrid>
-            <ContentBlock
-              width="2/3"
-              title="Информация об инструменте"
-              icon="tool"
-              fields={toolFields}
-              data={formData}
-            />
-            <StatusBadgeCard
-              label="Статус"
-              status={tool?.is_active ? 'active' : 'inactive'}
-              statusOptions={[
-                { value: 'active', label: 'Активен', tone: 'success' },
-                { value: 'inactive', label: 'Неактивен', tone: 'neutral' },
-              ]}
-              editable={false}
-              width="1/3"
-            />
-          </ContentGrid>
-          
-          <ContentGrid>
-            <ContentBlock
-              width="1/3"
-              title="Тип инструмента"
-              icon="settings"
-            >
-              {tool && (
-                <Badge tone={TYPE_TONES[tool.type] || 'neutral'} size="large">
-                  {TYPE_LABELS[tool.type] || tool.type}
-                </Badge>
-              )}
-            </ContentBlock>
-
-            <ContentBlock
-              width="2/3"
-              title="Основной релиз"
-              icon="star"
-            >
-              {tool?.recommended_release ? (
-                <div style={{ fontSize: '0.875rem' }}>
-                  <div style={{ marginBottom: '0.5rem' }}>
-                    <strong>Версия:</strong> v{tool.recommended_release.version}
-                  </div>
-                  <div style={{ marginBottom: '0.5rem' }}>
-                    <strong>Бэкенд:</strong> {tool.recommended_release.backend_release?.version || '—'}
-                  </div>
-                  {tool.recommended_release.expected_schema_hash && (
-                    <div style={{ marginBottom: '0.5rem' }}>
-                      <strong>Schema:</strong>{' '}
-                      <code style={{ fontSize: '0.75rem' }}>
-                        {tool.recommended_release.expected_schema_hash.slice(0, 8)}
-                      </code>
-                    </div>
-                  )}
-                  <Badge tone={STATUS_TONES[tool.recommended_release.status]}>
-                    {STATUS_LABELS[tool.recommended_release.status]}
-                  </Badge>
-                  <Button 
-                    variant="ghost" 
-                    size="small"
-                    style={{ marginLeft: '1rem' }}
-                    onClick={() => handleReleaseClick(tool.recommended_release as ToolReleaseListItem)}
-                  >
-                    Открыть →
-                  </Button>
-                </div>
-              ) : (
-                <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
-                  Основной релиз не выбран. Создайте и активируйте версию, затем установите её как основную.
-                </p>
-              )}
-            </ContentBlock>
-          </ContentGrid>
+          <ContentBlock
+            title="Основная информация"
+            fields={toolFields}
+            data={formData}
+            headerActions={
+              <Badge tone={tool?.is_active ? 'success' : 'neutral'} size="small">
+                {tool?.is_active ? 'Активен' : 'Неактивен'}
+              </Badge>
+            }
+          />
         </TabPanel>
 
         <TabPanel id="backend-releases" activeTab={activeTab}>

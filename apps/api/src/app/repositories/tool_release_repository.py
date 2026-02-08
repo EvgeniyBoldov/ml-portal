@@ -151,6 +151,7 @@ class ToolWithReleasesRepository:
         stmt = (
             select(Tool)
             .options(
+                selectinload(Tool.tool_group),
                 selectinload(Tool.backend_releases),
                 selectinload(Tool.releases).selectinload(ToolRelease.backend_release),
                 selectinload(Tool.recommended_release).selectinload(ToolRelease.backend_release),
@@ -165,6 +166,7 @@ class ToolWithReleasesRepository:
         stmt = (
             select(Tool)
             .options(
+                selectinload(Tool.tool_group),
                 selectinload(Tool.backend_releases),
                 selectinload(Tool.releases).selectinload(ToolRelease.backend_release),
                 selectinload(Tool.recommended_release).selectinload(ToolRelease.backend_release),

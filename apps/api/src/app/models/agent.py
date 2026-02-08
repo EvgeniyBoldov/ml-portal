@@ -32,18 +32,18 @@ class Agent(Base):
     # Reference to system prompt (by slug)
     system_prompt_slug: Mapped[str] = mapped_column(String(255), nullable=False)
     
-    # Optional baseline for restrictions/limitations (separate entity)
-    baseline_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey('baselines.id', ondelete='SET NULL'),
-        nullable=True,
-        index=True
-    )
-    
-    # Reference to Policy entity with execution limits
+    # Reference to Policy entity with behavioral rules/restrictions
     policy_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey('policies.id', ondelete='SET NULL'),
+        nullable=True,
+        index=True
+    )
+
+    # Reference to Limit entity with execution limits
+    limit_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey('limits.id', ondelete='SET NULL'),
         nullable=True,
         index=True
     )

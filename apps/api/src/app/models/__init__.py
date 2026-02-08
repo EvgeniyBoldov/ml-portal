@@ -9,7 +9,7 @@ from .rag_ingest import Source, Chunk, EmbStatus, RAGStatus
 from .model_registry import ModelRegistry
 from .events import EventOutbox
 from .prompt import Prompt, PromptVersion, PromptStatus
-from .baseline import Baseline, BaselineVersion, BaselineStatus, BaselineScope
+# Baseline removed in refactor/policy-limits
 from .tool_group import ToolGroup
 from .tool import Tool
 from .tool_instance import ToolInstance, HealthStatus, InstanceType
@@ -24,6 +24,7 @@ from .credential_set import CredentialSet, AuthType, CredentialScope
 from .permission_set import PermissionSet, PermissionScope, PermissionValue
 from .routing_log import RoutingLog
 from .policy import Policy
+from .limit import Limit, LimitVersion, LimitStatus
 
 __all__ = [
     "Base",
@@ -44,10 +45,6 @@ __all__ = [
     "Prompt",
     "PromptVersion",
     "PromptStatus",
-    "Baseline",
-    "BaselineVersion",
-    "BaselineStatus",
-    "BaselineScope",
     "ToolGroup",
     "Tool",
     "ToolInstance",
@@ -74,4 +71,7 @@ __all__ = [
     "PermissionValue",
     "RoutingLog",
     "Policy",
+    "Limit",
+    "LimitVersion",
+    "LimitStatus",
 ]

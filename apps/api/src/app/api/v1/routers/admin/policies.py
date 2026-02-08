@@ -1,15 +1,18 @@
 """
-Policies Admin API - with versioning support.
+Policies Admin API - text-based rules and restrictions with versioning.
 
 Architecture:
 - Policy (container) - holds metadata: slug, name, description
-- PolicyVersion - holds versioned data: limits, timeouts, budgets
-- recommended_version_id - points to the version that should be used by default
+- PolicyVersion - holds versioned data: policy_text, policy_json
+- current_version_id - points to the active version
+
+Policy is NOT execution limits (those are in /admin/limits).
+Policy defines behavioral rules, restrictions, and guidelines.
 
 Version workflow:
 - Create → always draft
-- Activate → draft → active (deactivates previous active)
-- Deactivate → draft or active → inactive
+- Activate → draft → active (deprecates previous active)
+- Deactivate → draft or active → deprecated
 """
 from typing import List, Optional, Dict, Any
 from uuid import UUID
@@ -37,62 +40,39 @@ router = APIRouter(tags=["policies"])
 # ─────────────────────────────────────────────────────────────────────────────
 
 class PolicyCreate(BaseModel):
-    """Schema for creating a policy container"""
     slug: str = Field(..., description="Unique slug for this policy")
     name: str = Field(..., description="Display name")
     description: Optional[str] = None
 
 
 class PolicyUpdate(BaseModel):
-    """Schema for updating a policy container"""
     name: Optional[str] = None
     description: Optional[str] = None
-    is_active: Optional[bool] = None
 
 
 class PolicyVersionCreate(BaseModel):
-    """Schema for creating a policy version"""
-    max_steps: Optional[int] = Field(None, description="Maximum agent steps")
-    max_tool_calls: Optional[int] = Field(None, description="Maximum tool calls")
-    max_wall_time_ms: Optional[int] = Field(None, description="Maximum wall time in ms")
-    tool_timeout_ms: Optional[int] = Field(None, description="Tool timeout in ms")
-    max_retries: Optional[int] = Field(None, description="Maximum retries")
-    budget_tokens: Optional[int] = Field(None, description="Token budget")
-    budget_cost_cents: Optional[int] = Field(None, description="Cost budget in cents")
-    extra_config: Dict[str, Any] = Field(default_factory=dict)
+    policy_text: str = Field(..., description="Policy text (rules/restrictions)")
+    policy_json: Optional[Dict[str, Any]] = Field(None, description="Structured policy data")
     notes: Optional[str] = Field(None, description="Notes about this version")
     parent_version_id: Optional[UUID] = Field(None, description="Parent version ID")
 
 
 class PolicyVersionUpdate(BaseModel):
-    """Schema for updating a policy version (only draft)"""
-    max_steps: Optional[int] = None
-    max_tool_calls: Optional[int] = None
-    max_wall_time_ms: Optional[int] = None
-    tool_timeout_ms: Optional[int] = None
-    max_retries: Optional[int] = None
-    budget_tokens: Optional[int] = None
-    budget_cost_cents: Optional[int] = None
-    extra_config: Optional[Dict[str, Any]] = None
+    policy_text: Optional[str] = None
+    policy_json: Optional[Dict[str, Any]] = None
     notes: Optional[str] = None
 
 
 class PolicyVersionResponse(BaseModel):
-    """Schema for policy version response"""
     id: UUID
     policy_id: UUID
     version: int
     status: str
-    max_steps: Optional[int]
-    max_tool_calls: Optional[int]
-    max_wall_time_ms: Optional[int]
-    tool_timeout_ms: Optional[int]
-    max_retries: Optional[int]
-    budget_tokens: Optional[int]
-    budget_cost_cents: Optional[int]
-    extra_config: Dict[str, Any]
-    parent_version_id: Optional[UUID]
-    notes: Optional[str]
+    hash: str
+    policy_text: str
+    policy_json: Optional[Dict[str, Any]] = None
+    parent_version_id: Optional[UUID] = None
+    notes: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
@@ -101,13 +81,11 @@ class PolicyVersionResponse(BaseModel):
 
 
 class PolicyResponse(BaseModel):
-    """Schema for policy container response"""
     id: UUID
     slug: str
     name: str
-    description: Optional[str]
-    recommended_version_id: Optional[UUID]
-    is_active: bool
+    description: Optional[str] = None
+    current_version_id: Optional[UUID] = None
     created_at: datetime
     updated_at: datetime
 
@@ -116,9 +94,8 @@ class PolicyResponse(BaseModel):
 
 
 class PolicyDetailResponse(PolicyResponse):
-    """Schema for policy with versions"""
     versions: List[PolicyVersionResponse] = []
-    recommended_version: Optional[PolicyVersionResponse] = None
+    current_version: Optional[PolicyVersionResponse] = None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -129,17 +106,12 @@ class PolicyDetailResponse(PolicyResponse):
 async def list_policies(
     skip: int = 0,
     limit: int = 100,
-    is_active: Optional[bool] = Query(None, description="Filter by active status"),
     db: AsyncSession = Depends(db_session),
     _: UserCtx = Depends(require_admin),
 ):
     """List all policies. Admin only."""
     service = PolicyService(db)
-    policies, _ = await service.list_policies(
-        skip=skip,
-        limit=limit,
-        is_active=is_active,
-    )
+    policies, _ = await service.list_policies(skip=skip, limit=limit)
     return policies
 
 
@@ -175,22 +147,24 @@ async def get_policy(
     service = PolicyService(db)
     try:
         policy = await service.get_policy_with_versions(slug)
-        
-        # Build response with versions
         versions = await service.list_versions(slug)
-        recommended = await service.get_recommended_version(slug)
-        
+
+        current = None
+        if policy.current_version_id:
+            cv = await service.version_repo.get_by_id(policy.current_version_id)
+            if cv:
+                current = PolicyVersionResponse.model_validate(cv)
+
         return PolicyDetailResponse(
             id=policy.id,
             slug=policy.slug,
             name=policy.name,
             description=policy.description,
-            recommended_version_id=policy.recommended_version_id,
-            is_active=policy.is_active,
+            current_version_id=policy.current_version_id,
             created_at=policy.created_at,
             updated_at=policy.updated_at,
             versions=[PolicyVersionResponse.model_validate(v) for v in versions],
-            recommended_version=PolicyVersionResponse.model_validate(recommended) if recommended else None,
+            current_version=current,
         )
     except PolicyNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -211,7 +185,6 @@ async def update_policy(
             policy_id=policy.id,
             name=data.name,
             description=data.description,
-            is_active=data.is_active,
         )
         await db.commit()
         return policy
@@ -246,7 +219,7 @@ async def delete_policy(
 @router.get("/{slug}/versions", response_model=List[PolicyVersionResponse])
 async def list_versions(
     slug: str = Path(..., description="Policy slug"),
-    status_filter: Optional[str] = Query(None, description="Filter by status: draft, active, inactive"),
+    status_filter: Optional[str] = Query(None, description="Filter by status: draft, active, deprecated"),
     db: AsyncSession = Depends(db_session),
     _: UserCtx = Depends(require_admin),
 ):
@@ -271,14 +244,8 @@ async def create_version(
     try:
         version = await service.create_version(
             policy_slug=slug,
-            max_steps=data.max_steps,
-            max_tool_calls=data.max_tool_calls,
-            max_wall_time_ms=data.max_wall_time_ms,
-            tool_timeout_ms=data.tool_timeout_ms,
-            max_retries=data.max_retries,
-            budget_tokens=data.budget_tokens,
-            budget_cost_cents=data.budget_cost_cents,
-            extra_config=data.extra_config,
+            policy_text=data.policy_text,
+            policy_json=data.policy_json,
             notes=data.notes,
             parent_version_id=data.parent_version_id,
         )
@@ -320,14 +287,8 @@ async def update_version(
         version = await service.get_version_by_number(slug, version_number)
         version = await service.update_version(
             version_id=version.id,
-            max_steps=data.max_steps,
-            max_tool_calls=data.max_tool_calls,
-            max_wall_time_ms=data.max_wall_time_ms,
-            tool_timeout_ms=data.tool_timeout_ms,
-            max_retries=data.max_retries,
-            budget_tokens=data.budget_tokens,
-            budget_cost_cents=data.budget_cost_cents,
-            extra_config=data.extra_config,
+            policy_text=data.policy_text,
+            policy_json=data.policy_json,
             notes=data.notes,
         )
         await db.commit()
@@ -347,7 +308,7 @@ async def delete_version(
     db: AsyncSession = Depends(db_session),
     _: UserCtx = Depends(require_admin),
 ):
-    """Delete a version (only draft and inactive versions can be deleted). Admin only."""
+    """Delete a version (only draft and deprecated versions). Admin only."""
     service = PolicyService(db)
     try:
         version = await service.get_version_by_number(slug, version_number)
@@ -368,8 +329,8 @@ async def activate_version(
 ):
     """
     Activate a version (draft → active).
-    Deactivates the currently active version (active → inactive).
-    Updates recommended_version_id on the policy.
+    Deprecates the currently active version.
+    Updates current_version_id on the policy.
     Admin only.
     """
     service = PolicyService(db)
@@ -391,49 +352,13 @@ async def deactivate_version(
     db: AsyncSession = Depends(db_session),
     _: UserCtx = Depends(require_admin),
 ):
-    """Deactivate a version (draft or active → inactive). Admin only."""
+    """Deactivate a version (draft or active → deprecated). Admin only."""
     service = PolicyService(db)
     try:
         version = await service.get_version_by_number(slug, version_number)
         version = await service.deactivate_version(version.id)
         await db.commit()
         return version
-    except (PolicyNotFoundError, PolicyVersionNotFoundError) as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except PolicyError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-@router.get("/{slug}/recommended", response_model=PolicyVersionResponse)
-async def get_recommended_version(
-    slug: str = Path(..., description="Policy slug"),
-    db: AsyncSession = Depends(db_session),
-    _: UserCtx = Depends(require_admin),
-):
-    """Get the recommended version for a policy. Admin only."""
-    service = PolicyService(db)
-    try:
-        version = await service.get_recommended_version(slug)
-        if not version:
-            raise HTTPException(status_code=404, detail="No recommended version found")
-        return version
-    except PolicyNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-
-
-@router.put("/{slug}/recommended", response_model=PolicyResponse)
-async def set_recommended_version(
-    slug: str = Path(..., description="Policy slug"),
-    version_id: UUID = Query(..., description="Version ID to set as recommended"),
-    db: AsyncSession = Depends(db_session),
-    _: UserCtx = Depends(require_admin),
-):
-    """Set the recommended version for a policy. Admin only."""
-    service = PolicyService(db)
-    try:
-        policy = await service.update_recommended_version(slug, version_id)
-        await db.commit()
-        return policy
     except (PolicyNotFoundError, PolicyVersionNotFoundError) as e:
         raise HTTPException(status_code=404, detail=str(e))
     except PolicyError as e:

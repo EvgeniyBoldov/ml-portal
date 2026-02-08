@@ -10,7 +10,6 @@
   background: var(--panel, var(--color-bg-primary));
   border: 1px solid var(--border, var(--color-border));
   border-radius: var(--radius-md, 8px);
-  align-self: flex-start; /* Don't stretch vertically */
 }
 
 /* Grid span classes - same as ContentBlock */

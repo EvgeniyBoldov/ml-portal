@@ -68,20 +68,16 @@ class PolicyRepository:
         self,
         skip: int = 0,
         limit: int = 100,
-        is_active: Optional[bool] = None,
     ) -> Tuple[List[Policy], int]:
-        """List policies with filters"""
+        """List policies with pagination"""
         stmt = select(Policy)
-        
-        if is_active is not None:
-            stmt = stmt.where(Policy.is_active == is_active)
-        
+
         count_stmt = select(func.count()).select_from(stmt.subquery())
         total = await self.session.scalar(count_stmt) or 0
-        
+
         stmt = stmt.order_by(Policy.created_at.desc()).offset(skip).limit(limit)
         result = await self.session.execute(stmt)
-        
+
         return list(result.scalars().all()), total
 
     async def get_default(self) -> Optional[Policy]:
@@ -176,14 +172,14 @@ class PolicyVersionRepository:
         await self.session.execute(stmt)
 
     async def deactivate_active_version(self, policy_id: UUID) -> None:
-        """Deactivate currently active version of a policy (set to inactive)"""
+        """Deprecate currently active version of a policy"""
         stmt = (
             update(PolicyVersion)
             .where(
                 PolicyVersion.policy_id == policy_id,
                 PolicyVersion.status == PolicyStatus.ACTIVE.value
             )
-            .values(status=PolicyStatus.INACTIVE.value)
+            .values(status=PolicyStatus.DEPRECATED.value)
         )
         await self.session.execute(stmt)
 

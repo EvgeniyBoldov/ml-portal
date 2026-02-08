@@ -44,6 +44,8 @@ export interface EntityInfoBlockProps {
   compact?: boolean;
   /** Additional CSS class */
   className?: string;
+  /** Additional header actions (e.g. status badge) */
+  headerActions?: React.ReactNode;
 }
 
 export function EntityInfoBlock({
@@ -58,6 +60,7 @@ export function EntityInfoBlock({
   width = 'full',
   compact = false,
   className = '',
+  headerActions,
 }: EntityInfoBlockProps) {
   // Default fields if not provided
   const defaultFields: FieldDefinition[] = [
@@ -78,6 +81,7 @@ export function EntityInfoBlock({
           fields={entityFields}
           data={entity}
           onChange={onFieldChange}
+          headerActions={headerActions}
         />
         {showStatus && status && (
           <StatusBlock
@@ -102,6 +106,7 @@ export function EntityInfoBlock({
           fields={entityFields}
           data={entity}
           onChange={onFieldChange}
+          headerActions={headerActions}
         />
       </div>
 

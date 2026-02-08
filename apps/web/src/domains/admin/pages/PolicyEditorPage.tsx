@@ -12,7 +12,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { policiesApi, type PolicyDetail, type PolicyVersionInfo } from '@/shared/api/policies';
 import { qk } from '@/shared/api/keys';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
-import { EntityTabsPage, PolicyVersionCard, type FieldDefinition, type BreadcrumbItem, type EntityPageMode } from '@/shared/ui';
+import { EntityTabsPage, PolicyVersionCard, Badge, type FieldDefinition, type BreadcrumbItem, type EntityPageMode } from '@/shared/ui';
 
 export function PolicyEditorPage() {
   const { slug } = useParams<{ slug: string }>();
@@ -206,6 +206,13 @@ export function PolicyEditorPage() {
       onSetRecommended={(v: PolicyVersionInfo) => setRecommendedMutation.mutate(v)}
       containerFields={containerFields}
       breadcrumbs={breadcrumbs}
+      statusBadge={
+        !isNew && policy ? (
+          <Badge tone={policy.is_active ? 'success' : 'neutral'} size="small">
+            {policy.is_active ? 'Активна' : 'Неактивна'}
+          </Badge>
+        ) : undefined
+      }
       renderVersionContent={() => (
         <PolicyVersionCard
           version={selectedVersion || null}

@@ -121,6 +121,7 @@ async def _sync_tools_from_registry():
                 worker_build_id=os.getenv("WORKER_BUILD_ID"),
             )
             stats = await service.sync_all()
+            await session.commit()
             logger.info(f"Tool sync: {stats}")
     except Exception as e:
         logger.error(f"Failed to sync tools from registry: {e}")

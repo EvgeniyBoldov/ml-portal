@@ -552,6 +552,7 @@ async def rescan_all_tools(
     """Rescan all tools from registry and sync to DB (tools + backend releases)"""
     sync_service = ToolSyncService(session, worker_build_id=os.getenv("WORKER_BUILD_ID"))
     stats = await sync_service.sync_all()
+    await session.commit()
     return {
         "message": "Tools synced successfully",
         "stats": stats,
@@ -571,6 +572,7 @@ async def rescan_group_tools(
     try:
         group = await service.get_group(group_slug)
         stats = await sync_service.sync_all()
+        await session.commit()
         
         return {
             "message": f"Tools in group '{group_slug}' synced successfully",
@@ -596,6 +598,7 @@ async def rescan_backend_releases(
         # Sync tools + backend releases from registry
         sync_service = ToolSyncService(session, worker_build_id=os.getenv("WORKER_BUILD_ID"))
         stats = await sync_service.sync_all()
+        await session.commit()
         
         # Re-fetch tool with updated backend releases
         updated_tool = await service.get_tool(slug)

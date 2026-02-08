@@ -17,8 +17,8 @@ import {
 } from '@/shared/api/toolReleases';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
 import { EntityPage, type EntityPageMode } from '@/shared/ui/EntityPage';
-import { ContentBlock, ContentGrid, StatusBadgeCard, type FieldDefinition, type StatusOption } from '@/shared/ui';
-import Button from '@/shared/ui/Button';
+import { ContentBlock, Badge, type FieldDefinition } from '@/shared/ui';
+import { useVersionActions } from '@/shared/hooks/useVersionActions';
 
 interface FormData {
   backend_release_id: string;
@@ -175,14 +175,6 @@ export function ToolReleasePage() {
     }
   };
 
-  const handleEdit = () => {
-    if (existingRelease?.status !== 'draft') {
-      showError('Только черновики можно редактировать');
-      return;
-    }
-    setSearchParams({ mode: 'edit' });
-  };
-
   const handleCancel = () => {
     if (mode === 'edit' && existingRelease) {
       setFormData({
@@ -205,13 +197,6 @@ export function ToolReleasePage() {
     value: br.id,
     label: `${br.version}${br.deprecated ? ' (deprecated)' : ''}`,
   }));
-
-  // Status options
-  const statusOptions: StatusOption[] = [
-    { value: 'draft', label: 'Черновик', tone: 'warn' },
-    { value: 'active', label: 'Активна', tone: 'success' },
-    { value: 'archived', label: 'Архив', tone: 'neutral' },
-  ];
 
   // Field definitions (без backend_release_id - он в отдельном read-only блоке)
   const releaseFields: FieldDefinition[] = [
@@ -240,36 +225,24 @@ export function ToolReleasePage() {
   ];
 
   // Check if this release is the recommended one
-  const isRecommended = tool?.recommended_release_id === existingRelease?.id;
+  const isRecommended = !!(tool?.recommended_release_id && existingRelease?.id && tool.recommended_release_id === existingRelease.id);
 
-  // Render header actions
-  const renderHeaderActions = () => {
-    if (isCreate) return null;
-    return (
-      <>
-        {existingRelease?.status === 'draft' && (
-          <Button variant="primary" onClick={() => activateMutation.mutate()} disabled={activateMutation.isPending}>
-            Активировать
-          </Button>
-        )}
-        {existingRelease?.status === 'active' && (
-          <>
-            {!isRecommended && (
-              <Button variant="primary" onClick={() => setRecommendedMutation.mutate()} disabled={setRecommendedMutation.isPending}>
-                Сделать основным
-              </Button>
-            )}
-            <Button variant="secondary" onClick={() => archiveMutation.mutate()} disabled={archiveMutation.isPending}>
-              Архивировать
-            </Button>
-          </>
-        )}
-        <Button variant="secondary" onClick={() => navigate(`/admin/tools/${toolSlug}/releases/new`)}>
-          Новый релиз
-        </Button>
-      </>
-    );
-  };
+  const actionButtons = useVersionActions({
+    status: existingRelease?.status,
+    isRecommended,
+    isCreate,
+    callbacks: {
+      onEdit: () => setSearchParams({ mode: 'edit' }),
+      onActivate: () => activateMutation.mutate(),
+      onDeactivate: () => archiveMutation.mutate(),
+      onSetRecommended: () => setRecommendedMutation.mutate(),
+    },
+    loading: {
+      activate: activateMutation.isPending,
+      deactivate: archiveMutation.isPending,
+      setRecommended: setRecommendedMutation.isPending,
+    },
+  });
 
   // Backend release info block
   const selectedBackendRelease = tool?.backend_releases?.find(
@@ -284,39 +257,26 @@ export function ToolReleasePage() {
       backPath={`/admin/tools/${toolSlug}`}
       loading={isLoading}
       saving={saving}
-      onEdit={existingRelease?.status === 'draft' ? handleEdit : undefined}
       onSave={handleSave}
       onCancel={handleCancel}
       breadcrumbs={breadcrumbs}
-      headerActions={renderHeaderActions()}
+      actionButtons={actionButtons}
     >
-      <ContentGrid>
-        {/* Left column: Release config - 2/3 */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
         <ContentBlock
-          width="2/3"
           title="Настройки релиза"
           editable={isEditable}
           fields={releaseFields}
           data={formData}
           onChange={handleFieldChange}
+          headerActions={
+            <Badge tone={STATUS_TONES[isCreate ? 'draft' : (existingRelease?.status || 'draft')]} size="small">
+              {STATUS_LABELS[isCreate ? 'draft' : (existingRelease?.status || 'draft')]}
+            </Badge>
+          }
         />
 
-        {/* Right column: Status + Backend info - 1/3 */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-          <StatusBadgeCard
-            label="Статус"
-            status={isCreate ? 'draft' : (existingRelease?.status || 'draft')}
-            statusOptions={statusOptions}
-            editable={false}
-            width="full"
-          />
-          
-          {/* Backend version selection - read-only block */}
-          <ContentBlock
-            width="full"
-            title="Версия бэкенда"
-            icon="code"
-          >
+        <ContentBlock title="Версия бэкенда" icon="code">
             {isEditable && isCreate ? (
               <div style={{ fontSize: '0.875rem' }}>
                 <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 500 }}>
@@ -329,7 +289,7 @@ export function ToolReleasePage() {
                     width: '100%',
                     padding: '0.5rem',
                     borderRadius: '4px',
-                    border: '1px solid var(--color-border)',
+                    border: '1px solid var(--border, var(--color-border))',
                     fontSize: '0.875rem',
                   }}
                 >
@@ -345,32 +305,23 @@ export function ToolReleasePage() {
               <div style={{ fontSize: '0.875rem' }}>
                 <div><strong>Версия:</strong> {selectedBackendRelease.version}</div>
                 {selectedBackendRelease.description && (
-                  <div style={{ marginTop: '0.5rem', color: 'var(--color-text-muted)' }}>
+                  <div style={{ marginTop: '0.5rem', color: 'var(--muted)' }}>
                     {selectedBackendRelease.description}
                   </div>
                 )}
                 {selectedBackendRelease.deprecated && (
-                  <div style={{ marginTop: '0.5rem', color: 'var(--color-warning)' }}>
-                    ⚠️ Эта версия устарела
+                  <div style={{ marginTop: '0.5rem', color: 'var(--warning)' }}>
+                    Эта версия устарела
                   </div>
                 )}
               </div>
             ) : (
-              <p style={{ color: 'var(--color-text-muted)', fontSize: '0.875rem' }}>
+              <p style={{ color: 'var(--muted)', fontSize: '0.875rem' }}>
                 Версия бэкенда не выбрана
               </p>
             )}
-          </ContentBlock>
-
-          {isRecommended && (
-            <ContentBlock width="full" title="Основной релиз" icon="star">
-              <div style={{ fontSize: '0.875rem', color: 'var(--color-success)' }}>
-                ✓ Этот релиз используется агентами по умолчанию
-              </div>
-            </ContentBlock>
-          )}
-        </div>
-      </ContentGrid>
+        </ContentBlock>
+      </div>
     </EntityPage>
   );
 }

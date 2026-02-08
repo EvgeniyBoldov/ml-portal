@@ -4,7 +4,7 @@
  * REDESIGNED: Tabs in header, proper content background
  */
 import React, { useState } from 'react';
-import { EntityPage, type EntityPageProps, type EntityPageMode } from '../EntityPage';
+import { EntityPage, type EntityPageProps, type EntityPageMode, type BreadcrumbItem } from '../EntityPage';
 import { EntityInfoBlock, type EntityInfo } from '../EntityInfoBlock';
 import { ShortEntityBlock, type ShortEntityBlockProps } from '../ShortEntityBlock';
 import { ShortVersionCard } from '../VersionCard';
@@ -54,6 +54,8 @@ export interface EntityTabsPageProps<TContainer = any, TVersion = any> {
   versionColumns?: DataTableColumn<TVersion>[];
   showDelete?: boolean;
   onDelete?: () => void;
+  /** Status badge to show in info block header */
+  statusBadge?: React.ReactNode;
 }
 
 export function EntityTabsPage<
@@ -85,6 +87,7 @@ export function EntityTabsPage<
   versionColumns,
   showDelete = false,
   onDelete,
+  statusBadge,
 }: EntityTabsPageProps<TContainer, TVersion>) {
   const isNew = slug === 'new';
   const isEditable = mode === 'edit' || mode === 'create';
@@ -237,6 +240,7 @@ export function EntityTabsPage<
                     editable={mode === 'edit'}
                     fields={containerFields}
                     onFieldChange={onFieldChange}
+                    headerActions={statusBadge}
                   />
                 </div>
                 <div className={styles.splitRight}>

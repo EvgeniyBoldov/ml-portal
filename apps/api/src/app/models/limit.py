@@ -1,22 +1,14 @@
 """
-Policy model - text-based rules and restrictions for agents.
+Limit model - execution limits for agents.
 
 Architecture:
-- Policy (container) - holds metadata: slug, name, description
-- PolicyVersion - holds versioned data: policy_text, policy_json
+- Limit (container) - holds metadata: slug, name, description
+- LimitVersion - holds versioned data: max_steps, timeouts, budgets
 - current_version_id - points to the active version
-
-Policy is NOT execution limits (those are in Limit model).
-Policy defines behavioral rules, restrictions, and guidelines.
-
-Examples:
-- "Do not generate code without explicit request"
-- "Do not mention competitors of company X"
-- "Always respond in Russian"
 
 Version statuses:
 - draft: can be edited, can be activated
-- active: used by agents (only one per policy)
+- active: used by agents (only one per limit)
 - deprecated: no longer used, kept for history
 """
 import uuid
@@ -24,28 +16,28 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional, Dict, Any, List
 
-from sqlalchemy import String, DateTime, Text, Integer, ForeignKey, UniqueConstraint
+from sqlalchemy import String, Boolean, DateTime, Text, Integer, ForeignKey, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
 
 
-class PolicyStatus(str, Enum):
-    """Policy version status"""
+class LimitStatus(str, Enum):
+    """Limit version status"""
     DRAFT = "draft"
     ACTIVE = "active"
     DEPRECATED = "deprecated"
 
 
-class Policy(Base):
+class Limit(Base):
     """
-    Policy container - holds metadata for behavioral policy.
+    Limit container - holds metadata for execution limits.
 
-    Each policy can have multiple versions (PolicyVersion).
+    Each limit can have multiple versions (LimitVersion).
     current_version_id points to the active version.
     """
-    __tablename__ = "policies"
+    __tablename__ = "limits"
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -57,7 +49,7 @@ class Policy(Base):
 
     current_version_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey('policy_versions.id', ondelete='SET NULL', use_alter=True),
+        ForeignKey('limit_versions.id', ondelete='SET NULL', use_alter=True),
         nullable=True,
         index=True
     )
@@ -72,47 +64,42 @@ class Policy(Base):
         nullable=False
     )
 
-    versions: Mapped[List["PolicyVersion"]] = relationship(
-        "PolicyVersion",
-        back_populates="policy",
+    versions: Mapped[List["LimitVersion"]] = relationship(
+        "LimitVersion",
+        back_populates="limit",
         cascade="all, delete-orphan",
-        order_by="desc(PolicyVersion.version)",
-        foreign_keys="PolicyVersion.policy_id"
+        order_by="desc(LimitVersion.version)",
+        foreign_keys="LimitVersion.limit_id"
     )
 
-    current_version: Mapped[Optional["PolicyVersion"]] = relationship(
-        "PolicyVersion",
+    current_version: Mapped[Optional["LimitVersion"]] = relationship(
+        "LimitVersion",
         foreign_keys=[current_version_id],
         post_update=True
     )
 
     def __repr__(self) -> str:
-        return f"<Policy {self.slug}>"
+        return f"<Limit {self.slug}>"
 
 
-class PolicyVersion(Base):
+class LimitVersion(Base):
     """
-    Policy version - holds text-based rules and restrictions.
+    Limit version - holds execution limits, timeouts, and budgets.
 
-    Each version belongs to a Policy and contains:
-    - policy_text: Human-readable policy text
-    - policy_json: Optional structured policy data
-    - hash: Content hash for deduplication
-
-    Only one version per policy can be ACTIVE at a time.
+    Only one version per limit can be ACTIVE at a time.
     """
-    __tablename__ = "policy_versions"
+    __tablename__ = "limit_versions"
     __table_args__ = (
-        UniqueConstraint('policy_id', 'version', name='uix_policy_version'),
+        UniqueConstraint('limit_id', 'version', name='uix_limit_version'),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
 
-    policy_id: Mapped[uuid.UUID] = mapped_column(
+    limit_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey('policies.id', ondelete='CASCADE'),
+        ForeignKey('limits.id', ondelete='CASCADE'),
         nullable=False,
         index=True
     )
@@ -121,20 +108,22 @@ class PolicyVersion(Base):
 
     status: Mapped[str] = mapped_column(
         String(20),
-        default=PolicyStatus.DRAFT.value,
+        default=LimitStatus.DRAFT.value,
         nullable=False,
         index=True
     )
 
-    hash: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    max_steps: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    max_tool_calls: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    max_wall_time_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    tool_timeout_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    max_retries: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
-    policy_text: Mapped[str] = mapped_column(Text, nullable=False)
-
-    policy_json: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
+    extra_config: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
 
     parent_version_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey('policy_versions.id', ondelete='SET NULL'),
+        ForeignKey('limit_versions.id', ondelete='SET NULL'),
         nullable=True
     )
 
@@ -150,29 +139,29 @@ class PolicyVersion(Base):
         nullable=False
     )
 
-    policy: Mapped["Policy"] = relationship(
-        "Policy",
+    limit: Mapped["Limit"] = relationship(
+        "Limit",
         back_populates="versions",
-        foreign_keys=[policy_id]
+        foreign_keys=[limit_id]
     )
 
-    parent_version: Mapped[Optional["PolicyVersion"]] = relationship(
-        "PolicyVersion",
+    parent_version: Mapped[Optional["LimitVersion"]] = relationship(
+        "LimitVersion",
         remote_side=[id],
         foreign_keys=[parent_version_id]
     )
 
     @property
     def is_editable(self) -> bool:
-        return self.status == PolicyStatus.DRAFT.value
+        return self.status == LimitStatus.DRAFT.value
 
     @property
     def can_activate(self) -> bool:
-        return self.status == PolicyStatus.DRAFT.value
+        return self.status == LimitStatus.DRAFT.value
 
     @property
     def can_deactivate(self) -> bool:
-        return self.status in (PolicyStatus.DRAFT.value, PolicyStatus.ACTIVE.value)
+        return self.status in (LimitStatus.DRAFT.value, LimitStatus.ACTIVE.value)
 
     def __repr__(self) -> str:
-        return f"<PolicyVersion {self.policy_id} v{self.version} ({self.status})>"
+        return f"<LimitVersion {self.limit_id} v{self.version} ({self.status})>"

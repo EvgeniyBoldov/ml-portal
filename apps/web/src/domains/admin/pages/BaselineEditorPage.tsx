@@ -12,7 +12,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { baselinesApi, type BaselineDetail, type BaselineVersionInfo } from '@/shared/api/baselines';
 import { qk } from '@/shared/api/keys';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
-import { EntityTabsPage, PromptVersionCard, type FieldDefinition, type BreadcrumbItem, type EntityPageMode } from '@/shared/ui';
+import { EntityTabsPage, PromptVersionCard, Badge, type FieldDefinition, type BreadcrumbItem, type EntityPageMode } from '@/shared/ui';
 
 export function BaselineEditorPage() {
   const { slug } = useParams<{ slug: string }>();
@@ -206,6 +206,13 @@ export function BaselineEditorPage() {
       onSetRecommended={(v: BaselineVersionInfo) => setRecommendedMutation.mutate(v)}
       containerFields={containerFields}
       breadcrumbs={breadcrumbs}
+      statusBadge={
+        !isNew && baseline ? (
+          <Badge tone={baseline.is_active ? 'success' : 'neutral'} size="small">
+            {baseline.is_active ? 'Активен' : 'Неактивен'}
+          </Badge>
+        ) : undefined
+      }
       renderVersionContent={() => (
         <PromptVersionCard
           version={selectedVersion || null}

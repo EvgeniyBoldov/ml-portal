@@ -1,9 +1,9 @@
 /**
  * ToolGroupViewPage - View/Edit tool group with tabs
  * 
- * Tabs:
- * - Обзор: Group info (editable name, description) + statistics
- * - Инструменты: Tools table with DataTable
+ * Layout pattern: same as PromptEditorPage
+ * - Split layout: info block left + status block right
+ * - Tabs: Обзор | Инструменты | Инстансы
  */
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
@@ -15,9 +15,9 @@ import {
 } from '@/shared/api/toolReleases';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
 import { EntityPage, type EntityPageMode } from '@/shared/ui/EntityPage';
-import { ContentBlock, ContentGrid, type FieldDefinition } from '@/shared/ui/ContentBlock';
+import { ContentBlock, type FieldDefinition } from '@/shared/ui/ContentBlock';
 import { Tabs, TabPanel } from '@/shared/ui/Tabs';
-import { Badge, Button, DataTable, StatusBadgeCard, type DataTableColumn, type BreadcrumbItem } from '@/shared/ui';
+import { Badge, Button, DataTable, type DataTableColumn, type BreadcrumbItem } from '@/shared/ui';
 
 const TYPE_LABELS: Record<string, string> = {
   api: 'API',
@@ -33,7 +33,7 @@ const TYPE_TONES: Record<string, 'warn' | 'success' | 'info' | 'neutral'> = {
   builtin: 'neutral',
 };
 
-type TabType = 'main' | 'tools';
+type TabType = 'main' | 'tools' | 'instances';
 
 export function ToolGroupViewPage() {
   const { groupSlug } = useParams<{ groupSlug: string }>();
@@ -92,10 +92,13 @@ export function ToolGroupViewPage() {
   // Rescan mutation
   const rescanMutation = useMutation({
     mutationFn: () => toolReleasesApi.rescanGroupTools(groupSlug!),
-    onSuccess: (data) => {
+    onSuccess: (data: any) => {
       queryClient.invalidateQueries({ queryKey: toolReleasesKeys.groupDetail(groupSlug!) });
       queryClient.invalidateQueries({ queryKey: toolReleasesKeys.groupsList() });
-      showSuccess(`Синхронизация завершена: ${data.stats.created} создано, ${data.stats.updated} обновлено`);
+      queryClient.invalidateQueries({ queryKey: toolReleasesKeys.tools() });
+      const t = data.stats?.tools || {};
+      const br = data.stats?.backend_releases || {};
+      showSuccess(`Синхронизация: ${t.created || 0} тулзов создано, ${br.backend_releases_created || 0} версий создано`);
     },
     onError: (err: Error) => showError(err?.message || 'Ошибка синхронизации'),
   });
@@ -152,7 +155,7 @@ export function ToolGroupViewPage() {
       label: 'Описание',
       type: 'textarea',
       placeholder: 'Описание группы инструментов...',
-      rows: 3,
+      rows: 2,
     },
   ];
 
@@ -162,10 +165,9 @@ export function ToolGroupViewPage() {
     { id: 'instances', label: `Инстансы (${group?.instances_count || 0})` },
   ];
 
-  // Breadcrumbs
   const breadcrumbs: BreadcrumbItem[] = [
     { label: 'Инструменты', href: '/admin/tools' },
-    { label: group?.name || 'Группа' },
+    { label: group?.name || groupSlug || 'Группа' },
   ];
 
   // DataTable columns for tools
@@ -177,7 +179,7 @@ export function ToolGroupViewPage() {
       render: (row) => (
         <div>
           <div style={{ fontWeight: 500 }}>{row.slug}</div>
-          <div style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)' }}>{row.name}</div>
+          <div style={{ fontSize: '0.8125rem', color: 'var(--muted)' }}>{row.name}</div>
         </div>
       ),
     },
@@ -196,7 +198,7 @@ export function ToolGroupViewPage() {
       label: 'ВЕРСИИ',
       width: 100,
       render: (row) => (
-        <span style={{ color: 'var(--color-text-muted)' }}>
+        <span style={{ color: 'var(--muted)' }}>
           {row.releases_count || 0}
           {row.has_recommended && ' ★'}
         </span>
@@ -217,7 +219,7 @@ export function ToolGroupViewPage() {
   return (
     <EntityPage
       mode={mode}
-      entityName={group?.name || 'Группа инструментов'}
+      entityName={group?.name || groupSlug || 'Группа'}
       entityTypeLabel="группы"
       backPath="/admin/tools"
       breadcrumbs={breadcrumbs}
@@ -240,27 +242,18 @@ export function ToolGroupViewPage() {
     >
       <Tabs tabs={tabs} activeTab={activeTab} onChange={setActiveTab}>
         <TabPanel id="main" activeTab={activeTab}>
-          <ContentGrid>
-            <ContentBlock
-              width="2/3"
-              title="Информация о группе"
-              icon="folder"
-              editable={isEditable}
-              fields={groupFields}
-              data={formData}
-              onChange={handleFieldChange}
-            />
-            <StatusBadgeCard
-              label="Статус"
-              status={group?.is_active ? 'active' : 'inactive'}
-              statusOptions={[
-                { value: 'active', label: 'Активна', tone: 'success' },
-                { value: 'inactive', label: 'Неактивна', tone: 'neutral' },
-              ]}
-              editable={false}
-              width="1/3"
-            />
-          </ContentGrid>
+          <ContentBlock
+            title="Основная информация"
+            editable={isEditable}
+            fields={groupFields}
+            data={formData}
+            onChange={handleFieldChange}
+            headerActions={
+              <Badge tone={group?.is_active ? 'success' : 'neutral'} size="small">
+                {group?.is_active ? 'Активна' : 'Неактивна'}
+              </Badge>
+            }
+          />
         </TabPanel>
 
         <TabPanel id="tools" activeTab={activeTab}>
@@ -274,7 +267,7 @@ export function ToolGroupViewPage() {
         </TabPanel>
 
         <TabPanel id="instances" activeTab={activeTab}>
-          <div style={{ padding: '1rem', textAlign: 'center', color: 'var(--color-text-muted)' }}>
+          <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--muted)' }}>
             Таб инстансы будет реализован позже
           </div>
         </TabPanel>

@@ -10,9 +10,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { promptsApi, type PromptVersion } from '@/shared/api/prompts';
 import { qk } from '@/shared/api/keys';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
-import { EntityPage, ContentBlock, ContentGrid, Textarea, Button, type EntityPageMode, type BreadcrumbItem } from '@/shared/ui';
-import { VersionActionsBlock } from '@/shared/ui';
-import layoutStyles from '@/shared/ui/styles/layouts.module.css';
+import { EntityPage, ContentBlock, Textarea, Badge, type EntityPageMode, type BreadcrumbItem } from '@/shared/ui';
+import { useVersionActions } from '@/shared/hooks/useVersionActions';
 
 export function PromptVersionPage() {
   const { slug, version: versionParam } = useParams<{ slug: string; version: string }>();
@@ -142,81 +141,24 @@ export function PromptVersionPage() {
     { label: isCreate ? 'Новая версия' : `Версия ${versionNumber}` },
   ];
 
-  // Generate action buttons for version management
-  const getVersionActionButtons = () => {
-    if (isCreate || !existingVersion) return null;
+  const isRecommended = !!(prompt?.recommended_version?.id && existingVersion?.id && prompt.recommended_version.id === existingVersion.id);
 
-    const buttons = [];
-    const isRecommended = prompt?.recommended_version?.id === existingVersion.id;
-
-    switch (existingVersion.status) {
-      case 'draft':
-        buttons.push(
-          <Button
-            key="activate"
-            variant="primary"
-            onClick={() => activateMutation.mutate()}
-            disabled={activateMutation.isPending}
-            loading={activateMutation.isPending}
-          >
-            Активировать
-          </Button>
-        );
-        buttons.push(
-          <Button
-            key="edit"
-            variant="outline"
-            onClick={() => setSearchParams({ mode: 'edit' })}
-          >
-            Редактировать
-          </Button>
-        );
-        break;
-
-      case 'active':
-        if (!isRecommended) {
-          buttons.push(
-            <Button
-              key="setRecommended"
-              variant="outline"
-              onClick={() => setRecommendedMutation.mutate()}
-              disabled={setRecommendedMutation.isPending}
-              loading={setRecommendedMutation.isPending}
-            >
-              Сделать основной
-            </Button>
-          );
-          buttons.push(
-            <Button
-              key="archive"
-              variant="danger"
-              onClick={() => deactivateMutation.mutate()}
-              disabled={deactivateMutation.isPending}
-              loading={deactivateMutation.isPending}
-            >
-              Архивировать
-            </Button>
-          );
-        }
-        break;
-
-      case 'archived':
-        buttons.push(
-          <Button
-            key="reactivate"
-            variant="primary"
-            onClick={() => activateMutation.mutate()}
-            disabled={activateMutation.isPending}
-            loading={activateMutation.isPending}
-          >
-            Активировать
-          </Button>
-        );
-        break;
-    }
-
-    return buttons.length > 0 ? buttons : null;
-  };
+  const actionButtons = useVersionActions({
+    status: existingVersion?.status,
+    isRecommended,
+    isCreate,
+    callbacks: {
+      onEdit: () => setSearchParams({ mode: 'edit' }),
+      onActivate: () => activateMutation.mutate(),
+      onDeactivate: () => deactivateMutation.mutate(),
+      onSetRecommended: () => setRecommendedMutation.mutate(),
+    },
+    loading: {
+      activate: activateMutation.isPending,
+      deactivate: deactivateMutation.isPending,
+      setRecommended: setRecommendedMutation.isPending,
+    },
+  });
 
   return (
     <EntityPage
@@ -230,9 +172,19 @@ export function PromptVersionPage() {
       onEdit={handleEdit}
       onSave={handleSave}
       onCancel={handleCancel}
-      actionButtons={getVersionActionButtons()}
+      actionButtons={actionButtons}
     >
-      <ContentBlock title="Template" icon="file-text">
+      <ContentBlock
+        title="Template"
+        icon="file-text"
+        headerActions={
+          !isCreate && existingVersion?.status ? (
+            <Badge tone={existingVersion.status === 'active' ? 'success' : existingVersion.status === 'draft' ? 'warn' : 'neutral'} size="small">
+              {existingVersion.status === 'active' ? 'Активна' : existingVersion.status === 'draft' ? 'Черновик' : 'Архив'}
+            </Badge>
+          ) : undefined
+        }
+      >
         {isEditable ? (
           <Textarea
             value={formData.template}

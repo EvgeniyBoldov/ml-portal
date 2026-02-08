@@ -8,8 +8,8 @@ import { useQuery } from '@tanstack/react-query';
 import { toolInstancesApi } from '@/shared/api';
 import { qk } from '@/shared/api/keys';
 import { EntityPage, type BreadcrumbItem } from '@/shared/ui/EntityPage';
-import { ContentBlock, ContentGrid, type FieldDefinition } from '@/shared/ui/ContentBlock';
-import { StatusBadgeCard } from '@/shared/ui';
+import { ContentBlock, type FieldDefinition } from '@/shared/ui/ContentBlock';
+import { Badge } from '@/shared/ui';
 
 export function InstanceViewPage() {
   const { id } = useParams<{ id: string }>();
@@ -65,37 +65,22 @@ export function InstanceViewPage() {
       showDelete={false}
       onEdit={() => navigate(`/admin/instances/${id}/edit`)}
     >
-      <ContentGrid>
-        <ContentBlock
-          width="2/3"
-          title="Основные параметры"
-          icon="server"
-          fields={infoFields}
-          data={formData}
-        />
-        <StatusBadgeCard
-          label="Статус"
-          status={instance?.is_active ? 'active' : 'inactive'}
-          statusOptions={[
-            { value: 'active', label: 'Активен', tone: 'success' },
-            { value: 'inactive', label: 'Неактивен', tone: 'neutral' },
-          ]}
-          editable={false}
-          width="1/3"
-          description={
-            instance?.is_active
-              ? undefined
-              : 'Неактивные инстансы не используются при выполнении запросов'
-          }
-        />
-      </ContentGrid>
+      <ContentBlock
+        title="Основные параметры"
+        icon="server"
+        fields={infoFields}
+        data={formData}
+        headerActions={
+          <Badge tone={instance?.is_active ? 'success' : 'neutral'} size="small">
+            {instance?.is_active ? 'Активен' : 'Неактивен'}
+          </Badge>
+        }
+      />
 
-      <ContentGrid>
-        <ContentBlock
-          width="1/1"
-          title="Конфигурация"
-          icon="settings"
-        >
+      <ContentBlock
+        title="Конфигурация"
+        icon="settings"
+      >
           <pre style={{
             background: 'var(--bg-secondary)',
             padding: '1rem',
@@ -106,13 +91,10 @@ export function InstanceViewPage() {
           }}>
             {JSON.stringify(instance?.config || {}, null, 2)}
           </pre>
-        </ContentBlock>
-      </ContentGrid>
+      </ContentBlock>
 
       {instance?.health_status && (
-        <ContentGrid>
           <ContentBlock
-            width="1/1"
             title="Health Check"
             icon="activity"
             fields={[
@@ -137,7 +119,6 @@ export function InstanceViewPage() {
                 : '',
             }}
           />
-        </ContentGrid>
       )}
     </EntityPage>
   );
