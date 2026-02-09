@@ -1,8 +1,12 @@
+"""
+Tool model v2 - container for tool versions.
+"""
 import uuid
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any, List, TYPE_CHECKING
-from sqlalchemy import String, Boolean, DateTime, Text, ForeignKey
-from sqlalchemy.dialects.postgresql import UUID, JSONB
+from typing import Optional, List, TYPE_CHECKING
+from enum import Enum
+from sqlalchemy import String, DateTime, Text, ForeignKey, UniqueConstraint
+from sqlalchemy.dialects.postgresql import UUID, ARRAY
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -12,17 +16,21 @@ if TYPE_CHECKING:
     from app.models.tool_release import ToolBackendRelease, ToolRelease
 
 
+class ToolKind(str, Enum):
+    """Tool kind (v2)"""
+    READ = "read"
+    WRITE = "write"
+    MIXED = "mixed"
+
+
 class Tool(Base):
     """
-    Tool registry for LLM agents.
-    Defines external capabilities (API calls, Python functions, etc.) with strict schemas.
+    Tool container (v2).
     
     Примеры: jira.search, jira.create, rag.search, netbox.get_device
     
-    Версионирование:
-    - backend_releases: версии из кода (заполняются воркером)
-    - releases: версии для агентов (создаются через UI)
-    - recommended_release_id: основная версия для использования
+    Версионирование через ToolRelease (tool_version в v2 schema).
+    current_version_id указывает на активную версию.
     """
     __tablename__ = "tools"
 
@@ -30,10 +38,8 @@ class Tool(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     
-    # Unique identifier (e.g., "jira.search", "rag.search", "netbox.get_device")
     slug: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
     
-    # FK to ToolGroup (e.g., "jira", "rag", "netbox")
     tool_group_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("tool_groups.id", ondelete="CASCADE"),
@@ -41,45 +47,26 @@ class Tool(Base):
         index=True
     )
     
-    # Display name
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     
-    # Name for LLM (how to refer to this tool in prompts)
-    name_for_llm: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    
-    # Description for the LLM (what this tool does)
-    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    
-    # Tool type: 'builtin', 'api', 'function', 'database', etc.
-    type: Mapped[str] = mapped_column(String(50), default="builtin", nullable=False)
-    
-    # JSON Schema for input arguments (legacy, now in backend_releases)
-    input_schema: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
-    
-    # JSON Schema for output (legacy, now in backend_releases)
-    output_schema: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
-    
-    # Execution configuration (e.g., HTTP URL, method, timeout, function_path)
-    config: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict)
-    
-    # Recommended release for agents to use
-    recommended_release_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+    # v2: current_version_id replaces recommended_release_id
+    current_version_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("tool_releases.id", ondelete="SET NULL"),
         nullable=True,
         index=True
     )
     
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # v2: kind (read/write/mixed)
+    kind: Mapped[str] = mapped_column(
+        String(10), default=ToolKind.READ.value, nullable=False
+    )
+    
+    # v2: tags for filtering
+    tags: Mapped[Optional[List[str]]] = mapped_column(ARRAY(String), nullable=True)
     
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), 
-        default=lambda: datetime.now(timezone.utc), 
-        onupdate=lambda: datetime.now(timezone.utc), 
-        nullable=False
     )
     
     # Relationships
@@ -103,10 +90,14 @@ class Tool(Base):
         cascade="all, delete-orphan"
     )
     
-    recommended_release: Mapped[Optional["ToolRelease"]] = relationship(
+    current_version: Mapped[Optional["ToolRelease"]] = relationship(
         "ToolRelease",
-        foreign_keys=[recommended_release_id],
+        foreign_keys=[current_version_id],
         post_update=True
+    )
+
+    __table_args__ = (
+        UniqueConstraint("tool_group_id", "slug", name="uq_tool_group_slug"),
     )
 
     def __repr__(self):

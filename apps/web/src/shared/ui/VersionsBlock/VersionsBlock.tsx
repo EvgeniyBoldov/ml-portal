@@ -22,7 +22,7 @@ export interface VersionInfo {
 
 export interface VersionsBlockProps {
   /** Entity type for status configuration */
-  entityType: 'prompt' | 'baseline' | 'policy';
+  entityType: 'prompt' | 'baseline' | 'policy' | 'agent' | 'limit' | 'tool';
   /** Versions data */
   versions: VersionInfo[];
   /** Currently selected version */

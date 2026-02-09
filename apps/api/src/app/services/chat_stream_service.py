@@ -236,16 +236,20 @@ User message: {message}"""
             logger.info(f"User message created: {user_message_id}")
             yield {"type": "user_message", "message_id": user_message_id, "created_at": user_message_created_at}
             
-            # 5. Load agent profile
+            # 5. Load agent version (v2)
             yield {"type": "status", "stage": "loading_agent"}
-            agent_profile = await self.agent_service.get_agent_profile(
+            from app.agents.runtime import AgentProfile
+            agent_version = await self.agent_service.resolve_active_version(
                 agent_slug=agent_slug,
                 use_rag=use_rag
             )
-            logger.info(
-                f"Using agent: {agent_profile.agent.slug}, "
-                f"tools: {agent_profile.tools}"
+            agent_obj = await self.agent_service.agent_repo.get_by_id(agent_version.agent_id)
+            resolved_agent_slug = agent_obj.slug if agent_obj else (agent_slug or "unknown")
+            agent_profile = AgentProfile(
+                agent_slug=resolved_agent_slug,
+                prompt_text=agent_version.prompt,
             )
+            logger.info(f"Using agent: {resolved_agent_slug}, version: {agent_version.version}")
             
             # 6. Load context
             yield {"type": "status", "stage": "loading_context"}
@@ -285,7 +289,7 @@ User message: {message}"""
                 # Use Router if enabled, otherwise use legacy flow
                 if self.use_router and self.router:
                     async for event_data in self._run_with_router(
-                        agent_slug=agent_profile.agent.slug,
+                        agent_slug=resolved_agent_slug,
                         user_id=user_id,
                         tenant_id=tenant_id,
                         llm_messages=llm_messages,
@@ -311,7 +315,7 @@ User message: {message}"""
                         messages=llm_messages,
                         ctx=tool_ctx,
                         model=model,
-                        enable_logging=agent_profile.agent.enable_logging,
+                        enable_logging=True,
                     ):
                         mapped = self._map_runtime_event(event)
                         if mapped:
@@ -462,7 +466,7 @@ User message: {message}"""
                 messages=llm_messages,
                 ctx=tool_ctx,
                 model=model,
-                enable_logging=exec_request.agent.enable_logging,
+                enable_logging=True,
             ):
                 mapped = self._map_runtime_event(event)
                 if mapped:

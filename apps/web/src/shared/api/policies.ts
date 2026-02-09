@@ -59,7 +59,7 @@ export interface PolicyUpdate {
 }
 
 export interface PolicyVersionCreate {
-  policy_text: string;
+  policy_text?: string;
   policy_json?: Record<string, any>;
   notes?: string;
   parent_version_id?: string;

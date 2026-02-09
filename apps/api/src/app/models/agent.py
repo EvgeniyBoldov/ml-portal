@@ -1,8 +1,17 @@
+"""
+Agent model v2 - versioned agent container.
+
+Architecture:
+- Agent (container) - holds metadata: slug, name, description, current_version_id
+- AgentVersion - holds versioned data: prompt, policy_id, limit_id
+- AgentBinding (tool_bind) links to agent_version_id
+"""
 import uuid
 from datetime import datetime, timezone
-from typing import Optional, List, Dict, Any
-from sqlalchemy import String, Boolean, DateTime, Text, ForeignKey
-from sqlalchemy.dialects.postgresql import UUID, JSONB
+from typing import Optional, List
+
+from sqlalchemy import String, DateTime, Text, ForeignKey
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -10,66 +19,50 @@ from app.models.base import Base
 
 class Agent(Base):
     """
-    Agent configuration entity.
-    Combines a System Prompt, Policy, Limit, and Tool Bindings.
-    Acts as a profile for the Chat/LLM interaction.
-    
-    Tool bindings are stored in AgentBinding table (agent_id → tool_id → instance_id).
-    Policy controls execution limits and behavior.
-    Capabilities are used by Router for agent selection.
+    Agent container - holds metadata for an agent.
+
+    Each agent can have multiple versions (AgentVersion).
+    current_version_id points to the active version.
     """
     __tablename__ = "agents"
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    
+
     slug: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
-    
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    
-    # Reference to system prompt (by slug)
-    system_prompt_slug: Mapped[str] = mapped_column(String(255), nullable=False)
-    
-    # Reference to Policy entity with behavioral rules/restrictions
-    policy_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+
+    current_version_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey('policies.id', ondelete='SET NULL'),
+        ForeignKey('agent_versions.id', ondelete='SET NULL', use_alter=True),
         nullable=True,
         index=True
     )
 
-    # Reference to Limit entity with execution limits
-    limit_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey('limits.id', ondelete='SET NULL'),
-        nullable=True,
-        index=True
-    )
-    
-    # Capabilities for Router matching
-    # ["knowledge_base_search", "ticket_management", "code_generation"]
-    capabilities: Mapped[List[str]] = mapped_column(JSONB, default=list)
-    
-    # Whether agent can run in partial mode (some tools unavailable)
-    supports_partial_mode: Mapped[bool] = mapped_column(Boolean, default=False)
-    
-    # LLM generation config (temperature, max_tokens, etc.)
-    generation_config: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict)
-    
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    
-    enable_logging: Mapped[bool] = mapped_column(Boolean, default=True)
-    
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), 
-        default=lambda: datetime.now(timezone.utc), 
-        onupdate=lambda: datetime.now(timezone.utc), 
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
         nullable=False
+    )
+
+    versions: Mapped[List["AgentVersion"]] = relationship(
+        "AgentVersion",
+        back_populates="agent",
+        cascade="all, delete-orphan",
+        order_by="desc(AgentVersion.version)",
+        foreign_keys="AgentVersion.agent_id"
+    )
+
+    current_version: Mapped[Optional["AgentVersion"]] = relationship(
+        "AgentVersion",
+        foreign_keys=[current_version_id],
+        post_update=True
     )
 
     def __repr__(self):

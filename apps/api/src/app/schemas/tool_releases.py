@@ -98,8 +98,8 @@ class ToolReleaseResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     
-    # Nested backend release info
-    backend_release: Optional[ToolBackendReleaseListItem] = None
+    # Nested backend release info (full, with schemas)
+    backend_release: Optional["ToolBackendReleaseResponse"] = None
 
     class Config:
         from_attributes = True
@@ -128,59 +128,50 @@ class ToolReleaseListItem(BaseModel):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class ToolResponse(BaseModel):
-    """Tool response"""
+    """Tool response (v2 container)"""
     id: UUID
     slug: str
     name: str
-    name_for_llm: Optional[str] = None
-    description: Optional[str] = None
-    type: str
+    kind: str
+    tags: Optional[List[str]] = None
     tool_group_id: UUID
-    is_active: bool
-    recommended_release_id: Optional[UUID] = None
+    current_version_id: Optional[UUID] = None
     created_at: datetime
-    updated_at: datetime
 
     class Config:
         from_attributes = True
 
 
 class ToolDetailResponse(BaseModel):
-    """Tool detail response with releases"""
+    """Tool detail response with releases (v2)"""
     id: UUID
     slug: str
     name: str
-    name_for_llm: Optional[str] = None
-    description: Optional[str] = None
-    type: str
+    kind: str
+    tags: Optional[List[str]] = None
     tool_group_id: UUID
     tool_group_slug: Optional[str] = None
-    is_active: bool
-    recommended_release_id: Optional[UUID] = None
+    current_version_id: Optional[UUID] = None
     created_at: datetime
-    updated_at: datetime
-    
-    # Nested data
+
     backend_releases: List[ToolBackendReleaseListItem] = []
     releases: List[ToolReleaseListItem] = []
-    recommended_release: Optional[ToolReleaseResponse] = None
+    current_version: Optional[ToolReleaseResponse] = None
 
     class Config:
         from_attributes = True
 
 
 class ToolListItem(BaseModel):
-    """Tool list item"""
+    """Tool list item (v2)"""
     id: UUID
     slug: str
     name: str
-    name_for_llm: Optional[str] = None
-    description: Optional[str] = None
-    type: str
-    is_active: bool
+    kind: str
+    tags: Optional[List[str]] = None
     backend_releases_count: int = 0
     releases_count: int = 0
-    has_recommended: bool = False
+    has_current_version: bool = False
 
     class Config:
         from_attributes = True
@@ -217,43 +208,42 @@ class SchemaDiffResponse(BaseModel):
 
 
 class ToolGroupCreate(BaseModel):
-    """Create tool group request"""
     slug: str = Field(..., min_length=1, max_length=50)
     name: str = Field(..., min_length=1, max_length=255)
     description: Optional[str] = None
+    type: Optional[str] = None
+    description_for_router: Optional[str] = None
 
 
 class ToolGroupUpdate(BaseModel):
-    """Update tool group request"""
     name: Optional[str] = Field(None, min_length=1, max_length=255)
     description: Optional[str] = None
+    type: Optional[str] = None
+    description_for_router: Optional[str] = None
 
 
 class ToolGroupResponse(BaseModel):
-    """Tool group response"""
     id: UUID
     slug: str
     name: str
     description: Optional[str] = None
-    is_active: bool = True
+    type: Optional[str] = None
+    description_for_router: Optional[str] = None
     created_at: datetime
-    updated_at: datetime
 
     class Config:
         from_attributes = True
 
 
 class ToolGroupDetailResponse(BaseModel):
-    """Tool group detail response with tools"""
     id: UUID
     slug: str
     name: str
     description: Optional[str] = None
-    is_active: bool = True
+    type: Optional[str] = None
+    description_for_router: Optional[str] = None
     created_at: datetime
-    updated_at: datetime
-    
-    # Nested data
+
     tools: List[ToolListItem] = []
     instances_count: int = 0
 
@@ -262,11 +252,11 @@ class ToolGroupDetailResponse(BaseModel):
 
 
 class ToolGroupListItem(BaseModel):
-    """Tool group list item"""
     id: UUID
     slug: str
     name: str
     description: Optional[str] = None
+    type: Optional[str] = None
     tools_count: int = 0
     instances_count: int = 0
 

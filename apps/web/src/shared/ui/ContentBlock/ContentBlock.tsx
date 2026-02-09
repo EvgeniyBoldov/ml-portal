@@ -132,7 +132,7 @@ const FieldEditor = ({
           value={value ?? ''}
           onChange={(val) => onChange(val)}
           placeholder="Выберите..."
-          options={[
+          options={field.required ? (field.options || []) : [
             { value: '', label: 'Выберите...' },
             ...(field.options || [])
           ]}

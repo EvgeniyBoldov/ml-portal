@@ -24,6 +24,7 @@ export function PolicyVersionPage() {
   const isCreate = !versionParam;
   const versionNumber = isCreate ? 0 : parseInt(versionParam, 10);
   const isEditMode = searchParams.get('mode') === 'edit';
+  const fromVersion = searchParams.get('from');
   const mode: EntityPageMode = isCreate ? 'create' : isEditMode ? 'edit' : 'view';
   const isEditable = mode === 'edit' || mode === 'create';
 
@@ -42,8 +43,21 @@ export function PolicyVersionPage() {
     enabled: !isCreate && !!slug && versionNumber > 0,
   });
 
+  // Load source version for duplication
+  const fromVersionNumber = fromVersion ? parseInt(fromVersion, 10) : 0;
+  const { data: sourceVersion } = useQuery({
+    queryKey: qk.policies.version(slug!, fromVersionNumber),
+    queryFn: () => policiesApi.getVersion(slug!, fromVersionNumber),
+    enabled: isCreate && !!slug && fromVersionNumber > 0,
+  });
+
   useEffect(() => {
-    if (isCreate) {
+    if (isCreate && sourceVersion) {
+      setFormData({
+        policy_text: sourceVersion.policy_text || '',
+        notes: '',
+      });
+    } else if (isCreate) {
       setFormData({ policy_text: '', notes: '' });
     } else if (existingVersion) {
       setFormData({
@@ -51,7 +65,7 @@ export function PolicyVersionPage() {
         notes: existingVersion.notes || '',
       });
     }
-  }, [existingVersion, isCreate]);
+  }, [existingVersion, isCreate, sourceVersion]);
 
   const createMutation = useMutation({
     mutationFn: (data: PolicyVersionCreate) => policiesApi.createVersion(slug!, data),
@@ -116,8 +130,8 @@ export function PolicyVersionPage() {
         notes: formData.notes || undefined,
       };
       if (isCreate) {
-        if (policy?.current_version) {
-          data.parent_version_id = policy.current_version.id;
+        if (sourceVersion) {
+          data.parent_version_id = sourceVersion.id;
         }
         await createMutation.mutateAsync(data);
       } else {
@@ -160,6 +174,7 @@ export function PolicyVersionPage() {
       onEdit: () => setSearchParams({ mode: 'edit' }),
       onActivate: () => activateMutation.mutate(),
       onDeactivate: () => deactivateMutation.mutate(),
+      onDuplicate: () => navigate(`/admin/policies/${slug}/versions/new?from=${versionNumber}`),
     },
     loading: {
       activate: activateMutation.isPending,

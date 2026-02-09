@@ -25,11 +25,6 @@ class ToolInstanceRepository:
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
-    async def get_by_slug(self, slug: str) -> Optional[ToolInstance]:
-        stmt = select(ToolInstance).where(ToolInstance.slug == slug)
-        result = await self.session.execute(stmt)
-        return result.scalar_one_or_none()
-
     async def update(self, instance: ToolInstance) -> ToolInstance:
         self.session.add(instance)
         await self.session.flush()
@@ -80,17 +75,11 @@ class ToolInstanceRepository:
         self,
         instance_id: UUID,
         status: str,
-        error: Optional[str] = None,
     ) -> Optional[ToolInstance]:
         """Update health check status"""
-        from datetime import datetime, timezone
-        
         instance = await self.get_by_id(instance_id)
         if not instance:
             return None
-        
+
         instance.health_status = status
-        instance.last_health_check_at = datetime.now(timezone.utc)
-        instance.health_check_error = error
-        
         return await self.update(instance)

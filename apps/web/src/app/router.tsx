@@ -36,12 +36,14 @@ const ToolViewPage = lazy(() => import('@/domains/admin/pages/ToolViewPage').the
 const ToolReleasePage = lazy(() => import('@/domains/admin/pages/ToolReleasePage').then(m => ({ default: m.ToolReleasePage })));
 const AgentRegistryPage = lazy(() => import('@/domains/admin/pages/AgentRegistryPage').then(m => ({ default: m.AgentRegistryPage })));
 const AgentEditorPage = lazy(() => import('@/domains/admin/pages/AgentEditorPage').then(m => ({ default: m.AgentEditorPage })));
+const AgentVersionPage = lazy(() => import('@/domains/admin/pages/AgentVersionPage').then(m => ({ default: m.AgentVersionPage })));
 const AgentRunsPage = lazy(() => import('@/domains/admin/pages/AgentRunsPage').then(m => ({ default: m.AgentRunsPage })));
 const CollectionsPage = lazy(() => import('@/domains/admin/pages/CollectionsPage'));
 const CreateCollectionPage = lazy(() => import('@/domains/admin/pages/CreateCollectionPage'));
 const ViewCollectionPage = lazy(() => import('@/domains/admin/pages/ViewCollectionPage'));
 const InstancesPage = lazy(() => import('@/domains/admin/pages/InstancesPage').then(m => ({ default: m.InstancesPage })));
 const InstanceEditorPage = lazy(() => import('@/domains/admin/pages/InstanceEditorPage').then(m => ({ default: m.InstanceEditorPage })));
+const InstanceViewPage = lazy(() => import('@/domains/admin/pages/InstanceViewPage').then(m => ({ default: m.InstanceViewPage })));
 const LimitsListPage = lazy(() => import('@/domains/admin/pages/LimitsListPage').then(m => ({ default: m.LimitsListPage })));
 const LimitEditorPage = lazy(() => import('@/domains/admin/pages/LimitEditorPage').then(m => ({ default: m.LimitEditorPage })));
 const LimitVersionPage = lazy(() => import('@/domains/admin/pages/LimitVersionPage').then(m => ({ default: m.LimitVersionPage })));
@@ -50,6 +52,9 @@ const RoutingLogsPage = lazy(() => import('@/domains/admin/pages/RoutingLogsPage
 const PoliciesListPage = lazy(() => import('@/domains/admin/pages/PoliciesListPage').then(m => ({ default: m.PoliciesListPage })));
 const PolicyEditorPage = lazy(() => import('@/domains/admin/pages/PolicyEditorPage').then(m => ({ default: m.PolicyEditorPage })));
 const PolicyVersionPage = lazy(() => import('@/domains/admin/pages/PolicyVersionPage').then(m => ({ default: m.PolicyVersionPage })));
+const RbacListPage = lazy(() => import('@/domains/admin/pages/RbacListPage').then(m => ({ default: m.RbacListPage })));
+const RbacPolicyPage = lazy(() => import('@/domains/admin/pages/RbacPolicyPage').then(m => ({ default: m.RbacPolicyPage })));
+const PlatformSettingsPage = lazy(() => import('@/domains/admin/pages/PlatformSettingsPage').then(m => ({ default: m.PlatformSettingsPage })));
 
 // Collections pages (user-facing)
 const CollectionsListPage = lazy(() => import('@/domains/collections/pages/CollectionsListPage'));
@@ -108,6 +113,8 @@ const router = createBrowserRouter([
       { path: 'agents', element: withSuspense(<AgentRegistryPage />) },
       { path: 'agents/new', element: withSuspense(<AgentEditorPage />) },
       { path: 'agents/:slug', element: withSuspense(<AgentEditorPage />) },
+      { path: 'agents/:slug/versions/new', element: withSuspense(<AgentVersionPage />) },
+      { path: 'agents/:slug/versions/:version', element: withSuspense(<AgentVersionPage />) },
       { path: 'agent-runs', element: withSuspense(<AgentRunsPage />) },
       { path: 'collections', element: withSuspense(<CollectionsPage />) },
       { path: 'collections/new', element: withSuspense(<CreateCollectionPage />) },
@@ -124,7 +131,12 @@ const router = createBrowserRouter([
       { path: 'policies/:slug/versions/:version', element: withSuspense(<PolicyVersionPage />) },
       { path: 'instances', element: withSuspense(<InstancesPage />) },
       { path: 'instances/new', element: withSuspense(<InstanceEditorPage />) },
-      { path: 'instances/:id', element: withSuspense(<InstanceEditorPage />) },
+      { path: 'instances/:id', element: withSuspense(<InstanceViewPage />) },
+      { path: 'instances/:id/edit', element: withSuspense(<InstanceEditorPage />) },
+      { path: 'rbac', element: withSuspense(<RbacListPage />) },
+      { path: 'rbac/new', element: withSuspense(<RbacPolicyPage />) },
+      { path: 'rbac/:slug', element: withSuspense(<RbacPolicyPage />) },
+      { path: 'platform', element: withSuspense(<PlatformSettingsPage />) },
       { path: 'defaults', element: withSuspense(<DefaultsPage />) },
       { path: 'routing-logs', element: withSuspense(<RoutingLogsPage />) },
       { path: 'settings/email', element: withSuspense(<EmailSettingsPage />) },

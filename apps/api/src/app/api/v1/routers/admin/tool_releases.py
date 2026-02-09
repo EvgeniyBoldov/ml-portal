@@ -99,12 +99,11 @@ async def get_tool_group(
                 id=t.id,
                 slug=t.slug,
                 name=t.name,
-                description=t.description,
-                type=t.type,
-                is_active=t.is_active,
+                kind=t.kind,
+                tags=t.tags,
                 backend_releases_count=len(t.backend_releases) if t.backend_releases else 0,
                 releases_count=len(t.releases) if t.releases else 0,
-                has_recommended=t.recommended_release_id is not None,
+                has_current_version=t.current_version_id is not None,
             )
             for t in group.tools
         ]
@@ -114,8 +113,9 @@ async def get_tool_group(
             slug=group.slug,
             name=group.name,
             description=group.description,
+            type=group.type,
+            description_for_router=group.description_for_router,
             created_at=group.created_at,
-            updated_at=group.updated_at,
             tools=tools,
             instances_count=len(group.instances) if group.instances else 0,
         )
@@ -174,12 +174,11 @@ async def list_tools_by_group(
                 id=t.id,
                 slug=t.slug,
                 name=t.name,
-                description=t.description,
-                type=t.type,
-                is_active=t.is_active,
+                kind=t.kind,
+                tags=t.tags,
                 backend_releases_count=len(t.backend_releases) if t.backend_releases else 0,
                 releases_count=len(t.releases) if t.releases else 0,
-                has_recommended=t.recommended_release_id is not None,
+                has_current_version=t.current_version_id is not None,
             )
             for t in tools
         ]
@@ -231,65 +230,39 @@ async def get_tool(
             for r in tool.releases
         ]
         
-        recommended = None
-        if tool.recommended_release:
-            r = tool.recommended_release
-            recommended = ToolReleaseResponse(
-                id=r.id,
-                tool_id=r.tool_id,
-                version=r.version,
-                backend_release_id=r.backend_release_id,
-                status=r.status,
-                config=r.config,
-                expected_schema_hash=r.expected_schema_hash,
-                parent_release_id=r.parent_release_id,
-                notes=r.notes,
-                created_at=r.created_at,
-                updated_at=r.updated_at,
-                backend_release=ToolBackendReleaseListItem(
-                    id=r.backend_release.id,
-                    version=r.backend_release.version,
-                    description=r.backend_release.description,
-                    deprecated=r.backend_release.deprecated,
-                    schema_hash=r.backend_release.schema_hash,
-                    worker_build_id=r.backend_release.worker_build_id,
-                    last_seen_at=r.backend_release.last_seen_at,
-                    synced_at=r.backend_release.synced_at,
-                ) if r.backend_release else None,
-            )
+        current_ver = None
+        if tool.current_version:
+            current_ver = _release_to_response(tool.current_version)
         
         return ToolDetailResponse(
             id=tool.id,
             slug=tool.slug,
             name=tool.name,
-            description=tool.description,
-            type=tool.type,
+            kind=tool.kind,
+            tags=tool.tags,
             tool_group_id=tool.tool_group_id,
             tool_group_slug=tool.tool_group.slug if tool.tool_group else None,
-            is_active=tool.is_active,
-            recommended_release_id=tool.recommended_release_id,
+            current_version_id=tool.current_version_id,
             created_at=tool.created_at,
-            updated_at=tool.updated_at,
             backend_releases=backend_releases,
             releases=releases,
-            recommended_release=recommended,
+            current_version=current_ver,
         )
     except ToolNotFoundError:
         raise HTTPException(status_code=404, detail=f"Tool '{slug}' not found")
 
 
-@tools_router.put("/{slug}/recommended", response_model=ToolDetailResponse)
-async def set_recommended_release(
+@tools_router.put("/{slug}/current-version", response_model=ToolDetailResponse)
+async def set_current_version(
     slug: str,
     release_id: UUID,
     session: AsyncSession = Depends(db_session),
     _: UserCtx = Depends(require_admin),
 ):
-    """Set recommended release for a tool"""
+    """Set current version for a tool"""
     service = ToolReleaseService(session)
     try:
-        tool = await service.set_recommended_release(slug, release_id)
-        # Re-fetch with all relations
+        tool = await service.set_current_version(slug, release_id)
         return await get_tool(slug, session, _)
     except ToolNotFoundError:
         raise HTTPException(status_code=404, detail=f"Tool '{slug}' not found")
@@ -483,11 +456,16 @@ def _release_to_response(release) -> ToolReleaseResponse:
     """Convert release model to response"""
     backend_release = None
     if release.backend_release:
-        backend_release = ToolBackendReleaseListItem(
+        backend_release = ToolBackendReleaseResponse(
             id=release.backend_release.id,
+            tool_id=release.backend_release.tool_id,
             version=release.backend_release.version,
+            input_schema=release.backend_release.input_schema or {},
+            output_schema=release.backend_release.output_schema,
             description=release.backend_release.description,
+            method_name=release.backend_release.method_name,
             deprecated=release.backend_release.deprecated,
+            deprecation_message=release.backend_release.deprecation_message,
             schema_hash=release.backend_release.schema_hash,
             worker_build_id=release.backend_release.worker_build_id,
             last_seen_at=release.backend_release.last_seen_at,

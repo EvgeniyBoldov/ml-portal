@@ -52,12 +52,32 @@ export function ToolsPage() {
       ),
     },
     {
+      key: 'type',
+      label: 'ТИП',
+      width: 100,
+      render: (row) => (
+        <span style={{ color: 'var(--text-secondary)', fontSize: '0.8125rem' }}>
+          {row.type || '—'}
+        </span>
+      ),
+    },
+    {
       key: 'tools_count',
       label: 'ИНСТРУМЕНТЫ',
       width: 120,
       render: (row) => (
-        <span style={{ color: 'var(--color-text-muted)' }}>
+        <span style={{ color: 'var(--text-secondary)' }}>
           {row.tools_count || 0}
+        </span>
+      ),
+    },
+    {
+      key: 'instances_count',
+      label: 'ИНСТАНСЫ',
+      width: 100,
+      render: (row) => (
+        <span style={{ color: 'var(--text-secondary)' }}>
+          {row.instances_count || 0}
         </span>
       ),
     },
@@ -65,7 +85,7 @@ export function ToolsPage() {
       key: 'description',
       label: 'ОПИСАНИЕ',
       render: (row) => (
-        <span style={{ color: 'var(--color-text-muted)' }}>
+        <span style={{ color: 'var(--text-secondary)' }}>
           {row.description || '—'}
         </span>
       ),

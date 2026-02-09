@@ -21,6 +21,8 @@ from .permissions import router as permissions_router
 from .routing_logs import router as routing_logs_router
 from .policies import router as policies_router
 from .limits import router as limits_router
+from .rbac import router as rbac_router
+from .platform_settings import router as platform_settings_router
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -41,5 +43,7 @@ router.include_router(permissions_router, prefix="/permissions", tags=["permissi
 router.include_router(routing_logs_router, prefix="/routing-logs", tags=["routing-logs"])
 router.include_router(policies_router, prefix="/policies", tags=["policies"])
 router.include_router(limits_router, prefix="/limits", tags=["limits"])
+router.include_router(rbac_router, prefix="/rbac", tags=["rbac"])
+router.include_router(platform_settings_router, prefix="/platform", tags=["platform"])
 
 __all__ = ["router"]

@@ -12,6 +12,8 @@ export * from './policies';
 export * from './limits';
 export * from './agents';
 export * from './agentRuns';
+export * from './rbac';
+export * from './platform';
 
 export * from './rag';
 export * from './collections';

@@ -1,48 +1,41 @@
+/**
+ * Tool Instances API v2
+ */
 import { apiRequest } from './http';
-
-export type ToolInstanceHealthStatus = 'healthy' | 'unhealthy' | 'unknown';
-export type ToolInstanceType = 'local' | 'http' | 'custom';
 
 export interface ToolInstance {
   id: string;
   tool_group_id: string;
-  slug: string;
   name: string;
   description?: string;
-  connection_config: Record<string, unknown>;
-  instance_metadata: Record<string, unknown>;
+  url: string;
+  config?: Record<string, unknown>;
   is_active: boolean;
-  instance_type: ToolInstanceType;
-  health_status: ToolInstanceHealthStatus;
-  last_health_check_at?: string;
-  health_check_error?: string;
+  health_status?: string;
   created_at: string;
-  updated_at: string;
-  // Optional joined fields
+  // joined fields
   tool_group_slug?: string;
   tool_group_name?: string;
 }
 
 export interface ToolInstanceCreate {
   tool_group_id: string;
-  slug: string;
   name: string;
+  url?: string;
   description?: string;
-  connection_config: Record<string, unknown>;
-  instance_metadata?: Record<string, unknown>;
-  instance_type?: ToolInstanceType;
+  config?: Record<string, unknown>;
 }
 
 export interface ToolInstanceUpdate {
   name?: string;
   description?: string;
-  connection_config?: Record<string, unknown>;
-  instance_metadata?: Record<string, unknown>;
+  url?: string;
+  config?: Record<string, unknown>;
   is_active?: boolean;
 }
 
 export interface HealthCheckResult {
-  status: ToolInstanceHealthStatus;
+  status: string;
   message?: string;
   details?: Record<string, unknown>;
 }

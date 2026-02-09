@@ -1,0 +1,63 @@
+.settingsGrid {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.settingItem {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.label {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.value {
+  font-size: 0.9375rem;
+  color: var(--text-primary);
+  padding: 8px 0;
+}
+
+.hint {
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+}
+
+.select {
+  padding: 8px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 0.875rem;
+  outline: none;
+  transition: border-color 0.15s;
+  max-width: 400px;
+}
+
+.select:focus {
+  border-color: var(--accent-color);
+}
+
+.infoBlock {
+  font-size: 0.875rem;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.infoBlock p {
+  margin: 0 0 12px;
+}
+
+.infoBlock ul {
+  margin: 8px 0 0;
+  padding-left: 20px;
+}
+
+.infoBlock li {
+  margin-bottom: 4px;
+}

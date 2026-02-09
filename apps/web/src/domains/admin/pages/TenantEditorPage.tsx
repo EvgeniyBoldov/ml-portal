@@ -18,6 +18,8 @@ import { useErrorToast, useSuccessToast } from '@shared/ui/Toast';
 import { EntityPage, type EntityPageMode } from '@shared/ui/EntityPage';
 import { ContentBlock, ContentGrid, type FieldDefinition } from '@shared/ui/ContentBlock';
 import { RbacRulesEditor, type RbacPermissions } from '@shared/ui/RbacRulesEditor';
+import { RBACRulesTable } from '@/shared/ui/RBACRulesTable';
+import { Tabs, TabPanel } from '@shared/ui/Tabs';
 import styles from './TenantEditorPage.module.css';
 
 interface FormData {
@@ -54,6 +56,7 @@ export function TenantEditorPage() {
     layout: false,
   });
   const [saving, setSaving] = useState(false);
+  const [activeTab, setActiveTab] = useState('general');
   
   // RBAC state
   const queryClient = useQueryClient();
@@ -273,103 +276,148 @@ export function TenantEditorPage() {
       onDelete={handleDelete}
       showDelete={mode === 'view' && !!id}
     >
-      <ContentGrid>
-        {/* Basic Info - 2/3 width */}
-        <ContentBlock
-          width="2/3"
-          title="Основная информация"
-          icon="info"
-          editable={isEditable}
-          fields={basicInfoFields}
-          data={formData}
-          onChange={handleFieldChange}
-        />
+      {!isCreate && id ? (
+        <Tabs
+          tabs={[
+            { id: 'general', label: 'Основное' },
+            { id: 'rbac', label: 'RBAC правила' },
+          ]}
+          activeTab={activeTab}
+          onChange={setActiveTab}
+        >
+          <TabPanel id="general" activeTab={activeTab}>
+            <ContentGrid>
+              <ContentBlock
+                width="2/3"
+                title="Основная информация"
+                icon="info"
+                editable={isEditable}
+                fields={basicInfoFields}
+                data={formData}
+                onChange={handleFieldChange}
+              />
+              <ContentBlock
+                width="1/3"
+                title="Статус"
+                icon="toggle-left"
+                editable={isEditable}
+                fields={statusFields}
+                data={formData}
+                onChange={handleFieldChange}
+              />
+              <ContentBlock
+                width="1/3"
+                title="Модели эмбеддинга"
+                icon="cpu"
+                editable={isEditable}
+                fields={embeddingFields}
+                data={formData}
+                onChange={handleFieldChange}
+              />
+              <ContentBlock
+                width="1/3"
+                title="Настройки обработки"
+                icon="settings"
+                editable={isEditable}
+                fields={processingFields}
+                data={formData}
+                onChange={handleFieldChange}
+              />
+              <ContentBlock
+                width="full"
+                title="Права доступа (legacy)"
+                icon="shield"
+              >
+                <p className={styles.formHint}>
+                  Права тенанта. Переопределяют default, но могут быть переопределены на уровне пользователя.
+                </p>
+                {!editingRbac ? (
+                  <>
+                    <RbacRulesEditor
+                      scope="tenant"
+                      permissions={{
+                        instance_permissions: tenantPermSet?.instance_permissions || {},
+                        agent_permissions: tenantPermSet?.agent_permissions || {},
+                      }}
+                      onChange={() => {}}
+                      editable={false}
+                    />
+                    <div className={styles.rbacActions}>
+                      <Button variant="outline" onClick={startEditingRbac}>
+                        Редактировать права
+                      </Button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <RbacRulesEditor
+                      scope="tenant"
+                      permissions={rbacPermissions}
+                      onChange={setRbacPermissions}
+                      editable={true}
+                    />
+                    <div className={styles.rbacActions}>
+                      <Button variant="outline" onClick={() => setEditingRbac(false)}>
+                        Отмена
+                      </Button>
+                      <Button 
+                        variant="primary" 
+                        onClick={() => saveRbacMutation.mutate()}
+                        disabled={saveRbacMutation.isPending}
+                      >
+                        {saveRbacMutation.isPending ? 'Сохранение...' : 'Сохранить права'}
+                      </Button>
+                    </div>
+                  </>
+                )}
+              </ContentBlock>
+            </ContentGrid>
+          </TabPanel>
 
-        {/* Status - 1/3 width */}
-        <ContentBlock
-          width="1/3"
-          title="Статус"
-          icon="toggle-left"
-          editable={isEditable}
-          fields={statusFields}
-          data={formData}
-          onChange={handleFieldChange}
-        />
-
-        {/* Embedding Models - 1/3 width */}
-        <ContentBlock
-          width="1/3"
-          title="Модели эмбеддинга"
-          icon="cpu"
-          editable={isEditable}
-          fields={embeddingFields}
-          data={formData}
-          onChange={handleFieldChange}
-        />
-
-        {/* Processing Settings - 1/3 width */}
-        <ContentBlock
-          width="1/3"
-          title="Настройки обработки"
-          icon="settings"
-          editable={isEditable}
-          fields={processingFields}
-          data={formData}
-          onChange={handleFieldChange}
-        />
-
-        {/* RBAC Permissions - full width, only for existing tenants */}
-        {!isCreate && id && (
+          <TabPanel id="rbac" activeTab={activeTab}>
+            <RBACRulesTable mode="tenant" levelId={id} />
+          </TabPanel>
+        </Tabs>
+      ) : (
+        <ContentGrid>
           <ContentBlock
-            width="full"
-            title="Права доступа"
-            icon="shield"
-          >
-            <p className={styles.formHint}>
-              Права тенанта. Переопределяют default, но могут быть переопределены на уровне пользователя.
-            </p>
-            {!editingRbac ? (
-              <>
-                <RbacRulesEditor
-                  scope="tenant"
-                  permissions={{
-                    instance_permissions: tenantPermSet?.instance_permissions || {},
-                    agent_permissions: tenantPermSet?.agent_permissions || {},
-                  }}
-                  onChange={() => {}}
-                  editable={false}
-                />
-                <div className={styles.rbacActions}>
-                  <Button variant="outline" onClick={startEditingRbac}>
-                    Редактировать права
-                  </Button>
-                </div>
-              </>
-            ) : (
-              <>
-                <RbacRulesEditor
-                  scope="tenant"
-                  permissions={rbacPermissions}
-                  onChange={setRbacPermissions}
-                  editable={true}
-                />
-                <div className={styles.rbacActions}>
-                  <Button variant="outline" onClick={() => setEditingRbac(false)}>
-                    Отмена
-                  </Button>
-                  <Button 
-                    variant="primary" 
-                    onClick={() => saveRbacMutation.mutate()}
-                    disabled={saveRbacMutation.isPending}
-                  >
-                    {saveRbacMutation.isPending ? 'Сохранение...' : 'Сохранить права'}
-                  </Button>
-                </div>
-              </>
-            )}
-          </ContentBlock>
-        )}
-      </ContentGrid>
+            width="2/3"
+            title="Основная информация"
+            icon="info"
+            editable={isEditable}
+            fields={basicInfoFields}
+            data={formData}
+            onChange={handleFieldChange}
+          />
+          <ContentBlock
+            width="1/3"
+            title="Статус"
+            icon="toggle-left"
+            editable={isEditable}
+            fields={statusFields}
+            data={formData}
+            onChange={handleFieldChange}
+          />
+          <ContentBlock
+            width="1/3"
+            title="Модели эмбеддинга"
+            icon="cpu"
+            editable={isEditable}
+            fields={embeddingFields}
+            data={formData}
+            onChange={handleFieldChange}
+          />
+          <ContentBlock
+            width="1/3"
+            title="Настройки обработки"
+            icon="settings"
+            editable={isEditable}
+            fields={processingFields}
+            data={formData}
+            onChange={handleFieldChange}
+          />
+        </ContentGrid>
+      )}
     </EntityPage>
   );
 }

@@ -1,33 +1,30 @@
+/**
+ * Credentials API v2 - owner-based model
+ */
 import { apiRequest } from './http';
 
-export type AuthType = 'token' | 'basic' | 'oauth' | 'api_key';
-export type CredentialScope = 'default' | 'tenant' | 'user';
-
-export interface CredentialSet {
+export interface Credential {
   id: string;
-  tool_instance_id: string;
-  scope: CredentialScope;
-  tenant_id?: string;
-  user_id?: string;
-  auth_type: AuthType;
-  is_default: boolean;
+  instance_id: string;
+  auth_type: string;
   is_active: boolean;
+  owner_user_id?: string | null;
+  owner_tenant_id?: string | null;
+  owner_platform: boolean;
   created_at: string;
-  updated_at: string;
 }
 
-export interface CredentialSetCreate {
-  tool_instance_id: string;
-  auth_type: AuthType;
+export interface CredentialCreate {
+  instance_id: string;
+  auth_type: string;
   payload: Record<string, any>;
-  scope: CredentialScope;
-  tenant_id?: string;
-  user_id?: string;
-  is_default?: boolean;
+  owner_user_id?: string | null;
+  owner_tenant_id?: string | null;
+  owner_platform?: boolean;
 }
 
-export interface CredentialSetUpdate {
-  auth_type?: AuthType;
+export interface CredentialUpdate {
+  auth_type?: string;
   payload?: Record<string, any>;
   is_active?: boolean;
 }
@@ -36,34 +33,29 @@ export const credentialsApi = {
   async list(params: {
     skip?: number;
     limit?: number;
-    tool_instance_id?: string;
-    scope?: string;
-    tenant_id?: string;
+    instance_id?: string;
     is_active?: boolean;
-  } = {}): Promise<CredentialSet[]> {
-    const searchParams = new URLSearchParams();
-    if (params.skip) searchParams.set('skip', String(params.skip));
-    if (params.limit) searchParams.set('limit', String(params.limit));
-    if (params.tool_instance_id) searchParams.set('tool_instance_id', params.tool_instance_id);
-    if (params.scope) searchParams.set('scope', params.scope);
-    if (params.tenant_id) searchParams.set('tenant_id', params.tenant_id);
-    if (params.is_active !== undefined) searchParams.set('is_active', String(params.is_active));
-    
-    return apiRequest(`/admin/credentials?${searchParams.toString()}`);
+  } = {}): Promise<Credential[]> {
+    const sp = new URLSearchParams();
+    if (params.skip) sp.set('skip', String(params.skip));
+    if (params.limit) sp.set('limit', String(params.limit));
+    if (params.instance_id) sp.set('instance_id', params.instance_id);
+    if (params.is_active !== undefined) sp.set('is_active', String(params.is_active));
+    return apiRequest(`/admin/credentials?${sp.toString()}`);
   },
 
-  async get(id: string): Promise<CredentialSet> {
+  async get(id: string): Promise<Credential> {
     return apiRequest(`/admin/credentials/${id}`);
   },
 
-  async create(data: CredentialSetCreate): Promise<CredentialSet> {
+  async create(data: CredentialCreate): Promise<Credential> {
     return apiRequest('/admin/credentials', {
       method: 'POST',
       body: JSON.stringify(data),
     });
   },
 
-  async update(id: string, data: CredentialSetUpdate): Promise<CredentialSet> {
+  async update(id: string, data: CredentialUpdate): Promise<Credential> {
     return apiRequest(`/admin/credentials/${id}`, {
       method: 'PUT',
       body: JSON.stringify(data),
@@ -71,8 +63,6 @@ export const credentialsApi = {
   },
 
   async delete(id: string): Promise<void> {
-    return apiRequest(`/admin/credentials/${id}`, {
-      method: 'DELETE',
-    });
+    return apiRequest(`/admin/credentials/${id}`, { method: 'DELETE' });
   },
 };

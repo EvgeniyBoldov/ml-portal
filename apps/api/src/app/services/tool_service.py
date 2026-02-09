@@ -1,3 +1,6 @@
+"""
+ToolService v2
+"""
 from typing import List, Optional, Tuple
 from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,13 +16,13 @@ class ToolService:
         self.repo = ToolRepository(session)
 
     async def list_tools(
-        self, 
-        skip: int = 0, 
+        self,
+        skip: int = 0,
         limit: int = 100,
-        type_filter: Optional[str] = None,
         tool_group_id: Optional[UUID] = None,
+        kind: Optional[str] = None,
     ) -> Tuple[List[Tool], int]:
-        return await self.repo.list_tools(skip, limit, type_filter, tool_group_id)
+        return await self.repo.list_tools(skip, limit, tool_group_id=tool_group_id, kind=kind)
 
     async def get_tool(self, identifier: str) -> Tool:
         """Get tool by ID or slug"""

@@ -1,5 +1,5 @@
 """
-Pydantic schemas for ToolInstance API
+Pydantic schemas for ToolInstance & Credential API (v2)
 """
 from typing import Optional, Dict, Any, List
 from uuid import UUID
@@ -7,90 +7,76 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 
+# ── ToolInstance ─────────────────────────────────────────────────────
+
 class ToolInstanceCreate(BaseModel):
-    """Schema for creating a tool instance"""
-    tool_group_id: UUID = Field(..., description="FK to ToolGroup")
-    slug: str = Field(..., description="Unique slug for this instance")
-    name: str = Field(..., description="Display name")
+    tool_group_id: UUID
+    name: str
+    url: str = ""
     description: Optional[str] = None
-    connection_config: Dict[str, Any] = Field(default_factory=dict)
-    instance_metadata: Dict[str, Any] = Field(default_factory=dict, description="Metadata (env, region, etc.)")
-    instance_type: str = Field(default="http", description="Instance type: local, http, custom")
+    config: Optional[Dict[str, Any]] = None
 
 
 class ToolInstanceUpdate(BaseModel):
-    """Schema for updating a tool instance"""
     name: Optional[str] = None
     description: Optional[str] = None
-    connection_config: Optional[Dict[str, Any]] = None
-    instance_metadata: Optional[Dict[str, Any]] = None
+    url: Optional[str] = None
+    config: Optional[Dict[str, Any]] = None
     is_active: Optional[bool] = None
 
 
 class ToolInstanceResponse(BaseModel):
-    """Schema for tool instance response"""
     id: UUID
     tool_group_id: UUID
-    slug: str
     name: str
-    description: Optional[str]
-    connection_config: Dict[str, Any]
-    instance_metadata: Dict[str, Any]
+    description: Optional[str] = None
+    url: str
+    config: Optional[Dict[str, Any]] = None
+    health_status: Optional[str] = None
     is_active: bool
-    instance_type: str
-    health_status: str
-    last_health_check_at: Optional[datetime]
-    health_check_error: Optional[str]
     created_at: datetime
-    updated_at: datetime
 
     class Config:
         from_attributes = True
 
 
 class ToolInstanceDetailResponse(ToolInstanceResponse):
-    """Tool instance response with group details"""
     tool_group_slug: Optional[str] = None
     tool_group_name: Optional[str] = None
 
 
 class HealthCheckResponse(BaseModel):
-    """Schema for health check response"""
     status: str
     message: Optional[str] = None
     details: Optional[Dict[str, Any]] = None
 
 
-class CredentialSetCreate(BaseModel):
-    """Schema for creating credentials"""
-    tool_instance_id: UUID
-    auth_type: str = Field(..., description="Auth type: token, basic, oauth, api_key")
-    payload: Dict[str, Any] = Field(..., description="Credentials payload")
-    scope: str = Field(..., description="Scope: default, tenant, user")
-    tenant_id: Optional[UUID] = None
-    user_id: Optional[UUID] = None
-    is_default: bool = True
+# ── Credential (v2 owner-based) ─────────────────────────────────────
+
+class CredentialCreate(BaseModel):
+    instance_id: UUID
+    auth_type: str = Field(..., description="token | basic | oauth | api_key")
+    payload: Dict[str, Any] = Field(..., description="Credentials payload (will be encrypted)")
+    owner_user_id: Optional[UUID] = None
+    owner_tenant_id: Optional[UUID] = None
+    owner_platform: bool = False
 
 
-class CredentialSetUpdate(BaseModel):
-    """Schema for updating credentials"""
+class CredentialUpdate(BaseModel):
     auth_type: Optional[str] = None
     payload: Optional[Dict[str, Any]] = None
     is_active: Optional[bool] = None
 
 
-class CredentialSetResponse(BaseModel):
-    """Schema for credential set response (without decrypted payload)"""
+class CredentialResponse(BaseModel):
     id: UUID
-    tool_instance_id: UUID
-    scope: str
-    tenant_id: Optional[UUID]
-    user_id: Optional[UUID]
+    instance_id: UUID
+    owner_user_id: Optional[UUID] = None
+    owner_tenant_id: Optional[UUID] = None
+    owner_platform: bool
     auth_type: str
-    is_default: bool
     is_active: bool
     created_at: datetime
-    updated_at: datetime
 
     class Config:
         from_attributes = True

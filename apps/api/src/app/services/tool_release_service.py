@@ -93,6 +93,8 @@ class ToolReleaseService:
             slug=data.slug,
             name=data.name,
             description=data.description,
+            type=data.type,
+            description_for_router=data.description_for_router,
         )
         await self.group_repo.create(group)
         await self.session.commit()
@@ -107,6 +109,10 @@ class ToolReleaseService:
             group.name = data.name
         if data.description is not None:
             group.description = data.description
+        if data.type is not None:
+            group.type = data.type
+        if data.description_for_router is not None:
+            group.description_for_router = data.description_for_router
         
         await self.group_repo.update(group)
         await self.session.commit()
@@ -142,23 +148,22 @@ class ToolReleaseService:
             raise ToolNotFoundError(f"Tool '{slug}' not found")
         return tool
     
-    async def set_recommended_release(self, tool_slug: str, release_id: UUID) -> Tool:
-        """Set recommended release for a tool"""
+    async def set_current_version(self, tool_slug: str, release_id: UUID) -> Tool:
+        """Set current version for a tool"""
         tool = await self.get_tool(tool_slug)
         
-        # Verify release exists and belongs to this tool
         release = await self.release_repo.get_by_id(release_id)
         if not release or release.tool_id != tool.id:
             raise ReleaseNotFoundError(f"Release not found for tool '{tool_slug}'")
         
         if release.status != ToolReleaseStatus.ACTIVE.value:
-            raise ReleaseNotEditableError("Only active releases can be set as recommended")
+            raise ReleaseNotEditableError("Only active releases can be set as current version")
         
-        tool.recommended_release_id = release_id
+        tool.current_version_id = release_id
         await self.tool_repo.update(tool)
         await self.session.commit()
         
-        logger.info(f"Set recommended release for {tool_slug}: v{release.version}")
+        logger.info(f"Set current version for {tool_slug}: v{release.version}")
         return await self.get_tool(tool_slug)
     
     # ─────────────────────────────────────────────────────────────────────────
@@ -424,8 +429,8 @@ class ToolReleaseService:
         
         # If this is the recommended release, clear it
         tool = await self.get_tool(tool_slug)
-        if tool.recommended_release_id == release.id:
-            tool.recommended_release_id = None
+        if tool.current_version_id == release.id:
+            tool.current_version_id = None
             await self.tool_repo.update(tool)
         
         release.status = ToolReleaseStatus.ARCHIVED.value

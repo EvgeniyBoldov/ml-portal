@@ -54,11 +54,10 @@ async def create_tool_instance(
     try:
         instance = await service.create_instance(
             tool_group_id=data.tool_group_id,
-            slug=data.slug,
             name=data.name,
-            connection_config=data.connection_config,
+            url=data.url,
             description=data.description,
-            instance_metadata=data.instance_metadata,
+            config=data.config,
         )
         await db.commit()
         return instance
@@ -94,8 +93,8 @@ async def update_tool_instance(
             instance_id=instance_id,
             name=data.name,
             description=data.description,
-            connection_config=data.connection_config,
-            instance_metadata=data.instance_metadata,
+            url=data.url,
+            config=data.config,
             is_active=data.is_active,
         )
         await db.commit()
@@ -133,7 +132,7 @@ async def check_tool_instance_health(
         result = await service.check_health(instance_id)
         await db.commit()
         return HealthCheckResponse(
-            status=result.status.value,
+            status=result.status,
             message=result.message,
             details=result.details,
         )

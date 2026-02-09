@@ -148,20 +148,52 @@ class LimitService:
         notes: Optional[str] = None,
         parent_version_id: Optional[UUID] = None,
     ) -> LimitVersion:
-        limit = await self.get_limit_by_slug(limit_slug)
+        """
+        Create a new limit version (always draft).
 
+        If parent_version_id is provided, inherits all limit fields
+        from the parent version. Explicit values override inherited ones.
+        """
+        limit = await self.get_limit_by_slug(limit_slug)
         next_version = await self.version_repo.get_next_version(limit.id)
+
+        # Inherit from parent version if specified
+        inherited = {
+            'max_steps': None,
+            'max_tool_calls': None,
+            'max_wall_time_ms': None,
+            'tool_timeout_ms': None,
+            'max_retries': None,
+            'extra_config': {},
+        }
+
+        if parent_version_id:
+            parent = await self.version_repo.get_by_id(parent_version_id)
+            if parent and parent.limit_id == limit.id:
+                inherited['max_steps'] = parent.max_steps
+                inherited['max_tool_calls'] = parent.max_tool_calls
+                inherited['max_wall_time_ms'] = parent.max_wall_time_ms
+                inherited['tool_timeout_ms'] = parent.tool_timeout_ms
+                inherited['max_retries'] = parent.max_retries
+                inherited['extra_config'] = parent.extra_config or {}
+                logger.info(
+                    f"Inheriting from v{parent.version} for limit '{limit_slug}'"
+                )
+            else:
+                logger.warning(
+                    f"Parent version {parent_version_id} not found or belongs to another limit"
+                )
 
         version = LimitVersion(
             limit_id=limit.id,
             version=next_version,
             status=LimitStatus.DRAFT.value,
-            max_steps=max_steps,
-            max_tool_calls=max_tool_calls,
-            max_wall_time_ms=max_wall_time_ms,
-            tool_timeout_ms=tool_timeout_ms,
-            max_retries=max_retries,
-            extra_config=extra_config or {},
+            max_steps=max_steps if max_steps is not None else inherited['max_steps'],
+            max_tool_calls=max_tool_calls if max_tool_calls is not None else inherited['max_tool_calls'],
+            max_wall_time_ms=max_wall_time_ms if max_wall_time_ms is not None else inherited['max_wall_time_ms'],
+            tool_timeout_ms=tool_timeout_ms if tool_timeout_ms is not None else inherited['tool_timeout_ms'],
+            max_retries=max_retries if max_retries is not None else inherited['max_retries'],
+            extra_config=extra_config if extra_config is not None else inherited['extra_config'],
             notes=notes,
             parent_version_id=parent_version_id,
         )

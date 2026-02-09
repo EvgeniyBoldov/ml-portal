@@ -56,19 +56,15 @@ async def list_chat_agents(
     service = AgentService(session)
     agents, _ = await service.list_agents(limit=50)
     
-    # Return only active agents with minimal info for UI
+    # Return agents with basic info (v2: no is_active/tools on container)
     return {
         "agents": [
             {
                 "slug": agent.slug,
                 "name": agent.name,
                 "description": agent.description,
-                "has_rag": "rag.search" in (agent.tools or []),
-                "has_collections": "collection.search" in (agent.tools or []),
-                "tools": agent.tools or [],
             }
             for agent in agents
-            if agent.is_active
         ]
     }
 

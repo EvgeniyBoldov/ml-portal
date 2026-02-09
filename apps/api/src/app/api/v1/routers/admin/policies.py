@@ -51,10 +51,10 @@ class PolicyUpdate(BaseModel):
 
 
 class PolicyVersionCreate(BaseModel):
-    policy_text: str = Field(..., description="Policy text (rules/restrictions)")
+    policy_text: Optional[str] = Field(None, description="Policy text (inherited from parent if not provided)")
     policy_json: Optional[Dict[str, Any]] = Field(None, description="Structured policy data")
     notes: Optional[str] = Field(None, description="Notes about this version")
-    parent_version_id: Optional[UUID] = Field(None, description="Parent version ID")
+    parent_version_id: Optional[UUID] = Field(None, description="Parent version ID for data inheritance")
 
 
 class PolicyVersionUpdate(BaseModel):

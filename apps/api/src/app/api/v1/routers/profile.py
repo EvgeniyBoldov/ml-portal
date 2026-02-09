@@ -15,7 +15,7 @@ from app.core.security import UserCtx
 from app.core.crypto import get_crypto_service
 from app.models.user import Users
 from app.models.api_token import ApiToken
-from app.models.credential_set import CredentialSet
+from app.models.credential_set import Credential
 from app.models.tool_instance import ToolInstance
 from app.models.tool import Tool
 from sqlalchemy import select
@@ -235,27 +235,28 @@ async def list_user_credentials(current_user: UserCtx = Depends(get_current_user
     session_factory = get_session_factory()
     async with session_factory() as session:
         result = await session.execute(
-            select(CredentialSet, ToolInstance, Tool)
-            .join(ToolInstance, CredentialSet.tool_instance_id == ToolInstance.id)
-            .outerjoin(Tool, ToolInstance.tool_id == Tool.id)
+            select(Credential, ToolInstance)
+            .join(ToolInstance, Credential.instance_id == ToolInstance.id)
             .where(
-                CredentialSet.user_id == UUID(current_user.id),
-                CredentialSet.scope == 'user'
+                Credential.owner_user_id == UUID(current_user.id),
+                Credential.is_active == True,
             )
-            .order_by(CredentialSet.created_at.desc())
+            .order_by(Credential.created_at.desc())
         )
         rows = result.all()
         
         return [
             CredentialResponse(
                 id=str(cred.id),
-                tool_instance_id=str(cred.tool_instance_id),
-                tool_name=tool.name if tool else None,
+                instance_id=str(cred.instance_id),
+                owner_user_id=str(cred.owner_user_id) if cred.owner_user_id else None,
+                owner_tenant_id=str(cred.owner_tenant_id) if cred.owner_tenant_id else None,
+                owner_platform=cred.owner_platform,
                 auth_type=cred.auth_type,
                 is_active=cred.is_active,
                 created_at=cred.created_at,
             )
-            for cred, instance, tool in rows
+            for cred, instance in rows
         ]
 
 
@@ -271,29 +272,21 @@ async def create_user_credential(
     async with session_factory() as session:
         # Verify tool instance exists and is active
         result = await session.execute(
-            select(ToolInstance, Tool)
-            .outerjoin(Tool, ToolInstance.tool_id == Tool.id)
-            .where(ToolInstance.id == UUID(data.tool_instance_id))
+            select(ToolInstance).where(ToolInstance.id == UUID(data.tool_instance_id))
         )
-        row = result.first()
-        if not row:
+        instance = result.scalar_one_or_none()
+        if not instance:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Tool instance not found"
             )
-        instance, tool = row
         
-        # Encrypt payload
         encrypted = crypto.encrypt(data.encrypted_payload)
         
-        # Get user's tenant_id (first one if multiple)
-        tenant_id = UUID(current_user.tenant_ids[0]) if current_user.tenant_ids else None
-        
-        credential = CredentialSet(
-            tool_instance_id=UUID(data.tool_instance_id),
-            scope='user',
-            tenant_id=tenant_id,
-            user_id=UUID(current_user.id),
+        credential = Credential(
+            instance_id=UUID(data.tool_instance_id),
+            owner_user_id=UUID(current_user.id),
+            owner_platform=False,
             auth_type=data.auth_type,
             encrypted_payload=encrypted,
             is_active=True,
@@ -304,8 +297,10 @@ async def create_user_credential(
         
         return CredentialResponse(
             id=str(credential.id),
-            tool_instance_id=str(credential.tool_instance_id),
-            tool_name=tool.name if tool else None,
+            instance_id=str(credential.instance_id),
+            owner_user_id=str(credential.owner_user_id),
+            owner_tenant_id=None,
+            owner_platform=False,
             auth_type=credential.auth_type,
             is_active=credential.is_active,
             created_at=credential.created_at,
@@ -321,10 +316,9 @@ async def delete_user_credential(
     session_factory = get_session_factory()
     async with session_factory() as session:
         result = await session.execute(
-            select(CredentialSet).where(
-                CredentialSet.id == credential_id,
-                CredentialSet.user_id == UUID(current_user.id),
-                CredentialSet.scope == 'user'
+            select(Credential).where(
+                Credential.id == credential_id,
+                Credential.owner_user_id == UUID(current_user.id),
             )
         )
         credential = result.scalar_one_or_none()

@@ -140,22 +140,47 @@ class PolicyService:
     async def create_version(
         self,
         policy_slug: str,
-        policy_text: str,
+        policy_text: Optional[str] = None,
         policy_json: Optional[Dict[str, Any]] = None,
         notes: Optional[str] = None,
         parent_version_id: Optional[UUID] = None,
     ) -> PolicyVersion:
-        policy = await self.get_policy_by_slug(policy_slug)
+        """
+        Create a new policy version (always draft).
 
+        If parent_version_id is provided, inherits policy_text/policy_json
+        from the parent version. Explicit values override inherited ones.
+        """
+        policy = await self.get_policy_by_slug(policy_slug)
         next_version = await self.version_repo.get_next_version(policy.id)
+
+        # Inherit from parent version if specified
+        inherited_text = ""
+        inherited_json = None
+
+        if parent_version_id:
+            parent = await self.version_repo.get_by_id(parent_version_id)
+            if parent and parent.policy_id == policy.id:
+                inherited_text = parent.policy_text
+                inherited_json = parent.policy_json
+                logger.info(
+                    f"Inheriting from v{parent.version} for policy '{policy_slug}'"
+                )
+            else:
+                logger.warning(
+                    f"Parent version {parent_version_id} not found or belongs to another policy"
+                )
+
+        final_text = policy_text if policy_text is not None else inherited_text
+        final_json = policy_json if policy_json is not None else inherited_json
 
         version = PolicyVersion(
             policy_id=policy.id,
             version=next_version,
             status=PolicyStatus.DRAFT.value,
-            hash=self._compute_hash(policy_text),
-            policy_text=policy_text,
-            policy_json=policy_json,
+            hash=self._compute_hash(final_text),
+            policy_text=final_text,
+            policy_json=final_json,
             notes=notes,
             parent_version_id=parent_version_id,
         )

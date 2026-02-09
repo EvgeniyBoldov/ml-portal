@@ -1,12 +1,14 @@
 """
-CredentialSet model - набор секретов для авторизации ToolInstance
+Credential model v2 - owner-based credentials for ToolInstance.
+
+Owner is exactly one of: user, tenant, or platform.
 """
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 from enum import Enum
 
-from sqlalchemy import String, Boolean, DateTime, Text, ForeignKey, func, CheckConstraint
+from sqlalchemy import String, Boolean, DateTime, Text, ForeignKey, CheckConstraint, Index
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -21,76 +23,69 @@ class AuthType(str, Enum):
     API_KEY = "api_key"
 
 
-class CredentialScope(str, Enum):
-    """Scope уровень для CredentialSet"""
-    DEFAULT = "default"  # Admin-level credentials
-    TENANT = "tenant"
-    USER = "user"
-
-
-class CredentialSet(Base):
+class Credential(Base):
     """
-    Набор секретов для авторизации в ToolInstance.
+    Credential v2 - owner-based credentials for ToolInstance.
     
-    Credentials хранятся в зашифрованном виде (encrypted_payload).
-    Мастер-ключ для шифрования берется из переменных окружения.
+    Exactly one owner must be set:
+    - owner_user_id: personal user credentials
+    - owner_tenant_id: shared tenant credentials
+    - owner_platform=True: platform-wide credentials
     
-    Scope определяет владельца credentials:
-    - default: админские креды (глобальные)
-    - tenant: общие креды для всего тенанта
-    - user: персональные креды пользователя
-    
-    Приоритет при резолве: user > tenant > default
+    Resolution priority depends on AgentBinding.credential_strategy.
     """
-    __tablename__ = "credential_sets"
+    __tablename__ = "credentials"
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     
-    tool_instance_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("tool_instances.id", ondelete="CASCADE"), nullable=False, index=True
+    instance_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tool_instances.id", ondelete="CASCADE"),
+        nullable=False, index=True
     )
     
-    scope: Mapped[str] = mapped_column(String(20), nullable=False)
-    tenant_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True, index=True
+    # Owner (exactly one must be set)
+    owner_user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=True
     )
-    user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True
+    owner_tenant_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True
     )
+    owner_platform: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     
     auth_type: Mapped[str] = mapped_column(String(50), nullable=False)
     encrypted_payload: Mapped[str] = mapped_column(Text, nullable=False)
     
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    is_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
     )
 
     __table_args__ = (
         CheckConstraint(
-            "scope IN ('default', 'tenant', 'user')",
-            name="credential_sets_scope_check"
-        ),
-        CheckConstraint(
             """
-            (scope = 'default' AND tenant_id IS NULL AND user_id IS NULL) OR
-            (scope = 'tenant' AND tenant_id IS NOT NULL AND user_id IS NULL) OR
-            (scope = 'user' AND tenant_id IS NOT NULL AND user_id IS NOT NULL)
+            (owner_platform::int +
+             (owner_user_id IS NOT NULL)::int +
+             (owner_tenant_id IS NOT NULL)::int) = 1
             """,
-            name="credential_sets_scope_refs_check"
+            name="ck_credential_single_owner"
         ),
         CheckConstraint(
             "auth_type IN ('token', 'basic', 'oauth', 'api_key')",
-            name="credential_sets_auth_type_check"
+            name="ck_credential_auth_type"
         ),
+        Index("ix_credential_user_lookup", "owner_user_id", "instance_id",
+              postgresql_where="is_active = true"),
+        Index("ix_credential_tenant_lookup", "owner_tenant_id", "instance_id",
+              postgresql_where="is_active = true"),
+        Index("ix_credential_platform_lookup", "owner_platform", "instance_id",
+              postgresql_where="is_active = true"),
     )
 
     def __repr__(self) -> str:
-        return f"<CredentialSet {self.id} ({self.scope}/{self.auth_type})>"
+        owner = "platform" if self.owner_platform else (
+            f"user:{self.owner_user_id}" if self.owner_user_id else f"tenant:{self.owner_tenant_id}"
+        )
+        return f"<Credential {self.id} ({owner}/{self.auth_type})>"

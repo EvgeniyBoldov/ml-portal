@@ -17,7 +17,7 @@ import styles from './EntityTabsPage.module.css';
 
 export interface EntityTabsPageProps<TContainer = any, TVersion = any> {
   // Entity identification
-  entityType: 'prompt' | 'baseline' | 'policy';
+  entityType: 'prompt' | 'baseline' | 'policy' | 'agent' | 'limit' | 'tool';
   entityNameLabel: string; // e.g. "Промпт"
   entityTypeLabel: string; // e.g. "промпта" (genitive case)
   slug: string;
@@ -153,8 +153,9 @@ export function EntityTabsPage<
           </Button>
         );
         
-        // Add "Set as Recommended" button if we have a selected version that's active but not recommended
-        if (selectedVersion && selectedVersion.status === 'active' && selectedVersion.id !== container?.recommended_version?.id && onSetRecommended) {
+        // Add "Set as Recommended" button if we have a selected version that's active but not current
+        const activeVer = (container as any)?.current_version || (container as any)?.recommended_version;
+        if (selectedVersion && selectedVersion.status === 'active' && selectedVersion.id !== activeVer?.id && onSetRecommended) {
           buttons.push(
             <Button 
               key="setRecommended" 
@@ -244,30 +245,33 @@ export function EntityTabsPage<
                   />
                 </div>
                 <div className={styles.splitRight}>
-                  {container?.recommended_version ? (
-                    <ShortEntityBlock
-                      title="Основная версия"
-                      subtitle={`Версия ${container.recommended_version.version}`}
-                      items={[
-                        { label: 'Статус', value: container.recommended_version.status },
-                        { label: 'Создана', value: new Date(container.recommended_version.created_at).toLocaleDateString('ru-RU') },
-                      ]}
-                    >
-                      <ShortVersionCard
-                        entityType={entityType}
-                        version={container.recommended_version}
+                  {(() => {
+                    const cv = (container as any)?.current_version || (container as any)?.recommended_version;
+                    return cv ? (
+                      <ShortEntityBlock
+                        title="Основная версия"
+                        subtitle={`Версия ${cv.version}`}
+                        items={[
+                          { label: 'Статус', value: cv.status },
+                          { label: 'Создана', value: new Date(cv.created_at).toLocaleDateString('ru-RU') },
+                        ]}
+                      >
+                        <ShortVersionCard
+                          entityType={entityType}
+                          version={cv}
+                        />
+                      </ShortEntityBlock>
+                    ) : (
+                      <ShortEntityBlock
+                        title="Основная версия"
+                        subtitle="Нет основной версии"
+                        items={[
+                          { label: 'Статус', value: '—' },
+                          { label: 'Создана', value: '—' },
+                        ]}
                       />
-                    </ShortEntityBlock>
-                  ) : (
-                    <ShortEntityBlock
-                      title="Основная версия"
-                      subtitle="Нет основной версии"
-                      items={[
-                        { label: 'Статус', value: '—' },
-                        { label: 'Создана', value: '—' },
-                      ]}
-                    />
-                  )}
+                    );
+                  })()}
                 </div>
               </div>
             </div>
@@ -283,7 +287,7 @@ export function EntityTabsPage<
                   onSelectVersion?.(version);
                 }}
                 selectedVersion={selectedVersion}
-                recommendedVersionId={container?.recommended_version?.id}
+                recommendedVersionId={((container as any)?.current_version || (container as any)?.recommended_version)?.id}
                 onSetRecommended={onSetRecommended}
                 columns={versionColumns}
               />

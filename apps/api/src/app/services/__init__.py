@@ -1,7 +1,7 @@
 """
 Services layer - business logic.
 """
-from .agent_service import AgentService, AgentProfile
+from .agent_service import AgentService, AgentError, AgentNotFoundError
 from .api_key_service import APIKeyService
 from .chat_stream_service import ChatStreamService
 from .credential_service import CredentialService
@@ -26,7 +26,8 @@ from .users_service import AsyncUsersService
 
 __all__ = [
     "AgentService",
-    "AgentProfile",
+    "AgentError",
+    "AgentNotFoundError",
     "APIKeyService",
     "ChatStreamService",
     "CredentialService",

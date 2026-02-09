@@ -1,7 +1,6 @@
-"""
-Drop baselines/baseline_versions tables.
-Remove baseline_id from agents.
-Add limit_id to agents.
+"""Drop baselines/baseline_versions tables, remove baseline_prompt_id from agents.
+
+This is a transitional migration. Agent v2 schema (agent_versions, etc.) is in 0064.
 
 Revision ID: 0063
 Revises: 0062
@@ -17,67 +16,26 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # 1. Drop baseline_prompt_id FK from agents (added in migration 0043)
-    # The real constraint name is 'fk_agents_baseline_prompt_id', column is 'baseline_prompt_id'
     conn = op.get_bind()
 
-    # Check if baseline_prompt_id column exists before trying to drop
-    result = conn.execute(sa.text(
-        "SELECT column_name FROM information_schema.columns "
-        "WHERE table_name = 'agents' AND column_name = 'baseline_prompt_id'"
+    # 1. Drop baseline_prompt_id from agents (added in migration 0043)
+    conn.execute(sa.text(
+        "ALTER TABLE agents DROP CONSTRAINT IF EXISTS fk_agents_baseline_prompt_id"
     ))
-    if result.fetchone():
-        op.drop_constraint('fk_agents_baseline_prompt_id', 'agents', type_='foreignkey')
-        op.drop_index('ix_agents_baseline_prompt_id', 'agents')
-        op.drop_column('agents', 'baseline_prompt_id')
-
-    # 2. Add policy_id to agents (if not exists)
-    result = conn.execute(sa.text(
-        "SELECT column_name FROM information_schema.columns "
-        "WHERE table_name = 'agents' AND column_name = 'policy_id'"
+    conn.execute(sa.text(
+        "DROP INDEX IF EXISTS ix_agents_baseline_prompt_id"
     ))
-    if not result.fetchone():
-        op.add_column('agents', sa.Column(
-            'policy_id',
-            postgresql.UUID(as_uuid=True),
-            nullable=True,
-        ))
-        op.create_foreign_key(
-            'agents_policy_id_fkey',
-            'agents', 'policies',
-            ['policy_id'], ['id'],
-            ondelete='SET NULL'
-        )
-        op.create_index('ix_agents_policy_id', 'agents', ['policy_id'])
-
-    # 3. Add limit_id to agents (if not exists)
-    result = conn.execute(sa.text(
-        "SELECT column_name FROM information_schema.columns "
-        "WHERE table_name = 'agents' AND column_name = 'limit_id'"
+    conn.execute(sa.text(
+        "ALTER TABLE agents DROP COLUMN IF EXISTS baseline_prompt_id"
     ))
-    if not result.fetchone():
-        op.add_column('agents', sa.Column(
-            'limit_id',
-            postgresql.UUID(as_uuid=True),
-            nullable=True,
-        ))
-        op.create_foreign_key(
-            'agents_limit_id_fkey',
-            'agents', 'limits',
-            ['limit_id'], ['id'],
-            ondelete='SET NULL'
-        )
-        op.create_index('ix_agents_limit_id', 'agents', ['limit_id'])
 
-    # 4. Drop baseline_versions table first (has FK to baselines)
-    op.drop_table('baseline_versions')
-
-    # 5. Drop baselines table
-    op.drop_table('baselines')
+    # 2. Drop baselines + baseline_versions (CASCADE handles cross-FKs)
+    conn.execute(sa.text("DROP TABLE IF EXISTS baseline_versions CASCADE"))
+    conn.execute(sa.text("DROP TABLE IF EXISTS baselines CASCADE"))
 
 
 def downgrade() -> None:
-    # 1. Recreate baselines table
+    # Recreate baselines table
     op.create_table(
         'baselines',
         sa.Column('id', postgresql.UUID(as_uuid=True), primary_key=True),
@@ -95,7 +53,7 @@ def downgrade() -> None:
         sa.ForeignKeyConstraint(['user_id'], ['users.id'], ondelete='CASCADE'),
     )
 
-    # 2. Recreate baseline_versions table
+    # Recreate baseline_versions table
     op.create_table(
         'baseline_versions',
         sa.Column('id', postgresql.UUID(as_uuid=True), primary_key=True),
@@ -112,7 +70,7 @@ def downgrade() -> None:
         sa.UniqueConstraint('baseline_id', 'version', name='uix_baseline_version'),
     )
 
-    # 3. Add baseline_prompt_id back to agents
+    # Add baseline_prompt_id back to agents
     op.add_column('agents', sa.Column(
         'baseline_prompt_id',
         postgresql.UUID(as_uuid=True),
@@ -125,13 +83,3 @@ def downgrade() -> None:
         ondelete='SET NULL'
     )
     op.create_index('ix_agents_baseline_prompt_id', 'agents', ['baseline_prompt_id'])
-
-    # 4. Drop limit_id from agents
-    op.drop_constraint('agents_limit_id_fkey', 'agents', type_='foreignkey')
-    op.drop_index('ix_agents_limit_id', 'agents')
-    op.drop_column('agents', 'limit_id')
-
-    # 5. Drop policy_id from agents
-    op.drop_constraint('agents_policy_id_fkey', 'agents', type_='foreignkey')
-    op.drop_index('ix_agents_policy_id', 'agents')
-    op.drop_column('agents', 'policy_id')

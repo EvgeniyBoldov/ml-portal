@@ -12,7 +12,7 @@ export interface ToolGroupListItem {
   slug: string;
   name: string;
   description: string | null;
-  is_active: boolean;
+  type: string | null;
   tools_count: number;
   instances_count: number;
 }
@@ -22,9 +22,9 @@ export interface ToolGroupDetail {
   slug: string;
   name: string;
   description: string | null;
-  is_active: boolean;
+  type: string | null;
+  description_for_router: string | null;
   created_at: string;
-  updated_at: string;
   tools: ToolListItem[];
   instances_count: number;
 }
@@ -33,42 +33,41 @@ export interface ToolGroupCreate {
   slug: string;
   name: string;
   description?: string | null;
+  type?: string | null;
+  description_for_router?: string | null;
 }
 
 export interface ToolGroupUpdate {
   name?: string;
   description?: string | null;
+  type?: string | null;
+  description_for_router?: string | null;
 }
 
 export interface ToolListItem {
   id: string;
   slug: string;
   name: string;
-  name_for_llm: string | null;
-  description: string | null;
-  type: string;
-  is_active: boolean;
+  kind: string;
+  tags: string[] | null;
   backend_releases_count: number;
   releases_count: number;
-  has_recommended: boolean;
+  has_current_version: boolean;
 }
 
 export interface ToolDetail {
   id: string;
   slug: string;
   name: string;
-  name_for_llm: string | null;
-  description: string | null;
-  type: string;
+  kind: string;
+  tags: string[] | null;
   tool_group_id: string;
-  is_active: boolean;
-  recommended_release_id: string | null;
+  tool_group_slug: string | null;
+  current_version_id: string | null;
   created_at: string;
-  updated_at: string;
   backend_releases: ToolBackendReleaseListItem[];
   releases: ToolReleaseListItem[];
-  recommended_release: ToolReleaseResponse | null;
-  tool_group_slug?: string;
+  current_version: ToolReleaseResponse | null;
 }
 
 export interface ToolBackendReleaseListItem {
@@ -131,7 +130,7 @@ export interface ToolReleaseResponse {
   parent_release_id: string | null;
   created_at: string;
   updated_at: string;
-  backend_release: ToolBackendReleaseListItem | null;
+  backend_release: ToolBackendReleaseDetail | null;
 }
 
 export interface ToolReleaseCreate {
@@ -200,8 +199,8 @@ export const toolReleasesApi = {
     return apiRequest<ToolDetail>(`/admin/tools/${slug}`, { method: 'GET' });
   },
 
-  setRecommendedRelease: async (toolSlug: string, releaseId: string): Promise<ToolDetail> => {
-    return apiRequest<ToolDetail>(`/admin/tools/${toolSlug}/recommended?release_id=${releaseId}`, { method: 'PUT' });
+  setCurrentVersion: async (toolSlug: string, releaseId: string): Promise<ToolDetail> => {
+    return apiRequest<ToolDetail>(`/admin/tools/${toolSlug}/current-version?release_id=${releaseId}`, { method: 'PUT' });
   },
 
   // ─────────────────────────────────────────────────────────────────────────

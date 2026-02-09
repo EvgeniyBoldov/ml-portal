@@ -1,8 +1,5 @@
 /**
- * AgentRegistryPage - Реестр агентов
- * 
- * Управление профилями агентов: системный промпт + инструменты.
- * Клик по строке → View страница, редактирование через кнопку на View.
+ * AgentRegistryPage v2 - Реестр агентов (контейнеры)
  */
 import { useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
@@ -14,7 +11,7 @@ import { AdminPage, DataTable, type DataTableColumn, Badge } from '@/shared/ui';
 export function AgentRegistryPage() {
   const navigate = useNavigate();
   const [q, setQ] = useState('');
-  
+
   const { data: agents, isLoading, error } = useQuery({
     queryKey: qk.agents.list({ q: q || undefined }),
     queryFn: () => agentsApi.list(),
@@ -25,15 +22,11 @@ export function AgentRegistryPage() {
     if (!agents) return [];
     if (!q.trim()) return agents;
     const query = q.toLowerCase();
-    return agents.filter((a: Agent) => 
-      a.name.toLowerCase().includes(query) || 
+    return agents.filter((a: Agent) =>
+      a.name.toLowerCase().includes(query) ||
       a.slug.toLowerCase().includes(query)
     );
   }, [agents, q]);
-
-  const handleRowClick = (agent: Agent) => {
-    navigate(`/admin/agents/${agent.slug}`);
-  };
 
   const columns: DataTableColumn<Agent>[] = [
     {
@@ -43,52 +36,37 @@ export function AgentRegistryPage() {
       render: (agent) => (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
           <span style={{ fontWeight: 500 }}>{agent.slug}</span>
-          <span style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>{agent.name}</span>
+          <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{agent.name}</span>
         </div>
       ),
     },
     {
-      key: 'is_active',
-      label: 'СТАТУС',
-      width: 100,
-      sortable: true,
-      render: (agent) => (
-        <Badge tone={agent.is_active ? 'success' : 'neutral'} size="small">
-          {agent.is_active ? 'Активен' : 'Неактивен'}
-        </Badge>
+      key: 'current_version_id',
+      label: 'ВЕРСИЯ',
+      width: 120,
+      render: (agent) => agent.current_version_id ? (
+        <Badge tone="success" size="small">Активна</Badge>
+      ) : (
+        <Badge tone="neutral" size="small">Нет версии</Badge>
       ),
     },
     {
-      key: 'system_prompt_slug',
-      label: 'ПРОМПТ',
-      sortable: true,
+      key: 'description',
+      label: 'ОПИСАНИЕ',
       render: (agent) => (
-        <code style={{ fontSize: '0.8125rem', color: 'var(--muted)' }}>
-          {agent.system_prompt_slug || '—'}
-        </code>
+        <span style={{ color: 'var(--text-secondary)', fontSize: '0.8125rem' }}>
+          {agent.description || '—'}
+        </span>
       ),
     },
     {
-      key: 'tools',
-      label: 'ИНСТРУМЕНТЫ',
-      width: 120,
-      render: (agent) => {
-        const toolsCount = agent.tools?.length || 0;
-        return toolsCount > 0 ? (
-          <Badge tone="info" size="small">{toolsCount} инстр.</Badge>
-        ) : (
-          <span style={{ color: 'var(--muted)' }}>—</span>
-        );
-      },
-    },
-    {
-      key: 'updated_at',
-      label: 'ОБНОВЛЁН',
+      key: 'created_at',
+      label: 'СОЗДАН',
       width: 120,
       sortable: true,
       render: (agent) => (
-        <span style={{ color: 'var(--muted)' }}>
-          {new Date(agent.updated_at).toLocaleDateString('ru-RU')}
+        <span style={{ color: 'var(--text-secondary)' }}>
+          {new Date(agent.created_at).toLocaleDateString('ru-RU')}
         </span>
       ),
     },
@@ -97,7 +75,7 @@ export function AgentRegistryPage() {
   return (
     <AdminPage
       title="Агенты"
-      subtitle="Профили агентов: системный промпт + инструменты"
+      subtitle="Контейнеры агентов с версионированием"
       searchValue={q}
       onSearchChange={setQ}
       searchPlaceholder="Поиск агентов..."
@@ -123,7 +101,7 @@ export function AgentRegistryPage() {
         emptyText="Агенты не найдены. Нажмите «Создать агента» для создания."
         paginated
         pageSize={20}
-        onRowClick={handleRowClick}
+        onRowClick={(agent: Agent) => navigate(`/admin/agents/${agent.slug}`)}
       />
     </AdminPage>
   );

@@ -1,12 +1,11 @@
 """
-ToolInstance model - конкретное подключение к системе
+ToolInstance model v2 - конкретное подключение к системе
 """
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any, TYPE_CHECKING
-from enum import Enum
 
-from sqlalchemy import String, Boolean, DateTime, Text, ForeignKey, func
+from sqlalchemy import String, Boolean, DateTime, Text, ForeignKey, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -16,31 +15,15 @@ if TYPE_CHECKING:
     from app.models.tool_group import ToolGroup
 
 
-class HealthStatus(str, Enum):
-    """Статус здоровья ToolInstance"""
-    HEALTHY = "healthy"
-    UNHEALTHY = "unhealthy"
-    UNKNOWN = "unknown"
-
-
-class InstanceType(str, Enum):
-    """Тип инстанса"""
-    LOCAL = "local"      # Локальный (коллекции, внутренние сервисы)
-    HTTP = "http"        # Внешний HTTP API
-    CUSTOM = "custom"    # Кастомный тип
-
-
 class ToolInstance(Base):
     """
-    Конкретный instance системы с настройками подключения.
+    Конкретный instance системы с настройками подключения (v2).
     
     Примеры:
-    - "jira-prod" - Jira Production
-    - "jira-staging" - Jira Staging  
-    - "netbox-main" - NetBox основной
-    - "remedy-1", "remedy-2" - несколько инстансов Remedy
+    - jira-prod (url: https://jira.company.com)
+    - netbox-main (url: https://netbox.company.com)
     
-    Инстансы глобальные, креды привязываются через CredentialSet.
+    Креды привязываются через Credential (owner-based).
     """
     __tablename__ = "tool_instances"
 
@@ -56,30 +39,21 @@ class ToolInstance(Base):
         index=True
     )
     
-    slug: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     
-    # Connection configuration (url, project mappings, etc.)
-    connection_config: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
+    # v2: explicit url field
+    url: Mapped[str] = mapped_column(Text, nullable=False, server_default='')
     
-    # Instance metadata (env=prod/stage/dev, region, etc.)
-    instance_metadata: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
+    # Additional config (project mappings, timeouts, etc.)
+    config: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
     
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    health_status: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     
-    # Instance type: local (collections), http (external APIs), custom
-    instance_type: Mapped[str] = mapped_column(String(20), default=InstanceType.HTTP.value, nullable=False)
-    
-    health_status: Mapped[str] = mapped_column(String(20), default=HealthStatus.UNKNOWN.value)
-    last_health_check_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    health_check_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
     )
     
     # Relationships
@@ -89,5 +63,9 @@ class ToolInstance(Base):
         foreign_keys=[tool_group_id]
     )
 
+    __table_args__ = (
+        UniqueConstraint("tool_group_id", "url", name="uq_tool_instance_group_url"),
+    )
+
     def __repr__(self) -> str:
-        return f"<ToolInstance {self.slug}>"
+        return f"<ToolInstance {self.name}>"

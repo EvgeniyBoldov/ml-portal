@@ -1,66 +1,37 @@
+"""
+Agent schemas v2 - versioned agent container.
+
+Agent is a container (slug, name, description, current_version_id).
+AgentVersion holds: prompt, policy_id, limit_id, version, status.
+AgentBinding (tool_bind) belongs to agent_version_id.
+"""
 from typing import Any, Dict, List, Optional
 from datetime import datetime
 from uuid import UUID
 from pydantic import BaseModel, Field
 
 
-class AgentBindingInput(BaseModel):
-    """Binding input for agent creation/update"""
-    tool_id: UUID = Field(..., description="Tool ID")
-    tool_instance_id: UUID = Field(..., description="Tool instance ID")
-    credential_strategy: str = Field(default="any", description="Credential strategy: user_only, tenant_only, default_only, prefer_user, prefer_tenant, any")
-    required: bool = Field(default=False, description="Is this tool required")
+# ─────────────────────────────────────────────────────────────────────────────
+# AGENT CONTAINER
+# ─────────────────────────────────────────────────────────────────────────────
 
-
-class AgentBase(BaseModel):
-    slug: str = Field(..., description="Unique identifier", example="jira-assistant")
+class AgentCreate(BaseModel):
+    slug: str = Field(..., description="Unique identifier")
     name: str = Field(..., description="Display name")
     description: Optional[str] = None
-    system_prompt_slug: str = Field(..., description="Slug of the System Prompt")
-    policy_id: Optional[UUID] = Field(default=None, description="ID of the Policy (behavioral rules)")
-    limit_id: Optional[UUID] = Field(default=None, description="ID of the Limit (execution constraints)")
-    capabilities: List[str] = Field(default=[], description="Agent capabilities for Router matching")
-    supports_partial_mode: bool = Field(default=False, description="Allow partial execution if some tools unavailable")
-    generation_config: Optional[Dict[str, Any]] = {}
-    is_active: bool = True
-    enable_logging: bool = Field(default=True, description="Enable detailed run logging")
-
-
-class AgentCreate(AgentBase):
-    """Schema for creating an agent with bindings"""
-    bindings: List[AgentBindingInput] = Field(default=[], description="Tool bindings")
 
 
 class AgentUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
-    system_prompt_slug: Optional[str] = None
-    policy_id: Optional[UUID] = None
-    limit_id: Optional[UUID] = None
-    capabilities: Optional[List[str]] = None
-    supports_partial_mode: Optional[bool] = None
-    generation_config: Optional[Dict[str, Any]] = None
-    is_active: Optional[bool] = None
-    enable_logging: Optional[bool] = None
-    bindings: Optional[List[AgentBindingInput]] = Field(default=None, description="Replace all bindings")
 
 
-class AgentBindingResponse(BaseModel):
-    """Binding response with details"""
+class AgentResponse(BaseModel):
     id: UUID
-    tool_id: UUID
-    tool_slug: str
-    tool_name: str
-    tool_group_slug: str
-    tool_instance_id: UUID
-    instance_slug: str
-    instance_name: str
-    credential_strategy: str
-    required: bool
-
-
-class AgentResponse(AgentBase):
-    id: UUID
+    slug: str
+    name: str
+    description: Optional[str] = None
+    current_version_id: Optional[UUID] = None
     created_at: datetime
     updated_at: datetime
 
@@ -68,6 +39,83 @@ class AgentResponse(AgentBase):
         from_attributes = True
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# AGENT VERSION
+# ─────────────────────────────────────────────────────────────────────────────
+
+class AgentVersionCreate(BaseModel):
+    prompt: Optional[str] = Field(default=None, description="System prompt text (inherited from parent if not provided)")
+    policy_id: Optional[UUID] = Field(default=None, description="Policy ID")
+    limit_id: Optional[UUID] = Field(default=None, description="Limit ID")
+    notes: Optional[str] = None
+    parent_version_id: Optional[UUID] = Field(default=None, description="Parent version ID for data inheritance")
+
+
+class AgentVersionUpdate(BaseModel):
+    prompt: Optional[str] = None
+    policy_id: Optional[UUID] = None
+    limit_id: Optional[UUID] = None
+    notes: Optional[str] = None
+
+
+class AgentVersionResponse(BaseModel):
+    id: UUID
+    agent_id: UUID
+    version: int
+    status: str
+    prompt: str
+    policy_id: Optional[UUID] = None
+    limit_id: Optional[UUID] = None
+    parent_version_id: Optional[UUID] = None
+    notes: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class AgentVersionInfo(BaseModel):
+    """Short version info for list views"""
+    id: UUID
+    version: int
+    status: str
+    prompt: str
+    policy_id: Optional[UUID] = None
+    limit_id: Optional[UUID] = None
+    notes: Optional[str] = None
+    created_at: datetime
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AGENT DETAIL (container + versions)
+# ─────────────────────────────────────────────────────────────────────────────
+
 class AgentDetailResponse(AgentResponse):
-    """Agent response with bindings"""
-    bindings: List[AgentBindingResponse] = Field(default=[], description="Tool bindings with details")
+    versions: List[AgentVersionInfo] = Field(default=[])
+    current_version: Optional[AgentVersionInfo] = None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TOOL BINDINGS (per version)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class AgentBindingInput(BaseModel):
+    tool_id: UUID = Field(..., description="Tool ID")
+    tool_instance_id: Optional[UUID] = Field(default=None, description="Tool instance ID (NULL = not bound)")
+    credential_strategy: str = Field(
+        default="ANY",
+        description="USER_ONLY|TENANT_ONLY|PLATFORM_ONLY|USER_THEN_TENANT|TENANT_THEN_PLATFORM|ANY"
+    )
+
+
+class AgentBindingResponse(BaseModel):
+    id: UUID
+    agent_version_id: UUID
+    tool_id: UUID
+    tool_instance_id: Optional[UUID] = None
+    credential_strategy: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True

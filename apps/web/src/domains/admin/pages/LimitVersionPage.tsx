@@ -28,6 +28,7 @@ export function LimitVersionPage() {
   const isCreate = !versionParam;
   const versionNumber = isCreate ? 0 : parseInt(versionParam, 10);
   const isEditMode = searchParams.get('mode') === 'edit';
+  const fromVersion = searchParams.get('from');
   const mode: EntityPageMode = isCreate ? 'create' : isEditMode ? 'edit' : 'view';
   const isEditable = mode === 'edit' || mode === 'create';
 
@@ -54,8 +55,26 @@ export function LimitVersionPage() {
     enabled: !isCreate && !!slug && versionNumber > 0,
   });
 
+  // Load source version for duplication
+  const fromVersionNumber = fromVersion ? parseInt(fromVersion, 10) : 0;
+  const { data: sourceVersion } = useQuery({
+    queryKey: qk.limits.version(slug!, fromVersionNumber),
+    queryFn: () => limitsApi.getVersion(slug!, fromVersionNumber),
+    enabled: isCreate && !!slug && fromVersionNumber > 0,
+  });
+
   useEffect(() => {
-    if (isCreate) {
+    if (isCreate && sourceVersion) {
+      setFormData({
+        max_steps: sourceVersion.max_steps ?? undefined,
+        max_tool_calls: sourceVersion.max_tool_calls ?? undefined,
+        max_wall_time_ms: sourceVersion.max_wall_time_ms ?? undefined,
+        tool_timeout_ms: sourceVersion.tool_timeout_ms ?? undefined,
+        max_retries: sourceVersion.max_retries ?? undefined,
+        extra_config: sourceVersion.extra_config || {},
+        notes: '',
+      });
+    } else if (isCreate) {
       setFormData({
         max_steps: undefined,
         max_tool_calls: undefined,
@@ -76,7 +95,7 @@ export function LimitVersionPage() {
         notes: existingVersion.notes || '',
       });
     }
-  }, [existingVersion, isCreate]);
+  }, [existingVersion, isCreate, sourceVersion]);
 
   const createMutation = useMutation({
     mutationFn: (data: LimitVersionCreate) => limitsApi.createVersion(slug!, data),
@@ -143,8 +162,8 @@ export function LimitVersionPage() {
       };
 
       if (mode === 'create') {
-        if (limit?.current_version) {
-          data.parent_version_id = limit.current_version.id;
+        if (sourceVersion) {
+          data.parent_version_id = sourceVersion.id;
         }
         await createMutation.mutateAsync(data);
       } else {
@@ -205,6 +224,7 @@ export function LimitVersionPage() {
       onEdit: () => setSearchParams({ mode: 'edit' }),
       onActivate: () => activateMutation.mutate(),
       onDeactivate: () => deactivateMutation.mutate(),
+      onDuplicate: () => navigate(`/admin/limits/${slug}/versions/new?from=${versionNumber}`),
     },
     loading: {
       activate: activateMutation.isPending,

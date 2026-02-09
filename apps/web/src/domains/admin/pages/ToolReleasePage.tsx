@@ -14,16 +14,24 @@ import {
   toolReleasesKeys,
   type ToolReleaseResponse,
   type ToolBackendReleaseListItem,
+  type ToolBackendReleaseDetail,
 } from '@/shared/api/toolReleases';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
 import { EntityPage, type EntityPageMode } from '@/shared/ui/EntityPage';
 import { ContentBlock, Badge, type FieldDefinition } from '@/shared/ui';
+import { Select } from '@/shared/ui/Select/Select';
 import { useVersionActions } from '@/shared/hooks/useVersionActions';
 
 interface FormData {
   backend_release_id: string;
-  notes: string;
+  description_for_llm: string;
+  category: string;
+  tags: string;
+  field_hints: string;
+  examples: string;
+  return_summary: string;
   config: string;
+  notes: string;
 }
 
 const STATUS_LABELS: Record<string, string> = {
@@ -46,16 +54,23 @@ export function ToolReleasePage() {
   const showError = useErrorToast();
   const showSuccess = useSuccessToast();
 
-  const isCreate = versionParam === 'new';
+  const isCreate = !versionParam;
   const versionNumber = isCreate ? 0 : parseInt(versionParam || '0', 10);
   const isEditMode = searchParams.get('mode') === 'edit' || isCreate;
+  const fromVersion = searchParams.get('from');
   const mode: EntityPageMode = isCreate ? 'create' : isEditMode ? 'edit' : 'view';
   const isEditable = mode === 'edit' || mode === 'create';
 
   const [formData, setFormData] = useState<FormData>({
     backend_release_id: '',
-    notes: '',
+    description_for_llm: '',
+    category: '',
+    tags: '',
+    field_hints: '{}',
+    examples: '[]',
+    return_summary: '',
     config: '{}',
+    notes: '',
   });
   const [saving, setSaving] = useState(false);
 
@@ -75,31 +90,69 @@ export function ToolReleasePage() {
 
   const isLoading = toolLoading || releaseLoading;
 
+  // Load source release for duplication
+  const fromVersionNumber = fromVersion ? parseInt(fromVersion, 10) : 0;
+  const { data: sourceRelease } = useQuery({
+    queryKey: toolReleasesKeys.releaseDetail(toolSlug!, fromVersionNumber),
+    queryFn: () => toolReleasesApi.getRelease(toolSlug!, fromVersionNumber),
+    enabled: isCreate && !!toolSlug && fromVersionNumber > 0,
+  });
+
   // Sync form data
   useEffect(() => {
-    if (isCreate && tool?.backend_releases?.length) {
-      // Default to latest backend release
+    if (isCreate && sourceRelease) {
+      setFormData({
+        backend_release_id: sourceRelease.backend_release_id || (tool?.backend_releases?.[0]?.id || ''),
+        description_for_llm: sourceRelease.description_for_llm || '',
+        category: sourceRelease.category || '',
+        tags: sourceRelease.tags?.join(', ') || '',
+        field_hints: JSON.stringify(sourceRelease.field_hints || {}, null, 2),
+        examples: JSON.stringify(sourceRelease.examples || [], null, 2),
+        return_summary: sourceRelease.return_summary || '',
+        config: JSON.stringify(sourceRelease.config || {}, null, 2),
+        notes: '',
+      });
+    } else if (isCreate && tool?.backend_releases?.length) {
       const latest = tool.backend_releases[0];
       setFormData({
         backend_release_id: latest.id,
-        notes: '',
+        description_for_llm: '',
+        category: '',
+        tags: '',
+        field_hints: '{}',
+        examples: '[]',
+        return_summary: '',
         config: '{}',
+        notes: '',
       });
     } else if (existingRelease) {
       setFormData({
         backend_release_id: existingRelease.backend_release_id,
-        notes: existingRelease.notes || '',
+        description_for_llm: existingRelease.description_for_llm || '',
+        category: existingRelease.category || '',
+        tags: existingRelease.tags?.join(', ') || '',
+        field_hints: JSON.stringify(existingRelease.field_hints || {}, null, 2),
+        examples: JSON.stringify(existingRelease.examples || [], null, 2),
+        return_summary: existingRelease.return_summary || '',
         config: JSON.stringify(existingRelease.config, null, 2),
+        notes: existingRelease.notes || '',
       });
     }
-  }, [existingRelease, isCreate, tool]);
+  }, [existingRelease, isCreate, tool, sourceRelease]);
 
   // Mutations
   const createMutation = useMutation({
     mutationFn: () => toolReleasesApi.createRelease(toolSlug!, {
       backend_release_id: formData.backend_release_id,
-      notes: formData.notes || undefined,
+      from_release_id: sourceRelease?.id || undefined,
+      description_for_llm: formData.description_for_llm || undefined,
+      category: formData.category || undefined,
+      tags: formData.tags ? formData.tags.split(',').map(t => t.trim()).filter(Boolean) : undefined,
+      field_hints: JSON.parse(formData.field_hints || '{}'),
+      examples: JSON.parse(formData.examples || '[]'),
+      return_summary: formData.return_summary || undefined,
       config: JSON.parse(formData.config || '{}'),
+      notes: formData.notes || undefined,
     }),
     onSuccess: (created: ToolReleaseResponse) => {
       queryClient.invalidateQueries({ queryKey: toolReleasesKeys.toolDetail(toolSlug!) });
@@ -112,8 +165,14 @@ export function ToolReleasePage() {
   const updateMutation = useMutation({
     mutationFn: () => toolReleasesApi.updateRelease(toolSlug!, versionNumber, {
       backend_release_id: formData.backend_release_id,
-      notes: formData.notes || undefined,
+      description_for_llm: formData.description_for_llm || undefined,
+      category: formData.category || undefined,
+      tags: formData.tags ? formData.tags.split(',').map(t => t.trim()).filter(Boolean) : undefined,
+      field_hints: JSON.parse(formData.field_hints || '{}'),
+      examples: JSON.parse(formData.examples || '[]'),
+      return_summary: formData.return_summary || undefined,
       config: JSON.parse(formData.config || '{}'),
+      notes: formData.notes || undefined,
     }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: toolReleasesKeys.toolDetail(toolSlug!) });
@@ -145,7 +204,7 @@ export function ToolReleasePage() {
   });
 
   const setRecommendedMutation = useMutation({
-    mutationFn: () => toolReleasesApi.setRecommendedRelease(toolSlug!, existingRelease!.id),
+    mutationFn: () => toolReleasesApi.setCurrentVersion(toolSlug!, existingRelease!.id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: toolReleasesKeys.toolDetail(toolSlug!) });
       showSuccess('Релиз установлен как основной');
@@ -155,12 +214,14 @@ export function ToolReleasePage() {
 
   // Handlers
   const handleSave = async () => {
-    // Validate JSON
-    try {
-      JSON.parse(formData.config || '{}');
-    } catch {
-      showError('Некорректный JSON в конфигурации');
-      return;
+    // Validate JSON fields
+    for (const [field, label] of [['config', 'Конфигурация'], ['field_hints', 'Field Hints'], ['examples', 'Examples']] as const) {
+      try {
+        JSON.parse(formData[field] || (field === 'examples' ? '[]' : '{}'));
+      } catch {
+        showError(`Некорректный JSON в поле "${label}"`);
+        return;
+      }
     }
 
     setSaving(true);
@@ -179,8 +240,14 @@ export function ToolReleasePage() {
     if (mode === 'edit' && existingRelease) {
       setFormData({
         backend_release_id: existingRelease.backend_release_id,
-        notes: existingRelease.notes || '',
+        description_for_llm: existingRelease.description_for_llm || '',
+        category: existingRelease.category || '',
+        tags: existingRelease.tags?.join(', ') || '',
+        field_hints: JSON.stringify(existingRelease.field_hints || {}, null, 2),
+        examples: JSON.stringify(existingRelease.examples || [], null, 2),
+        return_summary: existingRelease.return_summary || '',
         config: JSON.stringify(existingRelease.config, null, 2),
+        notes: existingRelease.notes || '',
       });
       setSearchParams({});
     } else if (mode === 'create') {
@@ -198,21 +265,67 @@ export function ToolReleasePage() {
     label: `${br.version}${br.deprecated ? ' (deprecated)' : ''}`,
   }));
 
-  // Field definitions (без backend_release_id - он в отдельном read-only блоке)
-  const releaseFields: FieldDefinition[] = [
+  // Field definitions
+  const mainFields: FieldDefinition[] = [
+    {
+      key: 'description_for_llm',
+      label: 'Описание для LLM',
+      type: 'textarea',
+      placeholder: 'Описание инструмента для языковой модели...',
+      rows: 3,
+    },
+    {
+      key: 'category',
+      label: 'Категория',
+      type: 'text',
+      placeholder: 'search / create / update ...',
+    },
+    {
+      key: 'tags',
+      label: 'Теги',
+      type: 'text',
+      placeholder: 'rag, search, documents (через запятую)',
+      description: 'Теги через запятую',
+    },
+    {
+      key: 'return_summary',
+      label: 'Описание возврата',
+      type: 'textarea',
+      placeholder: 'Что возвращает инструмент...',
+      rows: 2,
+    },
     {
       key: 'notes',
       label: 'Заметки',
       type: 'textarea',
       placeholder: 'Описание изменений в этом релизе...',
-      rows: 3,
+      rows: 2,
+    },
+  ];
+
+  const jsonFields: FieldDefinition[] = [
+    {
+      key: 'field_hints',
+      label: 'Field Hints (JSON)',
+      type: 'textarea',
+      placeholder: '{"query": "Поисковый запрос"}',
+      rows: 4,
+      description: 'Подсказки для полей входной схемы',
+    },
+    {
+      key: 'examples',
+      label: 'Examples (JSON)',
+      type: 'textarea',
+      placeholder: '[{"query": "пример запроса"}]',
+      rows: 4,
+      description: 'Примеры вызовов инструмента',
     },
     {
       key: 'config',
       label: 'Конфигурация (JSON)',
       type: 'textarea',
       placeholder: '{}',
-      rows: 6,
+      rows: 4,
       description: 'Дополнительные настройки (timeout, retries и т.д.)',
     },
   ];
@@ -224,8 +337,8 @@ export function ToolReleasePage() {
     { label: isCreate ? 'Новая версия' : `Версия v${versionNumber}` },
   ];
 
-  // Check if this release is the recommended one
-  const isRecommended = !!(tool?.recommended_release_id && existingRelease?.id && tool.recommended_release_id === existingRelease.id);
+  // Check if this release is the current version
+  const isRecommended = !!(tool?.current_version_id && existingRelease?.id && tool.current_version_id === existingRelease.id);
 
   const actionButtons = useVersionActions({
     status: existingRelease?.status,
@@ -236,6 +349,7 @@ export function ToolReleasePage() {
       onActivate: () => activateMutation.mutate(),
       onDeactivate: () => archiveMutation.mutate(),
       onSetRecommended: () => setRecommendedMutation.mutate(),
+      onDuplicate: () => navigate(`/admin/tools/${toolSlug}/versions/new?from=${versionNumber}`),
     },
     loading: {
       activate: activateMutation.isPending,
@@ -248,6 +362,21 @@ export function ToolReleasePage() {
   const selectedBackendRelease = tool?.backend_releases?.find(
     (br: ToolBackendReleaseListItem) => br.id === formData.backend_release_id
   );
+
+  // Load full backend release detail (with input_schema/output_schema)
+  // In view mode — from existingRelease.backend_release (already full)
+  // In create mode — fetch separately by selected backend_release_id
+  const { data: fetchedBackendRelease } = useQuery({
+    queryKey: toolReleasesKeys.backendReleaseDetail(
+      toolSlug!,
+      selectedBackendRelease?.version || ''
+    ),
+    queryFn: () => toolReleasesApi.getBackendRelease(toolSlug!, selectedBackendRelease!.version),
+    enabled: isCreate && !!toolSlug && !!selectedBackendRelease?.version,
+  });
+
+  const backendReleaseDetail: ToolBackendReleaseDetail | null =
+    existingRelease?.backend_release ?? fetchedBackendRelease ?? null;
 
   return (
     <EntityPage
@@ -264,9 +393,9 @@ export function ToolReleasePage() {
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
         <ContentBlock
-          title="Настройки релиза"
+          title="Основные настройки"
           editable={isEditable}
-          fields={releaseFields}
+          fields={mainFields}
           data={formData}
           onChange={handleFieldChange}
           headerActions={
@@ -276,51 +405,102 @@ export function ToolReleasePage() {
           }
         />
 
+        <ContentBlock
+          title="JSON-конфигурация"
+          icon="code"
+          editable={isEditable}
+          fields={jsonFields}
+          data={formData}
+          onChange={handleFieldChange}
+        />
+
         <ContentBlock title="Версия бэкенда" icon="code">
             {isEditable && isCreate ? (
               <div style={{ fontSize: '0.875rem' }}>
                 <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 500 }}>
                   Выберите версию бэкенда:
                 </label>
-                <select
+                <Select
+                  options={backendReleaseOptions}
                   value={formData.backend_release_id}
-                  onChange={(e) => handleFieldChange('backend_release_id', e.target.value)}
-                  style={{
-                    width: '100%',
-                    padding: '0.5rem',
-                    borderRadius: '4px',
-                    border: '1px solid var(--border, var(--color-border))',
-                    fontSize: '0.875rem',
-                  }}
-                >
-                  <option value="">-- Выберите версию --</option>
-                  {backendReleaseOptions.map((opt) => (
-                    <option key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </option>
-                  ))}
-                </select>
+                  onChange={(val) => handleFieldChange('backend_release_id', val)}
+                  placeholder="-- Выберите версию --"
+                />
               </div>
             ) : selectedBackendRelease ? (
               <div style={{ fontSize: '0.875rem' }}>
                 <div><strong>Версия:</strong> {selectedBackendRelease.version}</div>
                 {selectedBackendRelease.description && (
-                  <div style={{ marginTop: '0.5rem', color: 'var(--muted)' }}>
+                  <div style={{ marginTop: '0.5rem', color: 'var(--text-secondary)' }}>
                     {selectedBackendRelease.description}
                   </div>
                 )}
                 {selectedBackendRelease.deprecated && (
-                  <div style={{ marginTop: '0.5rem', color: 'var(--warning)' }}>
+                  <div style={{ marginTop: '0.5rem', color: 'var(--status-warn)' }}>
                     Эта версия устарела
                   </div>
                 )}
               </div>
             ) : (
-              <p style={{ color: 'var(--muted)', fontSize: '0.875rem' }}>
+              <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
                 Версия бэкенда не выбрана
               </p>
             )}
         </ContentBlock>
+
+        {backendReleaseDetail && (
+          <>
+            <ContentBlock title="Мета-информация бэкенда" icon="info">
+              <div style={{ fontSize: '0.875rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                <div><strong>Метод:</strong> <code>{backendReleaseDetail.method_name}</code></div>
+                {backendReleaseDetail.schema_hash && (
+                  <div><strong>Schema Hash:</strong> <code>{backendReleaseDetail.schema_hash.slice(0, 16)}...</code></div>
+                )}
+                {backendReleaseDetail.worker_build_id && (
+                  <div><strong>Worker Build:</strong> <code>{backendReleaseDetail.worker_build_id}</code></div>
+                )}
+                {backendReleaseDetail.deprecation_message && (
+                  <div style={{ color: 'var(--status-warn)' }}>
+                    <strong>Deprecation:</strong> {backendReleaseDetail.deprecation_message}
+                  </div>
+                )}
+                <div><strong>Синхронизировано:</strong> {new Date(backendReleaseDetail.synced_at).toLocaleString('ru')}</div>
+              </div>
+            </ContentBlock>
+
+            <ContentBlock title="Input Schema" icon="code">
+              <pre style={{
+                fontSize: '0.8125rem',
+                background: 'var(--bg-secondary)',
+                padding: '1rem',
+                borderRadius: '6px',
+                overflow: 'auto',
+                maxHeight: '400px',
+                margin: 0,
+                color: 'var(--text-primary)',
+              }}>
+                {JSON.stringify(backendReleaseDetail.input_schema, null, 2)}
+              </pre>
+            </ContentBlock>
+
+            {backendReleaseDetail.output_schema && Object.keys(backendReleaseDetail.output_schema).length > 0 && (
+              <ContentBlock title="Output Schema" icon="code">
+                <pre style={{
+                  fontSize: '0.8125rem',
+                  background: 'var(--bg-secondary)',
+                  padding: '1rem',
+                  borderRadius: '6px',
+                  overflow: 'auto',
+                  maxHeight: '400px',
+                  margin: 0,
+                  color: 'var(--text-primary)',
+                }}>
+                  {JSON.stringify(backendReleaseDetail.output_schema, null, 2)}
+                </pre>
+              </ContentBlock>
+            )}
+          </>
+        )}
       </div>
     </EntityPage>
   );

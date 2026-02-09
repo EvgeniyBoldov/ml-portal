@@ -24,6 +24,7 @@ export function PromptVersionPage() {
   const isCreate = !versionParam;
   const versionNumber = isCreate ? 0 : parseInt(versionParam, 10);
   const isEditMode = searchParams.get('mode') === 'edit';
+  const fromVersion = searchParams.get('from');
   const mode: EntityPageMode = isCreate ? 'create' : isEditMode ? 'edit' : 'view';
   const isEditable = mode === 'edit' || mode === 'create';
 
@@ -44,13 +45,23 @@ export function PromptVersionPage() {
     enabled: !isCreate && !!slug && versionNumber > 0,
   });
 
+  // Load source version for duplication
+  const fromVersionNumber = fromVersion ? parseInt(fromVersion, 10) : 0;
+  const { data: sourceVersion } = useQuery({
+    queryKey: qk.prompts.version(slug!, fromVersionNumber),
+    queryFn: () => promptsApi.getVersion(slug!, fromVersionNumber),
+    enabled: isCreate && !!slug && fromVersionNumber > 0,
+  });
+
   useEffect(() => {
-    if (isCreate) {
+    if (isCreate && sourceVersion) {
+      setFormData({ template: sourceVersion.template || '' });
+    } else if (isCreate) {
       setFormData({ template: '' });
     } else if (existingVersion) {
       setFormData({ template: existingVersion.template });
     }
-  }, [existingVersion, isCreate]);
+  }, [existingVersion, isCreate, sourceVersion]);
 
   // Mutations
   const createMutation = useMutation({
@@ -152,6 +163,7 @@ export function PromptVersionPage() {
       onActivate: () => activateMutation.mutate(),
       onDeactivate: () => deactivateMutation.mutate(),
       onSetRecommended: () => setRecommendedMutation.mutate(),
+      onDuplicate: () => navigate(`/admin/prompts/${slug}/versions/new?from=${versionNumber}`),
     },
     loading: {
       activate: activateMutation.isPending,

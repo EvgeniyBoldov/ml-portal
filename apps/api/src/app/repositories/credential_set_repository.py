@@ -1,5 +1,5 @@
 """
-CredentialSet Repository
+Credential Repository v2 - owner-based credentials.
 """
 from typing import List, Optional, Tuple
 from uuid import UUID
@@ -7,213 +7,138 @@ from uuid import UUID
 from sqlalchemy import select, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.credential_set import CredentialSet, CredentialScope
+from app.models.credential_set import Credential
 
 
-class CredentialSetRepository:
+class CredentialRepository:
     def __init__(self, session: AsyncSession):
         self.session = session
 
-    async def create(self, cred_set: CredentialSet) -> CredentialSet:
-        self.session.add(cred_set)
+    async def create(self, credential: Credential) -> Credential:
+        self.session.add(credential)
         await self.session.flush()
-        await self.session.refresh(cred_set)
-        return cred_set
+        await self.session.refresh(credential)
+        return credential
 
-    async def get_by_id(self, cred_id: UUID) -> Optional[CredentialSet]:
-        stmt = select(CredentialSet).where(CredentialSet.id == cred_id)
+    async def get_by_id(self, cred_id: UUID) -> Optional[Credential]:
+        stmt = select(Credential).where(Credential.id == cred_id)
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
-    async def update(self, cred_set: CredentialSet) -> CredentialSet:
-        self.session.add(cred_set)
+    async def update(self, credential: Credential) -> Credential:
+        self.session.add(credential)
         await self.session.flush()
-        await self.session.refresh(cred_set)
-        return cred_set
+        await self.session.refresh(credential)
+        return credential
 
-    async def delete(self, cred_set: CredentialSet) -> None:
-        await self.session.delete(cred_set)
+    async def delete(self, credential: Credential) -> None:
+        await self.session.delete(credential)
         await self.session.flush()
 
     async def list_credentials(
         self,
         skip: int = 0,
         limit: int = 100,
-        tool_instance_id: Optional[UUID] = None,
-        scope: Optional[str] = None,
-        tenant_id: Optional[UUID] = None,
+        instance_id: Optional[UUID] = None,
+        owner_user_id: Optional[UUID] = None,
+        owner_tenant_id: Optional[UUID] = None,
+        owner_platform: Optional[bool] = None,
         is_active: Optional[bool] = None,
-    ) -> Tuple[List[CredentialSet], int]:
-        """List credential sets with filters"""
-        stmt = select(CredentialSet)
-        
-        if tool_instance_id:
-            stmt = stmt.where(CredentialSet.tool_instance_id == tool_instance_id)
-        if scope:
-            stmt = stmt.where(CredentialSet.scope == scope)
-        if tenant_id:
-            stmt = stmt.where(CredentialSet.tenant_id == tenant_id)
+    ) -> Tuple[List[Credential], int]:
+        """List credentials with filters"""
+        stmt = select(Credential)
+
+        if instance_id:
+            stmt = stmt.where(Credential.instance_id == instance_id)
+        if owner_user_id:
+            stmt = stmt.where(Credential.owner_user_id == owner_user_id)
+        if owner_tenant_id:
+            stmt = stmt.where(Credential.owner_tenant_id == owner_tenant_id)
+        if owner_platform is not None:
+            stmt = stmt.where(Credential.owner_platform == owner_platform)
         if is_active is not None:
-            stmt = stmt.where(CredentialSet.is_active == is_active)
-        
+            stmt = stmt.where(Credential.is_active == is_active)
+
         count_stmt = select(func.count()).select_from(stmt.subquery())
         total = await self.session.scalar(count_stmt) or 0
-        
-        stmt = stmt.order_by(CredentialSet.created_at.desc()).offset(skip).limit(limit)
+
+        stmt = stmt.order_by(Credential.created_at.desc()).offset(skip).limit(limit)
         result = await self.session.execute(stmt)
-        
+
         return list(result.scalars().all()), total
 
-    async def get_for_instance(
+    async def resolve_for_instance(
         self,
-        tool_instance_id: UUID,
+        instance_id: UUID,
+        strategy: str,
         user_id: Optional[UUID] = None,
         tenant_id: Optional[UUID] = None,
-    ) -> Optional[CredentialSet]:
+    ) -> Optional[Credential]:
         """
-        Get credentials for a tool instance following priority:
-        User > Tenant > Default
-        
-        Args:
-            tool_instance_id: ID of the tool instance
-            user_id: User ID (for user-level credentials)
-            tenant_id: Tenant ID (for tenant-level credentials)
-            
-        Returns:
-            CredentialSet or None if no credentials found
+        Resolve credential for instance using strategy.
+
+        Strategies:
+        - USER_ONLY: only user creds
+        - TENANT_ONLY: only tenant creds
+        - PLATFORM_ONLY: only platform creds
+        - USER_THEN_TENANT: user > tenant
+        - TENANT_THEN_PLATFORM: tenant > platform
+        - ANY: user > tenant > platform
         """
-        conditions = [
-            CredentialSet.tool_instance_id == tool_instance_id,
-            CredentialSet.is_active == True,
-        ]
-        
-        # Try user scope first
-        if user_id and tenant_id:
-            user_stmt = select(CredentialSet).where(
-                and_(
-                    *conditions,
-                    CredentialSet.scope == CredentialScope.USER.value,
-                    CredentialSet.user_id == user_id,
-                    CredentialSet.tenant_id == tenant_id,
-                )
-            )
-            result = await self.session.execute(user_stmt)
-            user_creds = result.scalar_one_or_none()
-            if user_creds:
-                return user_creds
-        
-        # Try tenant scope
-        if tenant_id:
-            tenant_stmt = select(CredentialSet).where(
-                and_(
-                    *conditions,
-                    CredentialSet.scope == CredentialScope.TENANT.value,
-                    CredentialSet.tenant_id == tenant_id,
-                )
-            )
-            result = await self.session.execute(tenant_stmt)
-            tenant_creds = result.scalar_one_or_none()
-            if tenant_creds:
-                return tenant_creds
-        
-        # Try default scope
-        default_stmt = select(CredentialSet).where(
-            and_(
-                *conditions,
-                CredentialSet.scope == CredentialScope.DEFAULT.value,
-                CredentialSet.tenant_id.is_(None),
-                CredentialSet.user_id.is_(None),
-            )
-        )
-        result = await self.session.execute(default_stmt)
-        return result.scalar_one_or_none()
+        base = [Credential.instance_id == instance_id, Credential.is_active == True]
+
+        async def _find_user() -> Optional[Credential]:
+            if not user_id:
+                return None
+            stmt = select(Credential).where(and_(*base, Credential.owner_user_id == user_id))
+            return (await self.session.execute(stmt)).scalar_one_or_none()
+
+        async def _find_tenant() -> Optional[Credential]:
+            if not tenant_id:
+                return None
+            stmt = select(Credential).where(and_(*base, Credential.owner_tenant_id == tenant_id))
+            return (await self.session.execute(stmt)).scalar_one_or_none()
+
+        async def _find_platform() -> Optional[Credential]:
+            stmt = select(Credential).where(and_(*base, Credential.owner_platform == True))
+            return (await self.session.execute(stmt)).scalar_one_or_none()
+
+        if strategy == "USER_ONLY":
+            return await _find_user()
+        elif strategy == "TENANT_ONLY":
+            return await _find_tenant()
+        elif strategy == "PLATFORM_ONLY":
+            return await _find_platform()
+        elif strategy == "USER_THEN_TENANT":
+            return await _find_user() or await _find_tenant()
+        elif strategy == "TENANT_THEN_PLATFORM":
+            return await _find_tenant() or await _find_platform()
+        else:  # ANY
+            return await _find_user() or await _find_tenant() or await _find_platform()
 
     async def get_all_for_instance(
         self,
-        tool_instance_id: UUID,
-    ) -> List[CredentialSet]:
-        """Get all credential sets for a tool instance"""
-        stmt = select(CredentialSet).where(
-            CredentialSet.tool_instance_id == tool_instance_id
-        ).order_by(CredentialSet.created_at.desc())
-        
+        instance_id: UUID,
+    ) -> List[Credential]:
+        """Get all credentials for a tool instance"""
+        stmt = select(Credential).where(
+            Credential.instance_id == instance_id
+        ).order_by(Credential.created_at.desc())
+
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
-    async def exists_for_scope(
+    async def has_credentials(
         self,
-        tool_instance_id: UUID,
-        scope: str,
-        tenant_id: Optional[UUID] = None,
+        instance_id: UUID,
         user_id: Optional[UUID] = None,
+        tenant_id: Optional[UUID] = None,
     ) -> bool:
-        """Check if credentials already exist for given scope"""
-        conditions = [
-            CredentialSet.tool_instance_id == tool_instance_id,
-            CredentialSet.scope == scope,
-        ]
-        
-        if tenant_id:
-            conditions.append(CredentialSet.tenant_id == tenant_id)
-        if user_id:
-            conditions.append(CredentialSet.user_id == user_id)
-        
-        stmt = select(func.count()).where(and_(*conditions))
-        count = await self.session.scalar(stmt) or 0
-        return count > 0
-    
-    async def get_default_for_scope(
-        self,
-        tool_instance_id: UUID,
-        scope: str,
-        tenant_id: Optional[UUID] = None,
-        user_id: Optional[UUID] = None,
-    ) -> Optional[CredentialSet]:
-        """
-        Get default credential set for a specific scope.
-        
-        If is_default=true exists, returns it.
-        If multiple credentials exist but no default, returns None (error case).
-        If only one credential exists, returns it.
-        """
-        conditions = [
-            CredentialSet.tool_instance_id == tool_instance_id,
-            CredentialSet.scope == scope,
-            CredentialSet.is_active == True,
-        ]
-        
-        if scope == "tenant" and tenant_id:
-            conditions.append(CredentialSet.tenant_id == tenant_id)
-        elif scope == "user" and tenant_id and user_id:
-            conditions.append(CredentialSet.tenant_id == tenant_id)
-            conditions.append(CredentialSet.user_id == user_id)
-        
-        # Try to get default first
-        default_stmt = select(CredentialSet).where(
-            and_(*conditions, CredentialSet.is_default == True)
+        """Check if any active credentials exist (ANY strategy)"""
+        cred = await self.resolve_for_instance(
+            instance_id=instance_id,
+            strategy="ANY",
+            user_id=user_id,
+            tenant_id=tenant_id,
         )
-        result = await self.session.execute(default_stmt)
-        default_cred = result.scalar_one_or_none()
-        
-        if default_cred:
-            return default_cred
-        
-        # If no default, check if only one exists
-        all_stmt = select(CredentialSet).where(and_(*conditions))
-        result = await self.session.execute(all_stmt)
-        all_creds = list(result.scalars().all())
-        
-        if len(all_creds) == 1:
-            return all_creds[0]
-        elif len(all_creds) > 1:
-            # Multiple credentials but no default - this is an error state
-            # Log warning and return None
-            from app.core.logging import get_logger
-            logger = get_logger(__name__)
-            logger.warning(
-                f"Multiple credentials found for instance {tool_instance_id} "
-                f"scope {scope} but no default set"
-            )
-            return None
-        
-        return None
+        return cred is not None

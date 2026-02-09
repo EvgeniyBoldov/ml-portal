@@ -99,6 +99,9 @@ class ExecutionRequest:
     user_id: UUID
     tenant_id: UUID
     
+    # v2: prompt from AgentVersion
+    prompt: str = ""
+    
     intent: Optional[str] = None
     intent_confidence: float = 0.0
     
@@ -192,8 +195,11 @@ class AgentRouter:
         routing_reasons = []
         
         try:
-            agent = await self.agent_service.get_agent(agent_slug)
+            agent = await self.agent_service.get_agent_by_slug(agent_slug)
             routing_reasons.append(f"Agent '{agent_slug}' loaded")
+            
+            # v2: resolve active version for prompt
+            agent_version = await self.agent_service.resolve_active_version(agent_slug)
             
             effective_perms = await self.permission_service.resolve_permissions(
                 user_id=user_id,
@@ -273,6 +279,7 @@ class AgentRouter:
                 agent=agent,
                 user_id=user_id,
                 tenant_id=tenant_id,
+                prompt=agent_version.prompt,
                 available_tools=available_tools,
                 available_collections=available_collections,
                 tool_instances_map=tool_instances_map,
@@ -330,17 +337,21 @@ class AgentRouter:
         self,
         agent: Agent,
     ) -> List[Dict[str, Any]]:
-        """Load agent bindings with tool slugs from DB"""
+        """Load agent bindings with tool slugs from DB (v2: via current_version_id)"""
+        from app.models.agent_version import AgentVersion
+        
+        if not agent.current_version_id:
+            return []
+        
         stmt = (
             select(
                 AgentBinding.tool_id,
                 AgentBinding.tool_instance_id,
                 AgentBinding.credential_strategy,
-                AgentBinding.required,
                 Tool.slug.label("tool_slug"),
             )
             .join(Tool, AgentBinding.tool_id == Tool.id)
-            .where(AgentBinding.agent_id == agent.id)
+            .where(AgentBinding.agent_version_id == agent.current_version_id)
         )
         result = await self.session.execute(stmt)
         return [dict(row._mapping) for row in result.all()]
@@ -361,11 +372,9 @@ class AgentRouter:
         
         for binding in bindings:
             tool_slug = binding["tool_slug"]
-            required = binding.get("required", False)
             
             if not effective_perms.is_tool_allowed(tool_slug):
-                if required:
-                    missing.tools.append(tool_slug)
+                missing.tools.append(tool_slug)
                 continue
             
             instance = await self.instance_service.resolve_instance(
@@ -382,7 +391,7 @@ class AgentRouter:
                     tenant_id=tenant_id,
                 )
                 
-                if not has_credentials and required:
+                if not has_credentials:
                     missing.credentials.append(tool_slug)
                 
                 tool_instances_map[tool_slug] = {
@@ -390,7 +399,7 @@ class AgentRouter:
                     "instance_slug": instance.slug,
                     "has_credentials": has_credentials,
                 }
-            elif required:
+            else:
                 missing.tools.append(f"{tool_slug} (no instance)")
             
             capability = ToolCapability(
@@ -398,7 +407,7 @@ class AgentRouter:
                 instance_id=instance.id if instance else None,
                 instance_slug=instance.slug if instance else None,
                 has_credentials=has_credentials,
-                required=required,
+                required=True,
                 recommended=False,
             )
             available_tools.append(capability)
@@ -424,7 +433,7 @@ class AgentRouter:
         if not missing.has_missing:
             return ExecutionMode.FULL
         
-        if allow_partial and agent.supports_partial_mode:
+        if allow_partial:
             return ExecutionMode.PARTIAL
         
         return ExecutionMode.UNAVAILABLE

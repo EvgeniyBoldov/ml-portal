@@ -20,8 +20,17 @@ from app.agents.protocol import (
     build_tools_prompt,
     build_tool_results_message,
 )
-from app.services.agent_service import AgentProfile
 from app.core.http.clients import LLMClientProtocol
+
+
+@dataclass
+class AgentProfile:
+    """Legacy profile for backward compat with run() method.
+    In v2, use run_with_request() which gets prompt from ExecutionRequest."""
+    agent_slug: str
+    prompt_text: str
+    tools: List[str] = field(default_factory=list)
+    generation_config: Dict[str, Any] = field(default_factory=dict)
 
 logger = get_logger(__name__)
 
@@ -186,7 +195,7 @@ class AgentRuntime:
         tools_schemas = [h.to_llm_schema() for h in tool_handlers]
         
         logger.info(
-            f"Starting agent run: {profile.agent.slug}, "
+            f"Starting agent run: {profile.agent_slug}, "
             f"tools: {[h.slug for h in tool_handlers]}, "
             f"model: {effective_model}"
         )
@@ -199,7 +208,7 @@ class AgentRuntime:
             try:
                 run_id = await self.run_store.start_run(
                     tenant_id=ctx.tenant_id,
-                    agent_slug=profile.agent.slug,
+                    agent_slug=profile.agent_slug,
                     user_id=ctx.user_id,
                     chat_id=ctx.chat_id,
                 )
@@ -395,7 +404,7 @@ class AgentRuntime:
         tools_schemas: List[dict]
     ) -> str:
         """Собрать system prompt с инструкциями по tools"""
-        base_prompt = profile.system_prompt.template
+        base_prompt = profile.prompt_text
         
         if not tools_schemas:
             return base_prompt
@@ -526,7 +535,7 @@ class AgentRuntime:
         start_time = time.time()
         total_tool_calls = 0
         
-        effective_model = model or agent.generation_config.get("model")
+        effective_model = model
         
         # Use only available tools from exec_request
         available_tool_slugs = [t.tool_slug for t in exec_request.available_tools]
@@ -556,15 +565,8 @@ class AgentRuntime:
                 logger.warning(f"Failed to start run logging: {e}")
                 should_log = False
         
-        # Build system prompt
-        from app.services.agent_service import AgentProfile
-        from app.repositories.prompt_repository import PromptRepository
-        
-        # We need to load the prompt - simplified approach
-        system_prompt_template = agent.system_prompt_slug
-        
-        # For now, use a simplified prompt building
-        base_prompt = f"You are an AI assistant."  # Fallback
+        # Build system prompt from exec_request (v2: prompt is in AgentVersion)
+        base_prompt = getattr(exec_request, 'prompt', '') or "You are an AI assistant."
         
         if tools_schemas:
             tools_instruction = build_tools_prompt(tools_schemas)

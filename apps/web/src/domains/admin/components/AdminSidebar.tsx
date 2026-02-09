@@ -41,6 +41,13 @@ const navigation: NavGroup[] = [
     ],
   },
   {
+    title: 'Доступ',
+    items: [
+      { path: '/admin/rbac', label: 'RBAC', icon: 'shield' },
+      { path: '/admin/platform', label: 'Платформа', icon: 'sliders' },
+    ],
+  },
+  {
     title: 'Интеграции',
     items: [
       { path: '/admin/instances', label: 'Инстансы', icon: 'server' },

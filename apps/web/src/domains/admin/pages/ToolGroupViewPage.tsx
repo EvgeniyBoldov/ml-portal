@@ -1,9 +1,7 @@
 /**
- * ToolGroupViewPage - View/Edit tool group with tabs
- * 
- * Layout pattern: same as PromptEditorPage
- * - Split layout: info block left + status block right
- * - Tabs: Обзор | Инструменты | Инстансы
+ * ToolGroupViewPage v2 - View/Edit tool group with tabs
+ *
+ * Tabs: Обзор | Инструменты
  */
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
@@ -19,21 +17,19 @@ import { ContentBlock, type FieldDefinition } from '@/shared/ui/ContentBlock';
 import { Tabs, TabPanel } from '@/shared/ui/Tabs';
 import { Badge, Button, DataTable, type DataTableColumn, type BreadcrumbItem } from '@/shared/ui';
 
-const TYPE_LABELS: Record<string, string> = {
-  api: 'API',
-  function: 'Функция',
-  database: 'База данных',
-  builtin: 'Встроенный',
+const KIND_LABELS: Record<string, string> = {
+  read: 'Read',
+  write: 'Write',
+  mixed: 'Mixed',
 };
 
-const TYPE_TONES: Record<string, 'warn' | 'success' | 'info' | 'neutral'> = {
-  api: 'info',
-  function: 'success',
-  database: 'warn',
-  builtin: 'neutral',
+const KIND_TONES: Record<string, 'warn' | 'success' | 'info' | 'neutral'> = {
+  read: 'info',
+  write: 'warn',
+  mixed: 'neutral',
 };
 
-type TabType = 'main' | 'tools' | 'instances';
+type TabType = 'main' | 'tools';
 
 export function ToolGroupViewPage() {
   const { groupSlug } = useParams<{ groupSlug: string }>();
@@ -48,37 +44,39 @@ export function ToolGroupViewPage() {
   const mode: EntityPageMode = isEditMode ? 'edit' : 'view';
   const isEditable = mode === 'edit';
 
-  // Form state
   const [formData, setFormData] = useState({
     slug: '',
     name: '',
     description: '',
+    type: '',
+    description_for_router: '',
   });
   const [saving, setSaving] = useState(false);
 
-  // Load group with tools
   const { data: group, isLoading: groupLoading } = useQuery({
     queryKey: toolReleasesKeys.groupDetail(groupSlug!),
     queryFn: () => toolReleasesApi.getGroup(groupSlug!),
     enabled: !!groupSlug,
   });
 
-  // Sync form data
   useEffect(() => {
     if (group) {
       setFormData({
         slug: group.slug,
         name: group.name,
         description: group.description || '',
+        type: group.type || '',
+        description_for_router: group.description_for_router || '',
       });
     }
   }, [group]);
 
-  // Update mutation
   const updateMutation = useMutation({
     mutationFn: () => toolReleasesApi.updateGroup(groupSlug!, {
       name: formData.name,
-      description: formData.description,
+      description: formData.description || null,
+      type: formData.type || null,
+      description_for_router: formData.description_for_router || null,
     }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: toolReleasesKeys.groupDetail(groupSlug!) });
@@ -89,7 +87,6 @@ export function ToolGroupViewPage() {
     onError: (err: Error) => showError(err?.message || 'Ошибка обновления'),
   });
 
-  // Rescan mutation
   const rescanMutation = useMutation({
     mutationFn: () => toolReleasesApi.rescanGroupTools(groupSlug!),
     onSuccess: (data: any) => {
@@ -103,7 +100,6 @@ export function ToolGroupViewPage() {
     onError: (err: Error) => showError(err?.message || 'Ошибка синхронизации'),
   });
 
-  // Handlers
   const handleSave = async () => {
     setSaving(true);
     try {
@@ -121,6 +117,8 @@ export function ToolGroupViewPage() {
         slug: group.slug,
         name: group.name,
         description: group.description || '',
+        type: group.type || '',
+        description_for_router: group.description_for_router || '',
       });
     }
     setSearchParams({});
@@ -134,14 +132,12 @@ export function ToolGroupViewPage() {
     navigate(`/admin/tools/${tool.slug}`);
   };
 
-  // Field definitions
   const groupFields: FieldDefinition[] = [
     {
       key: 'slug',
-      label: 'Slug (ID)',
+      label: 'Slug',
       type: 'text',
       disabled: true,
-      description: 'Уникальный идентификатор (создаётся автоматически)',
     },
     {
       key: 'name',
@@ -151,10 +147,23 @@ export function ToolGroupViewPage() {
       placeholder: 'RAG',
     },
     {
+      key: 'type',
+      label: 'Тип',
+      type: 'text',
+      placeholder: 'jira / crm / rag ...',
+    },
+    {
       key: 'description',
       label: 'Описание',
       type: 'textarea',
       placeholder: 'Описание группы инструментов...',
+      rows: 2,
+    },
+    {
+      key: 'description_for_router',
+      label: 'Описание для роутера',
+      type: 'textarea',
+      placeholder: 'Описание для маршрутизации агентов...',
       rows: 2,
     },
   ];
@@ -162,7 +171,6 @@ export function ToolGroupViewPage() {
   const tabs = [
     { id: 'main', label: 'Обзор' },
     { id: 'tools', label: `Инструменты (${group?.tools?.length || 0})` },
-    { id: 'instances', label: `Инстансы (${group?.instances_count || 0})` },
   ];
 
   const breadcrumbs: BreadcrumbItem[] = [
@@ -170,7 +178,6 @@ export function ToolGroupViewPage() {
     { label: group?.name || groupSlug || 'Группа' },
   ];
 
-  // DataTable columns for tools
   const toolColumns: DataTableColumn<ToolListItem>[] = [
     {
       key: 'slug',
@@ -179,17 +186,17 @@ export function ToolGroupViewPage() {
       render: (row) => (
         <div>
           <div style={{ fontWeight: 500 }}>{row.slug}</div>
-          <div style={{ fontSize: '0.8125rem', color: 'var(--muted)' }}>{row.name}</div>
+          <div style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>{row.name}</div>
         </div>
       ),
     },
     {
-      key: 'type',
+      key: 'kind',
       label: 'ТИП',
-      width: 120,
+      width: 100,
       render: (row) => (
-        <Badge tone={TYPE_TONES[row.type] || 'neutral'} size="small">
-          {TYPE_LABELS[row.type] || row.type}
+        <Badge tone={KIND_TONES[row.kind] || 'neutral'} size="small">
+          {KIND_LABELS[row.kind] || row.kind}
         </Badge>
       ),
     },
@@ -198,20 +205,20 @@ export function ToolGroupViewPage() {
       label: 'ВЕРСИИ',
       width: 100,
       render: (row) => (
-        <span style={{ color: 'var(--muted)' }}>
+        <span style={{ color: 'var(--text-secondary)' }}>
           {row.releases_count || 0}
-          {row.has_recommended && ' ★'}
+          {row.has_current_version && ' ★'}
         </span>
       ),
     },
     {
-      key: 'is_active',
-      label: 'СТАТУС',
+      key: 'backend_releases_count',
+      label: 'БЭКЕНД',
       width: 100,
       render: (row) => (
-        <Badge tone={row.is_active ? 'success' : 'neutral'} size="small">
-          {row.is_active ? 'Активен' : 'Неактивен'}
-        </Badge>
+        <span style={{ color: 'var(--text-secondary)' }}>
+          {row.backend_releases_count || 0}
+        </span>
       ),
     },
   ];
@@ -248,11 +255,6 @@ export function ToolGroupViewPage() {
             fields={groupFields}
             data={formData}
             onChange={handleFieldChange}
-            headerActions={
-              <Badge tone={group?.is_active ? 'success' : 'neutral'} size="small">
-                {group?.is_active ? 'Активна' : 'Неактивна'}
-              </Badge>
-            }
           />
         </TabPanel>
 
@@ -264,12 +266,6 @@ export function ToolGroupViewPage() {
             emptyText="В этой группе пока нет инструментов"
             onRowClick={handleToolClick}
           />
-        </TabPanel>
-
-        <TabPanel id="instances" activeTab={activeTab}>
-          <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--muted)' }}>
-            Таб инстансы будет реализован позже
-          </div>
         </TabPanel>
       </Tabs>
     </EntityPage>

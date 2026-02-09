@@ -18,6 +18,7 @@ export interface VersionActionCallbacks {
   onDeactivate?: () => void;
   onSetRecommended?: () => void;
   onEdit?: () => void;
+  onDuplicate?: () => void;
 }
 
 export interface VersionActionLoadingState {
@@ -106,6 +107,7 @@ export function useVersionActions({
 
     case 'inactive':
     case 'archived':
+    case 'deprecated':
       if (callbacks.onActivate) {
         buttons.push(
           <Button
@@ -120,6 +122,19 @@ export function useVersionActions({
         );
       }
       break;
+  }
+
+  // Duplicate button — available for all statuses
+  if (callbacks.onDuplicate) {
+    buttons.push(
+      <Button
+        key="duplicate"
+        variant="outline"
+        onClick={callbacks.onDuplicate}
+      >
+        Дублировать
+      </Button>
+    );
   }
 
   // Append extra actions

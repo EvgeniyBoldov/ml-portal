@@ -12,7 +12,7 @@ from sqlalchemy.future import select
 
 from app.models.collection import Collection, FieldType, SearchMode
 from app.models.permission_set import PermissionSet
-from app.models.tool_instance import ToolInstance, InstanceType
+from app.models.tool_instance import ToolInstance
 from app.models.tool_group import ToolGroup
 from app.core.logging import get_logger
 
@@ -357,35 +357,35 @@ class CollectionService:
         # Create ToolInstance
         instance_slug = f"collection-{collection.slug}"
         
-        # Check if instance already exists
-        stmt = select(ToolInstance).where(ToolInstance.slug == instance_slug)
+        # Check if instance already exists (by name + group)
+        stmt = select(ToolInstance).where(
+            ToolInstance.tool_group_id == tool_group.id,
+            ToolInstance.name == f"Collection: {collection.name}",
+        )
         result = await self.session.execute(stmt)
         existing = result.scalar_one_or_none()
         
         if existing:
-            logger.info(f"ToolInstance '{instance_slug}' already exists, reusing")
+            logger.info(f"ToolInstance for collection '{collection.slug}' already exists, reusing")
             return existing
         
         tool_instance = ToolInstance(
             id=uuid.uuid4(),
             tool_group_id=tool_group.id,
-            slug=instance_slug,
             name=f"Collection: {collection.name}",
             description=collection.description or f"Data collection: {collection.name}",
-            connection_config={
+            url="",
+            config={
                 "collection_id": str(collection.id),
                 "collection_slug": collection.slug,
                 "tenant_id": str(collection.tenant_id),
                 "table_name": collection.table_name,
-            },
-            instance_metadata={
                 "entity_type": collection.entity_type,
                 "row_count": collection.row_count,
                 "has_vector_search": collection.has_vector_search,
                 "primary_key_field": collection.primary_key_field,
                 "time_column": collection.time_column,
             },
-            instance_type=InstanceType.LOCAL.value,  # Collections are always local
             is_active=True,
         )
         

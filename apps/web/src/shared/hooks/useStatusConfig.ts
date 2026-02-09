@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 
-export type EntityType = 'prompt' | 'baseline' | 'policy';
+export type EntityType = 'prompt' | 'baseline' | 'policy' | 'agent' | 'limit' | 'tool';
 
 export interface StatusConfig {
   labels: Record<string, string>;
@@ -48,6 +48,57 @@ const STATUS_CONFIGS: Record<EntityType, StatusConfig> = {
     ],
   },
   policy: {
+    labels: {
+      draft: 'Черновик',
+      active: 'Активна',
+      archived: 'Архив',
+    },
+    tones: {
+      draft: 'warn',
+      active: 'success',
+      archived: 'neutral',
+    },
+    options: [
+      { value: 'draft', label: 'Черновик', tone: 'warn' },
+      { value: 'active', label: 'Активна', tone: 'success' },
+      { value: 'archived', label: 'Архив', tone: 'neutral' },
+    ],
+  },
+  agent: {
+    labels: {
+      draft: 'Черновик',
+      active: 'Активна',
+      deprecated: 'Устарела',
+    },
+    tones: {
+      draft: 'warn',
+      active: 'success',
+      deprecated: 'neutral',
+    },
+    options: [
+      { value: 'draft', label: 'Черновик', tone: 'warn' },
+      { value: 'active', label: 'Активна', tone: 'success' },
+      { value: 'deprecated', label: 'Устарела', tone: 'neutral' },
+    ],
+  },
+  limit: {
+    labels: {
+      draft: 'Черновик',
+      active: 'Активна',
+      archived: 'Архив',
+    },
+    tones: {
+      draft: 'warn',
+      active: 'success',
+      archived: 'neutral',
+    },
+    options: [
+      { value: 'draft', label: 'Черновик', tone: 'warn' },
+      { value: 'active', label: 'Активна', tone: 'success' },
+      { value: 'archived', label: 'Архив', tone: 'neutral' },
+    ],
+  },
+  tool: {
     labels: {
       draft: 'Черновик',
       active: 'Активна',

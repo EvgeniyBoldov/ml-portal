@@ -8,7 +8,7 @@ import React from 'react';
 import styles from './VersionCard.module.css';
 
 export interface ShortVersionCardProps {
-  entityType: 'prompt' | 'baseline' | 'policy';
+  entityType: 'prompt' | 'baseline' | 'policy' | 'agent' | 'limit' | 'tool';
   version: {
     version: number;
     status: string;

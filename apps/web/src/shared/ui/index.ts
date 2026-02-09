@@ -77,6 +77,10 @@ export { RowActions } from './RowActions';
 export { RbacRulesEditor } from './RbacRulesEditor';
 export type { RbacPermissions } from './RbacRulesEditor';
 
+// RBACRulesTable
+export { RBACRulesTable } from './RBACRulesTable';
+export type { RBACTableMode } from './RBACRulesTable';
+
 // FormField
 export { FormField } from './FormField';
 export type { FormFieldProps, FormFieldType } from './FormField';

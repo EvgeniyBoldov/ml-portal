@@ -20,6 +20,8 @@ import { useErrorToast, useSuccessToast } from '@shared/ui/Toast';
 import { EntityPage, type EntityPageMode } from '@shared/ui/EntityPage';
 import { ContentBlock, ContentGrid, type FieldDefinition } from '@shared/ui/ContentBlock';
 import { RbacRulesEditor, type RbacPermissions } from '@shared/ui/RbacRulesEditor';
+import { RBACRulesTable } from '@/shared/ui/RBACRulesTable';
+import { Tabs, TabPanel } from '@shared/ui/Tabs';
 import type { User, Tenant } from '@shared/api/admin';
 import styles from './UserEditorPage.module.css';
 
@@ -67,6 +69,7 @@ export function UserEditorPage() {
   });
   const [newPassword, setNewPassword] = useState('');
   const [saving, setSaving] = useState(false);
+  const [activeTab, setActiveTab] = useState('general');
   
   // RBAC state
   const queryClient = useQueryClient();
@@ -297,109 +300,138 @@ export function UserEditorPage() {
       onDelete={handleDelete}
       showDelete={mode === 'view' && !!id}
     >
-      <ContentGrid>
-        {/* Basic Info - 2/3 */}
-        <ContentBlock
-          width="2/3"
-          title="Основная информация"
-          icon="user"
-          editable={isEditable}
-          fields={basicInfoFields}
-          data={formData}
-          onChange={handleFieldChange}
-        />
-
-        {/* Status & Role - 1/3 */}
-        <ContentBlock
-          width="1/3"
-          title="Статус и роль"
-          icon="shield"
-          editable={isEditable}
-          fields={statusAndRoleFields}
-          data={formData}
-          onChange={handleFieldChange}
-        />
-
-        {/* Security Section - 1/2 (есть текстовое поле) */}
-        {mode === 'edit' && id && (
-          <ContentBlock
-            width="1/2"
-            title="Сброс пароля"
-            icon="key"
-          >
-            <p className={styles.formHint}>
-              Установите новый пароль для пользователя. При следующем входе ему будет предложено сменить пароль.
-            </p>
-            <div className={styles.passwordRow}>
-              <Input
-                type="password"
-                value={newPassword}
-                onChange={(e: React.ChangeEvent<HTMLInputElement>) => setNewPassword(e.target.value)}
-                placeholder="Введите новый пароль"
+      {!isCreate && id ? (
+        <Tabs
+          tabs={[
+            { id: 'general', label: 'Основное' },
+            { id: 'rbac', label: 'RBAC правила' },
+          ]}
+          activeTab={activeTab}
+          onChange={setActiveTab}
+        >
+          <TabPanel id="general" activeTab={activeTab}>
+            <ContentGrid>
+              <ContentBlock
+                width="2/3"
+                title="Основная информация"
+                icon="user"
+                editable={isEditable}
+                fields={basicInfoFields}
+                data={formData}
+                onChange={handleFieldChange}
               />
-              <Button 
-                variant="outline" 
-                onClick={handleResetPassword} 
-                disabled={updateUser.isPending || !newPassword.trim()}
+              <ContentBlock
+                width="1/3"
+                title="Статус и роль"
+                icon="shield"
+                editable={isEditable}
+                fields={statusAndRoleFields}
+                data={formData}
+                onChange={handleFieldChange}
+              />
+              {mode === 'edit' && (
+                <ContentBlock
+                  width="1/2"
+                  title="Сброс пароля"
+                  icon="key"
+                >
+                  <p className={styles.formHint}>
+                    Установите новый пароль для пользователя. При следующем входе ему будет предложено сменить пароль.
+                  </p>
+                  <div className={styles.passwordRow}>
+                    <Input
+                      type="password"
+                      value={newPassword}
+                      onChange={(e: React.ChangeEvent<HTMLInputElement>) => setNewPassword(e.target.value)}
+                      placeholder="Введите новый пароль"
+                    />
+                    <Button 
+                      variant="outline" 
+                      onClick={handleResetPassword} 
+                      disabled={updateUser.isPending || !newPassword.trim()}
+                    >
+                      Сбросить
+                    </Button>
+                  </div>
+                </ContentBlock>
+              )}
+              <ContentBlock
+                width="full"
+                title="Права доступа (legacy)"
+                icon="shield"
               >
-                Сбросить
-              </Button>
-            </div>
-          </ContentBlock>
-        )}
+                <p className={styles.formHint}>
+                  Индивидуальные права пользователя. Переопределяют права тенанта и default.
+                </p>
+                {!editingRbac ? (
+                  <>
+                    <RbacRulesEditor
+                      scope="user"
+                      permissions={{
+                        instance_permissions: userPermSet?.instance_permissions || {},
+                        agent_permissions: userPermSet?.agent_permissions || {},
+                      }}
+                      onChange={() => {}}
+                      editable={false}
+                    />
+                    <div className={styles.rbacActions}>
+                      <Button variant="outline" onClick={startEditingRbac}>
+                        Редактировать права
+                      </Button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <RbacRulesEditor
+                      scope="user"
+                      permissions={rbacPermissions}
+                      onChange={setRbacPermissions}
+                      editable={true}
+                    />
+                    <div className={styles.rbacActions}>
+                      <Button variant="outline" onClick={() => setEditingRbac(false)}>
+                        Отмена
+                      </Button>
+                      <Button 
+                        variant="primary" 
+                        onClick={() => saveRbacMutation.mutate()}
+                        disabled={saveRbacMutation.isPending}
+                      >
+                        {saveRbacMutation.isPending ? 'Сохранение...' : 'Сохранить права'}
+                      </Button>
+                    </div>
+                  </>
+                )}
+              </ContentBlock>
+            </ContentGrid>
+          </TabPanel>
 
-        {/* RBAC Permissions - full width, only for existing users */}
-        {!isCreate && id && (
+          <TabPanel id="rbac" activeTab={activeTab}>
+            <RBACRulesTable mode="user" levelId={id} />
+          </TabPanel>
+        </Tabs>
+      ) : (
+        <ContentGrid>
           <ContentBlock
-            width="full"
-            title="Права доступа"
+            width="2/3"
+            title="Основная информация"
+            icon="user"
+            editable={isEditable}
+            fields={basicInfoFields}
+            data={formData}
+            onChange={handleFieldChange}
+          />
+          <ContentBlock
+            width="1/3"
+            title="Статус и роль"
             icon="shield"
-          >
-            <p className={styles.formHint}>
-              Индивидуальные права пользователя. Переопределяют права тенанта и default.
-            </p>
-            {!editingRbac ? (
-              <>
-                <RbacRulesEditor
-                  scope="user"
-                  permissions={{
-                    instance_permissions: userPermSet?.instance_permissions || {},
-                    agent_permissions: userPermSet?.agent_permissions || {},
-                  }}
-                  onChange={() => {}}
-                  editable={false}
-                />
-                <div className={styles.rbacActions}>
-                  <Button variant="outline" onClick={startEditingRbac}>
-                    Редактировать права
-                  </Button>
-                </div>
-              </>
-            ) : (
-              <>
-                <RbacRulesEditor
-                  scope="user"
-                  permissions={rbacPermissions}
-                  onChange={setRbacPermissions}
-                  editable={true}
-                />
-                <div className={styles.rbacActions}>
-                  <Button variant="outline" onClick={() => setEditingRbac(false)}>
-                    Отмена
-                  </Button>
-                  <Button 
-                    variant="primary" 
-                    onClick={() => saveRbacMutation.mutate()}
-                    disabled={saveRbacMutation.isPending}
-                  >
-                    {saveRbacMutation.isPending ? 'Сохранение...' : 'Сохранить права'}
-                  </Button>
-                </div>
-              </>
-            )}
-          </ContentBlock>
-        )}
-      </ContentGrid>
+            editable={isEditable}
+            fields={statusAndRoleFields}
+            data={formData}
+            onChange={handleFieldChange}
+          />
+        </ContentGrid>
+      )}
     </EntityPage>
   );
 }

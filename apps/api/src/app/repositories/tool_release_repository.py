@@ -154,7 +154,7 @@ class ToolWithReleasesRepository:
                 selectinload(Tool.tool_group),
                 selectinload(Tool.backend_releases),
                 selectinload(Tool.releases).selectinload(ToolRelease.backend_release),
-                selectinload(Tool.recommended_release).selectinload(ToolRelease.backend_release),
+                selectinload(Tool.current_version).selectinload(ToolRelease.backend_release),
             )
             .where(Tool.slug == slug)
         )
@@ -169,7 +169,7 @@ class ToolWithReleasesRepository:
                 selectinload(Tool.tool_group),
                 selectinload(Tool.backend_releases),
                 selectinload(Tool.releases).selectinload(ToolRelease.backend_release),
-                selectinload(Tool.recommended_release).selectinload(ToolRelease.backend_release),
+                selectinload(Tool.current_version).selectinload(ToolRelease.backend_release),
             )
             .where(Tool.id == tool_id)
         )

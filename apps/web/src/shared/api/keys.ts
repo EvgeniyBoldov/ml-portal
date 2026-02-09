@@ -39,6 +39,8 @@ export const qk = {
     all: () => ['agents'] as const,
     list: (params?: { q?: string }) => ['agents', 'list', params] as const,
     detail: (slug: string) => ['agents', 'detail', slug] as const,
+    versions: (slug: string) => ['agents', 'versions', slug] as const,
+    version: (slug: string, version: number) => ['agents', 'version', slug, version] as const,
   },
   prompts: {
     all: () => ['prompts'] as const,
@@ -67,7 +69,7 @@ export const qk = {
   },
   credentials: {
     all: () => ['credentials'] as const,
-    list: (params?: { toolInstanceId?: string; scope?: string; tenantId?: string }) =>
+    list: (params?: { instance_id?: string; is_active?: boolean }) =>
       ['credentials', 'list', params] as const,
     detail: (id: string) => ['credentials', 'detail', id] as const,
   },
@@ -99,6 +101,19 @@ export const qk = {
       ['routing-logs', 'list', params] as const,
     detail: (id: string) => ['routing-logs', 'detail', id] as const,
     stats: (params?: { tenantId?: string }) => ['routing-logs', 'stats', params] as const,
+  },
+  rbac: {
+    all: () => ['rbac'] as const,
+    list: (params?: { skip?: number; limit?: number }) => ['rbac', 'list', params] as const,
+    detail: (slug: string) => ['rbac', 'detail', slug] as const,
+    rules: (slug: string, params?: { level?: string; resource_type?: string }) =>
+      ['rbac', 'rules', slug, params] as const,
+    enrichedRules: (params?: Record<string, unknown>) =>
+      ['rbac', 'enriched-rules', params] as const,
+  },
+  platform: {
+    all: () => ['platform'] as const,
+    settings: () => ['platform', 'settings'] as const,
   },
   chats: {
     all: () => ['chats'] as const,

@@ -1,9 +1,8 @@
 /**
- * ToolViewPage - View tool details with releases
- * 
- * Layout pattern: same as PromptEditorPage
- * - Split layout: info block left + status/release block right
- * - Tabs: Обзор | Версии бэкенда | Версии
+ * ToolViewPage v2 - Tool container with 3 tabs:
+ * 1. Обзор — info fields + current version card
+ * 2. Версии — releases table (ToolRelease)
+ * 3. Бэкенд-релизы — backend releases table (read-only)
  */
 import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
@@ -20,18 +19,16 @@ import { ContentBlock, type FieldDefinition } from '@/shared/ui/ContentBlock';
 import { Tabs, TabPanel } from '@/shared/ui/Tabs';
 import { Badge, Button, DataTable, type DataTableColumn } from '@/shared/ui';
 
-const TYPE_LABELS: Record<string, string> = {
-  api: 'API',
-  function: 'Функция',
-  database: 'База данных',
-  builtin: 'Встроенный',
+const KIND_LABELS: Record<string, string> = {
+  read: 'Read',
+  write: 'Write',
+  mixed: 'Mixed',
 };
 
-const TYPE_TONES: Record<string, 'warn' | 'success' | 'info' | 'neutral'> = {
-  api: 'info',
-  function: 'success',
-  database: 'warn',
-  builtin: 'neutral',
+const KIND_TONES: Record<string, 'warn' | 'success' | 'info' | 'neutral'> = {
+  read: 'info',
+  write: 'warn',
+  mixed: 'neutral',
 };
 
 const STATUS_LABELS: Record<string, string> = {
@@ -46,7 +43,7 @@ const STATUS_TONES: Record<string, 'warn' | 'success' | 'neutral'> = {
   archived: 'neutral',
 };
 
-type TabType = 'main' | 'backend-releases' | 'releases';
+type TabType = 'main' | 'releases' | 'backend-releases';
 
 export function ToolViewPage() {
   const { toolSlug } = useParams<{ toolSlug: string }>();
@@ -62,57 +59,42 @@ export function ToolViewPage() {
     enabled: !!toolSlug,
   });
 
-  // Rescan backend releases mutation
   const rescanMutation = useMutation({
     mutationFn: () => toolReleasesApi.rescanBackendReleases(toolSlug!),
     onSuccess: (data: any) => {
       queryClient.invalidateQueries({ queryKey: toolReleasesKeys.toolDetail(toolSlug!) });
       queryClient.invalidateQueries({ queryKey: toolReleasesKeys.backendReleases(toolSlug!) });
       const br = data.stats?.backend_releases || {};
-      showSuccess(`Синхронизация завершена: ${br.backend_releases_created || 0} создано, ${br.backend_releases_updated || 0} обновлено`);
+      showSuccess(`Синхронизация: ${br.backend_releases_created || 0} создано, ${br.backend_releases_updated || 0} обновлено`);
     },
     onError: (err: Error) => showError(err?.message || 'Ошибка синхронизации'),
   });
 
-  // Back path - navigate to group if available
   const groupSlug = tool?.tool_group_slug;
   const backPath = groupSlug 
     ? `/admin/tools/groups/${groupSlug}` 
     : '/admin/tools';
 
-  // Field definitions (readonly)
   const toolFields: FieldDefinition[] = [
-    {
-      key: 'slug',
-      label: 'Slug (ID)',
-      type: 'text',
-      disabled: true,
-    },
-    {
-      key: 'name',
-      label: 'Название',
-      type: 'text',
-      disabled: true,
-    },
-    {
-      key: 'description',
-      label: 'Описание',
-      type: 'textarea',
-      disabled: true,
-      rows: 2,
-    },
+    { key: 'slug', label: 'Slug', type: 'text', disabled: true },
+    { key: 'name', label: 'Название', type: 'text', disabled: true },
+    { key: 'kind', label: 'Тип', type: 'text', disabled: true },
+    { key: 'tags', label: 'Теги', type: 'text', disabled: true },
   ];
 
   const formData = tool ? {
     slug: tool.slug,
     name: tool.name,
-    description: tool.description || '',
-  } : { slug: '', name: '', description: '' };
+    kind: KIND_LABELS[tool.kind] || tool.kind,
+    tags: tool.tags?.join(', ') || '—',
+  } : { slug: '', name: '', kind: '', tags: '' };
+
+  const currentVer = tool?.current_version;
 
   const tabs = [
     { id: 'main', label: 'Обзор' },
-    { id: 'backend-releases', label: `Версии бэкенда (${tool?.backend_releases?.length || 0})` },
     { id: 'releases', label: `Версии (${tool?.releases?.length || 0})` },
+    { id: 'backend-releases', label: `Бэкенд (${tool?.backend_releases?.length || 0})` },
   ];
 
   const breadcrumbs: BreadcrumbItem[] = [
@@ -125,7 +107,6 @@ export function ToolViewPage() {
     navigate(`/admin/tools/${toolSlug}/versions/${release.version}`);
   };
 
-  // DataTable columns for backend releases
   const backendReleaseColumns: DataTableColumn<ToolBackendReleaseListItem>[] = [
     {
       key: 'version',
@@ -134,22 +115,21 @@ export function ToolViewPage() {
       render: (row) => <strong>{row.version}</strong>,
     },
     {
-      key: 'schema_hash',
-      label: 'SCHEMA HASH',
-      width: 120,
+      key: 'description',
+      label: 'ОПИСАНИЕ',
       render: (row) => (
-        <code style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>
-          {row.schema_hash ? row.schema_hash.slice(0, 8) : '—'}
-        </code>
+        <span style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>
+          {row.description || '—'}
+        </span>
       ),
     },
     {
-      key: 'worker_build_id',
-      label: 'BUILD ID',
-      width: 120,
+      key: 'schema_hash',
+      label: 'SCHEMA',
+      width: 100,
       render: (row) => (
-        <code style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>
-          {row.worker_build_id ? row.worker_build_id.slice(0, 12) : '—'}
+        <code style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+          {row.schema_hash ? row.schema_hash.slice(0, 8) : '—'}
         </code>
       ),
     },
@@ -168,14 +148,13 @@ export function ToolViewPage() {
       label: 'СИНХРОНИЗИРОВАНО',
       width: 160,
       render: (row) => (
-        <span style={{ fontSize: '0.8125rem', color: 'var(--muted)' }}>
+        <span style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>
           {new Date(row.synced_at).toLocaleString('ru')}
         </span>
       ),
     },
   ];
 
-  // DataTable columns for releases
   const releaseColumns: DataTableColumn<ToolReleaseListItem>[] = [
     {
       key: 'version',
@@ -188,7 +167,7 @@ export function ToolViewPage() {
       label: 'БЭКЕНД',
       width: 100,
       render: (row) => (
-        <span style={{ color: 'var(--muted)' }}>{row.backend_version || '—'}</span>
+        <span style={{ color: 'var(--text-secondary)' }}>{row.backend_version || '—'}</span>
       ),
     },
     {
@@ -202,23 +181,22 @@ export function ToolViewPage() {
       ),
     },
     {
-      key: 'expected_schema_hash',
-      label: 'SCHEMA',
-      width: 100,
-      render: (row) => (
-        <code style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>
-          {row.expected_schema_hash ? row.expected_schema_hash.slice(0, 8) : '—'}
-        </code>
-      ),
-    },
-    {
-      key: 'recommended',
+      key: 'current',
       label: 'ОСНОВНАЯ',
       width: 100,
       render: (row) => (
-        tool?.recommended_release_id === row.id ? (
+        tool?.current_version_id === row.id ? (
           <Badge tone="info" size="small">★ Основная</Badge>
         ) : null
+      ),
+    },
+    {
+      key: 'notes',
+      label: 'ЗАМЕТКИ',
+      render: (row) => (
+        <span style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>
+          {row.notes || '—'}
+        </span>
       ),
     },
     {
@@ -226,7 +204,7 @@ export function ToolViewPage() {
       label: 'СОЗДАНА',
       width: 140,
       render: (row) => (
-        <span style={{ fontSize: '0.8125rem', color: 'var(--muted)' }}>
+        <span style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>
           {new Date(row.created_at).toLocaleString('ru')}
         </span>
       ),
@@ -243,37 +221,74 @@ export function ToolViewPage() {
       loading={isLoading}
       showDelete={false}
       headerActions={
-        <Button
-          variant="outline"
-          size="small"
-          onClick={() => rescanMutation.mutate()}
-          disabled={rescanMutation.isPending}
-        >
-          {rescanMutation.isPending ? 'Синхронизация...' : 'Rescan Backend'}
-        </Button>
+        <div style={{ display: 'flex', gap: '0.5rem' }}>
+          <Button
+            variant="outline"
+            size="small"
+            onClick={() => rescanMutation.mutate()}
+            disabled={rescanMutation.isPending}
+          >
+            {rescanMutation.isPending ? 'Синхронизация...' : 'Rescan Backend'}
+          </Button>
+        </div>
       }
     >
       <Tabs tabs={tabs} activeTab={activeTab} onChange={setActiveTab}>
         <TabPanel id="main" activeTab={activeTab}>
-          <ContentBlock
-            title="Основная информация"
-            fields={toolFields}
-            data={formData}
-            headerActions={
-              <Badge tone={tool?.is_active ? 'success' : 'neutral'} size="small">
-                {tool?.is_active ? 'Активен' : 'Неактивен'}
-              </Badge>
-            }
-          />
-        </TabPanel>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            <ContentBlock
+              title="Основная информация"
+              icon="tool"
+              fields={toolFields}
+              data={formData}
+              headerActions={
+                <Badge tone={KIND_TONES[tool?.kind || ''] || 'neutral'} size="small">
+                  {KIND_LABELS[tool?.kind || ''] || tool?.kind || '—'}
+                </Badge>
+              }
+            />
 
-        <TabPanel id="backend-releases" activeTab={activeTab}>
-          <DataTable
-            columns={backendReleaseColumns}
-            data={tool?.backend_releases || []}
-            keyField="id"
-            emptyText="Версии из кода ещё не синхронизированы"
-          />
+            <ContentBlock title="Текущая версия" icon="check-circle">
+              {currentVer ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', fontSize: '0.875rem' }}>
+                  <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+                    <strong>v{currentVer.version}</strong>
+                    <Badge tone={STATUS_TONES[currentVer.status]} size="small">
+                      {STATUS_LABELS[currentVer.status]}
+                    </Badge>
+                    {currentVer.backend_release && (
+                      <span style={{ color: 'var(--text-secondary)' }}>
+                        Бэкенд: {currentVer.backend_release.version}
+                      </span>
+                    )}
+                  </div>
+                  {currentVer.description_for_llm && (
+                    <div>
+                      <div style={{ fontWeight: 500, marginBottom: '0.25rem' }}>Описание для LLM:</div>
+                      <div style={{ color: 'var(--text-secondary)' }}>{currentVer.description_for_llm}</div>
+                    </div>
+                  )}
+                  {currentVer.notes && (
+                    <div style={{ color: 'var(--text-secondary)' }}>
+                      <em>{currentVer.notes}</em>
+                    </div>
+                  )}
+                  <Button
+                    variant="outline"
+                    size="small"
+                    onClick={() => navigate(`/admin/tools/${toolSlug}/versions/${currentVer.version}`)}
+                    style={{ alignSelf: 'flex-start' }}
+                  >
+                    Открыть версию
+                  </Button>
+                </div>
+              ) : (
+                <div style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
+                  Текущая версия не установлена. Создайте и активируйте версию.
+                </div>
+              )}
+            </ContentBlock>
+          </div>
         </TabPanel>
 
         <TabPanel id="releases" activeTab={activeTab}>
@@ -291,6 +306,15 @@ export function ToolViewPage() {
             keyField="id"
             emptyText="Версии ещё не созданы. Создайте первую версию для использования инструмента агентами."
             onRowClick={handleReleaseClick}
+          />
+        </TabPanel>
+
+        <TabPanel id="backend-releases" activeTab={activeTab}>
+          <DataTable
+            columns={backendReleaseColumns}
+            data={tool?.backend_releases || []}
+            keyField="id"
+            emptyText="Версии из кода ещё не синхронизированы. Нажмите 'Rescan Backend'."
           />
         </TabPanel>
       </Tabs>
