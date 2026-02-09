@@ -51,7 +51,6 @@ const navigation: NavGroup[] = [
     title: 'Интеграции',
     items: [
       { path: '/admin/instances', label: 'Инстансы', icon: 'server' },
-      { path: '/admin/defaults', label: 'Общие настройки', icon: 'sliders' },
     ],
   },
   {

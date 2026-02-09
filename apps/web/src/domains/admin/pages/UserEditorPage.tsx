@@ -355,54 +355,6 @@ export function UserEditorPage() {
                   </div>
                 </ContentBlock>
               )}
-              <ContentBlock
-                width="full"
-                title="Права доступа (legacy)"
-                icon="shield"
-              >
-                <p className={styles.formHint}>
-                  Индивидуальные права пользователя. Переопределяют права тенанта и default.
-                </p>
-                {!editingRbac ? (
-                  <>
-                    <RbacRulesEditor
-                      scope="user"
-                      permissions={{
-                        instance_permissions: userPermSet?.instance_permissions || {},
-                        agent_permissions: userPermSet?.agent_permissions || {},
-                      }}
-                      onChange={() => {}}
-                      editable={false}
-                    />
-                    <div className={styles.rbacActions}>
-                      <Button variant="outline" onClick={startEditingRbac}>
-                        Редактировать права
-                      </Button>
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <RbacRulesEditor
-                      scope="user"
-                      permissions={rbacPermissions}
-                      onChange={setRbacPermissions}
-                      editable={true}
-                    />
-                    <div className={styles.rbacActions}>
-                      <Button variant="outline" onClick={() => setEditingRbac(false)}>
-                        Отмена
-                      </Button>
-                      <Button 
-                        variant="primary" 
-                        onClick={() => saveRbacMutation.mutate()}
-                        disabled={saveRbacMutation.isPending}
-                      >
-                        {saveRbacMutation.isPending ? 'Сохранение...' : 'Сохранить права'}
-                      </Button>
-                    </div>
-                  </>
-                )}
-              </ContentBlock>
             </ContentGrid>
           </TabPanel>
 

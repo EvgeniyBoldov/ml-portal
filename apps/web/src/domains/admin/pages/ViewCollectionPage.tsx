@@ -3,10 +3,11 @@
  * 
  * Uses EntityPage + ContentBlock from shared/ui
  */
-import React from 'react';
+import React, { useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { EntityPage, ContentBlock, Badge, DataTable, type DataTableColumn, type BreadcrumbItem } from '@/shared/ui';
+import { Tabs, TabPanel } from '@shared/ui/Tabs';
 import { collectionsApi } from '@/shared/api/collections';
 import { adminApi } from '@/shared/api/admin';
 import { qk } from '@/shared/api/keys';
@@ -21,6 +22,7 @@ interface CollectionField {
 
 export function ViewCollectionPage() {
   const { id } = useParams<{ id: string }>();
+  const [activeTab, setActiveTab] = useState('general');
 
   const { data: collection, isLoading } = useQuery({
     queryKey: qk.collections.detail(id!),
@@ -93,62 +95,80 @@ export function ViewCollectionPage() {
       breadcrumbs={breadcrumbs}
       loading={isLoading}
     >
-      <ContentBlock
-        title="Основная информация"
-        icon="database"
-        fields={[
-          { key: 'slug', label: 'Slug', type: 'code' as const },
-          { key: 'name', label: 'Название', type: 'text' as const },
-          { key: 'tenant', label: 'Тенант', type: 'text' as const },
-          { key: 'table_name', label: 'Таблица', type: 'code' as const },
-          { key: 'row_count', label: 'Записей', type: 'text' as const },
-          { key: 'created_at', label: 'Создана', type: 'text' as const },
-          { key: 'description', label: 'Описание', type: 'text' as const },
+      <Tabs
+        tabs={[
+          { id: 'general', label: 'Основное' },
+          { id: 'fields', label: 'Поля' },
         ]}
-        data={{
-          slug: collection?.slug || '—',
-          name: collection?.name || '—',
-          tenant: tenant ? tenant.name : (collection?.tenant_id || '—'),
-          table_name: collection?.table_name || '—',
-          row_count: collection?.row_count?.toLocaleString() || '0',
-          created_at: collection?.created_at ? new Date(collection.created_at).toLocaleString('ru-RU') : '—',
-          description: collection?.description || '—',
-        }}
-      />
-
-      <ContentBlock title="Статус и возможности" icon="shield">
-        <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
-          <div>
-            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>Статус</div>
-            <Badge variant={collection?.is_active ? 'success' : 'default'}>
-              {collection?.is_active ? 'Активна' : 'Неактивна'}
-            </Badge>
-          </div>
-          <div>
-            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>Поиск</div>
-            <div style={{ display: 'flex', gap: '0.5rem' }}>
-              <Badge variant="info">SQL</Badge>
-              {collection?.has_vector_search && <Badge variant="warning">VECTOR</Badge>}
-            </div>
-          </div>
-          <div>
-            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>Обновлена</div>
-            <span>{collection?.updated_at ? new Date(collection.updated_at).toLocaleString('ru-RU') : '—'}</span>
-          </div>
-        </div>
-      </ContentBlock>
-
-      <ContentBlock
-        title={`Поля (${collection?.fields?.length || 0})`}
-        icon="clipboard-list"
+        activeTab={activeTab}
+        onChange={setActiveTab}
       >
-        <DataTable
-          columns={fieldColumns}
-          data={collection?.fields || []}
-          keyField="name"
-          emptyText="Нет полей"
-        />
-      </ContentBlock>
+        <TabPanel id="general" activeTab={activeTab}>
+          <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '1.5rem' }}>
+            <ContentBlock
+              title="Основная информация"
+              icon="database"
+              fields={[
+                { key: 'slug', label: 'Slug', type: 'code' as const },
+                { key: 'name', label: 'Название', type: 'text' as const },
+                { key: 'tenant', label: 'Тенант', type: 'text' as const },
+                { key: 'table_name', label: 'Таблица', type: 'code' as const },
+                { key: 'row_count', label: 'Записей', type: 'text' as const },
+                { key: 'created_at', label: 'Создана', type: 'text' as const },
+                { key: 'description', label: 'Описание', type: 'text' as const },
+              ]}
+              data={{
+                slug: collection?.slug || '—',
+                name: collection?.name || '—',
+                tenant: tenant ? tenant.name : (collection?.tenant_id || '—'),
+                table_name: collection?.table_name || '—',
+                row_count: collection?.row_count?.toLocaleString() || '0',
+                created_at: collection?.created_at ? new Date(collection.created_at).toLocaleString('ru-RU') : '—',
+                description: collection?.description || '—',
+              }}
+            />
+
+            <ContentBlock title="Статус" icon="shield">
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                <div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>Статус</div>
+                  <Badge variant={collection?.is_active ? 'success' : 'default'}>
+                    {collection?.is_active ? 'Активна' : 'Неактивна'}
+                  </Badge>
+                </div>
+                <div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>Возможности</div>
+                  <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                    <Badge variant="info">SQL</Badge>
+                    {collection?.has_vector_search && <Badge variant="warning">VECTOR</Badge>}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>Обновлена</div>
+                  <span>{collection?.updated_at ? new Date(collection.updated_at).toLocaleString('ru-RU') : '—'}</span>
+                </div>
+              </div>
+            </ContentBlock>
+          </div>
+        </TabPanel>
+
+        <TabPanel id="fields" activeTab={activeTab}>
+          <div style={{ marginBottom: '1rem' }}>
+            <h3 style={{ margin: 0, fontSize: '1.125rem', fontWeight: 600, color: 'var(--text-primary)' }}>
+              Поля коллекции ({collection?.fields?.length || 0})
+            </h3>
+            <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>
+              Структура полей и их характеристики
+            </p>
+          </div>
+          <DataTable
+            columns={fieldColumns}
+            data={collection?.fields || []}
+            keyField="name"
+            emptyText="Нет полей"
+          />
+        </TabPanel>
+      </Tabs>
     </EntityPage>
   );
 }

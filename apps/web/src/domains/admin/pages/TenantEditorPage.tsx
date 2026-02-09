@@ -323,54 +323,7 @@ export function TenantEditorPage() {
                 data={formData}
                 onChange={handleFieldChange}
               />
-              <ContentBlock
-                width="full"
-                title="Права доступа (legacy)"
-                icon="shield"
-              >
-                <p className={styles.formHint}>
-                  Права тенанта. Переопределяют default, но могут быть переопределены на уровне пользователя.
-                </p>
-                {!editingRbac ? (
-                  <>
-                    <RbacRulesEditor
-                      scope="tenant"
-                      permissions={{
-                        instance_permissions: tenantPermSet?.instance_permissions || {},
-                        agent_permissions: tenantPermSet?.agent_permissions || {},
-                      }}
-                      onChange={() => {}}
-                      editable={false}
-                    />
-                    <div className={styles.rbacActions}>
-                      <Button variant="outline" onClick={startEditingRbac}>
-                        Редактировать права
-                      </Button>
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <RbacRulesEditor
-                      scope="tenant"
-                      permissions={rbacPermissions}
-                      onChange={setRbacPermissions}
-                      editable={true}
-                    />
-                    <div className={styles.rbacActions}>
-                      <Button variant="outline" onClick={() => setEditingRbac(false)}>
-                        Отмена
-                      </Button>
-                      <Button 
-                        variant="primary" 
-                        onClick={() => saveRbacMutation.mutate()}
-                        disabled={saveRbacMutation.isPending}
-                      >
-                        {saveRbacMutation.isPending ? 'Сохранение...' : 'Сохранить права'}
-                      </Button>
-                    </div>
-                  </>
-                )}
-              </ContentBlock>
+
             </ContentGrid>
           </TabPanel>
 

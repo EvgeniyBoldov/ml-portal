@@ -47,7 +47,6 @@ const InstanceViewPage = lazy(() => import('@/domains/admin/pages/InstanceViewPa
 const LimitsListPage = lazy(() => import('@/domains/admin/pages/LimitsListPage').then(m => ({ default: m.LimitsListPage })));
 const LimitEditorPage = lazy(() => import('@/domains/admin/pages/LimitEditorPage').then(m => ({ default: m.LimitEditorPage })));
 const LimitVersionPage = lazy(() => import('@/domains/admin/pages/LimitVersionPage').then(m => ({ default: m.LimitVersionPage })));
-const DefaultsPage = lazy(() => import('@/domains/admin/pages/DefaultsPage').then(m => ({ default: m.DefaultsPage })));
 const RoutingLogsPage = lazy(() => import('@/domains/admin/pages/RoutingLogsPage').then(m => ({ default: m.RoutingLogsPage })));
 const PoliciesListPage = lazy(() => import('@/domains/admin/pages/PoliciesListPage').then(m => ({ default: m.PoliciesListPage })));
 const PolicyEditorPage = lazy(() => import('@/domains/admin/pages/PolicyEditorPage').then(m => ({ default: m.PolicyEditorPage })));
@@ -137,8 +136,7 @@ const router = createBrowserRouter([
       { path: 'rbac/new', element: withSuspense(<RbacPolicyPage />) },
       { path: 'rbac/:slug', element: withSuspense(<RbacPolicyPage />) },
       { path: 'platform', element: withSuspense(<PlatformSettingsPage />) },
-      { path: 'defaults', element: withSuspense(<DefaultsPage />) },
-      { path: 'routing-logs', element: withSuspense(<RoutingLogsPage />) },
+            { path: 'routing-logs', element: withSuspense(<RoutingLogsPage />) },
       { path: 'settings/email', element: withSuspense(<EmailSettingsPage />) },
     ],
   },
