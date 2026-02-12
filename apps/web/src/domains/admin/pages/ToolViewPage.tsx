@@ -25,6 +25,7 @@ import {
   Badge,
   Button,
 } from '@/shared/ui';
+import { getStatusProps } from '@/shared/lib/statusConfig';
 
 const KIND_LABELS: Record<string, string> = {
   read: 'Read',
@@ -36,18 +37,6 @@ const KIND_TONES: Record<string, 'warn' | 'success' | 'info' | 'neutral'> = {
   read: 'info',
   write: 'warn',
   mixed: 'neutral',
-};
-
-const STATUS_LABELS: Record<string, string> = {
-  draft: 'Черновик',
-  active: 'Активна',
-  archived: 'Архив',
-};
-
-const STATUS_TONES: Record<string, 'warn' | 'success' | 'neutral'> = {
-  draft: 'warn',
-  active: 'success',
-  archived: 'neutral',
 };
 
 export function ToolViewPage() {
@@ -161,8 +150,8 @@ export function ToolViewPage() {
       key: 'status',
       label: 'Статус',
       render: (row) => (
-        <Badge tone={STATUS_TONES[row.status]} size="small">
-          {STATUS_LABELS[row.status]}
+        <Badge tone={getStatusProps('version', row.status).tone} size="small">
+          {getStatusProps('version', row.status).label}
         </Badge>
       ),
     },

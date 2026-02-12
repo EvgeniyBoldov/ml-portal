@@ -20,34 +20,11 @@ import { CredentialsPanel } from '@/shared/ui/CredentialsPanel';
 import { useModels } from '@shared/api/hooks/useAdmin';
 import type { Model } from '@shared/api/admin';
 import styles from './PlatformSettingsPage.module.css';
+import { getStatusProps, MODEL_TYPE_LABELS } from '@/shared/lib/statusConfig';
 
 interface FormData {
   default_policy_id: string;
   default_limit_id: string;
-}
-
-// Model constants
-const TYPE_LABELS: Record<string, string> = {
-  llm_chat: 'LLM',
-  embedding: 'Embedding',
-  reranker: 'Reranker',
-};
-
-const STATUS_LABELS: Record<string, string> = {
-  available: 'Доступна',
-  deprecated: 'Устарела',
-  unavailable: 'Недоступна',
-  maintenance: 'Обслуживание',
-};
-
-function getStatusTone(status: string): 'success' | 'warn' | 'danger' | 'neutral' {
-  switch (status) {
-    case 'available': return 'success';
-    case 'deprecated': return 'warn';
-    case 'unavailable':
-    case 'maintenance': return 'danger';
-    default: return 'neutral';
-  }
 }
 
 export function PlatformSettingsPage() {
@@ -169,7 +146,7 @@ export function PlatformSettingsPage() {
       sortable: true,
       render: (model: Model) => (
         <Badge tone={model.type === 'llm_chat' ? 'info' : 'success'}>
-          {TYPE_LABELS[model.type] || model.type}
+          {MODEL_TYPE_LABELS[model.type] || model.type}
         </Badge>
       ),
     },
@@ -193,8 +170,8 @@ export function PlatformSettingsPage() {
       width: 120,
       sortable: true,
       render: (model: Model) => (
-        <Badge tone={getStatusTone(model.status)}>
-          {STATUS_LABELS[model.status] || model.status}
+        <Badge tone={getStatusProps('model', model.status).tone}>
+          {getStatusProps('model', model.status).label}
         </Badge>
       ),
     },

@@ -20,6 +20,7 @@ import { EntityPage, type EntityPageMode } from '@/shared/ui/EntityPage';
 import { ContentBlock, Badge, type FieldDefinition } from '@/shared/ui';
 import { Select } from '@/shared/ui/Select/Select';
 import { useVersionActions } from '@/shared/hooks/useVersionActions';
+import { getStatusProps } from '@/shared/lib/statusConfig';
 
 interface FormData {
   backend_release_id: string;
@@ -32,18 +33,6 @@ interface FormData {
   config: string;
   notes: string;
 }
-
-const STATUS_LABELS: Record<string, string> = {
-  draft: 'Черновик',
-  active: 'Активна',
-  archived: 'Архив',
-};
-
-const STATUS_TONES: Record<string, 'warn' | 'success' | 'neutral'> = {
-  draft: 'warn',
-  active: 'success',
-  archived: 'neutral',
-};
 
 export function ToolReleasePage() {
   const { toolSlug, version: versionParam } = useParams<{ toolSlug: string; version: string }>();
@@ -383,8 +372,8 @@ export function ToolReleasePage() {
           data={formData}
           onChange={handleFieldChange}
           headerActions={
-            <Badge tone={STATUS_TONES[isCreate ? 'draft' : (existingRelease?.status || 'draft')]} size="small">
-              {STATUS_LABELS[isCreate ? 'draft' : (existingRelease?.status || 'draft')]}
+            <Badge tone={getStatusProps('version', isCreate ? 'draft' : (existingRelease?.status || 'draft')).tone} size="small">
+              {getStatusProps('version', isCreate ? 'draft' : (existingRelease?.status || 'draft')).label}
             </Badge>
           }
         />

@@ -8,6 +8,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { agentRunsApi, AgentRun, AgentRunDetail, AgentRunFilter } from '@/shared/api';
 import { AdminPage, DataTable, type DataTableColumn, Badge, Button, Modal, ActionsButton, type ActionItem } from '@/shared/ui';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
+import { getStatusProps } from '@/shared/lib/statusConfig';
 
 function formatDuration(ms?: number): string {
   if (!ms) return '—';
@@ -24,12 +25,6 @@ function formatDate(dateStr: string): string {
     minute: '2-digit',
   });
 }
-
-const STATUS_TONES: Record<string, 'success' | 'warning' | 'danger' | 'info'> = {
-  running: 'info',
-  completed: 'success',
-  failed: 'danger',
-};
 
 const STEP_ICONS: Record<string, string> = {
   llm_request: '🤖',
@@ -117,7 +112,7 @@ function RunDetailModal({
         }}>
           <div>
             <strong>Статус:</strong>{' '}
-            <Badge tone={STATUS_TONES[run.status] || 'neutral'}>{run.status}</Badge>
+            <Badge tone={getStatusProps('run', run.status).tone}>{getStatusProps('run', run.status).label}</Badge>
           </div>
           <div>
             <strong>Длительность:</strong> {formatDuration(run.duration_ms)}
@@ -274,8 +269,8 @@ export function AgentRunsPage() {
       label: 'СТАТУС',
       width: 100,
       render: (run) => (
-        <Badge variant={STATUS_TONES[run.status] === 'success' ? 'success' : STATUS_TONES[run.status] === 'danger' ? 'danger' : 'default'} size="small">
-          {run.status}
+        <Badge tone={getStatusProps('run', run.status).tone} size="small">
+          {getStatusProps('run', run.status).label}
         </Badge>
       ),
     },
