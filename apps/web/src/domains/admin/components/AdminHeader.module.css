@@ -4,7 +4,7 @@
   justify-content: space-between;
   padding: 24px 32px;
   background: var(--panel);
-  border-bottom: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--border-color);
   gap: 24px;
 }
 

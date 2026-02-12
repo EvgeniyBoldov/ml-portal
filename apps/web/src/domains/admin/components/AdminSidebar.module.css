@@ -2,7 +2,7 @@
   width: 260px;
   height: 100vh;
   background: var(--panel);
-  border-right: 1px solid var(--color-border);
+  border-right: 1px solid var(--border-color);
   display: flex;
   flex-direction: column;
   position: sticky;
@@ -57,7 +57,7 @@
 }
 
 .navItem:hover {
-  background: var(--color-bg-secondary);
+  background: var(--bg-hover);
   color: var(--text);
 }
 
@@ -84,7 +84,7 @@
 
 .footer {
   padding: 16px;
-  border-top: 1px solid var(--color-border);
+  border-top: 1px solid var(--border-color);
 }
 
 .backLink {
@@ -101,7 +101,7 @@
 }
 
 .backLink:hover {
-  background: var(--color-bg-secondary);
+  background: var(--bg-hover);
   color: var(--text);
 }
 
