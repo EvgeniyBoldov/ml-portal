@@ -33,21 +33,21 @@
 }
 
 .step.upcoming .indicator {
-  background-color: var(--color-bg-muted, #f0f0f0);
-  color: var(--color-text-muted, #888);
-  border: 2px solid var(--color-border, #ddd);
+  background-color: var(--bg-hover, #f0f0f0);
+  color: var(--muted, #888);
+  border: 2px solid var(--border-color, #ddd);
 }
 
 .step.current .indicator {
-  background-color: var(--color-primary, #3b82f6);
-  color: var(--color-text-inverse, #fff);
-  border: 2px solid var(--color-primary, #3b82f6);
+  background-color: var(--primary, #3b82f6);
+  color: var(--text-inverse, #fff);
+  border: 2px solid var(--primary, #3b82f6);
 }
 
 .step.completed .indicator {
-  background-color: var(--color-success, #22c55e);
-  color: var(--color-text-inverse, #fff);
-  border: 2px solid var(--color-success, #22c55e);
+  background-color: var(--success, #22c55e);
+  color: var(--text-inverse, #fff);
+  border: 2px solid var(--success, #22c55e);
 }
 
 .content {
@@ -59,32 +59,32 @@
 .label {
   font-size: 14px;
   font-weight: 500;
-  color: var(--color-text, #1a1a2e);
+  color: var(--text, #1a1a2e);
 }
 
 .step.upcoming .label {
-  color: var(--color-text-muted, #888);
+  color: var(--muted, #888);
 }
 
 .step.current .label {
-  color: var(--color-primary, #3b82f6);
+  color: var(--primary, #3b82f6);
 }
 
 .description {
   font-size: 12px;
-  color: var(--color-text-muted, #888);
+  color: var(--muted, #888);
 }
 
 .connector {
   flex: 1;
   height: 2px;
   min-width: 24px;
-  background-color: var(--color-border, #ddd);
+  background-color: var(--border-color, #ddd);
   margin: 0 8px;
   align-self: center;
   margin-top: -8px;
 }
 
 .connector.completed {
-  background-color: var(--color-success, #22c55e);
+  background-color: var(--success, #22c55e);
 }

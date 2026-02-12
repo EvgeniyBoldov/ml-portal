@@ -176,8 +176,8 @@ export default function Popover({
             maxWidth: 320,
             padding: 8,
             borderRadius: 8,
-            background: 'var(--color-surface, var(--panel, #1f2933))',
-            border: '1px solid var(--color-border, rgba(255, 255, 255, 0.12))',
+            background: 'var(--panel, #1f2933)',
+            border: '1px solid var(--border-color, rgba(255, 255, 255, 0.12))',
             boxShadow: '0 12px 32px rgba(15, 23, 42, 0.35)',
             ...placement,
           }}

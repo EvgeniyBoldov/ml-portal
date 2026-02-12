@@ -15,7 +15,7 @@
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
-  border-bottom: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--border-color);
 }
 
 .body {
@@ -55,7 +55,7 @@
 
 .activeCircle {
   transform: scale(1.15);
-  box-shadow: 0 0 0 3px var(--color-primary-light), 0 4px 16px rgba(79, 124, 255, 0.3);
+  box-shadow: 0 0 0 3px var(--primary-light), 0 4px 16px rgba(79, 124, 255, 0.3);
 }
 
 .symbol {
@@ -82,23 +82,23 @@
 /* States (applied to .circle) */
 .state-idle {
   color: var(--muted);
-  background: var(--color-bg-secondary);
+  background: var(--bg-hover);
 }
 
 .state-queued {
   color: var(--muted);
-  background: var(--color-bg-secondary);
+  background: var(--bg-hover);
 }
 
 .state-skipped {
   color: var(--muted);
-  background: var(--color-bg-secondary);
+  background: var(--bg-hover);
   opacity: 0.6;
 }
 
 .state-running {
   color: var(--primary);
-  background: var(--color-primary-light);
+  background: var(--primary-light);
   border-color: var(--primary);
 }
 

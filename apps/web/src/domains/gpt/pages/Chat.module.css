@@ -5,7 +5,7 @@
   height: 100%;
   min-height: 100%;
   background: var(--panel);
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--border-color);
   border-radius: var(--radius);
   overflow: hidden;
   position: relative;
@@ -37,7 +37,7 @@
 
 .streamStatus {
   font-size: var(--font-size-xs);
-  color: var(--color-primary);
+  color: var(--primary);
   padding: var(--sp-1) var(--sp-3);
   background: rgba(139, 92, 246, 0.1);
   border-radius: var(--radius-full);
@@ -66,7 +66,7 @@
   scroll-behavior: smooth;
   /* Ensure proper scrollbar styling */
   scrollbar-width: thin;
-  scrollbar-color: var(--color-border) transparent;
+  scrollbar-color: var(--border-color) transparent;
 }
 
 /* Webkit scrollbar styling */
@@ -79,7 +79,7 @@
 }
 
 .messagesContainer::-webkit-scrollbar-thumb {
-  background: var(--color-border);
+  background: var(--border-color);
   border-radius: 3px;
 }
 
@@ -93,7 +93,7 @@
   height: auto;
   min-height: 60px;
   max-height: 200px;
-  border-top: 1px solid var(--color-border);
+  border-top: 1px solid var(--border-color);
   background: var(--panel);
 }
 
@@ -120,9 +120,9 @@
   padding: var(--sp-3) var(--sp-4);
   margin: var(--sp-2) 0;
   background: rgba(239, 68, 68, 0.1);
-  border: 1px solid var(--color-danger);
+  border: 1px solid var(--danger);
   border-radius: var(--radius-md);
-  color: var(--color-danger);
+  color: var(--danger);
   font-size: var(--font-size-sm);
 }
 

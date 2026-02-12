@@ -65,14 +65,14 @@ export default function Uploader({
                   alignItems: 'center',
                   justifyContent: 'space-between',
                   padding: '8px',
-                  background: 'var(--color-bg-secondary)',
-                  border: '1px solid var(--color-border)',
+                  background: 'var(--bg-hover)',
+                  border: '1px solid var(--border-color)',
                   borderRadius: 'var(--radius-sm)',
                   fontSize: '14px'
                 }}
               >
                 <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '300px' }}>
-                  {file.name} <span style={{ color: 'var(--color-muted)', fontSize: '12px' }}>({(file.size / 1024 / 1024).toFixed(2)} MB)</span>
+                  {file.name} <span style={{ color: 'var(--muted)', fontSize: '12px' }}>({(file.size / 1024 / 1024).toFixed(2)} MB)</span>
                 </span>
                 <button 
                   onClick={() => handleRemoveFile(index)}
@@ -81,7 +81,7 @@ export default function Uploader({
                     border: 'none', 
                     cursor: 'pointer', 
                     padding: '4px',
-                    color: 'var(--color-muted)' 
+                    color: 'var(--muted)' 
                   }}
                   type="button"
                 >

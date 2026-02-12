@@ -289,7 +289,7 @@ export function AgentRunsPage() {
       label: 'ВРЕМЯ',
       width: 100,
       render: (run) => (
-        <span style={{ color: 'var(--color-text-muted)' }}>{formatDuration(run.duration_ms)}</span>
+        <span style={{ color: 'var(--muted)' }}>{formatDuration(run.duration_ms)}</span>
       ),
     },
     {
@@ -297,7 +297,7 @@ export function AgentRunsPage() {
       label: 'НАЧАТ',
       width: 150,
       render: (run) => (
-        <span style={{ color: 'var(--color-text-muted)' }}>{formatDate(run.started_at)}</span>
+        <span style={{ color: 'var(--muted)' }}>{formatDate(run.started_at)}</span>
       ),
     },
     {

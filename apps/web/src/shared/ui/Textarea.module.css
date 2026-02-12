@@ -22,7 +22,7 @@
   background: rgba(255, 255, 255, 0.05);
 }
 .textarea:focus:not(:disabled):not(:read-only) {
-  border-color: var(--color-primary);
+  border-color: var(--primary);
   background: rgba(255, 255, 255, 0.05);
   box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.15);
 }

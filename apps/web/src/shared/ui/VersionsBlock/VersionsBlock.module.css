@@ -20,7 +20,7 @@
 }
 
 .versionsTable :global(.data-table tbody tr:hover) {
-  background-color: var(--bg-tertiary, var(--color-bg-secondary));
+  background-color: var(--bg-tertiary);
 }
 
 /* Animation */
@@ -77,11 +77,11 @@
 
 /* Table row hover effect */
 .versionsTable :global(.table-row:hover) {
-  background-color: var(--bg-hover, var(--color-bg-secondary));
+  background-color: var(--bg-hover);
   cursor: pointer;
 }
 
 .versionsTable :global(.table-row.selected) {
-  background-color: var(--bg-selected, var(--color-bg-secondary));
-  border-color: var(--border-accent, var(--color-border));
+  background-color: var(--bg-selected);
+  border-color: var(--border-accent);
 }

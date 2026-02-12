@@ -149,7 +149,7 @@ export function ModelsPage() {
           </p>
           <div style={{ 
             padding: '12px', 
-            background: 'var(--color-bg-secondary, #f5f5f5)', 
+            background: 'var(--bg-hover, #f5f5f5)', 
             borderRadius: '6px',
             fontSize: '13px'
           }}>

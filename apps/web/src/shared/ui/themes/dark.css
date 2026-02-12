@@ -33,13 +33,6 @@
   --border-hover: rgba(255, 255, 255, 0.16);
   --border-focus: var(--primary);
 
-  /* Legacy aliases for compatibility */
-  --color-border: var(--border);
-  --color-bg-secondary: var(--bg-hover);
-  --color-primary-light: var(--primary-light);
-  --color-text: var(--text);
-  --color-primary: var(--primary);
-  --color-bg: var(--bg);  /* Для RAG - такой же как основной фон */
 
   /* New standardized variables */
   --bg-primary: var(--bg);
@@ -56,26 +49,25 @@
   --border-color-dark: #4b5563;
 
   /* Brand colors — derived from --primary */
-  --color-primary-hover: var(--primary-hover);
-  --color-primary-active: #4338ca;
-  --color-primary-light: rgba(99, 102, 241, 0.15);
+  --primary-active: #4338ca;
+  --primary-light: rgba(99, 102, 241, 0.15);
 
   /* Semantic colors */
-  --color-success: #34d399;
-  --color-success-light: #064e3b;
-  --color-warning: #fbbf24;
-  --color-warning-light: #78350f;
-  --color-danger: #f87171;
-  --color-danger-light: #7f1d1d;
-  --color-info: #60a5fa;
-  --color-info-light: #1e3a8a;
+  --success: #34d399;
+  --success-light: #064e3b;
+  --warning: #fbbf24;
+  --warning-light: #78350f;
+  --danger: #f87171;
+  --danger-light: #7f1d1d;
+  --info: #60a5fa;
+  --info-light: #1e3a8a;
 
   /* Component-specific */
   --input-bg: rgba(15, 20, 25, 0.6);
   --input-bg-hover: rgba(26, 31, 46, 0.8);
   --input-bg-focus: rgba(15, 20, 25, 0.9);
   --input-border: rgba(255, 255, 255, 0.1);
-  --input-focus-border: var(--color-primary);
+  --input-focus-border: var(--primary);
   --input-disabled-bg: rgba(37, 43, 59, 0.5);
 
   /* Modal & overlays */

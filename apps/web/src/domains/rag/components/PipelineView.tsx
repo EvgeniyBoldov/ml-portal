@@ -42,11 +42,11 @@ const STATUS_ICONS: Record<PipelineStageStatus, string> = {
 };
 
 const STATUS_COLORS: Record<PipelineStageStatus, string> = {
-  pending: 'var(--color-text-muted)',
-  queued: 'var(--color-warning)',
-  processing: 'var(--color-primary)',
-  completed: 'var(--color-success)',
-  failed: 'var(--color-danger)',
+  pending: 'var(--muted)',
+  queued: 'var(--warning)',
+  processing: 'var(--primary)',
+  completed: 'var(--success)',
+  failed: 'var(--danger)',
 };
 
 function StageNode({

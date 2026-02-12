@@ -16,7 +16,7 @@
   align-items: center;
   gap: 0.25rem;
   padding: 0.25rem 0.5rem;
-  background: var(--color-primary);
+  background: var(--primary);
   color: white;
   border-radius: 0.25rem;
   font-size: 0.8rem;
@@ -42,7 +42,7 @@
 
 .noTags {
   font-size: 0.8rem;
-  color: var(--color-text-secondary);
+  color: var(--text-secondary);
   font-style: italic;
 }
 
@@ -65,7 +65,7 @@
   align-items: center;
   justify-content: space-between;
   padding: 0.5rem;
-  background: var(--color-bg-secondary);
+  background: var(--bg-hover);
   border-radius: 0.25rem;
   margin-bottom: 0.5rem;
 }
@@ -75,7 +75,7 @@
 }
 
 .removeButton {
-  background: var(--color-danger);
+  background: var(--danger);
   color: white;
   border: none;
   border-radius: 50%;
@@ -97,7 +97,7 @@
 .emptyState {
   text-align: center;
   padding: 2rem;
-  color: var(--color-text-secondary);
+  color: var(--text-secondary);
 }
 
 .emptyState p {

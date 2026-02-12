@@ -81,7 +81,7 @@ export function RoutingLogsPage() {
           {(row.available_tools?.length || 0) > 2 && (
             <Badge variant="outline">+{row.available_tools.length - 2}</Badge>
           )}
-          {!row.available_tools?.length && <span style={{ color: 'var(--color-text-muted)' }}>—</span>}
+          {!row.available_tools?.length && <span style={{ color: 'var(--muted)' }}>—</span>}
         </div>
       ),
     },
@@ -96,7 +96,7 @@ export function RoutingLogsPage() {
           {(row.unavailable_tools?.length || 0) > 2 && (
             <Badge variant="outline">+{row.unavailable_tools.length - 2}</Badge>
           )}
-          {!row.unavailable_tools?.length && <span style={{ color: 'var(--color-text-muted)' }}>—</span>}
+          {!row.unavailable_tools?.length && <span style={{ color: 'var(--muted)' }}>—</span>}
         </div>
       ),
     },

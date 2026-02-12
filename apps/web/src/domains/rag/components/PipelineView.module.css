@@ -3,7 +3,7 @@
   flex-direction: column;
   gap: 24px;
   padding: 24px;
-  background: var(--color-bg-secondary);
+  background: var(--bg-hover);
   border-radius: 12px;
   overflow-x: auto;
 }
@@ -23,8 +23,8 @@
   align-items: center;
   gap: 8px;
   padding: 16px 20px;
-  background: var(--color-bg-primary);
-  border: 2px solid var(--color-border);
+  background: var(--bg-primary);
+  border: 2px solid var(--border-color);
   border-radius: 12px;
   cursor: pointer;
   transition: all 0.2s ease;
@@ -39,7 +39,7 @@
 
 .stageNode.selected {
   border-color: var(--status-color);
-  background: color-mix(in srgb, var(--status-color) 10%, var(--color-bg-primary));
+  background: color-mix(in srgb, var(--status-color) 10%, var(--bg-primary));
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--status-color) 20%, transparent);
 }
 
@@ -61,7 +61,7 @@
 .stageLabel {
   font-size: 13px;
   font-weight: 600;
-  color: var(--color-text-primary);
+  color: var(--text-primary);
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
@@ -78,8 +78,8 @@
   align-items: center;
   gap: 8px;
   padding: 10px 14px;
-  background: var(--color-bg-primary);
-  border: 2px solid var(--color-border);
+  background: var(--bg-primary);
+  border: 2px solid var(--border-color);
   border-radius: 8px;
   cursor: pointer;
   transition: all 0.2s ease;
@@ -93,7 +93,7 @@
 
 .modelNode.selected {
   border-color: var(--status-color);
-  background: color-mix(in srgb, var(--status-color) 10%, var(--color-bg-primary));
+  background: color-mix(in srgb, var(--status-color) 10%, var(--bg-primary));
 }
 
 .modelNode.active .modelIcon {
@@ -115,7 +115,7 @@
 .modelName {
   font-size: 12px;
   font-weight: 500;
-  color: var(--color-text-primary);
+  color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -136,7 +136,7 @@
   top: 50%;
   width: 100%;
   height: 4px;
-  background: linear-gradient(90deg, transparent, var(--color-primary), transparent);
+  background: linear-gradient(90deg, transparent, var(--primary), transparent);
   transform: translateY(-50%);
   animation: flow 1s ease-in-out infinite;
   opacity: 0.5;
@@ -166,7 +166,7 @@
 .columnHeader {
   font-size: 11px;
   font-weight: 600;
-  color: var(--color-text-muted);
+  color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 1px;
   padding-left: 4px;
@@ -183,7 +183,7 @@
   display: flex;
   gap: 16px;
   padding-top: 16px;
-  border-top: 1px solid var(--color-border);
+  border-top: 1px solid var(--border-color);
 }
 
 .legendItem {
@@ -200,7 +200,7 @@
 
 .legendLabel {
   font-size: 11px;
-  color: var(--color-text-muted);
+  color: var(--muted);
   text-transform: capitalize;
 }
 

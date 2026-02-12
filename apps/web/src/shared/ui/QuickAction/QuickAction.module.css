@@ -25,7 +25,7 @@
 
 .quickAction:hover {
   background: var(--bg-hover);
-  border-color: var(--color-primary);
+  border-color: var(--primary);
   transform: translateY(-2px);
 }
 

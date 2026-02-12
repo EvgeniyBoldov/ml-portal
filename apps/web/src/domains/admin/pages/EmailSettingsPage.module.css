@@ -54,18 +54,18 @@
 }
 
 .statusBadge.enabled {
-  background: var(--color-success-light);
-  color: var(--color-success);
+  background: var(--success-light);
+  color: var(--success);
 }
 
 .statusBadge.disabled {
-  background: var(--color-danger-light);
-  color: var(--color-danger);
+  background: var(--danger-light);
+  color: var(--danger);
 }
 
 .statusBadge.error {
-  background: var(--color-warning-light);
-  color: var(--color-warning);
+  background: var(--warning-light);
+  color: var(--warning);
 }
 
 .statusInfo {
@@ -98,11 +98,11 @@
 }
 
 .statusValue.boolean.true {
-  color: var(--color-success);
+  color: var(--success);
 }
 
 .statusValue.boolean.false {
-  color: var(--color-danger);
+  color: var(--danger);
 }
 
 .infoCard {
@@ -159,8 +159,8 @@
 }
 
 .warningCard {
-  background: var(--color-warning-light);
-  border: 1px solid var(--color-warning);
+  background: var(--warning-light);
+  border: 1px solid var(--warning);
   border-radius: var(--radius-lg);
   padding: var(--sp-5);
   margin-bottom: var(--sp-5);
@@ -169,7 +169,7 @@
 .warningTitle {
   font-size: var(--font-size-lg);
   font-weight: 600;
-  color: var(--color-warning);
+  color: var(--warning);
   margin: 0 0 var(--sp-2) 0;
   display: flex;
   align-items: center;
@@ -178,7 +178,7 @@
 
 .warningContent {
   font-size: var(--font-size-sm);
-  color: var(--color-warning);
+  color: var(--warning);
   line-height: 1.6;
 }
 
@@ -266,8 +266,8 @@
   }
 
   .warningCard {
-    background: var(--color-warning-light);
-    border-color: var(--color-warning);
+    background: var(--warning-light);
+    border-color: var(--warning);
   }
 }
 

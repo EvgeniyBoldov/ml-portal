@@ -21,12 +21,12 @@
 }
 
 .loading {
-  background-color: var(--color-gray-400);
+  background-color: var(--muted);
   animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }
 
 .error {
-  background-color: var(--color-error);
+  background-color: var(--danger);
 }
 
 @keyframes pulse {

@@ -1,39 +1,39 @@
 .table {
   width: 100%;
   border-collapse: collapse;
-  background: var(--color-background);
+  background: var(--bg);
   border-radius: var(--border-radius);
   overflow: hidden;
   box-shadow: var(--shadow-sm);
 }
 
 .tableHeader {
-  background: var(--color-surface);
-  border-bottom: 1px solid var(--color-border);
+  background: var(--panel);
+  border-bottom: 1px solid var(--border-color);
 }
 
 /* Table headers are now styled via TableHeader component */
 
 .tableBody {
-  background: var(--color-background);
+  background: var(--bg);
 }
 
 .tableRow {
-  border-bottom: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--border-color);
   transition: background-color 0.2s ease;
 }
 
 .tableRow:hover {
-  background: var(--color-surface);
+  background: var(--panel);
 }
 
 .tableRow.selected {
-  background: var(--color-primary-light);
+  background: var(--primary-light);
 }
 
 .tableCell {
   padding: var(--spacing-md);
-  color: var(--color-text);
+  color: var(--text);
   font-size: var(--font-size-sm);
   vertical-align: middle;
 }
@@ -59,7 +59,7 @@
 .emptyState {
   padding: var(--spacing-xl);
   text-align: center;
-  color: var(--color-text-secondary);
+  color: var(--muted);
 }
 
 .emptyStateIcon {
@@ -87,15 +87,15 @@
 .loadingCell {
   padding: var(--spacing-md);
   text-align: center;
-  color: var(--color-text-secondary);
+  color: var(--muted);
 }
 
 .skeleton {
   background: linear-gradient(
     90deg,
-    var(--color-surface) 25%,
-    var(--color-border) 50%,
-    var(--color-surface) 75%
+    var(--panel) 25%,
+    var(--border-color) 50%,
+    var(--panel) 75%
   );
   background-size: 200% 100%;
   animation: skeleton-loading 1.5s infinite;
@@ -143,14 +143,14 @@
 /* Dark mode */
 @media (prefers-color-scheme: dark) {
   .tableHeader {
-    background: var(--color-surface-dark);
+    background: var(--panel-hover);
   }
 
   .tableRow:hover {
-    background: var(--color-surface-dark);
+    background: var(--panel-hover);
   }
 
   .tableRow.selected {
-    background: var(--color-primary-dark);
+    background: var(--primary-hover);
   }
 }

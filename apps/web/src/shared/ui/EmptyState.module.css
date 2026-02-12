@@ -5,7 +5,7 @@
   justify-content: center;
   padding: 3rem 2rem;
   text-align: center;
-  color: var(--color-text-secondary);
+  color: var(--muted);
 }
 
 .icon {
@@ -17,7 +17,7 @@
 .title {
   font-size: 1.25rem;
   font-weight: 600;
-  color: var(--color-text-primary);
+  color: var(--text);
   margin-bottom: 0.5rem;
 }
 
@@ -29,7 +29,7 @@
 }
 
 .actionButton {
-  background: var(--color-primary);
+  background: var(--primary);
   color: white;
   border: none;
   padding: 0.75rem 1.5rem;
@@ -41,7 +41,7 @@
 }
 
 .actionButton:hover {
-  background: var(--color-primary-hover);
+  background: var(--primary-hover);
 }
 
 .actionButton:active {

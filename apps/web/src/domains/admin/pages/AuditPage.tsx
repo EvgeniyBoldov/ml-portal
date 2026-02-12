@@ -33,7 +33,7 @@ export function AuditPage() {
       label: 'Время',
       width: 180,
       render: (log) => (
-        <span style={{ color: 'var(--color-text-muted)' }}>
+        <span style={{ color: 'var(--muted)' }}>
           {new Date(log.ts).toLocaleString('ru-RU', {
             year: 'numeric',
             month: '2-digit',
@@ -118,7 +118,7 @@ export function AuditPage() {
       }
     >
       {error && (
-        <div style={{ padding: '24px', textAlign: 'center', color: 'var(--color-danger)' }}>
+        <div style={{ padding: '24px', textAlign: 'center', color: 'var(--danger)' }}>
           Не удалось загрузить логи аудита
         </div>
       )}

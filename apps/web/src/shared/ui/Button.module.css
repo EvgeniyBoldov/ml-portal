@@ -26,7 +26,7 @@
 }
 
 .btn:focus-visible {
-  outline: 2px solid var(--color-primary, #8b5cf6);
+  outline: 2px solid var(--primary, #8b5cf6);
   outline-offset: 2px;
 }
 
@@ -38,14 +38,14 @@
 
 /* Variants */
 .primary {
-  background: var(--color-primary, #8b5cf6);
+  background: var(--primary, #8b5cf6);
   color: var(--text-inverse, #ffffff);
-  border-color: var(--color-primary, #8b5cf6);
+  border-color: var(--primary, #8b5cf6);
 }
 
 .primary:hover {
-  background: var(--color-primary-hover, #7c3aed);
-  border-color: var(--color-primary-hover, #7c3aed);
+  background: var(--primary-hover, #7c3aed);
+  border-color: var(--primary-hover, #7c3aed);
 }
 
 .outline {
@@ -71,20 +71,20 @@
 }
 
 .danger {
-  background: var(--color-danger, #ef4444);
+  background: var(--danger, #ef4444);
   color: var(--text-inverse, #ffffff);
-  border-color: var(--color-danger, #ef4444);
+  border-color: var(--danger, #ef4444);
 }
 
 .danger:hover {
-  background: var(--color-danger, #ef4444);
+  background: var(--danger, #ef4444);
   opacity: 0.9;
 }
 
 .success {
-  background: var(--color-success, #10b981);
+  background: var(--success, #10b981);
   color: var(--text-inverse, #ffffff);
-  border-color: var(--color-success, #10b981);
+  border-color: var(--success, #10b981);
 }
 
 .success:hover {
