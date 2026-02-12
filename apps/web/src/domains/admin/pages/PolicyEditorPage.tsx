@@ -52,18 +52,6 @@ export function PolicyEditorPage() {
   const versions = policy?.versions || [];
   const currentVersion = policy?.current_version;
 
-  // Debug logging
-  console.log('PolicyEditorPage Debug:', {
-    slug,
-    mode,
-    isNew,
-    isLoading,
-    policy,
-    versions: versions.length,
-    currentVersion,
-    containerFields: containerFields.length,
-  });
-
   // Sync form with entity data
   useEffect(() => {
     if (policy) {

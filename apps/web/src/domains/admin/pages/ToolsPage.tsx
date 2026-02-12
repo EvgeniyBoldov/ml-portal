@@ -47,7 +47,7 @@ export function ToolsPage() {
       render: (row) => (
         <div>
           <div style={{ fontWeight: 500 }}>{row.slug}</div>
-          <div style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)' }}>{row.name}</div>
+          <div style={{ fontSize: '0.8125rem', color: 'var(--muted)' }}>{row.name}</div>
         </div>
       ),
     },

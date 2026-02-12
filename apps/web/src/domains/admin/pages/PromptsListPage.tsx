@@ -50,7 +50,7 @@ export function PromptsListPage() {
       render: (row) => (
         <div>
           <div style={{ fontWeight: 500 }}>{row.slug}</div>
-          <div style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)' }}>{row.name}</div>
+          <div style={{ fontSize: '0.8125rem', color: 'var(--muted)' }}>{row.name}</div>
         </div>
       ),
     },
@@ -61,7 +61,7 @@ export function PromptsListPage() {
       render: (row) => (
         <span>
           {row.active_version ? `v${row.active_version}` : '—'} 
-          {row.versions_count > 0 && <span style={{ color: 'var(--color-text-muted)' }}> ({row.versions_count})</span>}
+          {row.versions_count > 0 && <span style={{ color: 'var(--muted)' }}> ({row.versions_count})</span>}
         </span>
       ),
     },
