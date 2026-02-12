@@ -10,9 +10,10 @@ export type RbacEffect = 'allow' | 'deny';
 
 export interface RbacRule {
   id: string;
-  rbac_policy_id: string;
   level: RbacLevel;
-  level_id?: string | null;
+  owner_user_id?: string | null;
+  owner_tenant_id?: string | null;
+  owner_platform: boolean;
   resource_type: ResourceType;
   resource_id: string;
   effect: RbacEffect;
@@ -20,43 +21,14 @@ export interface RbacRule {
   created_by_user_id?: string | null;
 }
 
-export interface RbacPolicy {
-  id: string;
-  slug: string;
-  name: string;
-  description?: string | null;
-  rules_count: number;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface RbacPolicyDetail {
-  id: string;
-  slug: string;
-  name: string;
-  description?: string | null;
-  rules: RbacRule[];
-  created_at: string;
-  updated_at: string;
-}
-
-export interface RbacPolicyCreate {
-  slug: string;
-  name: string;
-  description?: string;
-}
-
-export interface RbacPolicyUpdate {
-  name?: string;
-  description?: string;
-}
-
 export interface RbacRuleCreate {
   level: RbacLevel;
-  level_id?: string | null;
   resource_type: ResourceType;
   resource_id: string;
   effect: RbacEffect;
+  owner_user_id?: string | null;
+  owner_tenant_id?: string | null;
+  owner_platform?: boolean;
 }
 
 export interface RbacRuleUpdate {
@@ -78,38 +50,34 @@ export interface CheckAccessResponse {
 
 // ─── Enriched Rules ──────────────────────────────────────────────────────────
 
-export interface EnrichedRulePolicyInfo {
-  id: string;
-  slug: string;
+export interface EnrichedOwnerInfo {
+  level: RbacLevel;
   name: string;
+  user_id?: string | null;
+  tenant_id?: string | null;
+  platform: boolean;
 }
 
-export interface EnrichedRuleResourceInfo {
+export interface EnrichedResourceInfo {
   type: ResourceType;
   id: string;
   name: string;
 }
 
-export interface EnrichedRuleInfo {
+export interface EnrichedRule {
+  id: string;
+  owner: EnrichedOwnerInfo;
+  resource: EnrichedResourceInfo;
   effect: RbacEffect;
-  level: RbacLevel;
-  level_id?: string | null;
-  context_name?: string | null;
   created_at: string;
   created_by_user_id?: string | null;
 }
 
-export interface EnrichedRule {
-  id: string;
-  policy: EnrichedRulePolicyInfo;
-  resource: EnrichedRuleResourceInfo;
-  rule: EnrichedRuleInfo;
-}
-
 export interface EnrichedRulesFilters {
-  rbac_policy_id?: string;
   level?: RbacLevel;
-  level_id?: string;
+  owner_user_id?: string;
+  owner_tenant_id?: string;
+  owner_platform?: boolean;
   resource_type?: ResourceType;
   effect?: RbacEffect;
   skip?: number;
@@ -121,83 +89,59 @@ export interface EnrichedRulesFilters {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const rbacApi = {
-  // Policy CRUD
-  async listPolicies(params: { skip?: number; limit?: number } = {}): Promise<RbacPolicy[]> {
+  // Rule CRUD
+  async listRules(params: EnrichedRulesFilters = {}): Promise<RbacRule[]> {
     const sp = new URLSearchParams();
+    if (params.level) sp.set('level', params.level);
+    if (params.owner_user_id) sp.set('owner_user_id', params.owner_user_id);
+    if (params.owner_tenant_id) sp.set('owner_tenant_id', params.owner_tenant_id);
+    if (params.owner_platform !== undefined) sp.set('owner_platform', String(params.owner_platform));
+    if (params.resource_type) sp.set('resource_type', params.resource_type);
+    if (params.effect) sp.set('effect', params.effect);
     if (params.skip) sp.set('skip', String(params.skip));
     if (params.limit) sp.set('limit', String(params.limit));
     return apiRequest(`/admin/rbac?${sp.toString()}`);
   },
 
-  async getPolicy(slug: string): Promise<RbacPolicyDetail> {
-    return apiRequest(`/admin/rbac/${slug}`);
+  async getRule(ruleId: string): Promise<RbacRule> {
+    return apiRequest(`/admin/rbac/${ruleId}`);
   },
 
-  async createPolicy(data: RbacPolicyCreate): Promise<RbacPolicyDetail> {
+  async createRule(data: RbacRuleCreate): Promise<RbacRule> {
     return apiRequest('/admin/rbac', {
       method: 'POST',
       body: JSON.stringify(data),
     });
   },
 
-  async updatePolicy(slug: string, data: RbacPolicyUpdate): Promise<RbacPolicyDetail> {
-    return apiRequest(`/admin/rbac/${slug}`, {
+  async updateRule(ruleId: string, data: RbacRuleUpdate): Promise<RbacRule> {
+    return apiRequest(`/admin/rbac/${ruleId}`, {
       method: 'PATCH',
       body: JSON.stringify(data),
     });
   },
 
-  async deletePolicy(slug: string): Promise<void> {
-    return apiRequest(`/admin/rbac/${slug}`, {
-      method: 'DELETE',
-    });
-  },
-
-  // Rule CRUD
-  async listRules(
-    policySlug: string,
-    params: { level?: string; resource_type?: string } = {},
-  ): Promise<RbacRule[]> {
-    const sp = new URLSearchParams();
-    if (params.level) sp.set('level', params.level);
-    if (params.resource_type) sp.set('resource_type', params.resource_type);
-    return apiRequest(`/admin/rbac/${policySlug}/rules?${sp.toString()}`);
-  },
-
-  async createRule(policySlug: string, data: RbacRuleCreate): Promise<RbacRule> {
-    return apiRequest(`/admin/rbac/${policySlug}/rules`, {
-      method: 'POST',
-      body: JSON.stringify(data),
-    });
-  },
-
-  async updateRule(policySlug: string, ruleId: string, data: RbacRuleUpdate): Promise<RbacRule> {
-    return apiRequest(`/admin/rbac/${policySlug}/rules/${ruleId}`, {
-      method: 'PATCH',
-      body: JSON.stringify(data),
-    });
-  },
-
-  async deleteRule(policySlug: string, ruleId: string): Promise<void> {
-    return apiRequest(`/admin/rbac/${policySlug}/rules/${ruleId}`, {
+  async deleteRule(ruleId: string): Promise<void> {
+    return apiRequest(`/admin/rbac/${ruleId}`, {
       method: 'DELETE',
     });
   },
 
   // Access check
-  async checkAccess(policySlug: string, data: CheckAccessRequest): Promise<CheckAccessResponse> {
-    return apiRequest(`/admin/rbac/${policySlug}/check-access`, {
+  async checkAccess(data: CheckAccessRequest): Promise<CheckAccessResponse> {
+    return apiRequest('/admin/rbac/check-access', {
       method: 'POST',
       body: JSON.stringify(data),
     });
   },
 
-  // Enriched rules (cross-policy, with resource names)
+  // Enriched rules (with owner and resource names)
   async listEnrichedRules(params: EnrichedRulesFilters = {}): Promise<EnrichedRule[]> {
     const sp = new URLSearchParams();
-    if (params.rbac_policy_id) sp.set('rbac_policy_id', params.rbac_policy_id);
     if (params.level) sp.set('level', params.level);
-    if (params.level_id) sp.set('level_id', params.level_id);
+    if (params.owner_user_id) sp.set('owner_user_id', params.owner_user_id);
+    if (params.owner_tenant_id) sp.set('owner_tenant_id', params.owner_tenant_id);
+    if (params.owner_platform !== undefined) sp.set('owner_platform', String(params.owner_platform));
     if (params.resource_type) sp.set('resource_type', params.resource_type);
     if (params.effect) sp.set('effect', params.effect);
     if (params.skip) sp.set('skip', String(params.skip));

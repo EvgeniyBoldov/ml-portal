@@ -53,7 +53,7 @@ User message: {message}"""
         llm_client: LLMClientProtocol,
         chats_repo: AsyncChatsRepository,
         messages_repo: AsyncChatMessagesRepository,
-        use_router: bool = False,
+        use_router: bool = True,
     ):
         self.session = session
         self.redis = redis
@@ -451,7 +451,13 @@ User message: {message}"""
                 "routing_duration_ms": exec_request.routing_duration_ms,
             }
             
-            # 2. Check if agent is available
+            # 2. Enrich tool context with RBAC info
+            if exec_request.effective_permissions:
+                denied_reasons = exec_request.effective_permissions.denied_reasons or {}
+                tool_ctx.denied_tools = list(denied_reasons.keys())
+                tool_ctx.denied_reasons = denied_reasons
+            
+            # 3. Check if agent is available
             if exec_request.mode == ExecutionMode.UNAVAILABLE:
                 missing = exec_request.missing_requirements
                 error_msg = f"Agent unavailable: {missing.to_message()}" if missing else "Agent unavailable"

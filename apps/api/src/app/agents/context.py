@@ -19,6 +19,8 @@ class ToolContext:
     request_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     chat_id: Optional[str] = None
     scopes: List[str] = field(default_factory=list)
+    denied_tools: List[str] = field(default_factory=list)
+    denied_reasons: Dict[str, str] = field(default_factory=dict)
     extra: Dict[str, Any] = field(default_factory=dict)
     
     def with_extra(self, **kwargs) -> ToolContext:

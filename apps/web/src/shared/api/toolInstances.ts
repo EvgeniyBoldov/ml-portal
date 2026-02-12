@@ -6,8 +6,11 @@ import { apiRequest } from './http';
 export interface ToolInstance {
   id: string;
   tool_group_id: string;
+  slug: string;
   name: string;
   description?: string;
+  instance_type: string;  // "local" | "remote"
+  category?: string | null;  // "collection" | "rag" | "llm" | "dcbox" | "jira" | ...
   url: string;
   config?: Record<string, unknown>;
   is_active: boolean;
@@ -20,10 +23,12 @@ export interface ToolInstance {
 
 export interface ToolInstanceCreate {
   tool_group_id: string;
+  slug?: string;
   name: string;
   url?: string;
   description?: string;
   config?: Record<string, unknown>;
+  category?: string;
 }
 
 export interface ToolInstanceUpdate {
@@ -32,6 +37,7 @@ export interface ToolInstanceUpdate {
   url?: string;
   config?: Record<string, unknown>;
   is_active?: boolean;
+  category?: string;
 }
 
 export interface HealthCheckResult {

@@ -193,14 +193,18 @@ async def send_message_stream(
     
     Body params:
         content: str - Message content (required)
-        use_rag: bool - Enable RAG search (default: False)
         model: str - LLM model override (optional)
-        agent_slug: str - Agent profile to use (optional, defaults based on use_rag)
+        agent_slug: str - Agent to use (default: "assistant" with auto-routing)
+        use_rag: bool - Legacy flag, maps to "rag-search" agent (deprecated)
     """
     content = body.get("content", "")
-    use_rag = body.get("use_rag", False)
     model = body.get("model", None)
     agent_slug = body.get("agent_slug", None)
+    use_rag = body.get("use_rag", False)
+    
+    # Legacy compat: use_rag=True → rag-search agent
+    if not agent_slug:
+        agent_slug = "rag-search" if use_rag else "assistant"
     
     if not content:
         raise HTTPException(status_code=400, detail="Content is required")

@@ -112,19 +112,26 @@ class PolicyLimits:
     allow_parallel_tool_calls: bool = False
     
     @classmethod
-    def from_policy(cls, policy: Dict[str, Any]) -> "PolicyLimits":
-        """Extract limits from agent policy dict"""
+    def from_policy(cls, policy: Dict[str, Any], limit: Optional[Dict[str, Any]] = None) -> "PolicyLimits":
+        """Extract limits from policy_data dict and optional limit_data dict.
+        
+        policy_data comes from PolicyVersion.policy_json (structured behavioral rules).
+        limit_data comes from LimitVersion fields (execution constraints).
+        limit_data values override policy_data values when both are present.
+        """
         execution = policy.get("execution", {})
         retry = policy.get("retry", {})
         output = policy.get("output", {})
         tool_exec = policy.get("tool_execution", {})
         
+        lim = limit or {}
+        
         return cls(
-            max_steps=execution.get("max_steps", 10),
-            max_tool_calls_total=execution.get("max_tool_calls_total", 50),
-            max_wall_time_ms=execution.get("max_wall_time_ms", 300000),
-            tool_timeout_ms=execution.get("tool_timeout_ms", 30000),
-            max_retries=retry.get("max_retries", 3),
+            max_steps=lim.get("max_steps", execution.get("max_steps", 10)),
+            max_tool_calls_total=lim.get("max_tool_calls", execution.get("max_tool_calls_total", 50)),
+            max_wall_time_ms=lim.get("max_wall_time_ms", execution.get("max_wall_time_ms", 300000)),
+            tool_timeout_ms=lim.get("tool_timeout_ms", execution.get("tool_timeout_ms", 30000)),
+            max_retries=lim.get("max_retries", retry.get("max_retries", 3)),
             streaming_enabled=execution.get("streaming_enabled", True),
             citations_required=output.get("citations_required", False),
             allow_parallel_tool_calls=tool_exec.get("allow_parallel_tool_calls", False),
@@ -524,8 +531,11 @@ class AgentRuntime:
         
         agent = exec_request.agent
         
-        # Extract policy limits
-        policy = PolicyLimits.from_policy(agent.policy or {})
+        # Extract policy limits from exec_request (resolved by AgentRouter)
+        policy = PolicyLimits.from_policy(
+            exec_request.policy_data,
+            exec_request.limit_data,
+        )
         
         # Override max_steps from policy
         original_max_steps = self.max_steps

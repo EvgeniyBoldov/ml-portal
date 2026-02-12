@@ -17,6 +17,14 @@ export function InstancesPage() {
     queryFn: () => toolInstancesApi.list({}),
   });
 
+  const CATEGORY_LABELS: Record<string, string> = {
+    llm: 'LLM',
+    rag: 'RAG',
+    collection: 'Collection',
+    dcbox: 'DCBox',
+    jira: 'Jira',
+  };
+
   const filteredInstances = useMemo(() => {
     if (!instances) return [];
     if (!q.trim()) return instances;
@@ -24,6 +32,7 @@ export function InstancesPage() {
     return instances.filter((inst: ToolInstance) =>
       inst.name?.toLowerCase().includes(query) ||
       inst.url?.toLowerCase().includes(query) ||
+      inst.category?.toLowerCase().includes(query) ||
       inst.tool_group_name?.toLowerCase().includes(query)
     );
   }, [instances, q]);
@@ -46,6 +55,19 @@ export function InstancesPage() {
         <span style={{ color: 'var(--text-secondary)' }}>
           {instance.tool_group_name || instance.tool_group_slug || '—'}
         </span>
+      ),
+    },
+    {
+      key: 'category',
+      label: 'КАТЕГОРИЯ',
+      width: 110,
+      sortable: true,
+      render: (instance) => instance.category ? (
+        <Badge tone="info" size="small">
+          {CATEGORY_LABELS[instance.category] || instance.category}
+        </Badge>
+      ) : (
+        <span style={{ color: 'var(--text-secondary)' }}>—</span>
       ),
     },
     {

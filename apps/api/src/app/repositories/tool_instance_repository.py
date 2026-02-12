@@ -41,6 +41,7 @@ class ToolInstanceRepository:
         limit: int = 100,
         tool_group_id: Optional[UUID] = None,
         is_active: Optional[bool] = None,
+        instance_type: Optional[str] = None,
     ) -> Tuple[List[ToolInstance], int]:
         """List tool instances with filters"""
         stmt = select(ToolInstance)
@@ -49,6 +50,8 @@ class ToolInstanceRepository:
             stmt = stmt.where(ToolInstance.tool_group_id == tool_group_id)
         if is_active is not None:
             stmt = stmt.where(ToolInstance.is_active == is_active)
+        if instance_type is not None:
+            stmt = stmt.where(ToolInstance.instance_type == instance_type)
         
         count_stmt = select(func.count()).select_from(stmt.subquery())
         total = await self.session.scalar(count_stmt) or 0
@@ -70,6 +73,25 @@ class ToolInstanceRepository:
         )
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
+
+    async def get_by_slug_and_group(
+        self,
+        slug: str,
+        tool_group_id: UUID,
+    ) -> Optional[ToolInstance]:
+        """Get instance by slug within a tool group"""
+        stmt = select(ToolInstance).where(
+            ToolInstance.slug == slug,
+            ToolInstance.tool_group_id == tool_group_id,
+        )
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def get_by_slug(self, slug: str) -> Optional[ToolInstance]:
+        """Get instance by slug (globally unique in practice)"""
+        stmt = select(ToolInstance).where(ToolInstance.slug == slug)
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
 
     async def update_health_status(
         self,

@@ -19,9 +19,12 @@ from enum import Enum
 import os
 import httpx
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.models.model_registry import Model, ModelType, HealthStatus
 from app.core.config import get_settings
 from app.core.logging import get_logger
+from app.services.credential_service import CredentialService, CredentialError
 
 logger = get_logger(__name__)
 
@@ -42,13 +45,49 @@ class ModelHealthChecker:
         self.timeout = timeout_seconds
         self.settings = get_settings()
     
-    def _resolve_api_key(self, api_key_ref: Optional[str]) -> Optional[str]:
-        """Resolve API key from environment variable reference"""
-        if not api_key_ref:
-            return None
-        return os.getenv(api_key_ref)
+    async def _resolve_api_key(self, model: Model, session: Optional[AsyncSession] = None) -> Optional[str]:
+        """Resolve API key via CredentialService, fallback to instance.config"""
+        # 1. Try CredentialService (new approach)
+        if session and model.instance_id:
+            try:
+                cred_service = CredentialService(session)
+                decrypted = await cred_service.resolve_credentials(
+                    instance_id=model.instance_id,
+                    strategy="ANY",
+                )
+                if decrypted:
+                    payload = decrypted.payload
+                    # Support different auth types
+                    if decrypted.auth_type == "api_key":
+                        return payload.get("api_key")
+                    elif decrypted.auth_type == "token":
+                        return payload.get("token")
+                    elif decrypted.auth_type == "basic":
+                        return payload.get("password")
+            except CredentialError as e:
+                logger.warning(f"Failed to resolve credentials for model {model.alias}: {e}")
+        
+        # 2. Fallback: instance.config (legacy)
+        if model.instance and model.instance.config:
+            api_key = model.instance.config.get("api_key")
+            if api_key:
+                return api_key
+            api_key_ref = model.instance.config.get("api_key_ref")
+            if api_key_ref:
+                return os.getenv(api_key_ref)
+        return None
     
-    async def check_model(self, model: Model) -> HealthCheckResult:
+    def _resolve_base_url(self, model: Model) -> Optional[str]:
+        """Resolve base URL from instance or extra_config"""
+        # Try instance url first
+        if model.instance and model.instance.url:
+            return model.instance.url
+        # Fallback to extra_config
+        if model.extra_config and model.extra_config.get("base_url"):
+            return model.extra_config["base_url"]
+        return None
+    
+    async def check_model(self, model: Model, session: Optional[AsyncSession] = None) -> HealthCheckResult:
         """Perform health check on a model
         
         Args:
@@ -61,14 +100,21 @@ class ModelHealthChecker:
         
         try:
             if model.type == ModelType.LLM_CHAT:
-                result = await self._check_llm(model)
+                result = await self._check_llm(model, session)
             elif model.type == ModelType.EMBEDDING:
-                result = await self._check_embedding(model)
+                result = await self._check_embedding(model, session)
             elif model.type == ModelType.RERANKER:
                 result = await self._check_reranker(model)
             else:
                 # For other types, just check if base_url is reachable
-                result = await self._check_http_endpoint(model.base_url)
+                base_url = self._resolve_base_url(model)
+                if not base_url:
+                    return HealthCheckResult(
+                        status=HealthStatus.UNAVAILABLE,
+                        latency_ms=0,
+                        error="No base URL configured (no instance linked)"
+                    )
+                result = await self._check_http_endpoint(base_url)
             
             latency_ms = int((time.monotonic() - start_time) * 1000)
             
@@ -101,9 +147,13 @@ class ModelHealthChecker:
                 error=str(e)
             )
     
-    async def _check_llm(self, model: Model) -> Tuple[bool, dict]:
+    async def _check_llm(self, model: Model, session: Optional[AsyncSession] = None) -> Tuple[bool, dict]:
         """Check LLM model by sending minimal completion request"""
-        api_key = self._resolve_api_key(model.api_key_ref)
+        base_url = self._resolve_base_url(model)
+        if not base_url:
+            return False, {"error": "No base URL configured (no instance linked)"}
+        
+        api_key = await self._resolve_api_key(model, session)
         
         headers = {"Content-Type": "application/json"}
         if api_key:
@@ -117,7 +167,7 @@ class ModelHealthChecker:
             "stream": False
         }
         
-        url = f"{model.base_url.rstrip('/')}/chat/completions"
+        url = f"{base_url.rstrip('/')}/chat/completions"
         
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.post(url, json=payload, headers=headers)
@@ -145,18 +195,22 @@ class ModelHealthChecker:
                     error_msg = response.text[:200]
                 return False, {"error": f"HTTP {response.status_code}: {error_msg}"}
     
-    async def _check_embedding(self, model: Model) -> Tuple[bool, dict]:
+    async def _check_embedding(self, model: Model, session: Optional[AsyncSession] = None) -> Tuple[bool, dict]:
         """Check embedding model by sending minimal embed request"""
         provider = model.provider.lower()
         
         if provider == "local":
             return await self._check_local_embedding(model)
         else:
-            return await self._check_openai_embedding(model)
+            return await self._check_openai_embedding(model, session)
     
-    async def _check_openai_embedding(self, model: Model) -> Tuple[bool, dict]:
+    async def _check_openai_embedding(self, model: Model, session: Optional[AsyncSession] = None) -> Tuple[bool, dict]:
         """Check OpenAI-compatible embedding API"""
-        api_key = self._resolve_api_key(model.api_key_ref)
+        base_url = self._resolve_base_url(model)
+        if not base_url:
+            return False, {"error": "No base URL configured (no instance linked)"}
+        
+        api_key = await self._resolve_api_key(model, session)
         
         headers = {"Content-Type": "application/json"}
         if api_key:
@@ -167,7 +221,7 @@ class ModelHealthChecker:
             "input": "test"
         }
         
-        url = f"{model.base_url.rstrip('/')}/embeddings"
+        url = f"{base_url.rstrip('/')}/embeddings"
         
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.post(url, json=payload, headers=headers)
@@ -192,8 +246,12 @@ class ModelHealthChecker:
     
     async def _check_local_embedding(self, model: Model) -> Tuple[bool, dict]:
         """Check local embedding service (HTTP API)"""
+        base_url = self._resolve_base_url(model)
+        if not base_url:
+            return False, {"error": "No base URL configured (no instance linked)"}
+        
         # Local embedding service endpoint
-        url = f"{model.base_url.rstrip('/')}/embed"
+        url = f"{base_url.rstrip('/')}/embed"
         
         # Emb service expects {"text": "string"} not {"texts": [...]}
         payload = {
@@ -214,11 +272,15 @@ class ModelHealthChecker:
                 else:
                     return False, {"error": f"HTTP {response.status_code}: {response.text[:200]}"}
             except httpx.ConnectError:
-                return False, {"error": f"Cannot connect to {model.base_url}"}
+                return False, {"error": f"Cannot connect to {base_url}"}
     
     async def _check_reranker(self, model: Model) -> Tuple[bool, dict]:
         """Check reranker service"""
-        url = f"{model.base_url.rstrip('/')}/rerank"
+        base_url = self._resolve_base_url(model)
+        if not base_url:
+            return False, {"error": "No base URL configured (no instance linked)"}
+        
+        url = f"{base_url.rstrip('/')}/rerank"
         
         payload = {
             "query": "test query",
@@ -235,7 +297,7 @@ class ModelHealthChecker:
                 else:
                     return False, {"error": f"HTTP {response.status_code}"}
             except httpx.ConnectError:
-                return False, {"error": f"Cannot connect to {model.base_url}"}
+                return False, {"error": f"Cannot connect to {base_url}"}
     
     async def _check_http_endpoint(self, url: str) -> Tuple[bool, dict]:
         """Simple HTTP health check"""

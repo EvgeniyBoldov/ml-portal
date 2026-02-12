@@ -34,6 +34,7 @@ const ToolsPage = lazy(() => import('@/domains/admin/pages/ToolsPage').then(m =>
 const ToolGroupViewPage = lazy(() => import('@/domains/admin/pages/ToolGroupViewPage').then(m => ({ default: m.ToolGroupViewPage })));
 const ToolViewPage = lazy(() => import('@/domains/admin/pages/ToolViewPage').then(m => ({ default: m.ToolViewPage })));
 const ToolReleasePage = lazy(() => import('@/domains/admin/pages/ToolReleasePage').then(m => ({ default: m.ToolReleasePage })));
+const ViewBackendReleasePage = lazy(() => import('@/domains/admin/pages/ViewBackendReleasePage').then(m => ({ default: m.ViewBackendReleasePage })));
 const AgentRegistryPage = lazy(() => import('@/domains/admin/pages/AgentRegistryPage').then(m => ({ default: m.AgentRegistryPage })));
 const AgentEditorPage = lazy(() => import('@/domains/admin/pages/AgentEditorPage').then(m => ({ default: m.AgentEditorPage })));
 const AgentVersionPage = lazy(() => import('@/domains/admin/pages/AgentVersionPage').then(m => ({ default: m.AgentVersionPage })));
@@ -54,6 +55,8 @@ const PolicyVersionPage = lazy(() => import('@/domains/admin/pages/PolicyVersion
 const RbacListPage = lazy(() => import('@/domains/admin/pages/RbacListPage').then(m => ({ default: m.RbacListPage })));
 const RbacPolicyPage = lazy(() => import('@/domains/admin/pages/RbacPolicyPage').then(m => ({ default: m.RbacPolicyPage })));
 const PlatformSettingsPage = lazy(() => import('@/domains/admin/pages/PlatformSettingsPage').then(m => ({ default: m.PlatformSettingsPage })));
+const CredentialPage = lazy(() => import('@/domains/admin/pages/CredentialPage').then(m => ({ default: m.default })));
+const CredentialsListPage = lazy(() => import('@/domains/admin/pages/CredentialsListPage').then(m => ({ default: m.default })));
 
 // Collections pages (user-facing)
 const CollectionsListPage = lazy(() => import('@/domains/collections/pages/CollectionsListPage'));
@@ -107,6 +110,7 @@ const router = createBrowserRouter([
       { path: 'tools', element: withSuspense(<ToolsPage />) },
       { path: 'tools/groups/:groupSlug', element: withSuspense(<ToolGroupViewPage />) },
       { path: 'tools/:toolSlug', element: withSuspense(<ToolViewPage />) },
+      { path: 'tools/:toolSlug/backend/:version', element: withSuspense(<ViewBackendReleasePage />) },
       { path: 'tools/:toolSlug/versions/new', element: withSuspense(<ToolReleasePage />) },
       { path: 'tools/:toolSlug/versions/:version', element: withSuspense(<ToolReleasePage />) },
       { path: 'agents', element: withSuspense(<AgentRegistryPage />) },
@@ -136,6 +140,9 @@ const router = createBrowserRouter([
       { path: 'rbac/new', element: withSuspense(<RbacPolicyPage />) },
       { path: 'rbac/:slug', element: withSuspense(<RbacPolicyPage />) },
       { path: 'platform', element: withSuspense(<PlatformSettingsPage />) },
+      { path: 'credentials', element: withSuspense(<CredentialsListPage />) },
+      { path: 'credentials/new', element: withSuspense(<CredentialPage />) },
+      { path: 'credentials/:id', element: withSuspense(<CredentialPage />) },
             { path: 'routing-logs', element: withSuspense(<RoutingLogsPage />) },
       { path: 'settings/email', element: withSuspense(<EmailSettingsPage />) },
     ],

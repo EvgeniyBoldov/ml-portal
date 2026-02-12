@@ -116,6 +116,9 @@
   flex-direction: column;
   box-sizing: border-box;
   min-height: 0;
+  height: 100%;
+  flex: 1;
+  max-height: calc(100vh - 120px); /* Account for header + footer */
 }
 
 .footer {

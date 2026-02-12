@@ -17,3 +17,4 @@ def register_builtins() -> None:
     import app.agents.builtins.collection_search  # noqa: F401
     import app.agents.builtins.collection_get  # noqa: F401
     import app.agents.builtins.collection_aggregate  # noqa: F401
+    import app.agents.builtins.tool_router  # noqa: F401

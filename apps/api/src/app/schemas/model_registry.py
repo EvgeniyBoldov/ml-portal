@@ -43,8 +43,7 @@ class ModelBase(BaseModel):
     type: ModelTypeEnum = Field(..., description="Model type")
     provider: str = Field(..., min_length=1, max_length=50, description="Provider (openai, groq, local, etc.)")
     provider_model_name: str = Field(..., min_length=1, max_length=255, description="Model name at provider")
-    base_url: str = Field(..., min_length=1, max_length=500, description="API base URL")
-    api_key_ref: Optional[str] = Field(None, max_length=255, description="Reference to secret (not raw key)")
+    instance_id: Optional[str] = Field(None, description="FK to tool_instances (provider connection)")
     extra_config: Optional[Dict[str, Any]] = Field(None, description="Provider-specific config (JSON)")
     status: ModelStatusEnum = Field(default=ModelStatusEnum.AVAILABLE, description="Availability status")
     enabled: bool = Field(default=True, description="Is model enabled")
@@ -66,8 +65,7 @@ class ModelUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=255)
     provider: Optional[str] = Field(None, min_length=1, max_length=50)
     provider_model_name: Optional[str] = Field(None, min_length=1, max_length=255)
-    base_url: Optional[str] = Field(None, min_length=1, max_length=500)
-    api_key_ref: Optional[str] = Field(None, max_length=255)
+    instance_id: Optional[str] = Field(None, description="FK to tool_instances")
     extra_config: Optional[Dict[str, Any]] = None
     status: Optional[ModelStatusEnum] = None
     enabled: Optional[bool] = None
@@ -81,6 +79,7 @@ class ModelUpdate(BaseModel):
 class Model(ModelBase):
     """Schema for model response"""
     id: str
+    instance_name: Optional[str] = Field(None, description="Instance name (from joined relation)")
     last_health_check_at: Optional[datetime] = None
     health_status: Optional[HealthStatusEnum] = None
     health_error: Optional[str] = None

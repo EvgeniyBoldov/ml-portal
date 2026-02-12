@@ -1,48 +1,71 @@
 /**
  * PlatformSettingsPage - Global platform configuration (singleton)
  *
- * Shows default policy, limit, and RBAC policy for the platform.
- * Uses EntityPage in view/edit mode.
+ * Tabs: Общие настройки | Модели
+ * Uses EntityPageV2 + Tab architecture.
  */
 import { useState, useEffect } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { platformApi, type PlatformSettings } from '@/shared/api/platform';
 import { policiesApi, type Policy } from '@/shared/api/policies';
 import { limitsApi } from '@/shared/api/limits';
-import { rbacApi, type RbacPolicy } from '@/shared/api/rbac';
+import { credentialsApi } from '@/shared/api/credentials';
 import { qk } from '@/shared/api/keys';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
-import {
-  EntityPage,
-  ContentBlock,
-  type EntityPageMode,
-  type BreadcrumbItem,
-} from '@/shared/ui';
+import { ContentBlock, type BreadcrumbItem, DataTable, type DataTableColumn, Badge, Button } from '@/shared/ui';
+import { EntityPageV2, Tab, type EntityPageMode } from '@/shared/ui/EntityPage/EntityPageV2';
+import { RBACRulesTable } from '@/shared/ui/RBACRulesTable';
+import { CredentialsPanel } from '@/shared/ui/CredentialsPanel';
+import { useModels } from '@shared/api/hooks/useAdmin';
+import type { Model } from '@shared/api/admin';
 import styles from './PlatformSettingsPage.module.css';
 
 interface FormData {
   default_policy_id: string;
   default_limit_id: string;
-  default_rbac_policy_id: string;
+}
+
+// Model constants
+const TYPE_LABELS: Record<string, string> = {
+  llm_chat: 'LLM',
+  embedding: 'Embedding',
+  reranker: 'Reranker',
+};
+
+const STATUS_LABELS: Record<string, string> = {
+  available: 'Доступна',
+  deprecated: 'Устарела',
+  unavailable: 'Недоступна',
+  maintenance: 'Обслуживание',
+};
+
+function getStatusTone(status: string): 'success' | 'warn' | 'danger' | 'neutral' {
+  switch (status) {
+    case 'available': return 'success';
+    case 'deprecated': return 'warn';
+    case 'unavailable':
+    case 'maintenance': return 'danger';
+    default: return 'neutral';
+  }
 }
 
 export function PlatformSettingsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const showError = useErrorToast();
   const showSuccess = useSuccessToast();
 
   const isEditMode = searchParams.get('mode') === 'edit';
   const mode: EntityPageMode = isEditMode ? 'edit' : 'view';
-  const isEditable = mode === 'edit';
 
   const [formData, setFormData] = useState<FormData>({
     default_policy_id: '',
     default_limit_id: '',
-    default_rbac_policy_id: '',
   });
   const [saving, setSaving] = useState(false);
+  
 
   // ─── Queries ───────────────────────────────────────────────────────
 
@@ -61,10 +84,17 @@ export function PlatformSettingsPage() {
     queryFn: () => limitsApi.list(),
   });
 
-  const { data: rbacPolicies = [] } = useQuery({
-    queryKey: qk.rbac.list({}),
-    queryFn: () => rbacApi.listPolicies(),
+  // Models queries
+  const { data: modelsData, isLoading: modelsLoading } = useModels({ size: 50 });
+  const models = modelsData?.items || [];
+
+  // Credentials query
+  const { data: credentials = [] } = useQuery({
+    queryKey: qk.credentials.list({ owner_platform: true }),
+    queryFn: () => credentialsApi.list({ owner_platform: true }),
   });
+
+  
 
   // ─── Sync form ─────────────────────────────────────────────────────
 
@@ -73,10 +103,10 @@ export function PlatformSettingsPage() {
       setFormData({
         default_policy_id: settings.default_policy_id || '',
         default_limit_id: settings.default_limit_id || '',
-        default_rbac_policy_id: settings.default_rbac_policy_id || '',
       });
     }
   }, [settings]);
+
 
   // ─── Mutations ─────────────────────────────────────────────────────
 
@@ -85,7 +115,6 @@ export function PlatformSettingsPage() {
       platformApi.update({
         default_policy_id: formData.default_policy_id || null,
         default_limit_id: formData.default_limit_id || null,
-        default_rbac_policy_id: formData.default_rbac_policy_id || null,
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: qk.platform.settings() });
@@ -94,6 +123,7 @@ export function PlatformSettingsPage() {
     },
     onError: (err: Error) => showError(err.message),
   });
+
 
   // ─── Handlers ──────────────────────────────────────────────────────
 
@@ -111,11 +141,75 @@ export function PlatformSettingsPage() {
       setFormData({
         default_policy_id: settings.default_policy_id || '',
         default_limit_id: settings.default_limit_id || '',
-        default_rbac_policy_id: settings.default_rbac_policy_id || '',
       });
     }
     setSearchParams({});
   };
+
+
+  // ─── Models columns ────────────────────────────────────────────────
+  // (click row → navigate to /admin/models/:id)
+
+  const modelsColumns: DataTableColumn<Model>[] = [
+    {
+      key: 'alias',
+      label: 'АЛИАС / ИМЯ',
+      sortable: true,
+      render: (model: Model) => (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+          <span style={{ fontWeight: 500 }}>{model.alias}</span>
+          <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{model.name}</span>
+        </div>
+      ),
+    },
+    {
+      key: 'type',
+      label: 'ТИП',
+      width: 100,
+      sortable: true,
+      render: (model: Model) => (
+        <Badge tone={model.type === 'llm_chat' ? 'info' : 'success'}>
+          {TYPE_LABELS[model.type] || model.type}
+        </Badge>
+      ),
+    },
+    {
+      key: 'provider',
+      label: 'ПРОВАЙДЕР',
+      sortable: true,
+      render: (model: Model) => (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+          <span style={{ fontWeight: 500 }}>{model.provider}</span>
+          <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{model.provider_model_name}</span>
+          {model.instance_name && (
+            <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', opacity: 0.7 }}>⇢ {model.instance_name}</span>
+          )}
+        </div>
+      ),
+    },
+    {
+      key: 'status',
+      label: 'СТАТУС',
+      width: 120,
+      sortable: true,
+      render: (model: Model) => (
+        <Badge tone={getStatusTone(model.status)}>
+          {STATUS_LABELS[model.status] || model.status}
+        </Badge>
+      ),
+    },
+    {
+      key: 'default_for_type',
+      label: 'ПО УМОЛЧ.',
+      width: 100,
+      sortable: true,
+      render: (model: Model) => model.default_for_type ? (
+        <Badge tone="success" size="small">По умолч.</Badge>
+      ) : (
+        <span style={{ color: 'var(--text-secondary)' }}>—</span>
+      ),
+    },
+  ];
 
   // ─── Helpers ───────────────────────────────────────────────────────
 
@@ -129,11 +223,6 @@ export function PlatformSettingsPage() {
     return l ? `${l.name} (${l.slug})` : id ? id.slice(0, 8) + '...' : '—';
   };
 
-  const getRbacPolicyName = (id: string): string => {
-    const r = rbacPolicies.find((r: RbacPolicy) => r.id === id);
-    return r ? `${r.name} (${r.slug})` : id ? id.slice(0, 8) + '...' : '—';
-  };
-
   // ─── Breadcrumbs ───────────────────────────────────────────────────
 
   const breadcrumbs: BreadcrumbItem[] = [
@@ -143,123 +232,132 @@ export function PlatformSettingsPage() {
   // ─── Render ────────────────────────────────────────────────────────
 
   return (
-    <EntityPage
+    <EntityPageV2
+      title="Настройки платформы"
       mode={mode}
-      entityName="Настройки платформы"
-      entityTypeLabel="настроек"
-      backPath="/admin"
-      breadcrumbs={breadcrumbs}
       loading={isLoading}
       saving={saving}
-      onEdit={() => setSearchParams({ mode: 'edit' })}
+      breadcrumbs={breadcrumbs}
       onSave={handleSave}
       onCancel={handleCancel}
     >
-      <ContentBlock title="Дефолтные настройки" icon="settings">
-        <div className={styles.settingsGrid}>
-          {/* Default Policy */}
-          <div className={styles.settingItem}>
-            <label className={styles.label}>Политика по умолчанию</label>
-            {isEditable ? (
-              <select
-                className={styles.select}
-                value={formData.default_policy_id}
-                onChange={(e) =>
-                  setFormData((prev) => ({ ...prev, default_policy_id: e.target.value }))
-                }
-              >
-                <option value="">Не выбрана</option>
-                {policies.map((p: Policy) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name} ({p.slug})
-                  </option>
-                ))}
-              </select>
-            ) : (
-              <div className={styles.value}>
-                {getPolicyName(formData.default_policy_id)}
-              </div>
-            )}
-            <span className={styles.hint}>
-              Применяется ко всем агентам, если не переопределена на уровне версии
-            </span>
-          </div>
+      <Tab 
+        title="Общие настройки" 
+        layout="single" 
+        id="general"
+        actions={
+          mode === 'view' ? [
+            <Button key="edit-platform" variant="primary" onClick={() => setSearchParams({ mode: 'edit' })}>
+              Редактировать
+            </Button>,
+          ] : undefined
+        }
+      >
+        <ContentBlock title="Дефолтные настройки" icon="settings">
+          <div className={styles.settingsGrid}>
+            {/* Default Policy */}
+            <div className={styles.settingItem}>
+              <label className={styles.label}>Политика по умолчанию</label>
+              {mode === 'edit' ? (
+                <select
+                  className={styles.select}
+                  value={formData.default_policy_id}
+                  onChange={(e) =>
+                    setFormData((prev) => ({ ...prev, default_policy_id: e.target.value }))
+                  }
+                >
+                  <option value="">Не выбрана</option>
+                  {policies.map((p: Policy) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name} ({p.slug})
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <div className={styles.value}>
+                  {getPolicyName(formData.default_policy_id)}
+                </div>
+              )}
+              <span className={styles.hint}>
+                Применяется ко всем агентам, если не переопределена на уровне версии
+              </span>
+            </div>
 
-          {/* Default Limit */}
-          <div className={styles.settingItem}>
-            <label className={styles.label}>Лимит по умолчанию</label>
-            {isEditable ? (
-              <select
-                className={styles.select}
-                value={formData.default_limit_id}
-                onChange={(e) =>
-                  setFormData((prev) => ({ ...prev, default_limit_id: e.target.value }))
-                }
-              >
-                <option value="">Не выбран</option>
-                {limits.map((l: any) => (
-                  <option key={l.id} value={l.id}>
-                    {l.name} ({l.slug})
-                  </option>
-                ))}
-              </select>
-            ) : (
-              <div className={styles.value}>
-                {getLimitName(formData.default_limit_id)}
-              </div>
-            )}
-            <span className={styles.hint}>
-              Ограничения выполнения по умолчанию: шаги, вызовы, таймауты
-            </span>
+            {/* Default Limit */}
+            <div className={styles.settingItem}>
+              <label className={styles.label}>Лимит по умолчанию</label>
+              {mode === 'edit' ? (
+                <select
+                  className={styles.select}
+                  value={formData.default_limit_id}
+                  onChange={(e) =>
+                    setFormData((prev) => ({ ...prev, default_limit_id: e.target.value }))
+                  }
+                >
+                  <option value="">Не выбран</option>
+                  {limits.map((l: any) => (
+                    <option key={l.id} value={l.id}>
+                      {l.name} ({l.slug})
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <div className={styles.value}>
+                  {getLimitName(formData.default_limit_id)}
+                </div>
+              )}
+              <span className={styles.hint}>
+                Ограничения выполнения по умолчанию: шаги, вызовы, таймауты
+              </span>
+            </div>
           </div>
+        </ContentBlock>
+      </Tab>
 
-          {/* Default RBAC Policy */}
-          <div className={styles.settingItem}>
-            <label className={styles.label}>RBAC набор по умолчанию</label>
-            {isEditable ? (
-              <select
-                className={styles.select}
-                value={formData.default_rbac_policy_id}
-                onChange={(e) =>
-                  setFormData((prev) => ({ ...prev, default_rbac_policy_id: e.target.value }))
-                }
-              >
-                <option value="">Не выбран</option>
-                {rbacPolicies.map((r: RbacPolicy) => (
-                  <option key={r.id} value={r.id}>
-                    {r.name} ({r.slug})
-                  </option>
-                ))}
-              </select>
-            ) : (
-              <div className={styles.value}>
-                {getRbacPolicyName(formData.default_rbac_policy_id)}
-              </div>
-            )}
-            <span className={styles.hint}>
-              Набор правил доступа к ресурсам платформы (агенты, инструменты, инстансы)
-            </span>
-          </div>
-        </div>
-      </ContentBlock>
+      <Tab 
+        title="Модели" 
+        layout="full" 
+        id="models"
+        actions={[
+          <Button key="add-model" variant="primary" onClick={() => navigate('/admin/models/new')}>
+            Добавить модель
+          </Button>,
+        ]}
+      >
+        <DataTable
+          columns={modelsColumns}
+          data={models}
+          keyField="id"
+          loading={modelsLoading}
+          emptyText="Модели не найдены. Нажмите «Добавить модель» для создания."
+          paginated
+          pageSize={20}
+          onRowClick={(model: Model) => navigate(`/admin/models/${model.id}`)}
+        />
+      </Tab>
 
-      <ContentBlock title="Как это работает" icon="info">
-        <div className={styles.infoBlock}>
-          <p>
-            <strong>Платформа</strong> — это глобальные настройки по умолчанию для всей системы.
-            Они применяются, когда на уровне тенанта или пользователя нет переопределений.
-          </p>
-          <p>
-            <strong>Приоритет:</strong> Пользователь → Тенант → Платформа
-          </p>
-          <ul>
-            <li><strong>Политика</strong> — правила поведения агентов</li>
-            <li><strong>Лимит</strong> — ограничения выполнения (шаги, таймауты)</li>
-            <li><strong>RBAC</strong> — правила доступа к ресурсам (allow/deny)</li>
-          </ul>
-        </div>
-      </ContentBlock>
-    </EntityPage>
+      <Tab 
+        title="Общие доступы" 
+        layout="single" 
+        id="credentials"
+        badge={credentials?.length || 0}
+        actions={[
+          <Button key="add-credential" variant="primary" onClick={() => navigate('/admin/credentials/new')}>
+            + Добавить
+          </Button>,
+        ]}
+      >
+        <CredentialsPanel mode="platform" />
+      </Tab>
+
+      <Tab 
+        title="RBAC" 
+        layout="single" 
+        id="rbac"
+      >
+        <RBACRulesTable mode="platform" />
+      </Tab>
+    </EntityPageV2>
   );
 }
 

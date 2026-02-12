@@ -73,8 +73,8 @@
 
 .tableHeader {
   display: grid;
-  grid-template-columns: 1fr 120px 120px 140px;
-  padding: 0.625rem 1rem;
+  grid-template-columns: 300px 120px 120px 140px;
+  padding: 0.5rem 1rem;
   background: var(--bg-secondary);
   border-bottom: 1px solid var(--border-color);
   font-size: 0.75rem;
@@ -86,6 +86,14 @@
 
 .tableHeaderGlobal {
   grid-template-columns: 1fr 140px 120px 120px 140px;
+}
+
+.tableHeaderActions {
+  grid-template-columns: 300px 120px 120px 140px 80px;
+}
+
+.tableHeaderPlatform {
+  grid-template-columns: 300px 120px 120px 140px;
 }
 
 .sortable {
@@ -129,12 +137,12 @@
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  padding: 0.625rem 1rem;
+  padding: 0.375rem 1rem;
   background: var(--bg-secondary);
   cursor: pointer;
   user-select: none;
   transition: background 0.1s ease;
-  font-size: 0.8125rem;
+  font-size: 0.75rem;
   font-weight: 600;
   color: var(--text-primary);
 }
@@ -173,7 +181,7 @@
 .row {
   display: grid;
   grid-template-columns: 1fr 120px 120px 140px;
-  padding: 0.5rem 1rem 0.5rem 2.5rem;
+  padding: 0.375rem 1rem 0.375rem 2.5rem;
   border-bottom: 1px solid var(--border-color);
   align-items: center;
   font-size: 0.8125rem;
@@ -182,6 +190,14 @@
 
 .rowGlobal {
   grid-template-columns: 1fr 140px 120px 120px 140px;
+}
+
+.rowActions {
+  grid-template-columns: 300px 120px 120px 140px 80px;
+}
+
+.rowPlatform {
+  grid-template-columns: 300px 120px 120px 140px;
 }
 
 .row:last-child {
@@ -195,12 +211,55 @@
 .resourceName {
   font-weight: 500;
   color: var(--text-primary);
+  font-size: 0.8125rem;
 }
 
 .resourceId {
   font-size: 0.6875rem;
   color: var(--text-tertiary);
   font-family: monospace;
+  margin-top: 0.0625rem;
+}
+
+.resourceType {
+  display: inline-block;
+  font-size: 0.625rem;
+  padding: 0.0625rem 0.25rem;
+  background: var(--bg-tertiary, rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  color: var(--text-secondary);
+  margin-top: 0.125rem;
+  text-transform: lowercase;
+}
+
+.resourceDetails {
+  margin-top: 0.125rem;
+  font-size: 0.625rem;
+  color: var(--text-tertiary);
+}
+
+.resourceCategory {
+  display: inline-block;
+  padding: 0.0625rem 0.25rem;
+  background: var(--color-primary-light, rgba(99, 102, 241, 0.1));
+  border: 1px solid var(--color-primary);
+  border-radius: 3px;
+  color: var(--color-primary);
+  font-weight: 500;
+  text-transform: uppercase;
+  font-size: 0.5625rem;
+}
+
+.resourceUrl {
+  color: var(--text-tertiary);
+  font-family: monospace;
+  font-size: 0.5625rem;
+  margin-top: 0.0625rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 180px;
 }
 
 .policyName {
@@ -250,4 +309,53 @@
   display: flex;
   align-items: center;
   gap: 0.375rem;
+}
+
+/* ─── Actions ──────────────────────────────────────────────────────── */
+
+.actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.375rem;
+}
+
+.effectToggle {
+  all: unset;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: opacity 0.15s ease;
+}
+
+.effectToggle:hover {
+  opacity: 0.8;
+}
+
+.effectToggle:disabled {
+  cursor: wait;
+  opacity: 0.5;
+}
+
+.deleteBtn {
+  all: unset;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  color: var(--text-tertiary);
+  font-size: 0.75rem;
+  transition: all 0.15s ease;
+}
+
+.deleteBtn:hover {
+  color: var(--color-danger, #ef4444);
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.confirmDelete {
+  display: flex;
+  gap: 0.25rem;
 }

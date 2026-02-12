@@ -1,28 +1,41 @@
 /**
- * RBACRulesTable - Universal RBAC rules table with hierarchy, filters, sorting.
+ * RBACRulesTable - Universal self-contained RBAC rules component.
  *
- * Usage contexts:
- * - mode="user"   → User page tab, filters by level_id=userId
- * - mode="tenant" → Tenant page tab, filters by level_id=tenantId
- * - mode="global" → Global RBAC page, shows all rules with policy/context columns
+ * Modes:
+ * - mode="platform" → Platform rules. Edit effect only (rules auto-created).
+ * - mode="tenant"   → Tenant rules. Create + edit + delete.
+ * - mode="user"     → User rules. Create + edit + delete.
+ * - mode="global"   → Read-only overview of all rules across all levels.
+ *
+ * The component fetches its own data and handles all mutations internally.
+ * Pages just pass mode + ownerId.
  */
-import { useState, useMemo } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { rbacApi, type EnrichedRule, type EnrichedRulesFilters, type ResourceType, type RbacEffect } from '@/shared/api/rbac';
+import { useState, useMemo, useCallback } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import {
+  rbacApi,
+  type EnrichedRule,
+  type EnrichedRulesFilters,
+  type RbacEffect,
+  type RbacRuleCreate,
+} from '@/shared/api/rbac';
+import { agentsApi, type Agent } from '@/shared/api/agents';
+import { toolInstancesApi, type ToolInstance } from '@/shared/api/toolInstances';
 import { qk } from '@/shared/api/keys';
 import Badge from '../Badge';
+import Button from '../Button';
 import { Select } from '../Select';
 import styles from './RBACRulesTable.module.css';
 
-export type RBACTableMode = 'user' | 'tenant' | 'global';
+export type RBACTableMode = 'platform' | 'tenant' | 'user' | 'global';
 
-type SortField = 'resource' | 'effect' | 'level' | 'date' | 'policy';
+type SortField = 'resource' | 'effect' | 'level' | 'date' | 'owner';
 type SortDir = 'asc' | 'desc';
 
 interface RBACRulesTableProps {
   mode: RBACTableMode;
-  levelId?: string;
-  rbacPolicyId?: string;
+  /** Owner ID: user_id for mode="user", tenant_id for mode="tenant". Ignored for platform/global. */
+  ownerId?: string;
 }
 
 const RESOURCE_TYPE_LABELS: Record<string, string> = {
@@ -57,7 +70,9 @@ const EFFECT_CONFIG: Record<string, { label: string; tone: 'success' | 'danger' 
   deny: { label: 'Запрещён', tone: 'danger' },
 };
 
-export function RBACRulesTable({ mode, levelId, rbacPolicyId }: RBACRulesTableProps) {
+export function RBACRulesTable({ mode, ownerId }: RBACRulesTableProps) {
+  const queryClient = useQueryClient();
+
   const [search, setSearch] = useState('');
   const [filterResourceType, setFilterResourceType] = useState<string>('');
   const [filterEffect, setFilterEffect] = useState<string>('');
@@ -65,29 +80,122 @@ export function RBACRulesTable({ mode, levelId, rbacPolicyId }: RBACRulesTablePr
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const [sortField, setSortField] = useState<SortField>('resource');
   const [sortDir, setSortDir] = useState<SortDir>('asc');
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   const isGlobal = mode === 'global';
+  const canEdit = mode === 'tenant' || mode === 'user';
+  const canCreateDelete = mode === 'tenant' || mode === 'user';
 
-  // Build API filters based on mode
+  // ─── Query ──────────────────────────────────────────────────────────
+
   const apiFilters: EnrichedRulesFilters = useMemo(() => {
     const f: EnrichedRulesFilters = {};
-    if (rbacPolicyId) f.rbac_policy_id = rbacPolicyId;
-    if (mode === 'user' && levelId) {
-      f.level = 'user';
-      f.level_id = levelId;
-    } else if (mode === 'tenant' && levelId) {
-      f.level = 'tenant';
-      f.level_id = levelId;
+    if (mode === 'user' && ownerId) {
+      f.owner_user_id = ownerId;
+    } else if (mode === 'tenant' && ownerId) {
+      f.owner_tenant_id = ownerId;
+    } else if (mode === 'platform') {
+      f.owner_platform = true;
     }
     return f;
-  }, [mode, levelId, rbacPolicyId]);
+  }, [mode, ownerId]);
+
+  const queryKey = useMemo(
+    () => [...qk.rbac.enrichedRules(apiFilters as Record<string, unknown>), mode],
+    [apiFilters, mode],
+  );
 
   const { data: rules = [], isLoading } = useQuery({
-    queryKey: qk.rbac.enrichedRules(apiFilters as Record<string, unknown>),
+    queryKey,
     queryFn: () => rbacApi.listEnrichedRules(apiFilters),
   });
 
-  // Client-side filtering
+  // Load agents and instances for resource names
+  const { data: agents = [] } = useQuery({
+    queryKey: qk.agents.list({}),
+    queryFn: () => agentsApi.list({}),
+  });
+
+  const { data: instances = [] } = useQuery({
+    queryKey: qk.toolInstances.list({}),
+    queryFn: () => toolInstancesApi.list({}),
+  });
+
+  // ─── Mutations ──────────────────────────────────────────────────────
+
+  const invalidate = useCallback(
+    () => queryClient.invalidateQueries({ queryKey: qk.rbac.all() }),
+    [queryClient],
+  );
+
+  const toggleEffectMutation = useMutation({
+    mutationFn: ({ ruleId, newEffect }: { ruleId: string; newEffect: RbacEffect }) =>
+      rbacApi.updateRule(ruleId, { effect: newEffect }),
+    onSuccess: invalidate,
+  });
+
+  const deleteRuleMutation = useMutation({
+    mutationFn: (ruleId: string) => rbacApi.deleteRule(ruleId),
+    onSuccess: () => {
+      setConfirmDeleteId(null);
+      invalidate();
+    },
+  });
+
+  const createRuleMutation = useMutation({
+    mutationFn: (data: RbacRuleCreate) => rbacApi.createRule(data),
+    onSuccess: invalidate,
+  });
+
+  // ─── Handlers ───────────────────────────────────────────────────────
+
+  const handleToggleEffect = (rule: EnrichedRule) => {
+    const newEffect: RbacEffect = rule.effect === 'allow' ? 'deny' : 'allow';
+    toggleEffectMutation.mutate({ ruleId: rule.id, newEffect });
+  };
+
+  const handleDeleteConfirm = () => {
+    if (confirmDeleteId) deleteRuleMutation.mutate(confirmDeleteId);
+  };
+
+  // ─── Resource name resolution ───────────────────────────────────────
+
+  const getResourceName = useCallback((rule: EnrichedRule) => {
+    // First check if backend already provided a name
+    if (rule.resource.name && rule.resource.name !== rule.resource.id.slice(0, 8) + '...') {
+      return rule.resource.name;
+    }
+
+    // Fallback: lookup in our cached data
+    if (rule.resource.type === 'agent') {
+      const agent = agents.find((a: Agent) => a.id === rule.resource.id);
+      return agent ? agent.name : rule.resource.name;
+    }
+    
+    if (rule.resource.type === 'instance') {
+      const instance = instances.find((i: ToolInstance) => i.id === rule.resource.id);
+      return instance ? instance.name : rule.resource.name;
+    }
+
+    return rule.resource.name;
+  }, [agents, instances]);
+
+  const getResourceDetails = useCallback((rule: EnrichedRule) => {
+    if (rule.resource.type === 'instance') {
+      const instance = instances.find((i: ToolInstance) => i.id === rule.resource.id);
+      if (instance) {
+        return {
+          category: instance.category,
+          url: instance.url,
+        };
+      }
+    }
+    
+    return null;
+  }, [instances]);
+
+  // ─── Client-side filtering ─────────────────────────────────────────
+
   const filteredRules = useMemo(() => {
     let result = rules;
 
@@ -95,52 +203,53 @@ export function RBACRulesTable({ mode, levelId, rbacPolicyId }: RBACRulesTablePr
       const q = search.toLowerCase();
       result = result.filter(
         (r) =>
-          r.resource.name.toLowerCase().includes(q) ||
-          r.policy.name.toLowerCase().includes(q) ||
-          (r.rule.context_name && r.rule.context_name.toLowerCase().includes(q))
+          getResourceName(r).toLowerCase().includes(q) ||
+          r.owner.name.toLowerCase().includes(q),
       );
     }
     if (filterResourceType) {
       result = result.filter((r) => r.resource.type === filterResourceType);
     }
     if (filterEffect) {
-      result = result.filter((r) => r.rule.effect === filterEffect);
+      result = result.filter((r) => r.effect === filterEffect);
     }
     if (filterLevel) {
-      result = result.filter((r) => r.rule.level === filterLevel);
+      result = result.filter((r) => r.owner.level === filterLevel);
     }
 
     return result;
-  }, [rules, search, filterResourceType, filterEffect, filterLevel]);
+  }, [rules, search, filterResourceType, filterEffect, filterLevel, getResourceName]);
 
-  // Client-side sorting
+  // ─── Client-side sorting ───────────────────────────────────────────
+
   const sortedRules = useMemo(() => {
     const sorted = [...filteredRules];
     sorted.sort((a, b) => {
       let cmp = 0;
       switch (sortField) {
         case 'resource':
-          cmp = a.resource.name.localeCompare(b.resource.name);
+          cmp = getResourceName(a).localeCompare(getResourceName(b));
           break;
         case 'effect':
-          cmp = a.rule.effect.localeCompare(b.rule.effect);
+          cmp = a.effect.localeCompare(b.effect);
           break;
         case 'level':
-          cmp = a.rule.level.localeCompare(b.rule.level);
+          cmp = a.owner.level.localeCompare(b.owner.level);
           break;
         case 'date':
-          cmp = a.rule.created_at.localeCompare(b.rule.created_at);
+          cmp = a.created_at.localeCompare(b.created_at);
           break;
-        case 'policy':
-          cmp = a.policy.name.localeCompare(b.policy.name);
+        case 'owner':
+          cmp = a.owner.name.localeCompare(b.owner.name);
           break;
       }
       return sortDir === 'asc' ? cmp : -cmp;
     });
     return sorted;
-  }, [filteredRules, sortField, sortDir]);
+  }, [filteredRules, sortField, sortDir, getResourceName]);
 
-  // Group by resource_type
+  // ─── Group by resource_type ────────────────────────────────────────
+
   const grouped = useMemo(() => {
     const groups: Record<string, EnrichedRule[]> = {};
     for (const rule of sortedRules) {
@@ -148,14 +257,14 @@ export function RBACRulesTable({ mode, levelId, rbacPolicyId }: RBACRulesTablePr
       if (!groups[key]) groups[key] = [];
       groups[key].push(rule);
     }
-    // Sort groups by fixed order
     const sortedEntries = Object.entries(groups).sort(
-      ([a], [b]) => (RESOURCE_TYPE_ORDER[a] ?? 99) - (RESOURCE_TYPE_ORDER[b] ?? 99)
+      ([a], [b]) => (RESOURCE_TYPE_ORDER[a] ?? 99) - (RESOURCE_TYPE_ORDER[b] ?? 99),
     );
     return sortedEntries;
   }, [sortedRules]);
 
-  // Toggle group collapse
+  // ─── Sort helpers ──────────────────────────────────────────────────
+
   const toggleGroup = (key: string) => {
     setCollapsedGroups((prev) => {
       const next = new Set(prev);
@@ -165,7 +274,6 @@ export function RBACRulesTable({ mode, levelId, rbacPolicyId }: RBACRulesTablePr
     });
   };
 
-  // Toggle sort
   const handleSort = (field: SortField) => {
     if (sortField === field) {
       setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
@@ -184,7 +292,8 @@ export function RBACRulesTable({ mode, levelId, rbacPolicyId }: RBACRulesTablePr
     );
   };
 
-  // Filter options
+  // ─── Filter options ────────────────────────────────────────────────
+
   const resourceTypeOptions = [
     { value: '', label: 'Все типы' },
     { value: 'agent', label: 'Агенты' },
@@ -206,6 +315,25 @@ export function RBACRulesTable({ mode, levelId, rbacPolicyId }: RBACRulesTablePr
     { value: 'user', label: 'Пользователь' },
   ];
 
+  // ─── Determine grid class ─────────────────────────────────────────
+
+  const gridClass = isGlobal
+    ? styles.tableHeaderGlobal
+    : mode === 'platform'
+      ? styles.tableHeaderPlatform
+      : canEdit
+        ? styles.tableHeaderActions
+        : '';
+  const rowGridClass = isGlobal
+    ? styles.rowGlobal
+    : mode === 'platform'
+      ? styles.rowPlatform
+      : canEdit
+        ? styles.rowActions
+        : '';
+
+  // ─── Render ────────────────────────────────────────────────────────
+
   if (isLoading) {
     return <div className={styles.empty}>Загрузка правил...</div>;
   }
@@ -218,7 +346,7 @@ export function RBACRulesTable({ mode, levelId, rbacPolicyId }: RBACRulesTablePr
           type="text"
           placeholder="Поиск по ресурсу..."
           value={search}
-          onChange={(e) => setSearch(e.target.value)}
+          onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSearch(e.target.value)}
           className={styles.searchInput}
         />
         <div className={styles.filterSelect}>
@@ -252,13 +380,13 @@ export function RBACRulesTable({ mode, levelId, rbacPolicyId }: RBACRulesTablePr
       {/* Table */}
       <div className={styles.table}>
         {/* Header */}
-        <div className={`${styles.tableHeader} ${isGlobal ? styles.tableHeaderGlobal : ''}`}>
+        <div className={`${styles.tableHeader} ${gridClass}`}>
           <div className={styles.sortable} onClick={() => handleSort('resource')}>
             Ресурс {renderSortIcon('resource')}
           </div>
           {isGlobal && (
-            <div className={styles.sortable} onClick={() => handleSort('policy')}>
-              Политика {renderSortIcon('policy')}
+            <div className={styles.sortable} onClick={() => handleSort('owner')}>
+              Владелец {renderSortIcon('owner')}
             </div>
           )}
           <div className={styles.sortable} onClick={() => handleSort('effect')}>
@@ -270,6 +398,9 @@ export function RBACRulesTable({ mode, levelId, rbacPolicyId }: RBACRulesTablePr
           <div className={styles.sortable} onClick={() => handleSort('date')}>
             Создано {renderSortIcon('date')}
           </div>
+          {canEdit && mode !== 'platform' && (
+            <div>Действия</div>
+          )}
         </div>
 
         {/* Body */}
@@ -307,31 +438,92 @@ export function RBACRulesTable({ mode, levelId, rbacPolicyId }: RBACRulesTablePr
                   groupRules.map((rule) => (
                     <div
                       key={rule.id}
-                      className={`${styles.row} ${isGlobal ? styles.rowGlobal : ''}`}
+                      className={`${styles.row} ${rowGridClass}`}
                     >
                       <div>
-                        <div className={styles.resourceName}>{rule.resource.name}</div>
-                        <div className={styles.resourceId}>{rule.resource.id.slice(0, 8)}...</div>
+                        <div className={styles.resourceName}>{getResourceName(rule)}</div>
+                        {(() => {
+                          const details = getResourceDetails(rule);
+                          if (details) {
+                            return (
+                              <div className={styles.resourceDetails}>
+                                {details.category && (
+                                  <span className={styles.resourceCategory}>
+                                    {details.category}
+                                  </span>
+                                )}
+                                {details.url && (
+                                  <div className={styles.resourceUrl}>
+                                    {details.url}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          }
+                          return null;
+                        })()}
                       </div>
                       {isGlobal && (
-                        <div className={styles.policyName}>{rule.policy.name}</div>
+                        <div className={styles.policyName}>{rule.owner.name}</div>
                       )}
                       <div>
-                        <Badge tone={EFFECT_CONFIG[rule.rule.effect]?.tone || 'neutral'}>
-                          {EFFECT_CONFIG[rule.rule.effect]?.label || rule.rule.effect}
-                        </Badge>
+                        {canEdit ? (
+                          <button
+                            className={styles.effectToggle}
+                            onClick={() => handleToggleEffect(rule)}
+                            disabled={toggleEffectMutation.isPending}
+                            title="Нажмите для переключения"
+                          >
+                            <Badge tone={EFFECT_CONFIG[rule.effect]?.tone || 'neutral'}>
+                              {EFFECT_CONFIG[rule.effect]?.label || rule.effect}
+                            </Badge>
+                          </button>
+                        ) : (
+                          <Badge tone={EFFECT_CONFIG[rule.effect]?.tone || 'neutral'}>
+                            {EFFECT_CONFIG[rule.effect]?.label || rule.effect}
+                          </Badge>
+                        )}
                       </div>
                       <div>
                         <Badge tone="neutral" className={styles.levelBadge}>
-                          {LEVEL_LABELS[rule.rule.level] || rule.rule.level}
+                          {LEVEL_LABELS[rule.owner.level] || rule.owner.level}
                         </Badge>
-                        {rule.rule.context_name && (
-                          <div className={styles.contextName}>{rule.rule.context_name}</div>
-                        )}
                       </div>
                       <div className={styles.date}>
-                        {new Date(rule.rule.created_at).toLocaleDateString('ru')}
+                        {new Date(rule.created_at).toLocaleDateString('ru')}
                       </div>
+                      {canEdit && mode !== 'platform' && (
+                        <div className={styles.actions}>
+                          {canCreateDelete && (
+                            confirmDeleteId === rule.id ? (
+                              <div className={styles.confirmDelete}>
+                                <Button
+                                  variant="danger"
+                                  size="sm"
+                                  onClick={handleDeleteConfirm}
+                                  disabled={deleteRuleMutation.isPending}
+                                >
+                                  Да
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  onClick={() => setConfirmDeleteId(null)}
+                                >
+                                  Нет
+                                </Button>
+                              </div>
+                            ) : (
+                              <button
+                                className={styles.deleteBtn}
+                                onClick={() => setConfirmDeleteId(rule.id)}
+                                title="Удалить правило"
+                              >
+                                ✕
+                              </button>
+                            )
+                          )}
+                        </div>
+                      )}
                     </div>
                   ))}
               </div>

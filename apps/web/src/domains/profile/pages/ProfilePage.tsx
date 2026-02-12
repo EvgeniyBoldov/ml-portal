@@ -11,6 +11,7 @@ import Select from '@shared/ui/Select';
 import Modal from '@shared/ui/Modal';
 import ConfirmDialog from '@shared/ui/ConfirmDialog';
 import { useErrorToast, useSuccessToast } from '@shared/ui/Toast';
+import { CredentialsPanel } from '@/shared/ui/CredentialsPanel';
 import styles from './ProfilePage.module.css';
 
 interface Profile {
@@ -37,21 +38,6 @@ interface ApiTokenCreated extends ApiToken {
   token: string;
 }
 
-interface UserCredential {
-  id: string;
-  tool_instance_id: string;
-  tool_name?: string;
-  auth_type: string;
-  is_active: boolean;
-  created_at: string;
-}
-
-interface ToolInstance {
-  id: string;
-  tool_id: string;
-  tool?: { name: string; slug: string };
-  is_active: boolean;
-}
 
 const formatDate = (dateString: string | null) => {
   if (!dateString) return '—';
@@ -111,11 +97,6 @@ export default function ProfilePage() {
   const [createdToken, setCreatedToken] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [tokenToDelete, setTokenToDelete] = useState<ApiToken | null>(null);
-  const [showCredentialModal, setShowCredentialModal] = useState(false);
-  const [selectedInstance, setSelectedInstance] = useState('');
-  const [credAuthType, setCredAuthType] = useState('token');
-  const [credPayload, setCredPayload] = useState('');
-  const [credToDelete, setCredToDelete] = useState<UserCredential | null>(null);
 
   // Fetch profile
   const { data: profile, isLoading: profileLoading } = useQuery({
@@ -129,17 +110,6 @@ export default function ProfilePage() {
     queryFn: () => apiRequest<ApiToken[]>('/profile/tokens'),
   });
 
-  // Fetch user credentials
-  const { data: credentials = [], isLoading: credentialsLoading } = useQuery({
-    queryKey: ['profile', 'credentials'],
-    queryFn: () => apiRequest<UserCredential[]>('/profile/credentials'),
-  });
-
-  // Fetch available tool instances
-  const { data: instances = [] } = useQuery({
-    queryKey: ['tool-instances', 'active'],
-    queryFn: () => apiRequest<ToolInstance[]>('/api/v1/admin/tool-instances?is_active=true'),
-  });
 
   // Create token mutation
   const createToken = useMutation({
@@ -180,41 +150,6 @@ export default function ProfilePage() {
     },
   });
 
-  // Create credential mutation
-  const createCredential = useMutation({
-    mutationFn: async (data: { tool_instance_id: string; auth_type: string; payload: string }) => {
-      return apiRequest('/profile/credentials', {
-        method: 'POST',
-        body: JSON.stringify({
-          tool_instance_id: data.tool_instance_id,
-          auth_type: data.auth_type,
-          encrypted_payload: JSON.parse(data.payload),
-        }),
-      });
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['profile', 'credentials'] });
-      showSuccess('Credentials сохранены');
-      handleCloseCredentialModal();
-    },
-    onError: () => {
-      showError('Не удалось сохранить credentials');
-    },
-  });
-
-  // Delete credential mutation
-  const deleteCredential = useMutation({
-    mutationFn: (credId: string) => 
-      apiRequest(`/profile/credentials/${credId}`, { method: 'DELETE' }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['profile', 'credentials'] });
-      showSuccess('Credentials удалены');
-      setCredToDelete(null);
-    },
-    onError: () => {
-      showError('Не удалось удалить credentials');
-    },
-  });
 
   const handleCreateToken = () => {
     if (!newTokenName.trim()) return;
@@ -243,36 +178,6 @@ export default function ProfilePage() {
     setCopied(false);
   };
 
-  const handleCloseCredentialModal = () => {
-    setShowCredentialModal(false);
-    setSelectedInstance('');
-    setCredAuthType('token');
-    setCredPayload('');
-  };
-
-  const handleCreateCredential = () => {
-    if (!selectedInstance || !credPayload.trim()) return;
-    try {
-      JSON.parse(credPayload);
-      createCredential.mutate({
-        tool_instance_id: selectedInstance,
-        auth_type: credAuthType,
-        payload: credPayload,
-      });
-    } catch {
-      showError('Невалидный JSON');
-    }
-  };
-
-  const getPayloadTemplate = (authType: string) => {
-    switch (authType) {
-      case 'token': return JSON.stringify({ token: '' }, null, 2);
-      case 'basic': return JSON.stringify({ username: '', password: '' }, null, 2);
-      case 'api_key': return JSON.stringify({ header_name: 'X-API-Key', api_key: '' }, null, 2);
-      case 'oauth': return JSON.stringify({ client_id: '', client_secret: '', token_url: '' }, null, 2);
-      default: return '{}';
-    }
-  };
 
   if (profileLoading) {
     return <div className={styles.loading}>Загрузка...</div>;
@@ -404,66 +309,21 @@ export default function ProfilePage() {
 
       {/* Credentials Section */}
       <section className={styles.section}>
-        <div className={styles.sectionHeader}>
-          <h2 className={styles.sectionTitle}>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4" />
-            </svg>
-            Мои Credentials
-          </h2>
-          <Button onClick={() => {
-            setCredPayload(getPayloadTemplate('token'));
-            setShowCredentialModal(true);
-          }}>
-            + Добавить credentials
-          </Button>
-        </div>
-
+        <h2 className={styles.sectionTitle}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4" />
+          </svg>
+          Мои Credentials
+        </h2>
         <p className={styles.sectionDescription}>
           Ваши персональные учётные данные для подключения к инструментам. 
           Credentials шифруются и используются при выполнении запросов.
         </p>
-
-        {credentialsLoading ? (
-          <div className={styles.loading}>Загрузка credentials...</div>
-        ) : credentials.length === 0 ? (
-          <div className={styles.emptyState}>
-            <p>У вас пока нет сохранённых credentials</p>
-            <Button onClick={() => {
-              setCredPayload(getPayloadTemplate('token'));
-              setShowCredentialModal(true);
-            }}>
-              Добавить credentials
-            </Button>
-          </div>
-        ) : (
-          <div className={styles.tokensList}>
-            {credentials.map(cred => (
-              <div key={cred.id} className={styles.tokenCard}>
-                <div className={styles.tokenInfo}>
-                  <div className={styles.tokenHeader}>
-                    <span className={styles.tokenName}>
-                      {cred.tool_name || cred.tool_instance_id.slice(0, 8) + '...'}
-                    </span>
-                    <span className={styles.tokenBadge}>{cred.auth_type}</span>
-                  </div>
-                  <div className={styles.tokenMeta}>
-                    <span className={styles.tokenDate}>
-                      Создан: {formatDate(cred.created_at)}
-                    </span>
-                  </div>
-                </div>
-                <Button
-                  variant="danger"
-                  onClick={() => setCredToDelete(cred)}
-                  disabled={deleteCredential.isPending}
-                >
-                  Удалить
-                </Button>
-              </div>
-            ))}
-          </div>
-        )}
+        <CredentialsPanel
+          mode="user"
+          userId={profile?.id}
+          tenantId={profile?.tenants?.[0]}
+        />
       </section>
 
       {/* Delete Token Confirmation */}
@@ -482,21 +342,6 @@ export default function ProfilePage() {
         onCancel={() => setTokenToDelete(null)}
       />
 
-      {/* Delete Credential Confirmation */}
-      <ConfirmDialog
-        open={!!credToDelete}
-        title="Удалить credentials?"
-        message={credToDelete ? `Вы уверены, что хотите удалить credentials для "${credToDelete.tool_name || 'инструмента'}"? Это действие нельзя отменить.` : ''}
-        confirmLabel="Удалить"
-        cancelLabel="Отмена"
-        variant="danger"
-        onConfirm={() => {
-          if (credToDelete) {
-            deleteCredential.mutate(credToDelete.id);
-          }
-        }}
-        onCancel={() => setCredToDelete(null)}
-      />
 
       {/* Create Token Modal */}
       <Modal 
@@ -568,71 +413,6 @@ export default function ProfilePage() {
           )}
       </Modal>
 
-      {/* Create Credential Modal */}
-      <Modal 
-        open={showCredentialModal} 
-        onClose={handleCloseCredentialModal} 
-        title="Добавить credentials"
-      >
-        <div className={styles.createForm}>
-          <div className={styles.formGroup}>
-            <label className={styles.formLabel}>Инструмент</label>
-            <Select
-              value={selectedInstance}
-              onChange={e => setSelectedInstance(e.target.value)}
-            >
-              <option value="">Выберите инструмент</option>
-              {instances.map(inst => (
-                <option key={inst.id} value={inst.id}>
-                  {inst.tool?.name || inst.tool_id.slice(0, 8)}
-                </option>
-              ))}
-            </Select>
-            <span className={styles.formHelp}>
-              Инструмент, для которого добавляются credentials
-            </span>
-          </div>
-          <div className={styles.formGroup}>
-            <label className={styles.formLabel}>Тип авторизации</label>
-            <Select
-              value={credAuthType}
-              onChange={e => {
-                setCredAuthType(e.target.value);
-                setCredPayload(getPayloadTemplate(e.target.value));
-              }}
-            >
-              <option value="token">Bearer Token</option>
-              <option value="basic">Basic Auth</option>
-              <option value="api_key">API Key</option>
-              <option value="oauth">OAuth 2.0</option>
-            </Select>
-          </div>
-          <div className={styles.formGroup}>
-            <label className={styles.formLabel}>Данные (JSON)</label>
-            <textarea
-              className={styles.codeInput}
-              value={credPayload}
-              onChange={e => setCredPayload(e.target.value)}
-              rows={6}
-              style={{ fontFamily: 'monospace', width: '100%', padding: '0.5rem' }}
-            />
-            <span className={styles.formHelp}>
-              Данные будут зашифрованы перед сохранением
-            </span>
-          </div>
-          <div className={styles.modalActions}>
-            <Button variant="outline" onClick={handleCloseCredentialModal}>
-              Отмена
-            </Button>
-            <Button 
-              onClick={handleCreateCredential}
-              disabled={!selectedInstance || !credPayload.trim() || createCredential.isPending}
-            >
-              {createCredential.isPending ? 'Сохранение...' : 'Сохранить'}
-            </Button>
-          </div>
-        </div>
-      </Modal>
     </div>
   );
 }

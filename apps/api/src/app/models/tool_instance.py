@@ -1,11 +1,18 @@
 """
 ToolInstance model v2 - конкретное подключение к системе
+
+Instance types:
+- LOCAL: auto-managed by backend (RAG, collections). Cannot be created/deleted from UI.
+  No credentials needed.
+- REMOTE: user-created external systems (jira, netbox, crm). Managed via UI.
+  Credentials required.
 """
 import uuid
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, TYPE_CHECKING
+from enum import Enum
 
-from sqlalchemy import String, Boolean, DateTime, Text, ForeignKey, UniqueConstraint
+from sqlalchemy import String, Boolean, DateTime, Text, ForeignKey, UniqueConstraint, CheckConstraint
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -15,15 +22,26 @@ if TYPE_CHECKING:
     from app.models.tool_group import ToolGroup
 
 
+class InstanceType(str, Enum):
+    """Instance type: local (auto-managed) or remote (user-managed)"""
+    LOCAL = "local"
+    REMOTE = "remote"
+
+
 class ToolInstance(Base):
     """
     Конкретный instance системы с настройками подключения (v2).
     
-    Примеры:
+    LOCAL instances (auto-managed):
+    - rag-global (RAG knowledge base, scope=global)
+    - collection-{slug} (per-collection, auto-created/deleted)
+    
+    REMOTE instances (user-managed):
     - jira-prod (url: https://jira.company.com)
     - netbox-main (url: https://netbox.company.com)
     
     Креды привязываются через Credential (owner-based).
+    Локальные инстансы не требуют кредов.
     """
     __tablename__ = "tool_instances"
 
@@ -39,10 +57,22 @@ class ToolInstance(Base):
         index=True
     )
     
+    slug: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     
-    # v2: explicit url field
+    # Instance type: local (auto-managed) or remote (user-managed)
+    instance_type: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default='remote'
+    )
+    
+    # Category tag for filtering (collection, rag, llm, dcbox, jira, etc.)
+    category: Mapped[Optional[str]] = mapped_column(
+        String(50), nullable=True, index=True,
+        comment="Instance category tag for filtering"
+    )
+    
+    # v2: explicit url field (empty for local instances)
     url: Mapped[str] = mapped_column(Text, nullable=False, server_default='')
     
     # Additional config (project mappings, timeouts, etc.)
@@ -64,7 +94,11 @@ class ToolInstance(Base):
     )
 
     __table_args__ = (
-        UniqueConstraint("tool_group_id", "url", name="uq_tool_instance_group_url"),
+        UniqueConstraint("tool_group_id", "slug", name="uq_tool_instance_group_slug"),
+        CheckConstraint(
+            "instance_type IN ('local', 'remote')",
+            name="ck_tool_instance_type"
+        ),
     )
 
     def __repr__(self) -> str:

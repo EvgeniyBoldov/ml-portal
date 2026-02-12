@@ -12,7 +12,7 @@ from .prompt import Prompt, PromptVersion, PromptStatus
 # Baseline removed in refactor/policy-limits
 from .tool_group import ToolGroup
 from .tool import Tool
-from .tool_instance import ToolInstance
+from .tool_instance import ToolInstance, InstanceType
 from .tool_release import ToolBackendRelease, ToolRelease, ToolReleaseStatus
 from .agent import Agent
 from .agent_version import AgentVersion, AgentVersionStatus
@@ -27,7 +27,7 @@ from .permission_set import PermissionSet, PermissionScope, PermissionValue
 from .routing_log import RoutingLog
 from .policy import Policy
 from .limit import Limit, LimitVersion, LimitStatus
-from .rbac import RbacPolicy, RbacRule, RbacLevel, ResourceType, RbacEffect
+from .rbac import RbacRule, RbacLevel, ResourceType, RbacEffect
 from .platform_settings import PlatformSettings
 
 __all__ = [
@@ -52,6 +52,7 @@ __all__ = [
     "ToolGroup",
     "Tool",
     "ToolInstance",
+    "InstanceType",
     "ToolBackendRelease",
     "ToolRelease",
     "ToolReleaseStatus",
@@ -78,7 +79,6 @@ __all__ = [
     "Limit",
     "LimitVersion",
     "LimitStatus",
-    "RbacPolicy",
     "RbacRule",
     "RbacLevel",
     "ResourceType",

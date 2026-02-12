@@ -31,6 +31,7 @@ export function InstanceEditorPage() {
     url: '',
     description: '',
     config: {},
+    category: '',
   });
   const [configText, setConfigText] = useState('{}');
   const [saving, setSaving] = useState(false);
@@ -54,6 +55,7 @@ export function InstanceEditorPage() {
         url: existingInstance.url || '',
         description: existingInstance.description || '',
         config: existingInstance.config || {},
+        category: existingInstance.category || '',
         is_active: existingInstance.is_active,
       });
       setConfigText(JSON.stringify(existingInstance.config || {}, null, 2));
@@ -88,6 +90,7 @@ export function InstanceEditorPage() {
           description: formData.description,
           config,
           is_active: formData.is_active,
+          category: formData.category || undefined,
         });
         showSuccess('Инстанс обновлён');
         queryClient.invalidateQueries({ queryKey: qk.toolInstances.all() });
@@ -129,6 +132,15 @@ export function InstanceEditorPage() {
     setFormData(prev => ({ ...prev, [key]: value }));
   };
 
+  const CATEGORY_OPTIONS = [
+    { value: '', label: 'Не указана' },
+    { value: 'llm', label: 'LLM' },
+    { value: 'rag', label: 'RAG' },
+    { value: 'collection', label: 'Collection' },
+    { value: 'dcbox', label: 'DCBox' },
+    { value: 'jira', label: 'Jira' },
+  ];
+
   const basicFields: FieldDefinition[] = [
     {
       key: 'tool_group_id',
@@ -147,6 +159,13 @@ export function InstanceEditorPage() {
       type: 'text',
       required: true,
       placeholder: 'Production NetBox',
+    },
+    {
+      key: 'category',
+      label: 'Категория',
+      type: 'select',
+      options: CATEGORY_OPTIONS,
+      description: 'Тег для фильтрации и категоризации',
     },
     {
       key: 'url',

@@ -1,5 +1,7 @@
 """
-RBAC Repository — data access for RbacPolicy and RbacRule.
+RBAC Repository v3 — flat data access for RbacRule (no policy container).
+
+Rules are bound directly to owners (user/tenant/platform).
 """
 from __future__ import annotations
 from typing import Optional, List
@@ -7,67 +9,15 @@ from uuid import UUID
 
 from sqlalchemy import select, and_, delete
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
-from app.models.rbac import RbacPolicy, RbacRule
+from app.models.rbac import RbacRule
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
 
-class RbacPolicyRepository:
-    """Repository for RbacPolicy CRUD."""
-
-    def __init__(self, session: AsyncSession):
-        self.session = session
-
-    async def create(self, policy: RbacPolicy) -> RbacPolicy:
-        self.session.add(policy)
-        await self.session.flush()
-        await self.session.refresh(policy, attribute_names=["rules"])
-        return policy
-
-    async def get_by_id(self, policy_id: UUID) -> Optional[RbacPolicy]:
-        stmt = (
-            select(RbacPolicy)
-            .options(selectinload(RbacPolicy.rules))
-            .where(RbacPolicy.id == policy_id)
-        )
-        result = await self.session.execute(stmt)
-        return result.scalar_one_or_none()
-
-    async def get_by_slug(self, slug: str) -> Optional[RbacPolicy]:
-        stmt = (
-            select(RbacPolicy)
-            .options(selectinload(RbacPolicy.rules))
-            .where(RbacPolicy.slug == slug)
-        )
-        result = await self.session.execute(stmt)
-        return result.scalar_one_or_none()
-
-    async def list_all(self, skip: int = 0, limit: int = 100) -> List[RbacPolicy]:
-        stmt = (
-            select(RbacPolicy)
-            .options(selectinload(RbacPolicy.rules))
-            .order_by(RbacPolicy.created_at.desc())
-            .offset(skip)
-            .limit(limit)
-        )
-        result = await self.session.execute(stmt)
-        return list(result.scalars().all())
-
-    async def update(self, policy: RbacPolicy) -> RbacPolicy:
-        await self.session.flush()
-        await self.session.refresh(policy)
-        return policy
-
-    async def delete(self, policy: RbacPolicy) -> None:
-        await self.session.delete(policy)
-        await self.session.flush()
-
-
 class RbacRuleRepository:
-    """Repository for RbacRule CRUD and access checks."""
+    """Repository for flat RbacRule CRUD and access checks."""
 
     def __init__(self, session: AsyncSession):
         self.session = session
@@ -88,48 +38,91 @@ class RbacRuleRepository:
     async def get_by_id(self, rule_id: UUID) -> Optional[RbacRule]:
         return await self.session.get(RbacRule, rule_id)
 
-    async def list_by_policy(
+    # ─── Owner-based queries ─────────────────────────────────────────
+
+    async def list_by_user(
         self,
-        rbac_policy_id: UUID,
-        level: Optional[str] = None,
+        user_id: UUID,
         resource_type: Optional[str] = None,
     ) -> List[RbacRule]:
-        stmt = select(RbacRule).where(RbacRule.rbac_policy_id == rbac_policy_id)
-        if level:
-            stmt = stmt.where(RbacRule.level == level)
+        """List all rules owned by a specific user."""
+        stmt = select(RbacRule).where(RbacRule.owner_user_id == user_id)
         if resource_type:
             stmt = stmt.where(RbacRule.resource_type == resource_type)
         stmt = stmt.order_by(RbacRule.created_at)
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
-    async def find_rule(
+    async def list_by_tenant(
         self,
-        rbac_policy_id: UUID,
-        level: str,
-        level_id: Optional[UUID],
+        tenant_id: UUID,
+        resource_type: Optional[str] = None,
+    ) -> List[RbacRule]:
+        """List all rules owned by a specific tenant."""
+        stmt = select(RbacRule).where(RbacRule.owner_tenant_id == tenant_id)
+        if resource_type:
+            stmt = stmt.where(RbacRule.resource_type == resource_type)
+        stmt = stmt.order_by(RbacRule.created_at)
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def list_platform_rules(
+        self,
+        resource_type: Optional[str] = None,
+    ) -> List[RbacRule]:
+        """List all platform-level rules."""
+        stmt = select(RbacRule).where(RbacRule.owner_platform == True)  # noqa: E712
+        if resource_type:
+            stmt = stmt.where(RbacRule.resource_type == resource_type)
+        stmt = stmt.order_by(RbacRule.created_at)
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    # ─── Access check (user > tenant > platform) ─────────────────────
+
+    async def _find_user_rule(
+        self,
+        user_id: UUID,
         resource_type: str,
         resource_id: UUID,
     ) -> Optional[RbacRule]:
-        """Find a specific rule by all key fields."""
-        conditions = [
-            RbacRule.rbac_policy_id == rbac_policy_id,
-            RbacRule.level == level,
+        stmt = select(RbacRule).where(and_(
+            RbacRule.owner_user_id == user_id,
             RbacRule.resource_type == resource_type,
             RbacRule.resource_id == resource_id,
-        ]
-        if level_id is None:
-            conditions.append(RbacRule.level_id.is_(None))
-        else:
-            conditions.append(RbacRule.level_id == level_id)
+        ))
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
 
-        stmt = select(RbacRule).where(and_(*conditions))
+    async def _find_tenant_rule(
+        self,
+        tenant_id: UUID,
+        resource_type: str,
+        resource_id: UUID,
+    ) -> Optional[RbacRule]:
+        stmt = select(RbacRule).where(and_(
+            RbacRule.owner_tenant_id == tenant_id,
+            RbacRule.resource_type == resource_type,
+            RbacRule.resource_id == resource_id,
+        ))
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def _find_platform_rule(
+        self,
+        resource_type: str,
+        resource_id: UUID,
+    ) -> Optional[RbacRule]:
+        stmt = select(RbacRule).where(and_(
+            RbacRule.owner_platform == True,  # noqa: E712
+            RbacRule.resource_type == resource_type,
+            RbacRule.resource_id == resource_id,
+        ))
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
     async def check_access(
         self,
-        rbac_policy_id: UUID,
         user_id: UUID,
         tenant_id: UUID,
         resource_type: str,
@@ -141,23 +134,17 @@ class RbacRuleRepository:
         Returns 'allow' or 'deny'.
         """
         # 1. User level
-        rule = await self.find_rule(
-            rbac_policy_id, "user", user_id, resource_type, resource_id
-        )
+        rule = await self._find_user_rule(user_id, resource_type, resource_id)
         if rule:
             return rule.effect
 
         # 2. Tenant level
-        rule = await self.find_rule(
-            rbac_policy_id, "tenant", tenant_id, resource_type, resource_id
-        )
+        rule = await self._find_tenant_rule(tenant_id, resource_type, resource_id)
         if rule:
             return rule.effect
 
         # 3. Platform level
-        rule = await self.find_rule(
-            rbac_policy_id, "platform", None, resource_type, resource_id
-        )
+        rule = await self._find_platform_rule(resource_type, resource_id)
         if rule:
             return rule.effect
 
@@ -176,36 +163,32 @@ class RbacRuleRepository:
     async def list_all_rules(
         self,
         *,
-        rbac_policy_id: Optional[UUID] = None,
         level: Optional[str] = None,
-        level_id: Optional[UUID] = None,
+        owner_user_id: Optional[UUID] = None,
+        owner_tenant_id: Optional[UUID] = None,
+        owner_platform: Optional[bool] = None,
         resource_type: Optional[str] = None,
         effect: Optional[str] = None,
         skip: int = 0,
         limit: int = 500,
     ) -> List[RbacRule]:
-        """
-        List rules across all policies with optional filters.
-        Returns rules with rbac_policy relationship loaded.
-        """
-        stmt = (
-            select(RbacRule)
-            .options(selectinload(RbacRule.rbac_policy))
-        )
+        """List rules with optional filters."""
+        stmt = select(RbacRule)
 
-        if rbac_policy_id:
-            stmt = stmt.where(RbacRule.rbac_policy_id == rbac_policy_id)
         if level:
             stmt = stmt.where(RbacRule.level == level)
-        if level_id is not None:
-            stmt = stmt.where(RbacRule.level_id == level_id)
+        if owner_user_id is not None:
+            stmt = stmt.where(RbacRule.owner_user_id == owner_user_id)
+        if owner_tenant_id is not None:
+            stmt = stmt.where(RbacRule.owner_tenant_id == owner_tenant_id)
+        if owner_platform is not None:
+            stmt = stmt.where(RbacRule.owner_platform == owner_platform)
         if resource_type:
             stmt = stmt.where(RbacRule.resource_type == resource_type)
         if effect:
             stmt = stmt.where(RbacRule.effect == effect)
 
         stmt = stmt.order_by(
-            RbacRule.rbac_policy_id,
             RbacRule.resource_type,
             RbacRule.created_at,
         ).offset(skip).limit(limit)
@@ -213,9 +196,16 @@ class RbacRuleRepository:
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
-    async def delete_by_policy(self, rbac_policy_id: UUID) -> int:
-        """Delete all rules for a policy. Returns count of deleted rows."""
-        stmt = delete(RbacRule).where(RbacRule.rbac_policy_id == rbac_policy_id)
+    async def delete_by_user(self, user_id: UUID) -> int:
+        """Delete all rules for a user."""
+        stmt = delete(RbacRule).where(RbacRule.owner_user_id == user_id)
+        result = await self.session.execute(stmt)
+        await self.session.flush()
+        return result.rowcount
+
+    async def delete_by_tenant(self, tenant_id: UUID) -> int:
+        """Delete all rules for a tenant."""
+        stmt = delete(RbacRule).where(RbacRule.owner_tenant_id == tenant_id)
         result = await self.session.execute(stmt)
         await self.session.flush()
         return result.rowcount

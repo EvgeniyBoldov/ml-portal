@@ -14,7 +14,6 @@ import {
   toolReleasesKeys,
   type ToolReleaseResponse,
   type ToolBackendReleaseListItem,
-  type ToolBackendReleaseDetail,
 } from '@/shared/api/toolReleases';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
 import { EntityPage, type EntityPageMode } from '@/shared/ui/EntityPage';
@@ -363,21 +362,6 @@ export function ToolReleasePage() {
     (br: ToolBackendReleaseListItem) => br.id === formData.backend_release_id
   );
 
-  // Load full backend release detail (with input_schema/output_schema)
-  // In view mode — from existingRelease.backend_release (already full)
-  // In create mode — fetch separately by selected backend_release_id
-  const { data: fetchedBackendRelease } = useQuery({
-    queryKey: toolReleasesKeys.backendReleaseDetail(
-      toolSlug!,
-      selectedBackendRelease?.version || ''
-    ),
-    queryFn: () => toolReleasesApi.getBackendRelease(toolSlug!, selectedBackendRelease!.version),
-    enabled: isCreate && !!toolSlug && !!selectedBackendRelease?.version,
-  });
-
-  const backendReleaseDetail: ToolBackendReleaseDetail | null =
-    existingRelease?.backend_release ?? fetchedBackendRelease ?? null;
-
   return (
     <EntityPage
       mode={mode}
@@ -415,7 +399,7 @@ export function ToolReleasePage() {
         />
 
         <ContentBlock title="Версия бэкенда" icon="code">
-            {isEditable && isCreate ? (
+            {isEditable ? (
               <div style={{ fontSize: '0.875rem' }}>
                 <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 500 }}>
                   Выберите версию бэкенда:
@@ -447,60 +431,6 @@ export function ToolReleasePage() {
               </p>
             )}
         </ContentBlock>
-
-        {backendReleaseDetail && (
-          <>
-            <ContentBlock title="Мета-информация бэкенда" icon="info">
-              <div style={{ fontSize: '0.875rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                <div><strong>Метод:</strong> <code>{backendReleaseDetail.method_name}</code></div>
-                {backendReleaseDetail.schema_hash && (
-                  <div><strong>Schema Hash:</strong> <code>{backendReleaseDetail.schema_hash.slice(0, 16)}...</code></div>
-                )}
-                {backendReleaseDetail.worker_build_id && (
-                  <div><strong>Worker Build:</strong> <code>{backendReleaseDetail.worker_build_id}</code></div>
-                )}
-                {backendReleaseDetail.deprecation_message && (
-                  <div style={{ color: 'var(--status-warn)' }}>
-                    <strong>Deprecation:</strong> {backendReleaseDetail.deprecation_message}
-                  </div>
-                )}
-                <div><strong>Синхронизировано:</strong> {new Date(backendReleaseDetail.synced_at).toLocaleString('ru')}</div>
-              </div>
-            </ContentBlock>
-
-            <ContentBlock title="Input Schema" icon="code">
-              <pre style={{
-                fontSize: '0.8125rem',
-                background: 'var(--bg-secondary)',
-                padding: '1rem',
-                borderRadius: '6px',
-                overflow: 'auto',
-                maxHeight: '400px',
-                margin: 0,
-                color: 'var(--text-primary)',
-              }}>
-                {JSON.stringify(backendReleaseDetail.input_schema, null, 2)}
-              </pre>
-            </ContentBlock>
-
-            {backendReleaseDetail.output_schema && Object.keys(backendReleaseDetail.output_schema).length > 0 && (
-              <ContentBlock title="Output Schema" icon="code">
-                <pre style={{
-                  fontSize: '0.8125rem',
-                  background: 'var(--bg-secondary)',
-                  padding: '1rem',
-                  borderRadius: '6px',
-                  overflow: 'auto',
-                  maxHeight: '400px',
-                  margin: 0,
-                  color: 'var(--text-primary)',
-                }}>
-                  {JSON.stringify(backendReleaseDetail.output_schema, null, 2)}
-                </pre>
-              </ContentBlock>
-            )}
-          </>
-        )}
       </div>
     </EntityPage>
   );

@@ -69,7 +69,7 @@ export const qk = {
   },
   credentials: {
     all: () => ['credentials'] as const,
-    list: (params?: { instance_id?: string; is_active?: boolean }) =>
+    list: (params?: Record<string, unknown>) =>
       ['credentials', 'list', params] as const,
     detail: (id: string) => ['credentials', 'detail', id] as const,
   },
@@ -104,10 +104,8 @@ export const qk = {
   },
   rbac: {
     all: () => ['rbac'] as const,
-    list: (params?: { skip?: number; limit?: number }) => ['rbac', 'list', params] as const,
-    detail: (slug: string) => ['rbac', 'detail', slug] as const,
-    rules: (slug: string, params?: { level?: string; resource_type?: string }) =>
-      ['rbac', 'rules', slug, params] as const,
+    list: (params?: Record<string, unknown>) => ['rbac', 'list', params] as const,
+    detail: (id: string) => ['rbac', 'detail', id] as const,
     enrichedRules: (params?: Record<string, unknown>) =>
       ['rbac', 'enriched-rules', params] as const,
   },

@@ -29,7 +29,6 @@ class PlatformSettingsService:
         self,
         default_policy_id: Optional[UUID] = ...,
         default_limit_id: Optional[UUID] = ...,
-        default_rbac_policy_id: Optional[UUID] = ...,
     ) -> PlatformSettings:
         """
         Update platform settings. Use None to clear a field.
@@ -41,8 +40,6 @@ class PlatformSettingsService:
             settings.default_policy_id = default_policy_id
         if default_limit_id is not ...:
             settings.default_limit_id = default_limit_id
-        if default_rbac_policy_id is not ...:
-            settings.default_rbac_policy_id = default_rbac_policy_id
 
         result = await self.repo.update(settings)
         logger.info("Updated platform settings")

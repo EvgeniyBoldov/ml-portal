@@ -27,6 +27,12 @@ class EffectivePermissions:
     instance_permissions: Dict[str, bool] = field(default_factory=dict)
     # agent_slug -> is_allowed
     agent_permissions: Dict[str, bool] = field(default_factory=dict)
+    # tool_slug -> is_allowed (resolved from RBAC rules)
+    tool_permissions: Dict[str, bool] = field(default_factory=dict)
+    # collection_slug -> is_allowed
+    collection_permissions: Dict[str, bool] = field(default_factory=dict)
+    # RBAC denied reasons: resource -> reason
+    denied_reasons: Dict[str, str] = field(default_factory=dict)
     
     def is_instance_allowed(self, instance_slug: str) -> bool:
         """Check if instance is allowed. Default is denied."""
@@ -35,6 +41,24 @@ class EffectivePermissions:
     def is_agent_allowed(self, agent_slug: str) -> bool:
         """Check if agent is allowed. Default is denied."""
         return self.agent_permissions.get(agent_slug, False)
+    
+    def is_tool_allowed(self, tool_slug: str) -> bool:
+        """Check if tool is allowed. Default is allowed (permissive for tools)."""
+        return self.tool_permissions.get(tool_slug, True)
+    
+    def is_collection_allowed(self, collection_slug: str) -> bool:
+        """Check if collection is allowed. Default is allowed."""
+        return self.collection_permissions.get(collection_slug, True)
+    
+    @property
+    def allowed_tools(self) -> List[str]:
+        """Get list of explicitly allowed tool slugs"""
+        return [slug for slug, allowed in self.tool_permissions.items() if allowed]
+    
+    @property
+    def allowed_collections(self) -> List[str]:
+        """Get list of explicitly allowed collection slugs"""
+        return [slug for slug, allowed in self.collection_permissions.items() if allowed]
     
     def get_allowed_instances(self) -> List[str]:
         """Get list of allowed instance slugs"""
@@ -144,10 +168,14 @@ class PermissionService:
             )
             effective.agent_permissions[agent_slug] = allowed
         
+        # Enrich with flat RBAC rules (v3)
+        await self._apply_rbac_rules(effective, user_id, tenant_id)
+        
         logger.debug(
             f"Resolved permissions for user={user_id}, tenant={tenant_id}: "
             f"instances: allowed={len(effective.get_allowed_instances())}, denied={len(effective.get_denied_instances())}; "
-            f"agents: allowed={len(effective.get_allowed_agents())}, denied={len(effective.get_denied_agents())}"
+            f"agents: allowed={len(effective.get_allowed_agents())}, denied={len(effective.get_denied_agents())}; "
+            f"tools: {len(effective.tool_permissions)} rules"
         )
         
         return effective
@@ -206,6 +234,116 @@ class PermissionService:
         # Not specified anywhere -> denied by default
         return False
     
+    async def _apply_rbac_rules(
+        self,
+        effective: EffectivePermissions,
+        user_id: Optional[UUID],
+        tenant_id: Optional[UUID],
+    ) -> None:
+        """
+        Enrich EffectivePermissions with flat RBAC v3 rules.
+        
+        Checks deny rules for tools, instances, and agents.
+        Priority: user > tenant > platform.
+        """
+        try:
+            from app.services.rbac_service import RbacService
+            
+            rbac = RbacService(self.session)
+            
+            # Get all rules applicable to this user/tenant
+            rules = []
+            
+            if user_id:
+                user_rules = await rbac.list_rules(owner_user_id=user_id)
+                rules.extend(user_rules)
+            
+            if tenant_id:
+                tenant_rules = await rbac.list_rules(owner_tenant_id=tenant_id)
+                rules.extend(tenant_rules)
+            
+            platform_rules = await rbac.list_rules(owner_platform=True)
+            rules.extend(platform_rules)
+            
+            # Apply rules with priority: user > tenant > platform
+            # Track which resources have been resolved at higher priority
+            resolved: Dict[tuple, str] = {}  # (resource_type, resource_id) -> effect
+            
+            for rule in rules:
+                key = (rule.resource_type, str(rule.resource_id))
+                
+                # Higher priority (user) already resolved this
+                if key in resolved:
+                    # User rules override tenant, tenant overrides platform
+                    if rule.owner_user_id and user_id:
+                        resolved[key] = rule.effect  # User always wins
+                    elif rule.owner_tenant_id and not any(
+                        r.owner_user_id for r in rules 
+                        if (r.resource_type, str(r.resource_id)) == key
+                    ):
+                        resolved[key] = rule.effect  # Tenant wins if no user rule
+                    # Platform only if no user/tenant rule (already in resolved)
+                else:
+                    resolved[key] = rule.effect
+                
+                # Apply to effective permissions
+                is_allowed = rule.effect == "allow"
+                
+                if rule.resource_type == "tool":
+                    # Need to resolve tool slug from ID
+                    tool_slug = await self._get_tool_slug(rule.resource_id)
+                    if tool_slug:
+                        effective.tool_permissions[tool_slug] = is_allowed
+                        if not is_allowed:
+                            effective.denied_reasons[tool_slug] = (
+                                f"Denied by RBAC rule ({rule.level} level)"
+                            )
+                
+                elif rule.resource_type == "instance":
+                    instance_slug = await self._get_instance_slug(rule.resource_id)
+                    if instance_slug:
+                        effective.instance_permissions[instance_slug] = is_allowed
+                        if not is_allowed:
+                            effective.denied_reasons[instance_slug] = (
+                                f"Denied by RBAC rule ({rule.level} level)"
+                            )
+                
+                elif rule.resource_type == "agent":
+                    agent_slug = await self._get_agent_slug(rule.resource_id)
+                    if agent_slug:
+                        effective.agent_permissions[agent_slug] = is_allowed
+                        if not is_allowed:
+                            effective.denied_reasons[agent_slug] = (
+                                f"Denied by RBAC rule ({rule.level} level)"
+                            )
+                            
+        except Exception as e:
+            logger.warning(f"Failed to apply RBAC rules: {e}")
+
+    async def _get_tool_slug(self, tool_id: UUID) -> Optional[str]:
+        """Resolve tool slug from ID (cached in future)."""
+        from sqlalchemy import select
+        from app.models.tool import Tool
+        stmt = select(Tool.slug).where(Tool.id == tool_id)
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def _get_instance_slug(self, instance_id: UUID) -> Optional[str]:
+        """Resolve instance slug from ID."""
+        from sqlalchemy import select
+        from app.models.tool_instance import ToolInstance
+        stmt = select(ToolInstance.slug).where(ToolInstance.id == instance_id)
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def _get_agent_slug(self, agent_id: UUID) -> Optional[str]:
+        """Resolve agent slug from ID."""
+        from sqlalchemy import select
+        from app.models.agent import Agent
+        stmt = select(Agent.slug).where(Agent.id == agent_id)
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
     async def check_instance_permission(
         self,
         instance_slug: str,

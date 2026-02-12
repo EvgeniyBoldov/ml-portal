@@ -43,21 +43,88 @@
   border-color: var(--accent-color);
 }
 
-.infoBlock {
+.placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 3rem 1rem;
+  text-align: center;
+}
+
+.placeholderIcon {
+  font-size: 3rem;
+  margin-bottom: 1rem;
+  opacity: 0.6;
+}
+
+.placeholderTitle {
+  margin: 0 0 0.5rem;
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.placeholderText {
+  margin: 0;
   font-size: 0.875rem;
-  line-height: 1.6;
   color: var(--text-secondary);
+  max-width: 400px;
+  line-height: 1.5;
 }
 
-.infoBlock p {
-  margin: 0 0 12px;
+.editButton {
+  padding: 6px 12px;
+  background: var(--accent-color);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: background-color 0.15s;
 }
 
-.infoBlock ul {
-  margin: 8px 0 0;
-  padding-left: 20px;
+.editButton:hover {
+  background: var(--accent-color-hover);
 }
 
-.infoBlock li {
-  margin-bottom: 4px;
+.editActions {
+  display: flex;
+  gap: 8px;
+}
+
+.saveButton {
+  padding: 6px 12px;
+  background: var(--success-color);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.saveButton:hover:not(:disabled) {
+  background: var(--success-color-hover);
+}
+
+.saveButton:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.cancelButton {
+  padding: 6px 12px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.cancelButton:hover {
+  background: var(--bg-tertiary);
+  border-color: var(--border-color-hover);
 }

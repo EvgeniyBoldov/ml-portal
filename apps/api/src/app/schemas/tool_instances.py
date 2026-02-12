@@ -11,10 +11,12 @@ from pydantic import BaseModel, Field
 
 class ToolInstanceCreate(BaseModel):
     tool_group_id: UUID
+    slug: Optional[str] = Field(None, max_length=255, description="Auto-generated from name if not provided")
     name: str
     url: str = ""
     description: Optional[str] = None
     config: Optional[Dict[str, Any]] = None
+    category: Optional[str] = Field(None, max_length=50, description="Category tag (collection, rag, llm, dcbox, jira, etc.)")
 
 
 class ToolInstanceUpdate(BaseModel):
@@ -23,13 +25,17 @@ class ToolInstanceUpdate(BaseModel):
     url: Optional[str] = None
     config: Optional[Dict[str, Any]] = None
     is_active: Optional[bool] = None
+    category: Optional[str] = Field(None, max_length=50, description="Category tag")
 
 
 class ToolInstanceResponse(BaseModel):
     id: UUID
     tool_group_id: UUID
+    slug: str
     name: str
     description: Optional[str] = None
+    instance_type: str  # "local" | "remote"
+    category: Optional[str] = None  # "collection" | "rag" | "llm" | "dcbox" | "jira" | ...
     url: str
     config: Optional[Dict[str, Any]] = None
     health_status: Optional[str] = None
@@ -49,6 +55,13 @@ class HealthCheckResponse(BaseModel):
     status: str
     message: Optional[str] = None
     details: Optional[Dict[str, Any]] = None
+
+
+class RescanResponse(BaseModel):
+    created: int
+    updated: int
+    deleted: int
+    errors: int
 
 
 # ── Credential (v2 owner-based) ─────────────────────────────────────

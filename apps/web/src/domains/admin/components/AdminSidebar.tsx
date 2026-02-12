@@ -26,6 +26,15 @@ const navigation: NavGroup[] = [
     items: [
       { path: '/admin/users', label: 'Пользователи', icon: 'user' },
       { path: '/admin/tenants', label: 'Тенанты', icon: 'database' },
+      { path: '/admin/platform', label: 'Платформа', icon: 'sliders' },
+    ],
+  },
+  {
+    title: 'Безопасность',
+    items: [
+      { path: '/admin/rbac', label: 'RBAC', icon: 'shield' },
+      { path: '/admin/policies', label: 'Политики', icon: 'shield-check' },
+      { path: '/admin/limits', label: 'Лимиты', icon: 'shield' },
     ],
   },
   {
@@ -33,24 +42,15 @@ const navigation: NavGroup[] = [
     items: [
       { path: '/admin/models', label: 'Модели', icon: 'bot' },
       { path: '/admin/prompts', label: 'Промпты', icon: 'file-text' },
-      { path: '/admin/policies', label: 'Политики', icon: 'shield-check' },
-      { path: '/admin/limits', label: 'Лимиты', icon: 'shield' },
       { path: '/admin/tools', label: 'Инструменты', icon: 'settings' },
       { path: '/admin/agents', label: 'Агенты', icon: 'sparkles' },
-      { path: '/admin/collections', label: 'Коллекции', icon: 'database' },
-    ],
-  },
-  {
-    title: 'Доступ',
-    items: [
-      { path: '/admin/rbac', label: 'RBAC', icon: 'shield' },
-      { path: '/admin/platform', label: 'Платформа', icon: 'sliders' },
     ],
   },
   {
     title: 'Интеграции',
     items: [
       { path: '/admin/instances', label: 'Инстансы', icon: 'server' },
+      { path: '/admin/collections', label: 'Коллекции', icon: 'database' },
     ],
   },
   {

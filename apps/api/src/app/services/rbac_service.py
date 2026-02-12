@@ -1,11 +1,11 @@
 """
-RBAC Service — business logic for RBAC policies and rules.
+RBAC Service v3 — flat business logic for RbacRule (no policy container).
 
 Handles:
-- CRUD for RbacPolicy (named sets of rules)
-- CRUD for RbacRule (individual access rules)
+- CRUD for RbacRule (individual access rules with direct owner binding)
 - check_access(user_id, tenant_id, resource_type, resource_id) → allow/deny
 - Auto-creation of platform deny rules when resources are created
+- Enriched rule listing with resource names
 """
 from __future__ import annotations
 from typing import Optional, List, Dict, Any
@@ -13,15 +13,11 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.rbac import RbacPolicy, RbacRule, RbacLevel, ResourceType, RbacEffect
-from app.repositories.rbac_repository import RbacPolicyRepository, RbacRuleRepository
+from app.models.rbac import RbacRule, RbacLevel, ResourceType, RbacEffect
+from app.repositories.rbac_repository import RbacRuleRepository
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
-
-
-class RbacPolicyNotFoundError(Exception):
-    pass
 
 
 class RbacRuleNotFoundError(Exception):
@@ -33,72 +29,13 @@ class RbacRuleDuplicateError(Exception):
 
 
 class RbacService:
-    """Service for RBAC operations."""
+    """Service for flat RBAC operations (v3)."""
 
     def __init__(self, session: AsyncSession):
         self.session = session
-        self.policy_repo = RbacPolicyRepository(session)
         self.rule_repo = RbacRuleRepository(session)
 
-    # ─── Policy CRUD ──────────────────────────────────────────────────
-
-    async def list_policies(self, skip: int = 0, limit: int = 100) -> List[RbacPolicy]:
-        return await self.policy_repo.list_all(skip=skip, limit=limit)
-
-    async def get_policy_by_slug(self, slug: str) -> RbacPolicy:
-        policy = await self.policy_repo.get_by_slug(slug)
-        if not policy:
-            raise RbacPolicyNotFoundError(f"RBAC policy '{slug}' not found")
-        return policy
-
-    async def get_policy_by_id(self, policy_id: UUID) -> RbacPolicy:
-        policy = await self.policy_repo.get_by_id(policy_id)
-        if not policy:
-            raise RbacPolicyNotFoundError(f"RBAC policy '{policy_id}' not found")
-        return policy
-
-    async def create_policy(
-        self,
-        slug: str,
-        name: str,
-        description: Optional[str] = None,
-    ) -> RbacPolicy:
-        policy = RbacPolicy(
-            slug=slug,
-            name=name,
-            description=description,
-        )
-        return await self.policy_repo.create(policy)
-
-    async def update_policy(
-        self,
-        slug: str,
-        name: Optional[str] = None,
-        description: Optional[str] = None,
-    ) -> RbacPolicy:
-        policy = await self.get_policy_by_slug(slug)
-        if name is not None:
-            policy.name = name
-        if description is not None:
-            policy.description = description
-        return await self.policy_repo.update(policy)
-
-    async def delete_policy(self, slug: str) -> None:
-        policy = await self.get_policy_by_slug(slug)
-        await self.policy_repo.delete(policy)
-
     # ─── Rule CRUD ────────────────────────────────────────────────────
-
-    async def list_rules(
-        self,
-        policy_slug: str,
-        level: Optional[str] = None,
-        resource_type: Optional[str] = None,
-    ) -> List[RbacRule]:
-        policy = await self.get_policy_by_slug(policy_slug)
-        return await self.rule_repo.list_by_policy(
-            policy.id, level=level, resource_type=resource_type
-        )
 
     async def get_rule(self, rule_id: UUID) -> RbacRule:
         rule = await self.rule_repo.get_by_id(rule_id)
@@ -108,39 +45,31 @@ class RbacService:
 
     async def create_rule(
         self,
-        policy_slug: str,
         level: str,
-        level_id: Optional[UUID],
         resource_type: str,
         resource_id: UUID,
         effect: str,
+        owner_user_id: Optional[UUID] = None,
+        owner_tenant_id: Optional[UUID] = None,
+        owner_platform: bool = False,
         created_by_user_id: Optional[UUID] = None,
     ) -> RbacRule:
-        policy = await self.get_policy_by_slug(policy_slug)
-
-        # Check for duplicate
-        existing = await self.rule_repo.find_rule(
-            policy.id, level, level_id, resource_type, resource_id
-        )
-        if existing:
-            raise RbacRuleDuplicateError(
-                f"Rule already exists for {level}:{resource_type}:{resource_id} "
-                f"in policy '{policy_slug}'"
-            )
-
         rule = RbacRule(
-            rbac_policy_id=policy.id,
             level=level,
-            level_id=level_id,
+            owner_user_id=owner_user_id,
+            owner_tenant_id=owner_tenant_id,
+            owner_platform=owner_platform,
             resource_type=resource_type,
             resource_id=resource_id,
             effect=effect,
             created_by_user_id=created_by_user_id,
         )
         result = await self.rule_repo.create(rule)
+        owner = "platform" if owner_platform else (
+            f"user:{owner_user_id}" if owner_user_id else f"tenant:{owner_tenant_id}"
+        )
         logger.info(
-            f"Created RBAC rule: {level}:{resource_type}:{resource_id}={effect} "
-            f"in policy '{policy_slug}'"
+            f"Created RBAC rule: {owner}:{resource_type}:{resource_id}={effect}"
         )
         return result
 
@@ -161,11 +90,33 @@ class RbacService:
         await self.rule_repo.delete(rule)
         logger.info(f"Deleted RBAC rule {rule_id}")
 
+    async def list_rules(
+        self,
+        *,
+        level: Optional[str] = None,
+        owner_user_id: Optional[UUID] = None,
+        owner_tenant_id: Optional[UUID] = None,
+        owner_platform: Optional[bool] = None,
+        resource_type: Optional[str] = None,
+        effect: Optional[str] = None,
+        skip: int = 0,
+        limit: int = 500,
+    ) -> List[RbacRule]:
+        return await self.rule_repo.list_all_rules(
+            level=level,
+            owner_user_id=owner_user_id,
+            owner_tenant_id=owner_tenant_id,
+            owner_platform=owner_platform,
+            resource_type=resource_type,
+            effect=effect,
+            skip=skip,
+            limit=limit,
+        )
+
     # ─── Access Check ─────────────────────────────────────────────────
 
     async def check_access(
         self,
-        rbac_policy_id: UUID,
         user_id: UUID,
         tenant_id: UUID,
         resource_type: str,
@@ -177,57 +128,75 @@ class RbacService:
         Returns 'allow' or 'deny'.
         """
         return await self.rule_repo.check_access(
-            rbac_policy_id, user_id, tenant_id, resource_type, resource_id
+            user_id, tenant_id, resource_type, resource_id
         )
 
     # ─── Auto-create platform deny ────────────────────────────────────
 
     async def ensure_platform_deny(
         self,
-        rbac_policy_id: UUID,
         resource_type: str,
         resource_id: UUID,
     ) -> Optional[RbacRule]:
         """
         Ensure a platform deny rule exists for a resource.
         Called automatically when a new resource (agent, tool, etc.) is created.
-        
-        Returns the rule if created, None if already exists.
         """
-        existing = await self.rule_repo.find_rule(
-            rbac_policy_id, "platform", None, resource_type, resource_id
-        )
+        existing = await self.rule_repo._find_platform_rule(resource_type, resource_id)
         if existing:
             return None
 
         rule = RbacRule(
-            rbac_policy_id=rbac_policy_id,
             level=RbacLevel.PLATFORM.value,
-            level_id=None,
+            owner_platform=True,
             resource_type=resource_type,
             resource_id=resource_id,
             effect=RbacEffect.DENY.value,
         )
         result = await self.rule_repo.create(rule)
-        logger.info(
-            f"Auto-created platform deny for {resource_type}:{resource_id}"
-        )
+        logger.info(f"Auto-created platform deny for {resource_type}:{resource_id}")
         return result
+
+    async def set_platform_effect(
+        self,
+        resource_type: str,
+        resource_id: UUID,
+        effect: str,
+    ) -> RbacRule:
+        """
+        Set or update the platform-level effect for a resource.
+        Used for global release (allow) or rollback (deny).
+        """
+        existing = await self.rule_repo._find_platform_rule(resource_type, resource_id)
+        if existing:
+            existing.effect = effect
+            return await self.rule_repo.update(existing)
+
+        rule = RbacRule(
+            level=RbacLevel.PLATFORM.value,
+            owner_platform=True,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            effect=effect,
+        )
+        return await self.rule_repo.create(rule)
+
+    # ─── Enriched listing ─────────────────────────────────────────────
 
     async def list_enriched_rules(
         self,
         *,
-        rbac_policy_id: Optional[UUID] = None,
         level: Optional[str] = None,
-        level_id: Optional[UUID] = None,
+        owner_user_id: Optional[UUID] = None,
+        owner_tenant_id: Optional[UUID] = None,
+        owner_platform: Optional[bool] = None,
         resource_type: Optional[str] = None,
         effect: Optional[str] = None,
         skip: int = 0,
         limit: int = 500,
     ) -> List[Dict[str, Any]]:
         """
-        List rules with enriched data: policy info + resource names.
-        Returns flat list for frontend to group as needed.
+        List rules with enriched data: owner info + resource names.
         """
         from sqlalchemy import select
         from app.models.agent import Agent
@@ -238,9 +207,10 @@ class RbacService:
         from app.models.tenant import Tenants
 
         rules = await self.rule_repo.list_all_rules(
-            rbac_policy_id=rbac_policy_id,
             level=level,
-            level_id=level_id,
+            owner_user_id=owner_user_id,
+            owner_tenant_id=owner_tenant_id,
+            owner_platform=owner_platform,
             resource_type=resource_type,
             effect=effect,
             skip=skip,
@@ -252,28 +222,22 @@ class RbacService:
 
         # Collect resource IDs by type for batch loading
         resource_ids: Dict[str, set] = {
-            "agent": set(),
-            "toolgroup": set(),
-            "tool": set(),
-            "instance": set(),
+            "agent": set(), "toolgroup": set(), "tool": set(), "instance": set(),
         }
-        level_ids: Dict[str, set] = {"tenant": set(), "user": set()}
+        owner_user_ids: set = set()
+        owner_tenant_ids: set = set()
 
         for rule in rules:
             if rule.resource_type in resource_ids:
                 resource_ids[rule.resource_type].add(rule.resource_id)
-            if rule.level_id:
-                if rule.level == "tenant":
-                    level_ids["tenant"].add(rule.level_id)
-                elif rule.level == "user":
-                    level_ids["user"].add(rule.level_id)
+            if rule.owner_user_id:
+                owner_user_ids.add(rule.owner_user_id)
+            if rule.owner_tenant_id:
+                owner_tenant_ids.add(rule.owner_tenant_id)
 
         # Batch load resource names
         name_map: Dict[str, Dict[UUID, str]] = {
-            "agent": {},
-            "toolgroup": {},
-            "tool": {},
-            "instance": {},
+            "agent": {}, "toolgroup": {}, "tool": {}, "instance": {},
         }
 
         if resource_ids["agent"]:
@@ -296,18 +260,18 @@ class RbacService:
             result = await self.session.execute(stmt)
             name_map["instance"] = {row[0]: row[1] for row in result.all()}
 
-        # Batch load level context names
-        context_map: Dict[UUID, str] = {}
+        # Batch load owner names
+        owner_map: Dict[UUID, str] = {}
 
-        if level_ids["tenant"]:
-            stmt = select(Tenants.id, Tenants.name).where(Tenants.id.in_(level_ids["tenant"]))
+        if owner_tenant_ids:
+            stmt = select(Tenants.id, Tenants.name).where(Tenants.id.in_(owner_tenant_ids))
             result = await self.session.execute(stmt)
-            context_map.update({row[0]: row[1] for row in result.all()})
+            owner_map.update({row[0]: row[1] for row in result.all()})
 
-        if level_ids["user"]:
-            stmt = select(Users.id, Users.login).where(Users.id.in_(level_ids["user"]))
+        if owner_user_ids:
+            stmt = select(Users.id, Users.login).where(Users.id.in_(owner_user_ids))
             result = await self.session.execute(stmt)
-            context_map.update({row[0]: row[1] for row in result.all()})
+            owner_map.update({row[0]: row[1] for row in result.all()})
 
         # Build enriched response
         enriched = []
@@ -315,56 +279,33 @@ class RbacService:
             resource_name = name_map.get(rule.resource_type, {}).get(
                 rule.resource_id, str(rule.resource_id)[:8] + "..."
             )
-            context_name = context_map.get(rule.level_id) if rule.level_id else None
+            
+            if rule.owner_platform:
+                owner_name = "Platform"
+            elif rule.owner_user_id:
+                owner_name = owner_map.get(rule.owner_user_id, str(rule.owner_user_id)[:8])
+            elif rule.owner_tenant_id:
+                owner_name = owner_map.get(rule.owner_tenant_id, str(rule.owner_tenant_id)[:8])
+            else:
+                owner_name = "Unknown"
 
             enriched.append({
                 "id": str(rule.id),
-                "policy": {
-                    "id": str(rule.rbac_policy.id),
-                    "slug": rule.rbac_policy.slug,
-                    "name": rule.rbac_policy.name,
+                "owner": {
+                    "level": rule.level,
+                    "name": owner_name,
+                    "user_id": str(rule.owner_user_id) if rule.owner_user_id else None,
+                    "tenant_id": str(rule.owner_tenant_id) if rule.owner_tenant_id else None,
+                    "platform": rule.owner_platform,
                 },
                 "resource": {
                     "type": rule.resource_type,
                     "id": str(rule.resource_id),
                     "name": resource_name,
                 },
-                "rule": {
-                    "effect": rule.effect,
-                    "level": rule.level,
-                    "level_id": str(rule.level_id) if rule.level_id else None,
-                    "context_name": context_name,
-                    "created_at": rule.created_at.isoformat(),
-                    "created_by_user_id": str(rule.created_by_user_id) if rule.created_by_user_id else None,
-                },
+                "effect": rule.effect,
+                "created_at": rule.created_at.isoformat(),
+                "created_by_user_id": str(rule.created_by_user_id) if rule.created_by_user_id else None,
             })
 
         return enriched
-
-    async def set_platform_effect(
-        self,
-        rbac_policy_id: UUID,
-        resource_type: str,
-        resource_id: UUID,
-        effect: str,
-    ) -> RbacRule:
-        """
-        Set or update the platform-level effect for a resource.
-        Used for global release (allow) or rollback (deny).
-        """
-        existing = await self.rule_repo.find_rule(
-            rbac_policy_id, "platform", None, resource_type, resource_id
-        )
-        if existing:
-            existing.effect = effect
-            return await self.rule_repo.update(existing)
-
-        rule = RbacRule(
-            rbac_policy_id=rbac_policy_id,
-            level=RbacLevel.PLATFORM.value,
-            level_id=None,
-            resource_type=resource_type,
-            resource_id=resource_id,
-            effect=effect,
-        )
-        return await self.rule_repo.create(rule)

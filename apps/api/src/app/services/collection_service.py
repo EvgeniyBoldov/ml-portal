@@ -12,7 +12,7 @@ from sqlalchemy.future import select
 
 from app.models.collection import Collection, FieldType, SearchMode
 from app.models.permission_set import PermissionSet
-from app.models.tool_instance import ToolInstance
+from app.models.tool_instance import ToolInstance, InstanceType
 from app.models.tool_group import ToolGroup
 from app.core.logging import get_logger
 
@@ -372,20 +372,18 @@ class CollectionService:
         tool_instance = ToolInstance(
             id=uuid.uuid4(),
             tool_group_id=tool_group.id,
+            slug=f"collection-{collection.slug}",
             name=f"Collection: {collection.name}",
             description=collection.description or f"Data collection: {collection.name}",
             url="",
+            instance_type=InstanceType.LOCAL.value,
             config={
                 "collection_id": str(collection.id),
                 "collection_slug": collection.slug,
                 "tenant_id": str(collection.tenant_id),
                 "table_name": collection.table_name,
-                "entity_type": collection.entity_type,
-                "row_count": collection.row_count,
-                "has_vector_search": collection.has_vector_search,
-                "primary_key_field": collection.primary_key_field,
-                "time_column": collection.time_column,
             },
+            health_status="healthy",
             is_active=True,
         )
         
@@ -451,10 +449,27 @@ class CollectionService:
                 text(f"DROP TABLE IF EXISTS {collection.table_name} CASCADE")
             )
 
+        # Auto-delete linked tool instance
+        if collection.tool_instance_id:
+            await self._delete_tool_instance_for_collection(collection.tool_instance_id)
+
         await self.session.delete(collection)
         await self.session.flush()
 
         return True
+
+    async def _delete_tool_instance_for_collection(self, instance_id: uuid.UUID) -> None:
+        """Auto-delete the ToolInstance linked to a collection."""
+        try:
+            stmt = select(ToolInstance).where(ToolInstance.id == instance_id)
+            result = await self.session.execute(stmt)
+            instance = result.scalar_one_or_none()
+            if instance:
+                await self.session.delete(instance)
+                await self.session.flush()
+                logger.info(f"Deleted tool instance '{instance.slug}' for collection")
+        except Exception as e:
+            logger.error(f"Failed to delete tool instance {instance_id}: {e}")
 
     async def update_row_count(self, collection_id: uuid.UUID) -> int:
         """Update and return the row count for a collection"""

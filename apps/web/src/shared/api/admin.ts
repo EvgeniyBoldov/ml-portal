@@ -160,8 +160,8 @@ export interface Model {
   type: ModelType;                    // llm_chat | embedding
   provider: string;                   // openai, groq, local, etc.
   provider_model_name: string;        // Model name at provider
-  base_url: string;                   // API base URL
-  api_key_ref?: string | null;        // Reference to secret
+  instance_id?: string | null;        // FK to tool_instances (provider connection)
+  instance_name?: string | null;      // Instance name (from joined relation)
   extra_config?: Record<string, any> | null;  // Provider-specific config
   status: ModelStatus;                // Availability status
   enabled: boolean;
@@ -184,8 +184,7 @@ export interface ModelCreate {
   type: ModelType;
   provider: string;
   provider_model_name: string;
-  base_url: string;
-  api_key_ref?: string;
+  instance_id?: string;
   extra_config?: Record<string, any>;
   status?: ModelStatus;
   enabled?: boolean;
@@ -198,8 +197,7 @@ export interface ModelUpdate {
   name?: string;
   provider?: string;
   provider_model_name?: string;
-  base_url?: string;
-  api_key_ref?: string;
+  instance_id?: string;
   extra_config?: Record<string, any>;
   status?: ModelStatus;
   enabled?: boolean;

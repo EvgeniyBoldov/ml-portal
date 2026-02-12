@@ -1,25 +1,16 @@
 /**
- * TenantEditorPage - View/Edit/Create tenant with EntityPage
- * 
- * Unified page for all tenant operations:
- * - View: /admin/tenants/:id (readonly)
- * - Edit: /admin/tenants/:id?mode=edit
- * - Create: /admin/tenants/new
+ * TenantEditorPage - View/Edit/Create tenant with EntityPageV2
  */
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTenant, useModels } from '@shared/api/hooks/useAdmin';
 import { tenantApi } from '@shared/api/tenant';
-import { permissionsApi } from '@shared/api';
 import { qk } from '@shared/api/keys';
-import Button from '@shared/ui/Button';
 import { useErrorToast, useSuccessToast } from '@shared/ui/Toast';
-import { EntityPage, type EntityPageMode } from '@shared/ui/EntityPage';
-import { ContentBlock, ContentGrid, type FieldDefinition } from '@shared/ui/ContentBlock';
-import { RbacRulesEditor, type RbacPermissions } from '@shared/ui/RbacRulesEditor';
+import { EntityPageV2, Tab, type EntityPageMode } from '@shared/ui/EntityPage/EntityPageV2';
+import { ContentBlock, type FieldDefinition } from '@shared/ui/ContentBlock';
 import { RBACRulesTable } from '@/shared/ui/RBACRulesTable';
-import { Tabs, TabPanel } from '@shared/ui/Tabs';
+import ConfirmDialog from '@/shared/ui/ConfirmDialog';
 import styles from './TenantEditorPage.module.css';
 
 interface FormData {
@@ -38,11 +29,13 @@ export function TenantEditorPage() {
   const showError = useErrorToast();
   const showSuccess = useSuccessToast();
 
-  // Determine mode: create (no id), view (id, no edit param), edit (id + edit param)
-  const isCreate = !id;
+  const isNew = !id || id === 'new';
   const isEditMode = searchParams.get('mode') === 'edit';
-  const mode: EntityPageMode = isCreate ? 'create' : isEditMode ? 'edit' : 'view';
-  const isEditable = mode === 'edit' || mode === 'create';
+  const mode: EntityPageMode = isNew ? 'create' : isEditMode ? 'edit' : 'view';
+  const editable = mode === 'edit' || mode === 'create';
+
+  const [saving, setSaving] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   const { data: tenantData, isLoading, refetch } = useTenant(id);
   const { data: modelsData } = useModels({ size: 100 });
@@ -55,96 +48,24 @@ export function TenantEditorPage() {
     ocr: false,
     layout: false,
   });
-  const [saving, setSaving] = useState(false);
-  const [activeTab, setActiveTab] = useState('general');
-  
-  // RBAC state
-  const queryClient = useQueryClient();
-  const [rbacPermissions, setRbacPermissions] = useState<RbacPermissions>({
-    instance_permissions: {},
-    agent_permissions: {},
-  });
-  const [editingRbac, setEditingRbac] = useState(false);
-  
-  // Load tenant's permission set
-  const { data: tenantPermissions } = useQuery({
-    queryKey: qk.permissions.list({ scope: 'tenant', tenant_id: id }),
-    queryFn: () => permissionsApi.list({ scope: 'tenant', tenant_id: id }),
-    enabled: !!id && !isCreate,
-  });
-  
-  const tenantPermSet = tenantPermissions?.find((p: any) => p.scope === 'tenant' && p.tenant_id === id);
-  
-  // Save RBAC mutation
-  const saveRbacMutation = useMutation({
-    mutationFn: async () => {
-      if (tenantPermSet) {
-        return permissionsApi.update(tenantPermSet.id, {
-          instance_permissions: rbacPermissions.instance_permissions,
-          agent_permissions: rbacPermissions.agent_permissions,
-        });
-      } else {
-        return permissionsApi.create({
-          scope: 'tenant',
-          tenant_id: id!,
-          instance_permissions: rbacPermissions.instance_permissions,
-          agent_permissions: rbacPermissions.agent_permissions,
-        });
-      }
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.permissions.list({ scope: 'tenant', tenant_id: id }) });
-      showSuccess('Права доступа сохранены');
-      setEditingRbac(false);
-    },
-    onError: () => showError('Ошибка сохранения прав доступа'),
-  });
-  
-  const startEditingRbac = () => {
-    setRbacPermissions({
-      instance_permissions: tenantPermSet?.instance_permissions || {},
-      agent_permissions: tenantPermSet?.agent_permissions || {},
-    });
-    setEditingRbac(true);
-  };
 
-  // Get available embedding models
   const models = modelsData?.items || [];
-  const textModels = models.filter(
-    (m: any) => m.modality === 'text' && (m.state === 'active' || m.state === 'archived')
+  const extraModels = models.filter(
+    (m: any) => m.modality === 'text' && (m.state === 'active' || m.state === 'archived') && !m.global
   );
-  const extraModels = textModels.filter((m: any) => !m.global);
 
-  // Field change handler
   const handleFieldChange = (key: string, value: any) => {
-    setFormData((prev: FormData) => ({ ...prev, [key]: value }));
+    setFormData(prev => ({ ...prev, [key]: value }));
   };
 
-  // Field definitions
+  // ─── Field definitions ───
   const basicInfoFields: FieldDefinition[] = [
-    {
-      key: 'name',
-      label: 'Название',
-      type: 'text',
-      required: true,
-      placeholder: 'Введите название тенанта',
-    },
-    {
-      key: 'description',
-      label: 'Описание',
-      type: 'textarea',
-      placeholder: 'Краткое описание тенанта',
-      rows: 3,
-    },
+    { key: 'name', label: 'Название', type: 'text', required: true, placeholder: 'Введите название тенанта' },
+    { key: 'description', label: 'Описание', type: 'textarea', placeholder: 'Краткое описание тенанта', rows: 3 },
   ];
 
   const statusFields: FieldDefinition[] = [
-    {
-      key: 'is_active',
-      label: 'Активен',
-      type: 'boolean',
-      description: 'Тенант доступен для использования',
-    },
+    { key: 'is_active', label: 'Активен', type: 'boolean', description: 'Тенант доступен для использования' },
   ];
 
   const embeddingFields: FieldDefinition[] = [
@@ -154,30 +75,18 @@ export function TenantEditorPage() {
       type: 'select',
       options: [
         { value: '', label: 'Не использовать' },
-        ...extraModels.map((m: any) => ({
-          value: m.model,
-          label: `${m.model}${m.state === 'archived' ? ' (архив)' : ''}`,
-        })),
+        ...extraModels.map((m: any) => ({ value: m.model, label: `${m.model}${m.state === 'archived' ? ' (архив)' : ''}` })),
       ],
       description: 'Документы будут индексироваться дополнительно этой моделью',
     },
   ];
 
   const processingFields: FieldDefinition[] = [
-    {
-      key: 'ocr',
-      label: 'OCR',
-      type: 'boolean',
-      description: 'Распознавание текста на изображениях',
-    },
-    {
-      key: 'layout',
-      label: 'Layout Analysis',
-      type: 'boolean',
-      description: 'Анализ структуры документа',
-    },
+    { key: 'ocr', label: 'OCR', type: 'boolean', description: 'Распознавание текста на изображениях' },
+    { key: 'layout', label: 'Layout Analysis', type: 'boolean', description: 'Анализ структуры документа' },
   ];
 
+  // ─── Sync form with data ───
   useEffect(() => {
     if (tenantData) {
       setFormData({
@@ -191,187 +100,101 @@ export function TenantEditorPage() {
     }
   }, [tenantData]);
 
+  // ─── Handlers ───
   const handleSave = async () => {
-    if (!formData.name.trim()) {
-      showError('Название обязательно');
-      return;
-    }
-
+    if (!formData.name.trim()) { showError('Название обязательно'); return; }
     setSaving(true);
     try {
       if (mode === 'edit') {
         await tenantApi.updateTenant(id!, {
-          name: formData.name,
-          description: formData.description,
-          is_active: formData.is_active,
-          extra_embed_model: formData.extra_embed_model || null,
-          ocr: formData.ocr,
-          layout: formData.layout,
+          name: formData.name, description: formData.description,
+          is_active: formData.is_active, extra_embed_model: formData.extra_embed_model || null,
+          ocr: formData.ocr, layout: formData.layout,
         });
         showSuccess('Тенант обновлён');
-        setSearchParams({}); // Switch back to view mode
+        setSearchParams({});
         refetch();
       } else {
         await tenantApi.createTenant({
-          name: formData.name,
-          description: formData.description,
-          is_active: formData.is_active,
-          extra_embed_model: formData.extra_embed_model || undefined,
-          ocr: formData.ocr,
-          layout: formData.layout,
+          name: formData.name, description: formData.description,
+          is_active: formData.is_active, extra_embed_model: formData.extra_embed_model || undefined,
+          ocr: formData.ocr, layout: formData.layout,
         });
         showSuccess('Тенант создан');
         navigate('/admin/tenants');
       }
     } catch (err) {
       showError(err instanceof Error ? err.message : 'Ошибка сохранения');
-    } finally {
-      setSaving(false);
-    }
+    } finally { setSaving(false); }
   };
 
-  const handleEdit = () => {
-    setSearchParams({ mode: 'edit' });
-  };
+  const handleEdit = () => setSearchParams({ mode: 'edit' });
 
   const handleCancel = () => {
-    if (mode === 'edit') {
-      // Reset form to original data
-      if (tenantData) {
-        setFormData({
-          name: tenantData.name || '',
-          description: tenantData.description || '',
-          is_active: tenantData.is_active ?? true,
-          extra_embed_model: (tenantData as any).extra_embed_model || '',
-          ocr: tenantData.ocr || false,
-          layout: tenantData.layout || false,
-        });
-      }
+    if (mode === 'edit' && tenantData) {
+      setFormData({
+        name: tenantData.name || '', description: tenantData.description || '',
+        is_active: tenantData.is_active ?? true, extra_embed_model: (tenantData as any).extra_embed_model || '',
+        ocr: tenantData.ocr || false, layout: tenantData.layout || false,
+      });
       setSearchParams({});
-    }
+    } else if (isNew) { navigate('/admin/tenants'); }
   };
 
-  const handleDelete = async () => {
-    if (!confirm('Удалить этот тенант?')) return;
+  const handleDelete = () => setShowDeleteConfirm(true);
+  const handleDeleteConfirm = async () => {
     try {
       await tenantApi.deleteTenant(id!);
       showSuccess('Тенант удалён');
       navigate('/admin/tenants');
-    } catch (err) {
-      showError(err instanceof Error ? err.message : 'Ошибка удаления');
-    }
+    } catch (err) { showError(err instanceof Error ? err.message : 'Ошибка удаления'); }
+    setShowDeleteConfirm(false);
   };
 
+  // ─── Render ───
   return (
-    <EntityPage
+    <>
+    <EntityPageV2
+      title={tenantData?.name || 'Новый тенант'}
       mode={mode}
-      entityName={tenantData?.name || 'Новый тенант'}
-      entityTypeLabel="тенанта"
-      backPath="/admin/tenants"
-      loading={!isCreate && isLoading}
+      loading={!isNew && isLoading}
       saving={saving}
+      breadcrumbs={[
+        { label: 'Тенанты', href: '/admin/tenants' },
+        { label: tenantData?.name || 'Новый тенант' },
+      ]}
+      backPath="/admin/tenants"
       onEdit={handleEdit}
       onSave={handleSave}
       onCancel={handleCancel}
       onDelete={handleDelete}
       showDelete={mode === 'view' && !!id}
     >
-      {!isCreate && id ? (
-        <Tabs
-          tabs={[
-            { id: 'general', label: 'Основное' },
-            { id: 'rbac', label: 'RBAC правила' },
-          ]}
-          activeTab={activeTab}
-          onChange={setActiveTab}
-        >
-          <TabPanel id="general" activeTab={activeTab}>
-            <ContentGrid>
-              <ContentBlock
-                width="2/3"
-                title="Основная информация"
-                icon="info"
-                editable={isEditable}
-                fields={basicInfoFields}
-                data={formData}
-                onChange={handleFieldChange}
-              />
-              <ContentBlock
-                width="1/3"
-                title="Статус"
-                icon="toggle-left"
-                editable={isEditable}
-                fields={statusFields}
-                data={formData}
-                onChange={handleFieldChange}
-              />
-              <ContentBlock
-                width="1/3"
-                title="Модели эмбеддинга"
-                icon="cpu"
-                editable={isEditable}
-                fields={embeddingFields}
-                data={formData}
-                onChange={handleFieldChange}
-              />
-              <ContentBlock
-                width="1/3"
-                title="Настройки обработки"
-                icon="settings"
-                editable={isEditable}
-                fields={processingFields}
-                data={formData}
-                onChange={handleFieldChange}
-              />
+      <Tab title="Обзор" layout="grid">
+        <ContentBlock title="Основная информация" icon="info" editable={editable} fields={basicInfoFields} data={formData} onChange={handleFieldChange} />
+        <ContentBlock title="Статус" icon="toggle-left" editable={editable} fields={statusFields} data={formData} onChange={handleFieldChange} />
+        <ContentBlock title="Модели эмбеддинга" icon="cpu" editable={editable} fields={embeddingFields} data={formData} onChange={handleFieldChange} />
+        <ContentBlock title="Настройки обработки" icon="settings" editable={editable} fields={processingFields} data={formData} onChange={handleFieldChange} />
+      </Tab>
 
-            </ContentGrid>
-          </TabPanel>
-
-          <TabPanel id="rbac" activeTab={activeTab}>
-            <RBACRulesTable mode="tenant" levelId={id} />
-          </TabPanel>
-        </Tabs>
-      ) : (
-        <ContentGrid>
-          <ContentBlock
-            width="2/3"
-            title="Основная информация"
-            icon="info"
-            editable={isEditable}
-            fields={basicInfoFields}
-            data={formData}
-            onChange={handleFieldChange}
-          />
-          <ContentBlock
-            width="1/3"
-            title="Статус"
-            icon="toggle-left"
-            editable={isEditable}
-            fields={statusFields}
-            data={formData}
-            onChange={handleFieldChange}
-          />
-          <ContentBlock
-            width="1/3"
-            title="Модели эмбеддинга"
-            icon="cpu"
-            editable={isEditable}
-            fields={embeddingFields}
-            data={formData}
-            onChange={handleFieldChange}
-          />
-          <ContentBlock
-            width="1/3"
-            title="Настройки обработки"
-            icon="settings"
-            editable={isEditable}
-            fields={processingFields}
-            data={formData}
-            onChange={handleFieldChange}
-          />
-        </ContentGrid>
+      {!isNew && (
+        <Tab title="RBAC правила" layout="full">
+          <RBACRulesTable mode="tenant" ownerId={id} />
+        </Tab>
       )}
-    </EntityPage>
+    </EntityPageV2>
+
+    <ConfirmDialog
+      open={showDeleteConfirm}
+      title="Удалить тенант?"
+      message="Вы уверены? Это действие нельзя отменить."
+      confirmLabel="Удалить"
+      cancelLabel="Отмена"
+      variant="danger"
+      onConfirm={handleDeleteConfirm}
+      onCancel={() => setShowDeleteConfirm(false)}
+    />
+    </>
   );
 }
 

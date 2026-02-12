@@ -1,5 +1,5 @@
 /**
- * ModelEditorPage - View/Edit/Create model with EntityPage
+ * ModelEditorPage - View/Edit/Create model with EntityPageV2
  * 
  * Unified page for all model operations:
  * - View: /admin/models/:id (readonly)
@@ -10,10 +10,12 @@ import { useState, useEffect } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { adminApi, type ModelCreate, type ModelUpdate, type ModelType, type ModelStatus } from '@/shared/api/admin';
+import { toolInstancesApi } from '@/shared/api/toolInstances';
 import { qk } from '@/shared/api/keys';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
-import { EntityPage, type EntityPageMode } from '@/shared/ui/EntityPage';
-import { ContentBlock, ContentGrid, type FieldDefinition } from '@/shared/ui/ContentBlock';
+import { EntityPageV2, Tab, type EntityPageMode, type BreadcrumbItem } from '@/shared/ui/EntityPage/EntityPageV2';
+import { ContentBlock, type FieldDefinition } from '@/shared/ui/ContentBlock';
+import { Badge, ConfirmDialog } from '@/shared/ui';
 
 const MODEL_TYPES: { value: ModelType; label: string }[] = [
   { value: 'llm_chat', label: 'LLM Chat' },
@@ -47,6 +49,8 @@ export function ModelEditorPage() {
   const isEditMode = searchParams.get('mode') === 'edit';
   const mode: EntityPageMode = isCreate ? 'create' : isEditMode ? 'edit' : 'view';
   const isEditable = mode === 'edit' || mode === 'create';
+  const [saving, setSaving] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   
   // Form state
   const [formData, setFormData] = useState<Partial<ModelCreate>>({
@@ -55,8 +59,7 @@ export function ModelEditorPage() {
     type: 'llm_chat',
     provider: 'openai',
     provider_model_name: '',
-    base_url: '',
-    api_key_ref: '',
+    instance_id: '',
     status: 'available',
     enabled: true,
     default_for_type: false,
@@ -65,7 +68,6 @@ export function ModelEditorPage() {
     extra_config: {},
   });
   const [vectorDim, setVectorDim] = useState<string>('');
-  const [saving, setSaving] = useState(false);
   
   // Load existing model
   const { data: model, isLoading, refetch } = useQuery({
@@ -73,6 +75,21 @@ export function ModelEditorPage() {
     queryFn: () => adminApi.getModel(id!),
     enabled: !isCreate && !!id,
   });
+
+  // Load instances for select dropdown
+  const { data: instances = [] } = useQuery({
+    queryKey: qk.toolInstances.all(),
+    queryFn: () => toolInstancesApi.list(),
+  });
+
+  // Build instance options for select
+  const instanceOptions = [
+    { value: '', label: '— Не выбран —' },
+    ...instances.map((inst) => ({
+      value: inst.id,
+      label: `${inst.name} (${inst.slug})`,
+    })),
+  ];
   
   // Populate form when model loads
   useEffect(() => {
@@ -83,8 +100,7 @@ export function ModelEditorPage() {
         type: model.type,
         provider: model.provider,
         provider_model_name: model.provider_model_name,
-        base_url: model.base_url,
-        api_key_ref: model.api_key_ref || '',
+        instance_id: model.instance_id || '',
         status: model.status,
         enabled: model.enabled,
         default_for_type: model.default_for_type,
@@ -98,7 +114,7 @@ export function ModelEditorPage() {
     }
   }, [model]);
   
-  // Create mutation
+  // Mutations
   const createMutation = useMutation({
     mutationFn: (data: ModelCreate) => adminApi.createModel(data),
     onSuccess: () => {
@@ -106,7 +122,6 @@ export function ModelEditorPage() {
     },
   });
   
-  // Update mutation
   const updateMutation = useMutation({
     mutationFn: (data: ModelUpdate) => adminApi.updateModel(id!, data),
     onSuccess: () => {
@@ -114,7 +129,18 @@ export function ModelEditorPage() {
       queryClient.invalidateQueries({ queryKey: qk.admin.models.detail(id!) });
     },
   });
+
+  const deleteMutation = useMutation({
+    mutationFn: () => adminApi.deleteModel(id!),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: qk.admin.models.all() });
+      showSuccess('Модель удалена');
+      navigate('/admin/models');
+    },
+    onError: (err: any) => showError(err?.message || 'Ошибка удаления'),
+  });
   
+  // Handlers
   const handleSave = async () => {
     setSaving(true);
     try {
@@ -136,8 +162,7 @@ export function ModelEditorPage() {
           name: formData.name,
           provider: formData.provider,
           provider_model_name: formData.provider_model_name,
-          base_url: formData.base_url,
-          api_key_ref: formData.api_key_ref,
+          instance_id: formData.instance_id || undefined,
           status: formData.status,
           enabled: formData.enabled,
           default_for_type: formData.default_for_type,
@@ -159,9 +184,7 @@ export function ModelEditorPage() {
     }
   };
   
-  const handleEdit = () => {
-    setSearchParams({ mode: 'edit' });
-  };
+  const handleEdit = () => setSearchParams({ mode: 'edit' });
   
   const handleCancel = () => {
     if (mode === 'edit' && model) {
@@ -171,8 +194,7 @@ export function ModelEditorPage() {
         type: model.type,
         provider: model.provider,
         provider_model_name: model.provider_model_name,
-        base_url: model.base_url,
-        api_key_ref: model.api_key_ref || '',
+        instance_id: model.instance_id || '',
         status: model.status,
         enabled: model.enabled,
         default_for_type: model.default_for_type,
@@ -186,21 +208,23 @@ export function ModelEditorPage() {
     }
   };
   
-  const handleDelete = async () => {
-    if (!confirm('Удалить эту модель?')) return;
-    try {
-      await adminApi.deleteModel(id!);
-      showSuccess('Модель удалена');
-      queryClient.invalidateQueries({ queryKey: qk.admin.models.all() });
-      navigate('/admin/models');
-    } catch (err) {
-      showError(err instanceof Error ? err.message : 'Ошибка удаления');
-    }
+  const handleDelete = () => setShowDeleteConfirm(true);
+
+  const handleDeleteConfirm = async () => {
+    setSaving(true);
+    await deleteMutation.mutateAsync();
+    setSaving(false);
+    setShowDeleteConfirm(false);
   };
   
   const handleFieldChange = (key: string, value: any) => {
     setFormData((prev: Partial<ModelCreate>) => ({ ...prev, [key]: value }));
   };
+
+  const breadcrumbs: BreadcrumbItem[] = [
+    { label: 'Модели', href: '/admin/models' },
+    { label: model?.name || 'Новая модель' },
+  ];
 
   // Field definitions
   const basicInfoFields: FieldDefinition[] = [
@@ -253,18 +277,11 @@ export function ModelEditorPage() {
       placeholder: 'gpt-4-turbo-preview',
     },
     {
-      key: 'base_url',
-      label: 'Base URL',
-      type: 'text',
-      required: true,
-      placeholder: 'https://api.openai.com/v1',
-    },
-    {
-      key: 'api_key_ref',
-      label: 'API Key Reference',
-      type: 'text',
-      placeholder: 'OPENAI_API_KEY',
-      description: 'Имя переменной окружения (не сам ключ)',
+      key: 'instance_id',
+      label: 'Инстанс (провайдер)',
+      type: 'select',
+      options: instanceOptions,
+      description: 'Подключение к провайдеру (URL + креды)',
     },
   ];
 
@@ -289,88 +306,174 @@ export function ModelEditorPage() {
     },
   ];
 
-  const embeddingFields: FieldDefinition[] = [
-    {
-      key: 'vector_dim',
-      label: 'Размерность вектора',
-      type: 'number',
-      required: true,
-      placeholder: '1536',
-      render: (value, editable, onChange) => {
-        if (!editable) return vectorDim || '—';
-        return null; // Use default rendering
-      },
-    },
-  ];
-  
-  return (
-    <EntityPage
-      mode={mode}
-      entityName={model?.alias || 'Новая модель'}
-      entityTypeLabel="модели"
-      backPath="/admin/models"
-      loading={!isCreate && isLoading}
-      saving={saving}
-      onEdit={handleEdit}
-      onSave={handleSave}
-      onCancel={handleCancel}
-      onDelete={handleDelete}
-      showDelete={mode === 'view' && !!id && !model?.is_system}
-    >
-      <ContentGrid>
-        {/* Basic Info - 1/2 (есть текстовые поля) */}
-        <ContentBlock
-          width="1/2"
-          title="Основная информация"
-          icon="info"
-          editable={isEditable}
-          fields={basicInfoFields}
-          data={formData}
-          onChange={handleFieldChange}
-        />
-
-        {/* Provider - 1/2 (есть текстовые поля) */}
-        <ContentBlock
-          width="1/2"
-          title="Провайдер"
-          icon="server"
-          editable={isEditable}
-          fields={providerFields}
-          data={formData}
-          onChange={handleFieldChange}
-        />
-
-        {/* Status - 1/3 (только переключатели и выпадашки) */}
-        <ContentBlock
-          width="1/3"
-          title="Статус и флаги"
-          icon="settings"
-          editable={isEditable}
-          fields={statusFields}
-          data={formData}
-          onChange={handleFieldChange}
-        />
-
-        {/* Embedding config - 1/3 (только для embedding) */}
-        {formData.type === 'embedding' && (
+  // Create mode — single tab
+  if (isCreate) {
+    return (
+      <EntityPageV2
+        title="Новая модель"
+        mode={mode}
+        saving={saving}
+        breadcrumbs={breadcrumbs}
+        backPath="/admin/models"
+        onSave={handleSave}
+        onCancel={handleCancel}
+      >
+        <Tab title="Создание" layout="grid">
           <ContentBlock
-            width="1/3"
-            title="Настройки эмбеддинга"
-            icon="cpu"
-            editable={isEditable}
-            fields={[{
-              key: 'vector_dim',
-              label: 'Размерность вектора',
-              type: 'number',
-              required: true,
-              placeholder: '1536',
-            }]}
-            data={{ vector_dim: vectorDim }}
-            onChange={(key, value) => setVectorDim(value)}
+            width="full"
+            title="Основная информация"
+            icon="info"
+            editable={true}
+            fields={basicInfoFields}
+            data={formData}
+            onChange={handleFieldChange}
           />
-        )}
-      </ContentGrid>
-    </EntityPage>
+          <ContentBlock
+            width="full"
+            title="Провайдер"
+            icon="server"
+            editable={true}
+            fields={providerFields}
+            data={formData}
+            onChange={handleFieldChange}
+          />
+          <ContentBlock
+            width="full"
+            title="Статус и флаги"
+            icon="settings"
+            editable={true}
+            fields={statusFields}
+            data={formData}
+            onChange={handleFieldChange}
+          />
+          {formData.type === 'embedding' && (
+            <ContentBlock
+              width="full"
+              title="Настройки эмбеддинга"
+              icon="cpu"
+              editable={true}
+              fields={[{
+                key: 'vector_dim',
+                label: 'Размерность вектора',
+                type: 'number',
+                required: true,
+                placeholder: '1536',
+              }]}
+              data={{ vector_dim: vectorDim }}
+              onChange={(_key: string, value: any) => setVectorDim(value)}
+            />
+          )}
+        </Tab>
+      </EntityPageV2>
+    );
+  }
+
+  // View/Edit mode — tabs
+  return (
+    <>
+      <EntityPageV2
+        title={model?.name || 'Модель'}
+        mode={mode}
+        loading={isLoading}
+        saving={saving}
+        breadcrumbs={breadcrumbs}
+        onEdit={handleEdit}
+        onSave={handleSave}
+        onCancel={handleCancel}
+        showDelete={!model?.is_system}
+        onDelete={handleDelete}
+      >
+        <Tab title="Обзор" layout="grid" id="overview">
+          <ContentBlock
+            width="1/2"
+            title="Основная информация"
+            icon="info"
+            editable={isEditable}
+            fields={basicInfoFields}
+            data={isEditable ? formData : (model || formData)}
+            onChange={handleFieldChange}
+            headerActions={
+              model?.health_status ? (
+                <Badge tone={model.health_status === 'healthy' ? 'success' : model.health_status === 'degraded' ? 'warn' : 'danger'}>
+                  {model.health_status}
+                </Badge>
+              ) : undefined
+            }
+          />
+          <ContentBlock
+            width="1/2"
+            title="Провайдер и инстанс"
+            icon="server"
+            editable={isEditable}
+            fields={providerFields}
+            data={isEditable ? formData : {
+              ...model,
+              instance_id: model?.instance_id || '',
+            }}
+            onChange={handleFieldChange}
+          />
+          <ContentBlock
+            width="1/2"
+            title="Статус и флаги"
+            icon="settings"
+            editable={isEditable}
+            fields={statusFields}
+            data={isEditable ? formData : (model || formData)}
+            onChange={handleFieldChange}
+          />
+          {(formData.type === 'embedding' || model?.type === 'embedding') && (
+            <ContentBlock
+              width="1/2"
+              title="Настройки эмбеддинга"
+              icon="cpu"
+              editable={isEditable}
+              fields={[{
+                key: 'vector_dim',
+                label: 'Размерность вектора',
+                type: 'number',
+                required: true,
+                placeholder: '1536',
+              }]}
+              data={{ vector_dim: isEditable ? vectorDim : (model?.extra_config?.vector_dim || '—') }}
+              onChange={(_key: string, value: any) => setVectorDim(value)}
+            />
+          )}
+        </Tab>
+
+        <Tab title="Health" layout="full" id="health">
+          <ContentBlock
+            width="full"
+            title="Состояние модели"
+            icon="activity"
+            fields={[
+              { key: 'health_status', label: 'Статус', type: 'text' },
+              { key: 'health_latency_ms', label: 'Задержка (мс)', type: 'text' },
+              { key: 'health_error', label: 'Ошибка', type: 'text' },
+              { key: 'last_health_check_at', label: 'Последняя проверка', type: 'text' },
+            ]}
+            data={{
+              health_status: model?.health_status || '—',
+              health_latency_ms: model?.health_latency_ms != null ? String(model.health_latency_ms) : '—',
+              health_error: model?.health_error || '—',
+              last_health_check_at: model?.last_health_check_at
+                ? new Date(model.last_health_check_at).toLocaleString('ru-RU')
+                : '—',
+            }}
+          />
+        </Tab>
+      </EntityPageV2>
+
+      <ConfirmDialog
+        open={showDeleteConfirm}
+        title="Удалить модель?"
+        message={`Вы уверены, что хотите удалить модель "${model?.name}"? Это действие нельзя отменить.`}
+        confirmLabel="Удалить"
+        cancelLabel="Отмена"
+        variant="danger"
+        onConfirm={handleDeleteConfirm}
+        onCancel={() => setShowDeleteConfirm(false)}
+      />
+    </>
   );
 }
 

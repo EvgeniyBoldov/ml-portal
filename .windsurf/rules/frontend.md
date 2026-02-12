@@ -36,13 +36,23 @@ UI & STYLES
 - **CRITICAL**: Use proper CSS variables: --bg-primary, --text-primary, --border-color (NOT --color-bg, --color-text, --border)
 
 ADMIN PAGES ARCHITECTURE
-- **UNIFIED LAYOUTS**: Use BaseLayout components for all admin pages:
-  - <BaseLayout type="split"> for Prompt/Baseline entities
-  - <BaseLayout type="tabs"> for Policy entities
-- **NO DUPLICATION**: Never import styles from other pages (e.g., './PromptEditorPage.module.css')
-- **SHARED BLOCKS**: Use StatusBlock, VersionsBlock, EntityInfoBlock for entity management
-- **CONFIG HOOKS**: Use useStatusConfig(type) instead of inline STATUS_LABELS/STATUS_TONES objects
-- **CONSISTENT PATTERNS**: All entity pages follow same structure: PageHeader > BaseLayout > ContentBlocks
+- **UNIFIED LAYOUTS**: Use EntityPageV2 + Tab for ALL admin pages (create, edit, view):
+  ```tsx
+  <EntityPageV2 title={entity.name} mode={mode} ...>
+    <Tab title="Обзор" layout="grid">
+      <EntityInfoBlock />
+      <ShortEntityBlock />
+    </Tab>
+    <Tab title="Версии" layout="full" badge={versions.length}>
+      <VersionsBlock />
+    </Tab>
+  </EntityPageV2>
+  ```
+- **TAB LAYOUTS**: Use layout="grid" (default 1fr 1fr), layout="full" (tables), layout="single" (forms), layout="custom" (no wrapper)
+- **NO DUPLICATION**: Never import styles from other pages. Use existing shared blocks only.
+- **SHARED BLOCKS**: Use EntityInfoBlock, ShortEntityBlock, VersionsBlock, DataTable from @/shared/ui
+- **DECLARATIVE ACTIONS**: Tab actions render in header: actions={[<Button>Создать</Button>]}
+- **CONSISTENT PATTERNS**: All entity pages use EntityPageV2 + Tab + shared blocks
 
 API CONTRACTS
 - Align endpoints/types with backend. No client-side "fake detail" via list filtering.

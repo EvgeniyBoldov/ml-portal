@@ -1,7 +1,7 @@
 /**
- * ToolGroupViewPage v2 - View/Edit tool group with tabs
+ * ToolGroupViewPage - View/Edit tool group with EntityPageV2 + Tab architecture
  *
- * Tabs: Обзор | Инструменты
+ * Declarative tabs with existing shared blocks inside.
  */
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
@@ -12,10 +12,9 @@ import {
   type ToolListItem,
 } from '@/shared/api/toolReleases';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
-import { EntityPage, type EntityPageMode } from '@/shared/ui/EntityPage';
 import { ContentBlock, type FieldDefinition } from '@/shared/ui/ContentBlock';
-import { Tabs, TabPanel } from '@/shared/ui/Tabs';
 import { Badge, Button, DataTable, type DataTableColumn, type BreadcrumbItem } from '@/shared/ui';
+import { EntityPageV2, Tab, type EntityPageMode } from '@/shared/ui/EntityPage/EntityPageV2';
 
 const KIND_LABELS: Record<string, string> = {
   read: 'Read',
@@ -29,8 +28,6 @@ const KIND_TONES: Record<string, 'warn' | 'success' | 'info' | 'neutral'> = {
   mixed: 'neutral',
 };
 
-type TabType = 'main' | 'tools';
-
 export function ToolGroupViewPage() {
   const { groupSlug } = useParams<{ groupSlug: string }>();
   const navigate = useNavigate();
@@ -38,8 +35,6 @@ export function ToolGroupViewPage() {
   const queryClient = useQueryClient();
   const showError = useErrorToast();
   const showSuccess = useSuccessToast();
-
-  const [activeTab, setActiveTab] = useState<TabType>('main');
   const isEditMode = searchParams.get('mode') === 'edit';
   const mode: EntityPageMode = isEditMode ? 'edit' : 'view';
   const isEditable = mode === 'edit';
@@ -224,14 +219,13 @@ export function ToolGroupViewPage() {
   ];
 
   return (
-    <EntityPage
+    <EntityPageV2
+      title={group?.name || groupSlug || 'Группа'}
       mode={mode}
-      entityName={group?.name || groupSlug || 'Группа'}
-      entityTypeLabel="группы"
-      backPath="/admin/tools"
-      breadcrumbs={breadcrumbs}
       loading={groupLoading}
       saving={saving}
+      breadcrumbs={breadcrumbs}
+      backPath="/admin/tools"
       onEdit={handleEdit}
       onSave={handleSave}
       onCancel={handleCancel}
@@ -247,28 +241,26 @@ export function ToolGroupViewPage() {
         </Button>
       }
     >
-      <Tabs tabs={tabs} activeTab={activeTab} onChange={setActiveTab}>
-        <TabPanel id="main" activeTab={activeTab}>
-          <ContentBlock
-            title="Основная информация"
-            editable={isEditable}
-            fields={groupFields}
-            data={formData}
-            onChange={handleFieldChange}
-          />
-        </TabPanel>
+      <Tab title="Обзор" layout="single" id="main">
+        <ContentBlock
+          title="Основная информация"
+          editable={isEditable}
+          fields={groupFields}
+          data={formData}
+          onChange={handleFieldChange}
+        />
+      </Tab>
 
-        <TabPanel id="tools" activeTab={activeTab}>
-          <DataTable
-            columns={toolColumns}
-            data={group?.tools || []}
-            keyField="id"
-            emptyText="В этой группе пока нет инструментов"
-            onRowClick={handleToolClick}
-          />
-        </TabPanel>
-      </Tabs>
-    </EntityPage>
+      <Tab title={`Инструменты (${group?.tools?.length || 0})`} layout="full" id="tools">
+        <DataTable
+          columns={toolColumns}
+          data={group?.tools || []}
+          keyField="id"
+          emptyText="В этой группе пока нет инструментов"
+          onRowClick={handleToolClick}
+        />
+      </Tab>
+    </EntityPageV2>
   );
 }
 

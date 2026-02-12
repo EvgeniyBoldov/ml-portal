@@ -56,6 +56,14 @@ export interface EntityTabsPageProps<TContainer = any, TVersion = any> {
   onDelete?: () => void;
   /** Status badge to show in info block header */
   statusBadge?: React.ReactNode;
+  /** Additional custom tabs after built-in ones */
+  additionalTabs?: Array<{
+    id: string;
+    label: string;
+    count?: number;
+    render: () => React.ReactNode;
+    actions?: React.ReactNode[];
+  }>;
 }
 
 export function EntityTabsPage<
@@ -88,8 +96,9 @@ export function EntityTabsPage<
   showDelete = false,
   onDelete,
   statusBadge,
+  additionalTabs,
 }: EntityTabsPageProps<TContainer, TVersion>) {
-  const isNew = slug === 'new';
+  const isNew = !slug || slug === 'new';
   const isEditable = mode === 'edit' || mode === 'create';
   const [activeTab, setActiveTab] = useState('overview');
   const [selectedVersion, setSelectedVersion] = useState<TVersion | null>(null);
@@ -131,6 +140,12 @@ export function EntityTabsPage<
         );
       }
       
+      // Custom tab actions (edit mode)
+      const customTab = additionalTabs?.find(t => t.id === activeTab);
+      if (customTab?.actions) {
+        buttons.push(...customTab.actions);
+      }
+
       if (showDelete && onDelete) {
         buttons.push(
           <Button key="delete" variant="danger" onClick={onDelete}>
@@ -168,6 +183,12 @@ export function EntityTabsPage<
         }
       }
       
+      // Custom tab actions (view mode)
+      const customTab = additionalTabs?.find(t => t.id === activeTab);
+      if (customTab?.actions) {
+        buttons.push(...customTab.actions);
+      }
+
       if (showDelete && onDelete) {
         buttons.push(
           <Button key="delete" variant="danger" onClick={onDelete}>
@@ -196,6 +217,18 @@ export function EntityTabsPage<
         Версии
         <span className={styles.tabCount}>{versions.length}</span>
       </button>
+      {additionalTabs?.map(tab => (
+        <button
+          key={tab.id}
+          className={`${styles.tab} ${activeTab === tab.id ? styles.active : ''}`}
+          onClick={() => setActiveTab(tab.id)}
+        >
+          {tab.label}
+          {tab.count !== undefined && (
+            <span className={styles.tabCount}>{tab.count}</span>
+          )}
+        </button>
+      ))}
     </div>
   );
 
@@ -293,6 +326,14 @@ export function EntityTabsPage<
               />
             </div>
           )}
+
+          {additionalTabs?.map(tab => (
+            activeTab === tab.id && (
+              <div key={tab.id} className={styles.versionsTab}>
+                {tab.render()}
+              </div>
+            )
+          ))}
         </div>
       )}
     </EntityPage>

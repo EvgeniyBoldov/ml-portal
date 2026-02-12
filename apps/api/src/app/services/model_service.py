@@ -39,6 +39,10 @@ class ModelService:
         if data.get("default_for_type"):
             await self._unset_default_for_type(data["type"])
         
+        # Convert instance_id string to UUID if present
+        if data.get("instance_id") and isinstance(data["instance_id"], str):
+            data["instance_id"] = uuid.UUID(data["instance_id"])
+        
         model = Model(**data)
         self.session.add(model)
         await self.session.flush()
@@ -115,6 +119,10 @@ class ModelService:
         # If setting default_for_type=True, unset previous default
         if data.get("default_for_type") and not model.default_for_type:
             await self._unset_default_for_type(model.type)
+        
+        # Convert instance_id string to UUID if present
+        if data.get("instance_id") and isinstance(data["instance_id"], str):
+            data["instance_id"] = uuid.UUID(data["instance_id"])
         
         # Update fields
         for key, value in data.items():

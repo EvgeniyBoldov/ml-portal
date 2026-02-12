@@ -462,12 +462,46 @@ class EmbeddingServiceFactory:
                     )
                     model = result.scalars().first()
                     if model:
+                        # Resolve base_url and api_key from instance + credentials
+                        base_url = ''
+                        api_key = None
+                        if model.instance:
+                            base_url = model.instance.url or ''
+                        
+                        # 1. Try CredentialService (new approach)
+                        if model.instance_id:
+                            try:
+                                from app.services.credential_service import CredentialService
+                                cred_service = CredentialService(session)
+                                decrypted = await cred_service.resolve_credentials(
+                                    instance_id=model.instance_id,
+                                    strategy="ANY",
+                                )
+                                if decrypted:
+                                    if decrypted.auth_type == "api_key":
+                                        api_key = decrypted.payload.get("api_key")
+                                    elif decrypted.auth_type == "token":
+                                        api_key = decrypted.payload.get("token")
+                            except Exception as e:
+                                logger.warning(f"Failed to resolve credentials for {model.alias}: {e}")
+                        
+                        # 2. Fallback: instance.config (legacy)
+                        if not api_key and model.instance and model.instance.config:
+                            api_key = model.instance.config.get('api_key')
+                            if not api_key:
+                                ref = model.instance.config.get('api_key_ref')
+                                if ref:
+                                    api_key = os.getenv(ref)
+                        
+                        if not base_url and model.extra_config and model.extra_config.get('base_url'):
+                            base_url = model.extra_config['base_url']
+                        
                         return ModelConfig(
                             alias=model.alias,
                             provider=model.provider,
                             provider_model_name=model.provider_model_name,
-                            base_url=model.base_url,
-                            api_key=cls._resolve_api_key(model.api_key_ref),
+                            base_url=base_url,
+                            api_key=api_key,
                             dimensions=model.extra_config.get('vector_dim') if model.extra_config else None,
                             extra_config=model.extra_config
                         )

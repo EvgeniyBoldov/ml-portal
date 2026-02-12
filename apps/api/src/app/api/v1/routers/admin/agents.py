@@ -251,3 +251,21 @@ async def deactivate_version(
         raise HTTPException(status_code=404, detail=str(e))
     except AgentError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.delete("/{slug}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_agent(
+    slug: str,
+    db: AsyncSession = Depends(db_session),
+    _: UserCtx = Depends(require_admin),
+):
+    """Delete agent with cascade delete of all versions and bindings"""
+    try:
+        service = AgentService(db)
+        agent = await service.get_agent_by_slug(slug)
+        await service.delete_agent(agent.id)
+        await db.commit()
+    except AgentNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except AgentError as e:
+        raise HTTPException(status_code=400, detail=str(e))

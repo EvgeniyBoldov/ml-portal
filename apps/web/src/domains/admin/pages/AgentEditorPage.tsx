@@ -11,7 +11,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { agentsApi, type AgentDetail, type AgentVersionInfo } from '@/shared/api';
 import { qk } from '@/shared/api/keys';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
-import { EntityTabsPage, PromptVersionCard, type FieldDefinition, type BreadcrumbItem, type EntityPageMode } from '@/shared/ui';
+import { EntityTabsPage, PromptVersionCard, ConfirmDialog, type FieldDefinition, type BreadcrumbItem, type EntityPageMode } from '@/shared/ui';
 
 export function AgentEditorPage() {
   const { slug } = useParams<{ slug: string }>();
@@ -21,10 +21,11 @@ export function AgentEditorPage() {
   const showError = useErrorToast();
   const showSuccess = useSuccessToast();
 
-  const isNew = slug === 'new';
+  const isNew = !slug || slug === 'new';
   const isEditMode = searchParams.get('mode') === 'edit';
   const mode: EntityPageMode = isNew ? 'create' : isEditMode ? 'edit' : 'view';
   const [saving, setSaving] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   const [formData, setFormData] = useState({
     slug: '',
@@ -76,6 +77,16 @@ export function AgentEditorPage() {
     onError: (err: any) => showError(err?.message || 'Ошибка обновления'),
   });
 
+  const deleteMutation = useMutation({
+    mutationFn: () => agentsApi.delete(slug!),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: qk.agents.list() });
+      showSuccess('Агент удалён');
+      navigate('/admin/agents');
+    },
+    onError: (err: any) => showError(err?.message || 'Ошибка удаления'),
+  });
+
   const handleSave = async () => {
     setSaving(true);
     try {
@@ -117,6 +128,14 @@ export function AgentEditorPage() {
     setFormData(prev => ({ ...prev, [key]: value }));
   };
 
+  const handleDelete = () => {
+    setShowDeleteConfirm(true);
+  };
+
+  const handleDeleteConfirm = async () => {
+    await deleteMutation.mutateAsync();
+  };
+
   const containerFields: FieldDefinition[] = [
     {
       key: 'slug',
@@ -149,34 +168,54 @@ export function AgentEditorPage() {
   ];
 
   return (
-    <EntityTabsPage
-      entityType="policy"
-      entityNameLabel="Агент"
-      entityTypeLabel="агента"
-      slug={slug!}
-      basePath="/admin/agents"
-      listPath="/admin/agents"
-      container={agent || null}
-      versions={agent?.versions || []}
-      isLoading={isLoading}
-      formData={formData}
-      mode={mode}
-      saving={saving}
-      onFieldChange={handleFieldChange}
-      onEdit={handleEdit}
-      onSave={handleSave}
-      onCancel={handleCancel}
-      onCreateVersion={() => navigate(`/admin/agents/${slug}/versions/new`)}
-      onSelectVersion={(v: AgentVersionInfo) => navigate(`/admin/agents/${slug}/versions/${v.version}`)}
-      containerFields={containerFields}
-      breadcrumbs={breadcrumbs}
-      renderVersionContent={() => (
-        <PromptVersionCard
-          version={selectedVersion ? { ...selectedVersion, template: selectedVersion.prompt } : null}
-          onCreateVersion={() => navigate(`/admin/agents/${slug}/versions/new`)}
-        />
-      )}
-    />
+    <>
+      <EntityTabsPage
+        entityType="agent"
+        entityNameLabel="Агент"
+        entityTypeLabel="агента"
+        slug={slug!}
+        basePath="/admin/agents"
+        listPath="/admin/agents"
+        container={agent || null}
+        versions={agent?.versions || []}
+        isLoading={isLoading}
+        formData={formData}
+        mode={mode}
+        saving={saving}
+        onFieldChange={handleFieldChange}
+        onEdit={handleEdit}
+        onSave={handleSave}
+        onCancel={handleCancel}
+        onCreateVersion={() => navigate(`/admin/agents/${slug}/versions/new`)}
+        onSelectVersion={(v: AgentVersionInfo) => navigate(`/admin/agents/${slug}/versions/${v.version}`)}
+        containerFields={containerFields}
+        breadcrumbs={breadcrumbs}
+        showDelete={!isNew && !!agent}
+        onDelete={handleDelete}
+        renderVersionContent={() => (
+          <PromptVersionCard
+            version={selectedVersion ? { ...selectedVersion, template: selectedVersion.prompt } : null}
+            onCreateVersion={() => navigate(`/admin/agents/${slug}/versions/new`)}
+          />
+        )}
+      />
+      
+      <ConfirmDialog
+        open={showDeleteConfirm}
+        title="Удалить агента?"
+        message={
+          <div>
+            <p>Вы уверены, что хотите удалить агента <strong>{agent?.name}</strong>?</p>
+            <p>Это действие удалит все версии и привязки инструментов. Отменить его невозможно.</p>
+          </div>
+        }
+        confirmLabel="Удалить"
+        cancelLabel="Отмена"
+        variant="danger"
+        onConfirm={handleDeleteConfirm}
+        onCancel={() => setShowDeleteConfirm(false)}
+      />
+    </>
   );
 }
 

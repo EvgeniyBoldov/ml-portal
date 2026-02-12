@@ -23,7 +23,6 @@ class PlatformSettingsResponse(BaseModel):
     id: UUID
     default_policy_id: Optional[UUID]
     default_limit_id: Optional[UUID]
-    default_rbac_policy_id: Optional[UUID]
     created_at: datetime
     updated_at: datetime
 
@@ -34,7 +33,6 @@ class PlatformSettingsResponse(BaseModel):
 class PlatformSettingsUpdate(BaseModel):
     default_policy_id: Optional[UUID] = None
     default_limit_id: Optional[UUID] = None
-    default_rbac_policy_id: Optional[UUID] = None
 
 
 # ─── Endpoints ────────────────────────────────────────────────────────
@@ -65,8 +63,6 @@ async def update_platform_settings(
         kwargs["default_policy_id"] = data.default_policy_id
     if data.default_limit_id is not None:
         kwargs["default_limit_id"] = data.default_limit_id
-    if data.default_rbac_policy_id is not None:
-        kwargs["default_rbac_policy_id"] = data.default_rbac_policy_id
 
     if not kwargs:
         settings = await service.get()

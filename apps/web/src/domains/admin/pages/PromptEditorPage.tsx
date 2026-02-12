@@ -22,7 +22,7 @@ export function PromptEditorPage() {
   const showError = useErrorToast();
   const showSuccess = useSuccessToast();
 
-  const isNew = slug === 'new';
+  const isNew = !slug || slug === 'new';
   const isEditMode = searchParams.get('mode') === 'edit';
   const mode: EntityPageMode = isNew ? 'create' : isEditMode ? 'edit' : 'view';
   const [saving, setSaving] = useState(false);

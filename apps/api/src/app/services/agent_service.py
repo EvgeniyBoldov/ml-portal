@@ -50,8 +50,8 @@ class AgentVersionNotEditableError(AgentError):
 class AgentService:
     """Service for managing agents and their versions"""
 
-    DEFAULT_AGENT = "chat-simple"
-    RAG_AGENT = "chat-rag"
+    DEFAULT_AGENT = "assistant"
+    RAG_AGENT = "rag-search"
 
     def __init__(self, session: AsyncSession):
         self.session = session

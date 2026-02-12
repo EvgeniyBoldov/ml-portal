@@ -38,8 +38,8 @@ def serialize_model(model: Model) -> Dict[str, Any]:
         "type": model.type.value,
         "provider": model.provider,
         "provider_model_name": model.provider_model_name,
-        "base_url": model.base_url,
-        "api_key_ref": model.api_key_ref,
+        "instance_id": str(model.instance_id) if model.instance_id else None,
+        "instance_name": model.instance.name if model.instance else None,
         "extra_config": model.extra_config,
         "status": model.status.value,
         "enabled": model.enabled,
@@ -215,7 +215,7 @@ async def health_check_all_models(
         results = []
         
         for model in models:
-            result = await health_checker.check_model(model)
+            result = await health_checker.check_model(model, session=session)
             await service.update_health_status(
                 model.id,
                 result.status,
@@ -267,7 +267,7 @@ async def health_check_model(
         
         # Perform actual health check
         health_checker = get_health_checker()
-        result = await health_checker.check_model(model)
+        result = await health_checker.check_model(model, session=session)
         
         # Update model health status in DB
         await service.update_health_status(

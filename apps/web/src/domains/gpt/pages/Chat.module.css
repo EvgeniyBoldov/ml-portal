@@ -3,8 +3,12 @@
   display: flex;
   flex-direction: column;
   height: 100%;
-  background: var(--bg-primary);
+  min-height: 100%;
+  background: var(--panel);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
   overflow: hidden;
+  position: relative;
 }
 
 /* Header */
@@ -56,6 +60,41 @@
   gap: var(--sp-1);
   min-height: 0;
   background: var(--bg-primary, #ffffff);
+  /* Force minimum height to expand */
+  min-height: 300px;
+  /* Smooth scrolling */
+  scroll-behavior: smooth;
+  /* Ensure proper scrollbar styling */
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border) transparent;
+}
+
+/* Webkit scrollbar styling */
+.messagesContainer::-webkit-scrollbar {
+  width: 6px;
+}
+
+.messagesContainer::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.messagesContainer::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 3px;
+}
+
+.messagesContainer::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
+}
+
+/* ChatComposer wrapper - ensure proper flex behavior */
+.chatContainer :global(.composer) {
+  flex-shrink: 0;
+  height: auto;
+  min-height: 60px;
+  max-height: 200px;
+  border-top: 1px solid var(--color-border);
+  background: var(--panel);
 }
 
 .noMessages {

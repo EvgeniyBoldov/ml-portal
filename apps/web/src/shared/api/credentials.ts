@@ -29,17 +29,25 @@ export interface CredentialUpdate {
   is_active?: boolean;
 }
 
+export interface CredentialListParams {
+  skip?: number;
+  limit?: number;
+  instance_id?: string;
+  owner_user_id?: string;
+  owner_tenant_id?: string;
+  owner_platform?: boolean;
+  is_active?: boolean;
+}
+
 export const credentialsApi = {
-  async list(params: {
-    skip?: number;
-    limit?: number;
-    instance_id?: string;
-    is_active?: boolean;
-  } = {}): Promise<Credential[]> {
+  async list(params: CredentialListParams = {}): Promise<Credential[]> {
     const sp = new URLSearchParams();
     if (params.skip) sp.set('skip', String(params.skip));
     if (params.limit) sp.set('limit', String(params.limit));
     if (params.instance_id) sp.set('instance_id', params.instance_id);
+    if (params.owner_user_id) sp.set('owner_user_id', params.owner_user_id);
+    if (params.owner_tenant_id) sp.set('owner_tenant_id', params.owner_tenant_id);
+    if (params.owner_platform !== undefined) sp.set('owner_platform', String(params.owner_platform));
     if (params.is_active !== undefined) sp.set('is_active', String(params.is_active));
     return apiRequest(`/admin/credentials?${sp.toString()}`);
   },

@@ -1,0 +1,37 @@
+/**
+ * JSONDisplay styles
+ * 
+ * Clean, readable JSON display with syntax highlighting
+ */
+.jsonDisplay {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.875rem;
+  line-height: 1.5;
+  background: var(--code-bg, rgba(0, 0, 0, 0.2));
+  color: var(--code-text, #e11d48);
+  padding: 1rem;
+  border-radius: 6px;
+  border: 1px solid var(--border-color, #e5e7eb);
+  overflow: auto;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.jsonDisplay code {
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  font-size: inherit;
+  padding: 0;
+  border: none;
+}
+
+/* Dark theme adjustments */
+@media (prefers-color-scheme: dark) {
+  .jsonDisplay {
+    background: var(--code-bg, #1f2937);
+    color: var(--code-text, #f472b6);
+    border-color: var(--border-color, #374151);
+  }
+}

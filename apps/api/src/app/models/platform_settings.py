@@ -1,7 +1,7 @@
 """
 PlatformSettings model — singleton table for global platform configuration.
 
-Stores references to default policy, limit, rbac_policy, and credential.
+Stores references to default policy and limit.
 Only one row should exist (enforced by application logic + seed).
 """
 import uuid
@@ -19,8 +19,9 @@ class PlatformSettings(Base):
     """
     Global platform settings (singleton).
     
-    Defines default policy, limit, and RBAC policy for the entire platform.
+    Defines default policy and limit for the entire platform.
     These are the fallback values when tenant/user don't override them.
+    RBAC rules are now flat (v3) — no policy container needed.
     """
     __tablename__ = "platform_settings"
 
@@ -39,13 +40,6 @@ class PlatformSettings(Base):
     default_limit_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("limits.id", ondelete="SET NULL"),
-        nullable=True
-    )
-
-    # Default RBAC policy for the platform
-    default_rbac_policy_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("rbac_policies.id", ondelete="SET NULL"),
         nullable=True
     )
 

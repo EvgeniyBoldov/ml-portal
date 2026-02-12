@@ -266,6 +266,9 @@ export function ModelsPage() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
           <span style={{ fontWeight: 500 }}>{model.provider}</span>
           <span style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>{model.provider_model_name}</span>
+          {model.instance_name && (
+            <span style={{ fontSize: '0.7rem', color: 'var(--muted)', opacity: 0.7 }}>⇢ {model.instance_name}</span>
+          )}
         </div>
       ),
     },

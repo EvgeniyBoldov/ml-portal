@@ -127,6 +127,38 @@ async def _sync_tools_from_registry():
         logger.error(f"Failed to sync tools from registry: {e}")
 
 
+async def _rescan_local_instances():
+    """Rescan and sync local instances (RAG global, collection instances)"""
+    try:
+        from app.services.tool_instance_service import ToolInstanceService
+        
+        async with _session_factory() as session:
+            service = ToolInstanceService(session)
+            result = await service.rescan_local_instances()
+            await session.commit()
+            logger.info(
+                f"Local instance rescan: created={result.created}, "
+                f"deleted={result.deleted}, errors={result.errors}"
+            )
+    except Exception as e:
+        logger.error(f"Failed to rescan local instances: {e}")
+
+
+async def _seed_default_agents():
+    """Seed default agents (assistant, rag-search, data-analyst)"""
+    try:
+        from app.services.agent_seed_service import AgentSeedService
+        
+        async with _session_factory() as session:
+            service = AgentSeedService(session)
+            stats = await service.seed_all()
+            await session.commit()
+            if stats["created"] > 0:
+                logger.info(f"Agent seed: {stats}")
+    except Exception as e:
+        logger.error(f"Failed to seed agents: {e}")
+
+
 async def _ensure_default_permission_set():
     """Ensure default permission set exists"""
     try:
@@ -158,10 +190,39 @@ async def _register_embedding_models():
             models = result.scalars().all()
             
             for model in models:
-                # Resolve API key from env var
+                # Resolve base_url and api_key from instance + credentials
+                base_url = ''
                 api_key = None
-                if model.api_key_ref:
-                    api_key = os.getenv(model.api_key_ref)
+                if model.instance:
+                    base_url = model.instance.url or ''
+                
+                # 1. Try CredentialService (new approach)
+                if model.instance_id:
+                    try:
+                        from app.services.credential_service import CredentialService
+                        cred_service = CredentialService(session)
+                        decrypted = await cred_service.resolve_credentials(
+                            instance_id=model.instance_id,
+                            strategy="ANY",
+                        )
+                        if decrypted:
+                            if decrypted.auth_type == "api_key":
+                                api_key = decrypted.payload.get("api_key")
+                            elif decrypted.auth_type == "token":
+                                api_key = decrypted.payload.get("token")
+                    except Exception as e:
+                        logger.warning(f"Failed to resolve credentials for {model.alias}: {e}")
+                
+                # 2. Fallback: instance.config (legacy)
+                if not api_key and model.instance and model.instance.config:
+                    api_key = model.instance.config.get('api_key')
+                    if not api_key:
+                        ref = model.instance.config.get('api_key_ref')
+                        if ref:
+                            api_key = os.getenv(ref)
+                
+                if not base_url and model.extra_config and model.extra_config.get('base_url'):
+                    base_url = model.extra_config['base_url']
                 
                 # Get dimensions from extra_config
                 dimensions = None
@@ -172,7 +233,7 @@ async def _register_embedding_models():
                     alias=model.alias,
                     provider=model.provider,
                     provider_model_name=model.provider_model_name,
-                    base_url=model.base_url,
+                    base_url=base_url,
                     api_key=api_key,
                     dimensions=dimensions,
                     extra_config=model.extra_config
@@ -220,6 +281,12 @@ async def lifespan(app):
         
         # Sync tools from registry to database
         await _sync_tools_from_registry()
+        
+        # Rescan local instances (RAG global, collection instances)
+        await _rescan_local_instances()
+        
+        # Seed default agents (assistant, rag-search, data-analyst)
+        await _seed_default_agents()
         
         # Ensure default permission set exists
         await _ensure_default_permission_set()

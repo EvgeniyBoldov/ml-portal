@@ -56,7 +56,7 @@ def health_check_all_models(self: Task) -> dict:
             
             for model in models:
                 try:
-                    result = await health_checker.check_model(model)
+                    result = await health_checker.check_model(model, session=session)
                     
                     await service.update_health_status(
                         model.id,
@@ -132,7 +132,7 @@ def health_check_single_model(self: Task, model_id: str) -> dict:
             if not model:
                 raise ValueError(f"Model {model_id} not found")
             
-            result = await health_checker.check_model(model)
+            result = await health_checker.check_model(model, session=session)
             
             await service.update_health_status(
                 model.id,

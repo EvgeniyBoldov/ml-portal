@@ -102,6 +102,10 @@ class ExecutionRequest:
     # v2: prompt from AgentVersion
     prompt: str = ""
     
+    # v2: resolved policy/limit data from AgentVersion → PolicyVersion/LimitVersion
+    policy_data: Dict[str, Any] = field(default_factory=dict)
+    limit_data: Dict[str, Any] = field(default_factory=dict)
+    
     intent: Optional[str] = None
     intent_confidence: float = 0.0
     
@@ -198,8 +202,20 @@ class AgentRouter:
             agent = await self.agent_service.get_agent_by_slug(agent_slug)
             routing_reasons.append(f"Agent '{agent_slug}' loaded")
             
-            # v2: resolve active version for prompt
+            # v2: resolve active version for prompt, policy, limits
             agent_version = await self.agent_service.resolve_active_version(agent_slug)
+            
+            # Resolve policy_data and limit_data from version references
+            policy_data: Dict[str, Any] = {}
+            limit_data: Dict[str, Any] = {}
+            
+            if agent_version and agent_version.policy_id:
+                policy_data = await self._resolve_policy_data(agent_version.policy_id)
+                routing_reasons.append(f"Policy resolved: {agent_version.policy_id}")
+            
+            if agent_version and agent_version.limit_id:
+                limit_data = await self._resolve_limit_data(agent_version.limit_id)
+                routing_reasons.append(f"Limit resolved: {agent_version.limit_id}")
             
             effective_perms = await self.permission_service.resolve_permissions(
                 user_id=user_id,
@@ -280,6 +296,8 @@ class AgentRouter:
                 user_id=user_id,
                 tenant_id=tenant_id,
                 prompt=agent_version.prompt,
+                policy_data=policy_data,
+                limit_data=limit_data,
                 available_tools=available_tools,
                 available_collections=available_collections,
                 tool_instances_map=tool_instances_map,
@@ -377,19 +395,32 @@ class AgentRouter:
                 missing.tools.append(tool_slug)
                 continue
             
-            instance = await self.instance_service.resolve_instance(
-                tool_slug=tool_slug,
-                user_id=user_id,
-                tenant_id=tenant_id,
-            )
-            
-            has_credentials = False
-            if instance:
-                has_credentials = await self.credential_service.has_credentials(
-                    tool_instance_id=instance.id,
+            # Use binding's explicit tool_instance_id if set, otherwise resolve
+            binding_instance_id = binding.get("tool_instance_id")
+            instance = None
+            if binding_instance_id:
+                try:
+                    instance = await self.instance_service.get_instance(binding_instance_id)
+                except Exception:
+                    instance = None
+            if not instance:
+                instance = await self.instance_service.resolve_instance(
+                    tool_slug=tool_slug,
                     user_id=user_id,
                     tenant_id=tenant_id,
                 )
+            
+            has_credentials = False
+            if instance:
+                # Local instances don't require credentials
+                if instance.instance_type == "local":
+                    has_credentials = True
+                else:
+                    has_credentials = await self.credential_service.has_credentials(
+                        tool_instance_id=instance.id,
+                        user_id=user_id,
+                        tenant_id=tenant_id,
+                    )
                 
                 if not has_credentials:
                     missing.credentials.append(tool_slug)
@@ -414,6 +445,66 @@ class AgentRouter:
         
         return available_tools, tool_instances_map, missing
     
+    async def _resolve_policy_data(self, policy_id: UUID) -> Dict[str, Any]:
+        """Load policy_json from the active PolicyVersion via Policy.current_version_id"""
+        from app.models.policy import Policy, PolicyVersion
+        
+        try:
+            result = await self.session.execute(
+                select(Policy).where(Policy.id == policy_id)
+            )
+            policy = result.scalar_one_or_none()
+            if not policy or not policy.current_version_id:
+                return {}
+            
+            ver_result = await self.session.execute(
+                select(PolicyVersion).where(PolicyVersion.id == policy.current_version_id)
+            )
+            version = ver_result.scalar_one_or_none()
+            if version and version.policy_json:
+                return version.policy_json
+            return {}
+        except Exception as e:
+            logger.warning(f"Failed to resolve policy data for {policy_id}: {e}")
+            return {}
+
+    async def _resolve_limit_data(self, limit_id: UUID) -> Dict[str, Any]:
+        """Load limit fields from the active LimitVersion via Limit.current_version_id"""
+        from app.models.limit import Limit, LimitVersion
+        
+        try:
+            result = await self.session.execute(
+                select(Limit).where(Limit.id == limit_id)
+            )
+            limit = result.scalar_one_or_none()
+            if not limit or not limit.current_version_id:
+                return {}
+            
+            ver_result = await self.session.execute(
+                select(LimitVersion).where(LimitVersion.id == limit.current_version_id)
+            )
+            version = ver_result.scalar_one_or_none()
+            if not version:
+                return {}
+            
+            data: Dict[str, Any] = {}
+            if version.max_steps is not None:
+                data["max_steps"] = version.max_steps
+            if version.max_tool_calls is not None:
+                data["max_tool_calls"] = version.max_tool_calls
+            if version.max_wall_time_ms is not None:
+                data["max_wall_time_ms"] = version.max_wall_time_ms
+            if version.tool_timeout_ms is not None:
+                data["tool_timeout_ms"] = version.tool_timeout_ms
+            if version.max_retries is not None:
+                data["max_retries"] = version.max_retries
+            if version.extra_config:
+                data.update(version.extra_config)
+            return data
+        except Exception as e:
+            logger.warning(f"Failed to resolve limit data for {limit_id}: {e}")
+            return {}
+
     async def _resolve_collections(
         self,
         agent: Agent,

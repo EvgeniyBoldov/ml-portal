@@ -89,6 +89,10 @@ export type { FormFieldProps, FormFieldType } from './FormField';
 export { ShortEntityBlock } from './ShortEntityBlock';
 export type { ShortEntityBlockProps, ShortEntityBlockItem } from './ShortEntityBlock';
 
+// ShortVersionBlock
+export { ShortVersionBlock } from './ShortVersionBlock';
+export type { ShortVersionBlockProps } from './ShortVersionBlock';
+
 // VersionSelector
 export { VersionSelector } from './VersionSelector';
 export type { VersionSelectorProps, VersionOption } from './VersionSelector';
@@ -163,4 +167,16 @@ export type { VersionCardProps, VersionCardEntityType, PromptVersionCardProps, P
 // VersionActionsBlock
 export { VersionActionsBlock } from './VersionActionsBlock';
 export type { VersionActionsBlockProps } from './VersionActionsBlock';
+
+// JSONDisplay
+export { JSONDisplay } from './JSONDisplay';
+export type { JSONDisplayProps } from './JSONDisplay';
+
+// SecretField
+export { SecretField } from './SecretField';
+export type { SecretFieldProps } from './SecretField';
+
+// CredentialsPanel
+export { CredentialsPanel } from './CredentialsPanel';
+export type { CredentialsPanelProps, CredentialsPanelMode } from './CredentialsPanel';
 

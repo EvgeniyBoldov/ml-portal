@@ -6,13 +6,17 @@ New architecture:
 - External providers (OpenAI, Groq) for MVP
 - Easy swap to local providers later
 """
-from sqlalchemy.orm import Mapped, mapped_column
-from sqlalchemy import String, Boolean, Text, DateTime, func, JSON, Enum as SQLEnum
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy import String, Boolean, Text, DateTime, func, JSON, Enum as SQLEnum, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID
 import uuid
 import enum
 from datetime import datetime
+from typing import Optional, TYPE_CHECKING
 from .base import Base
+
+if TYPE_CHECKING:
+    from .tool_instance import ToolInstance
 
 
 class ModelType(str, enum.Enum):
@@ -64,9 +68,14 @@ class Model(Base):
     provider: Mapped[str] = mapped_column(String(50), comment="Provider name (openai, groq, local, etc.)")
     provider_model_name: Mapped[str] = mapped_column(String(255), comment="Model name at provider")
     
-    # Connection
-    base_url: Mapped[str] = mapped_column(String(500), comment="API base URL")
-    api_key_ref: Mapped[str | None] = mapped_column(String(255), nullable=True, comment="Reference to secret (not raw key)")
+    # Instance (provider connection)
+    instance_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tool_instances.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+        comment="FK to tool_instances (provider connection)"
+    )
     
     # Configuration
     extra_config: Mapped[dict | None] = mapped_column(JSON, nullable=True, comment="Provider-specific config (temperature, dimensions, etc.)")
@@ -95,6 +104,13 @@ class Model(Base):
     
     # Metadata
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    
+    # Relationships
+    instance: Mapped[Optional["ToolInstance"]] = relationship(
+        "ToolInstance",
+        foreign_keys=[instance_id],
+        lazy="joined"
+    )
     
     # Audit
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

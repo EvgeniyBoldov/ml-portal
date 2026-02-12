@@ -17,6 +17,7 @@ import {
   Badge,
   DataTable,
   Button,
+  ConfirmDialog,
   type BreadcrumbItem,
   type DataTableColumn,
 } from '@/shared/ui';
@@ -28,6 +29,7 @@ export function InstanceViewPage() {
   const showError = useErrorToast();
   const showSuccess = useSuccessToast();
   const [activeTab, setActiveTab] = useState('general');
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   const { data: instance, isLoading } = useQuery({
     queryKey: qk.toolInstances.detail(id!),

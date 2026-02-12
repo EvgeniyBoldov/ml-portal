@@ -1,16 +1,17 @@
 /**
- * CreateCollectionPage - Create a new collection
+ * CreateCollectionPage - Create a new collection with EntityPageV2 + Tab architecture
  * 
- * Uses EntityPage + ContentBlock from shared/ui
+ * Declarative tabs with existing shared blocks inside.
  */
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQueryClient, useQuery } from '@tanstack/react-query';
-import { EntityPage, ContentBlock, Button, Input, Textarea, Select, type BreadcrumbItem } from '@/shared/ui';
+import { ContentBlock, Button, Input, Textarea, Select, type BreadcrumbItem } from '@/shared/ui';
 import FieldEditor from '@shared/ui/FieldEditor';
 import { useErrorToast, useSuccessToast } from '@shared/ui/Toast';
 import { collectionsApi, CollectionField, SearchMode } from '@shared/api/collections';
 import { adminApi } from '@shared/api/admin';
+import { EntityPageV2, Tab, type EntityPageMode } from '@/shared/ui/EntityPage/EntityPageV2';
 
 interface FieldFormData extends CollectionField {
   id: string;
@@ -166,91 +167,92 @@ export function CreateCollectionPage() {
   ];
 
   return (
-    <EntityPage
+    <EntityPageV2
+      title="Новая коллекция"
       mode="create"
-      entityName="Новая коллекция"
-      entityTypeLabel="коллекции"
-      backPath="/admin/collections"
-      breadcrumbs={breadcrumbs}
       loading={tenantsLoading}
       saving={createMutation.isPending}
+      breadcrumbs={breadcrumbs}
+      backPath="/admin/collections"
       onSave={handleSave}
       onCancel={() => navigate('/admin/collections')}
     >
-      <ContentBlock title="Основная информация" icon="database">
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-          <div>
-            <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', fontWeight: 500 }}>Тенант *</label>
-            <Select
-              value={formData.tenant_id}
-              onChange={(value) => setFormData({ ...formData, tenant_id: value })}
-              placeholder="Выберите тенант..."
-              options={[
-                { value: '', label: 'Выберите тенант...' },
-                ...(tenants?.map(t => ({ value: t.id, label: t.name })) || [])
-              ]}
-            />
+      <Tab title="Создание" layout="single">
+        <ContentBlock title="Основная информация" icon="database">
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+            <div>
+              <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', fontWeight: 500 }}>Тенант *</label>
+              <Select
+                value={formData.tenant_id}
+                onChange={(value) => setFormData({ ...formData, tenant_id: value })}
+                placeholder="Выберите тенант..."
+                options={[
+                  { value: '', label: 'Выберите тенант...' },
+                  ...(tenants?.map(t => ({ value: t.id, label: t.name })) || [])
+                ]}
+              />
+            </div>
+            <div>
+              <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', fontWeight: 500 }}>Slug *</label>
+              <Input
+                value={formData.slug}
+                onChange={e =>
+                  setFormData({
+                    ...formData,
+                    slug: e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ''),
+                  })
+                }
+                placeholder="tickets"
+              />
+            </div>
+            <div>
+              <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', fontWeight: 500 }}>Название *</label>
+              <Input
+                value={formData.name}
+                onChange={e => setFormData({ ...formData, name: e.target.value })}
+                placeholder="IT Tickets"
+              />
+            </div>
+            <div>
+              <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', fontWeight: 500 }}>Описание</label>
+              <Textarea
+                value={formData.description}
+                onChange={e => setFormData({ ...formData, description: e.target.value })}
+                placeholder="Описание коллекции для LLM агента..."
+                rows={3}
+              />
+            </div>
           </div>
-          <div>
-            <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', fontWeight: 500 }}>Slug *</label>
-            <Input
-              value={formData.slug}
-              onChange={e =>
-                setFormData({
-                  ...formData,
-                  slug: e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ''),
-                })
-              }
-              placeholder="tickets"
-            />
-          </div>
-          <div>
-            <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', fontWeight: 500 }}>Название *</label>
-            <Input
-              value={formData.name}
-              onChange={e => setFormData({ ...formData, name: e.target.value })}
-              placeholder="IT Tickets"
-            />
-          </div>
-          <div>
-            <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', fontWeight: 500 }}>Описание</label>
-            <Textarea
-              value={formData.description}
-              onChange={e => setFormData({ ...formData, description: e.target.value })}
-              placeholder="Описание коллекции для LLM агента..."
-              rows={3}
-            />
-          </div>
-        </div>
-      </ContentBlock>
+        </ContentBlock>
 
-      <ContentBlock
-        title={`Поля (${fields.length})`}
-        icon="clipboard-list"
-        headerActions={
-          <Button type="button" variant="outline" size="sm" onClick={handleAddField}>
-            + Добавить поле
-          </Button>
-        }
-      >
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-          {fields.map(field => (
-            <FieldEditor
-              key={field.id}
-              name={field.name}
-              type={field.type}
-              required={field.required}
-              searchModes={field.search_modes}
-              onNameChange={(name) => handleFieldChange(field.id, 'name', name)}
-              onTypeChange={(type) => handleFieldChange(field.id, 'type', type)}
-              onRequiredChange={(required) => handleFieldChange(field.id, 'required', required)}
-              onSearchModeToggle={(mode) => toggleSearchMode(field.id, mode as SearchMode)}
-              onRemove={() => handleRemoveField(field.id)}
-            />
-          ))}
-        </div>
-      </ContentBlock>
-    </EntityPage>
+        <ContentBlock
+          title={`Поля (${fields.length})`}
+          icon="clipboard-list"
+          headerActions={
+            <Button type="button" variant="outline" size="sm" onClick={handleAddField}>
+              + Добавить поле
+            </Button>
+          }
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            {fields.map(field => (
+              <FieldEditor
+                key={field.id}
+                name={field.name}
+                type={field.type}
+                required={field.required}
+                searchModes={field.search_modes}
+                onNameChange={(name) => handleFieldChange(field.id, 'name', name)}
+                onTypeChange={(type) => handleFieldChange(field.id, 'type', type)}
+                onRequiredChange={(required) => handleFieldChange(field.id, 'required', required)}
+                onSearchModeToggle={(mode) => toggleSearchMode(field.id, mode as SearchMode)}
+                onRemove={() => handleRemoveField(field.id)}
+              />
+            ))}
+          </div>
+        </ContentBlock>
+      </Tab>
+    </EntityPageV2>
   );
 }
 
