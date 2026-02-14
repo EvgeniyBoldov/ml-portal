@@ -61,7 +61,8 @@ async def create_agent(
     try:
         service = AgentService(db)
         result = await service.create_agent(
-            slug=data.slug, name=data.name, description=data.description
+            slug=data.slug, name=data.name, description=data.description,
+            logging_level=data.logging_level,
         )
         await db.commit()
         return result
@@ -93,7 +94,8 @@ async def update_agent(
         service = AgentService(db)
         agent = await service.get_agent_by_slug(slug)
         result = await service.update_agent(
-            agent_id=agent.id, name=data.name, description=data.description
+            agent_id=agent.id, name=data.name, description=data.description,
+            logging_level=data.logging_level,
         )
         await db.commit()
         return result

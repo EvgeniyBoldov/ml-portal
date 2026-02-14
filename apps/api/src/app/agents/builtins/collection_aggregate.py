@@ -115,62 +115,84 @@ class CollectionAggregateTool(VersionedTool):
         from app.core.db import get_session_factory
         from app.services.collection_service import CollectionService
         
+        log = ctx.tool_logger("collection.aggregate")
+        
         collection_slug = args.get("collection_slug")
         metrics = args.get("metrics", [])
         group_by = args.get("group_by", [])
         filters = args.get("filters", {})
         time_bucket = args.get("time_bucket")
         
-        logger.info(
-            f"Collection aggregate: collection={collection_slug}, "
-            f"metrics={len(metrics)}, group_by={group_by}, tenant={ctx.tenant_id}"
-        )
+        log.info("Starting collection aggregate",
+                 collection=collection_slug,
+                 metrics_count=len(metrics),
+                 group_by=group_by,
+                 has_time_bucket=bool(time_bucket))
         
         try:
+            tenant_uuid = uuid.UUID(ctx.tenant_id) if isinstance(ctx.tenant_id, str) else ctx.tenant_id
+            
             session_factory = get_session_factory()
             async with session_factory() as session:
                 service = CollectionService(session)
                 
-                collection = await service.get_by_slug(ctx.tenant_id, collection_slug)
+                collection = await service.get_by_slug(tenant_uuid, collection_slug)
                 if not collection:
+                    log.error("Collection not found", collection=collection_slug)
                     return ToolResult.fail(
-                        f"Collection '{collection_slug}' not found"
+                        f"Collection '{collection_slug}' not found",
+                        logs=log.entries_dict(),
                     )
                 
                 # Validate metrics
                 if not metrics:
-                    return ToolResult.fail("At least one metric is required")
+                    log.warning("No metrics provided")
+                    return ToolResult.fail("At least one metric is required",
+                                           logs=log.entries_dict())
                 
                 for metric in metrics:
                     func = metric.get("function")
                     if func not in ALLOWED_AGGREGATE_FUNCTIONS:
-                        return ToolResult.fail(f"Invalid aggregate function: {func}")
+                        log.warning("Invalid aggregate function", function=func)
+                        return ToolResult.fail(f"Invalid aggregate function: {func}",
+                                               logs=log.entries_dict())
                     
                     # Validate field exists (except for count)
                     field = metric.get("field")
                     if func != "count" and field:
                         if not collection.get_field_by_name(field) and field != "id":
-                            return ToolResult.fail(f"Field '{field}' not found")
+                            log.warning("Field not found", field=field)
+                            return ToolResult.fail(f"Field '{field}' not found",
+                                                   logs=log.entries_dict())
                 
                 # Validate group_by
                 if len(group_by) > MAX_GROUP_BY_FIELDS:
-                    return ToolResult.fail(f"Maximum {MAX_GROUP_BY_FIELDS} group_by fields allowed")
+                    log.warning("Too many group_by fields", count=len(group_by))
+                    return ToolResult.fail(
+                        f"Maximum {MAX_GROUP_BY_FIELDS} group_by fields allowed",
+                        logs=log.entries_dict())
                 
                 for field in group_by:
                     if not collection.get_field_by_name(field) and field != "id":
-                        return ToolResult.fail(f"Group by field '{field}' not found")
+                        log.warning("Group by field not found", field=field)
+                        return ToolResult.fail(f"Group by field '{field}' not found",
+                                               logs=log.entries_dict())
                 
                 # Check guardrails: require filters for large tables
                 if not collection.allow_unfiltered_search and not filters:
+                    log.warning("Unfiltered aggregate blocked by guardrails")
                     return ToolResult.fail(
                         "Filters are required for aggregate queries on this collection. "
-                        "Please specify at least one filter condition."
+                        "Please specify at least one filter condition.",
+                        logs=log.entries_dict(),
                     )
                 
                 # Build SQL
                 sql, params = self._build_aggregate_sql(
                     collection, metrics, group_by, filters, time_bucket
                 )
+                
+                log.debug("Executing aggregate SQL", table=collection.table_name)
                 
                 # Execute with timeout
                 timeout_sql = f"SET LOCAL statement_timeout = '{collection.query_timeout_seconds}s'"
@@ -180,23 +202,29 @@ class CollectionAggregateTool(VersionedTool):
                 rows = [dict(r) for r in result.mappings().all()]
                 
                 # Limit results
+                truncated = False
                 if len(rows) > MAX_RESULT_GROUPS:
                     rows = rows[:MAX_RESULT_GROUPS]
-                    logger.warning(f"Aggregate results truncated to {MAX_RESULT_GROUPS}")
+                    truncated = True
+                    log.warning("Results truncated", max_groups=MAX_RESULT_GROUPS)
                 
-                logger.info(f"Collection aggregate returned {len(rows)} groups")
+                log.info("Aggregate completed",
+                         groups=len(rows), truncated=truncated)
                 
                 return ToolResult.ok(
                     data={
                         "results": rows,
                         "total_groups": len(rows),
                         "collection": collection.name,
-                    }
+                    },
+                    logs=log.entries_dict(),
                 )
                 
         except Exception as e:
             logger.error(f"Collection aggregate failed: {e}", exc_info=True)
-            return ToolResult.fail(f"Aggregate failed: {str(e)}")
+            log.error("Aggregate failed", error=str(e))
+            return ToolResult.fail(f"Aggregate failed: {str(e)}",
+                                   logs=log.entries_dict())
 
     def _build_aggregate_sql(
         self,

@@ -60,6 +60,23 @@ export interface AgentBindingResponse {
   tool_instance_id?: string | null;
   credential_strategy: string;
   created_at: string;
+  tool_slug?: string | null;
+  tool_name?: string | null;
+  tool_group_slug?: string | null;
+  instance_slug?: string | null;
+  instance_name?: string | null;
+}
+
+export interface AgentBindingCreate {
+  agent_version_id: string;
+  tool_id: string;
+  tool_instance_id?: string | null;
+  credential_strategy?: string;
+}
+
+export interface AgentBindingUpdate {
+  tool_instance_id?: string | null;
+  credential_strategy?: string;
 }
 
 export interface AgentCreate {
@@ -144,5 +161,35 @@ export const agentsApi = {
 
   async deactivateVersion(slug: string, version: number): Promise<AgentVersion> {
     return apiRequest(`/admin/agents/${slug}/versions/${version}/deactivate`, { method: 'POST' });
+  },
+
+  // Bindings CRUD
+  async listBindings(slug: string, version: number): Promise<AgentBindingResponse[]> {
+    return apiRequest(`/admin/agents/${slug}/versions/${version}/bindings`);
+  },
+
+  async createBinding(slug: string, version: number, data: AgentBindingCreate): Promise<AgentBindingResponse> {
+    return apiRequest(`/admin/agents/${slug}/versions/${version}/bindings`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+
+  async updateBinding(
+    slug: string,
+    version: number,
+    bindingId: string,
+    data: AgentBindingUpdate,
+  ): Promise<AgentBindingResponse> {
+    return apiRequest(`/admin/agents/${slug}/versions/${version}/bindings/${bindingId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    });
+  },
+
+  async deleteBinding(slug: string, version: number, bindingId: string): Promise<void> {
+    return apiRequest(`/admin/agents/${slug}/versions/${version}/bindings/${bindingId}`, {
+      method: 'DELETE',
+    });
   },
 };

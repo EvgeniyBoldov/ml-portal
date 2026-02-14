@@ -1,15 +1,15 @@
 /**
- * PoliciesPage - now shows LIMITS (execution constraints)
+ * LimitsListPage - Управление лимитами (EntityPageV2)
  * 
- * Old Policy pages become Limits pages.
- * Limits: max_steps, max_tool_calls, timeouts
+ * Execution constraints: max_steps, max_tool_calls, timeouts
  */
 import { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { limitsApi, type LimitListItem } from '@/shared/api/limits';
 import { qk } from '@/shared/api/keys';
-import { AdminPage, DataTable, type DataTableColumn, Badge } from '@/shared/ui';
+import { EntityPageV2, Tab } from '@/shared/ui/EntityPage/EntityPageV2';
+import { DataTable, type DataTableColumn, Badge, Button, Input } from '@/shared/ui';
 
 export function LimitsListPage() {
   const navigate = useNavigate();
@@ -73,35 +73,44 @@ export function LimitsListPage() {
   ];
 
   return (
-    <AdminPage
+    <EntityPageV2
       title="Лимиты"
-      subtitle="Ограничения выполнения агентов: шаги, вызовы, таймауты"
-      searchValue={q}
-      onSearchChange={setQ}
-      searchPlaceholder="Поиск лимитов..."
-      actions={[
-        {
-          label: 'Создать',
-          onClick: () => navigate('/admin/limits/new'),
-          variant: 'primary',
-        },
-      ]}
+      mode="view"
+      headerActions={
+        <Input
+          placeholder="Поиск лимитов..."
+          value={q}
+          onChange={setQ}
+        />
+      }
+      actionButtons={
+        <Button onClick={() => navigate('/admin/limits/new')}>
+          Создать
+        </Button>
+      }
     >
-      {error && (
-        <div style={{ padding: '16px', background: 'var(--danger-bg)', borderRadius: '8px', marginBottom: '16px' }}>
-          Не удалось загрузить лимиты. Попробуйте снова.
-        </div>
-      )}
+      <Tab 
+        title="Лимиты" 
+        layout="full"
+      >
+        {error && (
+          <div style={{ padding: '16px', background: 'var(--danger-bg)', borderRadius: '8px', marginBottom: '16px' }}>
+            Не удалось загрузить лимиты. Попробуйте снова.
+          </div>
+        )}
 
-      <DataTable
-        columns={columns}
-        data={filteredLimits || []}
-        keyField="id"
-        loading={isLoading}
-        emptyText="Лимиты не найдены. Нажмите «Создать» для добавления."
-        onRowClick={handleRowClick}
-      />
-    </AdminPage>
+        <DataTable
+          columns={columns}
+          data={filteredLimits}
+          keyField="slug"
+          loading={isLoading}
+          emptyText="Лимиты не найдены. Нажмите «Создать» для добавления."
+          paginated
+          pageSize={20}
+          onRowClick={handleRowClick}
+        />
+      </Tab>
+    </EntityPageV2>
   );
 }
 

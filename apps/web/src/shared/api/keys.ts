@@ -41,6 +41,7 @@ export const qk = {
     detail: (slug: string) => ['agents', 'detail', slug] as const,
     versions: (slug: string) => ['agents', 'versions', slug] as const,
     version: (slug: string, version: number) => ['agents', 'version', slug, version] as const,
+    bindings: (slug: string, version: number) => ['agents', 'bindings', slug, version] as const,
   },
   prompts: {
     all: () => ['prompts'] as const,
@@ -95,12 +96,13 @@ export const qk = {
     versions: (slug: string, params?: { status?: string }) => ['limits', 'versions', slug, params] as const,
     version: (slug: string, version: number) => ['limits', 'version', slug, version] as const,
   },
-  routingLogs: {
-    all: () => ['routing-logs'] as const,
-    list: (params?: { agentSlug?: string; status?: string; tenantId?: string }) =>
-      ['routing-logs', 'list', params] as const,
-    detail: (id: string) => ['routing-logs', 'detail', id] as const,
-    stats: (params?: { tenantId?: string }) => ['routing-logs', 'stats', params] as const,
+  agentRuns: {
+    all: () => ['agent-runs'] as const,
+    list: (params?: { page?: number; page_size?: number; agent_slug?: string; status?: string }) =>
+      ['agent-runs', 'list', params] as const,
+    detail: (id: string) => ['agent-runs', 'detail', id] as const,
+    stats: (params?: { tenant_id?: string; from_date?: string; to_date?: string }) =>
+      ['agent-runs', 'stats', params] as const,
   },
   rbac: {
     all: () => ['rbac'] as const,

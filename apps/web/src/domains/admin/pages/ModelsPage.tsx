@@ -77,8 +77,7 @@ export function ModelsPage() {
     try {
       const result = await healthCheckAllMutation.mutateAsync();
       showSuccess(`Проверка завершена: ${result.healthy}/${result.total} доступно`);
-    } catch (err) {
-      console.error(err);
+    } catch (err: unknown) {
       showError('Не удалось выполнить проверку');
     }
   };
@@ -96,7 +95,6 @@ export function ModelsPage() {
           : `${target.alias} установлена по умолчанию`
       );
     } catch (err) {
-      console.error(err);
       showError('Не удалось обновить флаг');
     } finally {
       setPendingModelId(null);
@@ -116,7 +114,6 @@ export function ModelsPage() {
           : `${target.alias} включена`
       );
     } catch (err) {
-      console.error(err);
       showError('Не удалось изменить статус');
     } finally {
       setPendingModelId(null);
@@ -129,7 +126,6 @@ export function ModelsPage() {
       await healthCheckMutation.mutateAsync({ id: target.id, force: true });
       showSuccess(`Проверка ${target.alias} завершена`);
     } catch (err) {
-      console.error(err);
       showError('Проверка не удалась');
     } finally {
       setPendingModelId(null);
@@ -168,9 +164,8 @@ export function ModelsPage() {
         try {
           await deleteModelMutation.mutateAsync(target.id);
           showSuccess(`Модель «${target.alias}» удалена`);
-        } catch (err: any) {
-          console.error(err);
-          const message = err?.message || 'Не удалось удалить модель';
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : 'Не удалось удалить модель';
           showError(message);
         }
       },

@@ -331,6 +331,11 @@ export function PlatformSettingsPage() {
         title="RBAC" 
         layout="single" 
         id="rbac"
+        actions={[
+          <Button key="create-rule" variant="primary" onClick={() => navigate('/admin/platform/rbac/new')}>
+            Создать правило
+          </Button>,
+        ]}
       >
         <RBACRulesTable mode="platform" />
       </Tab>

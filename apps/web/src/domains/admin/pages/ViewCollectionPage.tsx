@@ -37,6 +37,19 @@ export function ViewCollectionPage() {
   const tenants = tenantsData?.items ?? [];
   const tenant = tenants.find(t => t.id === collection?.tenant_id);
 
+  const TYPE_TONES: Record<string, 'info' | 'success' | 'warn' | 'neutral'> = {
+    string: 'info',
+    text: 'info',
+    integer: 'success',
+    float: 'success',
+    number: 'success',
+    boolean: 'warn',
+    date: 'neutral',
+    datetime: 'neutral',
+    vector: 'danger' as any,
+    json: 'warn',
+  };
+
   const fieldColumns: DataTableColumn<CollectionField>[] = [
     {
       key: 'name',
@@ -46,15 +59,17 @@ export function ViewCollectionPage() {
     {
       key: 'type',
       label: 'Тип',
-      width: 100,
-      render: (row) => <Badge variant="default">{row.type}</Badge>,
+      width: 120,
+      render: (row) => (
+        <Badge tone={TYPE_TONES[row.type] || 'neutral'}>{row.type}</Badge>
+      ),
     },
     {
       key: 'required',
       label: 'Обязательное',
       width: 120,
       render: (row) => (
-        <Badge variant={row.required ? 'warning' : 'default'}>
+        <Badge tone={row.required ? 'warn' : 'neutral'}>
           {row.required ? 'Да' : 'Нет'}
         </Badge>
       ),
@@ -62,21 +77,21 @@ export function ViewCollectionPage() {
     {
       key: 'search_modes',
       label: 'Режимы поиска',
-      width: 150,
+      width: 180,
       render: (row) => (
         <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
-          {row.search_modes?.map(mode => (
-            <Badge key={mode} variant={mode === 'vector' ? 'warning' : 'info'}>
+          {row.search_modes?.length ? row.search_modes.map(mode => (
+            <Badge key={mode} tone={mode === 'vector' ? 'warn' : mode === 'fulltext' ? 'success' : 'info'}>
               {mode}
             </Badge>
-          )) || '—'}
+          )) : <span style={{ color: 'var(--text-secondary)' }}>—</span>}
         </div>
       ),
     },
     {
       key: 'description',
       label: 'Описание',
-      render: (row) => row.description || '—',
+      render: (row) => row.description || <span style={{ color: 'var(--text-secondary)' }}>—</span>,
     },
   ];
 
@@ -117,38 +132,33 @@ export function ViewCollectionPage() {
           }}
         />
 
-        <ContentBlock title="Статус" icon="shield">
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-            <div>
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>Статус</div>
-              <Badge variant={collection?.is_active ? 'success' : 'default'}>
-                {collection?.is_active ? 'Активна' : 'Неактивна'}
-              </Badge>
-            </div>
-            <div>
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>Возможности</div>
-              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                <Badge variant="info">SQL</Badge>
-                {collection?.has_vector_search && <Badge variant="warning">VECTOR</Badge>}
-              </div>
-            </div>
-            <div>
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>Обновлена</div>
-              <span>{collection?.updated_at ? new Date(collection.updated_at).toLocaleString('ru-RU') : '—'}</span>
-            </div>
-          </div>
-        </ContentBlock>
+        <ContentBlock
+          title="Статус"
+          icon="shield"
+          fields={[
+            { key: 'is_active', label: 'Статус', type: 'boolean' as const },
+            {
+              key: 'capabilities',
+              label: 'Возможности',
+              type: 'custom' as const,
+              render: () => (
+                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                  <Badge tone="info">SQL</Badge>
+                  {collection?.has_vector_search && <Badge tone="warn">VECTOR</Badge>}
+                </div>
+              ),
+            },
+            { key: 'updated_at', label: 'Обновлена', type: 'date' as const },
+          ]}
+          data={{
+            is_active: collection?.is_active ?? false,
+            capabilities: null,
+            updated_at: collection?.updated_at || '—',
+          }}
+        />
       </Tab>
 
-      <Tab title="Поля" layout="full" id="fields">
-        <div style={{ marginBottom: '1rem' }}>
-          <h3 style={{ margin: 0, fontSize: '1.125rem', fontWeight: 600, color: 'var(--text-primary)' }}>
-            Поля коллекции ({collection?.fields?.length || 0})
-          </h3>
-          <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>
-            Структура полей и их характеристики
-          </p>
-        </div>
+      <Tab title="Поля" layout="full" id="fields" badge={collection?.fields?.length || undefined}>
         <DataTable
           columns={fieldColumns}
           data={collection?.fields || []}

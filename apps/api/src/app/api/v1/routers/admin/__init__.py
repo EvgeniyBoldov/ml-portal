@@ -23,6 +23,7 @@ from .policies import router as policies_router
 from .limits import router as limits_router
 from .rbac import router as rbac_router
 from .platform_settings import router as platform_settings_router
+from .agent_bindings import router as agent_bindings_router
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -45,5 +46,6 @@ router.include_router(policies_router, prefix="/policies", tags=["policies"])
 router.include_router(limits_router, prefix="/limits", tags=["limits"])
 router.include_router(rbac_router, prefix="/rbac", tags=["rbac"])
 router.include_router(platform_settings_router, prefix="/platform", tags=["platform"])
+router.include_router(agent_bindings_router, prefix="/agents", tags=["agent-bindings"])
 
 __all__ = ["router"]

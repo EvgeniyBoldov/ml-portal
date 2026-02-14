@@ -16,8 +16,6 @@ const routeLabels: Record<string, string> = {
   '/admin/tenants/new': 'Новый тенант',
   '/admin/models': 'Модели',
   '/admin/models/new': 'Новая модель',
-  '/admin/prompts': 'Промпты',
-  '/admin/prompts/new': 'Новый промпт',
   '/admin/tools': 'Инструменты',
   '/admin/tools/new': 'Новый инструмент',
   '/admin/agents': 'Агенты',

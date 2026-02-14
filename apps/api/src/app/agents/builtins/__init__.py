@@ -18,3 +18,9 @@ def register_builtins() -> None:
     import app.agents.builtins.collection_get  # noqa: F401
     import app.agents.builtins.collection_aggregate  # noqa: F401
     import app.agents.builtins.tool_router  # noqa: F401
+    # DCBox (NetBox) remote tools
+    import app.agents.builtins.dcbox_devices  # noqa: F401
+    import app.agents.builtins.dcbox_sites  # noqa: F401
+    import app.agents.builtins.dcbox_racks  # noqa: F401
+    import app.agents.builtins.dcbox_prefixes  # noqa: F401
+    import app.agents.builtins.dcbox_addresses  # noqa: F401

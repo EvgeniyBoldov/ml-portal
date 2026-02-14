@@ -19,11 +19,13 @@ class AgentCreate(BaseModel):
     slug: str = Field(..., description="Unique identifier")
     name: str = Field(..., description="Display name")
     description: Optional[str] = None
+    logging_level: str = Field(default="brief", description="none, brief, full")
 
 
 class AgentUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
+    logging_level: Optional[str] = Field(default=None, description="none, brief, full")
 
 
 class AgentResponse(BaseModel):
@@ -32,6 +34,7 @@ class AgentResponse(BaseModel):
     name: str
     description: Optional[str] = None
     current_version_id: Optional[UUID] = None
+    logging_level: str = Field(default="brief", description="none, brief, full")
     created_at: datetime
     updated_at: datetime
 

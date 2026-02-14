@@ -11,7 +11,9 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { agentsApi, type AgentDetail, type AgentVersionInfo } from '@/shared/api';
 import { qk } from '@/shared/api/keys';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
-import { EntityTabsPage, PromptVersionCard, ConfirmDialog, type FieldDefinition, type BreadcrumbItem, type EntityPageMode } from '@/shared/ui';
+import { EntityPageV2, Tab, type BreadcrumbItem, type EntityPageMode } from '@/shared/ui/EntityPage/EntityPageV2';
+import { PromptVersionCard, ConfirmDialog, ContentBlock, VersionsBlock, DataTable, type DataTableColumn, type FieldDefinition } from '@/shared/ui';
+import { Button } from '@/shared/ui';
 
 export function AgentEditorPage() {
   const { slug } = useParams<{ slug: string }>();
@@ -167,39 +169,109 @@ export function AgentEditorPage() {
     { label: agent?.name || 'Новый агент' },
   ];
 
-  return (
-    <>
-      <EntityTabsPage
-        entityType="agent"
-        entityNameLabel="Агент"
-        entityTypeLabel="агента"
-        slug={slug!}
-        basePath="/admin/agents"
-        listPath="/admin/agents"
-        container={agent || null}
-        versions={agent?.versions || []}
-        isLoading={isLoading}
-        formData={formData}
+  // Create mode — single tab
+  if (isNew) {
+    return (
+      <EntityPageV2
+        title="Новый агент"
         mode={mode}
         saving={saving}
-        onFieldChange={handleFieldChange}
-        onEdit={handleEdit}
+        breadcrumbs={breadcrumbs}
+        backPath="/admin/agents"
         onSave={handleSave}
         onCancel={handleCancel}
-        onCreateVersion={() => navigate(`/admin/agents/${slug}/versions/new`)}
-        onSelectVersion={(v: AgentVersionInfo) => navigate(`/admin/agents/${slug}/versions/${v.version}`)}
-        containerFields={containerFields}
-        breadcrumbs={breadcrumbs}
-        showDelete={!isNew && !!agent}
-        onDelete={handleDelete}
-        renderVersionContent={() => (
+      >
+        <Tab title="Создание" layout="single">
           <PromptVersionCard
-            version={selectedVersion ? { ...selectedVersion, template: selectedVersion.prompt } : null}
+            version={null}
             onCreateVersion={() => navigate(`/admin/agents/${slug}/versions/new`)}
           />
-        )}
-      />
-      
+        </Tab>
+      </EntityPageV2>
+    );
+  }
+
+  // View/Edit mode — two tabs
+  return (
+    <>
+      <EntityPageV2
+        title={agent?.name || 'Агент'}
+        mode={mode}
+        loading={isLoading}
+        saving={saving}
+        breadcrumbs={breadcrumbs}
+        onSave={handleSave}
+        onCancel={handleCancel}
+        onDelete={handleDelete}
+      >
+        <Tab 
+          title="Обзор" 
+          layout="grid"
+          actions={
+            mode === 'view' ? [
+              <Button key="edit" onClick={handleEdit}>
+                Редактировать
+              </Button>,
+              <Button key="delete" variant="danger" onClick={() => setShowDeleteConfirm(true)}>
+                Удалить
+              </Button>,
+            ] : mode === 'edit' ? [
+              <Button key="save" onClick={handleSave} disabled={saving}>
+                {saving ? 'Сохранение...' : 'Сохранить'}
+              </Button>,
+              <Button key="cancel" variant="outline" onClick={handleCancel}>
+                Отмена
+              </Button>,
+            ] : []
+          }
+        >
+          <ContentBlock
+            title="Основная информация"
+            icon="info"
+            fields={[
+              { key: 'slug', label: 'Slug', type: 'text' },
+              { key: 'name', label: 'Название', type: 'text' },
+              { key: 'description', label: 'Описание', type: 'textarea' },
+            ]}
+            data={{
+              slug: agent?.slug || '',
+              name: agent?.name || '',
+              description: agent?.description || '',
+            }}
+          />
+          <ContentBlock
+            title="Статистика"
+            icon="bar-chart"
+            fields={[
+              { key: 'versions_count', label: 'Версий', type: 'text' },
+              { key: 'active_version', label: 'Активная версия', type: 'text' },
+            ]}
+            data={{
+              versions_count: agent?.versions?.length || 0,
+              active_version: activeVersion?.version || '—',
+            }}
+          />
+        </Tab>
+        
+        <Tab 
+          title="Версии" 
+          layout="full" 
+          badge={agent?.versions?.length || 0}
+          actions={[
+            <Button key="create" onClick={() => navigate(`/admin/agents/${slug}/versions/new`)}>
+              Создать версию
+            </Button>,
+          ]}
+        >
+          <VersionsBlock
+            entityType="agent"
+            versions={agent?.versions || []}
+            selectedVersion={activeVersion}
+            onSelectVersion={(version) => navigate(`/admin/agents/${slug}/versions/${version.version}`)}
+          />
+        </Tab>
+      </EntityPageV2>
+
       <ConfirmDialog
         open={showDeleteConfirm}
         title="Удалить агента?"

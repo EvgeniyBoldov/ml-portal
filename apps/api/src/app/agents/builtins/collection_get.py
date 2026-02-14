@@ -74,24 +74,29 @@ class CollectionGetTool(VersionedTool):
         from app.core.db import get_session_factory
         from app.services.collection_service import CollectionService
         
+        log = ctx.tool_logger("collection.get")
+        
         collection_slug = args.get("collection_slug")
         record_id = args.get("id")
         id_field = args.get("id_field")
         
-        logger.info(
-            f"Collection get: collection={collection_slug}, "
-            f"id={record_id}, tenant={ctx.tenant_id}"
-        )
+        log.info("Starting collection get",
+                 collection=collection_slug, record_id=record_id,
+                 id_field=id_field)
         
         try:
+            tenant_uuid = uuid.UUID(ctx.tenant_id) if isinstance(ctx.tenant_id, str) else ctx.tenant_id
+            
             session_factory = get_session_factory()
             async with session_factory() as session:
                 service = CollectionService(session)
                 
-                collection = await service.get_by_slug(ctx.tenant_id, collection_slug)
+                collection = await service.get_by_slug(tenant_uuid, collection_slug)
                 if not collection:
+                    log.error("Collection not found", collection=collection_slug)
                     return ToolResult.fail(
-                        f"Collection '{collection_slug}' not found"
+                        f"Collection '{collection_slug}' not found",
+                        logs=log.entries_dict(),
                     )
                 
                 # Use collection's primary_key_field if not specified
@@ -100,42 +105,50 @@ class CollectionGetTool(VersionedTool):
                 # Validate key field exists
                 field_def = collection.get_field_by_name(key_field)
                 if not field_def and key_field != "id":
+                    log.error("Key field not found", field=key_field)
                     return ToolResult.fail(
-                        f"Field '{key_field}' not found in collection"
+                        f"Field '{key_field}' not found in collection",
+                        logs=log.entries_dict(),
                     )
                 
                 # Build and execute query
                 table_name = collection.table_name
                 sql = text(f"SELECT * FROM {table_name} WHERE {key_field} = :id LIMIT 1")
                 
+                log.debug("Executing query", table=table_name, key_field=key_field)
                 result = await session.execute(sql, {"id": record_id})
                 row = result.mappings().first()
                 
                 if not row:
+                    log.info("Record not found", record_id=record_id)
                     return ToolResult.ok(
                         data={
                             "record": None,
                             "found": False,
                             "collection": collection.name,
-                        }
+                        },
+                        logs=log.entries_dict(),
                     )
                 
                 # Format record
                 formatted = self._format_record(dict(row), collection)
                 
-                logger.info(f"Collection get found record in '{collection_slug}'")
+                log.info("Record found", collection=collection_slug)
                 
                 return ToolResult.ok(
                     data={
                         "record": formatted,
                         "found": True,
                         "collection": collection.name,
-                    }
+                    },
+                    logs=log.entries_dict(),
                 )
                 
         except Exception as e:
             logger.error(f"Collection get failed: {e}", exc_info=True)
-            return ToolResult.fail(f"Get failed: {str(e)}")
+            log.error("Get failed", error=str(e))
+            return ToolResult.fail(f"Get failed: {str(e)}",
+                                   logs=log.entries_dict())
 
     def _format_record(self, row: Dict, collection) -> Dict[str, Any]:
         """Format a single record for LLM consumption"""

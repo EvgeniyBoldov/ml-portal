@@ -226,22 +226,28 @@ export function ToolGroupViewPage() {
       saving={saving}
       breadcrumbs={breadcrumbs}
       backPath="/admin/tools"
-      onEdit={handleEdit}
       onSave={handleSave}
       onCancel={handleCancel}
-      showDelete={false}
-      headerActions={
-        <Button
-          variant="outline"
-          size="small"
-          onClick={() => rescanMutation.mutate()}
-          disabled={rescanMutation.isPending}
-        >
-          {rescanMutation.isPending ? 'Синхронизация...' : 'Rescan'}
-        </Button>
-      }
     >
-      <Tab title="Обзор" layout="single" id="main">
+      <Tab 
+        title="Обзор" 
+        layout="single" 
+        id="main"
+        actions={
+          mode === 'view' ? [
+            <Button key="edit" onClick={handleEdit}>
+              Редактировать
+            </Button>,
+          ] : mode === 'edit' ? [
+            <Button key="save" onClick={handleSave} disabled={saving}>
+              {saving ? 'Сохранение...' : 'Сохранить'}
+            </Button>,
+            <Button key="cancel" variant="outline" onClick={handleCancel}>
+              Отмена
+            </Button>,
+          ] : []
+        }
+      >
         <ContentBlock
           title="Основная информация"
           editable={isEditable}
@@ -251,7 +257,21 @@ export function ToolGroupViewPage() {
         />
       </Tab>
 
-      <Tab title={`Инструменты (${group?.tools?.length || 0})`} layout="full" id="tools">
+      <Tab 
+        title={`Инструменты (${group?.tools?.length || 0})`} 
+        layout="full" 
+        id="tools"
+        actions={[
+          <Button 
+            key="rescan"
+            variant="outline"
+            onClick={() => rescanMutation.mutate()}
+            disabled={rescanMutation.isPending}
+          >
+            {rescanMutation.isPending ? 'Синхронизация...' : 'Rescan'}
+          </Button>,
+        ]}
+      >
         <DataTable
           columns={toolColumns}
           data={group?.tools || []}

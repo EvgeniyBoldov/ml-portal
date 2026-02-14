@@ -9,11 +9,8 @@ import { useQuery } from '@tanstack/react-query';
 
 import { policiesApi, type Policy } from '@/shared/api/policies';
 import { qk } from '@/shared/api/keys';
-import {
-  AdminPage,
-  DataTable,
-  type DataTableColumn,
-} from '@/shared/ui';
+import { EntityPageV2, Tab } from '@/shared/ui/EntityPage/EntityPageV2';
+import { DataTable, type DataTableColumn, Badge, Button, Input } from '@/shared/ui';
 import { RowActions } from '@/shared/ui/RowActions';
 
 export function PoliciesListPage() {
@@ -78,29 +75,33 @@ export function PoliciesListPage() {
   ];
 
   return (
-    <AdminPage
+    <EntityPageV2
       title="Политики"
-      subtitle="Правила и ограничения поведения агентов"
-      searchValue={search}
-      onSearchChange={setSearch}
-      searchPlaceholder="Поиск политик..."
-      actions={[
-        {
-          label: 'Создать политику',
-          onClick: () => navigate('/admin/policies/new'),
-          variant: 'primary',
-        },
-      ]}
+      mode="view"
+      headerActions={
+        <Input
+          placeholder="Поиск политик..."
+          value={search}
+          onChange={setSearch}
+        />
+      }
+      actionButtons={
+        <Button onClick={() => navigate('/admin/policies/new')}>
+          Создать политику
+        </Button>
+      }
     >
-      <DataTable
-        columns={columns}
-        data={filteredPolicies}
-        keyField="id"
-        loading={isLoading}
-        emptyText="Политики не найдены"
-        onRowClick={(row) => navigate(`/admin/policies/${row.slug}`)}
-      />
-    </AdminPage>
+      <Tab title="Политики" layout="full">
+        <DataTable
+          columns={columns}
+          data={filteredPolicies}
+          keyField="id"
+          loading={isLoading}
+          emptyText="Политики не найдены"
+          onRowClick={(row) => navigate(`/admin/policies/${row.slug}`)}
+        />
+      </Tab>
+    </EntityPageV2>
   );
 }
 

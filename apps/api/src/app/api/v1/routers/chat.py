@@ -159,12 +159,24 @@ async def list_messages(
         elif isinstance(content_text, dict):
             content_text = str(content_text)
         
+        # Normalize created_at to ISO format with Z suffix
+        created_at_str = None
+        if message.created_at:
+            ts = message.created_at.isoformat()
+            # Avoid double timezone: strip +00:00 before adding Z
+            if ts.endswith("+00:00"):
+                ts = ts[:-6]
+            elif ts.endswith("Z"):
+                ts = ts[:-1]
+            created_at_str = ts + "Z"
+        
         items.append({
             "id": str(message.id),
             "chat_id": str(message.chat_id),
             "role": message.role,
             "content": content_text,
-            "created_at": message.created_at.isoformat() + "Z" if message.created_at else None
+            "created_at": created_at_str,
+            "meta": message.meta if message.meta else None,
         })
     
     # Calculate next cursor based on last message's created_at
@@ -269,7 +281,10 @@ async def send_message_stream(
                 
                 if event_type == "user_message":
                     # Notify about user message creation
-                    data = json.dumps({"message_id": event["message_id"]})
+                    data = json.dumps({
+                        "message_id": event["message_id"],
+                        "created_at": event.get("created_at"),
+                    })
                     yield f"event: user_message\ndata: {data}\n\n"
                 
                 elif event_type == "status":
@@ -293,8 +308,12 @@ async def send_message_stream(
                         yield f"event: delta\ndata: {event.get('content','')}\n\n"
                 
                 elif event_type == "final":
-                    # Send final message ID
-                    data = json.dumps({"message_id": event["message_id"]})
+                    # Send final message ID with created_at and sources
+                    data = json.dumps({
+                        "message_id": event["message_id"],
+                        "created_at": event.get("created_at"),
+                        "sources": event.get("sources", []),
+                    })
                     yield f"event: final\ndata: {data}\n\n"
                 
                 elif event_type == "cached":
