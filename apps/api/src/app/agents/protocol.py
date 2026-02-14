@@ -30,6 +30,66 @@ TOOL_CALL_PATTERN = re.compile(
     re.DOTALL
 )
 
+# Fallback: ```json\n{"tool": ...}\n```
+TOOL_CALL_JSON_BLOCK = re.compile(
+    r'```(?:json)?\s*\n(\{[^`]*?"tool"\s*:[^`]*?\})\s*\n```',
+    re.DOTALL
+)
+
+
+def _extract_balanced_json(text: str, start: int) -> Optional[str]:
+    """Extract a balanced JSON object starting from position `start` (must be '{')."""
+    if start >= len(text) or text[start] != '{':
+        return None
+    depth = 0
+    in_string = False
+    escape = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if escape:
+            escape = False
+            continue
+        if ch == '\\':
+            escape = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == '{':
+            depth += 1
+        elif ch == '}':
+            depth -= 1
+            if depth == 0:
+                return text[start:i + 1]
+    return None
+
+
+def _find_tool_json_objects(content: str) -> List[str]:
+    """
+    Find all JSON objects containing a "tool" key in the text.
+    Uses balanced-brace extraction for robustness with multiline JSON.
+    """
+    results = []
+    idx = 0
+    while idx < len(content):
+        brace = content.find('{', idx)
+        if brace < 0:
+            break
+        candidate = _extract_balanced_json(content, brace)
+        if candidate:
+            try:
+                data = json.loads(candidate)
+                if isinstance(data, dict) and "tool" in data:
+                    results.append(candidate)
+            except (json.JSONDecodeError, ValueError):
+                pass
+            idx = brace + len(candidate)
+        else:
+            idx = brace + 1
+    return results
+
 TOOL_RESULT_TEMPLATE = """```tool_result
 {result}
 ```"""
@@ -54,6 +114,11 @@ def parse_llm_response(content: str) -> ParsedResponse:
     """
     Парсит ответ LLM и извлекает tool_calls.
     
+    Supports multiple formats:
+    1. ```tool_call\n{...}\n```  (canonical)
+    2. ```json\n{"tool": ...}\n```
+    3. Any JSON object with "tool" key (balanced braces)
+    
     Args:
         content: Текст ответа LLM
         
@@ -61,19 +126,51 @@ def parse_llm_response(content: str) -> ParsedResponse:
         ParsedResponse с текстом и списком tool_calls
     """
     tool_calls: List[ToolCall] = []
+    seen_tools: set = set()
+    text = content
     
+    # 1. Try canonical ```tool_call ... ```
     matches = TOOL_CALL_PATTERN.findall(content)
-    
     for match in matches:
         try:
             data = json.loads(match.strip())
-            if "tool" in data:
-                tool_call = ToolCall.from_dict(data)
-                tool_calls.append(tool_call)
+            if "tool" in data and data["tool"] not in seen_tools:
+                tool_calls.append(ToolCall.from_dict(data))
+                seen_tools.add(data["tool"])
         except json.JSONDecodeError:
             continue
+    if tool_calls:
+        text = TOOL_CALL_PATTERN.sub('', text).strip()
+        return ParsedResponse(text=text, tool_calls=tool_calls, has_tool_calls=True)
     
-    text = TOOL_CALL_PATTERN.sub('', content).strip()
+    # 2. Try ```json ... ```
+    matches = TOOL_CALL_JSON_BLOCK.findall(content)
+    for match in matches:
+        try:
+            data = json.loads(match.strip())
+            if "tool" in data and data["tool"] not in seen_tools:
+                tool_calls.append(ToolCall.from_dict(data))
+                seen_tools.add(data["tool"])
+        except json.JSONDecodeError:
+            continue
+    if tool_calls:
+        text = TOOL_CALL_JSON_BLOCK.sub('', text).strip()
+        return ParsedResponse(text=text, tool_calls=tool_calls, has_tool_calls=True)
+    
+    # 3. Fallback: find any JSON with "tool" key using balanced braces
+    json_strs = _find_tool_json_objects(content)
+    for js in json_strs:
+        try:
+            data = json.loads(js)
+            if data["tool"] not in seen_tools:
+                tool_calls.append(ToolCall.from_dict(data))
+                seen_tools.add(data["tool"])
+                text = text.replace(js, '', 1)
+        except (json.JSONDecodeError, KeyError):
+            continue
+    
+    if tool_calls:
+        text = text.strip()
     
     return ParsedResponse(
         text=text,

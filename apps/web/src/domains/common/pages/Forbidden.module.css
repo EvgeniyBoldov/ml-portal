@@ -15,7 +15,7 @@
 .code {
   font-size: 96px;
   font-weight: 700;
-  color: var(--color-danger);
+  color: var(--danger);
   margin: 0 0 var(--sp-3);
   line-height: 1;
 }
@@ -37,7 +37,7 @@
 .link {
   display: inline-block;
   padding: var(--sp-2) var(--sp-4);
-  background: var(--color-primary);
+  background: var(--primary);
   color: white;
   text-decoration: none;
   border-radius: var(--radius-md);
@@ -46,10 +46,10 @@
 }
 
 .link:hover {
-  background: var(--color-primary-hover);
+  background: var(--primary-hover);
 }
 
 .link:focus-visible {
-  outline: 2px solid var(--color-primary);
+  outline: 2px solid var(--primary);
   outline-offset: 2px;
 }

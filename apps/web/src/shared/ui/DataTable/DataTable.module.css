@@ -48,7 +48,7 @@
 
 .selectedCount {
   font-size: var(--font-size-sm);
-  color: var(--color-primary);
+  color: var(--primary);
   font-weight: var(--font-weight-semibold);
 }
 

@@ -4,49 +4,49 @@
 }
 
 .pageHeader {
-  margin-bottom: var(--spacing-xl);
+  margin-bottom: var(--sp-6);
 }
 
 .pageTitle {
   font-size: var(--font-size-2xl);
   font-weight: 700;
-  color: var(--color-text);
-  margin: 0 0 var(--spacing-sm) 0;
+  color: var(--text);
+  margin: 0 0 var(--sp-2) 0;
 }
 
 .pageDescription {
   font-size: var(--font-size-lg);
-  color: var(--color-text-secondary);
+  color: var(--text-secondary);
   margin: 0;
 }
 
 .statusCard {
-  background: var(--color-background);
-  border-radius: var(--border-radius);
-  border: 1px solid var(--color-border);
-  padding: var(--spacing-xl);
-  margin-bottom: var(--spacing-lg);
+  background: var(--bg);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-color);
+  padding: var(--sp-6);
+  margin-bottom: var(--sp-5);
 }
 
 .statusHeader {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: var(--spacing-lg);
+  margin-bottom: var(--sp-5);
 }
 
 .statusTitle {
   font-size: var(--font-size-lg);
   font-weight: 600;
-  color: var(--color-text);
+  color: var(--text);
   margin: 0;
 }
 
 .statusBadge {
   display: inline-flex;
   align-items: center;
-  padding: var(--spacing-xs) var(--spacing-sm);
-  border-radius: var(--border-radius-full);
+  padding: var(--sp-1) var(--sp-2);
+  border-radius: var(--radius-full);
   font-size: var(--font-size-sm);
   font-weight: 600;
   text-transform: uppercase;
@@ -54,41 +54,41 @@
 }
 
 .statusBadge.enabled {
-  background: var(--color-success-light);
-  color: var(--color-success);
+  background: var(--success-light);
+  color: var(--success);
 }
 
 .statusBadge.disabled {
-  background: var(--color-danger-light);
-  color: var(--color-danger);
+  background: var(--danger-light);
+  color: var(--danger);
 }
 
 .statusBadge.error {
-  background: var(--color-warning-light);
-  color: var(--color-warning);
+  background: var(--warning-light);
+  color: var(--warning);
 }
 
 .statusInfo {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: var(--spacing-lg);
+  gap: var(--sp-5);
 }
 
 .statusItem {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-xs);
+  gap: var(--sp-1);
 }
 
 .statusLabel {
   font-size: var(--font-size-sm);
   font-weight: 500;
-  color: var(--color-text-secondary);
+  color: var(--text-secondary);
 }
 
 .statusValue {
   font-size: var(--font-size-sm);
-  color: var(--color-text);
+  color: var(--text);
   font-family: monospace;
 }
 
@@ -98,45 +98,45 @@
 }
 
 .statusValue.boolean.true {
-  color: var(--color-success);
+  color: var(--success);
 }
 
 .statusValue.boolean.false {
-  color: var(--color-danger);
+  color: var(--danger);
 }
 
 .infoCard {
-  background: var(--color-surface);
-  border-radius: var(--border-radius);
-  border: 1px solid var(--color-border);
-  padding: var(--spacing-lg);
-  margin-bottom: var(--spacing-lg);
+  background: var(--panel);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-color);
+  padding: var(--sp-5);
+  margin-bottom: var(--sp-5);
 }
 
 .infoTitle {
   font-size: var(--font-size-lg);
   font-weight: 600;
-  color: var(--color-text);
-  margin: 0 0 var(--spacing-md) 0;
+  color: var(--text);
+  margin: 0 0 var(--sp-4) 0;
 }
 
 .infoContent {
   font-size: var(--font-size-sm);
-  color: var(--color-text-secondary);
+  color: var(--text-secondary);
   line-height: 1.6;
 }
 
 .infoList {
   list-style: none;
   padding: 0;
-  margin: var(--spacing-md) 0 0 0;
+  margin: var(--sp-4) 0 0 0;
 }
 
 .infoListItem {
   display: flex;
   align-items: flex-start;
-  gap: var(--spacing-sm);
-  margin-bottom: var(--spacing-sm);
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-2);
 }
 
 .infoListItem:last-child {
@@ -159,83 +159,83 @@
 }
 
 .warningCard {
-  background: var(--color-warning-light);
-  border: 1px solid var(--color-warning-border);
-  border-radius: var(--border-radius);
-  padding: var(--spacing-lg);
-  margin-bottom: var(--spacing-lg);
+  background: var(--warning-light);
+  border: 1px solid var(--warning);
+  border-radius: var(--radius-lg);
+  padding: var(--sp-5);
+  margin-bottom: var(--sp-5);
 }
 
 .warningTitle {
   font-size: var(--font-size-lg);
   font-weight: 600;
-  color: var(--color-warning);
-  margin: 0 0 var(--spacing-sm) 0;
+  color: var(--warning);
+  margin: 0 0 var(--sp-2) 0;
   display: flex;
   align-items: center;
-  gap: var(--spacing-sm);
+  gap: var(--sp-2);
 }
 
 .warningContent {
   font-size: var(--font-size-sm);
-  color: var(--color-warning);
+  color: var(--warning);
   line-height: 1.6;
 }
 
 .metricsCard {
-  background: var(--color-background);
-  border-radius: var(--border-radius);
-  border: 1px solid var(--color-border);
-  padding: var(--spacing-xl);
+  background: var(--bg);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-color);
+  padding: var(--sp-6);
 }
 
 .metricsTitle {
   font-size: var(--font-size-lg);
   font-weight: 600;
-  color: var(--color-text);
-  margin: 0 0 var(--spacing-lg) 0;
+  color: var(--text);
+  margin: 0 0 var(--sp-5) 0;
 }
 
 .metricsGrid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: var(--spacing-lg);
+  gap: var(--sp-5);
 }
 
 .metricItem {
   text-align: center;
-  padding: var(--spacing-lg);
-  background: var(--color-surface);
-  border-radius: var(--border-radius);
-  border: 1px solid var(--color-border);
+  padding: var(--sp-5);
+  background: var(--panel);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-color);
 }
 
 .metricValue {
   font-size: var(--font-size-2xl);
   font-weight: 700;
-  color: var(--color-text);
-  margin: 0 0 var(--spacing-xs) 0;
+  color: var(--text);
+  margin: 0 0 var(--sp-1) 0;
 }
 
 .metricLabel {
   font-size: var(--font-size-sm);
-  color: var(--color-text-secondary);
+  color: var(--text-secondary);
   margin: 0;
 }
 
 .loadingState {
-  padding: var(--spacing-2xl);
+  padding: var(--sp-8);
   text-align: center;
 }
 
 .loadingSpinner {
   width: 2rem;
   height: 2rem;
-  border: 2px solid var(--color-border);
-  border-top: 2px solid var(--color-primary);
+  border: 2px solid var(--border-color);
+  border-top: 2px solid var(--primary);
   border-radius: 50%;
   animation: spin 1s linear infinite;
-  margin: 0 auto var(--spacing-md);
+  margin: 0 auto var(--sp-4);
 }
 
 @keyframes spin {
@@ -251,23 +251,23 @@
 @media (prefers-color-scheme: dark) {
   .statusCard,
   .metricsCard {
-    background: var(--color-background-dark);
-    border-color: var(--color-border-dark);
+    background: var(--bg);
+    border-color: var(--border-color);
   }
 
   .infoCard {
-    background: var(--color-surface-dark);
-    border-color: var(--color-border-dark);
+    background: var(--panel);
+    border-color: var(--border-color);
   }
 
   .metricItem {
-    background: var(--color-surface-dark);
-    border-color: var(--color-border-dark);
+    background: var(--panel);
+    border-color: var(--border-color);
   }
 
   .warningCard {
-    background: var(--color-warning-dark);
-    border-color: var(--color-warning-border-dark);
+    background: var(--warning-light);
+    border-color: var(--warning);
   }
 }
 
@@ -279,11 +279,11 @@
 
   .statusInfo {
     grid-template-columns: 1fr;
-    gap: var(--spacing-md);
+    gap: var(--sp-4);
   }
 
   .metricsGrid {
     grid-template-columns: 1fr;
-    gap: var(--spacing-md);
+    gap: var(--sp-4);
   }
 }

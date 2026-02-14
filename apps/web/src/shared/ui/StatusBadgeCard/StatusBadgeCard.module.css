@@ -7,8 +7,8 @@
   align-items: center;
   gap: 0.75rem;
   padding: 0.75rem 1rem;
-  background: var(--panel, var(--color-bg-primary));
-  border: 1px solid var(--border, var(--color-border));
+  background: var(--panel);
+  border: 1px solid var(--border-color);
   border-radius: var(--radius-md, 8px);
 }
 
@@ -21,7 +21,7 @@
 .label {
   font-size: 0.875rem;
   font-weight: 500;
-  color: var(--text-secondary, var(--color-text-secondary));
+  color: var(--text-secondary);
 }
 
 .select {

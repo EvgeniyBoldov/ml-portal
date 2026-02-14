@@ -67,12 +67,13 @@ class AgentService:
         slug: str,
         name: str,
         description: Optional[str] = None,
+        logging_level: str = "brief",
     ) -> Agent:
         existing = await self.agent_repo.get_by_slug(slug)
         if existing:
             raise AgentAlreadyExistsError(f"Agent with slug '{slug}' already exists")
 
-        agent = Agent(slug=slug, name=name, description=description)
+        agent = Agent(slug=slug, name=name, description=description, logging_level=logging_level)
         agent = await self.agent_repo.create(agent)
 
         await self._add_agent_to_default_permissions(agent.slug)
@@ -102,6 +103,7 @@ class AgentService:
         agent_id: UUID,
         name: Optional[str] = None,
         description: Optional[str] = None,
+        logging_level: Optional[str] = None,
     ) -> Agent:
         agent = await self.get_agent(agent_id)
         update_data = {}
@@ -109,6 +111,8 @@ class AgentService:
             update_data['name'] = name
         if description is not None:
             update_data['description'] = description
+        if logging_level is not None:
+            update_data['logging_level'] = logging_level
         if update_data:
             return await self.agent_repo.update(agent, update_data)
         return agent

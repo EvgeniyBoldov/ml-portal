@@ -25,13 +25,13 @@
 }
 
 .trigger:focus:not(:disabled) {
-  border-color: var(--color-primary);
+  border-color: var(--primary);
   background: rgba(255, 255, 255, 0.05);
   box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.15);
 }
 
 .trigger.open {
-  border-color: var(--color-primary);
+  border-color: var(--primary);
   background: rgba(255, 255, 255, 0.05);
   box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.15);
 }
@@ -45,7 +45,7 @@
 }
 
 .trigger.error {
-  border-color: var(--color-danger);
+  border-color: var(--danger);
 }
 
 .trigger.error:focus {

@@ -10,7 +10,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { limitsApi, type LimitVersionCreate } from '@/shared/api/limits';
 import { qk } from '@/shared/api/keys';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
-import { EntityPage, ContentBlock, Input, Textarea, Badge, type EntityPageMode, type BreadcrumbItem } from '@/shared/ui';
+import { EntityPageV2, Tab, type EntityPageMode, type BreadcrumbItem } from '@/shared/ui/EntityPage/EntityPageV2';
+import { ContentBlock, Input, Textarea, Badge } from '@/shared/ui';
 import { useVersionActions } from '@/shared/hooks/useVersionActions';
 
 interface FormData extends LimitVersionCreate {
@@ -233,29 +234,29 @@ export function LimitVersionPage() {
   });
 
   return (
-    <EntityPage
+    <EntityPageV2
+      title={isCreate ? 'Новая версия' : `Версия ${versionNumber}`}
       mode={mode}
-      entityName={isCreate ? 'Новая версия' : `Версия ${versionNumber}`}
-      entityTypeLabel="версии"
-      backPath={`/admin/limits/${slug}`}
       breadcrumbs={breadcrumbs}
       loading={!isCreate && isLoading}
       saving={saving}
+      backPath={`/admin/limits/${slug}`}
       onEdit={handleEdit}
       onSave={handleSave}
       onCancel={handleCancel}
       actionButtons={actionButtons}
     >
-      <ContentBlock
-        title="Лимиты"
-        icon="settings"
-        headerActions={
-          !isCreate && existingVersion?.status ? (
-            <Badge tone={existingVersion.status === 'active' ? 'success' : existingVersion.status === 'draft' ? 'warn' : 'neutral'} size="small">
-              {existingVersion.status === 'active' ? 'Активна' : existingVersion.status === 'draft' ? 'Черновик' : 'Архив'}
-            </Badge>
-          ) : undefined
-        }
+      <Tab title="Версия" layout="single">
+        <ContentBlock
+          title="Лимиты"
+          icon="settings"
+          headerActions={
+            !isCreate && existingVersion?.status ? (
+              <Badge tone={existingVersion.status === 'active' ? 'success' : existingVersion.status === 'draft' ? 'warn' : 'neutral'} size="small">
+                {existingVersion.status === 'active' ? 'Активна' : existingVersion.status === 'draft' ? 'Черновик' : 'Архив'}
+              </Badge>
+            ) : undefined
+          }
       >
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
           <div>
@@ -332,7 +333,8 @@ export function LimitVersionPage() {
           </pre>
         )}
       </ContentBlock>
-    </EntityPage>
+      </Tab>
+    </EntityPageV2>
   );
 }
 

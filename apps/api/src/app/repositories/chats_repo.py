@@ -93,14 +93,14 @@ class AsyncChatMessagesRepository(AsyncTenantRepository[ChatMessages]):
         super().__init__(session, ChatMessages, tenant_id, user_id)
     
     async def create_message(self, chat_id: str, role: str, content: Dict[str, Any], 
-                           metadata: Optional[Dict[str, Any]] = None, **kwargs) -> ChatMessages:
+                           meta: Optional[Dict[str, Any]] = None, **kwargs) -> ChatMessages:
         """Create a new chat message"""
         return await self.create(
             self.tenant_id,
             chat_id=chat_id,
             role=role,
             content=content,
-            metadata=metadata or {},
+            meta=meta or {},
             **kwargs
         )
     

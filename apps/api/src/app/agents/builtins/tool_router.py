@@ -267,6 +267,23 @@ class ToolRouterTool(VersionedTool):
                                 },
                             ))
 
+            # DCBox / NetBox: network infrastructure, DCIM, IPAM
+            dcbox_keywords = [
+                "device", "девайс", "устройств", "сервер", "server",
+                "switch", "свитч", "коммутатор", "router", "роутер",
+                "маршрутизатор", "firewall", "фаервол",
+                "site", "сайт", "площадк", "дата-центр", "datacenter", "dc",
+                "rack", "стойк", "шкаф",
+                "prefix", "префикс", "подсет", "subnet", "сеть", "network",
+                "ip", "адрес", "address", "ipam", "dcim",
+                "netbox", "dcbox", "инфраструктур", "infrastructure",
+                "vlan", "vrf", "интерфейс", "interface",
+            ]
+            if any(kw in query_lower for kw in dcbox_keywords):
+                dcbox_tool = self._select_dcbox_tool(query_lower, available)
+                if dcbox_tool and not self._already_planned(plan, dcbox_tool[0]):
+                    plan.append(dcbox_tool)
+
         # Fallback: if nothing matched, try RAG as default
         if not plan:
             rag_tool = self._find_tool(available, "rag.search")
@@ -290,6 +307,60 @@ class ToolRouterTool(VersionedTool):
                 "collection.aggregate",
                 {"metrics": [{"function": "count"}]},
             )
+        # DCBox tools
+        if tool.tool_slug.startswith("dcbox."):
+            return (tool.tool_slug, {"q": query, "limit": 20})
+        return None
+
+    def _select_dcbox_tool(
+        self,
+        query_lower: str,
+        available: List[VersionedTool],
+    ) -> Optional[tuple[str, Dict[str, Any]]]:
+        """
+        Select the most appropriate DCBox tool based on query keywords.
+        Falls back to dcbox.devices if no specific match.
+        """
+        # IP addresses
+        addr_kw = ["ip", "адрес", "address", "ip-адрес"]
+        if any(kw in query_lower for kw in addr_kw):
+            tool = self._find_tool(available, "dcbox.addresses")
+            if tool:
+                return ("dcbox.addresses", {"limit": 20})
+
+        # Prefixes / subnets
+        prefix_kw = ["prefix", "префикс", "подсет", "subnet", "vlan", "vrf"]
+        if any(kw in query_lower for kw in prefix_kw):
+            tool = self._find_tool(available, "dcbox.prefixes")
+            if tool:
+                return ("dcbox.prefixes", {"limit": 20})
+
+        # Sites
+        site_kw = ["site", "сайт", "площадк", "дата-центр", "datacenter"]
+        if any(kw in query_lower for kw in site_kw):
+            tool = self._find_tool(available, "dcbox.sites")
+            if tool:
+                return ("dcbox.sites", {"limit": 20})
+
+        # Racks
+        rack_kw = ["rack", "стойк", "шкаф"]
+        if any(kw in query_lower for kw in rack_kw):
+            tool = self._find_tool(available, "dcbox.racks")
+            if tool:
+                return ("dcbox.racks", {"limit": 20})
+
+        # Default: devices (most common DCIM query)
+        device_kw = [
+            "device", "девайс", "устройств", "сервер", "server",
+            "switch", "свитч", "коммутатор", "router", "роутер",
+            "маршрутизатор", "firewall", "фаервол",
+            "dcim", "netbox", "dcbox", "инфраструктур", "infrastructure",
+        ]
+        if any(kw in query_lower for kw in device_kw):
+            tool = self._find_tool(available, "dcbox.devices")
+            if tool:
+                return ("dcbox.devices", {"limit": 20})
+
         return None
 
     def _find_tool(

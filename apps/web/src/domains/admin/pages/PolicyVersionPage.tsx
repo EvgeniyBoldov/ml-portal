@@ -10,7 +10,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { policiesApi, type PolicyVersion, type PolicyVersionCreate } from '@/shared/api/policies';
 import { qk } from '@/shared/api/keys';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
-import { EntityPage, ContentBlock, Textarea, Badge, type EntityPageMode, type BreadcrumbItem } from '@/shared/ui';
+import { EntityPageV2, Tab, type EntityPageMode, type BreadcrumbItem } from '@/shared/ui/EntityPage/EntityPageV2';
+import { ContentBlock, Textarea, Badge } from '@/shared/ui';
 import { useVersionActions } from '@/shared/hooks/useVersionActions';
 
 export function PolicyVersionPage() {
@@ -183,29 +184,29 @@ export function PolicyVersionPage() {
   });
 
   return (
-    <EntityPage
+    <EntityPageV2
+      title={isCreate ? 'Новая версия' : `Версия ${versionNumber}`}
       mode={mode}
-      entityName={isCreate ? 'Новая версия' : `Версия ${versionNumber}`}
-      entityTypeLabel="версии"
-      backPath={`/admin/policies/${slug}`}
       breadcrumbs={breadcrumbs}
       loading={!isCreate && isLoading}
       saving={saving}
+      backPath={`/admin/policies/${slug}`}
       onEdit={handleEdit}
       onSave={handleSave}
       onCancel={handleCancel}
       actionButtons={actionButtons}
     >
-      <ContentBlock
-        title="Текст политики"
-        icon="file-text"
-        headerActions={
-          !isCreate && existingVersion?.status ? (
-            <Badge tone={existingVersion.status === 'active' ? 'success' : existingVersion.status === 'draft' ? 'warn' : 'neutral'} size="small">
-              {existingVersion.status === 'active' ? 'Активна' : existingVersion.status === 'draft' ? 'Черновик' : 'Архив'}
-            </Badge>
-          ) : undefined
-        }
+      <Tab title="Версия" layout="single">
+        <ContentBlock
+          title="Текст политики"
+          icon="file-text"
+          headerActions={
+            !isCreate && existingVersion?.status ? (
+              <Badge tone={existingVersion.status === 'active' ? 'success' : existingVersion.status === 'draft' ? 'warn' : 'neutral'} size="small">
+                {existingVersion.status === 'active' ? 'Активна' : existingVersion.status === 'draft' ? 'Черновик' : 'Архив'}
+              </Badge>
+            ) : undefined
+          }
       >
           {isEditable ? (
             <Textarea
@@ -249,7 +250,8 @@ export function PolicyVersionPage() {
           </pre>
         )}
       </ContentBlock>
-    </EntityPage>
+      </Tab>
+    </EntityPageV2>
   );
 }
 

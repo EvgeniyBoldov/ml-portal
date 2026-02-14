@@ -12,7 +12,7 @@
 .label {
   font-size: 0.875rem;
   font-weight: 500;
-  color: var(--text, var(--color-text));
+  color: var(--text);
 }
 
 .trigger {
@@ -25,7 +25,7 @@
   background: transparent;
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: var(--radius-md, 6px);
-  color: var(--text, var(--color-text));
+  color: var(--text);
   font-size: 0.9375rem;
   cursor: pointer;
   transition: all 0.2s ease;
@@ -44,7 +44,7 @@
 
 .chevron {
   transition: transform 0.2s ease;
-  color: var(--muted, var(--color-text-muted));
+  color: var(--muted);
 }
 
 .chevronOpen {
@@ -57,8 +57,8 @@
   left: 0;
   right: 0;
   margin-top: 0.25rem;
-  background: var(--panel, var(--color-panel));
-  border: 1px solid var(--border, var(--color-border));
+  background: var(--panel);
+  border: 1px solid var(--border-color);
   border-radius: var(--radius-md, 6px);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
   z-index: 100;
@@ -73,7 +73,7 @@
   padding: 0.5rem 0.75rem;
   background: transparent;
   border: none;
-  color: var(--text, var(--color-text));
+  color: var(--text);
   font-size: 0.9375rem;
   cursor: pointer;
   transition: background 0.15s ease;
@@ -96,7 +96,7 @@
 
 .default {
   background: rgba(255, 255, 255, 0.1);
-  color: var(--muted, var(--color-text-muted));
+  color: var(--muted);
 }
 
 .success {
@@ -106,6 +106,6 @@
 
 .muted {
   background: rgba(255, 255, 255, 0.05);
-  color: var(--muted, var(--color-text-muted));
+  color: var(--muted);
   opacity: 0.7;
 }

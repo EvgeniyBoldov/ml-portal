@@ -116,7 +116,7 @@
 
 .closeButton:hover {
   opacity: 1;
-  background: var(--color-bg-secondary, rgba(0, 0, 0, 0.05));
+  background: var(--bg-hover, rgba(0, 0, 0, 0.05));
 }
 
 .closeButton:focus-visible {

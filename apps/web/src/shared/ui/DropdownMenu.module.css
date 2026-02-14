@@ -53,11 +53,11 @@
 }
 
 .menuItem.danger {
-  color: var(--color-danger);
+  color: var(--danger);
 }
 
 .menuItem.danger:hover:not(:disabled) {
-  background: var(--color-danger-light);
+  background: var(--danger-light);
 }
 
 .icon {

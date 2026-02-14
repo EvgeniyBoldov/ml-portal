@@ -1,7 +1,7 @@
 /* Section */
 .section {
-  background: var(--panel, var(--color-bg-primary));
-  border: 1px solid var(--border, var(--color-border));
+  background: var(--panel);
+  border: 1px solid var(--border-color);
   border-radius: var(--radius-lg, 12px);
   overflow: hidden;
 }
@@ -11,8 +11,8 @@
   align-items: center;
   gap: 0.75rem;
   padding: 1rem 1.25rem;
-  border-bottom: 1px solid var(--border, var(--color-border));
-  background: var(--bg, var(--color-bg-secondary));
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-hover);
 }
 
 .sectionIcon {
@@ -32,7 +32,7 @@
   font-size: 0.9375rem;
   font-weight: 600;
   margin: 0;
-  color: var(--text, var(--color-text-primary));
+  color: var(--text);
 }
 
 .sectionContent {
@@ -52,7 +52,7 @@
 .formLabel {
   font-size: 0.8125rem;
   font-weight: 500;
-  color: var(--text, var(--color-text-primary));
+  color: var(--text);
 }
 
 .formLabel.required::after {
@@ -63,9 +63,9 @@
 .formValue {
   padding: 0.625rem 0.875rem;
   font-size: 0.875rem;
-  color: var(--text, var(--color-text-primary));
-  background: var(--bg, var(--color-bg-secondary));
-  border: 1px solid var(--border, var(--color-border));
+  color: var(--text);
+  background: var(--bg-hover);
+  border: 1px solid var(--border-color);
   border-radius: var(--radius-md, 6px);
   min-height: 42px;
   display: flex;
@@ -75,7 +75,7 @@
 .formHint {
   margin: 0;
   font-size: 0.8125rem;
-  color: var(--muted, var(--color-text-muted));
+  color: var(--muted);
   line-height: 1.5;
 }
 
@@ -85,7 +85,7 @@
   justify-content: space-between;
   align-items: center;
   padding: 0.75rem 0;
-  border-top: 1px solid var(--border, var(--color-border));
+  border-top: 1px solid var(--border-color);
 }
 
 .formRowLabel {
@@ -97,10 +97,10 @@
 .formRowTitle {
   font-size: 0.875rem;
   font-weight: 500;
-  color: var(--text, var(--color-text-primary));
+  color: var(--text);
 }
 
 .formRowDescription {
   font-size: 0.75rem;
-  color: var(--muted, var(--color-text-muted));
+  color: var(--muted);
 }

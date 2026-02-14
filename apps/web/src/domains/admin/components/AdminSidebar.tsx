@@ -40,8 +40,6 @@ const navigation: NavGroup[] = [
   {
     title: 'AI Конфигурация',
     items: [
-      { path: '/admin/models', label: 'Модели', icon: 'bot' },
-      { path: '/admin/prompts', label: 'Промпты', icon: 'file-text' },
       { path: '/admin/tools', label: 'Инструменты', icon: 'settings' },
       { path: '/admin/agents', label: 'Агенты', icon: 'sparkles' },
     ],
@@ -57,7 +55,6 @@ const navigation: NavGroup[] = [
     title: 'Мониторинг',
     items: [
       { path: '/admin/agent-runs', label: 'Запуски агентов', icon: 'activity' },
-      { path: '/admin/routing-logs', label: 'Логи маршрутизации', icon: 'git-branch' },
       { path: '/admin/audit', label: 'Аудит', icon: 'file' },
     ],
   },

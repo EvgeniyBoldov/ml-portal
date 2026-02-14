@@ -9,8 +9,8 @@
   padding: 6px 10px;
   font-size: 12px;
   line-height: 1.4;
-  color: var(--color-text-inverse, #fff);
-  background-color: var(--color-bg-tooltip, #1a1a2e);
+  color: var(--text-inverse, #fff);
+  background-color: var(--bg-tooltip, #1a1a2e);
   border-radius: 6px;
   white-space: nowrap;
   pointer-events: none;
@@ -21,7 +21,7 @@
   position: absolute;
   width: 8px;
   height: 8px;
-  background-color: var(--color-bg-tooltip, #1a1a2e);
+  background-color: var(--bg-tooltip, #1a1a2e);
   transform: rotate(45deg);
 }
 

@@ -232,7 +232,7 @@ User message: {message}"""
             await self.session.commit()
             
             user_message_id = str(user_message.id)
-            user_message_created_at = user_message.created_at.isoformat() if user_message.created_at else None
+            user_message_created_at = self._format_datetime(user_message.created_at)
             logger.info(f"User message created: {user_message_id}")
             yield {"type": "user_message", "message_id": user_message_id, "created_at": user_message_created_at}
             
@@ -253,7 +253,7 @@ User message: {message}"""
             
             # 6. Load context
             yield {"type": "status", "stage": "loading_context"}
-            context = await self.load_chat_context(chat_id, limit=20)
+            context = await self.load_chat_context(chat_id, limit=8)
             llm_messages = context + [{"role": "user", "content": content}]
             
             # 6.1. Auto-generate chat title if this is the first user message
@@ -335,7 +335,15 @@ User message: {message}"""
                 logger.error(f"AgentRuntime error: {llm_error}", exc_info=True)
                 yield {"type": "error", "error": llm_error}
             
-            # 9. Save assistant message
+            # 9. Commit agent run data (steps, run record) regardless of outcome.
+            # RunStore only does flush(), so we must commit here to persist runs.
+            try:
+                await self.session.commit()
+                logger.info("Agent run data committed")
+            except Exception as commit_exc:
+                logger.error(f"Failed to commit agent run data: {commit_exc}", exc_info=True)
+            
+            # 10. Save assistant message
             if assistant_content:
                 assistant_message = await self.messages_repo.create_message(
                     chat_id=chat_id,
@@ -347,10 +355,10 @@ User message: {message}"""
                 await self.session.commit()
                 
                 assistant_message_id = str(assistant_message.id)
-                assistant_message_created_at = assistant_message.created_at.isoformat() if assistant_message.created_at else None
+                assistant_message_created_at = self._format_datetime(assistant_message.created_at)
                 logger.info(f"Assistant message saved: {assistant_message_id}")
                 
-                # 10. Store idempotency
+                # 11. Store idempotency
                 if idempotency_key:
                     await self.store_idempotency(
                         idempotency_key,
@@ -371,6 +379,18 @@ User message: {message}"""
         except Exception as e:
             logger.error(f"Error in send_message_stream: {e}", exc_info=True)
             yield {"type": "error", "error": str(e)}
+    
+    @staticmethod
+    def _format_datetime(dt) -> Optional[str]:
+        """Normalize datetime to ISO format with Z suffix for consistent API output."""
+        if not dt:
+            return None
+        ts = dt.isoformat()
+        if ts.endswith("+00:00"):
+            ts = ts[:-6]
+        elif ts.endswith("Z"):
+            ts = ts[:-1]
+        return ts + "Z"
     
     def _map_runtime_event(self, event: RuntimeEvent) -> Optional[Dict[str, Any]]:
         """Map AgentRuntime event to SSE event format"""
@@ -451,7 +471,10 @@ User message: {message}"""
                 "routing_duration_ms": exec_request.routing_duration_ms,
             }
             
-            # 2. Enrich tool context with RBAC info
+            # 2. Enrich tool context with routing data
+            if exec_request.tool_instances_map:
+                tool_ctx.extra["tool_instances_map"] = exec_request.tool_instances_map
+            
             if exec_request.effective_permissions:
                 denied_reasons = exec_request.effective_permissions.denied_reasons or {}
                 tool_ctx.denied_tools = list(denied_reasons.keys())

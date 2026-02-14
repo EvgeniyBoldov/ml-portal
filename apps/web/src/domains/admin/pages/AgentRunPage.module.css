@@ -1,0 +1,105 @@
+/* AgentRunPage - detail page styles */
+
+.steps-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.step-item {
+  padding: 12px 16px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.step-item:hover {
+  background: var(--bg-secondary);
+}
+
+.step-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.step-number {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  min-width: 28px;
+}
+
+.step-meta {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.step-toggle {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  user-select: none;
+}
+
+.step-preview {
+  margin-top: 4px;
+  padding-left: 36px;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.step-data {
+  margin-top: 8px;
+  padding: 12px;
+  background: var(--bg-secondary);
+  border-radius: 6px;
+  font-family: monospace;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  overflow: auto;
+  max-height: 300px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.error-box {
+  padding: 12px 16px;
+  background: var(--bg-danger, rgba(239, 68, 68, 0.08));
+  border: 1px solid var(--border-danger, rgba(239, 68, 68, 0.2));
+  border-radius: 8px;
+  color: var(--text-danger, #ef4444);
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.error-label {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.empty-steps {
+  padding: 32px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.875rem;
+}
+
+.context-snapshot {
+  font-family: monospace;
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 400px;
+  overflow: auto;
+}

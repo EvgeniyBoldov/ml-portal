@@ -12,13 +12,13 @@
   gap: var(--space-4, 1rem);
   padding: var(--space-3, 0.75rem) var(--space-5, 1.5rem);
   background: var(--panel);
-  border-bottom: 1px solid var(--border, var(--color-border));
+  border-bottom: 1px solid var(--border-color);
 }
 
 .contained {
-  border: 1px solid var(--border, var(--color-border));
+  border: 1px solid var(--border-color);
   border-radius: var(--radius-lg, 8px);
-  border-bottom: 1px solid var(--border, var(--color-border));
+  border-bottom: 1px solid var(--border-color);
 }
 
 .brand {
@@ -41,7 +41,7 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  color: var(--text, var(--color-text));
+  color: var(--text);
 }
 
 .center {
@@ -63,7 +63,7 @@
 
 .user {
   font-size: var(--text-sm, 0.875rem);
-  color: var(--muted, var(--color-text-muted));
+  color: var(--muted);
   white-space: nowrap;
 }
 

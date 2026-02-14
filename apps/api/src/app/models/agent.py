@@ -10,9 +10,18 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional, List
 
-from sqlalchemy import String, DateTime, Text, ForeignKey
+from sqlalchemy import String, DateTime, Text, ForeignKey, Enum as SAEnum
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+import enum
+
+
+class LoggingLevel(str, enum.Enum):
+    """Agent logging verbosity level"""
+    NONE = "none"
+    BRIEF = "brief"
+    FULL = "full"
 
 from app.models.base import Base
 
@@ -39,6 +48,13 @@ class Agent(Base):
         ForeignKey('agent_versions.id', ondelete='SET NULL', use_alter=True),
         nullable=True,
         index=True
+    )
+
+    logging_level: Mapped[str] = mapped_column(
+        String(10),
+        default=LoggingLevel.BRIEF.value,
+        nullable=False,
+        server_default="brief",
     )
 
     created_at: Mapped[datetime] = mapped_column(

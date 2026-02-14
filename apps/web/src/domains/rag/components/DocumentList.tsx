@@ -124,8 +124,8 @@ export default function DocumentList({
                       cursor: 'pointer',
                       padding: '8px',
                       borderRadius: '6px',
-                      border: '1px solid var(--color-border)',
-                      background: 'var(--color-background)',
+                      border: '1px solid var(--border-color)',
+                      background: 'var(--bg)',
                       transition: 'all 0.2s ease',
                     }}
                   >

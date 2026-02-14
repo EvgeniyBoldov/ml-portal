@@ -22,7 +22,7 @@
 }
 
 .input:focus:not(:disabled):not(:read-only) {
-  border-color: var(--color-primary, #8b5cf6);
+  border-color: var(--primary, #8b5cf6);
   background: var(--input-bg-focus, #ffffff);
   box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.15);
 }
@@ -40,7 +40,7 @@
 /* But here we stick to simple rules */
 
 .input.error {
-  border-color: var(--color-danger);
+  border-color: var(--danger);
 }
 
 .input.error:focus {

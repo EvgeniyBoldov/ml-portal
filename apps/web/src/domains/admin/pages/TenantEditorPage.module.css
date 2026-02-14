@@ -6,8 +6,8 @@
 
 /* Section */
 .section {
-  background: var(--panel, var(--color-bg-primary));
-  border: 1px solid var(--border, var(--color-border));
+  background: var(--panel);
+  border: 1px solid var(--border-color);
   border-radius: var(--radius-lg, 8px);
   margin-bottom: 1rem;
 }
@@ -17,7 +17,7 @@
   align-items: center;
   gap: 0.75rem;
   padding: 1rem 1.25rem;
-  border-bottom: 1px solid var(--border, var(--color-border));
+  border-bottom: 1px solid var(--border-color);
 }
 
 .sectionIcon {
@@ -35,7 +35,7 @@
   font-size: 0.9375rem;
   font-weight: 600;
   margin: 0;
-  color: var(--text, var(--color-text-primary));
+  color: var(--text);
 }
 
 .sectionContent {
@@ -56,7 +56,7 @@
   font-size: 0.875rem;
   font-weight: 500;
   margin-bottom: 0.5rem;
-  color: var(--text, var(--color-text-primary));
+  color: var(--text);
 }
 
 .formLabel.required::after {
@@ -71,16 +71,16 @@
 
 .formHint {
   font-size: 0.8125rem;
-  color: var(--muted, var(--color-text-muted));
+  color: var(--muted);
   margin-top: 0.375rem;
 }
 
 .formValue {
   font-size: 0.9375rem;
-  color: var(--text, var(--color-text-primary));
+  color: var(--text);
   padding: 0.625rem 0.875rem;
-  background: var(--input-bg, var(--bg));
-  border: 1px solid var(--border, var(--color-border));
+  background: var(--input-bg);
+  border: 1px solid var(--border-color);
   border-radius: var(--radius-md, 6px);
   min-height: 42px;
 }
@@ -92,7 +92,7 @@
   justify-content: space-between;
   gap: 1rem;
   padding: 0.75rem 0;
-  border-bottom: 1px solid var(--border, var(--color-border));
+  border-bottom: 1px solid var(--border-color);
 }
 
 .formRow:last-child {
@@ -113,12 +113,12 @@
 .formRowTitle {
   font-size: 0.875rem;
   font-weight: 500;
-  color: var(--text, var(--color-text-primary));
+  color: var(--text);
 }
 
 .formRowDescription {
   font-size: 0.8125rem;
-  color: var(--muted, var(--color-text-muted));
+  color: var(--muted);
 }
 
 /* Info block */
@@ -127,9 +127,9 @@
   flex-direction: column;
   gap: 6px;
   padding: 1rem;
-  background: var(--bg, var(--color-bg-secondary));
+  background: var(--bg-hover);
   border-radius: var(--radius-md, 6px);
-  border: 1px solid var(--border, var(--color-border));
+  border: 1px solid var(--border-color);
   margin-bottom: 1rem;
 }
 
@@ -147,12 +147,12 @@
 .infoValue {
   font-size: 0.9375rem;
   font-weight: 500;
-  color: var(--text, var(--color-text-primary));
+  color: var(--text);
 }
 
 .infoHint {
   font-size: 0.8125rem;
-  color: var(--muted, var(--color-text-muted));
+  color: var(--muted);
 }
 
 /* Legacy field styles - keep for compatibility */
@@ -165,11 +165,11 @@
 .label {
   font-size: 13px;
   font-weight: 500;
-  color: var(--color-text-primary);
+  color: var(--text);
 }
 
 .required {
-  color: var(--color-danger);
+  color: var(--danger);
 }
 
 /* Switch Field */
@@ -178,7 +178,7 @@
   justify-content: space-between;
   align-items: center;
   padding: 12px 0;
-  border-bottom: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--border-color);
 }
 
 .switchField:last-child {
@@ -199,12 +199,12 @@
 .switchLabel {
   font-size: 14px;
   font-weight: 500;
-  color: var(--color-text-primary);
+  color: var(--text);
 }
 
 .switchDesc {
   font-size: 12px;
-  color: var(--color-text-muted);
+  color: var(--muted);
 }
 
 /* Switch Toggle */
@@ -229,7 +229,7 @@
   left: 0;
   right: 0;
   bottom: 0;
-  background-color: var(--color-border);
+  background-color: var(--border-color);
   transition: 0.2s;
   border-radius: 24px;
 }
@@ -247,7 +247,7 @@
 }
 
 .switch input:checked + .slider {
-  background-color: var(--color-primary);
+  background-color: var(--primary);
 }
 
 .switch input:checked + .slider::before {
@@ -258,22 +258,22 @@
 .select {
   padding: 10px 14px;
   font-size: 14px;
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--border-color);
   border-radius: 8px;
-  background: var(--color-bg-primary);
-  color: var(--color-text-primary);
+  background: var(--bg);
+  color: var(--text);
   cursor: pointer;
   width: 100%;
 }
 
 .select:focus {
   outline: none;
-  border-color: var(--color-primary);
+  border-color: var(--primary);
 }
 
 .fieldHint {
   font-size: 12px;
-  color: var(--color-text-muted);
+  color: var(--muted);
   margin-top: 4px;
 }
 
@@ -283,9 +283,9 @@
   flex-direction: column;
   gap: 6px;
   padding: 16px;
-  background: var(--color-bg-secondary);
+  background: var(--bg-hover);
   border-radius: 8px;
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--border-color);
 }
 
 .modelBadge {
@@ -294,7 +294,7 @@
   gap: 6px;
   font-size: 11px;
   font-weight: 600;
-  color: var(--color-success);
+  color: var(--success);
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
@@ -302,12 +302,12 @@
 .modelName {
   font-size: 15px;
   font-weight: 500;
-  color: var(--color-text-primary);
+  color: var(--text);
 }
 
 .modelHint {
   font-size: 12px;
-  color: var(--color-text-muted);
+  color: var(--muted);
 }
 
 /* Actions */
@@ -325,5 +325,5 @@
   gap: 12px;
   margin-top: 1rem;
   padding-top: 1rem;
-  border-top: 1px solid var(--color-border);
+  border-top: 1px solid var(--border-color);
 }

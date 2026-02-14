@@ -1,9 +1,9 @@
 .skeleton {
   background: linear-gradient(
     90deg,
-    var(--color-surface) 25%,
-    var(--color-border) 50%,
-    var(--color-surface) 75%
+    var(--panel) 25%,
+    var(--border-color) 50%,
+    var(--panel) 75%
   );
   background-size: 200% 100%;
   animation: skeleton-loading 1.5s infinite;
@@ -144,9 +144,9 @@
   .skeleton {
     background: linear-gradient(
       90deg,
-      var(--color-surface-dark) 25%,
-      var(--color-border-dark) 50%,
-      var(--color-surface-dark) 75%
+      var(--panel-hover) 25%,
+      var(--border-hover) 50%,
+      var(--panel-hover) 75%
     );
   }
 }

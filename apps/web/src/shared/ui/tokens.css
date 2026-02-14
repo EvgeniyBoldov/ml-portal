@@ -70,7 +70,7 @@
   /* Focus ring */
   --focus-ring-width: 2px;
   --focus-ring-offset: 2px;
-  --focus-ring-color: var(--color-primary);
+  --focus-ring-color: var(--primary);
 }
 
 /* Focus-visible styles (apply globally) */

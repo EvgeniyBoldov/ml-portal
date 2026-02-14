@@ -87,7 +87,7 @@
 
 .notesText {
   padding: var(--sp-2) var(--sp-3);
-  color: var(--text, var(--color-text));
+  color: var(--text);
   font-size: 0.875rem;
   line-height: 1.4;
   white-space: pre-wrap;
@@ -110,7 +110,7 @@
   background: var(--bg, #ffffff);
   border: 1px solid var(--border-color, #e5e7eb);
   border-radius: var(--radius-md, 6px);
-  color: var(--text, var(--color-text));
+  color: var(--text);
   resize: vertical;
 }
 
@@ -143,7 +143,7 @@
 .tableKey {
   padding: 0.5rem 0.75rem;
   text-align: left;
-  color: var(--muted, var(--color-text-muted));
+  color: var(--muted);
   font-weight: 500;
   width: 40%;
 }
@@ -151,7 +151,7 @@
 .tableValue {
   padding: 0.5rem 0.75rem;
   text-align: left;
-  color: var(--text, var(--color-text));
+  color: var(--text);
   font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
   font-size: 0.8125rem;
   word-break: break-word;
@@ -161,6 +161,6 @@
 .emptyText {
   padding: 1rem;
   text-align: center;
-  color: var(--muted, var(--color-text-muted));
+  color: var(--muted);
   font-size: 0.875rem;
 }

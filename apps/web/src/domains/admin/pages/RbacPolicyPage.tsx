@@ -12,14 +12,17 @@ import { agentsApi } from '@/shared/api/agents';
 import { qk } from '@/shared/api/keys';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
 import {
-  EntityPage,
+  EntityPageV2,
+  Tab,
+  type EntityPageMode,
+  type BreadcrumbItem,
+} from '@/shared/ui/EntityPage/EntityPageV2';
+import {
   ContentBlock,
   DataTable,
   Badge,
   Input,
   Select,
-  type EntityPageMode,
-  type BreadcrumbItem,
   type DataTableColumn,
 } from '@/shared/ui';
 import Button from '@/shared/ui/Button';
@@ -335,20 +338,20 @@ export function RbacPolicyPage() {
   // ─── Render ────────────────────────────────────────────────────────
 
   return (
-    <EntityPage
+    <EntityPageV2
+      title={isCreate ? 'Новый набор RBAC' : policy?.name || ''}
       mode={mode}
-      entityName={isCreate ? 'Новый набор RBAC' : policy?.name || ''}
-      entityTypeLabel="набора RBAC"
-      backPath="/admin/rbac"
       breadcrumbs={breadcrumbs}
       loading={!isCreate && isLoading}
       saving={saving}
+      backPath="/admin/rbac"
       onEdit={() => setSearchParams({ mode: 'edit' })}
       onSave={handleSave}
       onCancel={handleCancel}
     >
-      {/* Metadata block */}
-      <ContentBlock title="Основное" icon="settings">
+      <Tab title="Обзор" layout="single">
+        {/* Metadata block */}
+        <ContentBlock title="Основное" icon="settings">
         <div className={styles.formGrid}>
           <div className={styles.formField}>
             <label className={styles.label}>Slug</label>
@@ -519,8 +522,8 @@ export function RbacPolicyPage() {
             emptyText="Нет правил. Нажмите «+ Добавить правило» для создания."
           />
         </ContentBlock>
-      )}
-    </EntityPage>
+      </Tab>
+    </EntityPageV2>
   );
 }
 

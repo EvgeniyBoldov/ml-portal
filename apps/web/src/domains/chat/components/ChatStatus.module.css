@@ -11,12 +11,12 @@
   align-items: center;
   gap: 0.5rem;
   padding: 0.75rem 1rem;
-  background: var(--color-bg-primary);
-  border: 1px solid var(--color-border);
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
   border-radius: 0.5rem;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
   font-size: 0.9rem;
-  color: var(--color-text-primary);
+  color: var(--text-primary);
 }
 
 .error {
@@ -32,8 +32,8 @@
 .spinner {
   width: 16px;
   height: 16px;
-  border: 2px solid var(--color-border);
-  border-top: 2px solid var(--color-primary);
+  border: 2px solid var(--border-color);
+  border-top: 2px solid var(--primary);
   border-radius: 50%;
   animation: spin 1s linear infinite;
 }

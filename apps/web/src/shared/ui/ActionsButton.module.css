@@ -1,6 +1,6 @@
 .menuButton {
-  background: var(--color-bg-secondary);
-  border: 1px solid var(--color-border);
+  background: var(--bg-hover);
+  border: 1px solid var(--border-color);
   color: var(--muted);
   cursor: pointer;
   padding: 6px 12px;
@@ -35,14 +35,14 @@
   padding: 8px 16px;
   text-align: left;
   cursor: pointer;
-  color: var(--color-text);
+  color: var(--text);
   font-size: 14px;
   transition: background-color 0.2s;
   width: 100%;
 }
 
 .actionButton:hover:not(:disabled) {
-  background: var(--color-bg-secondary);
+  background: var(--bg-hover);
 }
 
 .actionButton:disabled {

@@ -3,15 +3,15 @@
  * 
  * Declarative tabs with existing shared blocks inside.
  */
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQueryClient, useQuery } from '@tanstack/react-query';
-import { ContentBlock, Button, Input, Textarea, Select, type BreadcrumbItem } from '@/shared/ui';
+import { ContentBlock, Button, type BreadcrumbItem, type FieldDefinition } from '@/shared/ui';
 import FieldEditor from '@shared/ui/FieldEditor';
 import { useErrorToast, useSuccessToast } from '@shared/ui/Toast';
 import { collectionsApi, CollectionField, SearchMode } from '@shared/api/collections';
 import { adminApi } from '@shared/api/admin';
-import { EntityPageV2, Tab, type EntityPageMode } from '@/shared/ui/EntityPage/EntityPageV2';
+import { EntityPageV2, Tab } from '@/shared/ui/EntityPage/EntityPageV2';
 
 interface FieldFormData extends CollectionField {
   id: string;
@@ -26,13 +26,12 @@ export function CreateCollectionPage() {
   const showError = useErrorToast();
   const showSuccess = useSuccessToast();
 
-  const { data: tenants, isLoading: tenantsLoading } = useQuery({
-    queryKey: ['tenants'],
-    queryFn: async () => {
-      const response = await adminApi.getTenants();
-      return response.data;
-    },
+  const { data: tenantsData, isLoading: tenantsLoading } = useQuery({
+    queryKey: ['admin', 'tenants'],
+    queryFn: () => adminApi.getTenants(),
   });
+
+  const tenants = tenantsData?.items ?? [];
 
   const [formData, setFormData] = useState({
     tenant_id: '',
@@ -40,6 +39,42 @@ export function CreateCollectionPage() {
     name: '',
     description: '',
   });
+
+  const tenantOptions = useMemo(() =>
+    tenants.map(t => ({ value: t.id, label: t.name })),
+    [tenants],
+  );
+
+  const mainFields: FieldDefinition[] = [
+    {
+      key: 'tenant_id',
+      label: 'Тенант',
+      type: 'select',
+      required: true,
+      options: tenantOptions,
+    },
+    {
+      key: 'slug',
+      label: 'Slug',
+      type: 'code',
+      required: true,
+      placeholder: 'tickets',
+    },
+    {
+      key: 'name',
+      label: 'Название',
+      type: 'text',
+      required: true,
+      placeholder: 'IT Tickets',
+    },
+    {
+      key: 'description',
+      label: 'Описание',
+      type: 'textarea',
+      rows: 3,
+      placeholder: 'Описание коллекции для LLM агента...',
+    },
+  ];
 
   const [fields, setFields] = useState<FieldFormData[]>([
     {
@@ -178,52 +213,20 @@ export function CreateCollectionPage() {
       onCancel={() => navigate('/admin/collections')}
     >
       <Tab title="Создание" layout="single">
-        <ContentBlock title="Основная информация" icon="database">
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-            <div>
-              <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', fontWeight: 500 }}>Тенант *</label>
-              <Select
-                value={formData.tenant_id}
-                onChange={(value) => setFormData({ ...formData, tenant_id: value })}
-                placeholder="Выберите тенант..."
-                options={[
-                  { value: '', label: 'Выберите тенант...' },
-                  ...(tenants?.map(t => ({ value: t.id, label: t.name })) || [])
-                ]}
-              />
-            </div>
-            <div>
-              <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', fontWeight: 500 }}>Slug *</label>
-              <Input
-                value={formData.slug}
-                onChange={e =>
-                  setFormData({
-                    ...formData,
-                    slug: e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ''),
-                  })
-                }
-                placeholder="tickets"
-              />
-            </div>
-            <div>
-              <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', fontWeight: 500 }}>Название *</label>
-              <Input
-                value={formData.name}
-                onChange={e => setFormData({ ...formData, name: e.target.value })}
-                placeholder="IT Tickets"
-              />
-            </div>
-            <div>
-              <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', fontWeight: 500 }}>Описание</label>
-              <Textarea
-                value={formData.description}
-                onChange={e => setFormData({ ...formData, description: e.target.value })}
-                placeholder="Описание коллекции для LLM агента..."
-                rows={3}
-              />
-            </div>
-          </div>
-        </ContentBlock>
+        <ContentBlock
+            title="Основная информация"
+            icon="database"
+            fields={mainFields}
+            data={formData}
+            editable={true}
+            onChange={(key, value) => {
+              if (key === 'slug') {
+                setFormData(prev => ({ ...prev, slug: String(value).toLowerCase().replace(/[^a-z0-9_]/g, '') }));
+              } else {
+                setFormData(prev => ({ ...prev, [key]: value }));
+              }
+            }}
+          />
 
         <ContentBlock
           title={`Поля (${fields.length})`}

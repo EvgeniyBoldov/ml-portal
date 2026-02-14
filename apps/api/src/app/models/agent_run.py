@@ -34,12 +34,21 @@ class AgentRun(Base):
     
     agent_slug: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     
+    # none, brief, full — copied from Agent at run start
+    logging_level: Mapped[str] = mapped_column(String(10), nullable=False, default='brief', server_default='brief')
+    
     # running, completed, failed
     status: Mapped[str] = mapped_column(String(50), nullable=False, default='running')
+    
+    # Snapshot of versions/config at run start (frozen for reproducibility)
+    # Keys: agent_version, prompt_hash, policy_version, limit_version,
+    #        tools, collections, permissions, model, routing
+    context_snapshot: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
     
     # Aggregated metrics
     total_steps: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     total_tool_calls: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_llm_calls: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     tokens_in: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     tokens_out: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     duration_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
@@ -66,7 +75,16 @@ class AgentRun(Base):
 class AgentRunStep(Base):
     """
     Individual step within an agent run.
-    Types: llm_request, tool_call, tool_result, final_response
+    
+    Step types:
+    - user_request:   {content, model, agent_slug}
+    - routing:        {mode, available_tools, permissions, policy, limits, duration_ms}
+    - llm_request:    {step, model, messages_count, messages (full only), system_prompt_hash}
+    - llm_response:   {step, content (full only), has_tool_calls, tool_calls_count, finish_reason}
+    - tool_call:      {tool_slug, call_id, arguments, schema_hash}
+    - tool_result:    {tool_slug, call_id, success, result (full only), error}
+    - final_response: {step, content_length, has_sources, sources_count}
+    - error:          {error, step, recoverable}
     """
     __tablename__ = "agent_run_steps"
 
@@ -80,19 +98,14 @@ class AgentRunStep(Base):
     
     step_number: Mapped[int] = mapped_column(Integer, nullable=False)
     
-    # llm_request, tool_call, tool_result, final_response
-    step_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    step_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     
-    # Flexible data storage for step details
-    # For llm_request: {prompt, model, temperature, ...}
-    # For tool_call: {tool_slug, arguments, ...}
-    # For tool_result: {tool_slug, result, success, ...}
-    # For final_response: {content, ...}
     data: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     
     tokens_in: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     tokens_out: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     duration_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False

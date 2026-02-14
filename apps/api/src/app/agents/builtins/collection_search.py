@@ -182,6 +182,8 @@ class CollectionSearchTool(VersionedTool):
         from app.core.db import get_session_factory
         from app.services.collection_service import CollectionService
         
+        log = ctx.tool_logger("collection.search")
+        
         collection_slug = args.get("collection_slug")
         query = args.get("query")
         filters = args.get("filters", {})
@@ -189,21 +191,25 @@ class CollectionSearchTool(VersionedTool):
         limit = min(args.get("limit", DEFAULT_LIMIT), MAX_LIMIT)
         offset = min(args.get("offset", 0), MAX_OFFSET)
         
-        logger.info(
-            f"Collection search: collection={collection_slug}, "
-            f"query='{query[:50] if query else ''}', filters={bool(filters)}, "
-            f"limit={limit}, offset={offset}, tenant={ctx.tenant_id}"
-        )
+        log.info("Starting collection search",
+                 collection=collection_slug,
+                 query=query[:50] if query else None,
+                 has_filters=bool(filters),
+                 limit=limit, offset=offset)
         
         try:
+            tenant_uuid = uuid.UUID(ctx.tenant_id) if isinstance(ctx.tenant_id, str) else ctx.tenant_id
+            
             session_factory = get_session_factory()
             async with session_factory() as session:
                 service = CollectionService(session)
                 
-                collection = await service.get_by_slug(ctx.tenant_id, collection_slug)
+                collection = await service.get_by_slug(tenant_uuid, collection_slug)
                 if not collection:
+                    log.error("Collection not found", collection=collection_slug)
                     return ToolResult.fail(
-                        f"Collection '{collection_slug}' not found"
+                        f"Collection '{collection_slug}' not found",
+                        logs=log.entries_dict(),
                     )
                 
                 # Apply guardrails
@@ -212,20 +218,27 @@ class CollectionSearchTool(VersionedTool):
                 # Check if filters required
                 has_filters = bool(filters.get("and") or filters.get("or") or query)
                 if not collection.allow_unfiltered_search and not has_filters:
+                    log.warning("Unfiltered search blocked by guardrails",
+                                collection=collection_slug)
                     return ToolResult.fail(
                         "Filters or query are required for this collection. "
-                        "Please specify at least one filter condition or search query."
+                        "Please specify at least one filter condition or search query.",
+                        logs=log.entries_dict(),
                     )
                 
                 # Validate filters against collection schema
                 validation_error = self._validate_filters(collection, filters)
                 if validation_error:
-                    return ToolResult.fail(validation_error)
+                    log.warning("Filter validation failed", error=validation_error)
+                    return ToolResult.fail(validation_error,
+                                           logs=log.entries_dict())
                 
                 # Build SQL query
                 sql, params = self._build_search_sql(
                     collection, filters, query, sort, effective_limit, offset
                 )
+                
+                log.debug("Executing SQL query", table=collection.table_name)
                 
                 # Execute with timeout
                 timeout_sql = f"SET LOCAL statement_timeout = '{collection.query_timeout_seconds}s'"
@@ -241,7 +254,9 @@ class CollectionSearchTool(VersionedTool):
                 
                 formatted_rows = self._format_rows(rows, collection)
                 
-                logger.info(f"Collection search found {len(formatted_rows)} of {total} results")
+                log.info("Search completed",
+                         returned=len(formatted_rows), total=total,
+                         has_more=(offset + len(formatted_rows)) < total)
                 
                 return ToolResult.ok(
                     data={
@@ -250,12 +265,15 @@ class CollectionSearchTool(VersionedTool):
                         "returned": len(formatted_rows),
                         "collection": collection.name,
                         "has_more": (offset + len(formatted_rows)) < total,
-                    }
+                    },
+                    logs=log.entries_dict(),
                 )
                 
         except Exception as e:
             logger.error(f"Collection search failed: {e}", exc_info=True)
-            return ToolResult.fail(f"Search failed: {str(e)}")
+            log.error("Search failed", error=str(e))
+            return ToolResult.fail(f"Search failed: {str(e)}",
+                                   logs=log.entries_dict())
 
     def _validate_filters(self, collection: Collection, filters: Dict) -> Optional[str]:
         """Validate filters against collection schema"""

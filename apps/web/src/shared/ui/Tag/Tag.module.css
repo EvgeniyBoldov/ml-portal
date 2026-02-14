@@ -22,33 +22,33 @@
 
 /* Variants */
 .tag.default {
-  background-color: var(--color-bg-secondary);
-  color: var(--color-text);
-  border: 1px solid var(--color-border);
+  background-color: var(--bg-hover);
+  color: var(--text);
+  border: 1px solid var(--border-color);
 }
 
 .tag.primary {
-  background-color: var(--color-primary-bg);
-  color: var(--color-primary);
-  border: 1px solid var(--color-primary);
+  background-color: var(--primary-bg);
+  color: var(--primary);
+  border: 1px solid var(--primary);
 }
 
 .tag.success {
-  background-color: var(--color-success-bg);
-  color: var(--color-success);
-  border: 1px solid var(--color-success);
+  background-color: var(--success-bg);
+  color: var(--success);
+  border: 1px solid var(--success);
 }
 
 .tag.warning {
-  background-color: var(--color-warning-bg);
-  color: var(--color-warning);
-  border: 1px solid var(--color-warning);
+  background-color: var(--warning-bg);
+  color: var(--warning);
+  border: 1px solid var(--warning);
 }
 
 .tag.danger {
-  background-color: var(--color-danger-bg);
-  color: var(--color-danger);
-  border: 1px solid var(--color-danger);
+  background-color: var(--danger-bg);
+  color: var(--danger);
+  border: 1px solid var(--danger);
 }
 
 .label {

@@ -85,18 +85,19 @@ class RagSearchTool(VersionedTool):
         """
         Выполнить поиск по RAG.
         """
+        log = ctx.tool_logger("rag.search")
+        
         query = args["query"]
         k = min(args.get("k", 5), 20)
         scope = args.get("scope", "tenant")
         
-        logger.info(
-            f"RAG search: query='{query[:50]}...', k={k}, scope={scope}, "
-            f"tenant={ctx.tenant_id}"
-        )
+        log.info("Starting RAG search", query=query[:100], k=k, scope=scope,
+                 tenant_id=str(ctx.tenant_id))
         
         try:
             service = RagSearchService()
             
+            log.debug("Calling search service")
             results = await service.search(
                 tenant_id=ctx.tenant_id,
                 query=query,
@@ -104,10 +105,11 @@ class RagSearchTool(VersionedTool):
             )
             
             if not results:
-                logger.info("RAG search returned no results")
+                log.info("No results found")
                 return ToolResult.ok(
                     data={"hits": [], "total": 0},
-                    message="No relevant documents found"
+                    message="No relevant documents found",
+                    logs=log.entries_dict(),
                 )
             
             hits = []
@@ -127,19 +129,23 @@ class RagSearchTool(VersionedTool):
                     "meta": result.meta
                 })
             
-            logger.info(f"RAG search found {len(hits)} results")
+            log.info("Search completed", hits_count=len(hits),
+                     top_score=round(results[0].score, 3) if results else 0)
             
             return ToolResult.ok(
                 data={
                     "hits": hits,
                     "total": len(hits)
                 },
-                sources=sources
+                sources=sources,
+                logs=log.entries_dict(),
             )
             
         except Exception as e:
             logger.error(f"RAG search failed: {e}", exc_info=True)
-            return ToolResult.fail(f"Search failed: {str(e)}")
+            log.error("Search failed", error=str(e))
+            return ToolResult.fail(f"Search failed: {str(e)}",
+                                   logs=log.entries_dict())
     
     def _format_hit(self, result: SearchResult) -> Dict[str, Any]:
         """Форматировать результат для LLM"""

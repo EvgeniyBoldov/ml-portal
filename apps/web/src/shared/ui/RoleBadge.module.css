@@ -12,33 +12,33 @@
 }
 
 .badge.admin {
-  background: var(--color-danger-light);
-  color: var(--color-danger);
-  border: 1px solid var(--color-danger-border);
+  background: var(--danger-light);
+  color: var(--danger);
+  border: 1px solid var(--danger-border);
 }
 
 .badge.editor {
-  background: var(--color-warning-light);
-  color: var(--color-warning);
-  border: 1px solid var(--color-warning-border);
+  background: var(--warning-light);
+  color: var(--warning);
+  border: 1px solid var(--warning-border);
 }
 
 .badge.reader {
-  background: var(--color-info-light);
-  color: var(--color-info);
-  border: 1px solid var(--color-info-border);
+  background: var(--info-light);
+  color: var(--info);
+  border: 1px solid var(--info-border);
 }
 
 .badge.inactive {
-  background: var(--color-surface);
-  color: var(--color-text-secondary);
-  border: 1px solid var(--color-border);
+  background: var(--panel);
+  color: var(--muted);
+  border: 1px solid var(--border-color);
 }
 
 .badge.active {
-  background: var(--color-success-light);
-  color: var(--color-success);
-  border: 1px solid var(--color-success-border);
+  background: var(--success-light);
+  color: var(--success);
+  border: 1px solid var(--success-border);
 }
 
 .badge.small {
@@ -54,27 +54,27 @@
 /* Dark mode */
 @media (prefers-color-scheme: dark) {
   .badge.admin {
-    background: var(--color-danger-dark);
-    color: var(--color-danger-light);
+    background: var(--danger-dark);
+    color: var(--danger-light);
   }
 
   .badge.editor {
-    background: var(--color-warning-dark);
-    color: var(--color-warning-light);
+    background: var(--warning-dark);
+    color: var(--warning-light);
   }
 
   .badge.reader {
-    background: var(--color-info-dark);
-    color: var(--color-info-light);
+    background: var(--info-dark);
+    color: var(--info-light);
   }
 
   .badge.inactive {
-    background: var(--color-surface-dark);
-    color: var(--color-text-secondary);
+    background: var(--panel-dark);
+    color: var(--muted);
   }
 
   .badge.active {
-    background: var(--color-success-dark);
-    color: var(--color-success-light);
+    background: var(--success-dark);
+    color: var(--success-light);
   }
 }

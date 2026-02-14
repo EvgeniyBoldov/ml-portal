@@ -17,35 +17,13 @@ import {
 import { AdminPage, DataTable, type DataTableColumn, Badge, Alert, ActionsButton, type ActionItem } from '@/shared/ui';
 import { useErrorToast, useSuccessToast } from '@shared/ui/Toast';
 import { useAppStore } from '@app/store/app.store';
-
-const TYPE_LABELS: Record<string, string> = {
-  llm_chat: 'LLM',
-  embedding: 'Embedding',
-  reranker: 'Reranker',
-};
-
-const STATUS_LABELS: Record<string, string> = {
-  available: 'Доступна',
-  deprecated: 'Устарела',
-  unavailable: 'Недоступна',
-  maintenance: 'Обслуживание',
-};
+import { getStatusProps, MODEL_TYPE_LABELS } from '@/shared/lib/statusConfig';
 
 const HEALTH_LABELS: Record<string, string> = {
   healthy: 'OK',
   degraded: 'Деградация',
   unavailable: 'Недоступна',
 };
-
-function getStatusTone(status: string): 'success' | 'warn' | 'danger' | 'neutral' {
-  switch (status) {
-    case 'available': return 'success';
-    case 'deprecated': return 'warn';
-    case 'unavailable':
-    case 'maintenance': return 'danger';
-    default: return 'neutral';
-  }
-}
 
 function getHealthTone(health: string): 'success' | 'warn' | 'danger' | 'neutral' {
   switch (health) {
@@ -55,7 +33,6 @@ function getHealthTone(health: string): 'success' | 'warn' | 'danger' | 'neutral
     default: return 'neutral';
   }
 }
-
 
 export function ModelsPage() {
   const navigate = useNavigate();
@@ -100,8 +77,7 @@ export function ModelsPage() {
     try {
       const result = await healthCheckAllMutation.mutateAsync();
       showSuccess(`Проверка завершена: ${result.healthy}/${result.total} доступно`);
-    } catch (err) {
-      console.error(err);
+    } catch (err: unknown) {
       showError('Не удалось выполнить проверку');
     }
   };
@@ -119,7 +95,6 @@ export function ModelsPage() {
           : `${target.alias} установлена по умолчанию`
       );
     } catch (err) {
-      console.error(err);
       showError('Не удалось обновить флаг');
     } finally {
       setPendingModelId(null);
@@ -139,7 +114,6 @@ export function ModelsPage() {
           : `${target.alias} включена`
       );
     } catch (err) {
-      console.error(err);
       showError('Не удалось изменить статус');
     } finally {
       setPendingModelId(null);
@@ -152,7 +126,6 @@ export function ModelsPage() {
       await healthCheckMutation.mutateAsync({ id: target.id, force: true });
       showSuccess(`Проверка ${target.alias} завершена`);
     } catch (err) {
-      console.error(err);
       showError('Проверка не удалась');
     } finally {
       setPendingModelId(null);
@@ -172,7 +145,7 @@ export function ModelsPage() {
           </p>
           <div style={{ 
             padding: '12px', 
-            background: 'var(--color-bg-secondary, #f5f5f5)', 
+            background: 'var(--bg-hover, #f5f5f5)', 
             borderRadius: '6px',
             fontSize: '13px'
           }}>
@@ -191,9 +164,8 @@ export function ModelsPage() {
         try {
           await deleteModelMutation.mutateAsync(target.id);
           showSuccess(`Модель «${target.alias}» удалена`);
-        } catch (err: any) {
-          console.error(err);
-          const message = err?.message || 'Не удалось удалить модель';
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : 'Не удалось удалить модель';
           showError(message);
         }
       },
@@ -254,7 +226,7 @@ export function ModelsPage() {
       sortable: true,
       render: (model) => (
         <Badge tone={model.type === 'llm_chat' ? 'info' : 'success'}>
-          {TYPE_LABELS[model.type] || model.type}
+          {MODEL_TYPE_LABELS[model.type] || model.type}
         </Badge>
       ),
     },
@@ -278,8 +250,8 @@ export function ModelsPage() {
       width: 120,
       sortable: true,
       render: (model) => (
-        <Badge tone={getStatusTone(model.status)}>
-          {STATUS_LABELS[model.status] || model.status}
+        <Badge tone={getStatusProps('model', model.status).tone}>
+          {getStatusProps('model', model.status).label}
         </Badge>
       ),
     },

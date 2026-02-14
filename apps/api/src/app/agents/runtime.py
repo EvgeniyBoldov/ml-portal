@@ -183,17 +183,20 @@ class AgentRuntime:
         enable_logging: bool = True,
     ) -> AsyncGenerator[RuntimeEvent, None]:
         """
-        Выполнить агента с tool-call loop.
+        Выполнить агента с tool-call loop (legacy flow без Router).
         
         Args:
             profile: Профиль агента (prompt, tools, config)
             messages: История сообщений (без system prompt)
             ctx: Контекст выполнения
             model: Override модели (опционально)
+            enable_logging: Включить логирование run
             
         Yields:
             RuntimeEvent с прогрессом выполнения
         """
+        from app.services.run_store import _hash_text
+        
         run_ctx = RunContext()
         
         effective_model = model or profile.generation_config.get("model")
@@ -223,6 +226,25 @@ class AgentRuntime:
                 logger.warning(f"Failed to start run logging: {e}")
                 should_log = False
         
+        # Helper: safe step logging
+        async def _log_step(
+            step_type: str,
+            data: Dict[str, Any],
+            tokens_in: Optional[int] = None,
+            tokens_out: Optional[int] = None,
+            duration_ms: Optional[int] = None,
+            error: Optional[str] = None,
+        ) -> None:
+            if should_log and run_id:
+                try:
+                    await self.run_store.add_step(
+                        run_id, step_type, data,
+                        tokens_in=tokens_in, tokens_out=tokens_out,
+                        duration_ms=duration_ms, error=error,
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to log step {step_type}: {e}")
+        
         system_prompt = self._build_system_prompt(profile, tools_schemas)
         
         llm_messages = [{"role": "system", "content": system_prompt}]
@@ -230,22 +252,22 @@ class AgentRuntime:
         
         run_ctx.messages = llm_messages.copy()
         
+        # Log user_request step
+        user_content = messages[-1].get("content", "") if messages else ""
+        await _log_step("user_request", {
+            "content": user_content,
+            "agent_slug": profile.agent_slug,
+            "model": effective_model,
+            "messages_count": len(messages),
+        })
+        
         step = 0
         collected_sources: List[dict] = []
-        total_tokens_in = 0
-        total_tokens_out = 0
         
         async def finish_run(status: str, error: Optional[str] = None):
-            """Helper to finalize run logging"""
             if should_log and run_id:
                 try:
-                    await self.run_store.finish_run(
-                        run_id,
-                        status=status,
-                        error=error,
-                        tokens_in=total_tokens_in if total_tokens_in else None,
-                        tokens_out=total_tokens_out if total_tokens_out else None,
-                    )
+                    await self.run_store.finish_run(run_id, status=status, error=error)
                 except Exception as e:
                     logger.warning(f"Failed to finish run logging: {e}")
         
@@ -267,119 +289,120 @@ class AgentRuntime:
             
             yield RuntimeEvent.thinking(step)
             
-            # Log LLM request step
-            if should_log and run_id:
-                try:
-                    await self.run_store.add_step(
-                        run_id,
-                        step_type="llm_request",
-                        data={
-                            "step": step,
-                            "model": effective_model,
-                            "messages_count": len(llm_messages),
-                        }
-                    )
-                except Exception as e:
-                    logger.warning(f"Failed to log step: {e}")
+            # Log LLM request
+            llm_start = time.time()
+            await _log_step("llm_request", {
+                "step": step,
+                "model": effective_model,
+                "messages_count": len(llm_messages),
+                "messages": llm_messages,
+                "system_prompt": system_prompt,
+                "system_prompt_hash": _hash_text(system_prompt),
+            })
             
             try:
                 llm_response = await self._call_llm(llm_messages, effective_model)
             except Exception as e:
+                llm_duration = int((time.time() - llm_start) * 1000)
                 logger.error(f"LLM call failed: {e}", exc_info=True)
+                await _log_step("llm_response", {
+                    "step": step,
+                    "error": str(e),
+                    "has_tool_calls": False,
+                }, duration_ms=llm_duration, error=str(e))
                 yield RuntimeEvent.error(str(e))
                 await finish_run("failed", str(e))
                 return
             
+            llm_duration = int((time.time() - llm_start) * 1000)
             parsed = parse_llm_response(llm_response)
+            
+            # Log LLM response
+            await _log_step("llm_response", {
+                "step": step,
+                "content": llm_response,
+                "content_length": len(llm_response),
+                "has_tool_calls": parsed.has_tool_calls,
+                "tool_calls_count": len(parsed.tool_calls) if parsed.has_tool_calls else 0,
+                "is_final": parsed.is_final,
+            }, duration_ms=llm_duration)
             
             if parsed.is_final:
                 logger.info(f"Agent finished after {step} steps")
                 
-                # Log final response step
-                if should_log and run_id:
-                    try:
-                        await self.run_store.add_step(
-                            run_id,
-                            step_type="final_response",
-                            data={"step": step, "has_sources": bool(collected_sources)}
-                        )
-                    except Exception as e:
-                        logger.warning(f"Failed to log final step: {e}")
-                
+                stream_start = time.time()
+                final_content = ""
                 async for event in self._stream_final_response(
                     llm_messages, 
                     effective_model,
                     collected_sources
                 ):
+                    if event.type == RuntimeEventType.DELTA:
+                        final_content += event.data.get("content", "")
                     yield event
+                
+                stream_duration = int((time.time() - stream_start) * 1000)
+                await _log_step("final_response", {
+                    "step": step,
+                    "content": final_content,
+                    "content_length": len(final_content),
+                    "has_sources": bool(collected_sources),
+                    "sources_count": len(collected_sources),
+                }, duration_ms=stream_duration)
+                
                 await finish_run("completed")
                 return
             
             logger.info(f"Step {step}: {len(parsed.tool_calls)} tool calls")
             
             tool_results = []
-            for tool_call in parsed.tool_calls:
-                yield RuntimeEvent.tool_call(
-                    tool_call.tool_slug,
-                    tool_call.id,
-                    tool_call.arguments
-                )
-                
-                # Resolve handler for schema_hash logging
-                _handler = next((h for h in tool_handlers if h.slug == tool_call.tool_slug), None)
+            for tc in parsed.tool_calls:
+                _handler = next((h for h in tool_handlers if h.slug == tc.tool_slug), None)
                 _schema_hash = getattr(_handler, 'schema_hash', None) if _handler else None
                 
-                # Log tool call step
-                if should_log and run_id:
-                    try:
-                        await self.run_store.add_step(
-                            run_id,
-                            step_type="tool_call",
-                            data={
-                                "tool_slug": tool_call.tool_slug,
-                                "call_id": tool_call.id,
-                                "arguments": tool_call.arguments,
-                                "schema_hash": _schema_hash,
-                            }
-                        )
-                    except Exception as e:
-                        logger.warning(f"Failed to log tool call: {e}")
+                yield RuntimeEvent.tool_call(tc.tool_slug, tc.id, tc.arguments)
                 
-                result, sources = await self._execute_tool(tool_call, ctx, tool_handlers)
+                # Log tool call
+                await _log_step("tool_call", {
+                    "tool_slug": tc.tool_slug,
+                    "call_id": tc.id,
+                    "arguments": tc.arguments,
+                    "schema_hash": _schema_hash,
+                })
+                
+                tool_start = time.time()
+                result, sources = await self._execute_tool(tc, ctx, tool_handlers)
+                tool_duration = int((time.time() - tool_start) * 1000)
                 
                 if sources:
                     collected_sources.extend(sources)
                 
                 yield RuntimeEvent.tool_result(
-                    tool_call.tool_slug,
-                    tool_call.id,
+                    tc.tool_slug, tc.id,
                     result.success,
                     result.data if result.success else result.error
                 )
                 
-                # Log tool result step
-                if should_log and run_id:
-                    try:
-                        # Truncate large results for storage
-                        result_data = result.data if result.success else result.error
-                        if isinstance(result_data, str) and len(result_data) > 5000:
-                            result_data = result_data[:5000] + "... [truncated]"
-                        
-                        await self.run_store.add_step(
-                            run_id,
-                            step_type="tool_result",
-                            data={
-                                "tool_slug": tool_call.tool_slug,
-                                "call_id": tool_call.id,
-                                "success": result.success,
-                                "result": result_data,
-                                "schema_hash": _schema_hash,
-                            }
-                        )
-                    except Exception as e:
-                        logger.warning(f"Failed to log tool result: {e}")
+                # Log tool result (include tool_logs from ToolLogger)
+                result_data = result.data if result.success else result.error
+                tool_result_step = {
+                    "tool_slug": tc.tool_slug,
+                    "call_id": tc.id,
+                    "success": result.success,
+                    "result": result_data,
+                    "has_sources": bool(sources),
+                    "sources_count": len(sources) if sources else 0,
+                }
+                tool_logs = result.metadata.get("logs")
+                if tool_logs:
+                    tool_result_step["tool_logs"] = tool_logs
+                    tool_result_step["tool_logs_count"] = len(tool_logs)
                 
-                tool_results.append((tool_call, result.to_message_content()))
+                await _log_step("tool_result", tool_result_step,
+                    duration_ms=tool_duration,
+                    error=result.error if not result.success else None)
+                
+                tool_results.append((tc, result.to_message_content()))
                 run_ctx.increment_tool_calls()
             
             llm_messages.append({
@@ -392,13 +415,13 @@ class AgentRuntime:
                 "role": "user",
                 "content": results_message
             })
-            
-            run_ctx.add_step("tool_results", {
-                "step": step,
-                "tools": [tc.tool_slug for tc, _ in tool_results]
-            })
         
         logger.warning(f"Agent reached max steps ({self.max_steps})")
+        await _log_step("error", {
+            "error": f"Maximum steps ({self.max_steps}) reached",
+            "step": step,
+            "recoverable": True,
+        }, error=f"Maximum steps ({self.max_steps}) reached")
         yield RuntimeEvent.error(
             f"Maximum steps ({self.max_steps}) reached",
             recoverable=True
@@ -470,6 +493,9 @@ class AgentRuntime:
         
         Returns:
             Tuple of (ToolResult, sources list for RAG-like tools)
+            
+        Tool logs (from ToolLogger) are automatically extracted from
+        result.metadata["logs"] and available for RunStore persistence.
         """
         handler = None
         for h in handlers:
@@ -497,6 +523,18 @@ class AgentRuntime:
             if result.success and result.metadata.get("sources"):
                 sources = result.metadata["sources"]
             
+            # Log tool-level entries to structured logger
+            tool_logs = result.metadata.get("logs")
+            if tool_logs:
+                log_summary = [
+                    e for e in tool_logs if e.get("level") in ("warning", "error")
+                ]
+                if log_summary:
+                    logger.info(
+                        f"Tool {tool_call.tool_slug} produced {len(tool_logs)} log entries "
+                        f"({len(log_summary)} warnings/errors)"
+                    )
+            
             return result, sources
             
         except Exception as e:
@@ -516,6 +554,7 @@ class AgentRuntime:
         
         Применяет policy limits из агента и использует
         только доступные tools из exec_request.
+        Логирует каждый шаг в RunStore с учётом logging_level агента.
         
         Args:
             exec_request: ExecutionRequest от AgentRouter
@@ -528,6 +567,7 @@ class AgentRuntime:
             RuntimeEvent с прогрессом выполнения
         """
         from app.agents.router import ExecutionMode
+        from app.services.run_store import _hash_text
         
         agent = exec_request.agent
         
@@ -552,15 +592,51 @@ class AgentRuntime:
         tool_handlers = ToolRegistry.get_for_agent(available_tool_slugs)
         tools_schemas = [h.to_llm_schema() for h in tool_handlers]
         
+        # Resolve logging level from Agent
+        logging_level = getattr(agent, 'logging_level', 'brief') or 'brief'
+        
         logger.info(
             f"Starting agent run with ExecutionRequest: {agent.slug}, "
             f"mode: {exec_request.mode.value}, "
             f"tools: {available_tool_slugs}, "
+            f"logging: {logging_level}, "
             f"policy: max_steps={policy.max_steps}, max_tool_calls={policy.max_tool_calls_total}"
         )
         
+        # Build context snapshot for reproducibility
+        context_snapshot = {
+            "agent_slug": agent.slug,
+            "agent_version_id": str(agent.current_version_id) if agent.current_version_id else None,
+            "prompt_hash": _hash_text(exec_request.prompt) if exec_request.prompt else None,
+            "model": effective_model,
+            "execution_mode": exec_request.mode.value,
+            "policy": {
+                "max_steps": policy.max_steps,
+                "max_tool_calls": policy.max_tool_calls_total,
+                "max_wall_time_ms": policy.max_wall_time_ms,
+                "tool_timeout_ms": policy.tool_timeout_ms,
+                "streaming_enabled": policy.streaming_enabled,
+            },
+            "policy_data_hash": _hash_text(str(exec_request.policy_data)) if exec_request.policy_data else None,
+            "limit_data_hash": _hash_text(str(exec_request.limit_data)) if exec_request.limit_data else None,
+            "tools": [
+                {
+                    "slug": t.tool_slug,
+                    "instance_id": str(t.instance_id) if t.instance_id else None,
+                    "has_credentials": t.has_credentials,
+                }
+                for t in exec_request.available_tools
+            ],
+            "permissions": {
+                "allowed_tools": list(exec_request.effective_permissions.allowed_tools) if exec_request.effective_permissions else [],
+                "denied_reasons": exec_request.effective_permissions.denied_reasons if exec_request.effective_permissions else {},
+            },
+            "routing_duration_ms": exec_request.routing_duration_ms,
+            "routing_reasons": exec_request.routing_reasons,
+        }
+        
         # Start run logging
-        run_id: Optional[uuid.UUID] = exec_request.run_id
+        run_id: Optional[uuid.UUID] = None
         should_log = enable_logging and self.run_store is not None
         
         if should_log:
@@ -568,12 +644,53 @@ class AgentRuntime:
                 run_id = await self.run_store.start_run(
                     tenant_id=ctx.tenant_id,
                     agent_slug=agent.slug,
+                    logging_level=logging_level,
                     user_id=ctx.user_id,
                     chat_id=ctx.chat_id,
+                    context_snapshot=context_snapshot,
                 )
             except Exception as e:
                 logger.warning(f"Failed to start run logging: {e}")
                 should_log = False
+        
+        # Helper: safe step logging (never breaks runtime on log failure)
+        async def _log_step(
+            step_type: str,
+            data: Dict[str, Any],
+            tokens_in: Optional[int] = None,
+            tokens_out: Optional[int] = None,
+            duration_ms: Optional[int] = None,
+            error: Optional[str] = None,
+        ) -> None:
+            if should_log and run_id:
+                try:
+                    await self.run_store.add_step(
+                        run_id, step_type, data,
+                        tokens_in=tokens_in, tokens_out=tokens_out,
+                        duration_ms=duration_ms, error=error,
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to log step {step_type}: {e}")
+        
+        # Log user_request step
+        user_content = messages[-1].get("content", "") if messages else ""
+        await _log_step("user_request", {
+            "content": user_content,
+            "agent_slug": agent.slug,
+            "model": effective_model,
+            "messages_count": len(messages),
+        })
+        
+        # Log routing step
+        await _log_step("routing", {
+            "mode": exec_request.mode.value,
+            "available_tools": available_tool_slugs,
+            "permissions": context_snapshot.get("permissions", {}),
+            "policy": context_snapshot.get("policy", {}),
+            "routing_reasons": exec_request.routing_reasons,
+            "duration_ms": exec_request.routing_duration_ms,
+            "partial_warning": exec_request.partial_mode_warning,
+        }, duration_ms=exec_request.routing_duration_ms)
         
         # Build system prompt from exec_request (v2: prompt is in AgentVersion)
         base_prompt = getattr(exec_request, 'prompt', '') or "You are an AI assistant."
@@ -629,6 +746,13 @@ class AgentRuntime:
                 llm_messages, effective_model, collected_sources
             ):
                 yield event
+            await _log_step("final_response", {
+                "step": 0,
+                "content_length": 0,
+                "has_sources": bool(collected_sources),
+                "sources_count": len(collected_sources),
+                "no_tools": True,
+            })
             await finish_run("completed")
             self.max_steps = original_max_steps
             return
@@ -640,41 +764,94 @@ class AgentRuntime:
                 # Check policy limits
                 limit_error = await check_policy_limits()
                 if limit_error:
+                    await _log_step("error", {
+                        "error": limit_error.data.get("error"),
+                        "step": step,
+                        "recoverable": False,
+                    }, error=limit_error.data.get("error"))
                     yield limit_error
                     await finish_run("failed", limit_error.data.get("error"))
                     return
                 
                 yield RuntimeEvent.thinking(step)
                 
+                # Log LLM request
+                llm_start = time.time()
+                await _log_step("llm_request", {
+                    "step": step,
+                    "model": effective_model,
+                    "messages_count": len(llm_messages),
+                    "messages": llm_messages,
+                    "system_prompt": system_prompt,
+                    "system_prompt_hash": _hash_text(system_prompt),
+                })
+                
                 try:
                     llm_response = await self._call_llm(llm_messages, effective_model)
                 except Exception as e:
+                    llm_duration = int((time.time() - llm_start) * 1000)
                     logger.error(f"LLM call failed: {e}", exc_info=True)
+                    await _log_step("llm_response", {
+                        "step": step,
+                        "error": str(e),
+                        "has_tool_calls": False,
+                    }, duration_ms=llm_duration, error=str(e))
                     yield RuntimeEvent.error(str(e))
                     await finish_run("failed", str(e))
                     return
                 
+                llm_duration = int((time.time() - llm_start) * 1000)
                 parsed = parse_llm_response(llm_response)
+                
+                # Log LLM response
+                await _log_step("llm_response", {
+                    "step": step,
+                    "content": llm_response,
+                    "content_length": len(llm_response),
+                    "has_tool_calls": parsed.has_tool_calls,
+                    "tool_calls_count": len(parsed.tool_calls) if parsed.has_tool_calls else 0,
+                    "is_final": parsed.is_final,
+                }, duration_ms=llm_duration)
+                
+                logger.info(
+                    f"LLM response (step {step}): has_tool_calls={parsed.has_tool_calls}, "
+                    f"response_len={len(llm_response)}, duration={llm_duration}ms"
+                )
                 
                 if parsed.is_final:
                     logger.info(f"Agent finished after {step} steps, {total_tool_calls} tool calls")
+                    
+                    stream_start = time.time()
+                    final_content = ""
                     async for event in self._stream_final_response(
                         llm_messages, effective_model, collected_sources
                     ):
+                        if event.type == RuntimeEventType.DELTA:
+                            final_content += event.data.get("content", "")
                         yield event
+                    
+                    stream_duration = int((time.time() - stream_start) * 1000)
+                    await _log_step("final_response", {
+                        "step": step,
+                        "content": final_content,
+                        "content_length": len(final_content),
+                        "has_sources": bool(collected_sources),
+                        "sources_count": len(collected_sources),
+                    }, duration_ms=stream_duration)
+                    
                     await finish_run("completed")
                     return
                 
                 logger.info(f"Step {step}: {len(parsed.tool_calls)} tool calls")
                 
                 tool_results = []
-                for tool_call in parsed.tool_calls:
+                for tc in parsed.tool_calls:
                     # Check if tool is in available tools
-                    if tool_call.tool_slug not in available_tool_slugs:
-                        logger.warning(f"Tool {tool_call.tool_slug} not available, skipping")
+                    if tc.tool_slug not in available_tool_slugs:
+                        logger.warning(f"Tool {tc.tool_slug} not available, skipping")
                         tool_results.append((
-                            tool_call,
-                            f"Tool '{tool_call.tool_slug}' is not available for this agent"
+                            tc,
+                            f"Tool '{tc.tool_slug}' is not available for this agent"
                         ))
                         continue
                     
@@ -682,6 +859,11 @@ class AgentRuntime:
                     
                     # Check tool calls limit
                     if total_tool_calls > policy.max_tool_calls_total:
+                        await _log_step("error", {
+                            "error": "Tool calls limit exceeded",
+                            "step": step,
+                            "total_tool_calls": total_tool_calls,
+                        }, error="Tool calls limit exceeded")
                         yield RuntimeEvent.error(
                             f"Tool calls limit exceeded ({policy.max_tool_calls_total})",
                             recoverable=False
@@ -689,25 +871,58 @@ class AgentRuntime:
                         await finish_run("failed", "Tool calls limit exceeded")
                         return
                     
+                    # Resolve handler for schema_hash logging
+                    _handler = next((h for h in tool_handlers if h.slug == tc.tool_slug), None)
+                    _schema_hash = getattr(_handler, 'schema_hash', None) if _handler else None
+                    
                     yield RuntimeEvent.tool_call(
-                        tool_call.tool_slug,
-                        tool_call.id,
-                        tool_call.arguments
+                        tc.tool_slug,
+                        tc.id,
+                        tc.arguments
                     )
                     
-                    result, sources = await self._execute_tool(tool_call, ctx, tool_handlers)
+                    # Log tool call
+                    await _log_step("tool_call", {
+                        "tool_slug": tc.tool_slug,
+                        "call_id": tc.id,
+                        "arguments": tc.arguments,
+                        "schema_hash": _schema_hash,
+                    })
+                    
+                    tool_start = time.time()
+                    result, sources = await self._execute_tool(tc, ctx, tool_handlers)
+                    tool_duration = int((time.time() - tool_start) * 1000)
                     
                     if sources:
                         collected_sources.extend(sources)
                     
                     yield RuntimeEvent.tool_result(
-                        tool_call.tool_slug,
-                        tool_call.id,
+                        tc.tool_slug,
+                        tc.id,
                         result.success,
                         result.data if result.success else result.error
                     )
                     
-                    tool_results.append((tool_call, result.to_message_content()))
+                    # Log tool result (include tool_logs from ToolLogger)
+                    result_data = result.data if result.success else result.error
+                    tool_result_step = {
+                        "tool_slug": tc.tool_slug,
+                        "call_id": tc.id,
+                        "success": result.success,
+                        "result": result_data,
+                        "has_sources": bool(sources),
+                        "sources_count": len(sources) if sources else 0,
+                    }
+                    tool_logs = result.metadata.get("logs")
+                    if tool_logs:
+                        tool_result_step["tool_logs"] = tool_logs
+                        tool_result_step["tool_logs_count"] = len(tool_logs)
+                    
+                    await _log_step("tool_result", tool_result_step,
+                        duration_ms=tool_duration,
+                        error=result.error if not result.success else None)
+                    
+                    tool_results.append((tc, result.to_message_content()))
                     run_ctx.increment_tool_calls()
                 
                 llm_messages.append({
@@ -722,6 +937,11 @@ class AgentRuntime:
                 })
             
             logger.warning(f"Agent reached max steps ({self.max_steps})")
+            await _log_step("error", {
+                "error": f"Maximum steps ({self.max_steps}) reached",
+                "step": step,
+                "recoverable": True,
+            }, error=f"Maximum steps ({self.max_steps}) reached")
             yield RuntimeEvent.error(
                 f"Maximum steps ({self.max_steps}) reached",
                 recoverable=True
