@@ -67,13 +67,26 @@ class AgentService:
         slug: str,
         name: str,
         description: Optional[str] = None,
+        tag: Optional[str] = None,
+        category: Optional[str] = None,
+        routing_example: Optional[str] = None,
+        is_routable: bool = False,
         logging_level: str = "brief",
     ) -> Agent:
         existing = await self.agent_repo.get_by_slug(slug)
         if existing:
             raise AgentAlreadyExistsError(f"Agent with slug '{slug}' already exists")
 
-        agent = Agent(slug=slug, name=name, description=description, logging_level=logging_level)
+        agent = Agent(
+            slug=slug,
+            name=name,
+            description=description,
+            tag=tag,
+            category=category,
+            routing_example=routing_example,
+            is_routable=is_routable,
+            logging_level=logging_level,
+        )
         agent = await self.agent_repo.create(agent)
 
         await self._add_agent_to_default_permissions(agent.slug)
@@ -103,6 +116,10 @@ class AgentService:
         agent_id: UUID,
         name: Optional[str] = None,
         description: Optional[str] = None,
+        tag: Optional[str] = None,
+        category: Optional[str] = None,
+        routing_example: Optional[str] = None,
+        is_routable: Optional[bool] = None,
         logging_level: Optional[str] = None,
     ) -> Agent:
         agent = await self.get_agent(agent_id)
@@ -111,6 +128,14 @@ class AgentService:
             update_data['name'] = name
         if description is not None:
             update_data['description'] = description
+        if tag is not None:
+            update_data['tag'] = tag
+        if category is not None:
+            update_data['category'] = category
+        if routing_example is not None:
+            update_data['routing_example'] = routing_example
+        if is_routable is not None:
+            update_data['is_routable'] = is_routable
         if logging_level is not None:
             update_data['logging_level'] = logging_level
         if update_data:
@@ -127,6 +152,42 @@ class AgentService:
         limit: int = 100,
     ) -> Tuple[List[Agent], int]:
         return await self.agent_repo.list_agents(skip, limit)
+
+    async def route_agent(self, request_text: str, category: Optional[str] = None, tag: Optional[str] = None) -> Optional[Agent]:
+        """Select best routable agent by simple scoring over routing metadata."""
+        stmt = select(Agent).where(Agent.is_routable.is_(True))
+        result = await self.session.execute(stmt)
+        candidates = list(result.scalars().all())
+
+        if not candidates:
+            return None
+
+        normalized_text = request_text.lower().strip()
+        normalized_category = category.lower().strip() if category else None
+        normalized_tag = tag.lower().strip() if tag else None
+
+        def score(agent: Agent) -> int:
+            value = 0
+
+            if normalized_category and agent.category and agent.category.lower() == normalized_category:
+                value += 5
+            elif agent.category and agent.category.lower() in normalized_text:
+                value += 2
+
+            if normalized_tag and agent.tag and agent.tag.lower() == normalized_tag:
+                value += 5
+            elif agent.tag and agent.tag.lower() in normalized_text:
+                value += 3
+
+            if agent.routing_example:
+                example_tokens = [t for t in agent.routing_example.lower().split() if len(t) > 3]
+                value += sum(1 for token in example_tokens if token in normalized_text)
+
+            return value
+
+        ranked = sorted(candidates, key=score, reverse=True)
+        best = ranked[0]
+        return best if score(best) > 0 else None
 
     async def _add_agent_to_default_permissions(self, agent_slug: str):
         stmt = select(PermissionSet).where(

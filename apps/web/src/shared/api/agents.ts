@@ -12,6 +12,10 @@ export interface Agent {
   slug: string;
   name: string;
   description?: string;
+  tag?: string | null;
+  category?: string | null;
+  routing_example?: string | null;
+  is_routable?: boolean;
   current_version_id?: string | null;
   created_at: string;
   updated_at: string;
@@ -83,11 +87,29 @@ export interface AgentCreate {
   slug: string;
   name: string;
   description?: string;
+  tag?: string;
+  category?: string;
+  routing_example?: string;
+  is_routable?: boolean;
 }
 
 export interface AgentUpdate {
   name?: string;
   description?: string;
+  tag?: string;
+  category?: string;
+  routing_example?: string;
+  is_routable?: boolean;
+}
+
+export interface AgentRouteRequest {
+  request_text: string;
+  category?: string;
+  tag?: string;
+}
+
+export interface AgentRouteResponse {
+  selected_agent: Agent;
 }
 
 export interface AgentVersionCreate {
@@ -132,6 +154,13 @@ export const agentsApi = {
 
   async delete(slug: string): Promise<void> {
     return apiRequest(`/admin/agents/${slug}`, { method: 'DELETE' });
+  },
+
+  async route(data: AgentRouteRequest): Promise<AgentRouteResponse> {
+    return apiRequest('/admin/agents/router/route', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
   },
 
   // Version CRUD

@@ -19,12 +19,20 @@ class AgentCreate(BaseModel):
     slug: str = Field(..., description="Unique identifier")
     name: str = Field(..., description="Display name")
     description: Optional[str] = None
+    tag: Optional[str] = Field(default=None, description="Agent routing tag")
+    category: Optional[str] = Field(default=None, description="Agent category")
+    routing_example: Optional[str] = Field(default=None, description="Example request for router")
+    is_routable: bool = Field(default=False, description="Whether agent can be selected by router")
     logging_level: str = Field(default="brief", description="none, brief, full")
 
 
 class AgentUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
+    tag: Optional[str] = None
+    category: Optional[str] = None
+    routing_example: Optional[str] = None
+    is_routable: Optional[bool] = None
     logging_level: Optional[str] = Field(default=None, description="none, brief, full")
 
 
@@ -33,6 +41,10 @@ class AgentResponse(BaseModel):
     slug: str
     name: str
     description: Optional[str] = None
+    tag: Optional[str] = None
+    category: Optional[str] = None
+    routing_example: Optional[str] = None
+    is_routable: bool = False
     current_version_id: Optional[UUID] = None
     logging_level: str = Field(default="brief", description="none, brief, full")
     created_at: datetime

@@ -32,8 +32,19 @@ from app.schemas.agents import (
     AgentVersionUpdate,
     AgentVersionResponse,
 )
+from pydantic import BaseModel, Field
 
 router = APIRouter(tags=["agents"])
+
+
+class AgentRouteRequest(BaseModel):
+    request_text: str = Field(..., min_length=1)
+    category: Optional[str] = None
+    tag: Optional[str] = None
+
+
+class AgentRouteResponse(BaseModel):
+    selected_agent: AgentResponse
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -62,6 +73,10 @@ async def create_agent(
         service = AgentService(db)
         result = await service.create_agent(
             slug=data.slug, name=data.name, description=data.description,
+            tag=data.tag,
+            category=data.category,
+            routing_example=data.routing_example,
+            is_routable=data.is_routable,
             logging_level=data.logging_level,
         )
         await db.commit()
@@ -83,6 +98,23 @@ async def get_agent(
         raise HTTPException(status_code=404, detail=str(e))
 
 
+@router.post("/router/route", response_model=AgentRouteResponse)
+async def route_agent(
+    data: AgentRouteRequest,
+    db: AsyncSession = Depends(db_session),
+    _: UserCtx = Depends(require_admin),
+):
+    service = AgentService(db)
+    selected = await service.route_agent(
+        request_text=data.request_text,
+        category=data.category,
+        tag=data.tag,
+    )
+    if not selected:
+        raise HTTPException(status_code=404, detail="No routable agent matches request")
+    return AgentRouteResponse(selected_agent=selected)
+
+
 @router.put("/{slug}", response_model=AgentResponse)
 async def update_agent(
     slug: str,
@@ -95,6 +127,10 @@ async def update_agent(
         agent = await service.get_agent_by_slug(slug)
         result = await service.update_agent(
             agent_id=agent.id, name=data.name, description=data.description,
+            tag=data.tag,
+            category=data.category,
+            routing_example=data.routing_example,
+            is_routable=data.is_routable,
             logging_level=data.logging_level,
         )
         await db.commit()

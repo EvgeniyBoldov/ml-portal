@@ -18,7 +18,7 @@ import {
 import { 
   EntityPageV2,
   Tab,
-  type BreadcrumbItem, 
+  type BreadcrumbItem,
   type EntityPageMode,
 } from '@/shared/ui/EntityPage/EntityPageV2';
 import { 
@@ -155,7 +155,7 @@ export function ToolPage() {
       key: 'status',
       label: 'Статус',
       render: (row) => (
-        <Badge tone={getStatusProps('version', row.status).tone} size="small">
+        <Badge tone={getStatusProps('version', row.status).tone}>
           {getStatusProps('version', row.status).label}
         </Badge>
       ),
@@ -165,7 +165,7 @@ export function ToolPage() {
       label: 'Основная',
       render: (row) => (
         tool?.current_version_id === row.id ? (
-          <Badge tone="info" size="small">★ Основная</Badge>
+          <Badge tone="info">★ Основная</Badge>
         ) : null
       ),
     },
@@ -196,7 +196,7 @@ export function ToolPage() {
       key: 'deprecated',
       label: 'Статус',
       render: (row) => (
-        <Badge tone={row.deprecated ? 'warn' : 'success'} size="small">
+        <Badge tone={row.deprecated ? 'warn' : 'success'}>
           {row.deprecated ? 'Устарела' : 'Актуальна'}
         </Badge>
       ),
@@ -220,7 +220,7 @@ export function ToolPage() {
       breadcrumbs={breadcrumbs}
       loading={isLoading}
       saving={saving}
-          >
+    >
       <Tab 
         title="Обзор" 
         layout="grid"
@@ -247,7 +247,7 @@ export function ToolPage() {
           data={formData}
           onChange={handleFieldChange}
           headerActions={
-            <Badge tone={KIND_TONES[tool?.kind || 'mixed'] || 'neutral'} size="small">
+            <Badge tone={KIND_TONES[tool?.kind || 'mixed'] || 'neutral'}>
               {KIND_LABELS[tool?.kind || 'mixed'] || tool?.kind || '—'}
             </Badge>
           }

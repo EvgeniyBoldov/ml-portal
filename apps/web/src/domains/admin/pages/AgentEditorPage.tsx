@@ -8,12 +8,12 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { agentsApi, type AgentDetail, type AgentVersionInfo } from '@/shared/api';
+import { agentsApi, type AgentCreate, type AgentUpdate } from '@/shared/api';
 import { qk } from '@/shared/api/keys';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
 import { EntityPageV2, Tab, type BreadcrumbItem, type EntityPageMode } from '@/shared/ui/EntityPage/EntityPageV2';
-import { PromptVersionCard, ConfirmDialog, ContentBlock, VersionsBlock, DataTable, type DataTableColumn, type FieldDefinition } from '@/shared/ui';
-import { Button } from '@/shared/ui';
+import { ConfirmDialog, ContentBlock, VersionsBlock, TagsInput, type FieldDefinition } from '@/shared/ui';
+import { Button, Input } from '@/shared/ui';
 
 export function AgentEditorPage() {
   const { slug } = useParams<{ slug: string }>();
@@ -33,6 +33,10 @@ export function AgentEditorPage() {
     slug: '',
     name: '',
     description: '',
+    tag: '',
+    category: '',
+    routing_example: '',
+    is_routable: false,
   });
 
   const { data: agent, isLoading } = useQuery({
@@ -42,11 +46,6 @@ export function AgentEditorPage() {
   });
 
   const activeVersion = agent?.versions?.find(v => v.status === 'active') || agent?.versions?.[0];
-  const { data: selectedVersion } = useQuery({
-    queryKey: qk.agents.version(slug!, activeVersion?.version ?? 0),
-    queryFn: () => agentsApi.getVersion(slug!, activeVersion!.version),
-    enabled: !!slug && !!activeVersion,
-  });
 
   useEffect(() => {
     if (agent) {
@@ -54,29 +53,33 @@ export function AgentEditorPage() {
         slug: agent.slug,
         name: agent.name,
         description: agent.description || '',
+        tag: agent.tag || '',
+        category: agent.category || '',
+        routing_example: agent.routing_example || '',
+        is_routable: agent.is_routable || false,
       });
     }
   }, [agent]);
 
   const createMutation = useMutation({
-    mutationFn: (data: any) => agentsApi.create(data),
-    onSuccess: (created: any) => {
+    mutationFn: (data: AgentCreate) => agentsApi.create(data),
+    onSuccess: (created) => {
       queryClient.invalidateQueries({ queryKey: qk.agents.list() });
       showSuccess('Агент создан');
       navigate(`/admin/agents/${created.slug}`);
     },
-    onError: (err: any) => showError(err?.message || 'Ошибка создания'),
+    onError: (err: Error) => showError(err?.message || 'Ошибка создания'),
   });
 
   const updateMutation = useMutation({
-    mutationFn: (data: any) => agentsApi.update(slug!, data),
+    mutationFn: (data: AgentUpdate) => agentsApi.update(slug!, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: qk.agents.detail(slug!) });
       queryClient.invalidateQueries({ queryKey: qk.agents.list() });
       showSuccess('Агент обновлён');
       setSearchParams({});
     },
-    onError: (err: any) => showError(err?.message || 'Ошибка обновления'),
+    onError: (err: Error) => showError(err?.message || 'Ошибка обновления'),
   });
 
   const deleteMutation = useMutation({
@@ -86,7 +89,7 @@ export function AgentEditorPage() {
       showSuccess('Агент удалён');
       navigate('/admin/agents');
     },
-    onError: (err: any) => showError(err?.message || 'Ошибка удаления'),
+    onError: (err: Error) => showError(err?.message || 'Ошибка удаления'),
   });
 
   const handleSave = async () => {
@@ -102,6 +105,10 @@ export function AgentEditorPage() {
         await updateMutation.mutateAsync({
           name: formData.name,
           description: formData.description,
+          tag: formData.tag,
+          category: formData.category,
+          routing_example: formData.routing_example,
+          is_routable: formData.is_routable,
         });
       }
     } finally {
@@ -120,6 +127,10 @@ export function AgentEditorPage() {
           slug: agent.slug,
           name: agent.name,
           description: agent.description || '',
+          tag: agent.tag || '',
+          category: agent.category || '',
+          routing_example: agent.routing_example || '',
+          is_routable: agent.is_routable || false,
         });
       }
       setSearchParams({});
@@ -162,6 +173,25 @@ export function AgentEditorPage() {
       placeholder: 'Описание агента...',
       rows: 2,
     },
+    {
+      key: 'category',
+      label: 'Категория',
+      type: 'text',
+      placeholder: 'support / analytics / devops',
+    },
+    {
+      key: 'routing_example',
+      label: 'Routing Example',
+      type: 'textarea',
+      placeholder: 'Пример запроса для роутера...',
+      rows: 3,
+    },
+    {
+      key: 'is_routable',
+      label: 'Доступен для Agent Router',
+      type: 'boolean',
+      description: 'Если включено, роутер может выбрать этого агента автоматически',
+    },
   ];
 
   const breadcrumbs: BreadcrumbItem[] = [
@@ -182,10 +212,22 @@ export function AgentEditorPage() {
         onCancel={handleCancel}
       >
         <Tab title="Создание" layout="single">
-          <PromptVersionCard
-            version={null}
-            onCreateVersion={() => navigate(`/admin/agents/${slug}/versions/new`)}
+          <ContentBlock
+            title="Основная информация"
+            icon="info"
+            fields={containerFields}
+            data={formData}
+            editable={true}
+            onChange={handleFieldChange}
           />
+          <ContentBlock title="Тег маршрутизации" icon="tag">
+            <TagsInput
+              value={formData.tag ? [formData.tag] : []}
+              onChange={(tags) => handleFieldChange('tag', tags[0] || '')}
+              maxTags={1}
+              placeholder="Например: finance"
+            />
+          </ContentBlock>
         </Tab>
       </EntityPageV2>
     );
@@ -228,16 +270,29 @@ export function AgentEditorPage() {
           <ContentBlock
             title="Основная информация"
             icon="info"
-            fields={[
-              { key: 'slug', label: 'Slug', type: 'text' },
-              { key: 'name', label: 'Название', type: 'text' },
-              { key: 'description', label: 'Описание', type: 'textarea' },
-            ]}
-            data={{
+            fields={containerFields}
+            data={mode === 'edit' ? formData : {
               slug: agent?.slug || '',
               name: agent?.name || '',
               description: agent?.description || '',
+              category: agent?.category || '',
+              routing_example: agent?.routing_example || '',
+              is_routable: agent?.is_routable || false,
             }}
+            editable={mode === 'edit'}
+            onChange={handleFieldChange}
+          />
+          <ContentBlock title="Тег маршрутизации" icon="tag">
+            {mode === 'edit' ? (
+              <TagsInput
+                value={formData.tag ? [formData.tag] : []}
+                onChange={(tags) => handleFieldChange('tag', tags[0] || '')}
+                maxTags={1}
+                placeholder="Например: finance"
+              />
+            ) : (
+              <Input value={agent?.tag || '—'} disabled />
+            )}
           />
           <ContentBlock
             title="Статистика"

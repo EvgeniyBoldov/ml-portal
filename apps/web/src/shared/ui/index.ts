@@ -30,6 +30,7 @@ export { Tag } from './Tag';
 export type { TagProps } from './Tag';
 export { default as Textarea } from './Textarea';
 export { default as ThemeSwitch } from './ThemeSwitch';
+export { TagsInput } from './TagsInput/TagsInput';
 export { Toast, ToastProvider, useToast } from './Toast';
 export { default as FieldEditor } from './FieldEditor';
 export { default as FieldCard } from './FieldCard';

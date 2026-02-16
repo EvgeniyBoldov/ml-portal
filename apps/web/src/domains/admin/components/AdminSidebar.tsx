@@ -42,6 +42,7 @@ const navigation: NavGroup[] = [
     items: [
       { path: '/admin/tools', label: 'Инструменты', icon: 'settings' },
       { path: '/admin/agents', label: 'Агенты', icon: 'sparkles' },
+      { path: '/admin/agents/router', label: 'Agent Router', icon: 'activity' },
     ],
   },
   {

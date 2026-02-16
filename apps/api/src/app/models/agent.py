@@ -10,7 +10,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional, List
 
-from sqlalchemy import String, DateTime, Text, ForeignKey, Enum as SAEnum
+from sqlalchemy import String, DateTime, Text, ForeignKey, Boolean, Enum as SAEnum
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -42,6 +42,10 @@ class Agent(Base):
     slug: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    tag: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    category: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    routing_example: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    is_routable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
 
     current_version_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),

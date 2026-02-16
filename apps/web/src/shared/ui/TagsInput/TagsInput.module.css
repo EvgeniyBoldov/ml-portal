@@ -1,0 +1,22 @@
+.tags-input {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.tags-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.controls-row {
+  display: flex;
+  gap: 8px;
+}
+
+@media (max-width: 768px) {
+  .controls-row {
+    flex-direction: column;
+  }
+}

@@ -81,9 +81,42 @@
 
 ## P2 — средний приоритет (maintainability/consistency)
 
+- [ ] **RBAC: Улучшить сводную таблицу правил** - текущая таблица в RbacListPage показывает все правила без иерархии. Нужно сделать:
+  - Фильтрацию по владельцу (пользователь/тенант/платформа)
+  - Группировку правил по владельцам
+  - Улучшенный UI для просмотра иерархии правил
+  - Возможность быстрых переходов к правилам конкретного владельца
+
 - [ ] Привести единый стиль domain errors: выделить общий иерархический набор ошибок для сервисов, где сейчас используются ad-hoc `Exception`.
   - `apps/api/src/app/services/rbac_service.py`
   - `apps/api/src/app/services/credential_service.py`
 
 - [ ] Добавить/усилить regression tests на transactional boundaries (rollback/commit orchestration) после очистки repository layer.
   - целевые контуры: CRUD generic repos + API маршруты на `db_uow`
+
+## Frontend Architecture: Progressive Loading & Sandbox
+
+### P1 — высокий приоритет (архитектурное улучшение)
+
+- [ ] **Реализовать Progressive Loading + Role-based Splitting** - разделить загрузку по ролям и доменам для оптимизации initial bundle.
+  - **Phase 1: Анализ и подготовка**
+    - [ ] Проанализировать текущую архитектуру роутинга и lazy loading
+    - [ ] Создать sandbox домен (layouts, pages, components)
+    - [ ] Создать SandboxGuard для role-based доступа
+  - **Phase 2: Перенос функциональности**
+    - [ ] Перенести AgentRouterPage в sandbox домен
+    - [ ] Добавить sandbox роуты в основной router.tsx
+    - [ ] Добавить навигацию в песочницу из AdminLayout
+  - **Phase 3: Очистка и оптимизация**
+    - [ ] Удалить Agent Router из админки (страница, роут, сайдбар, кнопки)
+    - [ ] Настроить code splitting для domain chunks (admin, sandbox, gpt)
+    - [ ] Добавить preloading для sandbox при наведении на кнопку
+  - **Phase 4: Тестирование и финализация**
+    - [ ] Протестировать progressive loading и кэширование
+  - **Ожидаемый результат**: Initial load ~2.3MB, Admin +2.5MB, Sandbox +1.8MB, Total cached ~6.6MB
+
+### P2 — средний приоритет (опциональные улучшения)
+
+- [ ] Добавить feature flags для условной загрузки sandbox модуля
+- [ ] Реализовать micro-frontend подход при дальнейшем росте бандла
+- [ ] Добавить метрики загрузки и performance monitoring

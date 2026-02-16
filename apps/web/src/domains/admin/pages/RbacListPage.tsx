@@ -1,71 +1,69 @@
-/**
- * RbacListPage - List of RBAC policies (named rule sets)
- */
-import { useState, useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { rbacApi, type RbacPolicy } from '@/shared/api/rbac';
 import { qk } from '@/shared/api/keys';
-import { AdminPage, DataTable, type DataTableColumn, Badge } from '@/shared/ui';
+import { rbacApi, type EnrichedRule } from '@/shared/api/rbac';
+import { Badge, DataTable, type DataTableColumn, EntityPageV2, Input } from '@/shared/ui';
+import { Tab } from '@/shared/ui/EntityPage/EntityPageV2';
+import styles from './RbacListPage.module.css';
 
 export function RbacListPage() {
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
 
-  const { data: policies = [], isLoading } = useQuery({
+  const { data: rules = [], isLoading } = useQuery({
     queryKey: qk.rbac.list({}),
-    queryFn: () => rbacApi.listPolicies(),
+    queryFn: () => rbacApi.listEnrichedRules({}),
   });
 
   const filtered = useMemo(() => {
-    if (!search.trim()) return policies;
-    const q = search.toLowerCase();
-    return policies.filter(
-      (p) =>
-        p.slug.toLowerCase().includes(q) ||
-        p.name.toLowerCase().includes(q) ||
-        p.description?.toLowerCase().includes(q)
-    );
-  }, [policies, search]);
+    if (!search.trim()) {
+      return rules;
+    }
 
-  const columns: DataTableColumn<RbacPolicy>[] = [
+    const q = search.toLowerCase();
+    return rules.filter((rule) => {
+      const ownerName = rule.owner.name.toLowerCase();
+      const resourceName = rule.resource.name.toLowerCase();
+      return (
+        ownerName.includes(q)
+        || resourceName.includes(q)
+        || rule.resource.type.toLowerCase().includes(q)
+        || rule.effect.toLowerCase().includes(q)
+      );
+    });
+  }, [rules, search]);
+
+  const columns: DataTableColumn<EnrichedRule>[] = [
     {
-      key: 'name',
-      label: 'НАЗВАНИЕ',
+      key: 'owner',
+      label: 'Владелец',
       render: (row) => (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-          <span style={{ fontWeight: 500 }}>{row.name}</span>
-          <code style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-            {row.slug}
-          </code>
+        <div className={styles['owner-cell']}>
+          <span className={styles['owner-name']}>{row.owner.name}</span>
+          <Badge tone="neutral">{row.owner.level}</Badge>
         </div>
       ),
     },
     {
-      key: 'description',
-      label: 'ОПИСАНИЕ',
-      render: (row) => (
-        <span style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>
-          {row.description || '—'}
-        </span>
-      ),
+      key: 'resource',
+      label: 'Ресурс',
+      render: (row) => `${row.resource.name} (${row.resource.type})`,
     },
     {
-      key: 'rules_count',
-      label: 'ПРАВИЛА',
-      width: 100,
+      key: 'effect',
+      label: 'Эффект',
       render: (row) => (
-        <Badge tone="neutral" size="small">
-          {row.rules_count}
+        <Badge tone={row.effect === 'allow' ? 'success' : 'danger'}>
+          {row.effect === 'allow' ? 'Разрешён' : 'Запрещён'}
         </Badge>
       ),
     },
     {
-      key: 'updated_at',
-      label: 'ОБНОВЛЕНО',
-      width: 140,
+      key: 'created_at',
+      label: 'Создано',
       render: (row) =>
-        new Date(row.updated_at).toLocaleDateString('ru-RU', {
+        new Date(row.created_at).toLocaleDateString('ru-RU', {
           day: '2-digit',
           month: '2-digit',
           year: 'numeric',
@@ -74,29 +72,28 @@ export function RbacListPage() {
   ];
 
   return (
-    <AdminPage
+    <EntityPageV2
       title="RBAC"
-      subtitle="Наборы правил доступа к ресурсам платформы"
-      searchValue={search}
-      onSearchChange={setSearch}
-      searchPlaceholder="Поиск наборов..."
-      actions={[
-        {
-          label: 'Создать набор',
-          onClick: () => navigate('/admin/rbac/new'),
-          variant: 'primary',
-        },
-      ]}
+      mode="view"
+      headerActions={(
+        <Input
+          placeholder="Поиск правил..."
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+        />
+      )}
     >
-      <DataTable
-        columns={columns}
-        data={filtered}
-        keyField="id"
-        loading={isLoading}
-        emptyText="Наборы RBAC не найдены. Нажмите «Создать набор» для добавления."
-        onRowClick={(row) => navigate(`/admin/rbac/${row.slug}`)}
-      />
-    </AdminPage>
+      <Tab title="Правила" layout="full" badge={filtered.length}>
+        <DataTable
+          columns={columns}
+          data={filtered}
+          keyField="id"
+          loading={isLoading}
+          emptyText="RBAC правила не найдены"
+          onRowClick={(row) => navigate(`/admin/rbac/${row.id}`)}
+        />
+      </Tab>
+    </EntityPageV2>
   );
 }
 

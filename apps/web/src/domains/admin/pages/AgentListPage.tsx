@@ -46,9 +46,9 @@ export function AgentListPage() {
       label: 'ВЕРСИЯ',
       width: 120,
       render: (agent) => agent.current_version_id ? (
-        <Badge tone="success" size="small">Активна</Badge>
+        <Badge tone="success">Активна</Badge>
       ) : (
-        <Badge tone="neutral" size="small">Нет версии</Badge>
+        <Badge tone="neutral">Нет версии</Badge>
       ),
     },
     {
@@ -84,7 +84,7 @@ export function AgentListPage() {
         <Input
           placeholder="Поиск агентов..."
           value={q}
-          onChange={setQ}
+          onChange={(event) => setQ(event.target.value)}
         />
       }
     >
@@ -92,6 +92,9 @@ export function AgentListPage() {
         title="Список" 
         layout="full"
         actions={[
+          <Button key="router" variant="outline" onClick={() => navigate('/admin/agents/router')}>
+            Agent Router
+          </Button>,
           <Button key="create" onClick={() => navigate('/admin/agents/new')}>
             Создать агента
           </Button>,

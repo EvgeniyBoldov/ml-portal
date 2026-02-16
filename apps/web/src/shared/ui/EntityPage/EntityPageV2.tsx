@@ -125,20 +125,22 @@ export function EntityPageV2({
   const hasTabs = tabs.length > 1;
   const [activeTabId, setActiveTabId] = useState(defaultTab || tabs[0]?.id || 'tab-0');
   const activeTab = tabs.find(t => t.id === activeTabId) || tabs[0];
+  const hasDeclarativeTabActions = tabs.some((tab) => tab.actions !== undefined);
 
   const isCreate = mode === 'create';
   const isEdit = mode === 'edit';
 
-  // ─── Action buttons: mode defaults + active tab actions ───
+  // ─── Action buttons ───
   const renderActionButtons = () => {
     if (actionButtons) return actionButtons;
 
-    const buttons: React.ReactNode[] = [];
-
-    // Tab-specific actions first
-    if (activeTab?.actions) {
-      buttons.push(...activeTab.actions);
+    // New declarative behavior: if page uses Tab actions,
+    // header buttons are fully controlled by active tab.
+    if (hasDeclarativeTabActions) {
+      return activeTab?.actions ?? [];
     }
+
+    const buttons: React.ReactNode[] = [];
 
     // Mode-based default buttons
     if (isCreate) {

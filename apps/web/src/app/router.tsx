@@ -34,6 +34,7 @@ const ToolVersionPage = lazy(() => import('@/domains/admin/pages/ToolVersionPage
 const ViewBackendReleasePage = lazy(() => import('@/domains/admin/pages/ViewBackendReleasePage').then(m => ({ default: m.ViewBackendReleasePage })));
 const AgentListPage = lazy(() => import('@/domains/admin/pages/AgentListPage').then(m => ({ default: m.AgentListPage })));
 const AgentEditorPage = lazy(() => import('@/domains/admin/pages/AgentEditorPage').then(m => ({ default: m.AgentEditorPage })));
+const AgentRouterPage = lazy(() => import('@/domains/admin/pages/AgentRouterPage').then(m => ({ default: m.AgentRouterPage })));
 const AgentVersionPage = lazy(() => import('@/domains/admin/pages/AgentVersionPage').then(m => ({ default: m.AgentVersionPage })));
 const AgentRunsPage = lazy(() => import('@/domains/admin/pages/AgentRunsPage').then(m => ({ default: m.AgentRunsPage })));
 const AgentRunPage = lazy(() => import('@/domains/admin/pages/AgentRunPage').then(m => ({ default: m.AgentRunPage })));
@@ -49,7 +50,8 @@ const PoliciesListPage = lazy(() => import('@/domains/admin/pages/PoliciesListPa
 const PolicyPage = lazy(() => import('@/domains/admin/pages/PolicyPage').then(m => ({ default: m.PolicyPage })));
 const PolicyVersionPage = lazy(() => import('@/domains/admin/pages/PolicyVersionPage').then(m => ({ default: m.PolicyVersionPage })));
 const RbacListPage = lazy(() => import('@/domains/admin/pages/RbacListPage').then(m => ({ default: m.RbacListPage })));
-const RbacPolicyPage = lazy(() => import('@/domains/admin/pages/RbacPolicyPage').then(m => ({ default: m.RbacPolicyPage })));
+const RbacRulePage = lazy(() => import('@/domains/admin/pages/RbacRulePage').then(m => ({ default: m.RbacRulePage })));
+const RbacRuleCreatePage = lazy(() => import('@/domains/admin/pages/RbacRuleCreatePage').then(m => ({ default: m.RbacRuleCreatePage })));
 const PlatformSettingsPage = lazy(() => import('@/domains/admin/pages/PlatformSettingsPage').then(m => ({ default: m.PlatformSettingsPage })));
 const CredentialPage = lazy(() => import('@/domains/admin/pages/CredentialPage').then(m => ({ default: m.default })));
 const CredentialsListPage = lazy(() => import('@/domains/admin/pages/CredentialsListPage').then(m => ({ default: m.default })));
@@ -92,9 +94,11 @@ const router = createBrowserRouter([
       { path: 'users', element: withSuspense(<UsersListPage />) },
       { path: 'users/new', element: withSuspense(<UserPage />) },
       { path: 'users/:id', element: withSuspense(<UserPage />) },
+      { path: 'users/:id/rbac/new', element: withSuspense(<RbacRuleCreatePage />) },
       { path: 'tenants', element: withSuspense(<TenantsListPage />) },
       { path: 'tenants/new', element: withSuspense(<TenantPage />) },
       { path: 'tenants/:id', element: withSuspense(<TenantPage />) },
+      { path: 'tenants/:id/rbac/new', element: withSuspense(<RbacRuleCreatePage />) },
       { path: 'models', element: withSuspense(<ModelsPage />) },
       { path: 'models/new', element: withSuspense(<ModelEditorPage />) },
       { path: 'models/:id', element: withSuspense(<ModelEditorPage />) },
@@ -107,6 +111,7 @@ const router = createBrowserRouter([
       { path: 'tools/:toolSlug/versions/:version', element: withSuspense(<ToolVersionPage />) },
       { path: 'agents', element: withSuspense(<AgentListPage />) },
       { path: 'agents/new', element: withSuspense(<AgentEditorPage />) },
+      { path: 'agents/router', element: withSuspense(<AgentRouterPage />) },
       { path: 'agents/:slug', element: withSuspense(<AgentEditorPage />) },
       { path: 'agents/:slug/versions/new', element: withSuspense(<AgentVersionPage />) },
       { path: 'agents/:slug/versions/:version', element: withSuspense(<AgentVersionPage />) },
@@ -130,9 +135,9 @@ const router = createBrowserRouter([
       { path: 'instances/:id', element: withSuspense(<InstancePage />) },
       { path: 'instances/:id/edit', element: withSuspense(<InstancePage />) },
       { path: 'rbac', element: withSuspense(<RbacListPage />) },
-      { path: 'rbac/new', element: withSuspense(<RbacPolicyPage />) },
-      { path: 'rbac/:slug', element: withSuspense(<RbacPolicyPage />) },
+      { path: 'rbac/:id', element: withSuspense(<RbacRulePage />) },
       { path: 'platform', element: withSuspense(<PlatformSettingsPage />) },
+      { path: 'platform/rbac/new', element: withSuspense(<RbacRuleCreatePage />) },
       { path: 'credentials', element: withSuspense(<CredentialsListPage />) },
       { path: 'credentials/new', element: withSuspense(<CredentialPage />) },
       { path: 'credentials/:id', element: withSuspense(<CredentialPage />) },
