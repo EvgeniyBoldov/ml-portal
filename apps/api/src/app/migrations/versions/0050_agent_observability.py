@@ -1,7 +1,7 @@
 """Agent observability: logging_level, context_snapshot, total_llm_calls, step error
 
-Revision ID: 0050
-Revises: 0049
+Revision ID: 0068_agent_observability
+Revises: 0068
 Create Date: 2026-02-13
 
 Adds:
@@ -18,8 +18,8 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB
 
 
-revision = "0050"
-down_revision = "0049"
+revision = "0068_agent_observability"
+down_revision = "0068"
 branch_labels = None
 depends_on = None
 
