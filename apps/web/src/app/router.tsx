@@ -33,7 +33,7 @@ const ToolPage = lazy(() => import('@/domains/admin/pages/ToolPage').then(m => (
 const ToolVersionPage = lazy(() => import('@/domains/admin/pages/ToolVersionPage').then(m => ({ default: m.ToolVersionPage })));
 const ViewBackendReleasePage = lazy(() => import('@/domains/admin/pages/ViewBackendReleasePage').then(m => ({ default: m.ViewBackendReleasePage })));
 const AgentListPage = lazy(() => import('@/domains/admin/pages/AgentListPage').then(m => ({ default: m.AgentListPage })));
-const AgentEditorPage = lazy(() => import('@/domains/admin/pages/AgentEditorPage').then(m => ({ default: m.AgentEditorPage })));
+const AgentPage = lazy(() => import('@/domains/admin/pages/AgentPage').then(m => ({ default: m.AgentPage })));
 const AgentRouterPage = lazy(() => import('@/domains/admin/pages/AgentRouterPage').then(m => ({ default: m.AgentRouterPage })));
 const AgentVersionPage = lazy(() => import('@/domains/admin/pages/AgentVersionPage').then(m => ({ default: m.AgentVersionPage })));
 const AgentRunsPage = lazy(() => import('@/domains/admin/pages/AgentRunsPage').then(m => ({ default: m.AgentRunsPage })));
@@ -110,9 +110,9 @@ const router = createBrowserRouter([
       { path: 'tools/:toolSlug/versions/new', element: withSuspense(<ToolVersionPage />) },
       { path: 'tools/:toolSlug/versions/:version', element: withSuspense(<ToolVersionPage />) },
       { path: 'agents', element: withSuspense(<AgentListPage />) },
-      { path: 'agents/new', element: withSuspense(<AgentEditorPage />) },
+      { path: 'agents/new', element: withSuspense(<AgentPage />) },
       { path: 'agents/router', element: withSuspense(<AgentRouterPage />) },
-      { path: 'agents/:slug', element: withSuspense(<AgentEditorPage />) },
+      { path: 'agents/:slug', element: withSuspense(<AgentPage />) },
       { path: 'agents/:slug/versions/new', element: withSuspense(<AgentVersionPage />) },
       { path: 'agents/:slug/versions/:version', element: withSuspense(<AgentVersionPage />) },
       { path: 'agent-runs', element: withSuspense(<AgentRunsPage />) },

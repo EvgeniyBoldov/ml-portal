@@ -1,7 +1,7 @@
 /**
  * ToolViewPage - Tool container with versions using EntityTabsPage
  * 
- * Refactored to follow AgentEditorPage pattern with EntityTabsPage
+ * Refactored to follow AgentPage pattern with EntityTabsPage
  * Tool container: slug, name, description, kind, tags
  * Versions hold: releases with backend_version, status, notes
  */

@@ -1,24 +1,19 @@
 /**
- * AgentPage - View/Edit/Create agent with EntityPageV2
- * 
- * Unified page for all agent operations:
- * - View: /admin/agents/:slug (readonly)
- * - Edit: /admin/agents/:slug?mode=edit
- * - Create: /admin/agents/new
+ * AgentPage v2 - Container + Versions (like PolicyPage)
+ *
+ * Uses EntityTabsPage for unified layout.
+ * Agent container: slug, name, description
+ * Versions hold: prompt, policy_id, limit_id
  */
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { agentsApi, type AgentCreate, type AgentUpdate, type Agent } from '@/shared/api';
+import { agentsApi, type AgentCreate, type AgentUpdate } from '@/shared/api';
 import { qk } from '@/shared/api/keys';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
 import { EntityPageV2, Tab, type BreadcrumbItem, type EntityPageMode } from '@/shared/ui/EntityPage/EntityPageV2';
-import { PromptVersionCard, ConfirmDialog, ContentBlock, VersionsBlock, type FieldDefinition } from '@/shared/ui';
-import { Button } from '@/shared/ui';
-
-type ApiErrorShape = {
-  message?: string;
-};
+import { ConfirmDialog, ContentBlock, VersionsBlock, TagsInput, type FieldDefinition } from '@/shared/ui';
+import { Button, Input } from '@/shared/ui';
 
 export function AgentPage() {
   const { slug } = useParams<{ slug: string }>();
@@ -38,6 +33,10 @@ export function AgentPage() {
     slug: '',
     name: '',
     description: '',
+    tag: '',
+    category: '',
+    routing_example: '',
+    is_routable: false,
   });
 
   const { data: agent, isLoading } = useQuery({
@@ -54,18 +53,22 @@ export function AgentPage() {
         slug: agent.slug,
         name: agent.name,
         description: agent.description || '',
+        tag: agent.tag || '',
+        category: agent.category || '',
+        routing_example: agent.routing_example || '',
+        is_routable: agent.is_routable || false,
       });
     }
   }, [agent]);
 
   const createMutation = useMutation({
     mutationFn: (data: AgentCreate) => agentsApi.create(data),
-    onSuccess: (created: Agent) => {
+    onSuccess: (created) => {
       queryClient.invalidateQueries({ queryKey: qk.agents.list() });
       showSuccess('Агент создан');
       navigate(`/admin/agents/${created.slug}`);
     },
-    onError: (err: unknown) => showError((err as ApiErrorShape)?.message || 'Ошибка создания'),
+    onError: (err: Error) => showError(err?.message || 'Ошибка создания'),
   });
 
   const updateMutation = useMutation({
@@ -76,7 +79,7 @@ export function AgentPage() {
       showSuccess('Агент обновлён');
       setSearchParams({});
     },
-    onError: (err: unknown) => showError((err as ApiErrorShape)?.message || 'Ошибка обновления'),
+    onError: (err: Error) => showError(err?.message || 'Ошибка обновления'),
   });
 
   const deleteMutation = useMutation({
@@ -86,7 +89,7 @@ export function AgentPage() {
       showSuccess('Агент удалён');
       navigate('/admin/agents');
     },
-    onError: (err: unknown) => showError((err as ApiErrorShape)?.message || 'Ошибка удаления'),
+    onError: (err: Error) => showError(err?.message || 'Ошибка удаления'),
   });
 
   const handleSave = async () => {
@@ -102,6 +105,10 @@ export function AgentPage() {
         await updateMutation.mutateAsync({
           name: formData.name,
           description: formData.description,
+          tag: formData.tag,
+          category: formData.category,
+          routing_example: formData.routing_example,
+          is_routable: formData.is_routable,
         });
       }
     } finally {
@@ -120,10 +127,18 @@ export function AgentPage() {
           slug: agent.slug,
           name: agent.name,
           description: agent.description || '',
+          tag: agent.tag || '',
+          category: agent.category || '',
+          routing_example: agent.routing_example || '',
+          is_routable: agent.is_routable || false,
         });
       }
       setSearchParams({});
     }
+  };
+
+  const handleFieldChange = (key: string, value: any) => {
+    setFormData(prev => ({ ...prev, [key]: value }));
   };
 
   const handleDelete = () => {
@@ -158,6 +173,25 @@ export function AgentPage() {
       placeholder: 'Описание агента...',
       rows: 2,
     },
+    {
+      key: 'category',
+      label: 'Категория',
+      type: 'text',
+      placeholder: 'support / analytics / devops',
+    },
+    {
+      key: 'routing_example',
+      label: 'Routing Example',
+      type: 'textarea',
+      placeholder: 'Пример запроса для роутера...',
+      rows: 3,
+    },
+    {
+      key: 'is_routable',
+      label: 'Доступен для Agent Router',
+      type: 'boolean',
+      description: 'Если включено, роутер может выбрать этого агента автоматически',
+    },
   ];
 
   const breadcrumbs: BreadcrumbItem[] = [
@@ -174,12 +208,26 @@ export function AgentPage() {
         saving={saving}
         breadcrumbs={breadcrumbs}
         backPath="/admin/agents"
+        onSave={handleSave}
+        onCancel={handleCancel}
       >
         <Tab title="Создание" layout="single">
-          <PromptVersionCard
-            version={null}
-            onCreateVersion={() => navigate(`/admin/agents/${slug}/versions/new`)}
+          <ContentBlock
+            title="Основная информация"
+            icon="info"
+            fields={containerFields}
+            data={formData}
+            editable={true}
+            onChange={handleFieldChange}
           />
+          <ContentBlock title="Тег маршрутизации" icon="tag">
+            <TagsInput
+              value={formData.tag ? [formData.tag] : []}
+              onChange={(tags) => handleFieldChange('tag', tags[0] || '')}
+              maxTags={1}
+              placeholder="Например: finance"
+            />
+          </ContentBlock>
         </Tab>
       </EntityPageV2>
     );
@@ -194,6 +242,9 @@ export function AgentPage() {
         loading={isLoading}
         saving={saving}
         breadcrumbs={breadcrumbs}
+        onSave={handleSave}
+        onCancel={handleCancel}
+        onDelete={handleDelete}
       >
         <Tab 
           title="Обзор" 
@@ -219,17 +270,30 @@ export function AgentPage() {
           <ContentBlock
             title="Основная информация"
             icon="info"
-            fields={[
-              { key: 'slug', label: 'Slug', type: 'text' },
-              { key: 'name', label: 'Название', type: 'text' },
-              { key: 'description', label: 'Описание', type: 'textarea' },
-            ]}
-            data={{
+            fields={containerFields}
+            data={mode === 'edit' ? formData : {
               slug: agent?.slug || '',
               name: agent?.name || '',
               description: agent?.description || '',
+              category: agent?.category || '',
+              routing_example: agent?.routing_example || '',
+              is_routable: agent?.is_routable || false,
             }}
+            editable={mode === 'edit'}
+            onChange={handleFieldChange}
           />
+          <ContentBlock title="Тег маршрутизации" icon="tag">
+            {mode === 'edit' ? (
+              <TagsInput
+                value={formData.tag ? [formData.tag] : []}
+                onChange={(tags) => handleFieldChange('tag', tags[0] || '')}
+                maxTags={1}
+                placeholder="Например: finance"
+              />
+            ) : (
+              <Input value={agent?.tag || '—'} disabled />
+            )}
+          </ContentBlock>
           <ContentBlock
             title="Статистика"
             icon="bar-chart"
@@ -254,24 +318,12 @@ export function AgentPage() {
             </Button>,
           ]}
         >
-          {(() => {
-            const normalizedVersions = (agent?.versions || []).map(version => ({
-              ...version,
-              notes: version.notes ?? undefined,
-            }));
-            const normalizedSelectedVersion = activeVersion
-              ? { ...activeVersion, notes: activeVersion.notes ?? undefined }
-              : undefined;
-
-            return (
           <VersionsBlock
             entityType="agent"
-            versions={normalizedVersions}
-            selectedVersion={normalizedSelectedVersion}
+            versions={agent?.versions || []}
+            selectedVersion={activeVersion}
             onSelectVersion={(version) => navigate(`/admin/agents/${slug}/versions/${version.version}`)}
           />
-            );
-          })()}
         </Tab>
       </EntityPageV2>
 
