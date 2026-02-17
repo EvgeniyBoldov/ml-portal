@@ -17,7 +17,7 @@ from datetime import datetime
 
 
 revision = "0051"
-down_revision = "0050_tool_schema_tracking"
+down_revision = "0050"
 branch_labels = None
 depends_on = None
 
