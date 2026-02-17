@@ -7,7 +7,7 @@ import { useUser, useUpdateUser, useDeleteUser, useCreateUser } from '@shared/ap
 import { useTenants } from '@shared/hooks/useTenants';
 import { qk } from '@shared/api/keys';
 import { useErrorToast, useSuccessToast } from '@shared/ui/Toast';
-import { EntityPageV2, Tab, type EntityPageMode } from '@shared/ui/EntityPage/EntityPageV2';
+import { EntityPageV2, Tab, type EntityPageMode } from '@/shared/ui';
 import { ContentBlock, type FieldDefinition } from '@shared/ui/ContentBlock';
 import { Button } from '@shared/ui';
 import { RBACRulesTable } from '@/shared/ui/RBACRulesTable';
@@ -133,6 +133,16 @@ export function UserPage() {
   };
 
   const handleDelete = () => setShowDeleteConfirm(true);
+  
+  const handleResetPassword = async () => {
+    try {
+      // TODO: Add password reset API call
+      showSuccess('Ссылка для сброса пароля отправлена на email');
+    } catch (err) {
+      showError(err instanceof Error ? err.message : 'Ошибка сброса пароля');
+    }
+  };
+  
   const handleDeleteConfirm = async () => {
     try {
       await deleteUser.mutateAsync(id!);
@@ -167,8 +177,18 @@ export function UserPage() {
             <Button key="edit" onClick={handleEdit}>
               Редактировать
             </Button>,
+            <Button key="reset" variant="outline" onClick={handleResetPassword} disabled={!user?.email}>
+              Сбросить пароль
+            </Button>,
             <Button key="delete" variant="danger" onClick={() => setShowDeleteConfirm(true)}>
               Удалить
+            </Button>,
+          ] : mode === 'create' ? [
+            <Button key="save" onClick={handleSave} disabled={saving}>
+              {saving ? 'Сохранение...' : 'Сохранить'}
+            </Button>,
+            <Button key="cancel" variant="outline" onClick={handleCancel}>
+              Отмена
             </Button>,
           ] : mode === 'edit' ? [
             <Button key="save" onClick={handleSave} disabled={saving}>

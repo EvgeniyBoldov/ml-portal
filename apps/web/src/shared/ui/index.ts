@@ -63,6 +63,8 @@ export type { AppHeaderProps } from './AppHeader';
 // EntityPage
 export { EntityPage } from './EntityPage';
 export type { EntityPageProps, EntityPageMode } from './EntityPage';
+export { EntityPageV2, Tab } from './EntityPage';
+export type { EntityPageV2Props, BreadcrumbItem } from './EntityPage';
 
 // EntityGrid
 export { EntityGrid } from './EntityGrid';
@@ -119,7 +121,6 @@ export type { Step } from './Stepper';
 
 // Breadcrumbs
 export { Breadcrumbs } from './Breadcrumbs';
-export type { BreadcrumbItem } from './Breadcrumbs';
 
 // Combobox
 export { Combobox } from './Combobox';

@@ -14,7 +14,7 @@ import { credentialsApi } from '@/shared/api/credentials';
 import { qk } from '@/shared/api/keys';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
 import { ContentBlock, type BreadcrumbItem, DataTable, type DataTableColumn, Badge, Button } from '@/shared/ui';
-import { EntityPageV2, Tab, type EntityPageMode } from '@/shared/ui/EntityPage/EntityPageV2';
+import { EntityPageV2, Tab, type EntityPageMode } from '@/shared/ui';
 import { RBACRulesTable } from '@/shared/ui/RBACRulesTable';
 import { CredentialsPanel } from '@/shared/ui/CredentialsPanel';
 import { useModels } from '@shared/api/hooks/useAdmin';
@@ -226,6 +226,13 @@ export function PlatformSettingsPage() {
           mode === 'view' ? [
             <Button key="edit-platform" variant="primary" onClick={() => setSearchParams({ mode: 'edit' })}>
               Редактировать
+            </Button>,
+          ] : mode === 'edit' ? [
+            <Button key="save" onClick={handleSave} disabled={saving}>
+              {saving ? 'Сохранение...' : 'Сохранить'}
+            </Button>,
+            <Button key="cancel" variant="outline" onClick={handleCancel}>
+              Отмена
             </Button>,
           ] : undefined
         }

@@ -12,7 +12,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { credentialsApi, type Credential, type CredentialCreate } from '@/shared/api/credentials';
 import { toolInstancesApi, type ToolInstance } from '@/shared/api/toolInstances';
 import { qk } from '@/shared/api/keys';
-import { EntityPageV2, Tab, type EntityPageMode, type BreadcrumbItem } from '@/shared/ui/EntityPage/EntityPageV2';
+import { EntityPageV2, Tab, type EntityPageMode, type BreadcrumbItem } from '@/shared/ui';
 import { ContentBlock, Input, Select, Badge, type FieldDefinition } from '@/shared/ui';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
 
@@ -209,6 +209,18 @@ export default function CredentialPage() {
     },
   });
 
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => credentialsApi.delete(id),
+    onSuccess: () => {
+      showSuccess('Credential удалён');
+      queryClient.invalidateQueries({ queryKey: qk.credentials.all() });
+      navigate('/admin/credentials');
+    },
+    onError: () => {
+      showError('Не удалось удалить credential');
+    },
+  });
+
   // Handlers
   const handleSave = async () => {
     if (!formData.instance_id) {
@@ -243,6 +255,12 @@ export default function CredentialPage() {
       navigate('/admin/credentials');
     } else {
       setSearchParams({});
+    }
+  };
+
+  const handleDelete = () => {
+    if (id && window.confirm('Удалить этот credential?')) {
+      deleteMutation.mutate(id);
     }
   };
 
@@ -312,6 +330,7 @@ export default function CredentialPage() {
         onEdit={handleEdit}
         onSave={handleSave}
         onCancel={handleCancel}
+        onDelete={handleDelete}
       >
         <Tab title="Обзор" layout="grid" id="overview">
           <ContentBlock 

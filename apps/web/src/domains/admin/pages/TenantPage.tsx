@@ -7,7 +7,7 @@ import { useTenant, useModels } from '@shared/api/hooks/useAdmin';
 import { tenantApi } from '@shared/api/tenant';
 import { qk } from '@shared/api/keys';
 import { useErrorToast, useSuccessToast } from '@shared/ui/Toast';
-import { EntityPageV2, Tab, type EntityPageMode } from '@shared/ui/EntityPage/EntityPageV2';
+import { EntityPageV2, Tab, type EntityPageMode } from '@/shared/ui';
 import { ContentBlock, type FieldDefinition } from '@shared/ui/ContentBlock';
 import { Button } from '@shared/ui';
 import { RBACRulesTable } from '@/shared/ui/RBACRulesTable';
@@ -52,7 +52,7 @@ export function TenantPage() {
 
   const models = modelsData?.items || [];
   const extraModels = models.filter(
-    (m: any) => m.modality === 'text' && (m.state === 'active' || m.state === 'archived') && !m.global
+    (m: any) => m.type === 'EMBEDDING' && (m.status === 'active' || m.status === 'archived') && !m.default_for_type
   );
 
   const handleFieldChange = (key: string, value: any) => {
@@ -76,7 +76,7 @@ export function TenantPage() {
       type: 'select',
       options: [
         { value: '', label: 'Не использовать' },
-        ...extraModels.map((m: any) => ({ value: m.model, label: `${m.model}${m.state === 'archived' ? ' (архив)' : ''}` })),
+        ...extraModels.map((m: any) => ({ value: m.alias, label: `${m.alias}${m.status === 'archived' ? ' (архив)' : ''}` })),
       ],
       description: 'Документы будут индексироваться дополнительно этой моделью',
     },
@@ -179,6 +179,13 @@ export function TenantPage() {
             </Button>,
             <Button key="delete" variant="danger" onClick={() => setShowDeleteConfirm(true)}>
               Удалить
+            </Button>,
+          ] : mode === 'create' ? [
+            <Button key="save" onClick={handleSave} disabled={saving}>
+              {saving ? 'Сохранение...' : 'Сохранить'}
+            </Button>,
+            <Button key="cancel" variant="outline" onClick={handleCancel}>
+              Отмена
             </Button>,
           ] : mode === 'edit' ? [
             <Button key="save" onClick={handleSave} disabled={saving}>

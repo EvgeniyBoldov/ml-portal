@@ -11,7 +11,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { agentsApi, type AgentCreate, type AgentUpdate } from '@/shared/api';
 import { qk } from '@/shared/api/keys';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
-import { EntityPageV2, Tab, type BreadcrumbItem, type EntityPageMode } from '@/shared/ui/EntityPage/EntityPageV2';
+import { EntityPageV2, Tab, type BreadcrumbItem, type EntityPageMode } from '@/shared/ui';
 import { ConfirmDialog, ContentBlock, VersionsBlock, TagsInput, type FieldDefinition } from '@/shared/ui';
 import { Button, Input } from '@/shared/ui';
 
@@ -320,8 +320,8 @@ export function AgentPage() {
         >
           <VersionsBlock
             entityType="agent"
-            versions={agent?.versions || []}
-            selectedVersion={activeVersion}
+            versions={agent?.versions?.map(v => ({ ...v, notes: v.notes || undefined })) || []}
+            selectedVersion={activeVersion ? { ...activeVersion, notes: activeVersion.notes || undefined } : undefined}
             onSelectVersion={(version) => navigate(`/admin/agents/${slug}/versions/${version.version}`)}
           />
         </Tab>

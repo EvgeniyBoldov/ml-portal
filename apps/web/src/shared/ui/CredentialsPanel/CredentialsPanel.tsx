@@ -135,15 +135,17 @@ export function CredentialsPanel({ mode, userId, tenantId }: CredentialsPanelPro
       key: 'actions',
       label: '',
       render: (c: Credential) => (
-        <div style={{ display: 'flex', gap: '0.5rem' }}>
-          <Button
-            variant="danger"
-            size="sm"
-            onClick={() => setConfirmDeleteId(c.id)}
-          >
-            Удалить
-          </Button>
-        </div>
+        mode === 'platform' ? null : (
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            <Button
+              variant="danger"
+              size="sm"
+              onClick={() => setConfirmDeleteId(c.id)}
+            >
+              Удалить
+            </Button>
+          </div>
+        )
       ),
     },
   ], [instanceMap, navigate]);

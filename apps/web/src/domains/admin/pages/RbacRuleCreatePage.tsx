@@ -17,18 +17,21 @@ import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
 import {
   EntityPageV2,
   Tab,
-} from '@/shared/ui/EntityPage/EntityPageV2';
+  type BreadcrumbItem,
+} from '@/shared/ui';
 import {
   ContentBlock,
   Badge,
   Input,
   Button,
+  Select,
 } from '@/shared/ui';
+import { ResourceSelector } from './RbacRulePage/ResourceSelector';
 import styles from './RbacRuleCreatePage.module.css';
 
 interface FormData {
   resource_type: ResourceType;
-  resource_id: string;
+  resource: any; // Теперь это объект ресурса, не string
   effect: RbacEffect;
 }
 
@@ -42,7 +45,7 @@ export function RbacRuleCreatePage() {
 
   const [formData, setFormData] = useState<FormData>({
     resource_type: 'agent',
-    resource_id: '',
+    resource: null,
     effect: 'deny',
   });
   const [saving, setSaving] = useState(false);
@@ -119,8 +122,8 @@ export function RbacRuleCreatePage() {
   // ─── Handlers ──────────────────────────────────────────────────────
 
   const handleSave = async () => {
-    if (!formData.resource_id.trim()) {
-      showError('ID ресурса не может быть пустым');
+    if (!formData.resource) {
+      showError('Ресурс не выбран');
       return;
     }
     setSaving(true);
@@ -128,7 +131,7 @@ export function RbacRuleCreatePage() {
       await createMutation.mutateAsync({
         level: ownerInfo.level,
         resource_type: formData.resource_type,
-        resource_id: formData.resource_id,
+        resource_id: formData.resource.id,
         effect: formData.effect,
         owner_user_id: ownerInfo.owner_user_id,
         owner_tenant_id: ownerInfo.owner_tenant_id,
@@ -157,15 +160,24 @@ export function RbacRuleCreatePage() {
 
   // ─── Render ────────────────────────────────────────────────────────
 
+  const breadcrumbs: BreadcrumbItem[] = [
+    { label: 'RBAC', href: '/admin/platform/rbac' },
+    { label: 'Создание правила' },
+  ];
+
   return (
     <EntityPageV2
       title={`Новое RBAC правило для ${ownerInfo.title}`}
       mode="create"
       saving={saving}
+      breadcrumbs={breadcrumbs}
+      backPath="/admin/platform/rbac"
+      onSave={handleSave}
+      onCancel={handleCancel}
     >
       <Tab 
         title="Создание правила" 
-        layout="single"
+        layout="grid"
         actions={[
           <Button key="save" variant="primary" onClick={handleSave} disabled={saving}>
             {saving ? 'Создание...' : 'Создать'}
@@ -175,7 +187,7 @@ export function RbacRuleCreatePage() {
           </Button>,
         ]}
       >
-        {/* Owner info block */}
+        {/* Левый блок - информация о владельце */}
         <ContentBlock title="Владелец правила" icon="user">
           <div className={styles['form-grid']}>
             <div className={styles['form-field']}>
@@ -195,69 +207,47 @@ export function RbacRuleCreatePage() {
           </div>
         </ContentBlock>
 
-        {/* Rule configuration */}
+        {/* Правый блок - настройки правила */}
         <ContentBlock title="Настройки правила" icon="settings">
           <div className={styles['form-grid']}>
             <div className={styles['form-field']}>
+              <label className={styles.label}>Эффект</label>
+              <Select
+                value={formData.effect}
+                onChange={(value) => setFormData(prev => ({ ...prev, effect: value as RbacEffect }))}
+                options={[
+                  { value: 'deny', label: 'Запрещён' },
+                  { value: 'allow', label: 'Разрешён' },
+                ]}
+              />
+            </div>
+            <div className={styles['form-field']}>
               <label className={styles.label}>Тип ресурса</label>
-              <select
-                className={styles.select}
+              <Select
                 value={formData.resource_type}
-                onChange={(e) =>
-                  setFormData((prev) => ({
-                    ...prev,
-                    resource_type: e.target.value as ResourceType,
-                    resource_id: '',
-                  }))
-                }
-              >
-                <option value="agent">Агент</option>
-                <option value="toolgroup">Группа инструментов</option>
-                <option value="tool">Инструмент</option>
-                <option value="instance">Инстанс</option>
-              </select>
+                onChange={(value) => setFormData((prev) => ({ 
+                  ...prev, 
+                  resource_type: value as ResourceType,
+                  resource: null
+                }))}
+                options={[
+                  { value: 'agent', label: 'Агент' },
+                  { value: 'toolgroup', label: 'Группа инструментов' },
+                  { value: 'tool', label: 'Инструмент' },
+                  { value: 'instance', label: 'Инстанс' },
+                ]}
+              />
             </div>
 
             <div className={styles['form-field']}>
               <label className={styles.label}>Ресурс</label>
-              {resourceOptions.length > 0 ? (
-                <select
-                  className={styles.select}
-                  value={formData.resource_id}
-                  onChange={(e) =>
-                    setFormData((prev) => ({ ...prev, resource_id: e.target.value }))
-                  }
-                >
-                  <option value="">Выберите...</option>
-                  {resourceOptions.map((opt: any) => (
-                    <option key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </option>
-                  ))}
-                </select>
-              ) : (
-                <Input
-                  value={formData.resource_id}
-                  onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                    setFormData((prev) => ({ ...prev, resource_id: e.target.value }))
-                  }
-                  placeholder="ID ресурса"
-                />
-              )}
-            </div>
-
-            <div className={styles['form-field']}>
-              <label className={styles.label}>Эффект</label>
-              <select
-                className={styles.select}
-                value={formData.effect}
-                onChange={(e) =>
-                  setFormData((prev) => ({ ...prev, effect: e.target.value as RbacEffect }))
-                }
-              >
-                <option value="deny">Запрещён</option>
-                <option value="allow">Разрешён</option>
-              </select>
+              <ResourceSelector
+                resourceType={formData.resource_type}
+                value={formData.resource}
+                onChange={(resource: any) => setFormData(prev => ({ ...prev, resource }))}
+                agents={agents}
+                toolGroups={toolGroups}
+              />
             </div>
           </div>
         </ContentBlock>

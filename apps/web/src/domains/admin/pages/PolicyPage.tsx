@@ -16,7 +16,7 @@ import { VersionsBlock } from '@/shared/ui/VersionsBlock';
 import { PolicyVersionContent } from '@/domains/policies/components/PolicyVersionContent';
 import ConfirmDialog from '@/shared/ui/ConfirmDialog';
 import { useEntityFields } from '@/shared/hooks/useEntityFields';
-import { EntityPageV2, Tab, type EntityPageMode, type BreadcrumbItem } from '@/shared/ui/EntityPage/EntityPageV2';
+import { EntityPageV2, Tab, type EntityPageMode, type BreadcrumbItem } from '@/shared/ui';
 
 export function PolicyPage() {
   const { slug } = useParams<{ slug: string }>();

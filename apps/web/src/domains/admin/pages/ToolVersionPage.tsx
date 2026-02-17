@@ -16,11 +16,12 @@ import {
   type ToolBackendReleaseListItem,
 } from '@/shared/api/toolReleases';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
-import { EntityPageV2, Tab, type EntityPageMode } from '@/shared/ui/EntityPage/EntityPageV2';
+import { EntityPageV2, Tab, type EntityPageMode } from '@/shared/ui';
 import { ContentBlock, Badge, type FieldDefinition } from '@/shared/ui';
 import { Select } from '@/shared/ui/Select/Select';
 import { useVersionActions } from '@/shared/hooks/useVersionActions';
 import { getStatusProps } from '@/shared/lib/statusConfig';
+import { convertBadgeTone } from '@/shared/lib/badgeHelpers';
 
 interface FormData {
   backend_release_id: string;
@@ -372,7 +373,7 @@ export function ToolVersionPage() {
           data={formData}
           onChange={handleFieldChange}
           headerActions={
-            <Badge tone={getStatusProps('version', isCreate ? 'draft' : (existingRelease?.status || 'draft')).tone} size="small">
+            <Badge tone={convertBadgeTone(getStatusProps('version', isCreate ? 'draft' : (existingRelease?.status || 'draft')).tone)}>
               {getStatusProps('version', isCreate ? 'draft' : (existingRelease?.status || 'draft')).label}
             </Badge>
           }

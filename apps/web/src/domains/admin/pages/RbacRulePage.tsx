@@ -1,5 +1,5 @@
 /**
- * RbacRulePage - Просмотр/редактирование RBAC правила (EntityPageV2)
+ * RbacRulePage - Просмотр/редактирование RBAC правила по правилам проекта
  */
 import { useState, useEffect } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
@@ -14,21 +14,12 @@ import {
 import { agentsApi } from '@/shared/api/agents';
 import { qk } from '@/shared/api/keys';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
-import {
-  EntityPageV2,
-  Tab,
-  type EntityPageMode,
-} from '@/shared/ui/EntityPage/EntityPageV2';
-import {
-  ContentBlock,
-  Badge,
-  Input,
-  Button,
-} from '@/shared/ui';
-import styles from './RbacRulePage.module.css';
+import Button from '@/shared/ui/Button';
+import { RbacRuleBlock, RbacTargetBlock, type RbacRuleData, type RbacTargetData } from '@/shared/ui/RbacRuleBlock';
+import ConfirmDialog from '@/shared/ui/ConfirmDialog';
+import { EntityPageV2, Tab, type EntityPageMode, type BreadcrumbItem } from '@/shared/ui';
 
 interface FormData {
-  level: RbacLevel;
   resource_type: ResourceType;
   resource_id: string;
   effect: RbacEffect;
@@ -58,12 +49,12 @@ export function RbacRulePage() {
   const isEditable = mode === 'edit';
 
   const [formData, setFormData] = useState<FormData>({
-    level: 'platform',
     resource_type: 'agent',
     resource_id: '',
     effect: 'deny',
   });
   const [saving, setSaving] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   // ─── Queries ─────────────────────────────────────────────────────
 
@@ -93,7 +84,6 @@ export function RbacRulePage() {
   useEffect(() => {
     if (rule) {
       setFormData({
-        level: rule.level,
         resource_type: rule.resource_type,
         resource_id: rule.resource_id,
         effect: rule.effect,
@@ -130,7 +120,6 @@ export function RbacRulePage() {
   const handleCancel = () => {
     if (rule) {
       setFormData({
-        level: rule.level,
         resource_type: rule.resource_type,
         resource_id: rule.resource_id,
         effect: rule.effect,
@@ -139,97 +128,111 @@ export function RbacRulePage() {
     setSearchParams({});
   };
 
-  // ─── Resource name resolver ────────────────────────────────────────
+  const handleEdit = () => {
+    setSearchParams({ mode: 'edit' });
+  };
 
-  const getResourceName = (resourceType: string, resourceId: string): string => {
-    if (resourceType === 'agent') {
-      const agent = agents.find((a: any) => a.id === resourceId);
-      return agent ? `${agent.name} (${agent.slug})` : resourceId.slice(0, 8) + '...';
+  const handleDelete = async () => {
+    // Удаление правила (если нужно)
+    setShowDeleteConfirm(false);
+  };
+
+  const handleFieldChange = (key: keyof FormData, value: string) => {
+    if (key === 'resource_type') {
+      setFormData(prev => ({ 
+        ...prev, 
+        resource_type: value as ResourceType,
+        resource_id: '' // Сбросить ресурс при смене типа
+      }));
+    } else {
+      setFormData(prev => ({ ...prev, [key]: value }));
     }
-    if (resourceType === 'toolgroup') {
-      const group = toolGroups.find((g: any) => g.id === resourceId);
-      return group ? `${group.name} (${group.slug})` : resourceId.slice(0, 8) + '...';
-    }
-    return resourceId.slice(0, 8) + '...';
   };
 
   // ─── Render ────────────────────────────────────────────────────────
 
+  const breadcrumbs: BreadcrumbItem[] = [
+    { label: 'RBAC', href: '/admin/platform/rbac' },
+    { label: 'Правило' },
+  ];
+
+  // Данные для блоков
+  const ruleData: RbacRuleData = {
+    resource_type: formData.resource_type,
+    resource_id: formData.resource_id,
+    effect: formData.effect,
+  };
+
+  const targetData: RbacTargetData = rule ? {
+    owner_user_id: rule.owner_user_id,
+    owner_tenant_id: rule.owner_tenant_id,
+    owner_platform: rule.owner_platform,
+    created_at: rule.created_at,
+    created_by_user_id: rule.created_by_user_id,
+  } : {
+    owner_platform: false,
+    created_at: new Date().toISOString(),
+  };
+
   return (
+    <>
     <EntityPageV2
       title="RBAC правило"
       mode={mode}
       loading={isLoading}
       saving={saving}
+      breadcrumbs={breadcrumbs}
+      backPath="/admin/platform/rbac"
+      onSave={handleSave}
+      onCancel={handleCancel}
+      onDelete={handleDelete}
     >
       <Tab 
         title="Обзор" 
-        layout="single"
+        layout="grid" 
+        id="overview"
         actions={
           mode === 'view' ? [
-            <Button key="edit" variant="primary" onClick={() => setSearchParams({ mode: 'edit' })}>
+            <Button key="edit" onClick={handleEdit}>
               Редактировать
             </Button>,
+            <Button key="delete" variant="danger" onClick={() => setShowDeleteConfirm(true)}>
+              Удалить
+            </Button>,
           ] : mode === 'edit' ? [
-            <Button key="save" variant="primary" onClick={handleSave} disabled={saving}>
+            <Button key="save" onClick={handleSave} disabled={saving}>
               {saving ? 'Сохранение...' : 'Сохранить'}
             </Button>,
             <Button key="cancel" variant="outline" onClick={handleCancel}>
               Отмена
             </Button>,
-          ] : undefined
+          ] : []
         }
       >
-        {/* Rule info */}
-        <ContentBlock title="Информация о правиле" icon="settings">
-          <div className={styles['form-grid']}>
-            <div className={styles['form-field']}>
-              <label className={styles.label}>ID правила</label>
-              <Input value={rule?.id || ''} disabled />
-            </div>
-            <div className={styles['form-field']}>
-              <label className={styles.label}>Уровень</label>
-              <div className={styles['badge-row']}>
-                <Badge tone="neutral">{rule?.level || ''}</Badge>
-              </div>
-            </div>
-            <div className={styles['form-field']}>
-              <label className={styles.label}>Тип ресурса</label>
-              <Input value={RESOURCE_TYPE_LABELS[rule?.resource_type || ''] || rule?.resource_type || ''} disabled={!isEditable} />
-            </div>
-            <div className={styles['form-field']}>
-              <label className={styles.label}>Ресурс</label>
-              <Input value={rule ? getResourceName(rule.resource_type, rule.resource_id) : ''} disabled={!isEditable} />
-            </div>
-            <div className={styles['form-field']}>
-              <label className={styles.label}>Эффект</label>
-              {isEditable ? (
-                <select
-                  className={styles.select}
-                  value={formData.effect}
-                  onChange={(e) =>
-                    setFormData((prev) => ({ ...prev, effect: e.target.value as RbacEffect }))
-                  }
-                >
-                  <option value="deny">Запрещён</option>
-                  <option value="allow">Разрешён</option>
-                </select>
-              ) : (
-                <div className={styles['badge-row']}>
-                  <Badge tone={EFFECT_LABELS[rule?.effect || 'deny'].tone}>
-                    {EFFECT_LABELS[rule?.effect || 'deny'].label}
-                  </Badge>
-                </div>
-              )}
-            </div>
-            <div className={styles['form-field']}>
-              <label className={styles.label}>Создан</label>
-              <Input value={rule ? new Date(rule.created_at).toLocaleString('ru-RU') : ''} disabled />
-            </div>
-          </div>
-        </ContentBlock>
+        {/* Первый блок - владелец */}
+        <RbacTargetBlock data={targetData} editable={false} width="1/2" />
+        
+        {/* Второй блок - правило */}
+        <RbacRuleBlock 
+          data={ruleData}
+          editable={isEditable}
+          width="1/2"
+          agents={agents}
+          toolGroups={toolGroups}
+          onChange={handleFieldChange}
+        />
       </Tab>
     </EntityPageV2>
+
+    {showDeleteConfirm && (
+      <ConfirmDialog
+        open={showDeleteConfirm}
+        title="Удалить RBAC правило?"
+        onConfirm={handleDelete}
+        onCancel={() => setShowDeleteConfirm(false)}
+      />
+    )}
+    </>
   );
 }
 

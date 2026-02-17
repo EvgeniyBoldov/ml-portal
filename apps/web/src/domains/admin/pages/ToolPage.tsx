@@ -20,7 +20,7 @@ import {
   Tab,
   type BreadcrumbItem,
   type EntityPageMode,
-} from '@/shared/ui/EntityPage/EntityPageV2';
+} from '@/shared/ui';
 import { 
   type FieldDefinition, 
   DataTable,
@@ -31,6 +31,7 @@ import {
   ShortVersionBlock,
 } from '@/shared/ui';
 import { getStatusProps } from '@/shared/lib/statusConfig';
+import { convertBadgeTone } from '@/shared/lib/badgeHelpers';
 
 const KIND_LABELS: Record<string, string> = {
   read: 'Read',
@@ -155,7 +156,7 @@ export function ToolPage() {
       key: 'status',
       label: 'Статус',
       render: (row) => (
-        <Badge tone={getStatusProps('version', row.status).tone}>
+        <Badge tone={convertBadgeTone(getStatusProps('version', row.status).tone)}>
           {getStatusProps('version', row.status).label}
         </Badge>
       ),
