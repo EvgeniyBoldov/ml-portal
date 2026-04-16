@@ -388,12 +388,9 @@ export default function ProfilePage() {
                 <label className={styles.formLabel}>Срок действия</label>
                 <Select
                   value={expiresDays}
-                  onChange={e => setExpiresDays(e.target.value)}
-                >
-                  {EXPIRATION_OPTIONS.map(opt => (
-                    <option key={opt.value} value={opt.value}>{opt.label}</option>
-                  ))}
-                </Select>
+                  onChange={(value) => setExpiresDays(value)}
+                  options={EXPIRATION_OPTIONS}
+                />
                 <span className={styles.formHelp}>
                   Рекомендуем устанавливать срок действия для безопасности
                 </span>

@@ -2,40 +2,6 @@ import { describe, it, expect } from 'vitest';
 import { qk } from '@shared/api/keys';
 
 describe('Query Keys (qk)', () => {
-  describe('rag', () => {
-    it('should generate all key', () => {
-      expect(qk.rag.all()).toEqual(['rag']);
-    });
-
-    it('should generate list key without params', () => {
-      expect(qk.rag.list()).toEqual(['rag', 'list', undefined]);
-    });
-
-    it('should generate list key with params', () => {
-      expect(qk.rag.list({ page: 1, size: 20 })).toEqual([
-        'rag',
-        'list',
-        { page: 1, size: 20 },
-      ]);
-    });
-
-    it('should generate list key with all params', () => {
-      expect(qk.rag.list({ page: 2, size: 50, status: 'ready', q: 'search' })).toEqual([
-        'rag',
-        'list',
-        { page: 2, size: 50, status: 'ready', q: 'search' },
-      ]);
-    });
-
-    it('should generate detail key', () => {
-      expect(qk.rag.detail('doc-123')).toEqual(['rag', 'detail', 'doc-123']);
-    });
-
-    it('should generate statusGraph key', () => {
-      expect(qk.rag.statusGraph('doc-456')).toEqual(['rag', 'status-graph', 'doc-456']);
-    });
-  });
-
   describe('admin.users', () => {
     it('should generate all key', () => {
       expect(qk.admin.users.all()).toEqual(['admin', 'users']);
@@ -179,25 +145,25 @@ describe('Query Keys (qk)', () => {
 
   describe('key uniqueness', () => {
     it('should generate unique keys for different resources', () => {
-      const ragList = qk.rag.list({ page: 1 });
+      const collectionsList = qk.collections.list();
       const usersList = qk.admin.users.list({ page: 1 });
       const tenantsList = qk.admin.tenants.list({ page: 1 });
 
-      expect(ragList).not.toEqual(usersList);
+      expect(collectionsList).not.toEqual(usersList);
       expect(usersList).not.toEqual(tenantsList);
-      expect(ragList).not.toEqual(tenantsList);
+      expect(collectionsList).not.toEqual(tenantsList);
     });
 
     it('should generate unique keys for different params', () => {
-      const page1 = qk.rag.list({ page: 1 });
-      const page2 = qk.rag.list({ page: 2 });
+      const page1 = qk.admin.users.list({ page: 1 });
+      const page2 = qk.admin.users.list({ page: 2 });
 
       expect(page1).not.toEqual(page2);
     });
 
     it('should generate same key for same params', () => {
-      const key1 = qk.rag.list({ page: 1, size: 20 });
-      const key2 = qk.rag.list({ page: 1, size: 20 });
+      const key1 = qk.admin.users.list({ page: 1, limit: 20 });
+      const key2 = qk.admin.users.list({ page: 1, limit: 20 });
 
       expect(key1).toEqual(key2);
     });

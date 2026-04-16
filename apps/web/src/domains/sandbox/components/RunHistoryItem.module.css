@@ -1,0 +1,129 @@
+.item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-secondary);
+  transition: border-color 0.15s ease;
+}
+
+.item-expanded {
+  border-color: var(--accent-primary);
+}
+
+.header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+  width: 100%;
+}
+
+.header:hover {
+  opacity: 0.85;
+}
+
+.header-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.status {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.status-completed {
+  color: var(--text-success);
+  background: var(--bg-success);
+}
+
+.status-running {
+  color: var(--text-warning);
+  background: var(--bg-warning);
+}
+
+.status-failed {
+  color: var(--text-danger);
+  background: var(--bg-danger);
+}
+
+.status-waiting_confirmation {
+  color: var(--text-warning);
+  background: var(--bg-warning);
+}
+
+.branch {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+}
+
+.branch-current {
+  color: var(--text-primary);
+  background: var(--bg-primary);
+}
+
+.branch-inherited {
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+}
+
+.time {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.run-id {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono',
+    'Courier New', monospace;
+}
+
+.steps-badge {
+  font-size: 11px;
+  color: var(--text-secondary);
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--bg-tertiary);
+}
+
+.chevron {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-secondary);
+  transition: transform 0.15s ease;
+}
+
+.chevron-open {
+  transform: rotate(180deg);
+}
+
+.detail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-color);
+}
+
+.loading {
+  font-size: 13px;
+  color: var(--text-secondary);
+  padding: 8px 0;
+}

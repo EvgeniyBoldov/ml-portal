@@ -130,7 +130,11 @@ class AsyncTenantsService:
 
         if tenant.embedding_model_alias:
             extra_model = await self.model_repo.get_by_alias(tenant.embedding_model_alias)
-            if extra_model and extra_model.status == ModelStatus.AVAILABLE:
+            if (
+                extra_model
+                and extra_model.status == ModelStatus.AVAILABLE
+                and extra_model.alias not in embed_models
+            ):
                 embed_models.append(extra_model.alias)
                 vector_dim = extra_model.extra_config.get('vector_dim') if extra_model.extra_config else None
                 embed_models_info.append(
@@ -164,6 +168,7 @@ class AsyncTenantsService:
             "extra_embed_model": tenant.embedding_model_alias,
             "ocr": tenant.ocr,
             "layout": tenant.layout,
+            "default_agent_slug": tenant.default_agent_slug,
             "created_at": tenant.created_at,
             "updated_at": tenant.updated_at,
         }

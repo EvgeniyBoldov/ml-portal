@@ -55,19 +55,8 @@ interface SelectionState {
   toggleTenantSelection: (id: string) => void;
 }
 
-// RAG view state
-type RAGActionType = 'ingest' | 'reset' | 'cancel' | 'kill';
-
-interface RAGViewState {
-  focusedDocId?: string;
-  setFocusedDoc: (id?: string) => void;
-  lastAction?: { type: RAGActionType; id: string; timestamp: number };
-  setLastAction: (action: { type: RAGActionType; id: string }) => void;
-  clearLastAction: () => void;
-}
-
 // Combined store
-type AppStore = UIState & SelectionState & RAGViewState;
+type AppStore = UIState & SelectionState;
 
 export const useAppStore = create<AppStore>(set => ({
   // UI state
@@ -190,19 +179,6 @@ export const useAppStore = create<AppStore>(set => ({
         : [...state.selectedTenantIds, id],
     })),
 
-  // RAG view state
-  focusedDocId: undefined,
-
-  setFocusedDoc: id => set(() => ({ focusedDocId: id })),
-
-  lastAction: undefined,
-
-  setLastAction: action =>
-    set(() => ({
-      lastAction: { ...action, timestamp: Date.now() },
-    })),
-
-  clearLastAction: () => set(() => ({ lastAction: undefined })),
 }));
 
 // Selectors for better performance
@@ -211,12 +187,6 @@ export const useModalOpen = (id: string) =>
 
 export const useDropdownOpen = (id: string) =>
   useAppStore(state => state.dropdowns[id] || false);
-
-export const useRAGFilters = () => useAppStore(state => state.filters);
-
-export const useSelectedDocs = () => useAppStore(state => state.selectedDocIds);
-
-export const useFocusedDoc = () => useAppStore(state => state.focusedDocId);
 
 // Admin selectors
 export const useSelectedUsers = () =>

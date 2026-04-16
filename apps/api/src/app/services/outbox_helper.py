@@ -24,11 +24,17 @@ async def _emit_event(
     
     seq будет автоматически присвоен PostgreSQL последовательностью.
     """
-    # Получить следующий seq из последовательности
-    result = await session.execute(
-        text("SELECT nextval('events_outbox_seq_seq')")
-    )
-    seq = result.scalar()
+    # Получить следующий seq без падения, даже если sequence не создана в этой БД.
+    # В fallback-ветке используем advisory lock, чтобы избежать коллизий при concurrent insert.
+    await session.execute(text("SELECT pg_advisory_xact_lock(hashtext('events_outbox_seq_fallback'))"))
+    seq_regclass = await session.execute(text("SELECT to_regclass('events_outbox_seq')"))
+    has_sequence = seq_regclass.scalar() is not None
+    if has_sequence:
+        result = await session.execute(text("SELECT nextval('events_outbox_seq')"))
+        seq = result.scalar()
+    else:
+        result = await session.execute(text("SELECT COALESCE((SELECT MAX(seq) + 1 FROM events_outbox), 1)"))
+        seq = result.scalar()
     
     event = EventOutbox(
         id=uuid4(),
@@ -118,3 +124,29 @@ async def emit_deleted(
         }
     )
 
+
+async def emit_collection_vectorization_requested(
+    session: AsyncSession,
+    *,
+    collection_id: UUID,
+    tenant_id: UUID,
+    qdrant_collection_name: str | None,
+    row_ids: list[str] | None,
+    reason: str,
+    celery_task_id: str,
+) -> None:
+    """Emit a collection vectorization request event into the outbox."""
+    await _emit_event(
+        session,
+        event_type="collection.vectorization.requested",
+        payload={
+            "collection_id": str(collection_id),
+            "tenant_id": str(tenant_id),
+            "qdrant_collection_name": qdrant_collection_name,
+            "row_ids": row_ids or [],
+            "mode": "rows" if row_ids else "full",
+            "reason": reason,
+            "celery_task_id": celery_task_id,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )

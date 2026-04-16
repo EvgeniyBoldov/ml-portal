@@ -10,14 +10,10 @@ import hashlib
 from typing import Dict, Any, Optional
 from cryptography.fernet import Fernet, InvalidToken
 
+from app.core.exceptions import CryptoError
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
-
-
-class CryptoError(Exception):
-    """Base exception for crypto operations"""
-    pass
 
 
 class CryptoService:

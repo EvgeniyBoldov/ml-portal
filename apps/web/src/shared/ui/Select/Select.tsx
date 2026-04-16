@@ -26,6 +26,7 @@ export interface SelectProps {
   disabled?: boolean;
   error?: boolean;
   className?: string;
+  style?: React.CSSProperties;
   id?: string;
   name?: string;
 }
@@ -38,6 +39,7 @@ export function Select({
   disabled = false,
   error = false,
   className,
+  style,
   id,
   name,
 }: SelectProps) {
@@ -232,6 +234,7 @@ export function Select({
         className={`${styles.trigger} ${error ? styles.error : ''} ${
           isOpen ? styles.open : ''
         } ${className || ''}`}
+        style={style}
         onClick={() => isOpen ? closeMenu() : openMenu()}
         onKeyDown={handleTriggerKeyDown}
       >

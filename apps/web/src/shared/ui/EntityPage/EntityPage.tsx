@@ -9,12 +9,10 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import Button from '../Button';
-import { Breadcrumbs } from '../Breadcrumbs';
+import { Breadcrumbs, type BreadcrumbItem } from '../Breadcrumbs';
 import styles from './EntityPage.module.css';
 
 export type EntityPageMode = 'view' | 'edit' | 'create';
-
-export type { BreadcrumbItem } from '../Breadcrumbs';
 
 export interface EntityPageProps {
   /** Page mode */

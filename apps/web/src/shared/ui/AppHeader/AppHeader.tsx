@@ -35,6 +35,11 @@ export interface AppHeaderProps {
   showProfileButton?: boolean;
   /** Profile button click handler */
   onProfileClick?: () => void;
+
+  /** Show sandbox button */
+  showSandboxButton?: boolean;
+  /** Sandbox button click handler */
+  onSandboxClick?: () => void;
 }
 
 export function AppHeader({
@@ -50,6 +55,8 @@ export function AppHeader({
   onLogout,
   showProfileButton,
   onProfileClick,
+  showSandboxButton,
+  onSandboxClick,
 }: AppHeaderProps) {
   const headerClass = variant === 'contained' 
     ? `${styles.header} ${styles.contained}` 
@@ -83,6 +90,12 @@ export function AppHeader({
       <div className={styles.right}>
         {userLabel && <span className={styles.user}>{userLabel}</span>}
         <ThemeSwitch />
+
+        {showSandboxButton && onSandboxClick && (
+          <Button variant="outline" onClick={onSandboxClick}>
+            Песочница
+          </Button>
+        )}
         
         {showAdminButton && onAdminClick && (
           <Button variant="outline" onClick={onAdminClick}>

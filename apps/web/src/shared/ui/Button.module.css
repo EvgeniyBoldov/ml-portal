@@ -81,6 +81,17 @@
   opacity: 0.9;
 }
 
+.warning {
+  background: var(--warning, #f59e0b);
+  color: var(--text-inverse, #ffffff);
+  border-color: var(--warning, #f59e0b);
+}
+
+.warning:hover {
+  background: var(--warning-hover, #d97706);
+  border-color: var(--warning-hover, #d97706);
+}
+
 .success {
   background: var(--success, #10b981);
   color: var(--text-inverse, #ffffff);

@@ -12,6 +12,21 @@
   vertical-align: middle;
 }
 
+.inner {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  width: 100%;
+}
+
+.labelRow {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+
 .header.sortable {
   cursor: pointer;
   user-select: none;
@@ -37,7 +52,6 @@
 
 .sortIcon {
   display: inline-block;
-  margin-left: var(--sp-1);
   vertical-align: middle;
   opacity: 0.6;
   font-size: 10px;
@@ -45,4 +59,40 @@
 
 .header.active .sortIcon {
   opacity: 1;
+}
+
+.filterWrap {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.filterBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.filterBtn:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.filterBtnActive {
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  border-color: color-mix(in srgb, var(--primary) 20%, transparent);
+}
+
+.filterIcon {
+  opacity: 0.9;
 }

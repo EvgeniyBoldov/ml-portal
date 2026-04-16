@@ -1,0 +1,211 @@
+# Конфигурация EVPN/VXLAN — Huawei CE6870, dc2-leaf-01.spb (PROD-DC2)
+# Компания "Дубалайн"
+# Дата: 2025-11-10
+# Инженер: Михаил Сергеев (Сетевой инженер, Data Center)
+# Заявка: CHG-2025-1221
+# Роль: LEAF-нода в EVPN/VXLAN фабрике ЦОД Санкт-Петербург
+# SPINE: dc2-spine-01.spb (10.255.2.1), dc2-spine-02.spb (10.255.2.2)
+
+#------------------------------------------------------------
+# ГЛОБАЛЬНАЯ КОНФИГУРАЦИЯ
+#------------------------------------------------------------
+vxlan enable
+evpn enable
+#
+
+#------------------------------------------------------------
+# ИНТЕРФЕЙСЫ (FABRIC UPLINKS)
+#------------------------------------------------------------
+interface 100GE1/0/1
+ description FABRIC-UPLINK :: dc2-spine-01.spb :: PROD-DC2
+ mtu 9216
+ ip address 10.2.0.1 255.255.255.254
+ undo shutdown
+#
+interface 100GE1/0/2
+ description FABRIC-UPLINK :: dc2-spine-02.spb :: PROD-DC2
+ mtu 9216
+ ip address 10.2.1.1 255.255.255.254
+ undo shutdown
+#
+
+#------------------------------------------------------------
+# LOOPBACK (VTEP)
+#------------------------------------------------------------
+interface LoopBack0
+ description LOOPBACK :: dc2-leaf-01.spb :: VTEP
+ ip address 10.255.2.11 255.255.255.255
+#
+
+#------------------------------------------------------------
+# SERVER DOWNLINKS — VMware ESXi
+#------------------------------------------------------------
+interface 25GE1/0/1
+ description SERVER :: esxi-spb-01 :: PROD-DC2 :: VLAN100,200,300
+ port link-type trunk
+ port trunk allow-pass vlan 100 200 300
+ stp edged-port enable
+ undo shutdown
+#
+interface 25GE1/0/2
+ description SERVER :: esxi-spb-02 :: PROD-DC2 :: VLAN100,200,300
+ port link-type trunk
+ port trunk allow-pass vlan 100 200 300
+ stp edged-port enable
+ undo shutdown
+#
+interface 25GE1/0/3
+ description SERVER :: storage-spb-01 :: PROD-DC2 :: VLAN200 (iSCSI)
+ port link-type access
+ port default vlan 200
+ stp edged-port enable
+ undo shutdown
+#
+
+#------------------------------------------------------------
+# VLAN-BATCH
+#------------------------------------------------------------
+vlan batch 100 200 300 400
+#
+
+#------------------------------------------------------------
+# VXLAN TUNNEL INTERFACE (NVE)
+#------------------------------------------------------------
+interface Nve1
+ source 10.255.2.11
+ vni 10100 head-end peer-list protocol bgp
+ vni 10200 head-end peer-list protocol bgp
+ vni 10300 head-end peer-list protocol bgp
+ vni 10400 head-end peer-list protocol bgp
+#
+
+#------------------------------------------------------------
+# BD — BRIDGE DOMAIN
+#------------------------------------------------------------
+bridge-domain 100
+ description APP servers :: PROD-DC2
+ vlan 100
+ vxlan vni 10100
+ evpn
+  route-distinguisher 65021:10100
+  vpn-target 65100:10100 export-extcommunity evpn
+  vpn-target 65100:10100 import-extcommunity evpn
+#
+
+bridge-domain 200
+ description DB servers :: PROD-DC2
+ vlan 200
+ vxlan vni 10200
+ evpn
+  route-distinguisher 65021:10200
+  vpn-target 65100:10200 export-extcommunity evpn
+  vpn-target 65100:10200 import-extcommunity evpn
+#
+
+bridge-domain 300
+ description Management :: PROD-DC2
+ vlan 300
+ vxlan vni 10300
+ evpn
+  route-distinguisher 65021:10300
+  vpn-target 65100:10300 export-extcommunity evpn
+  vpn-target 65100:10300 import-extcommunity evpn
+#
+
+bridge-domain 400
+ description Bare-metal :: PROD-DC2
+ vlan 400
+ vxlan vni 10400
+ evpn
+  route-distinguisher 65021:10400
+  vpn-target 65100:10400 export-extcommunity evpn
+  vpn-target 65100:10400 import-extcommunity evpn
+#
+
+#------------------------------------------------------------
+# VBDIF — L3 ANYCAST GATEWAY
+#------------------------------------------------------------
+interface Vbdif100
+ description GW :: APP servers :: 10.10.100.0/24
+ mac-address 0000-5e00-0101
+ ip address 10.10.100.1 255.255.255.0
+ arp distribute-gateway enable
+ undo arp proxy enable
+ ip binding vpn-instance VPN-DC
+#
+
+interface Vbdif200
+ description GW :: DB servers :: 10.10.200.0/24
+ mac-address 0000-5e00-0102
+ ip address 10.10.200.1 255.255.255.0
+ arp distribute-gateway enable
+ undo arp proxy enable
+ ip binding vpn-instance VPN-DC
+#
+
+interface Vbdif300
+ description GW :: Management :: 172.16.200.0/24
+ mac-address 0000-5e00-0103
+ ip address 172.16.200.1 255.255.255.0
+ arp distribute-gateway enable
+ undo arp proxy enable
+#
+
+interface Vbdif400
+ description GW :: Bare-metal :: 10.10.40.0/24
+ mac-address 0000-5e00-0104
+ ip address 10.10.40.1 255.255.255.0
+ arp distribute-gateway enable
+ undo arp proxy enable
+ ip binding vpn-instance VPN-DC
+#
+
+#------------------------------------------------------------
+# VPN-INSTANCE (L3VPN для интеграции с PROD-CORE)
+#------------------------------------------------------------
+ip vpn-instance VPN-DC
+ ipv4-family
+  route-distinguisher 65021:200
+  vpn-target 65100:200 export-extcommunity
+  vpn-target 65100:200 import-extcommunity
+#
+
+#------------------------------------------------------------
+# BGP
+#------------------------------------------------------------
+bgp 65021
+ router-id 10.255.2.11
+
+ peer 10.2.0.0 as-number 65002
+ peer 10.2.0.0 description UNDERLAY :: dc2-spine-01.spb
+ peer 10.2.1.0 as-number 65002
+ peer 10.2.1.0 description UNDERLAY :: dc2-spine-02.spb
+
+ peer 10.255.2.1 as-number 65002
+ peer 10.255.2.1 description OVERLAY-EVPN :: dc2-spine-01.spb
+ peer 10.255.2.1 connect-interface LoopBack0
+ peer 10.255.2.1 ebgp-max-hop 2
+ peer 10.255.2.2 as-number 65002
+ peer 10.255.2.2 description OVERLAY-EVPN :: dc2-spine-02.spb
+ peer 10.255.2.2 connect-interface LoopBack0
+ peer 10.255.2.2 ebgp-max-hop 2
+
+ ipv4-family unicast
+  peer 10.2.0.0 enable
+  peer 10.2.0.0 route-policy UNDERLAY-EXPORT export
+  peer 10.2.1.0 enable
+  peer 10.2.1.0 route-policy UNDERLAY-EXPORT export
+
+ l2vpn-family evpn
+  peer 10.255.2.1 enable
+  peer 10.255.2.2 enable
+  advertise l2vpn evpn
+#
+
+#------------------------------------------------------------
+# ROUTE-POLICY UNDERLAY
+#------------------------------------------------------------
+route-policy UNDERLAY-EXPORT permit node 10
+ apply ip-address nexthop 10.255.2.11
+ if-match interface LoopBack0
+#

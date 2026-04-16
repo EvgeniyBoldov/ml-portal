@@ -5,6 +5,7 @@
  * Supports sorting, custom alignment, and className override.
  */
 import React from 'react';
+import Popover from '../Popover';
 import { Icon } from '../Icon';
 import styles from './TableHeader.module.css';
 
@@ -16,6 +17,8 @@ export interface TableHeaderProps {
   sortActive?: boolean;
   sortOrder?: 'asc' | 'desc';
   onSort?: () => void;
+  filter?: React.ReactNode;
+  filterActive?: boolean;
   className?: string;
 }
 
@@ -28,6 +31,8 @@ export const TableHeader = React.forwardRef<HTMLTableCellElement, TableHeaderPro
     sortActive = false,
     sortOrder = 'asc',
     onSort,
+    filter,
+    filterActive = false,
     className,
   }, ref) => {
     return (
@@ -48,14 +53,32 @@ export const TableHeader = React.forwardRef<HTMLTableCellElement, TableHeaderPro
           }
         } : undefined}
       >
-        <span className={styles.label}>{label}</span>
-        {sortable && sortActive && (
-          <Icon
-            name={sortOrder === 'asc' ? 'chevron-up' : 'chevron-down'}
-            size={14}
-            className={styles.sortIcon}
-          />
-        )}
+        <div className={styles.inner}>
+          <div className={styles.labelRow}>
+            <span className={styles.label}>{label}</span>
+            {sortable && sortActive && (
+              <Icon
+                name={sortOrder === 'asc' ? 'chevron-up' : 'chevron-down'}
+                size={14}
+                className={styles.sortIcon}
+              />
+            )}
+          </div>
+          {filter && (
+            <div className={styles.filterWrap} onClick={(e) => e.stopPropagation()}>
+              <Popover
+                align="end"
+                content={filter}
+                ariaLabel={`Фильтр: ${label}`}
+                trigger={
+                  <span className={`${styles.filterBtn} ${filterActive ? styles.filterBtnActive : ''}`}>
+                    <Icon name="filter" size={14} className={styles.filterIcon} />
+                  </span>
+                }
+              />
+            </div>
+          )}
+        </div>
       </th>
     );
   }

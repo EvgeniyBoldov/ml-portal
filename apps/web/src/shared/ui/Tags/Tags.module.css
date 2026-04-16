@@ -1,0 +1,104 @@
+.badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 4px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+}
+
+.tone-0 {
+  background: color-mix(in srgb, var(--primary) 12%, var(--bg-secondary));
+  color: var(--text-primary);
+}
+
+.tone-1 {
+  background: color-mix(in srgb, var(--success) 12%, var(--bg-secondary));
+  color: var(--text-primary);
+}
+
+.tone-2 {
+  background: color-mix(in srgb, var(--warning) 14%, var(--bg-secondary));
+  color: var(--text-primary);
+}
+
+.tone-3 {
+  background: color-mix(in srgb, var(--danger) 10%, var(--bg-secondary));
+  color: var(--text-primary);
+}
+
+.tone-4 {
+  background: color-mix(in srgb, var(--info, var(--primary)) 12%, var(--bg-secondary));
+  color: var(--text-primary);
+}
+
+.remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  cursor: pointer;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0;
+  opacity: 0.6;
+  color: inherit;
+  transition: opacity 0.2s ease, background-color 0.2s ease;
+}
+
+.remove:hover {
+  opacity: 1;
+  background: color-mix(in srgb, var(--text-primary) 10%, transparent);
+}
+
+.remove:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+  opacity: 1;
+}
+
+.editWrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.input {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  font-size: 14px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  outline: none;
+  box-sizing: border-box;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
+}
+
+.input:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 18%, transparent);
+}
+
+.empty {
+  color: var(--text-secondary);
+  font-size: 14px;
+}

@@ -48,6 +48,39 @@ class ChatTurnRequest(BaseModel):
     max_tokens: Optional[int] = Field(None)
     idempotency_key: Optional[str] = Field(None)
 
+
+class ChatMessageStreamRequest(BaseModel):
+    content: str = Field(..., min_length=1)
+    use_rag: Optional[bool] = Field(default=None)
+    model: Optional[str] = Field(default=None)
+    agent_slug: Optional[str] = Field(default=None)
+    attachment_ids: Optional[List[str]] = Field(default=None, description="Uploaded chat attachment IDs")
+
+
+class ChatAttachmentUploadResponse(BaseModel):
+    id: str
+    file_id: str
+    file_name: str
+    file_ext: str
+    content_type: Optional[str] = None
+    size_bytes: int
+    status: str
+
+
+class ChatUploadPolicyResponse(BaseModel):
+    max_bytes: int
+    allowed_extensions: List[str]
+    allowed_content_types_by_extension: Dict[str, List[str]] = Field(default_factory=dict)
+
+
+class ChatAttachmentDownloadResponse(BaseModel):
+    id: str
+    file_name: str
+    content_type: Optional[str] = None
+    size_bytes: int
+    url: str
+    expires_in: int
+
 class ChatTurnResponse(BaseModel):
     chat_id: Optional[str] = Field(None)
     message_id: Optional[str] = Field(None)

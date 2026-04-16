@@ -1,0 +1,77 @@
+.name {
+  font-weight: 500;
+  color: var(--text-primary);
+  cursor: default;
+  border-bottom: 1px dashed var(--border-color);
+  padding-bottom: 1px;
+}
+
+.uuid {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+  cursor: default;
+  border-bottom: 1px dashed var(--border-color);
+  padding-bottom: 1px;
+}
+
+.fallback {
+  color: var(--text-muted, var(--text-secondary));
+}
+
+.tooltip-content {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 180px;
+}
+
+.tooltip-type {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted, rgba(255,255,255,0.5));
+}
+
+.tooltip-id {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.75rem;
+  color: rgba(255, 255, 255, 0.85);
+  word-break: break-all;
+}
+
+.tooltip-meta {
+  font-size: 0.8125rem;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.tooltip-description {
+  font-size: 0.8125rem;
+  color: rgba(255, 255, 255, 0.85);
+  font-style: italic;
+  margin-top: 2px;
+  max-width: 250px;
+  word-wrap: break-word;
+}
+
+.tooltip-name {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.95);
+}
+
+.short-uuid {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+  letter-spacing: 0.02em;
+}
+
+.loading {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.8125rem;
+  color: var(--text-muted, var(--text-secondary));
+  opacity: 0.6;
+  cursor: default;
+}

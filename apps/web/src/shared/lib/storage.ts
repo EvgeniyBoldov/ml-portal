@@ -5,7 +5,7 @@ export type Tokens = {
 };
 const KEY = 'auth.tokens.v1';
 
-export function set(key: string, value: any) {
+export function set(key: string, value: unknown) {
   if (value === undefined || value === null) {
     localStorage.removeItem(key);
     return;
@@ -19,7 +19,7 @@ export function get<T = string>(key: string): T | null {
   try {
     return JSON.parse(raw) as T;
   } catch {
-    return raw as unknown as T;
+    return raw as T;
   }
 }
 export function del(key: string) {

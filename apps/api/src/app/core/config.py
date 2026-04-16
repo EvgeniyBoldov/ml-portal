@@ -56,7 +56,7 @@ class Settings(BaseSettings):
     EMB_MAX_WAIT_MS: int = Field(default=8)
     
     # Reranker (local service, not in models table)
-    RERANK_SERVICE_URL: str = Field(default="http://reranker:8002", description="Reranker service URL")
+    RERANK_SERVICE_URL: str = Field(default="http://rerank:8002", description="Reranker service URL")
     RERANK_MODEL: str = Field(default="cross-encoder/ms-marco-MiniLM-L-6-v2", description="Reranker model name")
     RERANK_ENABLED: bool = Field(default=True, description="Enable reranker service")
     
@@ -72,6 +72,12 @@ class Settings(BaseSettings):
     HTTP_TIMEOUT_SECONDS: int = Field(default=30)
     HTTP_MAX_RETRIES: int = Field(default=2)
     TIMEOUT_SECONDS: int = Field(default=30)
+    DB_SLOW_QUERY_LOG_ENABLED: bool = Field(default=True)
+    DB_SLOW_QUERY_THRESHOLD_MS: int = Field(default=500)
+    DB_SLOW_QUERY_TEXT_MAX_LEN: int = Field(default=1200)
+    GLOBAL_RATE_LIMIT_ENABLED: bool = Field(default=True)
+    GLOBAL_RATE_LIMIT_RPM: int = Field(default=240)
+    GLOBAL_RATE_LIMIT_RPH: int = Field(default=2400)
 
     # Circuit Breaker
     CB_LLM_FAILURES_THRESHOLD: int = Field(default=5)
@@ -89,6 +95,7 @@ class Settings(BaseSettings):
     S3_SECURE: bool = Field(default=False)
     S3_BUCKET_RAG: str = Field(default="rag")
     S3_BUCKET_ARTIFACTS: str = Field(default="artifacts")
+    S3_BUCKET_CHAT_UPLOADS: str = Field(default="chat-uploads")
     SAVE_EMB_TO_S3: bool = Field(default=False)
     UPLOAD_MAX_BYTES: int = Field(default=100 * 1024 * 1024)
     UPLOAD_ALLOWED_MIME: str = Field(default="application/pdf,image/png,image/jpeg,application/octet-stream")
@@ -123,13 +130,39 @@ class Settings(BaseSettings):
         default=None, 
         description="Master key for encrypting tool credentials. Required in production."
     )
-    
-    # Agent Router
-    AGENT_ROUTER_ENABLED: bool = Field(
+
+    # MCP Credential Broker (ephemeral access token for secret resolution)
+    MCP_CREDENTIAL_BROKER_ENABLED: bool = Field(
         default=False,
-        description="Enable AgentRouter for permission checking and policy enforcement"
+        description="Enable short-lived MCP credential access token flow instead of raw credential payload injection",
+    )
+    MCP_CREDENTIAL_TOKEN_TTL_SECONDS: int = Field(
+        default=90,
+        description="TTL for MCP credential access tokens in seconds",
+    )
+    MCP_CREDENTIAL_BROKER_AUDIENCE: str = Field(
+        default="urn:ml-portal:mcp-credential-broker",
+        description="JWT audience for MCP credential broker tokens",
+    )
+    MCP_CREDENTIAL_BROKER_BASE_URL: str = Field(
+        default="http://api:8000",
+        description="Base URL that MCP servers use to call credential broker resolve endpoint",
+    )
+    MCP_CREDENTIAL_BROKER_RESOLVE_PATH: str = Field(
+        default="/api/v1/internal/mcp/credentials/resolve",
+        description="Path to credential broker resolve endpoint",
     )
 
+    # Runtime RBAC behavior
+    RUNTIME_RBAC_ENFORCE_RULES: bool = Field(
+        default=False,
+        description="Enable DB-backed RBAC rule enforcement in runtime resolution",
+    )
+    RUNTIME_RBAC_ALLOW_UNDEFINED: bool = Field(
+        default=False,
+        description="Test mode: allow undefined tools/collections by default",
+    )
+    
     model_config = ConfigDict(
         env_file=".env",
         case_sensitive=False
@@ -169,21 +202,36 @@ def get_settings() -> Settings:
 
 
 def get_embedding_models() -> list[str]:
-    """Get list of embedding model aliases from EMB_MODELS"""
+    """Get embedding model aliases from env (single-model preferred)."""
     settings = get_settings()
+    single = (settings.EMB_MODEL_ALIAS or "").strip()
+    if single:
+        return [single]
     return [model.strip() for model in settings.EMB_MODELS.split(',') if model.strip()]
 
 
 def get_model_path(model_alias: str) -> str | None:
-    """Get model path for given alias from environment variables"""
-    env_key = f"EMB_MODEL_{model_alias.replace('-', '_')}_PATH"
-    return os.getenv(env_key)
+    """Get model path for alias from environment variables."""
+    single_alias = (os.getenv("EMB_MODEL_ALIAS") or "").strip()
+    if single_alias and single_alias == model_alias:
+        explicit = os.getenv("EMB_MODEL_PATH")
+        if explicit:
+            return explicit
+    env_key_upper = f"EMB_MODEL_{model_alias.upper().replace('-', '_')}_PATH"
+    env_key_legacy = f"EMB_MODEL_{model_alias.replace('-', '_')}_PATH"
+    return os.getenv(env_key_upper) or os.getenv(env_key_legacy)
 
 
 def get_model_parallelism(model_alias: str) -> int:
-    """Get parallelism setting for given model alias"""
-    env_key = f"EMB_PARALLELISM_{model_alias.replace('-', '_')}"
-    return int(os.getenv(env_key, "1"))
+    """Get parallelism setting for given model alias."""
+    single_alias = (os.getenv("EMB_MODEL_ALIAS") or "").strip()
+    if single_alias and single_alias == model_alias:
+        value = os.getenv("EMB_MODEL_PARALLELISM")
+        if value:
+            return int(value)
+    env_key_upper = f"EMB_PARALLELISM_{model_alias.upper().replace('-', '_')}"
+    env_key_legacy = f"EMB_PARALLELISM_{model_alias.replace('-', '_')}"
+    return int(os.getenv(env_key_upper) or os.getenv(env_key_legacy) or "1")
 
 
 def is_production() -> bool:

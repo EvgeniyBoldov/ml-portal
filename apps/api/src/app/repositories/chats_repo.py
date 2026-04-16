@@ -142,6 +142,28 @@ class AsyncChatMessagesRepository(AsyncTenantRepository[ChatMessages]):
         
         result = await self.session.execute(query)
         return list(result.scalars().all())
+
+    async def get_recent_chat_messages(
+        self,
+        chat_id: str,
+        limit: int = 20,
+    ) -> List[ChatMessages]:
+        """Get most recent messages in chronological order (oldest->newest within the tail)."""
+        query = (
+            select(ChatMessages)
+            .where(
+                and_(
+                    ChatMessages.chat_id == chat_id,
+                    ChatMessages.tenant_id == self.tenant_id,
+                )
+            )
+            .order_by(desc(ChatMessages.created_at))
+            .limit(limit)
+        )
+        result = await self.session.execute(query)
+        latest_desc = list(result.scalars().all())
+        latest_desc.reverse()
+        return latest_desc
     
     async def get_message_by_id(self, message_id: str) -> Optional[ChatMessages]:
         """Get message by ID"""

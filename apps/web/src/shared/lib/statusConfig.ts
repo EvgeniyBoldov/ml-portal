@@ -41,7 +41,7 @@ const RUN_STATUSES: Record<string, StatusProps> = {
 const HEALTH_STATUSES: Record<string, StatusProps> = {
   healthy:   { label: 'Здоров',    tone: 'success' },
   unhealthy: { label: 'Нездоров',  tone: 'danger' },
-  unknown:   { label: 'Неизвестно', tone: 'neutral' },
+  unknown:   { label: 'Неизвестно', tone: 'warn' },
 };
 
 /* ─── Credential statuses ─── */

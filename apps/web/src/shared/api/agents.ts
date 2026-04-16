@@ -12,11 +12,12 @@ export interface Agent {
   slug: string;
   name: string;
   description?: string;
-  tag?: string | null;
-  category?: string | null;
-  routing_example?: string | null;
-  is_routable?: boolean;
+  tags?: string[] | null;
   current_version_id?: string | null;
+  model?: string | null;
+  logging_level?: string;
+  allowed_collection_ids?: string[] | null;
+  versions_count?: number;
   created_at: string;
   updated_at: string;
 }
@@ -25,16 +26,41 @@ export interface AgentVersionInfo {
   id: string;
   version: number;
   status: string;
-  prompt: string;
-  policy_id?: string | null;
-  limit_id?: string | null;
+  // Prompt parts
+  identity?: string | null;
+  mission?: string | null;
+  scope?: string | null;
+  rules?: string | null;
+  tool_use_rules?: string | null;
+  output_format?: string | null;
+  examples?: string | null;
+  // Execution config
+  model?: string | null;
+  timeout_s?: number | null;
+  max_steps?: number | null;
+  max_retries?: number | null;
+  max_tokens?: number | null;
+  temperature?: number | null;
+  // Safety knobs
+  requires_confirmation_for_write?: boolean | null;
+  risk_level?: string | null;
+  never_do?: string | null;
+  allowed_ops?: string | null;
+  // Routing
+  short_info?: string | null;
+  tags?: string[] | null;
+  is_routable?: boolean;
+  routing_keywords?: string[] | null;
+  routing_negative_keywords?: string[] | null;
+  // Meta
+  parent_version_id?: string | null;
   notes?: string | null;
   created_at: string;
+  updated_at?: string | null;
 }
 
 export interface AgentDetail extends Agent {
   versions: AgentVersionInfo[];
-  current_version?: AgentVersionInfo | null;
 }
 
 export interface AgentVersion {
@@ -42,70 +68,60 @@ export interface AgentVersion {
   agent_id: string;
   version: number;
   status: string;
-  prompt: string;
-  policy_id?: string | null;
-  limit_id?: string | null;
+  // Prompt parts
+  identity?: string | null;
+  mission?: string | null;
+  scope?: string | null;
+  rules?: string | null;
+  tool_use_rules?: string | null;
+  output_format?: string | null;
+  examples?: string | null;
+  // Execution config
+  model?: string | null;
+  timeout_s?: number | null;
+  max_steps?: number | null;
+  max_retries?: number | null;
+  max_tokens?: number | null;
+  temperature?: number | null;
+  // Safety knobs
+  requires_confirmation_for_write?: boolean | null;
+  risk_level?: string | null;
+  never_do?: string | null;
+  allowed_ops?: string | null;
+  // Routing
+  short_info?: string | null;
+  tags?: string[] | null;
+  is_routable?: boolean;
+  routing_keywords?: string[] | null;
+  routing_negative_keywords?: string[] | null;
+  // Meta
   parent_version_id?: string | null;
   notes?: string | null;
   created_at: string;
   updated_at: string;
 }
 
-export interface AgentBindingInput {
-  tool_id: string;
-  tool_instance_id?: string | null;
-  credential_strategy?: string;
-}
-
-export interface AgentBindingResponse {
-  id: string;
-  agent_version_id: string;
-  tool_id: string;
-  tool_instance_id?: string | null;
-  credential_strategy: string;
-  created_at: string;
-  tool_slug?: string | null;
-  tool_name?: string | null;
-  tool_group_slug?: string | null;
-  instance_slug?: string | null;
-  instance_name?: string | null;
-}
-
-export interface AgentBindingCreate {
-  agent_version_id: string;
-  tool_id: string;
-  tool_instance_id?: string | null;
-  credential_strategy?: string;
-}
-
-export interface AgentBindingUpdate {
-  tool_instance_id?: string | null;
-  credential_strategy?: string;
-}
-
 export interface AgentCreate {
   slug: string;
   name: string;
   description?: string;
-  tag?: string;
-  category?: string;
-  routing_example?: string;
-  is_routable?: boolean;
+  model?: string | null;
+  tags?: string[];
+  logging_level?: string;
+  allowed_collection_ids?: string[] | null;
 }
 
 export interface AgentUpdate {
   name?: string;
   description?: string;
-  tag?: string;
-  category?: string;
-  routing_example?: string;
-  is_routable?: boolean;
+  model?: string | null;
+  tags?: string[];
+  logging_level?: string;
+  allowed_collection_ids?: string[] | null;
 }
 
 export interface AgentRouteRequest {
   request_text: string;
-  category?: string;
-  tag?: string;
 }
 
 export interface AgentRouteResponse {
@@ -113,17 +129,65 @@ export interface AgentRouteResponse {
 }
 
 export interface AgentVersionCreate {
-  prompt?: string | null;
-  policy_id?: string | null;
-  limit_id?: string | null;
+  // Prompt parts
+  identity?: string | null;
+  mission?: string | null;
+  scope?: string | null;
+  rules?: string | null;
+  tool_use_rules?: string | null;
+  output_format?: string | null;
+  examples?: string | null;
+  // Execution config
+  model?: string | null;
+  timeout_s?: number | null;
+  max_steps?: number | null;
+  max_retries?: number | null;
+  max_tokens?: number | null;
+  temperature?: number | null;
+  // Safety knobs
+  requires_confirmation_for_write?: boolean | null;
+  risk_level?: string | null;
+  never_do?: string | null;
+  allowed_ops?: string | null;
+  // Routing
+  short_info?: string | null;
+  tags?: string[] | null;
+  is_routable?: boolean;
+  routing_keywords?: string[] | null;
+  routing_negative_keywords?: string[] | null;
+  // Meta
   notes?: string | null;
   parent_version_id?: string | null;
 }
 
 export interface AgentVersionUpdate {
-  prompt?: string;
-  policy_id?: string | null;
-  limit_id?: string | null;
+  // Prompt parts
+  identity?: string | null;
+  mission?: string | null;
+  scope?: string | null;
+  rules?: string | null;
+  tool_use_rules?: string | null;
+  output_format?: string | null;
+  examples?: string | null;
+  // Execution config
+  model?: string | null;
+  timeout_s?: number | null;
+  max_steps?: number | null;
+  max_retries?: number | null;
+  max_tokens?: number | null;
+  temperature?: number | null;
+  // Safety knobs
+  requires_confirmation_for_write?: boolean | null;
+  risk_level?: string | null;
+  never_do?: string | null;
+  allowed_ops?: string | null;
+  // Routing
+  short_info?: string | null;
+  tags?: string[] | null;
+  is_routable?: boolean;
+  routing_keywords?: string[] | null;
+  routing_negative_keywords?: string[] | null;
+  // Meta
   notes?: string | null;
 }
 
@@ -140,20 +204,20 @@ export const agentsApi = {
     return apiRequest(`/admin/agents?${sp.toString()}`);
   },
 
-  async get(slug: string): Promise<AgentDetail> {
-    return apiRequest(`/admin/agents/${slug}`);
+  async get(id: string): Promise<AgentDetail> {
+    return apiRequest(`/admin/agents/${id}`);
   },
 
   async create(data: AgentCreate): Promise<Agent> {
     return apiRequest('/admin/agents', { method: 'POST', body: JSON.stringify(data) });
   },
 
-  async update(slug: string, data: AgentUpdate): Promise<Agent> {
-    return apiRequest(`/admin/agents/${slug}`, { method: 'PUT', body: JSON.stringify(data) });
+  async update(id: string, data: AgentUpdate): Promise<Agent> {
+    return apiRequest(`/admin/agents/${id}`, { method: 'PUT', body: JSON.stringify(data) });
   },
 
-  async delete(slug: string): Promise<void> {
-    return apiRequest(`/admin/agents/${slug}`, { method: 'DELETE' });
+  async delete(id: string): Promise<void> {
+    return apiRequest(`/admin/agents/${id}`, { method: 'DELETE' });
   },
 
   async route(data: AgentRouteRequest): Promise<AgentRouteResponse> {
@@ -163,62 +227,37 @@ export const agentsApi = {
     });
   },
 
-  // Version CRUD
-  async listVersions(slug: string): Promise<AgentVersion[]> {
-    return apiRequest(`/admin/agents/${slug}/versions`);
+  // Version CRUD — all by agent UUID
+  async listVersions(agentId: string): Promise<AgentVersion[]> {
+    return apiRequest(`/admin/agents/${agentId}/versions`);
   },
 
-  async getVersion(slug: string, version: number): Promise<AgentVersion> {
-    return apiRequest(`/admin/agents/${slug}/versions/${version}`);
+  async getVersion(agentId: string, version: number): Promise<AgentVersion> {
+    return apiRequest(`/admin/agents/${agentId}/versions/${version}`);
   },
 
-  async createVersion(slug: string, data: AgentVersionCreate): Promise<AgentVersion> {
-    return apiRequest(`/admin/agents/${slug}/versions`, { method: 'POST', body: JSON.stringify(data) });
+  async createVersion(agentId: string, data: AgentVersionCreate): Promise<AgentVersion> {
+    return apiRequest(`/admin/agents/${agentId}/versions`, { method: 'POST', body: JSON.stringify(data) });
   },
 
-  async updateVersion(slug: string, version: number, data: AgentVersionUpdate): Promise<AgentVersion> {
-    return apiRequest(`/admin/agents/${slug}/versions/${version}`, { method: 'PATCH', body: JSON.stringify(data) });
+  async updateVersion(agentId: string, version: number, data: AgentVersionUpdate): Promise<AgentVersion> {
+    return apiRequest(`/admin/agents/${agentId}/versions/${version}`, { method: 'PATCH', body: JSON.stringify(data) });
   },
 
-  async deleteVersion(slug: string, version: number): Promise<void> {
-    return apiRequest(`/admin/agents/${slug}/versions/${version}`, { method: 'DELETE' });
+  async deleteVersion(agentId: string, version: number): Promise<void> {
+    return apiRequest(`/admin/agents/${agentId}/versions/${version}`, { method: 'DELETE' });
   },
 
-  async activateVersion(slug: string, version: number): Promise<AgentVersion> {
-    return apiRequest(`/admin/agents/${slug}/versions/${version}/activate`, { method: 'POST' });
+  async publishVersion(agentId: string, version: number): Promise<AgentVersion> {
+    return apiRequest(`/admin/agents/${agentId}/versions/${version}/publish`, { method: 'POST' });
   },
 
-  async deactivateVersion(slug: string, version: number): Promise<AgentVersion> {
-    return apiRequest(`/admin/agents/${slug}/versions/${version}/deactivate`, { method: 'POST' });
+  async archiveVersion(agentId: string, version: number): Promise<AgentVersion> {
+    return apiRequest(`/admin/agents/${agentId}/versions/${version}/archive`, { method: 'POST' });
   },
 
-  // Bindings CRUD
-  async listBindings(slug: string, version: number): Promise<AgentBindingResponse[]> {
-    return apiRequest(`/admin/agents/${slug}/versions/${version}/bindings`);
+  async setCurrentVersion(agentId: string, versionId: string): Promise<AgentDetail> {
+    return apiRequest(`/admin/agents/${agentId}/current-version?version_id=${versionId}`, { method: 'PUT' });
   },
 
-  async createBinding(slug: string, version: number, data: AgentBindingCreate): Promise<AgentBindingResponse> {
-    return apiRequest(`/admin/agents/${slug}/versions/${version}/bindings`, {
-      method: 'POST',
-      body: JSON.stringify(data),
-    });
-  },
-
-  async updateBinding(
-    slug: string,
-    version: number,
-    bindingId: string,
-    data: AgentBindingUpdate,
-  ): Promise<AgentBindingResponse> {
-    return apiRequest(`/admin/agents/${slug}/versions/${version}/bindings/${bindingId}`, {
-      method: 'PATCH',
-      body: JSON.stringify(data),
-    });
-  },
-
-  async deleteBinding(slug: string, version: number, bindingId: string): Promise<void> {
-    return apiRequest(`/admin/agents/${slug}/versions/${version}/bindings/${bindingId}`, {
-      method: 'DELETE',
-    });
-  },
 };

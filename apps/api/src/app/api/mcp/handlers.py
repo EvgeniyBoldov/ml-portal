@@ -102,19 +102,17 @@ class MCPHandlers:
         
         Returns all registered tools from ToolRegistry.
         """
-        handlers = ToolRegistry.list_all()
-        
         tools = []
-        for handler in handlers:
+        for descriptor in ToolRegistry.list_mcp_descriptors():
             tool = MCPTool(
-                name=handler.slug,
-                description=handler.description,
+                name=descriptor["name"],
+                description=descriptor.get("description"),
                 inputSchema=ToolInputSchema(
-                    type="object",
-                    properties=handler.input_schema.get("properties", {}),
-                    required=handler.input_schema.get("required", []),
+                    type=descriptor.get("inputSchema", {}).get("type", "object"),
+                    properties=descriptor.get("inputSchema", {}).get("properties", {}),
+                    required=descriptor.get("inputSchema", {}).get("required", []),
                 ),
-                outputSchema=handler.output_schema,
+                outputSchema=descriptor.get("outputSchema"),
             )
             tools.append(tool)
         

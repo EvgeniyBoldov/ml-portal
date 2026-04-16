@@ -58,7 +58,12 @@ COPY --chown=appuser:appuser apps/emb/src/app/ /app/
 ENV PYTHONPATH=/app \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    EMB_MODELS="all-MiniLM-L6-v2,multilingual-e5-small,bge-large-en" \
+    EMB_MODEL_ALIAS="all-MiniLM-L6-v2" \
+    EMB_MODEL_PATH="/models_llm/sentence-transformers--all-MiniLM-L6-v2" \
+    EMB_MODEL_DIMENSIONS=384 \
+    EMB_MODEL_MAX_TOKENS=512 \
+    EMB_MODEL_VERSION="1.0" \
+    EMB_MODEL_PARALLELISM=2 \
     EMB_BATCH_SIZE=128 \
     EMB_MAX_WAIT_MS=8
 

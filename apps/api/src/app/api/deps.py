@@ -1,12 +1,19 @@
 
 import os
-from typing import AsyncGenerator
-from sqlalchemy.ext.asyncio import AsyncSession
+import uuid as _uuid
+import time
+from dataclasses import dataclass
+from typing import AsyncGenerator, Callable
+
 from fastapi import Depends, HTTPException, status, Request
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.core.db import get_db
 from app.core.di import get_llm_client, get_emb_client
-from app.core.security import UserCtx
 from app.core.redis import get_redis
+from app.core.security import UserCtx
+from app.models.chat import Chats
 
 # Re-export for routers/services
 async def db_session() -> AsyncGenerator[AsyncSession, None]:
@@ -215,11 +222,113 @@ def require_tenant(request: Request) -> str:
         )
     return tenant_id
 
-# Rate limiting (stub)
-def rate_limit():
-    """Rate limiting dependency (stub)"""
-    pass
+# ── Chat context resolution ───────────────────────────────────────────────────────────
 
-def get_client_ip():
-    """Get client IP (stub)"""
-    return "127.0.0.1"
+
+@dataclass
+class ChatContext:
+    """Resolved chat context: validated chat record + tenant access."""
+    chat_id: str
+    tenant_id: str  # str(UUID) — ready for service layer
+    user_id: str
+
+
+async def resolve_chat_context(
+    chat_id: str,
+    session: AsyncSession = Depends(db_session),
+    current_user: UserCtx = Depends(get_current_user),
+) -> ChatContext:
+    """Load chat, verify tenant assignment and user access.
+
+    Raises HTTPException on:
+    - Invalid chat_id UUID
+    - Chat not found
+    - Chat has no tenant
+    - User not in chat's tenant
+    """
+    try:
+        chat_uuid = _uuid.UUID(chat_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid chat ID")
+
+    result = await session.execute(select(Chats).where(Chats.id == chat_uuid))
+    chat_row = result.scalar_one_or_none()
+    if not chat_row:
+        raise HTTPException(status_code=404, detail="Chat not found")
+    if not chat_row.tenant_id:
+        raise HTTPException(status_code=400, detail="Chat has no tenant assigned")
+
+    tenant_id = _uuid.UUID(str(chat_row.tenant_id))
+    user_tenant_ids = {_uuid.UUID(str(tid)) for tid in (current_user.tenant_ids or [])}
+    if user_tenant_ids and tenant_id not in user_tenant_ids:
+        raise HTTPException(status_code=403, detail="Access denied: user does not belong to chat tenant")
+
+    return ChatContext(
+        chat_id=str(chat_uuid),
+        tenant_id=str(tenant_id),
+        user_id=str(current_user.id),
+    )
+
+
+def get_client_ip(request: Request) -> str:
+    """Best-effort client IP for audit/rate-limit keys."""
+    if request.client and request.client.host:
+        return str(request.client.host)
+    return "unknown"
+
+
+def rate_limit_dependency(
+    *,
+    key_prefix: str,
+    rpm: int,
+    rph: int,
+) -> Callable[[Request], None]:
+    """
+    Build Redis-backed rate-limit dependency (fail-open).
+
+    Uses fixed windows:
+    - minute key TTL: 60s
+    - hour key TTL: 3600s
+    """
+
+    async def _check(request: Request) -> None:
+        user_id = None
+        user = getattr(request.state, "user", None)
+        if user is not None:
+            user_id = getattr(user, "id", None)
+
+        key = f"user:{user_id}" if user_id else f"ip:{get_client_ip(request)}"
+        now = int(time.time())
+        redis = get_redis()
+        minute_key = f"ratelimit:{key_prefix}:{key}:minute:{now // 60}"
+        hour_key = f"ratelimit:{key_prefix}:{key}:hour:{now // 3600}"
+
+        try:
+            minute_count = await redis.incr(minute_key)
+            if minute_count == 1:
+                await redis.expire(minute_key, 60)
+            if minute_count > rpm:
+                retry_after = 60 - (now % 60)
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"Rate limit exceeded. Retry after {retry_after} seconds.",
+                    headers={"Retry-After": str(retry_after)},
+                )
+
+            hour_count = await redis.incr(hour_key)
+            if hour_count == 1:
+                await redis.expire(hour_key, 3600)
+            if hour_count > rph:
+                retry_after = 3600 - (now % 3600)
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"Rate limit exceeded. Retry after {retry_after} seconds.",
+                    headers={"Retry-After": str(retry_after)},
+                )
+        except HTTPException:
+            raise
+        except Exception:
+            # Fail-open to avoid auth/chat hard outage on Redis issues.
+            return
+
+    return _check

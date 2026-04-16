@@ -8,7 +8,7 @@ import uuid
 from app.core.logging import get_logger
 from app.agents.handlers.versioned_tool import VersionedTool, tool_version, register_tool
 from app.agents.context import ToolContext, ToolResult
-from app.models.collection import Collection, SearchMode
+from app.models.collection import Collection, FieldType
 
 logger = get_logger(__name__)
 
@@ -106,7 +106,7 @@ class CollectionSearchTool(VersionedTool):
     """
     
     tool_slug: ClassVar[str] = "collection.search"
-    tool_group: ClassVar[str] = "collection"
+    domains: ClassVar[list] = ["collection.table"]
     name: ClassVar[str] = "Collection Search"
     description: ClassVar[str] = "Search in a data collection with filters and text search"
 
@@ -128,13 +128,17 @@ class CollectionSearchTool(VersionedTool):
             }
         }
         
-        for field in collection.get_searchable_fields():
+        for field in collection.get_filterable_fields():
             field_name = field["name"]
-            field_type = field["type"]
-            search_mode = field.get("search_mode", SearchMode.EXACT.value)
+            field_type = field["data_type"]
             field_desc = field.get("description", f"Filter by {field_name}")
             
-            if search_mode == SearchMode.RANGE.value:
+            if field_type in {
+                FieldType.INTEGER.value,
+                FieldType.FLOAT.value,
+                FieldType.DATETIME.value,
+                FieldType.DATE.value,
+            }:
                 properties[f"{field_name}_from"] = {
                     "type": cls._map_field_type(field_type),
                     "description": f"{field_desc} (from/minimum)"
@@ -159,12 +163,15 @@ class CollectionSearchTool(VersionedTool):
     def _map_field_type(cls, field_type: str) -> str:
         """Map collection field type to JSON Schema type"""
         mapping = {
+            "string": "string",
             "text": "string",
             "integer": "integer",
             "float": "number",
             "boolean": "boolean",
             "datetime": "string",
             "date": "string",
+            "enum": "string",
+            "json": "object",
         }
         return mapping.get(field_type, "string")
 
@@ -188,8 +195,29 @@ class CollectionSearchTool(VersionedTool):
         query = args.get("query")
         filters = args.get("filters", {})
         sort = args.get("sort", [])
-        limit = min(args.get("limit", DEFAULT_LIMIT), MAX_LIMIT)
-        offset = min(args.get("offset", 0), MAX_OFFSET)
+        # Normalize sort: if string, convert to array
+        if isinstance(sort, str):
+            # Parse "field desc" or "field asc"
+            parts = sort.strip().split()
+            if len(parts) >= 2:
+                sort = [{"field": parts[0], "order": parts[1].lower()}]
+            elif len(parts) == 1:
+                sort = [{"field": parts[0], "order": "desc"}]
+            else:
+                sort = []
+        elif isinstance(sort, list) and sort and isinstance(sort[0], dict):
+            # Already array format, ensure order is lowercase
+            for s in sort:
+                if isinstance(s, dict) and "order" in s:
+                    s["order"] = str(s["order"]).lower()
+        try:
+            limit = min(int(args.get("limit", DEFAULT_LIMIT)), MAX_LIMIT)
+        except (TypeError, ValueError):
+            limit = DEFAULT_LIMIT
+        try:
+            offset = min(int(args.get("offset", 0)), MAX_OFFSET)
+        except (TypeError, ValueError):
+            offset = 0
         
         log.info("Starting collection search",
                  collection=collection_slug,
@@ -280,7 +308,7 @@ class CollectionSearchTool(VersionedTool):
         if not filters:
             return None
         
-        allowed_fields = {f["name"] for f in collection.fields}
+        allowed_fields = {f["name"] for f in collection.get_filterable_fields()}
         allowed_fields.add("id")  # Always allow id
         
         def validate_condition(cond: Dict) -> Optional[str]:
@@ -329,7 +357,11 @@ class CollectionSearchTool(VersionedTool):
         
         # Add text search
         if query:
-            text_fields = [f["name"] for f in collection.fields if f.get("type") == "text"]
+            text_fields = [
+                f["name"]
+                for f in collection.get_filterable_fields()
+                if f.get("data_type") in (FieldType.STRING.value, FieldType.TEXT.value, FieldType.ENUM.value)
+            ]
             if text_fields:
                 text_conditions = []
                 params[f"query_{param_idx}"] = f"%{query}%"
@@ -340,14 +372,22 @@ class CollectionSearchTool(VersionedTool):
         
         where_clause = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
         
-        # Build ORDER BY
+        # Build ORDER BY (validate sort fields against collection schema + system columns)
+        allowed_sort_fields = {f["name"] for f in collection.get_sortable_fields()}
+        allowed_sort_fields.update({"id", "_created_at", "_updated_at"})
         order_parts = []
         if sort:
             for s in sort:
                 field = s.get("field")
                 order = s.get("order", "asc").upper()
                 if field and order in ("ASC", "DESC"):
-                    order_parts.append(f"{field} {order}")
+                    # Map common LLM hallucinated field names to real columns
+                    _SORT_ALIASES = {"created_at": "_created_at", "updated_at": "_updated_at"}
+                    field = _SORT_ALIASES.get(field, field)
+                    if field in allowed_sort_fields:
+                        order_parts.append(f"{field} {order}")
+                    else:
+                        logger.warning(f"Sort field '{field}' not in collection schema, skipping")
         
         if not order_parts and collection.default_sort:
             ds = collection.default_sort
@@ -382,7 +422,11 @@ class CollectionSearchTool(VersionedTool):
             where_parts.extend(filter_parts)
         
         if query:
-            text_fields = [f["name"] for f in collection.fields if f.get("type") == "text"]
+            text_fields = [
+                f["name"]
+                for f in collection.get_filterable_fields()
+                if f.get("data_type") in (FieldType.STRING.value, FieldType.TEXT.value, FieldType.ENUM.value)
+            ]
             if text_fields:
                 text_conditions = []
                 params[f"query_{param_idx}"] = f"%{query}%"
@@ -447,11 +491,25 @@ class CollectionSearchTool(VersionedTool):
             params[param_name] = value
             return f"{field} != :{param_name}", params, param_idx
         elif op == "in":
-            params[param_name] = tuple(value) if isinstance(value, list) else (value,)
-            return f"{field} IN :{param_name}", params, param_idx
+            values = value if isinstance(value, list) else [value]
+            if not values:
+                return "", params, param_idx
+            placeholders = []
+            for idx, item in enumerate(values):
+                item_param = f"{param_name}_{idx}"
+                params[item_param] = item
+                placeholders.append(f":{item_param}")
+            return f"{field} IN ({', '.join(placeholders)})", params, param_idx
         elif op == "not_in":
-            params[param_name] = tuple(value) if isinstance(value, list) else (value,)
-            return f"{field} NOT IN :{param_name}", params, param_idx
+            values = value if isinstance(value, list) else [value]
+            if not values:
+                return "", params, param_idx
+            placeholders = []
+            for idx, item in enumerate(values):
+                item_param = f"{param_name}_{idx}"
+                params[item_param] = item
+                placeholders.append(f":{item_param}")
+            return f"{field} NOT IN ({', '.join(placeholders)})", params, param_idx
         elif op == "gt":
             params[param_name] = value
             return f"{field} > :{param_name}", params, param_idx
@@ -515,7 +573,7 @@ class CollectionSearchTool(VersionedTool):
                     value = row[field_name]
                     if isinstance(value, uuid.UUID):
                         value = str(value)
-                    if field["type"] == "text" and value and len(str(value)) > 500:
+                    if field["data_type"] == FieldType.TEXT.value and value and len(str(value)) > 500:
                         value = str(value)[:497] + "..."
                     formatted_row[field_name] = value
             formatted.append(formatted_row)

@@ -10,86 +10,20 @@ from typing import List, Optional
 from uuid import UUID
 from fastapi import APIRouter, Depends, Query, Path, status, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from pydantic import BaseModel, Field
-from datetime import datetime
 
 from app.api.deps import db_session, require_admin
 from app.core.security import UserCtx
-from app.services.rbac_service import (
-    RbacService,
-    RbacRuleNotFoundError,
-    RbacRuleDuplicateError,
+from app.services.rbac_service import RbacService
+from app.schemas.rbac import (
+    RbacRuleCreate,
+    RbacRuleUpdate,
+    RbacRuleResponse,
+    CheckAccessRequest,
+    CheckAccessResponse,
+    EnrichedRuleResponse,
 )
 
 router = APIRouter()
-
-
-# ─── Schemas ──────────────────────────────────────────────────────────
-
-class RbacRuleCreate(BaseModel):
-    level: str = Field(..., description="platform | tenant | user")
-    resource_type: str = Field(..., description="agent | toolgroup | tool | instance")
-    resource_id: UUID
-    effect: str = Field(..., description="allow | deny")
-    owner_user_id: Optional[UUID] = Field(None, description="User owner (for user-level rules)")
-    owner_tenant_id: Optional[UUID] = Field(None, description="Tenant owner (for tenant-level rules)")
-    owner_platform: bool = Field(False, description="Platform owner (for platform-level rules)")
-
-
-class RbacRuleUpdate(BaseModel):
-    effect: str = Field(..., description="allow | deny")
-
-
-class RbacRuleResponse(BaseModel):
-    id: UUID
-    level: str
-    owner_user_id: Optional[UUID]
-    owner_tenant_id: Optional[UUID]
-    owner_platform: bool
-    resource_type: str
-    resource_id: UUID
-    effect: str
-    created_at: datetime
-    created_by_user_id: Optional[UUID]
-
-    class Config:
-        from_attributes = True
-
-
-class CheckAccessRequest(BaseModel):
-    user_id: UUID
-    tenant_id: UUID
-    resource_type: str
-    resource_id: UUID
-
-
-class CheckAccessResponse(BaseModel):
-    effect: str
-    resource_type: str
-    resource_id: UUID
-
-
-# ─── Enriched Rules Response ─────────────────────────────────────────
-
-class EnrichedOwnerInfo(BaseModel):
-    level: str
-    name: str
-    user_id: Optional[str] = None
-    tenant_id: Optional[str] = None
-    platform: bool = False
-
-class EnrichedResourceInfo(BaseModel):
-    type: str
-    id: str
-    name: str
-
-class EnrichedRuleResponse(BaseModel):
-    id: str
-    owner: EnrichedOwnerInfo
-    resource: EnrichedResourceInfo
-    effect: str
-    created_at: str
-    created_by_user_id: Optional[str] = None
 
 
 # ─── Rule Endpoints ──────────────────────────────────────────────────
@@ -100,7 +34,8 @@ async def list_enriched_rules(
     owner_user_id: Optional[UUID] = Query(None, description="Filter by owner user_id"),
     owner_tenant_id: Optional[UUID] = Query(None, description="Filter by owner tenant_id"),
     owner_platform: Optional[bool] = Query(None, description="Filter platform rules"),
-    resource_type: Optional[str] = Query(None, description="Filter: agent|toolgroup|tool|instance"),
+    resource_type: Optional[str] = Query(None, description="Filter: agent|tool|instance"),
+    resource_id: Optional[UUID] = Query(None, description="Filter by resource id"),
     effect: Optional[str] = Query(None, description="Filter: allow|deny"),
     skip: int = Query(0, ge=0),
     limit: int = Query(500, ge=1, le=1000),
@@ -117,6 +52,7 @@ async def list_enriched_rules(
         owner_tenant_id=owner_tenant_id,
         owner_platform=owner_platform,
         resource_type=resource_type,
+        resource_id=resource_id,
         effect=effect,
         skip=skip,
         limit=limit,
@@ -130,6 +66,7 @@ async def list_rules(
     owner_tenant_id: Optional[UUID] = Query(None),
     owner_platform: Optional[bool] = Query(None),
     resource_type: Optional[str] = Query(None),
+    resource_id: Optional[UUID] = Query(None),
     effect: Optional[str] = Query(None),
     skip: int = Query(0, ge=0),
     limit: int = Query(500, ge=1, le=1000),
@@ -144,6 +81,7 @@ async def list_rules(
         owner_tenant_id=owner_tenant_id,
         owner_platform=owner_platform,
         resource_type=resource_type,
+        resource_id=resource_id,
         effect=effect,
         skip=skip,
         limit=limit,
@@ -158,24 +96,19 @@ async def create_rule(
     user: UserCtx = Depends(require_admin),
 ):
     """Create a new RBAC rule with direct owner binding."""
-    try:
-        service = RbacService(db)
-        rule = await service.create_rule(
-            level=data.level,
-            resource_type=data.resource_type,
-            resource_id=data.resource_id,
-            effect=data.effect,
-            owner_user_id=data.owner_user_id,
-            owner_tenant_id=data.owner_tenant_id,
-            owner_platform=data.owner_platform,
-            created_by_user_id=UUID(user.id) if user.id else None,
-        )
-        await db.commit()
-        return RbacRuleResponse.model_validate(rule)
-    except RbacRuleDuplicateError as e:
-        raise HTTPException(status_code=409, detail=str(e))
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    service = RbacService(db)
+    rule = await service.create_rule(
+        level=data.level,
+        resource_type=data.resource_type,
+        resource_id=data.resource_id,
+        effect=data.effect,
+        owner_user_id=data.owner_user_id,
+        owner_tenant_id=data.owner_tenant_id,
+        owner_platform=data.owner_platform,
+        created_by_user_id=UUID(user.id) if user.id else None,
+    )
+    await db.commit()
+    return RbacRuleResponse.model_validate(rule)
 
 
 @router.get("/{rule_id}", response_model=RbacRuleResponse)
@@ -185,12 +118,9 @@ async def get_rule(
     _: UserCtx = Depends(require_admin),
 ):
     """Get a specific RBAC rule."""
-    try:
-        service = RbacService(db)
-        rule = await service.get_rule(rule_id)
-        return RbacRuleResponse.model_validate(rule)
-    except RbacRuleNotFoundError:
-        raise HTTPException(status_code=404, detail=f"RBAC rule '{rule_id}' not found")
+    service = RbacService(db)
+    rule = await service.get_rule(rule_id)
+    return RbacRuleResponse.model_validate(rule)
 
 
 @router.patch("/{rule_id}", response_model=RbacRuleResponse)
@@ -201,13 +131,10 @@ async def update_rule(
     _: UserCtx = Depends(require_admin),
 ):
     """Update a rule's effect (allow ↔ deny)."""
-    try:
-        service = RbacService(db)
-        rule = await service.update_rule(rule_id=rule_id, effect=data.effect)
-        await db.commit()
-        return RbacRuleResponse.model_validate(rule)
-    except RbacRuleNotFoundError:
-        raise HTTPException(status_code=404, detail=f"RBAC rule '{rule_id}' not found")
+    service = RbacService(db)
+    rule = await service.update_rule(rule_id=rule_id, effect=data.effect)
+    await db.commit()
+    return RbacRuleResponse.model_validate(rule)
 
 
 @router.delete("/{rule_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -217,12 +144,9 @@ async def delete_rule(
     _: UserCtx = Depends(require_admin),
 ):
     """Delete an RBAC rule."""
-    try:
-        service = RbacService(db)
-        await service.delete_rule(rule_id)
-        await db.commit()
-    except RbacRuleNotFoundError:
-        raise HTTPException(status_code=404, detail=f"RBAC rule '{rule_id}' not found")
+    service = RbacService(db)
+    await service.delete_rule(rule_id)
+    await db.commit()
 
 
 # ─── Access Check ─────────────────────────────────────────────────────

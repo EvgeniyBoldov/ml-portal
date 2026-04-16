@@ -16,13 +16,13 @@ export interface VersionInfo {
   version: number;
   status: string;
   created_at: string;
-  updated_at?: string;
-  notes?: string;
+  updated_at?: string | null;
+  notes?: string | null;
 }
 
 export interface VersionsBlockProps {
   /** Entity type for status configuration */
-  entityType: 'prompt' | 'baseline' | 'policy' | 'agent' | 'limit' | 'tool';
+  entityType: 'prompt' | 'baseline' | 'policy' | 'agent' | 'limit' | 'tool' | 'collection';
   /** Versions data */
   versions: VersionInfo[];
   /** Currently selected version */

@@ -12,6 +12,21 @@ from app.schemas.users import UserResponse
 
 router = APIRouter(tags=["users"])
 
+
+async def _user_response(user, repo: AsyncUsersRepository) -> dict:
+    default_tid = await repo.get_default_tenant(user.id)
+    return {
+        "id": user.id,
+        "login": user.login,
+        "email": user.email,
+        "full_name": getattr(user, "full_name", None),
+        "role": user.role,
+        "is_active": getattr(user, "is_active", True),
+        "tenant_id": str(default_tid) if default_tid else None,
+        "created_at": user.created_at.isoformat() if getattr(user, "created_at", None) else "",
+        "updated_at": user.updated_at.isoformat() if getattr(user, "updated_at", None) else None,
+    }
+
 @router.get("")
 async def list_users(
     limit: int = Query(20, ge=1, le=100),
@@ -157,15 +172,7 @@ async def get_user(
             ).model_dump()
         )
     
-    return {
-        "id": user.id,
-        "login": user.login,
-        "email": user.email,
-        "role": user.role,
-        "is_active": getattr(user, "is_active", True),
-        "created_at": user.created_at.isoformat() if getattr(user, "created_at", None) else "",
-        "updated_at": getattr(user, "updated_at", None).isoformat() if getattr(user, "updated_at", None) else None,
-    }
+    return await _user_response(user, repo)
 
 @router.patch("/{user_id}", response_model=UserResponse)
 async def update_user(
@@ -191,16 +198,7 @@ async def update_user(
     
     try:
         updated_user = await service.update_user(user_id, user_data)
-        return {
-            "id": updated_user.id,
-            "login": updated_user.login,
-            "email": updated_user.email,
-            "full_name": getattr(updated_user, "full_name", None),
-            "role": updated_user.role,
-            "is_active": getattr(updated_user, "is_active", True),
-            "created_at": updated_user.created_at.isoformat() if getattr(updated_user, "created_at", None) else "",
-            "updated_at": getattr(updated_user, "updated_at", None).isoformat() if getattr(updated_user, "updated_at", None) else None,
-        }
+        return await _user_response(updated_user, repo)
     except ValueError as e:
         raise HTTPException(
             status_code=400, 

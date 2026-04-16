@@ -3,18 +3,11 @@ CSV upload service for collections
 """
 import csv
 import io
-import uuid
-from typing import List, Tuple, Optional, Any
-from datetime import datetime, date
+from typing import List, Tuple, Any
 
-from app.models.collection import Collection, FieldType
-
-
-class CSVValidationError(Exception):
-    """CSV validation failed"""
-    def __init__(self, message: str, errors: List[dict] = None):
-        super().__init__(message)
-        self.errors = errors or []
+from app.models.collection import Collection
+from app.core.exceptions import CSVValidationError
+from app.services.collection.field_coercion import coerce_value
 
 
 class CollectionCSVService:
@@ -26,61 +19,6 @@ class CollectionCSVService:
         self.required_fields = {
             f["name"] for f in collection.fields if f.get("required", False)
         }
-
-    def _parse_value(self, value: str, field_type: str) -> Any:
-        """Parse string value to appropriate Python type"""
-        if value is None or value.strip() == "":
-            return None
-
-        value = value.strip()
-
-        if field_type == FieldType.TEXT.value:
-            return value
-
-        if field_type == FieldType.INTEGER.value:
-            try:
-                return int(value)
-            except ValueError:
-                raise ValueError(f"Cannot parse '{value}' as integer")
-
-        if field_type == FieldType.FLOAT.value:
-            try:
-                return float(value)
-            except ValueError:
-                raise ValueError(f"Cannot parse '{value}' as float")
-
-        if field_type == FieldType.BOOLEAN.value:
-            lower = value.lower()
-            if lower in ("true", "1", "yes", "да"):
-                return True
-            if lower in ("false", "0", "no", "нет"):
-                return False
-            raise ValueError(f"Cannot parse '{value}' as boolean")
-
-        if field_type == FieldType.DATETIME.value:
-            for fmt in [
-                "%Y-%m-%dT%H:%M:%S",
-                "%Y-%m-%dT%H:%M:%SZ",
-                "%Y-%m-%d %H:%M:%S",
-                "%Y-%m-%d",
-                "%d.%m.%Y %H:%M:%S",
-                "%d.%m.%Y",
-            ]:
-                try:
-                    return datetime.strptime(value, fmt)
-                except ValueError:
-                    continue
-            raise ValueError(f"Cannot parse '{value}' as datetime")
-
-        if field_type == FieldType.DATE.value:
-            for fmt in ["%Y-%m-%d", "%d.%m.%Y"]:
-                try:
-                    return datetime.strptime(value, fmt).date()
-                except ValueError:
-                    continue
-            raise ValueError(f"Cannot parse '{value}' as date")
-
-        return value
 
     def parse_csv(
         self,
@@ -145,8 +83,8 @@ class CollectionCSVService:
                     continue
 
                 try:
-                    parsed_row[field_name] = self._parse_value(
-                        raw_value, field_def["type"]
+                    parsed_row[field_name] = coerce_value(
+                        field_name, field_def["data_type"], raw_value
                     )
                 except ValueError as e:
                     row_errors.append({

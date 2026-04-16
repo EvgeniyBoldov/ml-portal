@@ -4,6 +4,8 @@
 
 ### Users & Tenants
 
+`Tenant` здесь лучше читать как организационный контур, например отдел или подразделение, а не как жёсткую границу изоляции для общих инструментов и инстансов.
+
 ```
 ┌─────────────┐       ┌─────────────┐
 │   Tenant    │◄──────│    User     │
@@ -60,22 +62,24 @@
 
 ```
 ┌─────────────┐       ┌─────────────┐       ┌─────────────┐
-│  ToolGroup  │◄──────│    Tool     │◄──────│ToolInstance │
+│   Tool      │       │  ToolDomain │       │ToolInstance │
 ├─────────────┤       ├─────────────┤       ├─────────────┤
 │ id          │       │ id          │       │ id          │
 │ slug        │       │ slug        │       │ slug        │
 │ name        │       │ name        │       │ name        │
-│ description │       │ description │       │ tool_id     │
-└─────────────┘       │ tool_group_ │       │ instance_   │
-                      │ id          │       │ type        │
-                      │ handler_    │       │ config      │
-                      │ class       │       │ is_active   │
-                      │ parameters  │       │ health_     │
-                      └─────────────┘       │ status      │
+│ domains[]   │       │ label       │       │ tool_id     │
+└─────────────┘       │ description │       │ instance_   │
+                      └─────────────┘       │ type        │
+                                            │ config      │
+                                            │ is_active   │
+                                            │ health_     │
+                                            │ status      │
                                             └─────────────┘
 ```
 
 ### Permissions & Credentials
+
+PermissionSet and CredentialSet are still scope-aware, but scope is mainly used for control and rollout, not for forcing every tool/instance to be tenant-exclusive.
 
 ```
 ┌─────────────────┐       ┌─────────────────┐

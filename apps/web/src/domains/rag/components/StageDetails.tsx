@@ -10,7 +10,10 @@ interface StageDetailsProps {
   model: EmbeddingModel | null;
   stageType: 'pipeline' | 'embedding' | 'index';
   docId: string;
+  canRestart?: boolean;
+  canStop?: boolean;
   onRestart?: () => void;
+  onStop?: () => void;
   onDownloadOriginal?: () => void;
   onDownloadNormalized?: () => void;
 }
@@ -57,10 +60,10 @@ function MetricValue({ label, value }: { label: string; value: any }) {
   );
 }
 
-const STATUS_BADGE_VARIANT: Record<PipelineStageStatus, 'default' | 'success' | 'warning' | 'danger'> = {
-  pending: 'default',
-  queued: 'warning',
-  processing: 'warning',
+const STATUS_BADGE_TONE: Record<PipelineStageStatus, 'neutral' | 'success' | 'warn' | 'danger'> = {
+  pending: 'neutral',
+  queued: 'warn',
+  processing: 'warn',
   completed: 'success',
   failed: 'danger',
 };
@@ -95,7 +98,10 @@ export function StageDetails({
   model,
   stageType,
   docId,
+  canRestart,
+  canStop,
   onRestart,
+  onStop,
   onDownloadOriginal,
   onDownloadNormalized,
 }: StageDetailsProps) {
@@ -119,7 +125,8 @@ export function StageDetails({
     ? model.model 
     : STAGE_LABELS[(data as PipelineStage).key] || (data as PipelineStage).key;
 
-  const canRestart = status === 'failed' || status === 'completed';
+  const canRestartByStatus = status === 'failed' || status === 'completed';
+  const canRestartAction = canRestart ?? canRestartByStatus;
   const isProcessing = status === 'processing' || status === 'queued';
 
   // Show download buttons for specific stages
@@ -136,7 +143,7 @@ export function StageDetails({
       <div className={styles.header}>
         <div className={styles.titleRow}>
           <h3 className={styles.title}>{title}</h3>
-          <Badge variant={STATUS_BADGE_VARIANT[status]}>{status}</Badge>
+          <Badge tone={STATUS_BADGE_TONE[status]}>{status}</Badge>
         </div>
         {model?.version && (
           <span className={styles.version}>v{model.version}</span>
@@ -189,18 +196,24 @@ export function StageDetails({
       {/* Actions */}
       <div className={styles.actions}>
         {showDownloadOriginal && onDownloadOriginal && (
-          <Button variant="secondary" onClick={onDownloadOriginal}>
+          <Button variant="outline" onClick={onDownloadOriginal}>
             <Icon name="download" size={16} />
             Скачать оригинал
           </Button>
         )}
         {showDownloadNormalized && onDownloadNormalized && (
-          <Button variant="secondary" onClick={onDownloadNormalized}>
+          <Button variant="outline" onClick={onDownloadNormalized}>
             <Icon name="download" size={16} />
             Скачать JSON
           </Button>
         )}
-        {canRestart && onRestart && (
+        {canStop && onStop && (
+          <Button variant="warning" onClick={onStop}>
+            <Icon name="x" size={16} />
+            Остановить
+          </Button>
+        )}
+        {canRestartAction && onRestart && (
           <Button variant="primary" onClick={onRestart}>
             <Icon name="refresh-cw" size={16} />
             Перезапустить

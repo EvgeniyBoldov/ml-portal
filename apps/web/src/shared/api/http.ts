@@ -2,9 +2,14 @@ import { API_BASE } from '@/shared/config';
 import { ApiError, toApiError } from '@/shared/api/errors';
 import { idempotencyKey } from '@/shared/lib/idempotency';
 
-export interface RequestOptions extends RequestInit {
+export interface RequestOptions extends Omit<RequestInit, 'body'> {
+  body?:
+    | unknown
+    | null;
   idempotent?: boolean;
   timeout?: number;
+  query?: Record<string, string | number | boolean | null | undefined>;
+  params?: Record<string, string | number | boolean | null | undefined>;
   skipAuthRedirect?: boolean; // Skip redirect to login on 401
 }
 
@@ -50,15 +55,33 @@ export function getAccessToken(): string | null {
   return _accessToken;
 }
 
+function appendQueryParams(
+  url: string,
+  params?: Record<string, string | number | boolean | null | undefined>
+): string {
+  if (!params) return url;
+  const entries = Object.entries(params).filter(
+    ([, value]) => value !== undefined && value !== null
+  );
+  if (entries.length === 0) return url;
+
+  const searchParams = new URLSearchParams();
+  for (const [key, value] of entries) {
+    searchParams.set(key, String(value));
+  }
+
+  const delimiter = url.includes('?') ? '&' : '?';
+  return `${url}${delimiter}${searchParams.toString()}`;
+}
+
 export async function apiRequest<T>(
   path: string,
   opts: RequestOptions = {}
 ): Promise<T> {
-  const url = path.startsWith('http')
+  const baseUrl = path.startsWith('http')
     ? path
     : API_BASE.replace(/\/$/, '') + path;
-  
-  console.log('[apiRequest]', { path, API_BASE, url });
+  const url = appendQueryParams(baseUrl, opts.query ?? opts.params);
 
   // Create AbortController for timeout
   const AbortControllerCtor = ensureAbortController();
@@ -96,10 +119,17 @@ export async function apiRequest<T>(
   if (body && typeof body === 'object' && !(body instanceof FormData) && !(body instanceof Blob)) {
     body = JSON.stringify(body);
   }
+  const requestBody = body as BodyInit | null | undefined;
 
   try {
     const attempt = () =>
-      fetch(url, { ...opts, body, headers, credentials: 'include', signal });
+      fetch(url, {
+        ...opts,
+        body: requestBody ?? undefined,
+        headers,
+        credentials: 'include',
+        signal,
+      });
     let resp = await attempt();
     if (resp.status === 401 && !opts.skipAuthRedirect) {
       try {
@@ -110,7 +140,7 @@ export async function apiRequest<T>(
           retryHeaders.set('Authorization', `Bearer ${_accessToken}`);
         resp = await fetch(url, {
           ...opts,
-          body,
+          body: requestBody ?? undefined,
           headers: retryHeaders,
           credentials: 'include',
           signal,
@@ -133,13 +163,13 @@ export async function apiRequest<T>(
       }
       throw error;
     }
-    if (resp.status === 204) return undefined as unknown as T;
+    if (resp.status === 204) return undefined as T;
     const ct = resp.headers.get('Content-Type') || '';
     if (ct.includes('application/json')) {
       const data = await resp.json();
       return data as T;
     }
-    return (await resp.text()) as unknown as T;
+    return (await resp.text()) as T;
   } finally {
     if (timeoutId) clearTimeout(timeoutId);
   }

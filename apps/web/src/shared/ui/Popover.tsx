@@ -12,6 +12,7 @@ interface PopoverProps {
   onOpenChange?: (open: boolean) => void;
   anchor?: { x: number; y: number };
   id?: string;
+  ariaLabel?: string;
   'aria-haspopup'?: boolean;
 }
 
@@ -26,6 +27,7 @@ export default function Popover({
   onOpenChange,
   anchor,
   id,
+  ariaLabel,
   'aria-haspopup': ariaHaspopup = true,
 }: PopoverProps) {
   const [internalOpen, setInternalOpen] = useState(false);
@@ -156,6 +158,7 @@ export default function Popover({
           tabIndex={0}
           aria-haspopup={ariaHaspopup}
           aria-expanded={isOpen}
+          aria-label={ariaLabel}
           onClick={event => void handleTriggerClick(event)}
           onKeyDown={event => void handleTriggerKeyDown(event)}
         >

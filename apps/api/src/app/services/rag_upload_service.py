@@ -14,9 +14,12 @@ from app.core.config import get_settings
 from app.repositories.factory import AsyncRepositoryFactory
 from app.models.rag import RAGDocument
 from app.models.rag_ingest import Source
+from app.services.document_artifacts import build_document_source_meta
 from app.services.rag_status_manager import RAGStatusManager
 from app.services.rag_event_publisher import RAGEventPublisher
+from app.storage.paths import calculate_file_checksum, get_origin_path
 from app.core.logging import get_logger
+from app.services.upload_intake_policy import UploadIntakePolicy
 
 logger = get_logger(__name__)
 
@@ -57,6 +60,12 @@ class RAGUploadService:
         Returns:
             Информация о загруженном документе
         """
+        UploadIntakePolicy.validate_document_upload(
+            filename=filename,
+            content_type=content_type,
+            size_bytes=len(file_content),
+        )
+
         # Генерируем ID документа
         doc_id = uuid4()
         doc_name = name or filename or f"Document {doc_id}"
@@ -64,36 +73,44 @@ class RAGUploadService:
         
         # Подготавливаем S3 ключ
         settings = get_settings()
-        s3_key = f"rag/documents/{doc_id}/{filename}"
+        file_checksum = calculate_file_checksum(file_content)
+        s3_key = get_origin_path(self.repo_factory.tenant_id, doc_id, filename, file_checksum)
         
-        # Загружаем в S3
-        await self._upload_to_s3(file_content, s3_key, settings.S3_BUCKET_RAG)
-        
-        # Создаём записи в БД
-        document = await self._create_document_record(
-            doc_id=doc_id,
-            filename=filename,
-            name=doc_name,
-            content_type=content_type,
-            size=len(file_content),
-            tags=doc_tags,
-            s3_key=s3_key,
-            user_id=user_id
-        )
-        
-        # Создаём source для ingest pipeline
-        await self._create_source_record(
-            doc_id=doc_id,
-            filename=filename,
-            content_type=content_type,
-            size=len(file_content),
-            s3_key=s3_key
-        )
-        
-        # Инициализируем статусы
-        await self._initialize_statuses(doc_id)
-        
-        await self.session.flush()  # Flush document creation
+        bucket = settings.S3_BUCKET_RAG
+        uploaded = await self._upload_to_s3(file_content, s3_key, bucket)
+        if not uploaded:
+            raise RuntimeError(f"Failed to upload file to s3://{bucket}/{s3_key}")
+
+        try:
+            # Создаём записи в БД
+            document = await self._create_document_record(
+                doc_id=doc_id,
+                filename=filename,
+                name=doc_name,
+                content_type=content_type,
+                size=len(file_content),
+                tags=doc_tags,
+                s3_key=s3_key,
+                user_id=user_id
+            )
+
+            # Создаём source для ingest pipeline
+            await self._create_source_record(
+                doc_id=doc_id,
+                filename=filename,
+                title=doc_name,
+                content_type=content_type,
+                size=len(file_content),
+                s3_key=s3_key
+            )
+
+            # Инициализируем статусы
+            await self._initialize_statuses(doc_id)
+
+            await self.session.flush()  # Flush document creation
+        except Exception:
+            await self._cleanup_s3_object(bucket, s3_key)
+            raise
         
         return {
             "id": str(document.id),
@@ -123,6 +140,22 @@ class RAGUploadService:
         
         logger.info(f"File uploaded to S3: bucket={bucket}, key={s3_key}, size={len(file_content)}")
         return upload_result
+
+    async def _cleanup_s3_object(self, bucket: str, s3_key: str) -> None:
+        """Best-effort cleanup for partially uploaded documents."""
+        try:
+            deleted = await s3_manager.delete_object(bucket=bucket, key=s3_key)
+            if deleted:
+                logger.info("Cleaned up orphaned S3 object: s3://%s/%s", bucket, s3_key)
+            else:
+                logger.warning("Failed to clean up orphaned S3 object: s3://%s/%s", bucket, s3_key)
+        except Exception as cleanup_err:
+            logger.warning(
+                "Cleanup of orphaned S3 object failed for s3://%s/%s: %s",
+                bucket,
+                s3_key,
+                cleanup_err,
+            )
     
     async def _create_document_record(
         self,
@@ -144,6 +177,7 @@ class RAGUploadService:
             title=name,
             content_type=content_type,
             size=size,
+            size_bytes=size,
             tags=tags,
             s3_key_raw=s3_key,
             status="uploaded",
@@ -159,6 +193,7 @@ class RAGUploadService:
         self,
         doc_id: UUID,
         filename: str,
+        title: str,
         content_type: Optional[str],
         size: int,
         s3_key: str
@@ -169,12 +204,13 @@ class RAGUploadService:
             tenant_id=self.repo_factory.tenant_id,
             created_at=datetime.utcnow(),
             updated_at=datetime.utcnow(),
-            meta={
-                "filename": filename,
-                "content_type": content_type,
-                "size": size,
-                "s3_key": s3_key
-            }
+            meta=build_document_source_meta(
+                filename=filename,
+                title=title,
+                content_type=content_type,
+                size_bytes=size,
+                original_key=s3_key,
+            ),
         )
         
         self.session.add(source)

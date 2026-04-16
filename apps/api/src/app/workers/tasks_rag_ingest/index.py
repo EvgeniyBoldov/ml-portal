@@ -1,26 +1,33 @@
 from __future__ import annotations
-from app.core.logging import get_logger
-import uuid
+
+import asyncio
 import json
-import time
-from typing import Dict, Any
+import os
+import tempfile
+import uuid
 from datetime import datetime, timezone
+from typing import Dict, Any
 
 from celery import Task
 
 from app.celery_app import app as celery_app
-from app.core.config import get_settings
-from app.adapters.s3_client import s3_manager
+from app.core.logging import get_logger
 from app.adapters.embeddings import EmbeddingServiceFactory
-from app.storage.paths import get_idempotency_key
+from app.adapters.s3_client import s3_manager
 from app.repositories.rag_ingest_repos import AsyncChunkRepository, AsyncSourceRepository
-from app.repositories.factory import AsyncRepositoryFactory
-from app.services.rag_status_manager import RAGStatusManager, StageStatus
-from app.services.rag_event_publisher import RAGEventPublisher
-from app.workers.tasks_rag_ingest.error_utils import notify_stage_error
-from app.workers.session_factory import get_worker_session
+from app.services.document_artifacts import normalize_document_source_meta
+from app.storage.paths import get_idempotency_key
+from app.workers.tasks_rag_ingest.stage_context import IngestStageContext, run_stage
+from app.workers.tasks_rag_ingest.stage_results import EmbedResult, IndexResult
 
 logger = get_logger(__name__)
+
+_INDEX_POINT_NAMESPACE = uuid.UUID("4b32c67e-86c7-4efb-8980-1e0570f31d16")
+
+
+def _build_stable_point_id(tenant_id: str, source_id: str, model_alias: str, chunk_id: str) -> str:
+    raw = f"{tenant_id}:{source_id}:{model_alias}:{chunk_id}"
+    return str(uuid.uuid5(_INDEX_POINT_NAMESPACE, raw))
 
 
 @celery_app.task(
@@ -32,247 +39,249 @@ logger = get_logger(__name__)
 def index_model(self: Task, embed_result: Dict[str, Any], tenant_id: str) -> Dict[str, Any]:
     """
     Index embeddings into Qdrant vector store.
-    
+
     Flow:
     1. Read embeddings from S3 (embeddings.jsonl)
     2. Fetch chunk metadata from DB (Postgres)
     3. Upsert payload + vectors to Qdrant
-    
-    Args:
-        embed_result: Result from embed_chunks_model task
-        tenant_id: Tenant ID
-    
-    Returns:
-        Dict: Index result
+    4. Return IndexResult (terminal)
     """
-    source_id = embed_result.get('source_id')
-    model_alias = embed_result.get('model_alias')
-    embeddings_key = embed_result.get('embeddings_key')
-    
-    logger.info(f"Starting index_model for source_id: {source_id}, model: {model_alias}")
-    
-    try:
-        import asyncio
-        
-        async def _index():
-            start_time = time.monotonic()
-            settings = get_settings()
-            
-            import redis.asyncio as redis
-            redis_client = redis.from_url(settings.REDIS_URL, decode_responses=True)
-            
-            lock_key = f"lock:index:{source_id}:{model_alias}"
-            
-            try:
-                async with redis_client.lock(lock_key, timeout=600, blocking_timeout=5):
-                    async with get_worker_session() as session:
-                        repo_factory = AsyncRepositoryFactory(session, uuid.UUID(tenant_id))
-                        event_publisher = RAGEventPublisher(redis_client)
-                        status_manager = RAGStatusManager(session, repo_factory, event_publisher)
-                        
-                        chunk_repo = AsyncChunkRepository(session, uuid.UUID(tenant_id))
-                        
-                        # 1. Update status
-                        await status_manager.transition_stage(
-                            doc_id=uuid.UUID(source_id),
-                            stage=f'index.{model_alias}',
-                            new_status=StageStatus.PROCESSING,
-                            celery_task_id=self.request.id
-                        )
-                        await session.flush()
-                        
-                        # 2. Check idempotency
-                        idem_key = get_idempotency_key(
-                            uuid.UUID(tenant_id), uuid.UUID(source_id),
-                            "index", model_alias
-                        )
-                        
-                        if await redis_client.exists(idem_key):
-                            logger.info(f"Index already completed for {source_id} with {model_alias}")
-                            await status_manager.transition_stage(
-                                doc_id=uuid.UUID(source_id),
-                                stage=f'index.{model_alias}',
-                                new_status=StageStatus.COMPLETED,
-                                metrics={'status': 'already_processed', 'cached': True}
-                            )
-                            await session.commit()
-                            return {
-                                "status": "already_processed", 
-                                "source_id": source_id, 
-                                "model_alias": model_alias
-                            }
-                        
-                        # 3. Read Embeddings from S3 (Stream optimized)
-                        if not embeddings_key:
-                            raise ValueError(f"No embeddings_key provided for {source_id}")
+    prev = EmbedResult.from_dict(embed_result) if isinstance(embed_result, dict) and "source_id" in embed_result else None
+    source_id = prev.source_id if prev else embed_result.get("source_id", "")
+    model_alias = prev.model_alias if prev else embed_result.get("model_alias", "")
+    embeddings_key = prev.embeddings_key if prev else embed_result.get("embeddings_key")
 
-                        # Use temporary file to avoid loading huge JSONL into memory
-                        import tempfile
-                        import os
-                        
-                        indexed_count = 0
-                        
-                        # 4. Fetch Chunks Metadata from DB
-                        # Loading all chunks metadata might still be heavy if millions of chunks,
-                        # but usually chunks metadata is much smaller than vectors.
-                        # If this becomes a bottleneck, we'd need to paginate chunk fetching too.
-                        chunks = await chunk_repo.get_by_source_id(uuid.UUID(source_id))
-                        chunk_map = {c.chunk_id: c for c in chunks}
-                        
-                        # 5. Prepare Qdrant Client
-                        from app.adapters.impl.qdrant import QdrantVectorStore
-                        vector_store = QdrantVectorStore()
-                        embedding_service = EmbeddingServiceFactory.get_service(model_alias)
-                        model_info = embedding_service.get_model_info()
-                        
-                        collection_name = f"{tenant_id}__{model_alias}"
-                        await vector_store.ensure_collection(collection_name, model_info.dimensions)
+    stage_name = f"index.{model_alias}"
 
-                        # Create temp file
-                        fd, tmp_path = tempfile.mkstemp()
-                        os.close(fd)
-                        
-                        try:
-                            # Download to temp file
-                            await s3_manager.download_file(
-                                bucket=settings.S3_BUCKET_RAG, 
-                                key=embeddings_key,
-                                file_path=tmp_path
-                            )
-                            
-                            # Read line by line and batch upsert
-                            batch_size = 100
-                            vectors = []
-                            payloads = []
-                            ids = []
-                            
-                            with open(tmp_path, 'r', encoding='utf-8') as f:
-                                for line in f:
-                                    line = line.strip()
-                                    if not line:
-                                        continue
-                                        
-                                    try:
-                                        record = json.loads(line)
-                                        chunk_id = record['chunk_id']
-                                        chunk = chunk_map.get(chunk_id)
-                                        
-                                        if not chunk:
-                                            # Chunk deleted or not found? Skip
-                                            continue
-                                            
-                                        vectors.append(record['vector'])
-                                        ids.append(str(uuid.uuid4())) # Qdrant Point ID
-                                        
-                                        payload = {
-                                            "tenant_id": tenant_id,
-                                            "source_id": source_id,
-                                            "chunk_id": chunk_id,
-                                            "page": chunk.page or 0,
-                                            "lang": chunk.lang or "en",
-                                            "mime": "text/plain",
-                                            "embed_model_alias": model_alias,
-                                            "version": model_info.version,
-                                            "updated_at": datetime.now(timezone.utc).isoformat(),
-                                            "tags": [],
-                                            "text": chunk.meta.get('text', '') if chunk.meta else ''
-                                        }
-                                        payloads.append(payload)
-                                        
-                                        # Upsert batch if full
-                                        if len(vectors) >= batch_size:
-                                            await vector_store.upsert(collection_name, vectors, payloads, ids)
-                                            indexed_count += len(vectors)
-                                            vectors = []
-                                            payloads = []
-                                            ids = []
-                                            
-                                    except json.JSONDecodeError:
-                                        logger.warning(f"Skipping invalid JSON line in embeddings for {source_id}")
-                                        continue
-                            
-                            # Upsert remaining
-                            if vectors:
-                                await vector_store.upsert(collection_name, vectors, payloads, ids)
-                                indexed_count += len(vectors)
-                                
-                        finally:
-                            # Cleanup temp file
-                            if os.path.exists(tmp_path):
-                                os.unlink(tmp_path)
-                        
-                        # 6. Handle empty case
-                        if indexed_count == 0:
-                             logger.warning(f"No embeddings indexed for {source_id}")
-                             # Mark as done but empty
-                             await status_manager.transition_stage(
-                                doc_id=uuid.UUID(source_id),
-                                stage=f'index.{model_alias}',
-                                new_status=StageStatus.COMPLETED,
-                                metrics={'indexed_count': 0}
-                            )
-                             await session.commit()
-                             return {"status": "completed", "indexed_count": 0}
+    async def _execute(ctx: IngestStageContext) -> IndexResult:
+        current_embeddings_key = embeddings_key
+        lock_key = f"lock:index:{source_id}:{model_alias}"
 
-                        # 7. Complete
-                        duration_sec = round(time.monotonic() - start_time, 2)
-                        await status_manager.transition_stage(
-                            doc_id=uuid.UUID(source_id),
-                            stage=f'index.{model_alias}',
-                            new_status=StageStatus.COMPLETED,
-                            metrics={
-                                'indexed_count': indexed_count,
-                                'collection': collection_name,
-                                'model_version': model_info.version,
-                                'duration_sec': duration_sec
-                            }
-                        )
-                        
-                        await redis_client.setex(
-                            idem_key,
-                            86400,
-                            json.dumps({"status": "completed", "indexed_count": indexed_count})
-                        )
-                        
-                        await session.commit()
-                        
-                        # Trigger commit check via separate task if needed, 
-                        # but RAGStatusManager updates aggregate status automatically.
-                        
-                        return {
-                            "source_id": source_id,
-                            "model_alias": model_alias,
-                            "indexed_count": indexed_count,
-                            "status": "completed"
-                        }
-            except Exception as e:
-                logger.error(f"Error in index task for {source_id}:{model_alias}: {e}")
-                try:
-                    await notify_stage_error(source_id, tenant_id, f'index.{model_alias}', e)
-                except Exception:
-                    pass
-                raise
-            finally:
-                if redis_client:
+        async with ctx.redis.lock(lock_key, timeout=600, blocking_timeout=5):
+            # 1. Mark processing
+            await ctx.set_processing()
+
+            chunk_repo = AsyncChunkRepository(ctx.session, ctx.tenant_id)
+
+            # 2. Check idempotency
+            cached = await ctx.check_idempotency(model_alias=model_alias)
+            if cached:
+                logger.info(f"Index already completed for {source_id} with {model_alias}")
+                await ctx.set_completed(metrics={"status": "already_processed", "cached": True})
+                await ctx.session.commit()
+                return IndexResult(source_id=source_id, model_alias=model_alias, indexed_count=cached.get("indexed_count", 0))
+
+            # 3. Validate embeddings key
+            if not current_embeddings_key:
+                embed_idem_key = get_idempotency_key(ctx.tenant_id, ctx.source_id, "embed", model_alias)
+                raw_cached = await ctx.redis.get(embed_idem_key)
+                if raw_cached:
                     try:
-                        await redis_client.close()
-                        await redis_client.connection_pool.disconnect()
-                    except Exception:
-                        pass
+                        cached_embed = json.loads(raw_cached)
+                        current_embeddings_key = cached_embed.get("embeddings_key")
+                    except (json.JSONDecodeError, TypeError):
+                        current_embeddings_key = None
+            if not current_embeddings_key:
+                source_repo = AsyncSourceRepository(ctx.session, ctx.tenant_id)
+                source = await source_repo.get_by_id(ctx.source_id)
+                normalized_meta = normalize_document_source_meta((source.meta or {}) if source else {})
+                embedding_artifacts = normalized_meta.get("embedding_artifacts") or {}
+                artifact = embedding_artifacts.get(model_alias)
+                if isinstance(artifact, dict):
+                    current_embeddings_key = artifact.get("key")
+                elif isinstance(artifact, str):
+                    current_embeddings_key = artifact
+            if not current_embeddings_key:
+                prefix = f"{ctx.tenant_id_str}/{source_id}/embeddings/{model_alias}/"
+                objects = await s3_manager.list_objects(
+                    bucket=ctx.settings.S3_BUCKET_RAG,
+                    prefix=prefix,
+                    max_keys=200,
+                )
+                candidates = [
+                    obj
+                    for obj in objects
+                    if isinstance(obj, dict) and str(obj.get("Key", "")).endswith(".jsonl")
+                ]
+                if candidates:
+                    candidates.sort(
+                        key=lambda obj: (
+                            obj.get("LastModified") is not None,
+                            obj.get("LastModified") or "",
+                            str(obj.get("Key", "")),
+                        ),
+                        reverse=True,
+                    )
+                    current_embeddings_key = str(candidates[0].get("Key"))
+            if not current_embeddings_key:
+                raise ValueError(f"No embeddings_key provided for {source_id}")
 
-        return asyncio.run(_index())
-    
-    except Exception as e:
-        logger.error(f"Error in index_model for {source_id}: {e}")
-        # No auto-retry - error is already handled in _index() via notify_stage_error
-        raise
+            # 4. Fetch Chunks Metadata from DB
+            chunks = await chunk_repo.get_by_source_id(ctx.source_id)
+            chunk_map = {c.chunk_id: c for c in chunks}
 
+            # 5. Prepare Qdrant Client
+            from app.adapters.impl.qdrant import QdrantVectorStore
 
-@celery_app.task(
-    queue="ingest.commit",
-    bind=True
-)
-def commit_source(self: Task, *args, **kwargs):
-    # Placeholder to keep imports valid if referenced elsewhere, 
-    # but main logic is now in status manager aggregation.
-    pass
+            vector_store = QdrantVectorStore()
+            await EmbeddingServiceFactory.ensure_model_registered_async(ctx.session, model_alias)
+            embedding_service = EmbeddingServiceFactory.get_service(model_alias)
+            model_info = embedding_service.get_model_info()
+
+            # Resolve Qdrant collection name: use collection's own name if available
+            source_repo = AsyncSourceRepository(ctx.session, ctx.tenant_id)
+            source = await source_repo.get_by_id(ctx.source_id)
+            source_meta = normalize_document_source_meta((source.meta or {}) if source else {})
+            collection_meta = source_meta.get("collection", {})
+
+            coll_qdrant_name = collection_meta.get("qdrant_collection_name")
+            collection_name = coll_qdrant_name or f"{ctx.tenant_id_str}__{model_alias}"
+
+            # Collection context for payload enrichment
+            coll_collection_id = collection_meta.get("id")
+            coll_row_id = collection_meta.get("row_id")
+
+            # 6. Download embeddings to temp file and batch upsert
+            fd, tmp_path = tempfile.mkstemp()
+            os.close(fd)
+
+            indexed_count = 0
+            try:
+                await s3_manager.download_file(
+                    bucket=ctx.settings.S3_BUCKET_RAG,
+                    key=current_embeddings_key,
+                    file_path=tmp_path,
+                )
+
+                batch_size = 100
+                vectors = []
+                payloads = []
+                ids = []
+                collection_ready = False
+
+                async def _upsert_with_retry(batch_vectors, batch_payloads, batch_ids) -> None:
+                    attempts = 3
+                    for attempt in range(1, attempts + 1):
+                        try:
+                            await vector_store.upsert(collection_name, batch_vectors, batch_payloads, batch_ids)
+                            return
+                        except Exception as exc:
+                            if attempt >= attempts:
+                                raise
+                            logger.warning(
+                                "Qdrant upsert retry %s/%s for source=%s model=%s: %s",
+                                attempt,
+                                attempts,
+                                source_id,
+                                model_alias,
+                                str(exc),
+                            )
+                            await asyncio.sleep(0.3 * attempt)
+
+                with open(tmp_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+
+                        try:
+                            record = json.loads(line)
+                        except json.JSONDecodeError:
+                            logger.warning(f"Skipping invalid JSON line in embeddings for {source_id}")
+                            continue
+
+                        chunk_id = record["chunk_id"]
+                        chunk = chunk_map.get(chunk_id)
+                        if not chunk:
+                            continue
+
+                        vector = record["vector"]
+                        vectors.append(vector)
+                        vector_dim = len(vector) if isinstance(vector, (list, tuple)) else model_info.dimensions
+                        if not collection_ready:
+                            try:
+                                await vector_store.ensure_collection(collection_name, vector_dim)
+                            except ValueError as exc:
+                                if coll_qdrant_name:
+                                    model_specific_collection = f"{coll_qdrant_name}__{model_alias}"
+                                    logger.warning(
+                                        "Qdrant collection dim mismatch for %s (%s), fallback to %s",
+                                        collection_name,
+                                        str(exc),
+                                        model_specific_collection,
+                                    )
+                                    collection_name = model_specific_collection
+                                    await vector_store.ensure_collection(collection_name, vector_dim)
+                                else:
+                                    raise
+                            collection_ready = True
+
+                        ids.append(
+                            _build_stable_point_id(
+                                tenant_id=ctx.tenant_id_str,
+                                source_id=source_id,
+                                model_alias=model_alias,
+                                chunk_id=chunk_id,
+                            )
+                        )
+
+                        payload = {
+                            "tenant_id": ctx.tenant_id_str,
+                            "source_id": source_id,
+                            "chunk_id": chunk_id,
+                            "page": chunk.page or 0,
+                            "lang": chunk.lang or "en",
+                            "mime": "text/plain",
+                            "embed_model_alias": model_alias,
+                            "version": model_info.version,
+                            "updated_at": datetime.now(timezone.utc).isoformat(),
+                            "tags": [],
+                            "text": chunk.meta.get("text", "") if chunk.meta else "",
+                        }
+                        # Enrich with collection context if present
+                        if coll_collection_id:
+                            payload["collection_id"] = coll_collection_id
+                        if coll_row_id:
+                            payload["row_id"] = coll_row_id
+
+                        payloads.append(payload)
+
+                        if len(vectors) >= batch_size:
+                            await _upsert_with_retry(vectors, payloads, ids)
+                            indexed_count += len(vectors)
+                            vectors, payloads, ids = [], [], []
+
+                if vectors:
+                    await _upsert_with_retry(vectors, payloads, ids)
+                    indexed_count += len(vectors)
+            finally:
+                if os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
+
+            # 7. Complete
+            await ctx.set_completed(metrics={
+                "indexed_count": indexed_count,
+                "collection": collection_name,
+                "model_version": model_info.version,
+                "duration_sec": ctx.elapsed_sec,
+            })
+            await ctx.save_idempotency(
+                {"status": "completed", "indexed_count": indexed_count},
+                model_alias=model_alias,
+            )
+            await ctx.session.commit()
+
+            return IndexResult(
+                source_id=source_id,
+                model_alias=model_alias,
+                indexed_count=indexed_count,
+                collection=collection_name,
+            )
+
+    return run_stage(
+        stage_name=stage_name,
+        source_id=source_id,
+        tenant_id=tenant_id,
+        celery_task=self,
+        execute_fn=_execute,
+    )

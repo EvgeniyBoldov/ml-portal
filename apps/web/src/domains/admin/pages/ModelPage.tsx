@@ -1,29 +1,33 @@
 /**
- * ModelPage - View/Edit/Create model with EntityPageV2
- * 
- * Unified page for all model operations:
- * - View: /admin/models/:id (readonly)
- * - Edit: /admin/models/:id?mode=edit
- * - Create: /admin/models/new
+ * ModelPage — просмотр/создание/редактирование/удаление модели.
+ *
+ * Использует useEntityEditor для стандартной CRUD логики.
+ * vectorDim — отдельный стейт, т.к. хранится в extra_config.
  */
-import { useState, useEffect } from 'react';
-import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { adminApi, type ModelCreate, type ModelUpdate, type ModelType, type ModelStatus } from '@/shared/api/admin';
+import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import {
+  adminApi,
+  type Model,
+  type ModelCreate,
+  type ModelUpdate,
+  type ModelType,
+  type ModelStatus,
+  type ModelConnector,
+} from '@/shared/api/admin';
 import { toolInstancesApi } from '@/shared/api/toolInstances';
 import { qk } from '@/shared/api/keys';
-import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
-import { EntityPageV2, Tab, type EntityPageMode, type BreadcrumbItem } from '@/shared/ui/EntityPage/EntityPageV2';
-import { ContentBlock, type FieldDefinition } from '@/shared/ui/ContentBlock';
+import { useEntityEditor } from '@/shared/hooks/useEntityEditor';
+import { EntityPageV2, Tab, type BreadcrumbItem } from '@/shared/ui/EntityPage';
+import { Block, type FieldConfig } from '@/shared/ui/GridLayout';
 import { Badge, ConfirmDialog } from '@/shared/ui';
 
-type ApiErrorShape = {
-  message?: string;
-};
+/* ─── Constants ─── */
 
 const MODEL_TYPES: { value: ModelType; label: string }[] = [
   { value: 'llm_chat', label: 'LLM Chat' },
   { value: 'embedding', label: 'Embedding' },
+  { value: 'reranker', label: 'Reranker' },
 ];
 
 const MODEL_STATUSES: { value: ModelStatus; label: string }[] = [
@@ -33,338 +37,428 @@ const MODEL_STATUSES: { value: ModelStatus; label: string }[] = [
   { value: 'maintenance', label: 'Обслуживание' },
 ];
 
-const PROVIDERS = [
-  { value: 'openai', label: 'OpenAI' },
-  { value: 'groq', label: 'Groq' },
-  { value: 'local', label: 'Local Container' },
-  { value: 'azure', label: 'Azure OpenAI' },
+const CONNECTORS: { value: ModelConnector; label: string }[] = [
+  { value: 'openai_http', label: 'OpenAI HTTP' },
+  { value: 'azure_openai_http', label: 'Azure OpenAI' },
+  { value: 'local_emb_http', label: 'Local Embedding (HTTP)' },
+  { value: 'local_rerank_http', label: 'Local Reranker (HTTP)' },
+  { value: 'local_llm_http', label: 'Local LLM (HTTP)' },
+  { value: 'grpc', label: 'gRPC' },
 ];
 
+/* ─── Field configs ─── */
+
+const INFO_FIELDS_VIEW: FieldConfig[] = [
+  {
+    key: 'alias',
+    type: 'text',
+    label: 'Алиас',
+    description: 'Уникальный идентификатор модели',
+    editable: false,
+    placeholder: 'llm.chat.default',
+  },
+  {
+    key: 'name',
+    type: 'text',
+    label: 'Название',
+    required: true,
+    placeholder: 'GPT-4 Turbo',
+  },
+  {
+    key: 'type',
+    type: 'select',
+    label: 'Тип модели',
+    description: 'LLM Chat или Embedding',
+    editable: false,
+    options: MODEL_TYPES.map(t => ({ value: t.value, label: t.label })),
+  },
+  {
+    key: 'description',
+    type: 'textarea',
+    label: 'Описание',
+    placeholder: 'Описание модели...',
+    rows: 3,
+  },
+];
+
+const INFO_FIELDS_CREATE: FieldConfig[] = [
+  {
+    key: 'alias',
+    type: 'text',
+    label: 'Алиас',
+    description: 'Уникальный идентификатор (напр. llm.chat.default)',
+    required: true,
+    placeholder: 'llm.chat.default',
+  },
+  {
+    key: 'name',
+    type: 'text',
+    label: 'Название',
+    required: true,
+    placeholder: 'GPT-4 Turbo',
+  },
+  {
+    key: 'type',
+    type: 'select',
+    label: 'Тип модели',
+    description: 'LLM Chat или Embedding',
+    required: true,
+    options: MODEL_TYPES.map(t => ({ value: t.value, label: t.label })),
+  },
+  {
+    key: 'description',
+    type: 'textarea',
+    label: 'Описание',
+    placeholder: 'Описание модели...',
+    rows: 3,
+  },
+];
+
+const CONNECTOR_FIELDS: FieldConfig[] = [
+  {
+    key: 'connector',
+    type: 'select',
+    label: 'Коннектор',
+    required: true,
+    description: 'Тип подключения к модели',
+    options: CONNECTORS.map(c => ({ value: c.value, label: c.label })),
+  },
+  {
+    key: 'provider_model_name',
+    type: 'text',
+    label: 'Имя модели / сервиса',
+    required: true,
+    placeholder: 'gpt-4-turbo-preview или all-MiniLM-L6-v2',
+  },
+  {
+    key: 'base_url',
+    type: 'text',
+    label: 'Base URL',
+    placeholder: 'http://emb:8001',
+    description: 'Прямой URL для локальных или standalone моделей',
+  },
+  {
+    key: 'instance_id',
+    type: 'select',
+    label: 'Коннектор (провайдер)',
+    description: 'Подключение к провайдеру (URL + креды). Для local_* рекомендуется указывать именно коннектор.',
+  },
+  {
+    key: 'model_version',
+    type: 'text',
+    label: 'Версия модели',
+    placeholder: 'v1.0.0',
+    description: 'Версия для отслеживания изменений',
+  },
+];
+
+const STATUS_FIELDS: FieldConfig[] = [
+  {
+    key: 'status',
+    type: 'select',
+    label: 'Статус',
+    description: 'Доступность модели',
+    options: MODEL_STATUSES.map(s => ({ value: s.value, label: s.label })),
+  },
+  {
+    key: 'enabled',
+    type: 'boolean',
+    label: 'Включена',
+    description: 'Модель доступна для использования',
+  },
+  {
+    key: 'default_for_type',
+    type: 'boolean',
+    label: 'По умолчанию для типа',
+    description: 'Используется по умолчанию для данного типа моделей',
+  },
+];
+
+const EMBEDDING_FIELDS: FieldConfig[] = [
+  {
+    key: 'vector_dim',
+    type: 'number',
+    label: 'Размерность вектора',
+    required: true,
+    placeholder: '1536',
+    description: 'Размерность векторного представления',
+  },
+];
+
+const HEALTH_FIELDS: FieldConfig[] = [
+  {
+    key: 'health_status',
+    type: 'badge',
+    label: 'Health Status',
+    badgeTone: 'success',
+    editable: false,
+  },
+  {
+    key: 'health_latency_ms',
+    type: 'text',
+    label: 'Задержка (мс)',
+    editable: false,
+  },
+  {
+    key: 'health_error',
+    type: 'text',
+    label: 'Ошибка',
+    editable: false,
+  },
+  {
+    key: 'last_health_check_at',
+    type: 'date',
+    label: 'Последняя проверка',
+    editable: false,
+  },
+];
+
+const META_FIELDS: FieldConfig[] = [
+  { key: 'id', type: 'code', label: 'ID', editable: false },
+  { key: 'instance_name', type: 'text', label: 'Коннектор', editable: false },
+  { key: 'is_system', type: 'badge', label: 'Системная', badgeTone: 'warn', editable: false },
+  { key: 'created_at', type: 'date', label: 'Создана', editable: false },
+  { key: 'updated_at', type: 'date', label: 'Обновлена', editable: false },
+];
+
+/* ─── Component ─── */
+
 export function ModelPage() {
-  const { id } = useParams<{ id: string }>();
-  const navigate = useNavigate();
-  const [searchParams, setSearchParams] = useSearchParams();
-  const queryClient = useQueryClient();
-  const showError = useErrorToast();
-  const showSuccess = useSuccessToast();
-  
-  // Determine mode
-  const isCreate = !id;
-  const isEditMode = searchParams.get('mode') === 'edit';
-  const mode: EntityPageMode = isCreate ? 'create' : isEditMode ? 'edit' : 'view';
-  const isEditable = mode === 'edit' || mode === 'create';
-  const [saving, setSaving] = useState(false);
-  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-  
-  // Form state
-  const [formData, setFormData] = useState<Partial<ModelCreate>>({
-    alias: '',
-    name: '',
-    type: 'llm_chat',
-    provider: 'openai',
-    provider_model_name: '',
-    instance_id: '',
-    status: 'available',
-    enabled: true,
-    default_for_type: false,
-    model_version: '',
-    description: '',
-    extra_config: {},
-  });
   const [vectorDim, setVectorDim] = useState<string>('');
-  
-  // Load existing model
-  const { data: model, isLoading, refetch } = useQuery({
-    queryKey: qk.admin.models.detail(id || ''),
-    queryFn: () => adminApi.getModel(id!),
-    enabled: !isCreate && !!id,
-  });
 
-  // Load instances for select dropdown
-  const { data: instances = [] } = useQuery({
-    queryKey: qk.toolInstances.all(),
-    queryFn: () => toolInstancesApi.list(),
-  });
-
-  // Build instance options for select
-  const instanceOptions = [
-    { value: '', label: '— Не выбран —' },
-    ...instances.map((inst) => ({
-      value: inst.id,
-      label: `${inst.name} (${inst.slug})`,
-    })),
-  ];
-  
-  // Populate form when model loads
-  useEffect(() => {
-    if (model) {
-      setFormData({
-        alias: model.alias,
-        name: model.name,
-        type: model.type,
-        provider: model.provider,
-        provider_model_name: model.provider_model_name,
-        instance_id: model.instance_id || '',
-        status: model.status,
-        enabled: model.enabled,
-        default_for_type: model.default_for_type,
-        model_version: model.model_version || '',
-        description: model.description || '',
-        extra_config: model.extra_config || {},
-      });
-      if (model.extra_config?.vector_dim) {
-        setVectorDim(String(model.extra_config.vector_dim));
+  const {
+    mode,
+    isNew,
+    isEditable,
+    entity: model,
+    isLoading,
+    formData,
+    saving,
+    showDeleteConfirm,
+    setShowDeleteConfirm,
+    breadcrumbs,
+    handleFieldChange,
+    handleSave,
+    handleEdit,
+    handleCancel,
+    handleDelete,
+    handleDeleteConfirm,
+  } = useEntityEditor<Model, ModelCreate, ModelUpdate>({
+    entityType: 'model',
+    entityNameLabel: 'Модели',
+    entityTypeLabel: 'модель',
+    basePath: '/admin/platform/models',
+    listPath: '/admin/platform',
+    api: {
+      get: (id) => adminApi.getModel(id),
+      create: (data) => adminApi.createModel(data),
+      update: (id, data) => adminApi.updateModel(id, data),
+      delete: (id) => adminApi.deleteModel(id),
+    },
+    queryKeys: {
+      list: qk.admin.models.list({}),
+      detail: (id) => qk.admin.models.detail(id),
+    },
+    getInitialFormData: (m) => {
+      if (m?.extra_config?.vector_dim) {
+        setVectorDim(String(m.extra_config.vector_dim));
       }
-    }
-  }, [model]);
-  
-  // Mutations
-  const createMutation = useMutation({
-    mutationFn: (data: ModelCreate) => adminApi.createModel(data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.admin.models.all() });
+      return {
+        alias: m?.alias ?? '',
+        name: m?.name ?? '',
+        type: m?.type ?? 'llm_chat',
+        connector: m?.connector ?? 'openai_http',
+        provider: m?.provider ?? '',
+        provider_model_name: m?.provider_model_name ?? '',
+        base_url: m?.base_url ?? '',
+        instance_id: m?.instance_id ?? '',
+        status: m?.status ?? 'available',
+        enabled: m?.enabled ?? true,
+        default_for_type: m?.default_for_type ?? false,
+        model_version: m?.model_version ?? '',
+        description: m?.description ?? '',
+        extra_config: m?.extra_config ?? {},
+      };
     },
-  });
-  
-  const updateMutation = useMutation({
-    mutationFn: (data: ModelUpdate) => adminApi.updateModel(id!, data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.admin.models.all() });
-      queryClient.invalidateQueries({ queryKey: qk.admin.models.detail(id!) });
-    },
-  });
-
-  const deleteMutation = useMutation({
-    mutationFn: () => adminApi.deleteModel(id!),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.admin.models.all() });
-      showSuccess('Модель удалена');
-      navigate('/admin/models');
-    },
-    onError: (err: unknown) => showError((err as ApiErrorShape)?.message || 'Ошибка удаления'),
-  });
-  
-  // Handlers
-  const handleSave = async () => {
-    setSaving(true);
-    try {
-      const extra_config: Record<string, unknown> = { ...formData.extra_config };
-      if (formData.type === 'embedding' && vectorDim) {
+    transformCreate: (data) => {
+      const extra_config: Record<string, unknown> = { ...(data.extra_config ?? {}) };
+      if (data.type === 'embedding' && vectorDim) {
         extra_config.vector_dim = parseInt(vectorDim, 10);
       }
-      
-      if (mode === 'create') {
-        const data = {
-          ...formData,
-          extra_config: Object.keys(extra_config).length > 0 ? extra_config : undefined,
-        } as ModelCreate;
-        await createMutation.mutateAsync(data);
-        showSuccess('Модель создана');
-        navigate('/admin/models');
-      } else {
-        const updateData: ModelUpdate = {
-          name: formData.name,
-          provider: formData.provider,
-          provider_model_name: formData.provider_model_name,
-          instance_id: formData.instance_id || undefined,
-          status: formData.status,
-          enabled: formData.enabled,
-          default_for_type: formData.default_for_type,
-          model_version: formData.model_version,
-          description: formData.description,
-        };
-        if (formData.type === 'embedding') {
-          updateData.extra_config = extra_config;
-        }
-        await updateMutation.mutateAsync(updateData);
-        showSuccess('Модель обновлена');
-        setSearchParams({});
-        refetch();
+      return {
+        ...data,
+        base_url: data.base_url || undefined,
+        instance_id: data.instance_id || undefined,
+        model_version: data.model_version || undefined,
+        description: data.description || undefined,
+        extra_config: Object.keys(extra_config).length > 0 ? extra_config : undefined,
+      } as ModelCreate;
+    },
+    transformUpdate: (data) => {
+      const extra_config: Record<string, unknown> = { ...(data.extra_config ?? {}) };
+      if (data.type === 'embedding' && vectorDim) {
+        extra_config.vector_dim = parseInt(vectorDim, 10);
       }
-    } catch (err) {
-      showError(err instanceof Error ? err.message : 'Ошибка сохранения');
-    } finally {
-      setSaving(false);
-    }
-  };
-  
-  const handleEdit = () => setSearchParams({ mode: 'edit' });
-  
-  const handleCancel = () => {
-    if (mode === 'edit' && model) {
-      setFormData({
-        alias: model.alias,
-        name: model.name,
-        type: model.type,
-        provider: model.provider,
-        provider_model_name: model.provider_model_name,
-        instance_id: model.instance_id || '',
-        status: model.status,
-        enabled: model.enabled,
-        default_for_type: model.default_for_type,
-        model_version: model.model_version || '',
-        description: model.description || '',
-        extra_config: model.extra_config || {},
-      });
-      setSearchParams({});
-    } else if (mode === 'create') {
-      navigate('/admin/models');
-    }
-  };
-  
-  const handleDelete = () => setShowDeleteConfirm(true);
+      return {
+        name: data.name,
+        connector: data.connector,
+        provider_model_name: data.provider_model_name,
+        base_url: data.base_url || undefined,
+        instance_id: data.instance_id || undefined,
+        status: data.status,
+        enabled: data.enabled,
+        default_for_type: data.default_for_type,
+        model_version: data.model_version,
+        description: data.description,
+        ...(data.type === 'embedding' ? { extra_config } : {}),
+      } as ModelUpdate;
+    },
+    messages: {
+      create: 'Модель создана',
+      update: 'Модель обновлена',
+      delete: 'Модель удалена',
+    },
+  });
 
-  const handleDeleteConfirm = async () => {
-    setSaving(true);
-    await deleteMutation.mutateAsync();
-    setSaving(false);
-    setShowDeleteConfirm(false);
-  };
-  
-  const handleFieldChange = (key: string, value: unknown) => {
-    setFormData((prev: Partial<ModelCreate>) => ({ ...prev, [key]: value }));
-  };
+  // ─── Коннекторы для select ───
+  const { data: instances = [] } = useQuery({
+    queryKey: qk.toolInstances.list({ connector_type: 'model', placement: 'remote' }),
+    queryFn: () => toolInstancesApi.list({ connector_type: 'model', placement: 'remote' }),
+    staleTime: 60_000,
+  });
 
-  const breadcrumbs: BreadcrumbItem[] = [
-    { label: 'Модели', href: '/admin/models' },
-    { label: model?.name || 'Новая модель' },
+  // ─── Derived ───
+  const instanceOptions = [
+    { value: '', label: '— Не выбран —' },
+    ...instances.map((inst) => ({ value: inst.id, label: `${inst.name} (${inst.slug})` })),
   ];
 
-  // Field definitions
-  const basicInfoFields: FieldDefinition[] = [
-    {
-      key: 'alias',
-      label: 'Алиас',
-      type: 'text',
-      required: true,
-      placeholder: 'llm.chat.default',
-      disabled: mode !== 'create',
-      description: mode === 'create' ? 'Уникальный идентификатор. Нельзя изменить после создания.' : undefined,
-    },
-    {
-      key: 'name',
-      label: 'Название',
-      type: 'text',
-      required: true,
-      placeholder: 'GPT-4 Turbo',
-    },
-    {
-      key: 'type',
-      label: 'Тип',
-      type: 'select',
-      required: true,
-      disabled: mode !== 'create',
-      options: MODEL_TYPES.map(t => ({ value: t.value, label: t.label })),
-    },
-    {
-      key: 'description',
-      label: 'Описание',
-      type: 'textarea',
-      placeholder: 'Описание модели...',
-      rows: 3,
-    },
-  ];
+  const viewData = {
+    alias: model?.alias ?? '',
+    name: model?.name ?? '',
+    type: model?.type ?? 'llm_chat',
+    description: model?.description ?? '',
+    connector: model?.connector ?? 'openai_http',
+    provider_model_name: model?.provider_model_name ?? '',
+    base_url: model?.base_url ?? '',
+    instance_id: model?.instance_id ?? '',
+    model_version: model?.model_version ?? '',
+    status: model?.status ?? 'available',
+    enabled: model?.enabled ?? false,
+    default_for_type: model?.default_for_type ?? false,
+    id: model?.id ?? '',
+    instance_name: model?.instance_name ?? '—',
+    is_system: model?.is_system ? 'Да' : 'Нет',
+    created_at: model?.created_at ?? '',
+    updated_at: model?.updated_at ?? '',
+  };
 
-  const providerFields: FieldDefinition[] = [
-    {
-      key: 'provider',
-      label: 'Провайдер',
-      type: 'select',
-      required: true,
-      options: PROVIDERS.map(p => ({ value: p.value, label: p.label })),
-    },
-    {
-      key: 'provider_model_name',
-      label: 'Имя модели у провайдера',
-      type: 'text',
-      required: true,
-      placeholder: 'gpt-4-turbo-preview',
-    },
-    {
-      key: 'instance_id',
-      label: 'Инстанс (провайдер)',
-      type: 'select',
-      options: instanceOptions,
-      description: 'Подключение к провайдеру (URL + креды)',
-    },
-  ];
+  const blockData = isEditable ? formData : viewData;
+  const embeddingData = { vector_dim: vectorDim };
+  const isEmbedding = (isEditable ? formData.type : model?.type) === 'embedding';
 
-  const statusFields: FieldDefinition[] = [
-    {
-      key: 'status',
-      label: 'Статус',
-      type: 'select',
-      options: MODEL_STATUSES.map(s => ({ value: s.value, label: s.label })),
-    },
-    {
-      key: 'enabled',
-      label: 'Включена',
-      type: 'boolean',
-      description: 'Модель доступна для использования',
-    },
-    {
-      key: 'default_for_type',
-      label: 'По умолчанию для типа',
-      type: 'boolean',
-      description: 'Используется по умолчанию для данного типа моделей',
-    },
-  ];
+  const healthData = {
+    health_status: model?.health_status ?? 'unknown',
+    health_latency_ms: model?.health_latency_ms != null ? String(model.health_latency_ms) : '—',
+    health_error: model?.health_error ?? '—',
+    last_health_check_at: model?.last_health_check_at ?? '',
+  };
 
-  // Create mode — single tab
-  if (isCreate) {
+  const currentConnector = String(isEditable ? formData.connector : model?.connector || '');
+  const isLocalConnector = currentConnector.startsWith('local_');
+
+  const connectorFieldsWithOptions = CONNECTOR_FIELDS
+    .filter((f) => {
+      if (f.key === 'base_url' && !isLocalConnector) return false;
+      return true;
+    })
+    .map((f) => {
+      if (f.key === 'instance_id') {
+        return { ...f, options: instanceOptions };
+      }
+      if (f.key === 'provider_model_name' && currentConnector === 'local_emb_http') {
+        return {
+          ...f,
+          label: 'Алиас embedding модели',
+          placeholder: 'all-MiniLM-L6-v2',
+          description: 'Алиас модели в emb-gateway (должен быть в EMB_MODELS).',
+        };
+      }
+      if (f.key === 'base_url' && currentConnector === 'local_emb_http') {
+        return {
+          ...f,
+          label: 'URL emb-gateway',
+          placeholder: 'http://emb:8001',
+          description: 'Базовый URL emb-сервиса (эндпоинты /embed, /embed/query, /health).',
+        };
+      }
+      if (f.key === 'base_url' && currentConnector === 'local_rerank_http') {
+        return {
+          ...f,
+          label: 'URL rerank-сервиса',
+          placeholder: 'http://rerank:8002',
+        };
+      }
+      return f;
+    });
+
+  // ─── Create mode ───
+  if (isNew) {
     return (
       <EntityPageV2
         title="Новая модель"
-        mode={mode}
+        mode="create"
         saving={saving}
-        breadcrumbs={breadcrumbs}
-        backPath="/admin/models"
+        breadcrumbs={[
+          { label: 'Платформа', href: '/admin/platform' },
+          { label: 'Новая модель' },
+        ]}
+        backPath="/admin/platform"
         onSave={handleSave}
         onCancel={handleCancel}
       >
         <Tab title="Создание" layout="grid">
-          <ContentBlock
-            width="full"
+          <Block
             title="Основная информация"
-            icon="info"
-            editable={true}
-            fields={basicInfoFields}
+            icon="cpu"
+            iconVariant="info"
+            width="1/2"
+            fields={INFO_FIELDS_CREATE}
             data={formData}
+            editable
             onChange={handleFieldChange}
           />
-          <ContentBlock
-            width="full"
-            title="Провайдер"
+          <Block
+            title="Подключение"
             icon="server"
-            editable={true}
-            fields={providerFields}
+            iconVariant="primary"
+            width="1/2"
+            height="stretch"
+            fields={connectorFieldsWithOptions}
             data={formData}
+            editable
             onChange={handleFieldChange}
           />
-          <ContentBlock
-            width="full"
+          <Block
             title="Статус и флаги"
             icon="settings"
-            editable={true}
-            fields={statusFields}
+            iconVariant="warning"
+            width="1/2"
+            fields={STATUS_FIELDS}
             data={formData}
+            editable
             onChange={handleFieldChange}
           />
-          {formData.type === 'embedding' && (
-            <ContentBlock
-              width="full"
+          {isEmbedding && (
+            <Block
               title="Настройки эмбеддинга"
-              icon="cpu"
-              editable={true}
-              fields={[{
-                key: 'vector_dim',
-                label: 'Размерность вектора',
-                type: 'number',
-                required: true,
-                placeholder: '1536',
-              }]}
-              data={{ vector_dim: vectorDim }}
-              onChange={(_key: string, value: unknown) => setVectorDim(String(value ?? ''))}
+              icon="brain"
+              iconVariant="info"
+              width="1/2"
+              fields={EMBEDDING_FIELDS}
+              data={embeddingData}
+              editable
+              onChange={(_key, value) => setVectorDim(String(value))}
             />
           )}
         </Tab>
@@ -372,29 +466,33 @@ export function ModelPage() {
     );
   }
 
-  // View/Edit mode — tabs
+  // ─── View / Edit mode ───
   return (
     <>
       <EntityPageV2
-        title={model?.name || 'Модель'}
+        title={model?.name ?? 'Модель'}
         mode={mode}
         loading={isLoading}
         saving={saving}
-        breadcrumbs={breadcrumbs}
+        breadcrumbs={[
+          { label: 'Платформа', href: '/admin/platform' },
+          { label: model?.name || 'Модель' },
+        ]}
         onEdit={handleEdit}
         onSave={handleSave}
         onCancel={handleCancel}
+        onDelete={!model?.is_system ? handleDelete : undefined}
         showDelete={!model?.is_system}
-        onDelete={handleDelete}
       >
         <Tab title="Обзор" layout="grid" id="overview">
-          <ContentBlock
-            width="1/2"
+          <Block
             title="Основная информация"
-            icon="info"
+            icon="cpu"
+            iconVariant="info"
+            width="1/2"
+            fields={INFO_FIELDS_VIEW}
+            data={blockData}
             editable={isEditable}
-            fields={basicInfoFields}
-            data={isEditable ? formData : (model || formData)}
             onChange={handleFieldChange}
             headerActions={
               model?.health_status ? (
@@ -404,65 +502,57 @@ export function ModelPage() {
               ) : undefined
             }
           />
-          <ContentBlock
-            width="1/2"
-            title="Провайдер и инстанс"
+          <Block
+            title="Подключение"
             icon="server"
+            iconVariant="primary"
+            width="1/2"
+            height="stretch"
+            fields={connectorFieldsWithOptions}
+            data={blockData}
             editable={isEditable}
-            fields={providerFields}
-            data={isEditable ? formData : {
-              ...model,
-              instance_id: model?.instance_id || '',
-            }}
             onChange={handleFieldChange}
           />
-          <ContentBlock
-            width="1/2"
+          <Block
             title="Статус и флаги"
             icon="settings"
+            iconVariant="warning"
+            width="1/2"
+            fields={STATUS_FIELDS}
+            data={blockData}
             editable={isEditable}
-            fields={statusFields}
-            data={isEditable ? formData : (model || formData)}
             onChange={handleFieldChange}
           />
-          {(formData.type === 'embedding' || model?.type === 'embedding') && (
-            <ContentBlock
-              width="1/2"
+          {isEmbedding && (
+            <Block
               title="Настройки эмбеддинга"
-              icon="cpu"
+              icon="brain"
+              iconVariant="info"
+              width="1/2"
+              fields={EMBEDDING_FIELDS}
+              data={embeddingData}
               editable={isEditable}
-              fields={[{
-                key: 'vector_dim',
-                label: 'Размерность вектора',
-                type: 'number',
-                required: true,
-                placeholder: '1536',
-              }]}
-              data={{ vector_dim: isEditable ? vectorDim : (model?.extra_config?.vector_dim || '—') }}
-              onChange={(_key: string, value: unknown) => setVectorDim(String(value ?? ''))}
+              onChange={(_key, value) => setVectorDim(String(value))}
             />
           )}
+          <Block
+            title="Метаданные"
+            icon="database"
+            iconVariant="info"
+            width="full"
+            fields={META_FIELDS}
+            data={blockData}
+          />
         </Tab>
 
         <Tab title="Health" layout="full" id="health">
-          <ContentBlock
-            width="full"
+          <Block
             title="Состояние модели"
             icon="activity"
-            fields={[
-              { key: 'health_status', label: 'Статус', type: 'text' },
-              { key: 'health_latency_ms', label: 'Задержка (мс)', type: 'text' },
-              { key: 'health_error', label: 'Ошибка', type: 'text' },
-              { key: 'last_health_check_at', label: 'Последняя проверка', type: 'text' },
-            ]}
-            data={{
-              health_status: model?.health_status || '—',
-              health_latency_ms: model?.health_latency_ms != null ? String(model.health_latency_ms) : '—',
-              health_error: model?.health_error || '—',
-              last_health_check_at: model?.last_health_check_at
-                ? new Date(model.last_health_check_at).toLocaleString('ru-RU')
-                : '—',
-            }}
+            iconVariant="warning"
+            width="full"
+            fields={HEALTH_FIELDS}
+            data={healthData}
           />
         </Tab>
       </EntityPageV2>
@@ -470,7 +560,6 @@ export function ModelPage() {
       <ConfirmDialog
         open={showDeleteConfirm}
         title="Удалить модель?"
-        message={`Вы уверены, что хотите удалить модель "${model?.name}"? Это действие нельзя отменить.`}
         confirmLabel="Удалить"
         cancelLabel="Отмена"
         variant="danger"

@@ -1,41 +1,70 @@
 """
-Tool schemas v2 - container with current_version_id, kind, tags.
+Tool schemas v2 - publication container + current_version_id.
+
+Pattern:
+- ToolListItem      — short schema for lists (counts only, no nested objects)
+- ToolDetailResponse — detail schema with nested releases and backend releases
 """
 from typing import Optional, List
 from datetime import datetime
 from uuid import UUID
 from pydantic import BaseModel, Field
 
+from app.schemas.tool_releases import (
+    ToolReleaseListItem,
+    ToolReleaseResponse,
+    ToolBackendReleaseListItem,
+)
+
+
+# ─── Mutations ────────────────────────────────────────────────────────
 
 class ToolCreate(BaseModel):
     slug: str = Field(..., description="Unique identifier, e.g. jira.search")
-    tool_group_id: UUID
     name: str
-    kind: str = Field("read", description="read | write | mixed")
+    domains: List[str] = Field(default_factory=list, description="Runtime domains/tags")
     tags: Optional[List[str]] = None
 
 
 class ToolUpdate(BaseModel):
     name: Optional[str] = None
-    kind: Optional[str] = None
+    domains: Optional[List[str]] = None
     tags: Optional[List[str]] = None
     current_version_id: Optional[UUID] = None
 
 
-class ToolResponse(BaseModel):
+# ─── List / Detail ────────────────────────────────────────────────────
+
+class ToolListItem(BaseModel):
+    """Short schema for tool lists."""
     id: UUID
     slug: str
-    tool_group_id: UUID
     name: str
-    current_version_id: Optional[UUID] = None
-    kind: str
+    domains: List[str] = Field(default_factory=list)
     tags: Optional[List[str]] = None
+    current_version_id: Optional[UUID] = None
+    backend_releases_count: int = 0
+    releases_count: int = 0
+    has_current_version: bool = False
     created_at: datetime
 
     class Config:
         from_attributes = True
 
 
-class ToolDetailResponse(ToolResponse):
-    tool_group_slug: Optional[str] = None
-    tool_group_name: Optional[str] = None
+class ToolDetailResponse(BaseModel):
+    """Detail schema for GET /tools/{id} — full tool with nested releases."""
+    id: UUID
+    slug: str
+    name: str
+    domains: List[str] = Field(default_factory=list)
+    tags: Optional[List[str]] = None
+    current_version_id: Optional[UUID] = None
+    created_at: datetime
+
+    backend_releases: List[ToolBackendReleaseListItem] = []
+    releases: List[ToolReleaseListItem] = []
+    current_version: Optional[ToolReleaseResponse] = None
+
+    class Config:
+        from_attributes = True

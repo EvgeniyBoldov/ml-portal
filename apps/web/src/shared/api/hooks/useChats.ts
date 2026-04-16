@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import * as chatsApi from '@shared/api/chats';
 import { qk } from '@shared/api/keys';
-import type { Chat, ChatMessage, ChatMessageCreateRequest } from '@shared/api/types';
+import type { Chat, ChatMessageCreateRequest, ChatMessageResponse } from '@shared/api/types';
 import type { ChatAgent } from '@shared/api/chats';
 
 /**
@@ -49,7 +49,7 @@ export function useCreateChat() {
 export function useDeleteChat() {
   const queryClient = useQueryClient();
 
-  return useMutation<void, Error, string>({
+  return useMutation<{ id: string; deleted: boolean }, Error, string>({
     mutationFn: (chatId: string) => chatsApi.deleteChat(chatId),
     onSuccess: (_result, chatId) => {
       queryClient.invalidateQueries({ queryKey: ['chats', 'list'] });
@@ -65,7 +65,7 @@ export function useSendMessage() {
   const queryClient = useQueryClient();
 
   return useMutation<
-    ChatMessage,
+    ChatMessageResponse,
     Error,
     { chatId: string; body: ChatMessageCreateRequest }
   >({

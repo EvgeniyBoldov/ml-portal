@@ -5,6 +5,7 @@ import pytest
 from unittest.mock import patch, MagicMock
 import time
 
+from app.core.exceptions import UnauthorizedError
 from app.core.security import (
     hash_password,
     verify_password,
@@ -157,8 +158,6 @@ class TestJWT:
     
     def test_decode_jwt_expired_token(self, mock_settings):
         """decode_jwt should raise for expired token"""
-        from fastapi import HTTPException
-        
         # Set TTL to 0 to create expired token
         mock_settings.JWT_ACCESS_TTL_MINUTES = 0
         
@@ -172,21 +171,16 @@ class TestJWT:
             )
             
             # Token is already expired (TTL=0)
-            with pytest.raises(HTTPException) as exc_info:
+            with pytest.raises(UnauthorizedError) as exc_info:
                 decode_jwt(token)
-            
-            assert exc_info.value.status_code == 401
-            assert "expired" in exc_info.value.detail.lower()
+            assert "expired" in str(exc_info.value).lower()
     
     def test_decode_jwt_invalid_token(self, mock_settings):
         """decode_jwt should raise for invalid token"""
-        from fastapi import HTTPException
-        
         with patch('app.core.security.get_settings', return_value=mock_settings):
-            with pytest.raises(HTTPException) as exc_info:
+            with pytest.raises(UnauthorizedError) as exc_info:
                 decode_jwt("invalid.token.here")
-            
-            assert exc_info.value.status_code == 401
+            assert "invalid token" in str(exc_info.value).lower()
     
     def test_access_token_contains_required_claims(self, mock_settings):
         """Access token should contain all required claims"""

@@ -9,7 +9,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.tool import Tool
-from app.models.tool_group import ToolGroup
 from app.models.tool_release import ToolBackendRelease, ToolRelease, ToolReleaseStatus
 
 
@@ -151,7 +150,6 @@ class ToolWithReleasesRepository:
         stmt = (
             select(Tool)
             .options(
-                selectinload(Tool.tool_group),
                 selectinload(Tool.backend_releases),
                 selectinload(Tool.releases).selectinload(ToolRelease.backend_release),
                 selectinload(Tool.current_version).selectinload(ToolRelease.backend_release),
@@ -166,7 +164,6 @@ class ToolWithReleasesRepository:
         stmt = (
             select(Tool)
             .options(
-                selectinload(Tool.tool_group),
                 selectinload(Tool.backend_releases),
                 selectinload(Tool.releases).selectinload(ToolRelease.backend_release),
                 selectinload(Tool.current_version).selectinload(ToolRelease.backend_release),
@@ -176,15 +173,15 @@ class ToolWithReleasesRepository:
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
     
-    async def list_by_group(self, group_id: UUID) -> List[Tool]:
-        """List all tools in a group"""
+    async def list_by_domain(self, domain: str) -> List[Tool]:
+        """List all tools in a runtime domain"""
         stmt = (
             select(Tool)
             .options(
                 selectinload(Tool.backend_releases),
                 selectinload(Tool.releases),
             )
-            .where(Tool.tool_group_id == group_id)
+            .where(Tool.domains.any(domain))
             .order_by(Tool.name)
         )
         result = await self.session.execute(stmt)
@@ -195,68 +192,3 @@ class ToolWithReleasesRepository:
         self.session.add(tool)
         await self.session.flush()
         return tool
-
-
-class ToolGroupWithToolsRepository:
-    """Repository for ToolGroup with tools"""
-    
-    def __init__(self, session: AsyncSession):
-        self.session = session
-    
-    async def get_by_slug(self, slug: str) -> Optional[ToolGroup]:
-        """Get tool group by slug with tools loaded"""
-        stmt = (
-            select(ToolGroup)
-            .options(
-                selectinload(ToolGroup.tools).selectinload(Tool.backend_releases),
-                selectinload(ToolGroup.tools).selectinload(Tool.releases),
-                selectinload(ToolGroup.instances),
-            )
-            .where(ToolGroup.slug == slug)
-        )
-        result = await self.session.execute(stmt)
-        return result.scalar_one_or_none()
-    
-    async def get_by_id(self, group_id: UUID) -> Optional[ToolGroup]:
-        """Get tool group by ID with tools loaded"""
-        stmt = (
-            select(ToolGroup)
-            .options(
-                selectinload(ToolGroup.tools).selectinload(Tool.backend_releases),
-                selectinload(ToolGroup.tools).selectinload(Tool.releases),
-                selectinload(ToolGroup.instances),
-            )
-            .where(ToolGroup.id == group_id)
-        )
-        result = await self.session.execute(stmt)
-        return result.scalar_one_or_none()
-    
-    async def list_all(self) -> List[ToolGroup]:
-        """List all tool groups with counts"""
-        stmt = (
-            select(ToolGroup)
-            .options(
-                selectinload(ToolGroup.tools),
-                selectinload(ToolGroup.instances),
-            )
-            .order_by(ToolGroup.name)
-        )
-        result = await self.session.execute(stmt)
-        return list(result.scalars().all())
-    
-    async def create(self, group: ToolGroup) -> ToolGroup:
-        """Create a new tool group"""
-        self.session.add(group)
-        await self.session.flush()
-        return group
-    
-    async def update(self, group: ToolGroup) -> ToolGroup:
-        """Update a tool group"""
-        self.session.add(group)
-        await self.session.flush()
-        return group
-    
-    async def delete(self, group: ToolGroup) -> None:
-        """Delete a tool group"""
-        await self.session.delete(group)
-        await self.session.flush()

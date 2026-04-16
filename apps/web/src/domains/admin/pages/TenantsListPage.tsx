@@ -7,7 +7,7 @@
 import React, { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTenants } from '@shared/hooks/useTenants';
-import { EntityPageV2, Tab } from '@/shared/ui/EntityPage/EntityPageV2';
+import { EntityPageV2, Tab } from '@/shared/ui/EntityPage';
 import { DataTable, type DataTableColumn, Badge, Button, Input } from '@/shared/ui';
 import type { Tenant } from '@shared/api/admin';
 
@@ -42,6 +42,11 @@ export function TenantsListPage() {
       key: 'name',
       label: 'НАЗВАНИЕ',
       sortable: true,
+      filter: {
+        kind: 'text',
+        placeholder: 'Название',
+        getValue: (tenant) => tenant.name,
+      },
       render: (tenant) => (
         <span style={{ fontWeight: 500 }}>{tenant.name}</span>
       ),
@@ -49,6 +54,11 @@ export function TenantsListPage() {
     {
       key: 'description',
       label: 'ОПИСАНИЕ',
+      filter: {
+        kind: 'text',
+        placeholder: 'Описание',
+        getValue: (tenant) => tenant.description ?? '',
+      },
       render: (tenant) => tenant.description ? (
         <span style={{ color: 'var(--muted)' }}>{tenant.description}</span>
       ) : (
@@ -60,8 +70,17 @@ export function TenantsListPage() {
       label: 'СТАТУС',
       width: 100,
       sortable: true,
+      filter: {
+        kind: 'select',
+        placeholder: 'Все статусы',
+        options: [
+          { value: 'true', label: 'Активен' },
+          { value: 'false', label: 'Неактивен' },
+        ],
+        getValue: (tenant) => String(tenant.is_active),
+      },
       render: (tenant) => (
-        <Badge tone={tenant.is_active ? 'success' : 'neutral'} size="small">
+        <Badge tone={tenant.is_active ? 'success' : 'neutral'}>
           {tenant.is_active ? 'Активен' : 'Неактивен'}
         </Badge>
       ),
@@ -87,7 +106,7 @@ export function TenantsListPage() {
         <Input
           placeholder="Поиск тенантов..."
           value={q}
-          onChange={setQ}
+          onChange={(e) => setQ(e.target.value)}
         />
       }
       actionButtons={

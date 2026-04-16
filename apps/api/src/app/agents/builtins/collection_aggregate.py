@@ -4,16 +4,23 @@ Collection Aggregate Tool - агрегации и статистика по ко
 from __future__ import annotations
 from typing import Any, Dict, List, ClassVar, Optional
 import uuid
+import re
 
 from app.core.logging import get_logger
 from app.agents.handlers.versioned_tool import VersionedTool, tool_version, register_tool
 from app.agents.context import ToolContext, ToolResult
+from app.agents.builtins.collection_aggregate_sql_builder import CollectionAggregateSQLBuilder
 
 logger = get_logger(__name__)
 
 ALLOWED_AGGREGATE_FUNCTIONS = {"count", "count_distinct", "sum", "avg", "min", "max"}
 MAX_GROUP_BY_FIELDS = 3
 MAX_RESULT_GROUPS = 100
+VALID_IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+SQL_BUILDER = CollectionAggregateSQLBuilder(
+    max_result_groups=MAX_RESULT_GROUPS,
+    allowed_functions=ALLOWED_AGGREGATE_FUNCTIONS,
+)
 
 _INPUT_SCHEMA_V1 = {
     "type": "object",
@@ -69,6 +76,41 @@ _INPUT_SCHEMA_V1 = {
                     "enum": ["hour", "day", "week", "month", "year"]
                 }
             }
+        },
+        "having": {
+            "type": "array",
+            "description": (
+                "HAVING conditions applied after GROUP BY. "
+                "Each condition: {function, field, op, value}. "
+                "Example: [{\"function\": \"count\", \"op\": \"gt\", \"value\": 5}]"
+            ),
+            "items": {
+                "type": "object",
+                "properties": {
+                    "function": {
+                        "type": "string",
+                        "enum": ["count", "count_distinct", "sum", "avg", "min", "max"]
+                    },
+                    "field": {"type": "string"},
+                    "op": {
+                        "type": "string",
+                        "enum": ["eq", "neq", "gt", "gte", "lt", "lte"],
+                        "description": "Comparison operator"
+                    },
+                    "value": {
+                        "type": "number",
+                        "description": "Value to compare against"
+                    }
+                },
+                "required": ["function", "op", "value"]
+            }
+        },
+        "order_by": {
+            "type": "string",
+            "description": (
+                "Order results by a metric alias or group_by field. "
+                "Prefix with '-' for descending. Example: '-metric_0'"
+            )
         }
     },
     "required": ["collection_slug", "metrics"]
@@ -97,7 +139,7 @@ class CollectionAggregateTool(VersionedTool):
     """
     
     tool_slug: ClassVar[str] = "collection.aggregate"
-    tool_group: ClassVar[str] = "collection"
+    domains: ClassVar[list] = ["collection.table"]
     name: ClassVar[str] = "Collection Aggregate"
     description: ClassVar[str] = "Get aggregated statistics from a collection (count, sum, avg, etc.)"
     
@@ -122,6 +164,8 @@ class CollectionAggregateTool(VersionedTool):
         group_by = args.get("group_by", [])
         filters = args.get("filters", {})
         time_bucket = args.get("time_bucket")
+        having = args.get("having", [])
+        order_by = args.get("order_by")
         
         log.info("Starting collection aggregate",
                  collection=collection_slug,
@@ -164,7 +208,13 @@ class CollectionAggregateTool(VersionedTool):
                             log.warning("Field not found", field=field)
                             return ToolResult.fail(f"Field '{field}' not found",
                                                    logs=log.entries_dict())
-                
+                    alias = metric.get("alias")
+                    if alias and not self._is_safe_identifier(alias):
+                        return ToolResult.fail(
+                            f"Invalid metric alias: {alias}",
+                            logs=log.entries_dict(),
+                        )
+
                 # Validate group_by
                 if len(group_by) > MAX_GROUP_BY_FIELDS:
                     log.warning("Too many group_by fields", count=len(group_by))
@@ -173,10 +223,18 @@ class CollectionAggregateTool(VersionedTool):
                         logs=log.entries_dict())
                 
                 for field in group_by:
-                    if not collection.get_field_by_name(field) and field != "id":
+                    if field not in self._allowed_group_fields(collection):
                         log.warning("Group by field not found", field=field)
                         return ToolResult.fail(f"Group by field '{field}' not found",
                                                logs=log.entries_dict())
+
+                filter_error = self._validate_filters(collection, filters)
+                if filter_error:
+                    return ToolResult.fail(filter_error, logs=log.entries_dict())
+
+                time_bucket_error = self._validate_time_bucket(collection, time_bucket)
+                if time_bucket_error:
+                    return ToolResult.fail(time_bucket_error, logs=log.entries_dict())
                 
                 # Check guardrails: require filters for large tables
                 if not collection.allow_unfiltered_search and not filters:
@@ -187,9 +245,29 @@ class CollectionAggregateTool(VersionedTool):
                         logs=log.entries_dict(),
                     )
                 
+                # Validate having conditions
+                for h_cond in having:
+                    h_func = h_cond.get("function")
+                    if h_func not in ALLOWED_AGGREGATE_FUNCTIONS:
+                        return ToolResult.fail(
+                            f"Invalid HAVING function: {h_func}",
+                            logs=log.entries_dict(),
+                        )
+                    h_field = h_cond.get("field")
+                    if h_field and h_field not in self._allowed_aggregate_fields(collection):
+                        return ToolResult.fail(
+                            f"Field '{h_field}' not found",
+                            logs=log.entries_dict(),
+                        )
+
+                order_error = self._validate_order_by(collection, metrics, group_by, time_bucket, order_by)
+                if order_error:
+                    return ToolResult.fail(order_error, logs=log.entries_dict())
+
                 # Build SQL
                 sql, params = self._build_aggregate_sql(
-                    collection, metrics, group_by, filters, time_bucket
+                    collection, metrics, group_by, filters, time_bucket,
+                    having=having, order_by=order_by,
                 )
                 
                 log.debug("Executing aggregate SQL", table=collection.table_name)
@@ -226,92 +304,113 @@ class CollectionAggregateTool(VersionedTool):
             return ToolResult.fail(f"Aggregate failed: {str(e)}",
                                    logs=log.entries_dict())
 
+    def _is_safe_identifier(self, value: str) -> bool:
+        return bool(value and VALID_IDENTIFIER_PATTERN.match(value))
+
+    def _allowed_filter_fields(self, collection) -> set[str]:
+        fields = {field["name"] for field in collection.get_filterable_fields()}
+        fields.add("id")
+        return fields
+
+    def _allowed_group_fields(self, collection) -> set[str]:
+        fields = {field["name"] for field in collection.get_business_fields()}
+        fields.add("id")
+        return fields
+
+    def _allowed_aggregate_fields(self, collection) -> set[str]:
+        return self._allowed_group_fields(collection)
+
+    def _validate_filters(self, collection, filters: Dict) -> Optional[str]:
+        if not filters:
+            return None
+
+        allowed_fields = self._allowed_filter_fields(collection)
+
+        def _check_field(field: Optional[str]) -> Optional[str]:
+            if not field:
+                return "Filter condition missing 'field'"
+            if field not in allowed_fields:
+                return f"Unknown or non-filterable field '{field}' in filter"
+            return None
+
+        for cond in filters.get("and", []):
+            error = _check_field(cond.get("field"))
+            if error:
+                return error
+
+        for cond in filters.get("or", []):
+            error = _check_field(cond.get("field"))
+            if error:
+                return error
+
+        for key in filters.keys():
+            if key in ("and", "or"):
+                continue
+            if key not in allowed_fields:
+                return f"Unknown or non-filterable field '{key}' in filter"
+
+        return None
+
+    def _validate_time_bucket(self, collection, time_bucket: Optional[Dict]) -> Optional[str]:
+        if not time_bucket:
+            return None
+
+        field = time_bucket.get("field")
+        if not field:
+            return "time_bucket requires field"
+        field_def = collection.get_field_by_name(field)
+        if not field_def:
+            return f"Field '{field}' not found"
+        if field_def.get("data_type") not in {"date", "datetime"}:
+            return f"time_bucket field '{field}' must be date/datetime"
+        return None
+
+    def _validate_order_by(
+        self,
+        collection,
+        metrics: List[Dict],
+        group_by: List[str],
+        time_bucket: Optional[Dict],
+        order_by: Optional[str],
+    ) -> Optional[str]:
+        if not order_by:
+            return None
+
+        order_field = order_by.lstrip("-")
+        metric_aliases = {
+            metric.get("alias", f"metric_{idx}")
+            for idx, metric in enumerate(metrics)
+        }
+        allowed_fields = set(group_by) | metric_aliases
+        if time_bucket:
+            allowed_fields.add("time_bucket")
+
+        if order_field not in allowed_fields:
+            return f"Invalid order_by field '{order_field}'"
+        if not self._is_safe_identifier(order_field):
+            return f"Invalid order_by field '{order_field}'"
+        return None
+
     def _build_aggregate_sql(
         self,
         collection,
         metrics: List[Dict],
         group_by: List[str],
         filters: Dict,
-        time_bucket: Optional[Dict]
+        time_bucket: Optional[Dict],
+        having: Optional[List[Dict]] = None,
+        order_by: Optional[str] = None,
     ) -> tuple[str, Dict]:
-        """Build aggregate SQL query"""
-        table_name = collection.table_name
-        params = {}
-        param_idx = 0
-        
-        # Build SELECT clause
-        select_parts = []
-        
-        # Add group_by fields to select
-        for field in group_by:
-            select_parts.append(field)
-        
-        # Add time_bucket if specified
-        if time_bucket:
-            tb_field = time_bucket.get("field")
-            tb_interval = time_bucket.get("interval", "day")
-            
-            interval_map = {
-                "hour": "hour",
-                "day": "day",
-                "week": "week",
-                "month": "month",
-                "year": "year"
-            }
-            pg_interval = interval_map.get(tb_interval, "day")
-            select_parts.append(f"date_trunc('{pg_interval}', {tb_field}) as time_bucket")
-            
-            if tb_field not in group_by:
-                group_by = group_by + [f"date_trunc('{pg_interval}', {tb_field})"]
-        
-        # Add metrics
-        for i, metric in enumerate(metrics):
-            func = metric["function"]
-            field = metric.get("field")
-            alias = metric.get("alias", f"metric_{i}")
-            
-            if func == "count":
-                if field:
-                    select_parts.append(f"COUNT({field}) as {alias}")
-                else:
-                    select_parts.append(f"COUNT(*) as {alias}")
-            elif func == "count_distinct":
-                select_parts.append(f"COUNT(DISTINCT {field}) as {alias}")
-            elif func == "sum":
-                select_parts.append(f"SUM({field}) as {alias}")
-            elif func == "avg":
-                select_parts.append(f"AVG({field}) as {alias}")
-            elif func == "min":
-                select_parts.append(f"MIN({field}) as {alias}")
-            elif func == "max":
-                select_parts.append(f"MAX({field}) as {alias}")
-        
-        select_clause = ", ".join(select_parts)
-        
-        # Build WHERE clause from filters
-        where_parts, params, param_idx = self._build_where_clause(filters, params, param_idx)
-        where_clause = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
-        
-        # Build GROUP BY clause
-        group_clause = ""
-        if group_by:
-            group_clause = f"GROUP BY {', '.join(group_by)}"
-        
-        # Build ORDER BY (by first group_by field or first metric)
-        order_clause = ""
-        if group_by:
-            order_clause = f"ORDER BY {group_by[0]}"
-        
-        sql = f"""
-            SELECT {select_clause}
-            FROM {table_name}
-            {where_clause}
-            {group_clause}
-            {order_clause}
-            LIMIT {MAX_RESULT_GROUPS}
-        """
-        
-        return sql.strip(), params
+        """Build aggregate SQL query."""
+        return SQL_BUILDER.build_aggregate_sql(
+            collection=collection,
+            metrics=metrics,
+            group_by=group_by,
+            filters=filters,
+            time_bucket=time_bucket,
+            having=having,
+            order_by=order_by,
+        )
 
     def _build_where_clause(
         self,
@@ -319,39 +418,8 @@ class CollectionAggregateTool(VersionedTool):
         params: Dict,
         param_idx: int
     ) -> tuple[List[str], Dict, int]:
-        """Build WHERE clause from DSL filters"""
-        where_parts = []
-        
-        if not filters:
-            return where_parts, params, param_idx
-        
-        # Handle 'and' conditions
-        and_conditions = filters.get("and", [])
-        for cond in and_conditions:
-            part, params, param_idx = self._build_condition(cond, params, param_idx)
-            if part:
-                where_parts.append(part)
-        
-        # Handle 'or' conditions
-        or_conditions = filters.get("or", [])
-        if or_conditions:
-            or_parts = []
-            for cond in or_conditions:
-                part, params, param_idx = self._build_condition(cond, params, param_idx)
-                if part:
-                    or_parts.append(part)
-            if or_parts:
-                where_parts.append(f"({' OR '.join(or_parts)})")
-        
-        # Handle direct field conditions (legacy format)
-        for key, value in filters.items():
-            if key not in ("and", "or"):
-                param_name = f"p{param_idx}"
-                param_idx += 1
-                params[param_name] = value
-                where_parts.append(f"{key} = :{param_name}")
-        
-        return where_parts, params, param_idx
+        """Build WHERE clause from DSL filters."""
+        return SQL_BUILDER.build_where_clause(filters, params, param_idx)
 
     def _build_condition(
         self,
@@ -359,63 +427,14 @@ class CollectionAggregateTool(VersionedTool):
         params: Dict,
         param_idx: int
     ) -> tuple[str, Dict, int]:
-        """Build a single condition from DSL"""
-        field = cond.get("field")
-        op = cond.get("op", "eq")
-        value = cond.get("value")
-        
-        if not field:
-            return "", params, param_idx
-        
-        param_name = f"p{param_idx}"
-        param_idx += 1
-        
-        if op == "eq":
-            params[param_name] = value
-            return f"{field} = :{param_name}", params, param_idx
-        elif op == "neq":
-            params[param_name] = value
-            return f"{field} != :{param_name}", params, param_idx
-        elif op == "in":
-            params[param_name] = tuple(value) if isinstance(value, list) else (value,)
-            return f"{field} IN :{param_name}", params, param_idx
-        elif op == "gt":
-            params[param_name] = value
-            return f"{field} > :{param_name}", params, param_idx
-        elif op == "gte":
-            params[param_name] = value
-            return f"{field} >= :{param_name}", params, param_idx
-        elif op == "lt":
-            params[param_name] = value
-            return f"{field} < :{param_name}", params, param_idx
-        elif op == "lte":
-            params[param_name] = value
-            return f"{field} <= :{param_name}", params, param_idx
-        elif op == "range":
-            parts = []
-            if "gte" in value:
-                params[f"{param_name}_gte"] = value["gte"]
-                parts.append(f"{field} >= :{param_name}_gte")
-            if "gt" in value:
-                params[f"{param_name}_gt"] = value["gt"]
-                parts.append(f"{field} > :{param_name}_gt")
-            if "lte" in value:
-                params[f"{param_name}_lte"] = value["lte"]
-                parts.append(f"{field} <= :{param_name}_lte")
-            if "lt" in value:
-                params[f"{param_name}_lt"] = value["lt"]
-                parts.append(f"{field} < :{param_name}_lt")
-            return f"({' AND '.join(parts)})" if parts else "", params, param_idx
-        elif op == "like":
-            params[param_name] = f"%{value}%"
-            return f"{field} ILIKE :{param_name}", params, param_idx
-        elif op == "contains":
-            params[param_name] = f"%{value}%"
-            return f"{field} ILIKE :{param_name}", params, param_idx
-        elif op == "is_null":
-            if value:
-                return f"{field} IS NULL", params, param_idx
-            else:
-                return f"{field} IS NOT NULL", params, param_idx
-        
-        return "", params, param_idx
+        """Build a single condition from DSL."""
+        return SQL_BUILDER.build_condition(cond, params, param_idx)
+
+    def _build_having_clause(
+        self,
+        having: List[Dict],
+        params: Dict,
+        param_idx: int,
+    ) -> tuple[List[str], Dict, int]:
+        """Build HAVING clause from having conditions list."""
+        return SQL_BUILDER.build_having_clause(having, params, param_idx)

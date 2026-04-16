@@ -8,6 +8,12 @@ from app.core.logging import get_logger
 from openai import AsyncOpenAI
 from app.core.config import get_settings
 
+
+class LLMResponse:
+    """Simple wrapper for LLM response"""
+    def __init__(self, content: str):
+        self.content = content
+
 logger = get_logger(__name__)
 
 
@@ -18,7 +24,7 @@ class LLMClient:
         self.settings = get_settings()
         self.client = AsyncOpenAI(
             base_url=self.settings.LLM_BASE_URL,
-            api_key=self.settings.LLM_TOKEN,
+            api_key=self.settings.LLM_API_KEY or self.settings.LLM_TOKEN,
             timeout=30.0
         )
         self.default_model = "llama-3.1-8b-instant"  # Default model
@@ -59,6 +65,17 @@ class LLMClient:
         except Exception as e:
             logger.error(f"Error in chat request: {str(e)}")
             raise
+    
+    async def complete(self, messages: list[Mapping[str, str]], *, model: Optional[str] = None, temperature: Optional[float] = None, max_tokens: Optional[int] = None) -> LLMResponse:
+        """Alias for chat method with explicit parameters"""
+        params = {}
+        if temperature is not None:
+            params["temperature"] = temperature
+        if max_tokens is not None:
+            params["max_tokens"] = max_tokens
+            
+        result = await self.chat(messages, model=model, params=params)
+        return LLMResponse(result["content"])
     
     async def chat_stream(self, messages: list[Mapping[str, str]], *, model: Optional[str] = None, params: Optional[dict] = None) -> AsyncIterator[str]:
         """Send streaming chat completion request"""

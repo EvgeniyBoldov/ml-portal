@@ -1,55 +1,143 @@
 """
-Pydantic schemas for ToolInstance & Credential API (v2)
+Pydantic schemas for ToolInstance API (v3).
+
+Instance v3 classification axes:
+- connector_type: data | mcp | model
+- connector_subtype: sql | api (for data connectors)
+- placement: local | remote
+
+Credentials and RoutingLogs schemas live in their own files:
+- app.schemas.credentials
+- app.schemas.routing_logs
 """
 from typing import Optional, Dict, Any, List
 from uuid import UUID
 from datetime import datetime
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+
+# Re-exports for backward compatibility
+from app.schemas.credentials import CredentialCreate, CredentialUpdate, CredentialResponse  # noqa: F401
+from app.schemas.routing_logs import RoutingLogResponse  # noqa: F401
 
 
 # ── ToolInstance ─────────────────────────────────────────────────────
 
 class ToolInstanceCreate(BaseModel):
-    tool_group_id: UUID
-    slug: Optional[str] = Field(None, max_length=255, description="Auto-generated from name if not provided")
+    slug: Optional[str] = Field(
+        None,
+        max_length=255,
+        pattern="^[a-z][a-z0-9_-]{1,254}$",
+        description="Auto-generated from name if not provided",
+    )
     name: str
-    url: str = ""
     description: Optional[str] = None
+    instance_kind: str = Field("data", pattern="^(data|service)$", description="data | service")
+    connector_type: str = Field(
+        "data",
+        pattern="^(data|mcp|model)$",
+        description="Connector type: data | mcp | model",
+    )
+    connector_subtype: Optional[str] = Field(
+        default=None,
+        pattern="^(sql|api)$",
+        description="Data connector subtype: sql | api",
+    )
+    url: str = ""
+    provider_kind: Optional[str] = Field(
+        default=None,
+        description="Explicit provider capability flag (e.g. mcp, local_tables, local_documents, local_runtime)",
+    )
     config: Optional[Dict[str, Any]] = None
-    category: Optional[str] = Field(None, max_length=50, description="Category tag (collection, rag, llm, dcbox, jira, etc.)")
+    access_via_instance_id: Optional[UUID] = Field(None, description="Service instance for accessing this data instance")
+
+    @model_validator(mode="after")
+    def validate_subtype(self) -> "ToolInstanceCreate":
+        if self.connector_type == "data" and not self.connector_subtype:
+            raise ValueError("connector_subtype is required for data connectors")
+        if self.connector_type != "data" and self.connector_subtype is not None:
+            raise ValueError("connector_subtype is allowed only for data connectors")
+        return self
 
 
 class ToolInstanceUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
+    instance_kind: Optional[str] = Field(default=None, pattern="^(data|service)$")
+    connector_type: Optional[str] = Field(default=None, pattern="^(data|mcp|model)$")
+    connector_subtype: Optional[str] = Field(default=None, pattern="^(sql|api)$")
     url: Optional[str] = None
+    provider_kind: Optional[str] = None
     config: Optional[Dict[str, Any]] = None
     is_active: Optional[bool] = None
-    category: Optional[str] = Field(None, max_length=50, description="Category tag")
+    access_via_instance_id: Optional[UUID] = None
+
+    @model_validator(mode="after")
+    def validate_subtype(self) -> "ToolInstanceUpdate":
+        if self.connector_type is not None and self.connector_type != "data" and self.connector_subtype is not None:
+            raise ValueError("connector_subtype is allowed only for data connectors")
+        return self
 
 
-class ToolInstanceResponse(BaseModel):
+class ToolInstanceListItem(BaseModel):
     id: UUID
-    tool_group_id: UUID
     slug: str
     name: str
     description: Optional[str] = None
-    instance_type: str  # "local" | "remote"
-    category: Optional[str] = None  # "collection" | "rag" | "llm" | "dcbox" | "jira" | ...
+    instance_kind: str
+    connector_type: str
+    connector_subtype: Optional[str] = None
+    placement: str
+    provider_kind: Optional[str] = None
     url: str
-    config: Optional[Dict[str, Any]] = None
     health_status: Optional[str] = None
     is_active: bool
+    access_via_instance_id: Optional[UUID] = None
     created_at: datetime
 
     class Config:
         from_attributes = True
 
 
-class ToolInstanceDetailResponse(ToolInstanceResponse):
-    tool_group_slug: Optional[str] = None
-    tool_group_name: Optional[str] = None
+class ToolInstanceResponse(BaseModel):
+    id: UUID
+    slug: str
+    name: str
+    description: Optional[str] = None
+    instance_kind: str
+    connector_type: str
+    connector_subtype: Optional[str] = None
+    placement: str
+    provider_kind: Optional[str] = None
+    url: str
+    config: Optional[Dict[str, Any]] = None
+    health_status: Optional[str] = None
+    is_active: bool
+    access_via_instance_id: Optional[UUID] = None
+    created_at: datetime
+    updated_at: datetime
 
+    class Config:
+        from_attributes = True
+
+
+class RuntimeOperationListItem(BaseModel):
+    operation_slug: str
+    operation: str
+    source: str
+    discovered_tool_slug: str
+    provider_instance_slug: Optional[str] = None
+    risk_level: str
+    side_effects: str
+    idempotent: bool
+    requires_confirmation: bool
+
+
+class ToolInstanceDetailResponse(ToolInstanceResponse):
+    access_via_name: Optional[str] = None
+    runtime_operations: List[RuntimeOperationListItem] = Field(default_factory=list)
+
+
+# ── Utility ──────────────────────────────────────────────────────────
 
 class HealthCheckResponse(BaseModel):
     status: str
@@ -64,118 +152,29 @@ class RescanResponse(BaseModel):
     errors: int
 
 
-# ── Credential (v2 owner-based) ─────────────────────────────────────
-
-class CredentialCreate(BaseModel):
+class LinkedDataInstanceRuntimeSummary(BaseModel):
     instance_id: UUID
-    auth_type: str = Field(..., description="token | basic | oauth | api_key")
-    payload: Dict[str, Any] = Field(..., description="Credentials payload (will be encrypted)")
-    owner_user_id: Optional[UUID] = None
-    owner_tenant_id: Optional[UUID] = None
-    owner_platform: bool = False
+    slug: str
+    connector_subtype: Optional[str] = None
+    is_runtime_ready: bool
+    runtime_readiness_reason: str
+    semantic_source: str
+    discovered_tools_count: int
+    runtime_operations_count: int
 
 
-class CredentialUpdate(BaseModel):
-    auth_type: Optional[str] = None
-    payload: Optional[Dict[str, Any]] = None
-    is_active: Optional[bool] = None
+class InstanceRuntimeOnboardRequest(BaseModel):
+    enable_all_in_runtime: bool = False
+    include_local_tools: bool = False
+    include_inactive_linked: bool = False
 
 
-class CredentialResponse(BaseModel):
-    id: UUID
-    instance_id: UUID
-    owner_user_id: Optional[UUID] = None
-    owner_tenant_id: Optional[UUID] = None
-    owner_platform: bool
-    auth_type: str
-    is_active: bool
-    created_at: datetime
-
-    class Config:
-        from_attributes = True
-
-
-class PermissionSetCreate(BaseModel):
-    """Schema for creating permission set"""
-    scope: str = Field(..., description="Scope: default, tenant, user")
-    tenant_id: Optional[UUID] = None
-    user_id: Optional[UUID] = None
-    instance_permissions: Dict[str, str] = Field(
-        default_factory=dict,
-        description="Map of instance_slug -> 'allowed'|'denied'|'undefined'"
-    )
-    agent_permissions: Dict[str, str] = Field(
-        default_factory=dict,
-        description="Map of agent_slug -> 'allowed'|'denied'|'undefined'"
-    )
-
-
-class PermissionSetUpdate(BaseModel):
-    """Schema for updating permission set"""
-    instance_permissions: Optional[Dict[str, str]] = Field(
-        None,
-        description="Map of instance_slug -> 'allowed'|'denied'|'undefined'"
-    )
-    agent_permissions: Optional[Dict[str, str]] = Field(
-        None,
-        description="Map of agent_slug -> 'allowed'|'denied'|'undefined'"
-    )
-
-
-class PermissionSetResponse(BaseModel):
-    """Schema for permission set response"""
-    id: UUID
-    scope: str
-    tenant_id: Optional[UUID]
-    user_id: Optional[UUID]
-    instance_permissions: Dict[str, str]
-    agent_permissions: Dict[str, str]
-    created_at: datetime
-    updated_at: datetime
-
-    class Config:
-        from_attributes = True
-
-
-class EffectivePermissionsResponse(BaseModel):
-    """Schema for resolved effective permissions"""
-    instance_permissions: Dict[str, bool] = Field(
-        ...,
-        description="Map of instance_slug -> is_allowed (True/False)"
-    )
-    agent_permissions: Dict[str, bool] = Field(
-        ...,
-        description="Map of agent_slug -> is_allowed (True/False)"
-    )
-    allowed_instances: List[str]
-    denied_instances: List[str]
-    allowed_agents: List[str]
-    denied_agents: List[str]
-
-
-class RoutingLogResponse(BaseModel):
-    """Schema for routing log response"""
-    id: UUID
-    run_id: UUID
-    user_id: Optional[UUID]
-    tenant_id: Optional[UUID]
-    request_text: Optional[str]
-    intent: Optional[str]
-    intent_confidence: Optional[float]
-    selected_agent_slug: Optional[str]
-    agent_confidence: Optional[float]
-    routing_reasons: List[str]
-    missing_tools: List[str]
-    missing_collections: List[str]
-    missing_credentials: List[str]
-    execution_mode: Optional[str]
-    effective_tools: List[str]
-    effective_collections: List[str]
-    tool_instances_map: Dict[str, Any]
-    routed_at: datetime
-    routing_duration_ms: Optional[int]
-    status: str
-    error_message: Optional[str]
-
-    class Config:
-        from_attributes = True
+class InstanceRuntimeOnboardResponse(BaseModel):
+    provider_instance_id: UUID
+    provider_slug: str
+    onboarding: Dict[str, Any]
+    linked_instances_total: int
+    linked_ready_count: int
+    linked_not_ready_count: int
+    linked_runtime_operations_total: int
+    linked_instances: List[LinkedDataInstanceRuntimeSummary] = Field(default_factory=list)

@@ -1,0 +1,36 @@
+.tabs-shell {
+  overflow-x: auto;
+  overflow-y: hidden;
+  border-bottom: 1px solid var(--border-color);
+  margin-top: -1px;
+  scrollbar-width: thin;
+}
+
+.tabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 16px;
+  flex-wrap: nowrap;
+  width: max-content;
+  min-width: 100%;
+}
+
+.tab {
+  flex: 0 0 auto;
+  border: 1px solid var(--border-color);
+  border-bottom-color: transparent;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  border-radius: 8px 8px 0 0;
+  padding: 6px 10px;
+  font-size: 11px;
+  cursor: pointer;
+  margin-bottom: -1px;
+}
+
+.tab-active {
+  color: var(--text-primary);
+  background: var(--bg-primary);
+  border-bottom-color: var(--bg-primary);
+}

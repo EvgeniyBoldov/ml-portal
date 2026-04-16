@@ -344,6 +344,7 @@ class ModelConfig:
     api_key: Optional[str] = None
     dimensions: Optional[int] = None
     extra_config: Optional[Dict[str, Any]] = None
+    connector: Optional[str] = None
 
 
 class EmbeddingServiceFactory:
@@ -374,9 +375,18 @@ class EmbeddingServiceFactory:
             dimensions = config.dimensions or 384
             return MockEmbeddingService(config.alias, dimensions)
         
+        connector = (config.connector or "").lower()
         provider = config.provider.lower()
         
-        if provider == "openai":
+        if connector == "local_emb_http" or (not connector and provider == "local" and config.base_url.startswith("http")):
+            return LocalEmbeddingServiceProvider(
+                model_alias=config.alias,
+                provider_model_name=config.provider_model_name,
+                base_url=config.base_url,
+                dimensions=config.dimensions or 384
+            )
+        
+        elif connector == "openai_http" or connector == "azure_openai_http" or (not connector and provider == "openai"):
             return OpenAIEmbeddingProvider(
                 model_alias=config.alias,
                 provider_model_name=config.provider_model_name,
@@ -385,24 +395,14 @@ class EmbeddingServiceFactory:
                 dimensions=config.dimensions
             )
         
-        elif provider == "local":
-            # Check if it's a local HTTP service or SentenceTransformer
-            if config.base_url.startswith("http"):
-                return LocalEmbeddingServiceProvider(
-                    model_alias=config.alias,
-                    provider_model_name=config.provider_model_name,
-                    base_url=config.base_url,
-                    dimensions=config.dimensions or 384
-                )
-            else:
-                # Local SentenceTransformer
-                return LocalSentenceTransformerProvider(config.provider_model_name)
+        elif not connector and provider == "local":
+            return LocalSentenceTransformerProvider(config.provider_model_name)
         
-        elif provider == "sentence-transformers":
+        elif not connector and provider == "sentence-transformers":
             return LocalSentenceTransformerProvider(config.provider_model_name)
         
         else:
-            logger.warning(f"Unknown provider '{provider}' for {config.alias}, using mock")
+            logger.warning(f"Unknown connector '{connector}'/provider '{provider}' for {config.alias}, using mock")
             return MockEmbeddingService(config.alias, config.dimensions or 384)
     
     @classmethod
@@ -412,6 +412,38 @@ class EmbeddingServiceFactory:
         # Clear cached service if exists
         if config.alias in cls._services:
             del cls._services[config.alias]
+
+    @classmethod
+    async def ensure_model_registered_async(cls, session: Any, model_alias: str) -> None:
+        """Register model config from an async SQLAlchemy session when startup registry is unavailable."""
+        if model_alias in cls._model_configs or model_alias in cls._services:
+            return
+
+        from sqlalchemy import text as sa_text
+
+        result = await session.execute(
+            sa_text(
+                "SELECT alias, provider, provider_model_name, connector, base_url, extra_config "
+                "FROM models WHERE alias = :alias AND type = 'EMBEDDING'"
+            ),
+            {"alias": model_alias},
+        )
+        mdata = result.mappings().first()
+        if not mdata:
+            return
+
+        extra = mdata["extra_config"] or {}
+        cls.register_model(
+            ModelConfig(
+                alias=mdata["alias"],
+                provider=mdata["provider"] or "local",
+                provider_model_name=mdata["provider_model_name"] or model_alias,
+                base_url=mdata["base_url"] or extra.get("base_url", ""),
+                dimensions=extra.get("vector_dim"),
+                extra_config=extra,
+                connector=mdata["connector"] or "",
+            )
+        )
     
     @classmethod
     def get_service(cls, model_alias: str) -> EmbeddingInterface:

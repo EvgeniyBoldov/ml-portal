@@ -8,6 +8,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import inspect
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import db_uow, get_current_user, require_admin
 from app.core.security import UserCtx
@@ -29,26 +30,67 @@ logger = get_logger(__name__)
 router = APIRouter(tags=["models"])
 
 
+def _resolve_connector(model: Model) -> str:
+    connector = getattr(model, "connector", None)
+    if connector:
+        return connector
+
+    provider = (model.provider or "").lower()
+    model_type = model.type.value if hasattr(model.type, "value") else str(model.type)
+    if provider == "local" and model_type == "embedding":
+        return "local_emb_http"
+    if provider == "local" and model_type == "reranker":
+        return "local_rerank_http"
+    if provider == "local" and model_type == "llm_chat":
+        return "local_llm_http"
+    if provider == "azure":
+        return "azure_openai_http"
+    return "openai_http"
+
+
+def _resolve_base_url(model: Model) -> Optional[str]:
+    if getattr(model, "base_url", None):
+        return model.base_url
+    state = inspect(model)
+    if "instance" not in state.unloaded and model.instance is not None and getattr(model.instance, "url", None):
+        return model.instance.url
+    if model.extra_config and model.extra_config.get("base_url"):
+        return model.extra_config.get("base_url")
+    return None
+
+
 def serialize_model(model: Model) -> Dict[str, Any]:
     """Serialize Model ORM object to dict for API response"""
+    state = inspect(model)
+    instance_name: Optional[str] = None
+    if "instance" not in state.unloaded and model.instance is not None:
+        instance_name = model.instance.name
+
+    def _enum_value(value: Any) -> Any:
+        if value is None:
+            return None
+        return value.value if hasattr(value, "value") else value
+
     return {
         "id": str(model.id),
         "alias": model.alias,
         "name": model.name,
-        "type": model.type.value,
+        "type": _enum_value(model.type),
         "provider": model.provider,
+        "connector": _resolve_connector(model),
         "provider_model_name": model.provider_model_name,
+        "base_url": _resolve_base_url(model),
         "instance_id": str(model.instance_id) if model.instance_id else None,
-        "instance_name": model.instance.name if model.instance else None,
+        "instance_name": instance_name,
         "extra_config": model.extra_config,
-        "status": model.status.value,
+        "status": _enum_value(model.status),
         "enabled": model.enabled,
         "is_system": model.is_system,
         "default_for_type": model.default_for_type,
         "model_version": model.model_version,
         "description": model.description,
         "last_health_check_at": model.last_health_check_at,
-        "health_status": model.health_status.value if model.health_status else None,
+        "health_status": _enum_value(model.health_status),
         "health_error": model.health_error,
         "health_latency_ms": model.health_latency_ms,
         "created_at": model.created_at,

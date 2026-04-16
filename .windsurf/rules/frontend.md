@@ -16,6 +16,7 @@ ARCHITECTURE
 - Server state: TanStack Query only. Local UI state: Zustand only. Never store server data in Zustand.
 - Create src/shared/api/keys.ts with a query-key factory. All queries/mutations must use it.
 - SSE updates must invalidate or update queries via QueryClient, never mutate global state directly.
+- **ALL API calls use UUID (entity.id), never slug**. Route params for admin entities: `:id` (UUID). Never use `:slug` for agents, tools, tool-groups. idField in useEntityList must be 'id'.
 
 ROUTING & PROVIDERS
 - One top-level <AppProviders> with: Theme (optional), QueryClientProvider, Auth/RBAC Provider, Toaster, SSEProvider, ErrorBoundary.

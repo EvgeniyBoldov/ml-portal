@@ -153,16 +153,7 @@ const handleChange = (field: keyof FormState, value: string) => {
 
 - UI state only (sidebar, toggles, local selections)
 
-## 8) Legacy migration pattern
-
-Если страница на legacy layout:
-
-1. Не переписывать всё сразу.
-2. Сначала вынести повторяемые блоки в `shared/ui`.
-3. Затем перевести страницу на `EntityPageV2`.
-4. После миграции удалить legacy-specific стили/разметку.
-
-## 9) Anti-patterns
+## 8) Anti-patterns
 
 - новый кастомный UI при наличии блока в `shared/ui`
 - server entities в Zustand

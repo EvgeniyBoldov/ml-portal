@@ -1,0 +1,168 @@
+# Конфигурация интерфейсов — Juniper MX480, cr-01.msk (PROD-CORE)
+# Компания "Дубалайн"
+# Дата: 2025-10-14
+# Инженер: Алексей Воронов (Ведущий сетевой инженер, Core Network)
+# Заявка: CHG-2025-1041
+
+interfaces {
+
+    # ===== UPLINK — ПРОВАЙДЕР МОСКВА =====
+    xe-0/0/0 {
+        description "UPLINK :: Provider-TransTeleCom :: AS20485 :: 10Gbps";
+        unit 0 {
+            family inet {
+                address 195.131.12.2/30;
+                filter {
+                    input PROVIDER-IN-FILTER;
+                    output PROVIDER-OUT-FILTER;
+                }
+            }
+            family inet6 {
+                address 2a02:6b8:ff00::2/64;
+            }
+        }
+    }
+
+    # ===== UPLINK — ПРОВАЙДЕР РЕЗЕРВ =====
+    xe-0/0/1 {
+        description "UPLINK :: Provider-Rostelecom :: AS12389 :: 10Gbps";
+        unit 0 {
+            family inet {
+                address 85.142.32.18/30;
+                filter {
+                    input PROVIDER-IN-FILTER;
+                    output PROVIDER-OUT-FILTER;
+                }
+            }
+            family inet6 {
+                address 2001:db8:1234::2/64;
+            }
+        }
+    }
+
+    # ===== CORE-TO-CORE ЛИНК MSK-SPB =====
+    xe-1/0/0 {
+        description "CORE-LINK :: cr-02.spb :: PROD-CORE :: 10Gbps :: ISIS-level2";
+        mtu 9192;
+        unit 0 {
+            family inet {
+                address 10.0.0.1/30;
+            }
+            family iso;
+            family mpls;
+        }
+    }
+
+    # ===== ЛИНК В PROD-DC1 =====
+    xe-1/0/1 {
+        description "DC-LINK :: dc1-core-01.msk :: PROD-DC1 :: 10Gbps";
+        mtu 9192;
+        unit 0 {
+            family inet {
+                address 10.0.1.1/30;
+            }
+            family mpls;
+        }
+    }
+
+    # ===== LOOPBACK =====
+    lo0 {
+        unit 0 {
+            description "LOOPBACK :: cr-01.msk :: PROD-CORE";
+            family inet {
+                address 10.255.0.1/32;
+                address 172.16.0.1/32;    # Management LOOPBACK
+            }
+            family iso {
+                address 49.0001.0100.0000.0001.00;
+            }
+        }
+    }
+
+    # ===== MANAGEMENT =====
+    fxp0 {
+        description "MGMT :: PROD-MGMT :: OOB";
+        unit 0 {
+            family inet {
+                address 192.168.100.1/24;
+            }
+        }
+    }
+
+    # ===== АГРЕГИРОВАННЫЙ ЛИНК К DC1 (LAG) =====
+    ae0 {
+        description "LAG :: dc1-core-01.msk :: PROD-DC1 :: 2x10Gbps LACP";
+        aggregated-ether-options {
+            lacp {
+                active;
+                periodic fast;
+            }
+        }
+        unit 0 {
+            family inet {
+                address 10.0.2.1/30;
+            }
+            family mpls;
+        }
+    }
+
+    xe-2/0/0 {
+        description "LAG-MEMBER :: ae0 :: dc1-core-01.msk";
+        ether-options {
+            802.3ad ae0;
+        }
+    }
+
+    xe-2/0/1 {
+        description "LAG-MEMBER :: ae0 :: dc1-core-01.msk";
+        ether-options {
+            802.3ad ae0;
+        }
+    }
+
+    # ===== ЛИНК В DMZ =====
+    xe-2/1/0 {
+        description "DMZ-LINK :: fw-dmz-01.msk :: PROD-DMZ :: 1Gbps";
+        unit 0 {
+            family inet {
+                address 10.0.3.1/30;
+                filter {
+                    input DMZ-IN-FILTER;
+                    output DMZ-OUT-FILTER;
+                }
+            }
+        }
+    }
+
+}
+
+# ===== ПОЛИТИКИ ФИЛЬТРАЦИИ =====
+firewall {
+    family inet {
+        filter PROVIDER-IN-FILTER {
+            term ALLOW-BGP {
+                from {
+                    protocol tcp;
+                    destination-port bgp;
+                }
+                then accept;
+            }
+            term BLOCK-RFC1918 {
+                from {
+                    source-address {
+                        10.0.0.0/8;
+                        172.16.0.0/12;
+                        192.168.0.0/16;
+                    }
+                }
+                then {
+                    discard;
+                    count BLOCK-RFC1918-COUNTER;
+                }
+            }
+            term DEFAULT-ACCEPT {
+                then accept;
+            }
+        }
+    }
+}

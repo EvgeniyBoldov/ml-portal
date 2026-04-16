@@ -1,31 +1,52 @@
 """
 Agent Runtime - ядро для выполнения агентов с tool-call loop
 """
-from app.agents.context import ToolContext, ToolResult, RunContext
+from __future__ import annotations
+
+from app.agents.context import ToolContext, ToolResult
 from app.agents.handlers.base import ToolHandler
 from app.agents.registry import ToolRegistry
-from app.agents.runtime import AgentRuntime, RuntimeEvent, RuntimeEventType, PolicyLimits
-from app.agents.router import (
-    AgentRouter,
-    ExecutionRequest,
-    ExecutionMode,
-    AgentRouterError,
-    AgentUnavailableError,
-)
 
 __all__ = [
     "ToolContext",
-    "ToolResult", 
-    "RunContext",
+    "ToolResult",
     "ToolHandler",
     "ToolRegistry",
     "AgentRuntime",
     "RuntimeEvent",
     "RuntimeEventType",
     "PolicyLimits",
-    "AgentRouter",
     "ExecutionRequest",
     "ExecutionMode",
-    "AgentRouterError",
+    "PreflightError",
     "AgentUnavailableError",
 ]
+
+
+def __getattr__(name: str):
+    if name in {"AgentRuntime", "RuntimeEvent", "RuntimeEventType", "PolicyLimits"}:
+        from app.agents.runtime import AgentRuntime, RuntimeEvent, RuntimeEventType, PolicyLimits
+
+        return {
+            "AgentRuntime": AgentRuntime,
+            "RuntimeEvent": RuntimeEvent,
+            "RuntimeEventType": RuntimeEventType,
+            "PolicyLimits": PolicyLimits,
+        }[name]
+
+    if name in {"ExecutionRequest", "ExecutionMode", "PreflightError", "AgentUnavailableError"}:
+        from app.agents.execution_preflight import (
+            ExecutionRequest,
+            ExecutionMode,
+            PreflightError,
+            AgentUnavailableError,
+        )
+
+        return {
+            "ExecutionRequest": ExecutionRequest,
+            "ExecutionMode": ExecutionMode,
+            "PreflightError": PreflightError,
+            "AgentUnavailableError": AgentUnavailableError,
+        }[name]
+
+    raise AttributeError(f"module 'app.agents' has no attribute '{name}'")

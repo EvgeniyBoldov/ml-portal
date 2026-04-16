@@ -1,5 +1,5 @@
 import React, { Suspense, lazy } from 'react';
-import { createBrowserRouter, RouterProvider } from 'react-router-dom';
+import { Navigate, createBrowserRouter, RouterProvider } from 'react-router-dom';
 import { AdminGuard } from './router/AdminGuard';
 import { Skeleton } from '@shared/ui/Skeleton';
 
@@ -10,7 +10,6 @@ const Login = lazy(() => import('@/domains/auth/pages/Login'));
 // GPT pages
 const GPTLayout = lazy(() => import('@/domains/gpt/pages/GPTLayout'));
 const ChatPage = lazy(() => import('@/domains/gpt/pages/ChatPage'));
-const RagPage = lazy(() => import('@/domains/rag/pages/RagPage'));
 const ProfilePage = lazy(() => import('@/domains/profile/pages/ProfilePage'));
 
 // Common pages
@@ -23,38 +22,33 @@ const UsersListPage = lazy(() => import('@/domains/admin/pages/UsersListPage'));
 const UserPage = lazy(() => import('@/domains/admin/pages/UserPage'));
 const TenantsListPage = lazy(() => import('@/domains/admin/pages/TenantsListPage'));
 const TenantPage = lazy(() => import('@/domains/admin/pages/TenantPage'));
-const ModelsPage = lazy(() => import('@/domains/admin/pages/ModelsPage'));
-const ModelEditorPage = lazy(() => import('@/domains/admin/pages/ModelEditorPage').then(m => ({ default: m.ModelEditorPage })));
+const ModelPage = lazy(() => import('@/domains/admin/pages/ModelPage').then(m => ({ default: m.default })));
 const AuditPage = lazy(() => import('@/domains/admin/pages/AuditPage'));
-const EmailSettingsPage = lazy(() => import('@/domains/admin/pages/EmailSettingsPage'));
-const ToolsListPage = lazy(() => import('@/domains/admin/pages/ToolsListPage').then(m => ({ default: m.ToolsListPage })));
-const ToolGroupViewPage = lazy(() => import('@/domains/admin/pages/ToolGroupViewPage').then(m => ({ default: m.ToolGroupViewPage })));
+const DiscoveredToolsPage = lazy(() => import('@/domains/admin/pages/DiscoveredToolsPage').then(m => ({ default: m.DiscoveredToolsPage })));
+const DiscoveredToolViewPage = lazy(() => import('@/domains/admin/pages/DiscoveredToolViewPage').then(m => ({ default: m.DiscoveredToolViewPage })));
 const ToolPage = lazy(() => import('@/domains/admin/pages/ToolPage').then(m => ({ default: m.ToolPage })));
 const ToolVersionPage = lazy(() => import('@/domains/admin/pages/ToolVersionPage').then(m => ({ default: m.ToolVersionPage })));
-const ViewBackendReleasePage = lazy(() => import('@/domains/admin/pages/ViewBackendReleasePage').then(m => ({ default: m.ViewBackendReleasePage })));
 const AgentListPage = lazy(() => import('@/domains/admin/pages/AgentListPage').then(m => ({ default: m.AgentListPage })));
 const AgentPage = lazy(() => import('@/domains/admin/pages/AgentPage').then(m => ({ default: m.AgentPage })));
-const AgentRouterPage = lazy(() => import('@/domains/admin/pages/AgentRouterPage').then(m => ({ default: m.AgentRouterPage })));
 const AgentVersionPage = lazy(() => import('@/domains/admin/pages/AgentVersionPage').then(m => ({ default: m.AgentVersionPage })));
 const AgentRunsPage = lazy(() => import('@/domains/admin/pages/AgentRunsPage').then(m => ({ default: m.AgentRunsPage })));
 const AgentRunPage = lazy(() => import('@/domains/admin/pages/AgentRunPage').then(m => ({ default: m.AgentRunPage })));
-const CollectionsPage = lazy(() => import('@/domains/admin/pages/CollectionsPage'));
-const CreateCollectionPage = lazy(() => import('@/domains/admin/pages/CreateCollectionPage'));
-const ViewCollectionPage = lazy(() => import('@/domains/admin/pages/ViewCollectionPage'));
-const InstancesListPage = lazy(() => import('@/domains/admin/pages/InstancesListPage').then(m => ({ default: m.InstancesListPage })));
+const CollectionListPage = lazy(() => import('@/domains/admin/pages/CollectionListPage'));
+const CollectionPage = lazy(() => import('@/domains/admin/pages/CollectionPage'));
+const CollectionVersionPage = lazy(() => import('@/domains/admin/pages/CollectionVersionPage').then(m => ({ default: m.CollectionVersionPage })));
+const InstancesListPage = lazy(() => import('@/domains/admin/pages/InstancesListPage'));
 const InstancePage = lazy(() => import('@/domains/admin/pages/InstancePage').then(m => ({ default: m.InstancePage })));
-const LimitsListPage = lazy(() => import('@/domains/admin/pages/LimitsListPage').then(m => ({ default: m.LimitsListPage })));
-const LimitPage = lazy(() => import('@/domains/admin/pages/LimitPage').then(m => ({ default: m.LimitPage })));
-const LimitVersionPage = lazy(() => import('@/domains/admin/pages/LimitVersionPage').then(m => ({ default: m.LimitVersionPage })));
-const PoliciesListPage = lazy(() => import('@/domains/admin/pages/PoliciesListPage').then(m => ({ default: m.PoliciesListPage })));
-const PolicyPage = lazy(() => import('@/domains/admin/pages/PolicyPage').then(m => ({ default: m.PolicyPage })));
-const PolicyVersionPage = lazy(() => import('@/domains/admin/pages/PolicyVersionPage').then(m => ({ default: m.PolicyVersionPage })));
 const RbacListPage = lazy(() => import('@/domains/admin/pages/RbacListPage').then(m => ({ default: m.RbacListPage })));
 const RbacRulePage = lazy(() => import('@/domains/admin/pages/RbacRulePage').then(m => ({ default: m.RbacRulePage })));
-const RbacRuleCreatePage = lazy(() => import('@/domains/admin/pages/RbacRuleCreatePage').then(m => ({ default: m.RbacRuleCreatePage })));
 const PlatformSettingsPage = lazy(() => import('@/domains/admin/pages/PlatformSettingsPage').then(m => ({ default: m.PlatformSettingsPage })));
+const OrchestrationPage = lazy(() => import('@/domains/admin/pages/OrchestrationPage').then(m => ({ default: m.OrchestrationPage })));
 const CredentialPage = lazy(() => import('@/domains/admin/pages/CredentialPage').then(m => ({ default: m.default })));
-const CredentialsListPage = lazy(() => import('@/domains/admin/pages/CredentialsListPage').then(m => ({ default: m.default })));
+
+// Sandbox pages
+const SandboxLayout = lazy(() => import('@/domains/sandbox/layouts/SandboxLayout'));
+const SandboxHomePage = lazy(() => import('@/domains/sandbox/pages/SandboxHomePage'));
+const SandboxSessionPage = lazy(() => import('@/domains/sandbox/pages/SandboxSessionPage'));
+const SandboxListPage = lazy(() => import('@/domains/sandbox/pages/SandboxListPage'));
 
 // Collections pages (user-facing)
 const CollectionsListPage = lazy(() => import('@/domains/collections/pages/CollectionsListPage'));
@@ -76,10 +70,17 @@ const router = createBrowserRouter([
     children: [
       { path: 'chat', element: withSuspense(<ChatPage />) },
       { path: 'chat/:chatId', element: withSuspense(<ChatPage />) },
-      { path: 'rag', element: withSuspense(<RagPage />) },
       { path: 'collections', element: withSuspense(<CollectionsListPage />) },
       { path: 'collections/:slug', element: withSuspense(<CollectionDataPage />) },
       { path: 'profile', element: withSuspense(<ProfilePage />) },
+    ],
+  },
+  {
+    path: '/sandbox',
+    element: withSuspense(<GPTGate>{withSuspense(<SandboxLayout />)}</GPTGate>),
+    children: [
+      { index: true, element: withSuspense(<SandboxHomePage />) },
+      { path: ':sessionId', element: withSuspense(<SandboxSessionPage />) },
     ],
   },
   {
@@ -94,54 +95,44 @@ const router = createBrowserRouter([
       { path: 'users', element: withSuspense(<UsersListPage />) },
       { path: 'users/new', element: withSuspense(<UserPage />) },
       { path: 'users/:id', element: withSuspense(<UserPage />) },
-      { path: 'users/:id/rbac/new', element: withSuspense(<RbacRuleCreatePage />) },
       { path: 'tenants', element: withSuspense(<TenantsListPage />) },
       { path: 'tenants/new', element: withSuspense(<TenantPage />) },
       { path: 'tenants/:id', element: withSuspense(<TenantPage />) },
-      { path: 'tenants/:id/rbac/new', element: withSuspense(<RbacRuleCreatePage />) },
-      { path: 'models', element: withSuspense(<ModelsPage />) },
-      { path: 'models/new', element: withSuspense(<ModelEditorPage />) },
-      { path: 'models/:id', element: withSuspense(<ModelEditorPage />) },
+      { path: 'platform/models/new', element: withSuspense(<ModelPage />) },
+      { path: 'platform/models/:id', element: withSuspense(<ModelPage />) },
       { path: 'audit', element: withSuspense(<AuditPage />) },
-      { path: 'tools', element: withSuspense(<ToolsListPage />) },
-      { path: 'tools/groups/:groupSlug', element: withSuspense(<ToolGroupViewPage />) },
-      { path: 'tools/:toolSlug', element: withSuspense(<ToolPage />) },
-      { path: 'tools/:toolSlug/backend/:version', element: withSuspense(<ViewBackendReleasePage />) },
-      { path: 'tools/:toolSlug/versions/new', element: withSuspense(<ToolVersionPage />) },
-      { path: 'tools/:toolSlug/versions/:version', element: withSuspense(<ToolVersionPage />) },
+      { path: 'tools', element: withSuspense(<DiscoveredToolsPage />) },
+      { path: 'tools/discovered/:id', element: withSuspense(<DiscoveredToolViewPage />) },
+      { path: 'tools/:id', element: withSuspense(<ToolPage />) },
+      { path: 'tools/:id/versions/new', element: withSuspense(<ToolVersionPage />) },
+      { path: 'tools/:id/versions/:version', element: withSuspense(<ToolVersionPage />) },
       { path: 'agents', element: withSuspense(<AgentListPage />) },
       { path: 'agents/new', element: withSuspense(<AgentPage />) },
-      { path: 'agents/router', element: withSuspense(<AgentRouterPage />) },
-      { path: 'agents/:slug', element: withSuspense(<AgentPage />) },
-      { path: 'agents/:slug/versions/new', element: withSuspense(<AgentVersionPage />) },
-      { path: 'agents/:slug/versions/:version', element: withSuspense(<AgentVersionPage />) },
+      { path: 'agents/:id', element: withSuspense(<AgentPage />) },
+      { path: 'agents/:id/versions/new', element: withSuspense(<AgentVersionPage />) },
+      { path: 'agents/:id/versions/:version', element: withSuspense(<AgentVersionPage />) },
       { path: 'agent-runs', element: withSuspense(<AgentRunsPage />) },
       { path: 'agent-runs/:id', element: withSuspense(<AgentRunPage />) },
-      { path: 'collections', element: withSuspense(<CollectionsPage />) },
-      { path: 'collections/new', element: withSuspense(<CreateCollectionPage />) },
-      { path: 'collections/:id', element: withSuspense(<ViewCollectionPage />) },
-      { path: 'limits', element: withSuspense(<LimitsListPage />) },
-      { path: 'limits/new', element: withSuspense(<LimitPage />) },
-      { path: 'limits/:slug', element: withSuspense(<LimitPage />) },
-      { path: 'limits/:slug/versions/new', element: withSuspense(<LimitVersionPage />) },
-      { path: 'limits/:slug/versions/:version', element: withSuspense(<LimitVersionPage />) },
-      { path: 'policies', element: withSuspense(<PoliciesListPage />) },
-      { path: 'policies/new', element: withSuspense(<PolicyPage />) },
-      { path: 'policies/:slug', element: withSuspense(<PolicyPage />) },
-      { path: 'policies/:slug/versions/new', element: withSuspense(<PolicyVersionPage />) },
-      { path: 'policies/:slug/versions/:version', element: withSuspense(<PolicyVersionPage />) },
-      { path: 'instances', element: withSuspense(<InstancesListPage />) },
+      { path: 'collections', element: withSuspense(<CollectionListPage />) },
+      { path: 'collections/new', element: withSuspense(<CollectionPage />) },
+      { path: 'collections/:slug', element: withSuspense(<CollectionPage />) },
+      { path: 'collections/:id/versions/new', element: withSuspense(<CollectionVersionPage />) },
+      { path: 'collections/:id/versions/:version', element: withSuspense(<CollectionVersionPage />) },
+      { path: 'connectors', element: withSuspense(<InstancesListPage />) },
+      { path: 'connectors/new', element: withSuspense(<InstancePage />) },
+      { path: 'connectors/:id', element: withSuspense(<InstancePage />) },
+      { path: 'connectors/:id/edit', element: withSuspense(<InstancePage />) },
+      { path: 'instances', element: <Navigate to="/admin/connectors" replace /> },
       { path: 'instances/new', element: withSuspense(<InstancePage />) },
       { path: 'instances/:id', element: withSuspense(<InstancePage />) },
       { path: 'instances/:id/edit', element: withSuspense(<InstancePage />) },
       { path: 'rbac', element: withSuspense(<RbacListPage />) },
       { path: 'rbac/:id', element: withSuspense(<RbacRulePage />) },
       { path: 'platform', element: withSuspense(<PlatformSettingsPage />) },
-      { path: 'platform/rbac/new', element: withSuspense(<RbacRuleCreatePage />) },
-      { path: 'credentials', element: withSuspense(<CredentialsListPage />) },
       { path: 'credentials/new', element: withSuspense(<CredentialPage />) },
       { path: 'credentials/:id', element: withSuspense(<CredentialPage />) },
-      { path: 'settings/email', element: withSuspense(<EmailSettingsPage />) },
+      { path: 'orchestration', element: withSuspense(<OrchestrationPage />) },
+      { path: 'sandbox', element: withSuspense(<SandboxListPage />) },
     ],
   },
   { path: '*', element: withSuspense(<NotFound />) },

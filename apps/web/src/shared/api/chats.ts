@@ -9,7 +9,13 @@ import type {
   ChatMessageCreateRequest,
   ChatMessageResponse,
   ChatMessage,
+  ChatAttachment,
+  ChatUploadPolicy,
 } from './types';
+
+type WindowWithAuthTokens = Window & {
+  __auth_tokens?: { access_token?: string };
+};
 
 export async function listChats(
   params: { cursor?: string; limit?: number; q?: string } = {}
@@ -63,6 +69,7 @@ export async function* sendMessageStreamSSE(
     useRag?: boolean;
     model?: string | null;
     agentSlug?: string | null;
+    attachmentIds?: string[];
   } = {}
 ) {
   const headers: Record<string, string> = {
@@ -72,7 +79,7 @@ export async function* sendMessageStreamSSE(
 
   // Add auth token if available
   const token =
-    (window as any).__auth_tokens?.access_token ||
+    (window as WindowWithAuthTokens).__auth_tokens?.access_token ||
     localStorage.getItem('access_token');
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;
@@ -91,6 +98,7 @@ export async function* sendMessageStreamSSE(
       use_rag: opts?.useRag ?? false,
       model: opts?.model ?? null,
       agent_slug: opts?.agentSlug ?? null,
+      attachment_ids: opts?.attachmentIds ?? [],
     }),
   });
 
@@ -166,6 +174,24 @@ export async function deleteChat(chat_id: string) {
   });
 }
 
+/** Resume a paused run (confirm action) */
+export async function resumeRun(runId: string, action: 'confirm' | 'cancel' | 'input', input?: string) {
+  const body: Record<string, string> = { action };
+  if (action === 'input' && input) {
+    body.input = input;
+  }
+  return apiRequest<{
+    run_id: string;
+    status: string;
+    paused_action?: Record<string, unknown>;
+    paused_context?: Record<string, unknown>;
+    user_input?: string;
+  }>(`/chats/runs/${runId}/resume`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
 /** Chat agent info for UI selection */
 export interface ChatAgent {
   slug: string;
@@ -179,4 +205,29 @@ export interface ChatAgent {
 /** Get list of available agents for chat */
 export async function listChatAgents() {
   return apiRequest<{ agents: ChatAgent[] }>('/chats/agents');
+}
+
+export async function getChatUploadPolicy() {
+  return apiRequest<ChatUploadPolicy>('/chats/uploads/policy');
+}
+
+export async function uploadChatAttachment(chatId: string, file: File) {
+  const form = new FormData();
+  form.append('file', file);
+  return apiRequest<ChatAttachment>(`/chats/${chatId}/uploads`, {
+    method: 'POST',
+    body: form,
+    headers: {},
+  });
+}
+
+export async function getChatAttachmentDownloadLink(attachmentId: string) {
+  return apiRequest<{
+    id: string;
+    file_name: string;
+    content_type?: string | null;
+    size_bytes: number;
+    url: string;
+    expires_in: number;
+  }>(`/chats/attachments/${attachmentId}/download`);
 }

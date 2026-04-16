@@ -1,0 +1,161 @@
+# Конфигурация MPLS/BGP — Huawei NE40E-X8, cr-02.spb (PROD-CORE)
+# Компания "Дубалайн"
+# Дата: 2025-10-20
+# Инженер: Алексей Воронов (Ведущий сетевой инженер, Core Network)
+# Заявка: CHG-2025-1062
+# AS: 65100, Loopback: 10.255.0.2
+
+#------------------------------------------------------------
+# ISIS
+#------------------------------------------------------------
+isis 1
+ is-level level-2
+ network-entity 49.0001.0100.0000.0002.00
+ cost-style wide
+ bfd all-interfaces enable
+ authentication-mode md5 cipher %^%#AbCdEfGhIjKlMnOpQrStUv%^%#
+ log-peer-change
+#
+
+#------------------------------------------------------------
+# MPLS GLOBAL
+#------------------------------------------------------------
+mpls lsr-id 10.255.0.2
+mpls
+#
+mpls ldp
+#
+
+#------------------------------------------------------------
+# MPLS TE
+#------------------------------------------------------------
+mpls te
+ mpls rsvp-te
+#
+
+# RSVP на интерфейсах
+interface XGigabitEthernet1/1/0
+ mpls te
+ mpls rsvp-te
+ mpls rsvp-te bandwidth 9000000     # 9 Gbps
+#
+interface XGigabitEthernet1/1/1
+ mpls te
+ mpls rsvp-te
+ mpls rsvp-te bandwidth 9000000
+#
+
+# TE-туннели
+interface Tunnel0/0/1
+ description TE-TUNNEL :: cr-02.spb -> cr-01.msk :: PROD-CORE
+ ip address unnumbered interface LoopBack0
+ tunnel-protocol mpls te
+ destination 10.255.0.1
+ mpls te tunnel-id 1
+ mpls te bandwidth ct0 8000000
+ mpls te fast-reroute
+ mpls te record-route
+ mpls te commit
+#
+
+interface Tunnel0/0/2
+ description TE-TUNNEL :: cr-02.spb -> cr-03.ekb :: PROD-CORE
+ ip address unnumbered interface LoopBack0
+ tunnel-protocol mpls te
+ destination 10.255.0.3
+ mpls te tunnel-id 2
+ mpls te bandwidth ct0 4000000
+ mpls te fast-reroute
+ mpls te commit
+#
+
+#------------------------------------------------------------
+# BGP
+#------------------------------------------------------------
+bgp 65100
+ router-id 10.255.0.2
+
+ # IBGP группа — PROD-CORE
+ group IBGP-CORE internal
+  connect-interface LoopBack0
+  peer 10.255.0.1 group IBGP-CORE
+  peer 10.255.0.1 description IBGP :: cr-01.msk
+  peer 10.255.0.3 group IBGP-CORE
+  peer 10.255.0.3 description IBGP :: cr-03.ekb
+
+ ipv4-family unicast
+  undo synchronization
+  peer IBGP-CORE enable
+  peer IBGP-CORE label-route-capability
+  peer 10.255.0.1 enable
+  peer 10.255.0.3 enable
+
+ # VPNv4 для L3VPN
+ ipv4-family vpnv4
+  policy vpn-target
+  peer IBGP-CORE enable
+  peer 10.255.0.1 enable
+  peer 10.255.0.3 enable
+
+ # EBGP — Провайдеры SPB
+ peer 46.61.128.1 as-number 31133
+ peer 46.61.128.1 description EBGP :: MegaFon :: AS31133
+ peer 46.61.128.1 password cipher %^%#XyZaBcDeFgH%^%#
+ peer 93.180.14.5 as-number 3216
+ peer 93.180.14.5 description EBGP :: Vympelcom :: AS3216
+ peer 93.180.14.5 password cipher %^%#PqRsTuVwXyZa%^%#
+
+ ipv4-family unicast
+  peer 46.61.128.1 enable
+  peer 46.61.128.1 route-policy PROVIDER-IMPORT import
+  peer 46.61.128.1 route-policy PROVIDER-EXPORT export
+  peer 93.180.14.5 enable
+  peer 93.180.14.5 route-policy PROVIDER-IMPORT import
+  peer 93.180.14.5 route-policy PROVIDER-EXPORT export
+#
+
+#------------------------------------------------------------
+# L3VPN — VRF PROD-OFFICE
+#------------------------------------------------------------
+ip vpn-instance VRF-PROD-OFFICE
+ ipv4-family
+  route-distinguisher 65100:100
+  vpn-target 65100:100 export-extcommunity
+  vpn-target 65100:100 import-extcommunity
+#
+interface XGigabitEthernet3/0/1.100
+ description VRF-LINK :: PROD-OFFICE :: офисная сеть SPB
+ ip binding vpn-instance VRF-PROD-OFFICE
+ ip address 10.20.0.1 255.255.255.252
+ dot1q termination vid 100
+ arp broadcast enable
+#
+
+ip vpn-instance VRF-PROD-DC
+ ipv4-family
+  route-distinguisher 65100:200
+  vpn-target 65100:200 export-extcommunity
+  vpn-target 65100:200 import-extcommunity
+#
+
+#------------------------------------------------------------
+# ROUTE-POLICY
+#------------------------------------------------------------
+ip ip-prefix DUBALINE-PREFIXES index 10 permit 46.61.128.0 22
+ip ip-prefix DUBALINE-PREFIXES index 20 permit 93.180.14.0 24
+
+route-policy PROVIDER-IMPORT permit node 10
+ if-match ip-prefix DUBALINE-PREFIXES
+route-policy PROVIDER-IMPORT permit node 20
+ if-match ip-address acl 2000     # default route
+route-policy PROVIDER-IMPORT deny node 100
+
+route-policy PROVIDER-EXPORT permit node 10
+ if-match ip-prefix DUBALINE-PREFIXES
+route-policy PROVIDER-EXPORT deny node 100
+
+#------------------------------------------------------------
+# ECMP
+#------------------------------------------------------------
+ip load-balancing ecmp 8
+#

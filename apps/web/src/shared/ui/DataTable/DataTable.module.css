@@ -40,10 +40,48 @@
   font-weight: var(--font-weight-medium);
   cursor: pointer;
   user-select: none;
+  color: var(--text-primary);
 }
 
 .selectAll input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-primary);
+  display: inline-grid;
+  place-items: center;
   cursor: pointer;
+  transition: border-color 0.2s ease, background-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.selectAll input[type="checkbox"]::after {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  transform: scale(0);
+  transition: transform 0.15s ease;
+  background: var(--bg-primary);
+}
+
+.selectAll input[type="checkbox"]:checked,
+.selectAll input[type="checkbox"]:indeterminate {
+  background: var(--primary);
+  border-color: var(--primary);
+}
+
+.selectAll input[type="checkbox"]:checked::after,
+.selectAll input[type="checkbox"]:indeterminate::after {
+  transform: scale(1);
+}
+
+.selectAll input[type="checkbox"]:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 18%, transparent);
 }
 
 .selectedCount {
@@ -81,6 +119,10 @@
   border-bottom: 1px solid var(--border-color, #e5e7eb);
 }
 
+.filterRow {
+  background: var(--bg-secondary, #f9fafb);
+}
+
 .table tbody tr {
   border-bottom: 1px solid var(--border-color, #e5e7eb);
   transition: background-color var(--transition-fast);
@@ -103,13 +145,77 @@
   color: var(--text-primary, #111827);
 }
 
+.filterRow th {
+  padding: var(--sp-2, 0.5rem) var(--sp-4, 1rem) var(--sp-3, 0.75rem);
+  vertical-align: top;
+  border-bottom: 1px solid var(--border-color, #e5e7eb);
+}
+
+.filterCell {
+  text-align: left;
+}
+
+.columnFilterInput,
+.columnFilterSelect {
+  width: 100%;
+  min-width: 0;
+}
+
+.dateRangeFilter {
+  display: flex;
+  gap: var(--sp-2, 0.5rem);
+  width: 100%;
+}
+
+.dateRangeInput {
+  min-width: 0;
+  width: 100%;
+}
+
 .checkboxCol {
   width: 40px;
   text-align: center !important;
 }
 
 .checkboxCol input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-primary);
+  display: inline-grid;
+  place-items: center;
   cursor: pointer;
+  transition: border-color 0.2s ease, background-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.checkboxCol input[type="checkbox"]::after {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  transform: scale(0);
+  transition: transform 0.15s ease;
+  background: var(--bg-primary);
+}
+
+.checkboxCol input[type="checkbox"]:checked,
+.checkboxCol input[type="checkbox"]:indeterminate {
+  background: var(--primary);
+  border-color: var(--primary);
+}
+
+.checkboxCol input[type="checkbox"]:checked::after,
+.checkboxCol input[type="checkbox"]:indeterminate::after {
+  transform: scale(1);
+}
+
+.checkboxCol input[type="checkbox"]:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 18%, transparent);
 }
 
 /* Empty state */

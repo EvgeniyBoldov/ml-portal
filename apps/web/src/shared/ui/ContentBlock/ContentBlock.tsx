@@ -51,7 +51,7 @@ export interface FieldDefinition {
   /** Rows for textarea */
   rows?: number;
   /** Badge tone for badge type */
-  badgeTone?: 'info' | 'success' | 'warning' | 'danger' | 'neutral';
+  badgeTone?: 'info' | 'success' | 'warning' | 'warn' | 'danger' | 'neutral';
   /** Custom render function */
   render?: (value: any, isEditable: boolean, onChange: (value: any) => void) => React.ReactNode;
   /** Disabled in edit mode */
@@ -141,7 +141,7 @@ const FieldEditor = ({
       );
     case 'badge':
       return value ? (
-        <Badge tone={field.badgeTone || 'neutral'}>{String(value)}</Badge>
+        <Badge tone={field.badgeTone === 'warning' ? 'warn' : (field.badgeTone || 'neutral')}>{String(value)}</Badge>
       ) : (
         <span className={styles.emptyValue}>—</span>
       );

@@ -14,11 +14,14 @@ COPY apps/emb/src/app/ /app/
 
 # Set environment variables
 ENV PYTHONPATH=/app
-ENV EMB_MODELS="all-MiniLM-L6-v2"
-ENV EMB_MODEL_all-MiniLM-L6-v2_PATH=/models_llm/sentence-transformers--all-MiniLM-L6-v2
+ENV EMB_MODEL_ALIAS="all-MiniLM-L6-v2"
+ENV EMB_MODEL_PATH=/models_llm/sentence-transformers--all-MiniLM-L6-v2
+ENV EMB_MODEL_DIMENSIONS=384
+ENV EMB_MODEL_MAX_TOKENS=512
+ENV EMB_MODEL_VERSION=1.0
 ENV EMB_BATCH_SIZE=128
 ENV EMB_MAX_WAIT_MS=8
-ENV EMB_PARALLELISM_all-MiniLM-L6-v2=2
+ENV EMB_MODEL_PARALLELISM=2
 
 # Expose port
 EXPOSE 8001

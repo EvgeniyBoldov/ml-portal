@@ -159,6 +159,7 @@ class OpenAICompatibleLLM:
                 {"id": "llama-3.1-70b-versatile", "name": "Llama 3.1 70B Versatile"},
                 {"id": "mixtral-8x7b-32768", "name": "Mixtral 8x7B"},
                 {"id": "gemma2-9b-it", "name": "Gemma 2 9B"},
+                {"id": "compound-beta", "name": "Compound Beta"},
             ],
             "openai": [
                 {"id": "gpt-4-turbo-preview", "name": "GPT-4 Turbo"},

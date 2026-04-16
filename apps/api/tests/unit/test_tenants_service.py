@@ -415,6 +415,22 @@ class TestBuildTenantResponse(TestAsyncTenantsService):
         
         assert len(result["embed_models"]) == 2
         assert "extra-embed" in result["embed_models"]
+
+    @pytest.mark.asyncio
+    async def test_build_response_does_not_duplicate_global_embed_model(
+        self, tenants_service, mock_model_repo, sample_tenant,
+        sample_embed_model, sample_rerank_model
+    ):
+        """Should not duplicate embed model when tenant alias equals global default."""
+        sample_tenant.embedding_model_alias = sample_embed_model.alias
+
+        mock_model_repo.get_global_by_type.side_effect = [sample_embed_model, sample_rerank_model]
+        mock_model_repo.get_by_alias.return_value = sample_embed_model
+
+        result = await tenants_service._build_tenant_response(sample_tenant)
+
+        assert result["embed_models"] == [sample_embed_model.alias]
+        assert len(result["embed_models_info"]) == 1
     
     @pytest.mark.asyncio
     async def test_build_response_no_global_models(

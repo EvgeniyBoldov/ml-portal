@@ -12,9 +12,6 @@ from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from app.core.config import get_settings
-from app.core.logging import get_logger
-
-logger = get_logger(__name__)
 
 
 def _get_db_url() -> str:
@@ -68,38 +65,3 @@ async def get_worker_session() -> AsyncGenerator[AsyncSession, None]:
             yield session
     finally:
         await engine.dispose()
-
-
-def get_worker_session_factory() -> async_sessionmaker:
-    """
-    DEPRECATED: This function is kept for backward compatibility but should not be used.
-    
-    The problem: AsyncEngine is bound to the event loop where it was created.
-    asyncio.run() creates a NEW event loop each time, so a globally cached engine
-    will fail with "Future attached to a different loop" error.
-    
-    Use get_worker_session() context manager instead.
-    """
-    logger.warning(
-        "get_worker_session_factory() is deprecated and will cause event loop errors. "
-        "Use 'async with get_worker_session() as session:' instead."
-    )
-    
-    # Create a fresh factory each time (not ideal but prevents the loop error)
-    db_url = _get_db_url()
-    
-    engine = create_async_engine(
-        db_url,
-        echo=False,
-        pool_pre_ping=True,
-        pool_recycle=300,
-        pool_size=2,
-        max_overflow=3,
-    )
-    
-    return async_sessionmaker(
-        engine,
-        expire_on_commit=False,
-        class_=AsyncSession
-    )
-

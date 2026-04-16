@@ -81,6 +81,7 @@ Legacy-страницы на `EntityTabsPage` пока допустимы, но 
 1. Использовать `Input`, `Textarea`, `Select`, `Checkbox`, `Button` из `shared/ui`.
 2. Формы — controlled, с полевой и общей валидацией.
 3. Большие формы не размещать в modal/drawer: только page-level форма.
+4. Добавление связей `one-to-many` в UI делать через shared-модалку (`FormModal`/`Modal`) с контентом формы на уровне конкретной страницы.
 
 ## 8) Accessibility
 

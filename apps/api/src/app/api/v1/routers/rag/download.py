@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 
 from fastapi import APIRouter, HTTPException, Query, Depends
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import db_uow, get_current_user
@@ -12,7 +13,10 @@ from app.core.security import UserCtx
 from app.core.logging import get_logger
 from app.core.config import get_settings
 from app.adapters.s3_client import s3_manager, PresignOptions
+from app.models.rag_ingest import Source
 from app.repositories.factory import get_async_repository_factory, AsyncRepositoryFactory
+from app.services.document_artifacts import get_document_artifact_key
+from app.services.file_delivery_service import FileDeliveryService
 
 logger = get_logger(__name__)
 
@@ -39,6 +43,15 @@ async def download_rag_file(
             s3_key = document.s3_key_raw
         else:
             s3_key = document.s3_key_processed
+            if not s3_key:
+                source_meta_result = await session.execute(
+                    select(Source.meta).where(
+                        Source.source_id == uuid.UUID(doc_id),
+                        Source.tenant_id == document.tenant_id,
+                    )
+                )
+                source_meta = source_meta_result.scalar_one_or_none()
+                s3_key = get_document_artifact_key(source_meta, "canonical")
             
             if not s3_key:
                 prefix = f"{document.tenant_id}/{doc_id}/canonical/"
@@ -65,7 +78,12 @@ async def download_rag_file(
             options=PresignOptions(method="GET", expires_in=3600)
         )
         
-        return {"url": url}
+        file_id = FileDeliveryService.make_rag_document_file_id(doc_id, kind)
+        return {
+            "url": url,
+            "file_id": file_id,
+            "download_url": f"/api/v1/files/{file_id}/download",
+        }
     except HTTPException:
         raise
     except ValueError:

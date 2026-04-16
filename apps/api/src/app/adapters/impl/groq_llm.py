@@ -113,6 +113,12 @@ class LLMClient:
                     "name": "Mixtral 8x7B",
                     "description": "Mixture of experts model",
                     "provider": "groq"
+                },
+                {
+                    "id": "compound-beta",
+                    "name": "Compound Beta",
+                    "description": "Groq Compound Beta — multi-step reasoning, no rate limits",
+                    "provider": "groq"
                 }
             ]
             

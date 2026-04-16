@@ -21,6 +21,39 @@ class ModelService:
     def __init__(self, session: AsyncSession):
         self.session = session
     
+    def _normalize_payload(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        payload = dict(data)
+
+        connector = payload.get("connector")
+        if connector is None:
+            provider = (payload.get("provider") or "").lower()
+            model_type = payload.get("type")
+            model_type_value = model_type.value if hasattr(model_type, "value") else model_type
+            if provider == "local" and model_type_value == "embedding":
+                connector = "local_emb_http"
+            elif provider == "local" and model_type_value == "reranker":
+                connector = "local_rerank_http"
+            elif provider == "local" and model_type_value == "llm_chat":
+                connector = "local_llm_http"
+            elif provider == "azure":
+                connector = "azure_openai_http"
+            else:
+                connector = "openai_http"
+            payload["connector"] = connector
+
+        if payload.get("instance_id") == "":
+            payload["instance_id"] = None
+        if payload.get("base_url") == "":
+            payload["base_url"] = None
+
+        if str(connector).startswith("local_"):
+            if not payload.get("base_url") and payload.get("extra_config") and payload["extra_config"].get("base_url"):
+                payload["base_url"] = payload["extra_config"]["base_url"]
+            if not payload.get("base_url") and not payload.get("instance_id"):
+                raise ValueError("Local connector requires instance_id or base_url")
+        payload.setdefault("provider", "")
+        return payload
+    
     async def create_model(self, data: Dict[str, Any]) -> Model:
         """Create a new model
         
@@ -30,6 +63,8 @@ class ModelService:
         Returns:
             Created model
         """
+        data = self._normalize_payload(data)
+        
         # Check if alias already exists
         existing = await self.get_by_alias(data.get("alias"))
         if existing:
@@ -37,11 +72,20 @@ class ModelService:
         
         # If default_for_type=True, unset previous default
         if data.get("default_for_type"):
-            await self._unset_default_for_type(data["type"])
+            model_type = data["type"]
+            if isinstance(model_type, str):
+                model_type = ModelType(model_type)
+            await self._unset_default_for_type(model_type)
         
         # Convert instance_id string to UUID if present
         if data.get("instance_id") and isinstance(data["instance_id"], str):
             data["instance_id"] = uuid.UUID(data["instance_id"])
+        
+        # Convert string enum fields to enum objects
+        if isinstance(data.get("type"), str):
+            data["type"] = ModelType(data["type"])
+        if isinstance(data.get("status"), str):
+            data["status"] = ModelStatus(data["status"])
         
         model = Model(**data)
         self.session.add(model)
@@ -116,6 +160,16 @@ class ModelService:
         if not model:
             return None
         
+        data = self._normalize_payload({
+            "type": model.type,
+            "provider": data.get("provider", model.provider),
+            "connector": data.get("connector", model.connector),
+            "instance_id": data.get("instance_id", model.instance_id),
+            "base_url": data.get("base_url", model.base_url),
+            "extra_config": data.get("extra_config", model.extra_config),
+            **data,
+        })
+        
         # If setting default_for_type=True, unset previous default
         if data.get("default_for_type") and not model.default_for_type:
             await self._unset_default_for_type(model.type)
@@ -123,7 +177,15 @@ class ModelService:
         # Convert instance_id string to UUID if present
         if data.get("instance_id") and isinstance(data["instance_id"], str):
             data["instance_id"] = uuid.UUID(data["instance_id"])
-        
+
+        # Normalize enum-like fields when update payload comes from API as plain strings
+        if isinstance(data.get("type"), str):
+            data["type"] = ModelType(data["type"])
+        if isinstance(data.get("status"), str):
+            data["status"] = ModelStatus(data["status"])
+        if isinstance(data.get("health_status"), str):
+            data["health_status"] = HealthStatus(data["health_status"])
+
         # Update fields
         for key, value in data.items():
             if hasattr(model, key):
@@ -131,6 +193,10 @@ class ModelService:
         
         model.updated_at = datetime.now(timezone.utc)
         await self.session.flush()
+        
+        # Invalidate ModelResolver cache for this alias
+        from app.services.model_resolver import ModelResolver
+        ModelResolver.invalidate_cache(model.alias)
         
         logger.info(f"Updated model: {model.alias}")
         return model

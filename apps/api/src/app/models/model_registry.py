@@ -65,8 +65,10 @@ class Model(Base):
     
     # Type & Provider
     type: Mapped[ModelType] = mapped_column(SQLEnum(ModelType, name="model_type", create_type=True), index=True, comment="Model type")
-    provider: Mapped[str] = mapped_column(String(50), comment="Provider name (openai, groq, local, etc.)")
+    provider: Mapped[str] = mapped_column(String(50), comment="Deprecated provider label (openai, groq, local, etc.)")
+    connector: Mapped[str] = mapped_column(String(50), index=True, comment="Connection driver (openai_http, local_emb_http, local_rerank_http, etc.)")
     provider_model_name: Mapped[str] = mapped_column(String(255), comment="Model name at provider")
+    base_url: Mapped[str | None] = mapped_column(String(500), nullable=True, comment="Direct endpoint URL for local or standalone model connectors")
     
     # Instance (provider connection)
     instance_id: Mapped[uuid.UUID | None] = mapped_column(

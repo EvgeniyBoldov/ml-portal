@@ -10,10 +10,11 @@ import React, { useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { agentsApi, toolInstancesApi, type ToolInstance } from '@/shared/api';
 import { qk } from '@/shared/api/keys';
-import type { PermissionValue } from '@/shared/api/permissions';
 import Button from '../Button';
 import Badge from '../Badge';
 import styles from './RbacRulesEditor.module.css';
+
+type PermissionValue = 'allowed' | 'denied' | 'undefined';
 
 export interface RbacPermissions {
   instance_permissions: Record<string, PermissionValue>;
@@ -143,7 +144,7 @@ export function RbacRulesEditor({
           className={`${styles.tab} ${activeTab === 'instances' ? styles.tabActive : ''}`}
           onClick={() => setActiveTab('instances')}
         >
-          Инстансы ({instances.length})
+          Коннекторы ({instances.length})
         </button>
       </div>
 
@@ -201,11 +202,11 @@ export function RbacRulesEditor({
         {activeTab === 'instances' && (
           <div className={styles.list}>
             {filteredInstances.length === 0 ? (
-              <div className={styles.empty}>Нет инстансов</div>
+              <div className={styles.empty}>Нет коннекторов</div>
             ) : (
               filteredInstances.map((instance: ToolInstance) => {
                 const perm = getInstancePermission(instance.slug);
-                const isLocal = instance.instance_type === 'local';
+                const isLocal = instance.placement === 'local';
                 return (
                   <div key={instance.slug} className={styles.item}>
                     <div className={styles.itemInfo}>

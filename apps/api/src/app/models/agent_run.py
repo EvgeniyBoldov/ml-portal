@@ -55,8 +55,18 @@ class AgentRun(Base):
     
     error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     
+    # Pause state for run continuation (waiting_confirmation / waiting_input)
+    paused_action: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
+    paused_context: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
+    
     started_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
     )
     finished_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True

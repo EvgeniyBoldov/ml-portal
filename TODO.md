@@ -1,122 +1,100 @@
-# Frontend & Backend Review TODO
+# TODO
 
-Аудит выполнен по правилам из `docs/frontend/RULES.md` и `docs/frontend/PATTERNS.md`.
+Этот файл содержит только актуальный backlog.
 
-## P0 — критично (архитектурные нарушения)
+## 1. Валидация загружаемых файлов
 
-- [ ] Убрать hardcoded query keys в SSE cache update и перейти полностью на `qk.*`.
-  - `apps/web/src/app/providers/applyRagEvents.ts`:
-    - `['rag', 'list']` @ `invalidateQueries`, `setQueriesData`
-    - `['rag', 'detail']` @ `setQueriesData`, `removeQueries`
+- Ввести явный allowlist по типам файлов для document upload и RAG upload.
+- Валидировать расширение и MIME до запуска extraction pipeline.
+- Синхронизировать правила для фронта, document collections и legacy RAG, чтобы не было разных входных контрактов.
 
-- [ ] Убрать hardcoded query keys в hooks/pages и использовать query key factory.
-  - `apps/web/src/shared/api/hooks/useAdmin.ts`
-    - `['admin', 'email-settings']`
-    - fallback keys `['admin', 'users', 'undefined']`, `['admin', 'models', 'undefined']`, `['admin', 'tenants', 'undefined']`
-  - `apps/web/src/domains/profile/pages/ProfilePage.tsx`
-    - `['profile']`, `['profile', 'tokens']`
-  - `apps/web/src/domains/admin/pages/CreateCollectionPage.tsx`
-    - `['admin', 'tenants']`
-  - `apps/web/src/domains/admin/pages/ViewCollectionPage.tsx`
-    - `['admin', 'tenants']`
+## 2. Довести документный контур до одного канона
 
-## P1 — высокий приоритет (style/accessibility/maintainability)
+- Выровнять metadata contract между `collection_ingest`, `Source.meta` и UI.
+- Зафиксировать публичные и внутренние retrieval-сурfaces для документов.
+- Убрать остатки legacy RAG vocabulary из seed prompts и операторских подсказок.
+- Явно зафиксировать, какие document fields являются обязательными, а какие автозаполняемыми.
 
-- [ ] Убрать inline styles из админских страниц и вынести в `.module.css`.
-  - `apps/web/src/domains/admin/pages/AuditPage.tsx` (множественные inline styles)
-  - `apps/web/src/domains/admin/pages/CreateCollectionPage.tsx` (`div style={{ display: 'flex', ... }}`)
-  - `apps/web/src/domains/admin/pages/ViewCollectionPage.tsx` (inline styles в ячейках таблицы)
-  - `apps/web/src/app/router.tsx` (`withSuspense` fallback с inline padding)
+## 3. Structured collection retrieval
 
-- [ ] Привести типизацию к strict-правилам (убрать `any` в новом/активно изменяемом коде).
-  - `apps/web/src/domains/admin/pages/AgentEditorPage.tsx` (`any` в mutation payload/error handlers)
-  - `apps/web/src/domains/admin/pages/ModelEditorPage.tsx` (`err: any`, `value: any`, и т.д.)
+- Сделать chunking для длинных text fields перед vectorization.
+- Явно определить retrieval profiles по типу коллекции.
+- Решить, где rerank обязателен, а где опционален.
+- Добавить явный процесс revectorization всей таблицы для случаев смены модели или схемы.
+- Оставить `semantic_search` только если он реально нужен как публичная операция, иначе увести внутрь backend.
 
-## P2 — средний приоритет (legacy/структура)
+## 4. Внешние интеграции через MCP
 
-- [ ] Сократить крупные компоненты > 250 строк через extraction в subcomponents/hooks.
-  - `apps/web/src/domains/profile/pages/ProfilePage.tsx` (~419 строк)
-  - `apps/web/src/domains/admin/pages/ModelEditorPage.tsx` (~481 строк)
-  - `apps/web/src/domains/admin/pages/AgentEditorPage.tsx` (~295 строк)
+- Перенести оставшиеся внешние tool groups за MCP там, где это действительно упрощает ownership и креды.
+- Довести discovery/config для provider domains до одного понятного контракта.
+- Зафиксировать, что MCP rescan обновляет сырой каталог схем и tool descriptors, а runtime publication происходит отдельно через ToolProfile/OperationView.
+- Проверить, что provider-specific credential scope и runtime publication описаны одинаково во всех слоях.
 
-- [ ] Закрыть legacy naming debt по `*EditorPage.tsx`.
-  - Переименовать/мигрировать:
-    - `apps/web/src/domains/admin/pages/AgentEditorPage.tsx`
-    - `apps/web/src/domains/admin/pages/ModelEditorPage.tsx`
-  - Целевой формат: `<Entity>Page.tsx` + EntityPageV2/Tab как единый контракт.
+## 5. Operational maturity
 
-## Дополнительно (после основных фиксов)
+- Улучшить логирование и recovery paths для collection provisioning и vectorization failures.
+- Добавить health checks и cleanup story для Qdrant collections per collection/workspace.
+- Сделать operator-facing ошибки по ingest/reindex более точными и действия-ориентированными.
 
-- [ ] Унифицировать admin CRUD/query hooks: все query keys и invalidation только через `qk`.
-- [ ] Добавить lint rule на запрет inline styles (кроме явно динамических случаев).
-- [ ] Добавить lint/test guard на запрет queryKey массивов вне `keys.ts`.
+## 6. Канонизация runtime vocabulary
 
----
+- Убедиться, что seed prompts, runtime docs и builtin tools не возвращают старые названия операций.
+- Свести domain filtering к узкому набору canonical operations.
+- Убирать legacy naming только после того, как новый contract покрыт тестами и seed prompts.
+- Продумать tenant/company glossary для нормализации пользовательских запросов по локальным аббревиатурам и терминам инфраструктуры перед routing/search; scope должен быть tenant/company-aware, а алиасы должны быть явными и контролируемыми, чтобы `форт1` и похожие формы не давали случайных ложных срабатываний.
 
-## Backend Review TODO
+## 7. Аудит entity pages
 
-Аудит выполнен по правилам из `docs/backend/RULES.md` и `docs/backend/PATTERNS.md`.
+- `AgentPage`: сверить overview/current version data с backend contract и отдельно решить, нужен ли `allowed_instance_slugs` в version UI или это уже лишний слой.
+- `AgentVersionPage`: проверить, что tabs содержат только version-level поля, а мета и доступ к данным не размазаны по нескольким блокам.
+- `AgentRunsPage`: проверить состав payload/display полей и убрать legacy naming из статусов и метаданных.
+- `ToolPage`: сверить общий слой тулза, current version meta и backend meta, отдельно проверить схемы и versions list.
+- `ToolVersionPage`: оставить только version-level поля, без backend schema surface и без чужой меты в hints.
+- `InstancesListPage` и detail pages: сверить domain/kind/placement/health/credentials/runtime summary; проверить, не остались ли `tool_group`/legacy compat поля в UI.
+- `CollectionPage`: проверить source/type, status/status_details, vector readiness, qdrant name, permission gate и retrieval profile; убрать `structured` как UI-термин.
+- `CollectionsListPage` и `CollectionDataPage`: убрать legacy `structured` naming и довести labels/styles до table/document модели.
+- Legacy group pages/hooks: удалены, если снова всплывут только как compatibility-хвост, но не как продуктовый путь.
+- Пройтись по shared field blocks и убрать дубли, где одни и те же данные рисуются разными компонентами.
 
-## P0 — критично (архитектурные/контрактные нарушения)
+## 8. Runtime maturity and debuggability
 
-- [ ] Убрать ручной `commit()` в роутерах, где используется `Depends(db_uow)` (двойное управление транзакцией).
-  - `apps/api/src/app/api/v1/routers/collections/upload.py` (`await session.commit()` в `upload_csv` и `delete_collection_rows`)
+- Добавить `runtime evaluation harness` с эталонными сценариями для chat/RAG/SQL/tool paths, чтобы ловить деградации качества, а не только статусы.
+- Сделать `deterministic replay / trace pack`: сохранять полный runtime snapshot, effective collections/tools/agents, prompts и tool I/O для воспроизводимого повторного прогона.
+- Ввести budget policy по latency/cost/tool-call depth: лимиты по времени, токенам и числу вызовов должны быть явными и наблюдаемыми.
+- Добавить reliability layer для operations: retry policy, circuit breaker, idempotency guard и понятные fallback-ветки для внешних интеграций.
+- Довести planner/sandbox introspection UI до explainability уровня: показывать не только шаги, но и причины выбора агентa/tool, candidate set и assembled prompt surfaces.
 
-- [ ] Убрать rollback из repository layer и оставить управление транзакцией на API/`db_uow`/worker transaction.
-  - `apps/api/src/app/repositories/base.py` (`session.rollback()` в generic repository методах)
+## 9. Runtime contracts and control plane
 
-- [ ] Убрать fallback на raw string query key/fallback-подход в tool/rbac scope logic и заменить на enum/константы для scope/status.
-  - `apps/api/src/app/repositories/base.py` (`'local'/'global'` в `_build_scope_filter`)
-  - `apps/api/src/app/adapters/qdrant_client.py` (`if scope == 'local' / 'global'`)
+- Подготовить настоящий checkpoint resume для runtime. Текущий continuation через новый turn рабочий, но длинные сценарии и дорогие step chains потребуют mid-run checkpointing.
+- Довести UI consumption для structured answer contract (`answer_blocks.v1`): рендер text/table/file/citations/action без обязательной markdown-парсилки.
+- Добавить режимы обязательных citations для критичных retrieval/analysis ответов (базовый `grounding score` уже сохраняется в `assistant.meta.grounding`).
 
-## P1 — высокий приоритет (quality/observability/security)
+## 10. Platform limits consolidation (P0)
 
-- [ ] Привести логирование к структурированному формату событий (не только message string).
-  - `apps/api/src/app/core/logging.py` (текущий `format="%(message)s"`)
-  - `apps/api/src/app/services/rbac_service.py` (строковые f-string логи без event-полей)
-  - `apps/api/src/app/services/credential_service.py` (ошибки/операции логируются без стабильного event-контракта)
+- Привести `PlatformSettings` к правилу: в UI показываем только то, что реально применяется в runtime.
+- Зафиксировать и оставить рабочий набор полей:
+  - safety gates: `require_confirmation_for_write`, `require_confirmation_for_destructive`, `forbid_destructive`, `forbid_write_in_prod`
+  - runtime caps: `abs_max_steps`, `abs_max_timeout_s`, `abs_max_plan_steps`, `abs_max_concurrency`
+  - chat upload: `chat_upload_max_bytes`, `chat_upload_allowed_extensions`
+- Для полей, которые остаются в контракте, но не применяются, сделать одно из двух (без промежуточного состояния):
+  - либо добавить enforcement,
+  - либо удалить из backend schema/model/service/router + frontend формы.
+- Кандидаты на выпил в текущем состоянии (если не добавляем enforcement): `require_backup_before_write`, `abs_max_task_runtime_s`, `abs_max_retries`, `abs_max_tool_calls_per_step`.
+- Исправить PATCH `/admin/settings` так, чтобы поддерживалась явная очистка nullable-полей (`null`) из UI.
 
-- [ ] Убрать хардкод дефолтных execution limit значений в runtime и вынести в config/enum слой.
-  - `apps/api/src/app/agents/runtime.py` (`PolicyLimits` default constants)
+## 11. Backend → Frontend field wiring (P0)
 
-## P2 — средний приоритет (maintainability/consistency)
+- `AgentPage`: прокинуть контейнерный `logging_level`.
+- `AgentPage`: прокинуть контейнерные `tags`.
+- `CollectionPage` (create/update): прокинуть `table_name`.
+- `CollectionPage` (create/update): прокинуть `table_schema` (JSON).
+- `CollectionPage` (SQL create): прокинуть `data_instance_id` (выбор instance).
+- `CollectionPage`: определить судьбу `source_contract`:
+  - либо сделать editable в UI,
+  - либо убрать из публичного create/update контракта и оставить backend-managed.
+- `ToolPage`: сделать `domains` редактируемым (сейчас readonly при наличии backend update поля).
 
-- [ ] **RBAC: Улучшить сводную таблицу правил** - текущая таблица в RbacListPage показывает все правила без иерархии. Нужно сделать:
-  - Фильтрацию по владельцу (пользователь/тенант/платформа)
-  - Группировку правил по владельцам
-  - Улучшенный UI для просмотра иерархии правил
-  - Возможность быстрых переходов к правилам конкретного владельца
+## 12. Limits entity decision (P1)
 
-- [ ] Привести единый стиль domain errors: выделить общий иерархический набор ошибок для сервисов, где сейчас используются ad-hoc `Exception`.
-  - `apps/api/src/app/services/rbac_service.py`
-  - `apps/api/src/app/services/credential_service.py`
-
-- [ ] Добавить/усилить regression tests на transactional boundaries (rollback/commit orchestration) после очистки repository layer.
-  - целевые контуры: CRUD generic repos + API маршруты на `db_uow`
-
-## Frontend Architecture: Progressive Loading & Sandbox
-
-### P1 — высокий приоритет (архитектурное улучшение)
-
-- [ ] **Реализовать Progressive Loading + Role-based Splitting** - разделить загрузку по ролям и доменам для оптимизации initial bundle.
-  - **Phase 1: Анализ и подготовка**
-    - [ ] Проанализировать текущую архитектуру роутинга и lazy loading
-    - [ ] Создать sandbox домен (layouts, pages, components)
-    - [ ] Создать SandboxGuard для role-based доступа
-  - **Phase 2: Перенос функциональности**
-    - [ ] Перенести AgentRouterPage в sandbox домен
-    - [ ] Добавить sandbox роуты в основной router.tsx
-    - [ ] Добавить навигацию в песочницу из AdminLayout
-  - **Phase 3: Очистка и оптимизация**
-    - [ ] Удалить Agent Router из админки (страница, роут, сайдбар, кнопки)
-    - [ ] Настроить code splitting для domain chunks (admin, sandbox, gpt)
-    - [ ] Добавить preloading для sandbox при наведении на кнопку
-  - **Phase 4: Тестирование и финализация**
-    - [ ] Протестировать progressive loading и кэширование
-  - **Ожидаемый результат**: Initial load ~2.3MB, Admin +2.5MB, Sandbox +1.8MB, Total cached ~6.6MB
-
-### P2 — средний приоритет (опциональные улучшения)
-
-- [ ] Добавить feature flags для условной загрузки sandbox модуля
-- [ ] Реализовать micro-frontend подход при дальнейшем росте бандла
-- [ ] Добавить метрики загрузки и performance monitoring
+- Принять решение по `Limit` entity: либо реально используем как отдельный контур и делаем admin UI, либо исключаем из продуктового контура и чистим legacy-остатки.

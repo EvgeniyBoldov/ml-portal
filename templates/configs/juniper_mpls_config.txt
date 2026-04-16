@@ -1,0 +1,200 @@
+# Конфигурация MPLS — Juniper MX480, cr-01.msk (PROD-CORE)
+# Компания "Дубалайн"
+# Дата: 2025-10-14
+# Инженер: Алексей Воронов (Ведущий сетевой инженер, Core Network)
+# Заявка: CHG-2025-1041
+# Топология: cr-01.msk <-> cr-02.spb <-> cr-03.ekb (PROD-CORE)
+
+# ===== ISIS (IGP ДЛЯ MPLS) =====
+protocols {
+    isis {
+        level 1 disable;
+        level 2 {
+            authentication-key "$9$B5jAqmPQn6AF3/vO1"; ## SECRET
+            authentication-type md5;
+            wide-metrics-only;
+        }
+        interface xe-1/0/0.0 {
+            level 2 {
+                metric 10;
+            }
+            point-to-point;
+        }
+        interface lo0.0 {
+            passive;
+        }
+    }
+
+    # ===== MPLS =====
+    mpls {
+        interface xe-1/0/0.0;
+        interface ae0.0;
+
+        label-switched-path LSP-CR01-TO-CR02-SPB {
+            description "LSP :: cr-01.msk -> cr-02.spb :: PROD-CORE";
+            from 10.255.0.1;
+            to 10.255.0.2;
+            primary MAIN-PATH {
+                bandwidth 8g;
+                priority 4 4;
+                fast-reroute;
+            }
+            secondary BACKUP-PATH {
+                standby;
+                bandwidth 4g;
+            }
+        }
+
+        label-switched-path LSP-CR01-TO-CR03-EKB {
+            description "LSP :: cr-01.msk -> cr-03.ekb :: PROD-CORE";
+            from 10.255.0.1;
+            to 10.255.0.3;
+            primary MAIN-PATH {
+                bandwidth 4g;
+                fast-reroute;
+            }
+        }
+    }
+
+    # ===== RSVP (для TE-туннелей) =====
+    rsvp {
+        interface xe-1/0/0.0 {
+            bandwidth 9g;
+            link-protection;
+        }
+        interface ae0.0 {
+            bandwidth 18g;
+        }
+    }
+
+    # ===== LDP (fallback) =====
+    ldp {
+        track-igp-metric;
+        interface xe-1/0/0.0;
+        interface lo0.0;
+    }
+
+    # ===== BGP =====
+    bgp {
+        group IBGP-CORE {
+            description "IBGP :: PROD-CORE :: full-mesh";
+            type internal;
+            local-address 10.255.0.1;
+            family inet {
+                unicast;
+            }
+            family inet-vpn {
+                unicast;
+            }
+            family l2vpn {
+                signaling;
+            }
+            authentication-key "$9$TZUDi.P5z9pq6";
+            neighbor 10.255.0.2 {
+                description "IBGP :: cr-02.spb";
+            }
+            neighbor 10.255.0.3 {
+                description "IBGP :: cr-03.ekb";
+            }
+        }
+
+        group EBGP-PROVIDERS {
+            description "EBGP :: External providers";
+            type external;
+            import PROVIDER-IMPORT-POLICY;
+            export PROVIDER-EXPORT-POLICY;
+
+            neighbor 195.131.12.1 {
+                description "EBGP :: TransTeleCom :: AS20485";
+                peer-as 20485;
+                authentication-key "$9$KJ4PQF/6AhEy2";
+                local-as 65100;
+            }
+            neighbor 85.142.32.17 {
+                description "EBGP :: Rostelecom :: AS12389";
+                peer-as 12389;
+                authentication-key "$9$LM5QRG/7BiHz3";
+                local-as 65100;
+            }
+        }
+    }
+}
+
+# ===== VRF L3VPN — PROD-OFFICE =====
+routing-instances {
+    VRF-PROD-OFFICE {
+        description "L3VPN :: PROD-OFFICE :: офисная сеть";
+        instance-type vrf;
+        interface xe-1/0/2.100;
+        route-distinguisher 65100:100;
+        vrf-target target:65100:100;
+        vrf-table-label;
+        routing-options {
+            static {
+                route 172.20.0.0/14 next-hop 10.0.5.2;
+            }
+        }
+    }
+
+    VRF-PROD-DC {
+        description "L3VPN :: PROD-DC :: ЦОД";
+        instance-type vrf;
+        interface xe-1/0/1.200;
+        route-distinguisher 65100:200;
+        vrf-target target:65100:200;
+        vrf-table-label;
+    }
+}
+
+# ===== ПОЛИТИКИ МАРШРУТИЗАЦИИ =====
+policy-options {
+    prefix-list DUBALINE-PREFIXES {
+        195.208.64.0/18;
+        85.142.32.0/22;
+    }
+
+    policy-statement PROVIDER-IMPORT-POLICY {
+        term ACCEPT-DEFAULT {
+            from {
+                route-filter 0.0.0.0/0 exact;
+            }
+            then accept;
+        }
+        term ACCEPT-SPECIFIC {
+            from {
+                prefix-list DUBALINE-PREFIXES;
+            }
+            then accept;
+        }
+        term REJECT-ALL {
+            then reject;
+        }
+    }
+
+    policy-statement PROVIDER-EXPORT-POLICY {
+        term EXPORT-OWN-PREFIXES {
+            from {
+                prefix-list DUBALINE-PREFIXES;
+            }
+            then accept;
+        }
+        term REJECT-ALL {
+            then reject;
+        }
+    }
+
+    # Балансировка нагрузки
+    policy-statement LOAD-BALANCE {
+        then {
+            load-balance per-flow;
+        }
+    }
+}
+
+routing-options {
+    forwarding-table {
+        export LOAD-BALANCE;
+        ecmp-fast-reroute;
+    }
+    autonomous-system 65100;
+}

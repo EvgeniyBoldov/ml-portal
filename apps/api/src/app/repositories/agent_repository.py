@@ -44,6 +44,15 @@ class AgentRepository:
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def get_by_id_with_versions(self, agent_id: UUID) -> Optional[Agent]:
+        stmt = (
+            select(Agent)
+            .where(Agent.id == agent_id)
+            .options(selectinload(Agent.versions))
+        )
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
     async def update(self, agent: Agent, data: dict) -> Agent:
         for key, value in data.items():
             setattr(agent, key, value)
@@ -110,10 +119,10 @@ class AgentVersionRepository:
         max_version = await self.session.scalar(stmt)
         return (max_version or 0) + 1
 
-    async def get_active_by_agent(self, agent_id: UUID) -> Optional[AgentVersion]:
+    async def get_published_by_agent(self, agent_id: UUID) -> Optional[AgentVersion]:
         stmt = select(AgentVersion).where(
             AgentVersion.agent_id == agent_id,
-            AgentVersion.status == AgentVersionStatus.ACTIVE.value,
+            AgentVersion.status == AgentVersionStatus.PUBLISHED.value,
         )
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
@@ -134,14 +143,14 @@ class AgentVersionRepository:
         await self.session.execute(stmt)
         await self.session.flush()
 
-    async def deactivate_active_version(self, agent_id: UUID) -> None:
+    async def archive_published_version(self, agent_id: UUID) -> None:
         stmt = (
             update(AgentVersion)
             .where(
                 AgentVersion.agent_id == agent_id,
-                AgentVersion.status == AgentVersionStatus.ACTIVE.value,
+                AgentVersion.status == AgentVersionStatus.PUBLISHED.value,
             )
-            .values(status=AgentVersionStatus.DEPRECATED.value)
+            .values(status=AgentVersionStatus.ARCHIVED.value)
         )
         await self.session.execute(stmt)
         await self.session.flush()

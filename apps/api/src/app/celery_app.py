@@ -15,6 +15,8 @@ app = Celery(
     include=[
         # RAG ingest pipeline tasks
         "app.workers.tasks_rag_ingest",
+        # Collection vectorization tasks
+        "app.workers.tasks_collection_vectorize",
         # Cleanup tasks for retention policies
         "app.workers.tasks_cleanup",
     ],
@@ -46,8 +48,6 @@ app.conf.task_queues = (
     Queue('ingest.chunk', routing_key='ingest.chunk', priority=5),
     Queue('ingest.embed', routing_key='ingest.embed', priority=4),
     Queue('ingest.index', routing_key='ingest.index', priority=3),
-    Queue('ingest.commit', routing_key='ingest.commit', priority=2),
-    
     # Reindex queues
     Queue('reindex.default', routing_key='reindex.default', priority=2),
     
@@ -66,7 +66,9 @@ app.conf.task_routes = {
     "app.workers.tasks_rag_ingest.chunk.chunk_document": {"queue": "ingest.chunk", "priority": 5},
     "app.workers.tasks_rag_ingest.embed.embed_chunks_model": {"queue": "ingest.embed", "priority": 4},
     "app.workers.tasks_rag_ingest.index.index_model": {"queue": "ingest.index", "priority": 3},
-    "app.workers.tasks_rag_ingest.index.commit_source": {"queue": "ingest.commit", "priority": 2},
+    # Collection vectorization tasks
+    "app.workers.tasks_collection_vectorize.vectorize_collection_rows": {"queue": "ingest.embed", "priority": 4},
+    "app.workers.tasks_collection_vectorize.reconcile_collection_vectorization": {"queue": "maintenance.default", "priority": 1},
 
     # Reindex tasks
     "app.workers.tasks_reindex.reindex_source": {"queue": "reindex.default", "priority": 2},
@@ -113,7 +115,11 @@ if settings.BEAT == 1:
         "models-health-check": {
             "task": "app.workers.tasks_health_check.health_check_all_models",
             "schedule": 300.0,  # 5 minutes
-        }
+        },
+        "collections-vectorization-reconcile": {
+            "task": "app.workers.tasks_collection_vectorize.reconcile_collection_vectorization",
+            "schedule": 120.0,  # 2 minutes
+        },
     }
 
 # Инициализация задач эмбеддингов
@@ -125,6 +131,4 @@ if settings.BEAT == 1:
 # create_embedding_worker_tasks(app)
 # create_dispatcher_tasks(app)
 
-# Initialize session factory on worker process start
-# Note: We use lazy initialization in get_worker_session_factory() instead
-# because signals can be problematic with fork workers
+# Worker sessions are created lazily per task via get_worker_session().

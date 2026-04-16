@@ -4,15 +4,16 @@
  * Паттерн: PoliciesListPage (EntityPageV2 + Tab + DataTable)
  */
 import { useState, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 
 import { agentRunsApi, type AgentRun, type AgentRunFilter } from '@/shared/api/agentRuns';
 import { qk } from '@/shared/api/keys';
-import { EntityPageV2, Tab } from '@/shared/ui/EntityPage/EntityPageV2';
+import { EntityPageV2, Tab } from '@/shared/ui/EntityPage';
 import { DataTable, type DataTableColumn, Badge, Input } from '@/shared/ui';
 import { RowActions } from '@/shared/ui/RowActions';
 import { getStatusProps } from '@/shared/lib/statusConfig';
+import styles from './AgentRunsPage.module.css';
 
 function formatDuration(ms?: number): string {
   if (!ms) return '—';
@@ -32,15 +33,27 @@ function formatDate(dateStr: string): string {
 
 export function AgentRunsPage() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [search, setSearch] = useState('');
+  const [chatId, setChatId] = useState(() => searchParams.get('chat_id') ?? '');
   const [filters, setFilters] = useState<AgentRunFilter>({
     page: 1,
     page_size: 20,
   });
 
+  const effectiveFilters = useMemo<AgentRunFilter>(() => {
+    const next: AgentRunFilter = { ...filters };
+    if (chatId.trim()) {
+      next.chat_id = chatId.trim();
+    } else {
+      delete next.chat_id;
+    }
+    return next;
+  }, [filters, chatId]);
+
   const { data: runsData, isLoading } = useQuery({
-    queryKey: qk.agentRuns.list({ ...filters }),
-    queryFn: () => agentRunsApi.list(filters),
+    queryKey: qk.agentRuns.list({ ...effectiveFilters }),
+    queryFn: () => agentRunsApi.list(effectiveFilters),
   });
 
   const filteredRuns = useMemo(() => {
@@ -59,12 +72,20 @@ export function AgentRunsPage() {
       key: 'agent_slug',
       label: 'АГЕНТ',
       render: (run) => (
-        <div>
-          <div style={{ fontWeight: 500 }}>{run.agent_slug}</div>
-          <div style={{ fontSize: '0.8125rem', color: 'var(--text-muted)' }}>
-            {run.id.substring(0, 8)}...
-          </div>
+        <div className={styles['agent-cell']}>
+          <div className={styles['agent-slug']}>{run.agent_slug}</div>
+          <div className={styles['agent-id']}>{run.id.substring(0, 8)}...</div>
         </div>
+      ),
+    },
+    {
+      key: 'chat_id',
+      label: 'ЧАТ',
+      width: 140,
+      render: (run) => (
+        <span className={styles.muted}>
+          {run.chat_id ? `${run.chat_id.substring(0, 8)}...` : '—'}
+        </span>
       ),
     },
     {
@@ -94,7 +115,7 @@ export function AgentRunsPage() {
       label: 'ВРЕМЯ',
       width: 100,
       render: (run) => (
-        <span style={{ color: 'var(--text-muted)' }}>{formatDuration(run.duration_ms)}</span>
+        <span className={styles.muted}>{formatDuration(run.duration_ms)}</span>
       ),
     },
     {
@@ -102,7 +123,7 @@ export function AgentRunsPage() {
       label: 'НАЧАТ',
       width: 150,
       render: (run) => (
-        <span style={{ color: 'var(--text-muted)' }}>{formatDate(run.started_at)}</span>
+        <span className={styles.muted}>{formatDate(run.started_at)}</span>
       ),
     },
     {
@@ -112,9 +133,18 @@ export function AgentRunsPage() {
       align: 'right',
       render: (run) => (
         <RowActions
-          actions={[
-            { label: 'Открыть', onClick: () => navigate(`/admin/agent-runs/${run.id}`) },
-          ]}
+          basePath="/admin/agent-runs"
+          id={run.id}
+          editable={false}
+          deletable={false}
+          customActions={run.chat_id ? [{
+            label: 'Все рансы чата',
+            onClick: () => {
+              setChatId(run.chat_id!);
+              setFilters(prev => ({ ...prev, page: 1 }));
+              setSearchParams({ chat_id: run.chat_id! });
+            },
+          }] : []}
         />
       ),
     },
@@ -125,11 +155,31 @@ export function AgentRunsPage() {
       title="Запуски агентов"
       mode="view"
       headerActions={
-        <Input
-          placeholder="Поиск по агенту..."
-          value={search}
-          onChange={setSearch}
-        />
+        <div className={styles.filters}>
+          <div className={styles['filter-item']}>
+            <Input
+              placeholder="Поиск по агенту/статусу/ID..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </div>
+          <div className={styles['filter-item']}>
+            <Input
+              placeholder="Фильтр: chat_id (UUID)"
+              value={chatId}
+              onChange={(e) => {
+                const next = e.target.value;
+                setChatId(next);
+                setFilters(prev => ({ ...prev, page: 1 }));
+                if (next.trim()) {
+                  setSearchParams({ chat_id: next.trim() });
+                } else {
+                  setSearchParams({});
+                }
+              }}
+            />
+          </div>
+        </div>
       }
     >
       <Tab title="Запуски" layout="full">
@@ -141,8 +191,8 @@ export function AgentRunsPage() {
           emptyText="Запуски не найдены"
           onRowClick={(run) => navigate(`/admin/agent-runs/${run.id}`)}
           paginated
-          pageSize={filters.page_size}
-          currentPage={filters.page}
+          pageSize={effectiveFilters.page_size}
+          currentPage={effectiveFilters.page}
           totalItems={runsData?.total}
           onPageChange={(page) => setFilters({ ...filters, page })}
         />

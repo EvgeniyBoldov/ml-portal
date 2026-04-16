@@ -1,9 +1,9 @@
 """
 Agent schemas v2 - versioned agent container.
 
-Agent is a container (slug, name, description, current_version_id).
-AgentVersion holds: prompt, policy_id, limit_id, version, status.
-AgentBinding (tool_bind) belongs to agent_version_id.
+Pattern:
+- AgentListItem       — short schema for lists (no nested objects)
+- AgentDetailResponse  — detail schema with nested version list
 """
 from typing import Any, Dict, List, Optional
 from datetime import datetime
@@ -19,21 +19,19 @@ class AgentCreate(BaseModel):
     slug: str = Field(..., description="Unique identifier")
     name: str = Field(..., description="Display name")
     description: Optional[str] = None
-    tag: Optional[str] = Field(default=None, description="Agent routing tag")
-    category: Optional[str] = Field(default=None, description="Agent category")
-    routing_example: Optional[str] = Field(default=None, description="Example request for router")
-    is_routable: bool = Field(default=False, description="Whether agent can be selected by router")
+    tags: Optional[List[str]] = Field(default=None, description="Agent tags for catalog filtering")
     logging_level: str = Field(default="brief", description="none, brief, full")
+    model: Optional[str] = Field(default=None, description="LLM model override")
+    allowed_collection_ids: Optional[List[UUID]] = Field(default=None, description="Whitelist of Collection IDs bound to agent. NULL = all collections.")
 
 
 class AgentUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
-    tag: Optional[str] = None
-    category: Optional[str] = None
-    routing_example: Optional[str] = None
-    is_routable: Optional[bool] = None
+    tags: Optional[List[str]] = None
     logging_level: Optional[str] = Field(default=None, description="none, brief, full")
+    model: Optional[str] = Field(default=None, description="LLM model override")
+    allowed_collection_ids: Optional[List[UUID]] = None
 
 
 class AgentResponse(BaseModel):
@@ -41,12 +39,30 @@ class AgentResponse(BaseModel):
     slug: str
     name: str
     description: Optional[str] = None
-    tag: Optional[str] = None
-    category: Optional[str] = None
-    routing_example: Optional[str] = None
-    is_routable: bool = False
+    tags: Optional[List[str]] = None
     current_version_id: Optional[UUID] = None
     logging_level: str = Field(default="brief", description="none, brief, full")
+    model: Optional[str] = None
+    allowed_collection_ids: Optional[List[UUID]] = None
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class AgentListItem(BaseModel):
+    """Short schema for GET /agents list."""
+    id: UUID
+    slug: str
+    name: str
+    description: Optional[str] = None
+    tags: Optional[List[str]] = None
+    current_version_id: Optional[UUID] = None
+    logging_level: str = "brief"
+    model: Optional[str] = None
+    allowed_collection_ids: Optional[List[UUID]] = None
+    versions_count: int = 0
     created_at: datetime
     updated_at: datetime
 
@@ -59,17 +75,65 @@ class AgentResponse(BaseModel):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class AgentVersionCreate(BaseModel):
-    prompt: Optional[str] = Field(default=None, description="System prompt text (inherited from parent if not provided)")
-    policy_id: Optional[UUID] = Field(default=None, description="Policy ID")
-    limit_id: Optional[UUID] = Field(default=None, description="Limit ID")
+    # Prompt parts
+    identity: Optional[str] = Field(default=None, description="Role/persona")
+    mission: Optional[str] = Field(default=None, description="What the agent does")
+    scope: Optional[str] = Field(default=None, description="Boundaries: what it does / does NOT do")
+    rules: Optional[str] = Field(default=None, description="Guidelines/algorithm")
+    tool_use_rules: Optional[str] = Field(default=None, description="How/when to call tools")
+    output_format: Optional[str] = Field(default=None, description="Response structure/JSON schema")
+    examples: Optional[str] = Field(default=None, description="Few-shot examples")
+    # Execution config
+    model: Optional[str] = Field(default=None, description="LLM model override")
+    timeout_s: Optional[int] = Field(default=None, description="Timeout in seconds")
+    max_steps: Optional[int] = Field(default=None, description="Max tool-call loop steps")
+    max_retries: Optional[int] = Field(default=None, description="Max retries on failure")
+    max_tokens: Optional[int] = Field(default=None, description="Max output tokens")
+    temperature: Optional[float] = Field(default=None, description="LLM temperature")
+    # Safety knobs
+    requires_confirmation_for_write: Optional[bool] = Field(default=None, description="Require confirmation for write ops")
+    risk_level: Optional[str] = Field(default=None, description="low, medium, high")
+    never_do: Optional[str] = Field(default=None, description="Explicit prohibitions")
+    allowed_ops: Optional[str] = Field(default=None, description="Allowed operations")
+    # Routing
+    short_info: Optional[str] = Field(default=None, description="Short description for routing")
+    tags: Optional[List[str]] = Field(default=None, description="Version-specific tags for routing")
+    is_routable: bool = Field(default=False, description="Whether this version can be selected by router")
+    routing_keywords: Optional[List[str]] = Field(default=None, description="Keywords for routing (5-30)")
+    routing_negative_keywords: Optional[List[str]] = Field(default=None, description="Negative keywords for routing")
+    # Meta
     notes: Optional[str] = None
     parent_version_id: Optional[UUID] = Field(default=None, description="Parent version ID for data inheritance")
 
 
 class AgentVersionUpdate(BaseModel):
-    prompt: Optional[str] = None
-    policy_id: Optional[UUID] = None
-    limit_id: Optional[UUID] = None
+    # Prompt parts
+    identity: Optional[str] = None
+    mission: Optional[str] = None
+    scope: Optional[str] = None
+    rules: Optional[str] = None
+    tool_use_rules: Optional[str] = None
+    output_format: Optional[str] = None
+    examples: Optional[str] = None
+    # Execution config
+    model: Optional[str] = None
+    timeout_s: Optional[int] = None
+    max_steps: Optional[int] = None
+    max_retries: Optional[int] = None
+    max_tokens: Optional[int] = None
+    temperature: Optional[float] = None
+    # Safety knobs
+    requires_confirmation_for_write: Optional[bool] = None
+    risk_level: Optional[str] = None
+    never_do: Optional[str] = None
+    allowed_ops: Optional[str] = None
+    # Routing
+    short_info: Optional[str] = None
+    tags: Optional[List[str]] = None
+    is_routable: Optional[bool] = None
+    routing_keywords: Optional[List[str]] = None
+    routing_negative_keywords: Optional[List[str]] = None
+    # Meta
     notes: Optional[str] = None
 
 
@@ -78,9 +142,33 @@ class AgentVersionResponse(BaseModel):
     agent_id: UUID
     version: int
     status: str
-    prompt: str
-    policy_id: Optional[UUID] = None
-    limit_id: Optional[UUID] = None
+    # Prompt parts
+    identity: Optional[str] = None
+    mission: Optional[str] = None
+    scope: Optional[str] = None
+    rules: Optional[str] = None
+    tool_use_rules: Optional[str] = None
+    output_format: Optional[str] = None
+    examples: Optional[str] = None
+    # Execution config
+    model: Optional[str] = None
+    timeout_s: Optional[int] = None
+    max_steps: Optional[int] = None
+    max_retries: Optional[int] = None
+    max_tokens: Optional[int] = None
+    temperature: Optional[float] = None
+    # Safety knobs
+    requires_confirmation_for_write: Optional[bool] = None
+    risk_level: Optional[str] = None
+    never_do: Optional[str] = None
+    allowed_ops: Optional[str] = None
+    # Routing
+    short_info: Optional[str] = None
+    tags: Optional[List[str]] = None
+    is_routable: bool = False
+    routing_keywords: Optional[List[str]] = None
+    routing_negative_keywords: Optional[List[str]] = None
+    # Meta
     parent_version_id: Optional[UUID] = None
     notes: Optional[str] = None
     created_at: datetime
@@ -95,11 +183,11 @@ class AgentVersionInfo(BaseModel):
     id: UUID
     version: int
     status: str
-    prompt: str
-    policy_id: Optional[UUID] = None
-    limit_id: Optional[UUID] = None
+    identity: Optional[str] = None
+    mission: Optional[str] = None
     notes: Optional[str] = None
     created_at: datetime
+    updated_at: Optional[datetime] = None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -107,30 +195,4 @@ class AgentVersionInfo(BaseModel):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class AgentDetailResponse(AgentResponse):
-    versions: List[AgentVersionInfo] = Field(default=[])
-    current_version: Optional[AgentVersionInfo] = None
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# TOOL BINDINGS (per version)
-# ─────────────────────────────────────────────────────────────────────────────
-
-class AgentBindingInput(BaseModel):
-    tool_id: UUID = Field(..., description="Tool ID")
-    tool_instance_id: Optional[UUID] = Field(default=None, description="Tool instance ID (NULL = not bound)")
-    credential_strategy: str = Field(
-        default="ANY",
-        description="USER_ONLY|TENANT_ONLY|PLATFORM_ONLY|USER_THEN_TENANT|TENANT_THEN_PLATFORM|ANY"
-    )
-
-
-class AgentBindingResponse(BaseModel):
-    id: UUID
-    agent_version_id: UUID
-    tool_id: UUID
-    tool_instance_id: Optional[UUID] = None
-    credential_strategy: str
-    created_at: datetime
-
-    class Config:
-        from_attributes = True
+    versions: List[AgentVersionResponse] = Field(default=[])

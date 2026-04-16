@@ -75,6 +75,13 @@ const icons: Record<string, React.FC<{ size?: number; className?: string }>> = {
       <path d="m9 18 6-6-6-6" />
     </svg>
   ),
+  filter: ({ size = 16, className }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <path d="M4 5h16" />
+      <path d="M7 12h10" />
+      <path d="M10 19h4" />
+    </svg>
+  ),
   users: ({ size = 16, className }) => (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
       <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
@@ -116,6 +123,12 @@ const icons: Record<string, React.FC<{ size?: number; className?: string }>> = {
   'activity': ({ size = 16, className }) => (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
       <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+    </svg>
+  ),
+  'heart-pulse': ({ size = 16, className }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <path d="M19.5 13.57 12 21l-7.5-7.43a5 5 0 1 1 7.07-7.07L12 7l.43-.5a5 5 0 1 1 7.07 7.07Z" />
+      <path d="M3.5 12h4l1.5-3 3 6 1.5-3h5" />
     </svg>
   ),
   'bar-chart': ({ size = 16, className }) => (

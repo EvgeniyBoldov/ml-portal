@@ -11,21 +11,15 @@ from __future__ import annotations
 from typing import Optional, List, Dict, Any
 from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.exceptions import RbacRuleNotFoundError, RbacRuleDuplicateError
 from app.models.rbac import RbacRule, RbacLevel, ResourceType, RbacEffect
 from app.repositories.rbac_repository import RbacRuleRepository
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
-
-
-class RbacRuleNotFoundError(Exception):
-    pass
-
-
-class RbacRuleDuplicateError(Exception):
-    pass
 
 
 class RbacService:
@@ -98,6 +92,7 @@ class RbacService:
         owner_tenant_id: Optional[UUID] = None,
         owner_platform: Optional[bool] = None,
         resource_type: Optional[str] = None,
+        resource_id: Optional[UUID] = None,
         effect: Optional[str] = None,
         skip: int = 0,
         limit: int = 500,
@@ -108,6 +103,7 @@ class RbacService:
             owner_tenant_id=owner_tenant_id,
             owner_platform=owner_platform,
             resource_type=resource_type,
+            resource_id=resource_id,
             effect=effect,
             skip=skip,
             limit=limit,
@@ -191,6 +187,7 @@ class RbacService:
         owner_tenant_id: Optional[UUID] = None,
         owner_platform: Optional[bool] = None,
         resource_type: Optional[str] = None,
+        resource_id: Optional[UUID] = None,
         effect: Optional[str] = None,
         skip: int = 0,
         limit: int = 500,
@@ -198,11 +195,10 @@ class RbacService:
         """
         List rules with enriched data: owner info + resource names.
         """
-        from sqlalchemy import select
         from app.models.agent import Agent
-        from app.models.tool_group import ToolGroup
         from app.models.tool_instance import ToolInstance
         from app.models.tool import Tool
+        from app.models.collection import Collection
         from app.models.user import Users
         from app.models.tenant import Tenants
 
@@ -212,6 +208,7 @@ class RbacService:
             owner_tenant_id=owner_tenant_id,
             owner_platform=owner_platform,
             resource_type=resource_type,
+            resource_id=resource_id,
             effect=effect,
             skip=skip,
             limit=limit,
@@ -222,10 +219,12 @@ class RbacService:
 
         # Collect resource IDs by type for batch loading
         resource_ids: Dict[str, set] = {
-            "agent": set(), "toolgroup": set(), "tool": set(), "instance": set(),
+            "agent": set(), "tool": set(), "instance": set(),
+            "collection": set(), "operation": set(),
         }
         owner_user_ids: set = set()
         owner_tenant_ids: set = set()
+        created_by_user_ids: set = set()
 
         for rule in rules:
             if rule.resource_type in resource_ids:
@@ -234,31 +233,16 @@ class RbacService:
                 owner_user_ids.add(rule.owner_user_id)
             if rule.owner_tenant_id:
                 owner_tenant_ids.add(rule.owner_tenant_id)
+            if rule.created_by_user_id:
+                created_by_user_ids.add(rule.created_by_user_id)
 
-        # Batch load resource names
-        name_map: Dict[str, Dict[UUID, str]] = {
-            "agent": {}, "toolgroup": {}, "tool": {}, "instance": {},
-        }
-
-        if resource_ids["agent"]:
-            stmt = select(Agent.id, Agent.name).where(Agent.id.in_(resource_ids["agent"]))
-            result = await self.session.execute(stmt)
-            name_map["agent"] = {row[0]: row[1] for row in result.all()}
-
-        if resource_ids["toolgroup"]:
-            stmt = select(ToolGroup.id, ToolGroup.name).where(ToolGroup.id.in_(resource_ids["toolgroup"]))
-            result = await self.session.execute(stmt)
-            name_map["toolgroup"] = {row[0]: row[1] for row in result.all()}
-
-        if resource_ids["tool"]:
-            stmt = select(Tool.id, Tool.name).where(Tool.id.in_(resource_ids["tool"]))
-            result = await self.session.execute(stmt)
-            name_map["tool"] = {row[0]: row[1] for row in result.all()}
-
-        if resource_ids["instance"]:
-            stmt = select(ToolInstance.id, ToolInstance.name).where(ToolInstance.id.in_(resource_ids["instance"]))
-            result = await self.session.execute(stmt)
-            name_map["instance"] = {row[0]: row[1] for row in result.all()}
+        name_map = await self._load_resource_name_map(
+            resource_ids=resource_ids,
+            agent_model=Agent,
+            tool_model=Tool,
+            instance_model=ToolInstance,
+            collection_model=Collection,
+        )
 
         # Batch load owner names
         owner_map: Dict[UUID, str] = {}
@@ -273,19 +257,30 @@ class RbacService:
             result = await self.session.execute(stmt)
             owner_map.update({row[0]: row[1] for row in result.all()})
 
+        created_by_map: Dict[UUID, str] = {}
+        if created_by_user_ids:
+            stmt = select(Users.id, Users.login).where(Users.id.in_(created_by_user_ids))
+            result = await self.session.execute(stmt)
+            created_by_map.update({row[0]: row[1] for row in result.all()})
+
         # Build enriched response
         enriched = []
         for rule in rules:
-            resource_name = name_map.get(rule.resource_type, {}).get(
-                rule.resource_id, str(rule.resource_id)[:8] + "..."
-            )
-            
+            resource_info = name_map.get(rule.resource_type, {}).get(rule.resource_id, {})
+            resource_name = resource_info.get("name") or resource_info.get("slug") or {
+                "agent": "Агент",
+                "tool": "Инструмент",
+                "instance": "Коннектор",
+                "collection": "Коллекция",
+                "operation": "Операция",
+            }.get(rule.resource_type, rule.resource_type)
+
             if rule.owner_platform:
                 owner_name = "Platform"
             elif rule.owner_user_id:
-                owner_name = owner_map.get(rule.owner_user_id, str(rule.owner_user_id)[:8])
+                owner_name = owner_map.get(rule.owner_user_id, "Пользователь")
             elif rule.owner_tenant_id:
-                owner_name = owner_map.get(rule.owner_tenant_id, str(rule.owner_tenant_id)[:8])
+                owner_name = owner_map.get(rule.owner_tenant_id, "Тенант")
             else:
                 owner_name = "Unknown"
 
@@ -302,10 +297,68 @@ class RbacService:
                     "type": rule.resource_type,
                     "id": str(rule.resource_id),
                     "name": resource_name,
+                    "slug": resource_info.get("slug"),
                 },
                 "effect": rule.effect,
                 "created_at": rule.created_at.isoformat(),
                 "created_by_user_id": str(rule.created_by_user_id) if rule.created_by_user_id else None,
+                "created_by_name": created_by_map.get(rule.created_by_user_id) if rule.created_by_user_id else None,
             })
 
         return enriched
+
+    async def _load_resource_name_map(
+        self,
+        *,
+        resource_ids: Dict[str, set],
+        agent_model: type,
+        tool_model: type,
+        instance_model: type,
+        collection_model: type,
+    ) -> Dict[str, Dict[UUID, Dict[str, Optional[str]]]]:
+        name_map: Dict[str, Dict[UUID, Dict[str, Optional[str]]]] = {
+            "agent": {},
+            "tool": {},
+            "instance": {},
+            "collection": {},
+            "operation": {},
+        }
+
+        name_map["agent"] = await self._load_name_map_by_ids(
+            model=agent_model,
+            ids=resource_ids["agent"],
+        )
+        name_map["tool"] = await self._load_name_map_by_ids(
+            model=tool_model,
+            ids=resource_ids["tool"],
+        )
+        name_map["instance"] = await self._load_name_map_by_ids(
+            model=instance_model,
+            ids=resource_ids["instance"],
+        )
+        name_map["collection"] = await self._load_name_map_by_ids(
+            model=collection_model,
+            ids=resource_ids["collection"],
+        )
+        # operation — no DB model yet, resolve later if needed
+
+        return name_map
+
+    async def _load_name_map_by_ids(
+        self,
+        *,
+        model: type,
+        ids: set[UUID],
+    ) -> Dict[UUID, Dict[str, Optional[str]]]:
+        if not ids:
+            return {}
+
+        stmt = select(model.id, model.name, model.slug).where(model.id.in_(ids))
+        result = await self.session.execute(stmt)
+        return {
+            row[0]: {
+                "name": row[1],
+                "slug": row[2],
+            }
+            for row in result.all()
+        }

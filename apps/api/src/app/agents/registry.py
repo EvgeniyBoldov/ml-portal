@@ -2,7 +2,7 @@
 Tool Registry - реестр всех доступных tool handlers
 """
 from __future__ import annotations
-from typing import Dict, List, Optional, Type
+from typing import Any, Dict, List, Optional, Type
 from app.core.logging import get_logger
 
 from app.agents.handlers.base import ToolHandler
@@ -20,11 +20,10 @@ class _VersionedToolWrapper(ToolHandler):
         self._vt = versioned_tool
         self._version = version
         vi = versioned_tool.get_version(version)
-        # Set ToolHandler ClassVar-like attributes on instance
         self.slug = versioned_tool.tool_slug
         self.name = versioned_tool.name
         self.description = versioned_tool.description
-        self.tool_group = versioned_tool.tool_group
+        self.domains = getattr(versioned_tool, 'domains', [])
         self.input_schema = vi.input_schema if vi else {}
         self.output_schema = vi.output_schema if vi else None
     
@@ -50,7 +49,7 @@ class ToolRegistry:
         handler = ToolRegistry.get("my.tool")
         
         # Получение tools для агента
-        handlers = ToolRegistry.get_for_agent(["rag.search", "jira.create"])
+        handlers = ToolRegistry.get_for_agent(["collection.document.search", "collection.table.search"])
     """
     
     _handlers: Dict[str, ToolHandler] = {}
@@ -109,7 +108,29 @@ class ToolRegistry:
         """
         cls._ensure_initialized()
         return list(cls._handlers.values())
+
+    @classmethod
+    def list_mcp_descriptors(
+        cls,
+        slugs: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Получить MCP-compatible descriptors для локальных handlers.
+        """
+        handlers = cls.get_for_agent(slugs) if slugs is not None else cls.list_all()
+        return [handler.to_mcp_descriptor() for handler in handlers]
     
+    @classmethod
+    def list_by_domain(cls, domain: str) -> List[ToolHandler]:
+        """
+        Получить handlers, которые обслуживают указанный domain.
+        """
+        cls._ensure_initialized()
+        return [
+            h for h in cls._handlers.values()
+            if domain in (getattr(h, 'domains', None) or [])
+        ]
+
     @classmethod
     def list_slugs(cls) -> List[str]:
         """

@@ -7,7 +7,7 @@ import { ContentBlock, type FieldDefinition, type BlockWidth } from '../ContentB
 import { ResourceSelector } from './ResourceSelector';
 
 // Интерфейсы для RBAC
-export type ResourceType = 'agent' | 'toolgroup' | 'tool' | 'instance';
+export type ResourceType = 'agent' | 'tool' | 'instance';
 export type RbacEffect = 'allow' | 'deny';
 
 export interface RbacRuleData {
@@ -21,15 +21,13 @@ interface RbacRuleBlockProps {
   editable?: boolean;
   width?: BlockWidth;
   agents?: any[];
-  toolGroups?: any[];
   onChange?: (key: keyof RbacRuleData, value: string) => void;
 }
 
 const RESOURCE_TYPE_LABELS: Record<string, string> = {
   agent: 'Агент',
-  toolgroup: 'Группа инструментов',
   tool: 'Инструмент',
-  instance: 'Инстанс',
+  instance: 'Коннектор',
 };
 
 export function RbacRuleBlock({ 
@@ -37,22 +35,17 @@ export function RbacRuleBlock({
   editable = false, 
   width = '1/2',
   agents = [], 
-  toolGroups = [], 
   onChange 
 }: RbacRuleBlockProps) {
   
   const getResourceName = (resourceId: string): string => {
-    if (!resourceId) return 'Не выбран';
+    if (!resourceId) return RESOURCE_TYPE_LABELS[data.resource_type] || 'Не выбран';
     
     // Ищем в агентах
     const agent = agents.find((a: any) => a.id === resourceId);
-    if (agent) return `${agent.name} (${agent.slug})`;
-    
-    // Ищем в группах инструментов
-    const group = toolGroups.find((g: any) => g.id === resourceId);
-    if (group) return `${group.name} (${group.slug})`;
-    
-    return resourceId.slice(0, 8) + '...';
+    if (agent) return agent.name || agent.slug || resourceId;
+
+    return RESOURCE_TYPE_LABELS[data.resource_type] || 'Ресурс';
   };
 
   const fields: FieldDefinition[] = [
@@ -77,7 +70,6 @@ export function RbacRuleBlock({
           value={value}
           onChange={onChange}
           agents={agents}
-          toolGroups={toolGroups}
         />
       ),
     },

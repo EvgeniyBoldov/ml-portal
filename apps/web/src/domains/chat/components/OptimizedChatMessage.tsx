@@ -1,8 +1,7 @@
 import React, { memo, useMemo } from 'react';
 import { ChatMessage } from '@/shared/api/types';
 import styles from './OptimizedChatMessage.module.css';
-import MarkdownMessage from './MarkdownMessage';
-import RAGSources from './RAGSources';
+import MarkdownRenderer from '@/shared/ui/MarkdownRenderer';
 
 interface OptimizedChatMessageProps {
   message: ChatMessage & { meta?: Record<string, unknown> };
@@ -34,7 +33,7 @@ const OptimizedChatMessage = memo<OptimizedChatMessageProps>(({ message, index: 
           <span className={styles.time}>{messageTime}</span>
         </div>
         <div className={styles.body}>
-          <div className={styles.userText}>{messageContent}</div>
+          <MarkdownRenderer content={String(messageContent ?? '')} />
         </div>
       </div>
     </div>

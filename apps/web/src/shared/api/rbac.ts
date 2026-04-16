@@ -5,7 +5,7 @@ import { apiRequest } from './http';
 // ─────────────────────────────────────────────────────────────────────────────
 
 export type RbacLevel = 'platform' | 'tenant' | 'user';
-export type ResourceType = 'agent' | 'toolgroup' | 'tool' | 'instance';
+export type ResourceType = 'agent' | 'tool' | 'instance';
 export type RbacEffect = 'allow' | 'deny';
 
 export interface RbacRule {
@@ -62,6 +62,7 @@ export interface EnrichedResourceInfo {
   type: ResourceType;
   id: string;
   name: string;
+  slug?: string | null;
 }
 
 export interface EnrichedRule {
@@ -71,6 +72,7 @@ export interface EnrichedRule {
   effect: RbacEffect;
   created_at: string;
   created_by_user_id?: string | null;
+  created_by_name?: string | null;
 }
 
 export interface EnrichedRulesFilters {
@@ -79,6 +81,7 @@ export interface EnrichedRulesFilters {
   owner_tenant_id?: string;
   owner_platform?: boolean;
   resource_type?: ResourceType;
+  resource_id?: string;
   effect?: RbacEffect;
   skip?: number;
   limit?: number;
@@ -97,6 +100,7 @@ export const rbacApi = {
     if (params.owner_tenant_id) sp.set('owner_tenant_id', params.owner_tenant_id);
     if (params.owner_platform !== undefined) sp.set('owner_platform', String(params.owner_platform));
     if (params.resource_type) sp.set('resource_type', params.resource_type);
+    if (params.resource_id) sp.set('resource_id', params.resource_id);
     if (params.effect) sp.set('effect', params.effect);
     if (params.skip) sp.set('skip', String(params.skip));
     if (params.limit) sp.set('limit', String(params.limit));
@@ -143,6 +147,7 @@ export const rbacApi = {
     if (params.owner_tenant_id) sp.set('owner_tenant_id', params.owner_tenant_id);
     if (params.owner_platform !== undefined) sp.set('owner_platform', String(params.owner_platform));
     if (params.resource_type) sp.set('resource_type', params.resource_type);
+    if (params.resource_id) sp.set('resource_id', params.resource_id);
     if (params.effect) sp.set('effect', params.effect);
     if (params.skip) sp.set('skip', String(params.skip));
     if (params.limit) sp.set('limit', String(params.limit));

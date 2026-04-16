@@ -21,35 +21,17 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.exceptions import (
+    PolicyNotFoundError,
+    PolicyVersionNotFoundError,
+    PolicyAlreadyExistsError,
+    PolicyVersionNotEditableError,
+    AppError as PolicyError,
+)
 from app.models.policy import Policy, PolicyVersion, PolicyStatus
 from app.repositories.policy_repository import PolicyRepository, PolicyVersionRepository
 
 logger = logging.getLogger(__name__)
-
-
-class PolicyError(Exception):
-    """Base exception for policy operations"""
-    pass
-
-
-class PolicyNotFoundError(PolicyError):
-    """Policy not found"""
-    pass
-
-
-class PolicyVersionNotFoundError(PolicyError):
-    """Policy version not found"""
-    pass
-
-
-class PolicyAlreadyExistsError(PolicyError):
-    """Policy with this slug already exists"""
-    pass
-
-
-class PolicyVersionNotEditableError(PolicyError):
-    """Policy version cannot be edited (not in draft status)"""
-    pass
 
 
 class PolicyService:

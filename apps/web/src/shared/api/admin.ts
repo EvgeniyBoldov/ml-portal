@@ -16,6 +16,86 @@ export interface User {
   updated_at: string;
 }
 
+export interface OrchestrationSettings {
+  id: string;
+  executor_model?: string | null;
+  executor_temperature?: number | null;
+  executor_timeout_s?: number | null;
+  executor_max_steps?: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type ExecutorSettingsUpdate = Partial<Pick<
+  OrchestrationSettings,
+  | 'executor_model'
+  | 'executor_temperature'
+  | 'executor_timeout_s'
+  | 'executor_max_steps'
+>>;
+
+// === SystemLLMRole Types ===
+
+export type SystemLLMRoleType = 'triage' | 'planner' | 'summary' | 'memory';
+export type RetryBackoffType = 'none' | 'linear' | 'exp';
+
+export interface SystemLLMRole {
+  id: string;
+  role_type: SystemLLMRoleType;
+  identity?: string | null;
+  mission?: string | null;
+  rules?: string | null;
+  safety?: string | null;
+  output_requirements?: string | null;
+  model?: string | null;
+  temperature?: number | null;
+  max_tokens?: number | null;
+  timeout_s?: number | null;
+  max_retries?: number | null;
+  retry_backoff?: RetryBackoffType | null;
+  is_active?: boolean | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SystemLLMRoleCreate {
+  role_type: SystemLLMRoleType;
+  identity?: string | null;
+  mission?: string | null;
+  rules?: string | null;
+  safety?: string | null;
+  output_requirements?: string | null;
+  model?: string | null;
+  temperature?: number | null;
+  max_tokens?: number | null;
+  timeout_s?: number | null;
+  max_retries?: number | null;
+  retry_backoff?: RetryBackoffType | null;
+  is_active?: boolean | null;
+}
+
+export interface SystemLLMRoleUpdate {
+  identity?: string | null;
+  mission?: string | null;
+  rules?: string | null;
+  safety?: string | null;
+  output_requirements?: string | null;
+  model?: string | null;
+  temperature?: number | null;
+  max_tokens?: number | null;
+  timeout_s?: number | null;
+  max_retries?: number | null;
+  retry_backoff?: RetryBackoffType | null;
+  is_active?: boolean | null;
+}
+
+// Role-specific update types — all use same schema as SystemLLMRoleUpdate
+// Fields: identity, mission, rules, safety, output_requirements, model, temperature, etc.
+export type TriageRoleUpdate = SystemLLMRoleUpdate;
+export type PlannerRoleUpdate = SystemLLMRoleUpdate;
+export type SummaryRoleUpdate = SystemLLMRoleUpdate;
+export type MemoryRoleUpdate = SystemLLMRoleUpdate;
+
 export interface UserCreate {
   login: string;
   email?: string;
@@ -31,6 +111,7 @@ export interface UserUpdate {
   email?: string;
   is_active?: boolean;
   require_password_change?: boolean;
+  tenant_ids?: string[];
 }
 
 export interface UserListResponse {
@@ -77,40 +158,43 @@ export interface TokenListResponse {
 
 export interface AuditLog {
   id: string;
-  ts: string;
-  actor_user_id?: string;
-  actor_login?: string;
+  user_id?: string | null;
+  tenant_id?: string | null;
   action: string;
-  object_type?: string;
-  object_id?: string;
-  meta?: Record<string, any>;
-  ip?: string;
+  resource?: string | null;
+  request_data?: Record<string, any> | null;
+  response_status: string;
+  response_data?: Record<string, any> | null;
+  error_message?: string | null;
+  duration_ms?: number | null;
+  tokens_in?: number | null;
+  tokens_out?: number | null;
+  ip_address?: string | null;
   user_agent?: string;
   request_id?: string;
+  created_at: string;
+  ts?: string;
+  actor_user_id?: string | null;
+  actor_login?: string | null;
+  object_type?: string | null;
+  object_id?: string | null;
+  meta?: Record<string, any> | null;
+  ip?: string | null;
 }
 
 export interface AuditLogListResponse {
-  logs: AuditLog[];
-  has_more: boolean;
-  next_cursor?: string;
-  total?: number;
+  items: AuditLog[];
+  total: number;
+  page: number;
+  page_size: number;
 }
 
 export interface AuditFilters {
-  actor_user_id?: string;
+  user_id?: string;
   action?: string;
-  object_type?: string;
-  start_date?: string;
-  end_date?: string;
-}
-
-export interface SystemStatus {
-  email_enabled: boolean;
-  email_status: 'ok' | 'error' | 'disabled';
-  total_users: number;
-  active_users: number;
-  total_tokens: number;
-  active_tokens: number;
+  status?: string;
+  from_date?: string;
+  to_date?: string;
 }
 
 export interface Tenant {
@@ -118,9 +202,12 @@ export interface Tenant {
   name: string;
   description?: string;
   is_active: boolean;
-  embedding_model_alias?: string;  // Updated: FK to models.alias
+  extra_embed_model?: string | null;
+  embed_models?: string[];
+  rerank_model?: string | null;
   ocr?: boolean;
   layout?: boolean;
+  default_agent_slug?: string;
   created_at: string;
   updated_at: string;
 }
@@ -129,45 +216,37 @@ export type TenantCreate = {
   name: string;
   description?: string;
   is_active?: boolean;
-  embedding_model_alias?: string;  // Updated
+  extra_embed_model?: string | null;
   ocr?: boolean;
   layout?: boolean;
+  default_agent_slug?: string;
 };
 
 export type TenantUpdate = Partial<TenantCreate>;
 
-export interface EmailSettings {
-  smtp_host?: string | null;
-  smtp_port?: number | null;
-  smtp_user?: string | null;
-  smtp_password?: string | null;
-  from_email?: string | null;
-  from_name?: string | null;
-  smtp_enabled?: boolean;
-}
-
-export type EmailSettingsUpdate = Partial<EmailSettings>;
-
 // New Model architecture
-export type ModelType = 'llm_chat' | 'embedding';
+export type ModelType = 'llm_chat' | 'embedding' | 'reranker';
+export type ModelConnector = 'openai_http' | 'azure_openai_http' | 'local_emb_http' | 'local_rerank_http' | 'local_llm_http' | 'grpc';
 export type ModelStatus = 'available' | 'unavailable' | 'deprecated' | 'maintenance';
 export type HealthStatus = 'healthy' | 'degraded' | 'unavailable';
 
 export interface Model {
   id: string;
-  alias: string;                      // e.g. "llm.chat.default"
-  name: string;                       // Human-readable name
-  type: ModelType;                    // llm_chat | embedding
-  provider: string;                   // openai, groq, local, etc.
-  provider_model_name: string;        // Model name at provider
-  instance_id?: string | null;        // FK to tool_instances (provider connection)
-  instance_name?: string | null;      // Instance name (from joined relation)
-  extra_config?: Record<string, any> | null;  // Provider-specific config
-  status: ModelStatus;                // Availability status
+  alias: string;
+  name: string;
+  type: ModelType;
+  provider: string;                   // deprecated, use connector
+  connector: ModelConnector;
+  provider_model_name: string;
+  base_url?: string | null;
+  instance_id?: string | null;
+  instance_name?: string | null;
+  extra_config?: Record<string, any> | null;
+  status: ModelStatus;
   enabled: boolean;
-  is_system: boolean;                 // System model (cannot be deleted)
-  default_for_type: boolean;          // Is this the default model for its type?
-  model_version?: string | null;      // For tracking changes
+  is_system: boolean;
+  default_for_type: boolean;
+  model_version?: string | null;
   description?: string | null;
   last_health_check_at?: string | null;
   health_status?: HealthStatus | null;
@@ -182,8 +261,10 @@ export interface ModelCreate {
   alias: string;
   name: string;
   type: ModelType;
-  provider: string;
+  connector: ModelConnector;
+  provider?: string;
   provider_model_name: string;
+  base_url?: string;
   instance_id?: string;
   extra_config?: Record<string, any>;
   status?: ModelStatus;
@@ -195,8 +276,10 @@ export interface ModelCreate {
 
 export interface ModelUpdate {
   name?: string;
+  connector?: ModelConnector;
   provider?: string;
   provider_model_name?: string;
+  base_url?: string;
   instance_id?: string;
   extra_config?: Record<string, any>;
   status?: ModelStatus;
@@ -239,10 +322,6 @@ export interface HealthCheckAllResponse {
     error?: string;
   }>;
 }
-
-// Backward compatibility (will be removed)
-export type ModelRegistry = Model;
-export type ModelRegistryListResponse = ModelListResponse;
 
 export interface TenantListResponse {
   items: Tenant[];
@@ -335,31 +414,26 @@ export const adminApi = {
   // Audit
   async getAuditLogs(
     params: {
-      actor_user_id?: string;
+      page?: number;
+      page_size?: number;
+      user_id?: string;
       action?: string;
-      object_type?: string;
-      start_date?: string;
-      end_date?: string;
-      limit?: number;
-      cursor?: string;
+      status?: string;
+      from_date?: string;
+      to_date?: string;
     } = {}
   ): Promise<AuditLogListResponse> {
     const searchParams = new URLSearchParams();
-    if (params.actor_user_id)
-      searchParams.set('actor_user_id', params.actor_user_id);
+    if (params.page) searchParams.set('page', String(params.page));
+    if (params.page_size) searchParams.set('page_size', String(params.page_size));
+    if (params.user_id) searchParams.set('user_id', params.user_id);
     if (params.action) searchParams.set('action', params.action);
-    if (params.object_type) searchParams.set('object_type', params.object_type);
-    if (params.start_date) searchParams.set('start_date', params.start_date);
-    if (params.end_date) searchParams.set('end_date', params.end_date);
-    if (params.limit) searchParams.set('limit', String(params.limit));
-    if (params.cursor) searchParams.set('cursor', params.cursor);
+    if (params.status) searchParams.set('status', params.status);
+    if (params.from_date) searchParams.set('from_date', params.from_date);
+    if (params.to_date) searchParams.set('to_date', params.to_date);
 
-    return apiRequest(`/admin/audit-logs?${searchParams.toString()}`);
-  },
-
-  // System status
-  async getSystemStatus(): Promise<SystemStatus> {
-    return apiRequest('/admin/status');
+    const response = await apiRequest<AuditLogListResponse>(`/admin/audit-logs?${searchParams.toString()}`);
+    return response;
   },
 
   // Password reset
@@ -396,7 +470,7 @@ export const adminApi = {
     const searchParams = new URLSearchParams();
     if (params.type) searchParams.set('type', params.type);
     if (params.status) searchParams.set('status', params.status);
-    if (params.enabled_only) searchParams.set('enabled_only', 'true');
+    if (params.enabled_only === true) searchParams.set('enabled_only', 'true');
     if (params.search) searchParams.set('search', params.search);
     if (params.page) searchParams.set('page', String(params.page));
     if (params.size) searchParams.set('size', String(params.size));
@@ -442,8 +516,18 @@ export const adminApi = {
   },
 
   // Tenants
-  async getTenants(): Promise<TenantListResponse> {
-    return apiRequest(`/admin/tenants`);
+  async getTenants(params: {
+    page?: number;
+    size?: number;
+    search?: string;
+    is_active?: boolean;
+  } = {}): Promise<TenantListResponse> {
+    const searchParams = new URLSearchParams();
+    if (params.page) searchParams.set('page', String(params.page));
+    if (params.size) searchParams.set('size', String(params.size));
+    if (params.search) searchParams.set('search', params.search);
+    if (params.is_active !== undefined) searchParams.set('is_active', String(params.is_active));
+    return apiRequest(`/admin/tenants${searchParams.toString() ? `?${searchParams.toString()}` : ''}`);
   },
 
   async getTenant(id: string): Promise<Tenant> {
@@ -477,16 +561,6 @@ export const adminApi = {
     return apiRequest(`/admin/tenants/${id}/models/resolve`);
   },
 
-  async getEmailSettings(): Promise<EmailSettings> {
-    return apiRequest('/admin/settings/email');
-  },
-
-  async updateEmailSettings(data: EmailSettingsUpdate): Promise<EmailSettings> {
-    return apiRequest('/admin/settings/email', {
-      method: 'PUT',
-      body: JSON.stringify(data),
-    });
-  },
 };
 
 // Token scopes configuration
@@ -526,3 +600,139 @@ export function expandScopes(scopes: string[]): string[] {
   }
   return Array.from(expanded).sort();
 }
+
+// ─── Platform Settings ─────────────────────────────────────────────────────
+
+export interface PlatformSettings {
+  id: string;
+  // Global Policy Settings
+  policies_text?: string;
+  require_confirmation_for_write?: boolean;
+  require_confirmation_for_destructive?: boolean;
+  forbid_destructive?: boolean;
+  forbid_write_in_prod?: boolean;
+  require_backup_before_write?: boolean;
+  // Global Caps / Rails
+  abs_max_timeout_s?: number;
+  abs_max_retries?: number;
+  abs_max_steps?: number;
+  abs_max_plan_steps?: number;
+  abs_max_concurrency?: number;
+  abs_max_task_runtime_s?: number;
+  abs_max_tool_calls_per_step?: number;
+  chat_upload_max_bytes?: number;
+  chat_upload_allowed_extensions?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PlatformSettingsUpdate {
+  policies_text?: string;
+  require_confirmation_for_write?: boolean;
+  require_confirmation_for_destructive?: boolean;
+  forbid_destructive?: boolean;
+  forbid_write_in_prod?: boolean;
+  require_backup_before_write?: boolean;
+  abs_max_timeout_s?: number;
+  abs_max_retries?: number;
+  abs_max_steps?: number;
+  abs_max_plan_steps?: number;
+  abs_max_concurrency?: number;
+  abs_max_task_runtime_s?: number;
+  abs_max_tool_calls_per_step?: number;
+  chat_upload_max_bytes?: number;
+  chat_upload_allowed_extensions?: string;
+}
+
+// Platform Settings API
+export const platformSettingsApi = {
+  get: (): Promise<PlatformSettings> =>
+    apiRequest('/admin/settings', { method: 'GET' }),
+  
+  update: (data: PlatformSettingsUpdate): Promise<PlatformSettings> =>
+    apiRequest('/admin/settings', { 
+      method: 'PATCH', 
+      body: JSON.stringify(data),
+    }),
+};
+
+export const orchestrationApi = {
+  get: (): Promise<OrchestrationSettings> =>
+    apiRequest('/admin/orchestration', { method: 'GET' }),
+
+  updateExecutor: (data: ExecutorSettingsUpdate): Promise<OrchestrationSettings> =>
+    apiRequest('/admin/orchestration/executor', {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+};
+
+export const systemLLMRolesApi = {
+  // CRUD operations
+  list: (roleType?: SystemLLMRoleType): Promise<SystemLLMRole[]> =>
+    apiRequest(roleType ? `/admin/system-llm-roles?role_type=${roleType}` : '/admin/system-llm-roles', {
+      method: 'GET',
+    }),
+
+  get: (id: string): Promise<SystemLLMRole> =>
+    apiRequest(`/admin/system-llm-roles/${id}`, {
+      method: 'GET',
+    }),
+
+  getActive: (roleType: SystemLLMRoleType): Promise<SystemLLMRole> =>
+    apiRequest(`/admin/system-llm-roles/active/${roleType}`, {
+      method: 'GET',
+    }),
+
+  create: (data: SystemLLMRoleCreate): Promise<SystemLLMRole> =>
+    apiRequest('/admin/system-llm-roles', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  update: (id: string, data: SystemLLMRoleUpdate): Promise<SystemLLMRole> =>
+    apiRequest(`/admin/system-llm-roles/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+
+  delete: (id: string): Promise<{ message: string }> =>
+    apiRequest(`/admin/system-llm-roles/${id}`, {
+      method: 'DELETE',
+    }),
+
+  activate: (id: string): Promise<SystemLLMRole> =>
+    apiRequest(`/admin/system-llm-roles/${id}/activate`, {
+      method: 'POST',
+    }),
+
+  // Role-specific update methods
+  updateTriage: (data: TriageRoleUpdate): Promise<SystemLLMRole> =>
+    apiRequest('/admin/system-llm-roles/triage', {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+
+  updatePlanner: (data: PlannerRoleUpdate): Promise<SystemLLMRole> =>
+    apiRequest('/admin/system-llm-roles/planner', {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+
+  updateSummary: (data: SummaryRoleUpdate): Promise<SystemLLMRole> =>
+    apiRequest('/admin/system-llm-roles/summary', {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+
+  updateMemory: (data: MemoryRoleUpdate): Promise<SystemLLMRole> =>
+    apiRequest('/admin/system-llm-roles/memory', {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+
+  ensureDefaults: (): Promise<{ message: string; roles: Record<string, string> }> =>
+    apiRequest('/admin/system-llm-roles/ensure-defaults', {
+      method: 'POST',
+    }),
+};

@@ -1,6 +1,5 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { Icon } from '@/shared/ui/Icon';
-import { useChatAgents, type ChatAgent } from '@/shared/api/hooks/useChats';
 import styles from './ChatComposer.module.css';
 
 interface Attachment {
@@ -18,28 +17,58 @@ interface ChatComposerProps {
 export function ChatComposer({ onSend, disabled, placeholder }: ChatComposerProps) {
   const [text, setText] = useState('');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
-  const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
-  const [showAgentPicker, setShowAgentPicker] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [showMenu, setShowMenu] = useState(false);
+  const [uploadPolicy, setUploadPolicy] = useState<{
+    max_bytes: number;
+    allowed_extensions: string[];
+    allowed_content_types_by_extension?: Record<string, string[]>;
+  } | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
 
-  const { data: agents = [], isLoading: agentsLoading } = useChatAgents();
+  useEffect(() => {
+    let mounted = true;
+    import('@/shared/api/chats')
+      .then(({ getChatUploadPolicy }) => getChatUploadPolicy())
+      .then((policy) => {
+        if (mounted) setUploadPolicy(policy);
+      })
+      .catch(() => {
+        if (mounted) setUploadPolicy(null);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
-  const currentAgent = agents.find(a => a.slug === selectedAgent) || agents[0];
+  useEffect(() => {
+    const onClickOutside = (event: MouseEvent) => {
+      if (!menuRef.current) return;
+      if (!menuRef.current.contains(event.target as Node)) {
+        setShowMenu(false);
+      }
+    };
+    if (showMenu) {
+      document.addEventListener('mousedown', onClickOutside);
+    }
+    return () => document.removeEventListener('mousedown', onClickOutside);
+  }, [showMenu]);
 
   const handleSubmit = useCallback(() => {
     if (!text.trim() && attachments.length === 0) return;
     if (disabled) return;
 
     onSend(text.trim(), {
-      agentSlug: selectedAgent || currentAgent?.slug,
       attachments: attachments.map(a => a.file),
     });
 
     setText('');
     setAttachments([]);
+    setUploadError(null);
     textareaRef.current?.focus();
-  }, [text, attachments, selectedAgent, currentAgent, disabled, onSend]);
+  }, [text, attachments, disabled, onSend]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -50,33 +79,66 @@ export function ChatComposer({ onSend, disabled, placeholder }: ChatComposerProp
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
-    const newAttachments: Attachment[] = files.map(file => ({
+    if (!files.length) return;
+
+    const maxBytes = uploadPolicy?.max_bytes ?? 50 * 1024 * 1024;
+    const allowedExtensions = new Set(
+      (uploadPolicy?.allowed_extensions ?? ['txt', 'md', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'csv']).map((item) =>
+        item.toLowerCase().replace(/^\./, '')
+      )
+    );
+
+    const validFiles: File[] = [];
+    const allowedMimeByExt = uploadPolicy?.allowed_content_types_by_extension ?? {};
+    for (const file of files) {
+      const fileName = (file.name || '').toLowerCase();
+      const dotIdx = fileName.lastIndexOf('.');
+      const ext = dotIdx >= 0 ? fileName.slice(dotIdx + 1) : '';
+      if (!ext || !allowedExtensions.has(ext)) {
+        setUploadError(`Файл "${file.name}" не поддерживается`);
+        continue;
+      }
+      if (file.size > maxBytes) {
+        setUploadError(`Файл "${file.name}" превышает лимит ${(maxBytes / 1024 / 1024).toFixed(0)} МБ`);
+        continue;
+      }
+      const allowedMime = allowedMimeByExt[ext];
+      const mime = (file.type || '').toLowerCase();
+      if (mime && Array.isArray(allowedMime) && allowedMime.length > 0 && !allowedMime.includes(mime)) {
+        setUploadError(`Файл "${file.name}" имеет неподдерживаемый MIME: ${mime}`);
+        continue;
+      }
+      validFiles.push(file);
+    }
+
+    if (!validFiles.length) {
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
+
+    setUploadError(null);
+    const newAttachments: Attachment[] = validFiles.map(file => ({
       id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
       file,
       preview: file.type.startsWith('image/') ? URL.createObjectURL(file) : undefined,
     }));
     setAttachments(prev => [...prev, ...newAttachments]);
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
-    }
+    if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   const removeAttachment = (id: string) => {
     setAttachments(prev => {
       const att = prev.find(a => a.id === id);
-      if (att?.preview) {
-        URL.revokeObjectURL(att.preview);
-      }
+      if (att?.preview) URL.revokeObjectURL(att.preview);
       return prev.filter(a => a.id !== id);
     });
   };
 
-  const handleAgentSelect = (slug: string) => {
-    setSelectedAgent(slug);
-    setShowAgentPicker(false);
-  };
-
   const canSend = (text.trim().length > 0 || attachments.length > 0) && !disabled;
+  const acceptValue = useMemo(() => {
+    const list = uploadPolicy?.allowed_extensions ?? ['txt', 'md', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'csv'];
+    return list.map((ext) => (ext.startsWith('.') ? ext : `.${ext}`)).join(',');
+  }, [uploadPolicy]);
 
   return (
     <div className={styles.composer}>
@@ -89,16 +151,12 @@ export function ChatComposer({ onSend, disabled, placeholder }: ChatComposerProp
                 <img src={att.preview} alt={att.file.name} className={styles.attachmentPreview} />
               ) : (
                 <div className={styles.attachmentIcon}>
-                  <Icon name="file" size={20} />
+                  <Icon name="file" size={14} />
                 </div>
               )}
               <span className={styles.attachmentName}>{att.file.name}</span>
-              <button
-                className={styles.attachmentRemove}
-                onClick={() => removeAttachment(att.id)}
-                type="button"
-              >
-                <Icon name="x" size={14} />
+              <button className={styles.attachmentRemove} onClick={() => removeAttachment(att.id)} type="button">
+                <Icon name="x" size={12} />
               </button>
             </div>
           ))}
@@ -107,51 +165,6 @@ export function ChatComposer({ onSend, disabled, placeholder }: ChatComposerProp
 
       {/* Main input area */}
       <div className={styles.inputArea}>
-        {/* Agent selector */}
-        <div className={styles.agentSelector}>
-          <button
-            className={styles.agentButton}
-            onClick={() => setShowAgentPicker(!showAgentPicker)}
-            type="button"
-            title="Выбрать ассистента"
-          >
-            <Icon name={currentAgent?.has_collections ? 'file-text' : currentAgent?.has_rag ? 'database' : 'sparkles'} size={18} />
-            <span className={styles.agentName}>{currentAgent?.name || 'Ассистент'}</span>
-            <Icon name="chevron-down" size={14} />
-          </button>
-
-          {showAgentPicker && (
-            <div className={styles.agentDropdown}>
-              {agentsLoading ? (
-                <div className={styles.agentOption}>Загрузка...</div>
-              ) : (
-                agents.map(agent => (
-                  <button
-                    key={agent.slug}
-                    className={`${styles.agentOption} ${agent.slug === (selectedAgent || currentAgent?.slug) ? styles.selected : ''}`}
-                    onClick={() => handleAgentSelect(agent.slug)}
-                    type="button"
-                  >
-                    <Icon name={agent.has_collections ? 'file-text' : agent.has_rag ? 'database' : 'sparkles'} size={16} />
-                    <div className={styles.agentInfo}>
-                      <span className={styles.agentOptionName}>{agent.name}</span>
-                      {agent.description && (
-                        <span className={styles.agentDescription}>{agent.description}</span>
-                      )}
-                    </div>
-                    {agent.has_rag && (
-                      <span className={styles.ragBadge}>RAG</span>
-                    )}
-                    {agent.has_collections && (
-                      <span className={styles.ragBadge}>DATA</span>
-                    )}
-                  </button>
-                ))
-              )}
-            </div>
-          )}
-        </div>
-
         {/* Textarea */}
         <textarea
           ref={textareaRef}
@@ -166,26 +179,42 @@ export function ChatComposer({ onSend, disabled, placeholder }: ChatComposerProp
 
         {/* Actions */}
         <div className={styles.actions}>
-          {/* File upload */}
+          <div className={styles.plusMenu} ref={menuRef}>
+            <button
+              className={styles.actionButton}
+              onClick={() => setShowMenu((v) => !v)}
+              type="button"
+              title="Добавить"
+              disabled={disabled}
+            >
+              <Icon name="plus" size={20} />
+            </button>
+            {showMenu && (
+              <div className={styles.menuDropdown}>
+                <button
+                  className={styles.menuItem}
+                  type="button"
+                  onClick={() => {
+                    setShowMenu(false);
+                    fileInputRef.current?.click();
+                  }}
+                >
+                  <Icon name="paperclip" size={16} />
+                  <span>Загрузить файл</span>
+                </button>
+              </div>
+            )}
+          </div>
+
           <input
             ref={fileInputRef}
             type="file"
             multiple
             onChange={handleFileSelect}
             className={styles.fileInput}
-            accept="image/*,.pdf,.doc,.docx,.txt,.md"
+            accept={acceptValue}
           />
-          <button
-            className={styles.actionButton}
-            onClick={() => fileInputRef.current?.click()}
-            type="button"
-            title="Прикрепить файл"
-            disabled={disabled}
-          >
-            <Icon name="paperclip" size={20} />
-          </button>
 
-          {/* Send button */}
           <button
             className={`${styles.sendButton} ${canSend ? styles.active : ''}`}
             onClick={handleSubmit}
@@ -197,6 +226,7 @@ export function ChatComposer({ onSend, disabled, placeholder }: ChatComposerProp
           </button>
         </div>
       </div>
+      {uploadError && <div className={styles.uploadError}>{uploadError}</div>}
     </div>
   );
 }

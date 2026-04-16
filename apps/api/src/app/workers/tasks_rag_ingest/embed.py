@@ -1,28 +1,22 @@
 from __future__ import annotations
-from app.core.logging import get_logger
-import uuid
+
+import asyncio
 import json
-import time
-from typing import Dict, Any
+import uuid
 from datetime import datetime, timezone
+from typing import Dict, Any
 
 from celery import Task
 
 from app.celery_app import app as celery_app
-from app.core.config import get_settings
-from app.adapters.s3_client import s3_manager
+from app.core.logging import get_logger
 from app.adapters.embeddings import EmbeddingServiceFactory
-from app.storage.paths import (
-    get_embeddings_path,
-    get_idempotency_key,
-    calculate_text_checksum
-)
 from app.repositories.rag_ingest_repos import AsyncSourceRepository, AsyncEmbStatusRepository
-from app.repositories.factory import AsyncRepositoryFactory
-from app.services.rag_status_manager import RAGStatusManager, StageStatus
-from app.services.rag_event_publisher import RAGEventPublisher
+from app.storage.paths import get_embeddings_path, calculate_text_checksum
+from app.services.document_artifacts import get_document_artifact_key, normalize_document_source_meta
 from app.workers.tasks_rag_ingest.error_utils import notify_embed_error
-from app.workers.session_factory import get_worker_session
+from app.workers.tasks_rag_ingest.stage_context import IngestStageContext, run_stage
+from app.workers.tasks_rag_ingest.stage_results import ChunkResult, EmbedResult
 
 logger = get_logger(__name__)
 
@@ -36,254 +30,194 @@ logger = get_logger(__name__)
 def embed_chunks_model(self: Task, chunk_result: Dict[str, Any], tenant_id: str, model_alias: str = "all-MiniLM-L6-v2") -> Dict[str, Any]:
     """
     Generate embeddings for chunks using specified model.
-    
+
     Flow:
     1. Read chunks from S3 (chunks.jsonl)
     2. Generate embeddings in batches
     3. Write embeddings to S3 (embeddings.jsonl)
-    4. Return path to embeddings dump
-    
-    Args:
-        chunk_result: Result from chunk_document task
-        tenant_id: Tenant ID
-        model_alias: Model to use for embedding
-    
-    Returns:
-        Dict: Embedding result with embeddings_key (s3 path)
+    4. Return EmbedResult for index stage
     """
-    if isinstance(chunk_result, dict) and 'source_id' in chunk_result:
-        source_id = chunk_result['source_id']
-        chunks_key = chunk_result.get('chunks_key')
-    else:
-        # Fallback (should not happen)
-        source_id = str(chunk_result)
-        chunks_key = None
-    
-    logger.info(f"Starting embed_chunks_model for source_id: {source_id}, model: {model_alias}")
+    prev = ChunkResult.from_dict(chunk_result) if isinstance(chunk_result, dict) and "source_id" in chunk_result else None
+    source_id = prev.source_id if prev else str(chunk_result)
+    chunks_key = prev.chunks_key if prev else None
 
-    try:
-        import asyncio
+    stage_name = f"embed.{model_alias}"
 
-        async def _embed():
-            start_time = time.monotonic()
-            settings = get_settings()
-            
-            import redis.asyncio as redis
-            redis_client = redis.from_url(settings.REDIS_URL, decode_responses=True)
-            
-            # Lock is good to prevent duplicate embedding of the same model/doc
-            lock_key = f"lock:embed:{source_id}:{model_alias}"
-            
-            try:
-                # Use lock with timeout
-                async with redis_client.lock(lock_key, timeout=600, blocking_timeout=5):
-                    async with get_worker_session() as session:
-                        repo_factory = AsyncRepositoryFactory(session, uuid.UUID(tenant_id))
-                        event_publisher = RAGEventPublisher(redis_client)
-                        status_manager = RAGStatusManager(session, repo_factory, event_publisher)
-                        
-                        source_repo = AsyncSourceRepository(session, uuid.UUID(tenant_id))
-                        emb_status_repo = AsyncEmbStatusRepository(session, uuid.UUID(tenant_id))
+    async def _execute(ctx: IngestStageContext) -> EmbedResult:
+        # Lock to prevent duplicate embedding of the same model/doc
+        lock_key = f"lock:embed:{source_id}:{model_alias}"
 
-                        # 1. Update status
-                        await status_manager.transition_stage(
-                            doc_id=uuid.UUID(source_id),
-                            stage=f'embed.{model_alias}',
-                            new_status=StageStatus.PROCESSING,
-                            celery_task_id=self.request.id
-                        )
-                        await session.flush()
+        async with ctx.redis.lock(lock_key, timeout=600, blocking_timeout=5):
+            # 1. Mark processing
+            await ctx.set_processing()
 
-                        source = await source_repo.get_by_id(uuid.UUID(source_id))
-                        if not source:
-                            raise ValueError(f"Source {source_id} not found")
+            source_repo = AsyncSourceRepository(ctx.session, ctx.tenant_id)
+            emb_status_repo = AsyncEmbStatusRepository(ctx.session, ctx.tenant_id)
 
-                        # 2. Check idempotency
-                        idem_key = get_idempotency_key(
-                            uuid.UUID(tenant_id), uuid.UUID(source_id), 
-                            "embed", model_alias
-                        )
+            source = await source_repo.get_by_id(ctx.source_id)
+            if not source:
+                raise ValueError(f"Source {source_id} not found")
 
-                        if await redis_client.exists(idem_key):
-                            cached_data = await redis_client.get(idem_key)
-                            try:
-                                cached_json = json.loads(cached_data)
-                                embeddings_key = cached_json.get("embeddings_key")
-                                if embeddings_key and await s3_manager.object_exists(settings.S3_BUCKET_RAG, embeddings_key):
-                                    logger.info(f"Embedding cached for {source_id}:{model_alias}")
-                                    await status_manager.transition_stage(
-                                        doc_id=uuid.UUID(source_id),
-                                        stage=f'embed.{model_alias}',
-                                        new_status=StageStatus.COMPLETED,
-                                        metrics={'status': 'already_processed', 'cached': True}
-                                    )
-                                    await session.commit()
-                                    return {
-                                        "status": "already_processed", 
-                                        "source_id": source_id, 
-                                        "model_alias": model_alias,
-                                        "embeddings_key": embeddings_key
-                                    }
-                            except Exception:
-                                pass
+            # 2. Check idempotency
+            cached = await ctx.check_idempotency(model_alias=model_alias, s3_key_field="embeddings_key")
+            if cached:
+                logger.info(f"Embedding cached for {source_id}:{model_alias}")
+                await ctx.set_completed(metrics={"status": "already_processed", "cached": True})
+                await ctx.session.commit()
+                return EmbedResult(
+                    source_id=source_id,
+                    model_alias=model_alias,
+                    embeddings_key=cached["embeddings_key"],
+                    count=cached.get("count", 0),
+                )
 
-                        # 3. Read Chunks
-                        if not chunks_key:
-                             # Try to find chunks_key via DB or S3 guess? No, fail fast.
-                             raise ValueError(f"No chunks_key provided for source {source_id}")
+            # 3. Read Chunks
+            resolved_chunks_key = chunks_key
+            if not resolved_chunks_key:
+                normalized_meta = normalize_document_source_meta(source.meta)
+                resolved_chunks_key = get_document_artifact_key(normalized_meta, "chunks")
+            if not resolved_chunks_key:
+                raise ValueError(f"No chunks_key provided for source {source_id}")
 
-                        chunks_content = await s3_manager.get_object(
-                            bucket=settings.S3_BUCKET_RAG, 
-                            key=chunks_key
-                        )
-                        # Parse JSONL
-                        chunks = []
-                        for line in chunks_content.decode('utf-8').splitlines():
-                            if line.strip():
-                                chunks.append(json.loads(line))
-                        
-                        if not chunks:
-                             raise ValueError(f"No chunks found in file for {source_id}")
+            chunks_content = await ctx.s3_get(resolved_chunks_key)
+            chunks = [json.loads(line) for line in chunks_content.decode("utf-8").splitlines() if line.strip()]
 
-                        # 4. Prepare Embedding Service
-                        embedding_service = EmbeddingServiceFactory.get_service(model_alias)
-                        model_info = embedding_service.get_model_info()
+            if not chunks:
+                raise ValueError(f"No chunks found in file for {source_id}")
 
-                        # Update progress record
-                        await emb_status_repo.create_or_update(
-                            source_id=uuid.UUID(source_id),
-                            model_alias=model_alias,
-                            total_count=len(chunks),
-                            model_version=model_info.version
-                        )
-                        await session.flush()
+            # 4. Prepare Embedding Service
+            await EmbeddingServiceFactory.ensure_model_registered_async(ctx.session, model_alias)
+            embedding_service = EmbeddingServiceFactory.get_service(model_alias)
+            model_info = embedding_service.get_model_info()
+            max_chars = int(getattr(model_info, "max_tokens", 0) or 0)
+            if max_chars <= 0:
+                max_chars = 512
 
-                        # 5. Generate Embeddings (Batch Processing)
-                        batch_size = 32
-                        embeddings_data = [] # List of dicts to save to JSONL
-                        processed_count = 0
+            await emb_status_repo.create_or_update(
+                source_id=ctx.source_id,
+                model_alias=model_alias,
+                total_count=len(chunks),
+                model_version=model_info.version,
+            )
+            await ctx.session.flush()
 
-                        for i in range(0, len(chunks), batch_size):
-                            batch_chunks = chunks[i:i + batch_size]
-                            batch_texts = [c.get('text', '') for c in batch_chunks]
+            # 5. Generate Embeddings (Batch Processing)
+            batch_size = 32
+            embeddings_data = []
+            processed_count = 0
+            truncated_chunks = 0
 
-                            # Run sync embedding in thread
-                            batch_vectors = await asyncio.to_thread(
-                                embedding_service.embed_texts, 
-                                batch_texts
-                            )
-                            
-                            for chunk, vector in zip(batch_chunks, batch_vectors):
-                                record = {
-                                    "chunk_id": chunk['chunk_id'],
-                                    "vector": vector,
-                                    "index": chunk.get('index', 0)
-                                }
-                                embeddings_data.append(record)
+            for i in range(0, len(chunks), batch_size):
+                batch_chunks = chunks[i : i + batch_size]
+                batch_texts = []
+                for chunk in batch_chunks:
+                    raw_text = str(chunk.get("text", "") or "")
+                    if len(raw_text) > max_chars:
+                        truncated_chunks += 1
+                        raw_text = raw_text[:max_chars]
+                    batch_texts.append(raw_text)
 
-                            processed_count += len(batch_chunks)
-                            
-                            # Update progress DB
-                            await emb_status_repo.update_done_count(
-                                uuid.UUID(source_id), 
-                                model_alias, 
-                                processed_count
-                            )
-                            
-                            # Emit progress
-                            from app.services.outbox_helper import emit_embed_progress
-                            await emit_embed_progress(
-                                session, repo_factory,
-                                uuid.UUID(source_id),
-                                model_alias,
-                                done=processed_count,
-                                total=len(chunks),
-                                last_error=None
-                            )
-                            await session.flush()
+                batch_vectors = await asyncio.to_thread(embedding_service.embed_texts, batch_texts)
 
-                        # 6. Save Embeddings to S3
-                        # We save them as JSONL: {"chunk_id": "...", "vector": [...]}
-                        # This file will be read by Index task
-                        embeddings_jsonl = "\n".join(json.dumps(e, ensure_ascii=False) for e in embeddings_data)
-                        embeddings_checksum = calculate_text_checksum(str(len(embeddings_data)) + model_alias)
-                        
-                        embeddings_key = get_embeddings_path(
-                            uuid.UUID(tenant_id), uuid.UUID(source_id), model_alias, embeddings_checksum, "v1", 0
-                        ).replace('.npy', '.jsonl') # Force jsonl extension override
-                        
-                        await s3_manager.upload_content_sync(
-                            bucket=settings.S3_BUCKET_RAG,
-                            key=embeddings_key,
-                            content=embeddings_jsonl.encode('utf-8'),
-                            content_type="application/x-ndjson"
-                        )
+                for chunk, vector in zip(batch_chunks, batch_vectors):
+                    embeddings_data.append({
+                        "chunk_id": chunk["chunk_id"],
+                        "vector": vector,
+                        "index": chunk.get("index", 0),
+                    })
 
-                        # 7. Complete
-                        duration_sec = round(time.monotonic() - start_time, 2)
-                        await status_manager.transition_stage(
-                            doc_id=uuid.UUID(source_id),
-                            stage=f'embed.{model_alias}',
-                            new_status=StageStatus.COMPLETED,
-                            metrics={
-                                'vectors': len(embeddings_data),
-                                'model_version': model_info.version,
-                                'dimensions': model_info.dimensions,
-                                'duration_sec': duration_sec,
-                                'vectors_per_sec': round(len(embeddings_data) / duration_sec, 1) if duration_sec > 0 else 0
-                            }
-                        )
-                        
-                        # Emit final 100% progress
-                        from app.services.outbox_helper import emit_embed_progress
-                        await emit_embed_progress(
-                            session, repo_factory,
-                            uuid.UUID(source_id),
-                            model_alias,
-                            done=len(chunks),
-                            total=len(chunks),
-                            last_error=None
-                        )
-                        await session.flush()
-                        
-                        await redis_client.setex(
-                            idem_key,
-                            86400,
-                            json.dumps({
-                                "status": "completed", 
-                                "embeddings_key": embeddings_key,
-                                "count": len(embeddings_data)
-                            })
-                        )
-                        
-                        await session.commit()
-                        
-                        return {
-                            "source_id": source_id,
-                            "model_alias": model_alias,
-                            "embeddings_key": embeddings_key,
-                            "count": len(embeddings_data),
-                            "status": "completed"
-                        }
+                processed_count += len(batch_chunks)
 
-            except Exception as e:
-                logger.error(f"Error in embed task for {source_id}:{model_alias}: {e}")
-                try:
-                    await notify_embed_error(source_id, tenant_id, model_alias, e)
-                except Exception:
-                    pass
-                raise
-            finally:
-                if redis_client:
-                    try:
-                        await redis_client.close()
-                        await redis_client.connection_pool.disconnect()
-                    except Exception:
-                        pass
+                await emb_status_repo.update_done_count(ctx.source_id, model_alias, processed_count)
 
-        return asyncio.run(_embed())
+                from app.services.outbox_helper import emit_embed_progress
 
-    except Exception as e:
-        logger.error(f"Error in embed_chunks_model for {source_id}: {e}")
-        # No auto-retry - error is already handled in _embed() via notify_embed_error
-        raise
+                await emit_embed_progress(
+                    ctx.session,
+                    ctx.repo_factory,
+                    ctx.source_id,
+                    model_alias,
+                    done=processed_count,
+                    total=len(chunks),
+                    last_error=None,
+                )
+                await ctx.session.flush()
+
+            # 6. Save Embeddings to S3 (JSONL)
+            embeddings_jsonl = "\n".join(json.dumps(e, ensure_ascii=False) for e in embeddings_data)
+            embeddings_checksum = calculate_text_checksum(
+                f"{resolved_chunks_key}:{model_alias}:{len(embeddings_data)}"
+            )
+
+            embeddings_key = get_embeddings_path(
+                ctx.tenant_id, ctx.source_id, model_alias, embeddings_checksum, "v1", 0
+            ).replace(".npy", ".jsonl")
+
+            await ctx.s3_put(
+                key=embeddings_key,
+                content=embeddings_jsonl.encode("utf-8"),
+                content_type="application/x-ndjson",
+            )
+
+            # Persist embedding artifact key in source.meta so index retry can recover
+            # even if Redis idempotency cache was evicted.
+            normalized_meta = normalize_document_source_meta(source.meta if source else None)
+            embedding_artifacts = dict(normalized_meta.get("embedding_artifacts") or {})
+            embedding_artifacts[model_alias] = {
+                "key": embeddings_key,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+            normalized_meta["embedding_artifacts"] = embedding_artifacts
+            source.meta = normalized_meta
+            await ctx.session.flush()
+
+            # 7. Complete
+            duration = ctx.elapsed_sec
+            await ctx.set_completed(metrics={
+                "vectors": len(embeddings_data),
+                "model_version": model_info.version,
+                "dimensions": model_info.dimensions,
+                "max_chars": max_chars,
+                "truncated_chunks": truncated_chunks,
+                "duration_sec": duration,
+                "vectors_per_sec": round(len(embeddings_data) / duration, 1) if duration > 0 else 0,
+            })
+
+            # Emit final 100% progress
+            from app.services.outbox_helper import emit_embed_progress as _emit
+
+            await _emit(
+                ctx.session,
+                ctx.repo_factory,
+                ctx.source_id,
+                model_alias,
+                done=len(chunks),
+                total=len(chunks),
+                last_error=None,
+            )
+            await ctx.session.flush()
+
+            await ctx.save_idempotency(
+                {"status": "completed", "embeddings_key": embeddings_key, "count": len(embeddings_data)},
+                model_alias=model_alias,
+            )
+            await ctx.session.commit()
+
+            return EmbedResult(
+                source_id=source_id,
+                model_alias=model_alias,
+                embeddings_key=embeddings_key,
+                count=len(embeddings_data),
+            )
+
+    async def _error_notify(src_id: str, t_id: str, _stage: str, exc: Exception) -> None:
+        await notify_embed_error(src_id, t_id, model_alias, exc)
+
+    return run_stage(
+        stage_name=stage_name,
+        source_id=source_id,
+        tenant_id=tenant_id,
+        celery_task=self,
+        execute_fn=_execute,
+        error_notify_fn=_error_notify,
+    )

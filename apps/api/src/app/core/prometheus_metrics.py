@@ -67,6 +67,31 @@ model_progress_ratio = Gauge(
     registry=_registry
 )
 
+# DB pool metrics
+db_pool_size = Gauge(
+    "db_pool_size",
+    "Configured SQLAlchemy DB pool size",
+    registry=_registry,
+)
+
+db_pool_checked_in = Gauge(
+    "db_pool_checkedin",
+    "Current checked-in DB connections",
+    registry=_registry,
+)
+
+db_pool_checked_out = Gauge(
+    "db_pool_checkedout",
+    "Current checked-out DB connections",
+    registry=_registry,
+)
+
+db_pool_overflow = Gauge(
+    "db_pool_overflow",
+    "Current DB pool overflow connections",
+    registry=_registry,
+)
+
 
 def record_task_duration(step: str, duration: float, tenant_id: Optional[str] = None):
     """Record task duration"""
@@ -132,7 +157,20 @@ def record_model_progress(model_alias: str, document_id: str, ratio: float, tena
     ).set(ratio)
 
 
+def record_db_pool_stats(stats: dict) -> None:
+    """Update DB pool gauges from get_pool_stats() output."""
+    if not isinstance(stats, dict):
+        return
+    if "size" in stats:
+        db_pool_size.set(float(stats["size"]))
+    if "checkedin" in stats:
+        db_pool_checked_in.set(float(stats["checkedin"]))
+    if "checkedout" in stats:
+        db_pool_checked_out.set(float(stats["checkedout"]))
+    if "overflow" in stats:
+        db_pool_overflow.set(float(stats["overflow"]))
+
+
 def get_metrics_text() -> str:
     """Get Prometheus metrics as text"""
     return generate_latest(_registry).decode('utf-8')
-

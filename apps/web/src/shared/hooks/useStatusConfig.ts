@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 
-export type EntityType = 'prompt' | 'baseline' | 'policy' | 'agent' | 'limit' | 'tool';
+export type EntityType = 'prompt' | 'baseline' | 'policy' | 'agent' | 'limit' | 'tool' | 'collection';
 
 export interface StatusConfig {
   labels: Record<string, string>;
@@ -67,18 +67,18 @@ const STATUS_CONFIGS: Record<EntityType, StatusConfig> = {
   agent: {
     labels: {
       draft: 'Черновик',
-      active: 'Активна',
-      deprecated: 'Устарела',
+      published: 'Опубликована',
+      archived: 'В архиве',
     },
     tones: {
       draft: 'warn',
-      active: 'success',
-      deprecated: 'neutral',
+      published: 'success',
+      archived: 'neutral',
     },
     options: [
       { value: 'draft', label: 'Черновик', tone: 'warn' },
-      { value: 'active', label: 'Активна', tone: 'success' },
-      { value: 'deprecated', label: 'Устарела', tone: 'neutral' },
+      { value: 'published', label: 'Опубликована', tone: 'success' },
+      { value: 'archived', label: 'В архиве', tone: 'neutral' },
     ],
   },
   limit: {
@@ -112,6 +112,25 @@ const STATUS_CONFIGS: Record<EntityType, StatusConfig> = {
     options: [
       { value: 'draft', label: 'Черновик', tone: 'warn' },
       { value: 'active', label: 'Активна', tone: 'success' },
+      { value: 'archived', label: 'Архив', tone: 'neutral' },
+    ],
+  },
+  collection: {
+    labels: {
+      draft: 'Черновик',
+      active: 'Опубликована',
+      published: 'Опубликована',
+      archived: 'Архив',
+    },
+    tones: {
+      draft: 'warn',
+      active: 'success',
+      published: 'success',
+      archived: 'neutral',
+    },
+    options: [
+      { value: 'draft', label: 'Черновик', tone: 'warn' },
+      { value: 'published', label: 'Опубликована', tone: 'success' },
       { value: 'archived', label: 'Архив', tone: 'neutral' },
     ],
   },

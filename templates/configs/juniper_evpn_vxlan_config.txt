@@ -1,0 +1,269 @@
+# Конфигурация EVPN/VXLAN — Juniper QFX5120, dc1-leaf-01.msk (PROD-DC1)
+# Компания "Дубалайн"
+# Дата: 2025-11-03
+# Инженер: Михаил Сергеев (Сетевой инженер, Data Center)
+# Заявка: CHG-2025-1198
+# Роль: LEAF-нода в EVPN/VXLAN фабрике ЦОД Москва
+# SPINE: dc1-spine-01.msk (10.255.1.1), dc1-spine-02.msk (10.255.1.2)
+
+chassis {
+    aggregated-devices {
+        ethernet {
+            device-count 8;
+        }
+    }
+}
+
+interfaces {
+    # ===== UPLINK К SPINE-01 =====
+    et-0/0/48 {
+        description "FABRIC-UPLINK :: dc1-spine-01.msk :: PROD-DC1";
+        mtu 9216;
+        unit 0 {
+            family inet {
+                address 10.1.0.1/31;
+            }
+        }
+    }
+
+    # ===== UPLINK К SPINE-02 =====
+    et-0/0/49 {
+        description "FABRIC-UPLINK :: dc1-spine-02.msk :: PROD-DC1";
+        mtu 9216;
+        unit 0 {
+            family inet {
+                address 10.1.1.1/31;
+            }
+        }
+    }
+
+    # ===== LOOPBACK (VTEP-адрес) =====
+    lo0 {
+        unit 0 {
+            description "LOOPBACK :: dc1-leaf-01.msk :: VTEP";
+            family inet {
+                address 10.255.1.11/32;
+            }
+        }
+    }
+
+    # ===== SERVER DOWNLINKS — ESXi-хосты =====
+    xe-0/0/0 {
+        description "SERVER :: esxi-01.msk :: PROD-DC1 :: VLAN100,200,300";
+        native-vlan-id 1;
+        unit 0 {
+            family ethernet-switching {
+                interface-mode trunk;
+                vlan {
+                    members [ VLAN-PROD-APP VLAN-PROD-DB VLAN-PROD-MGMT ];
+                }
+            }
+        }
+    }
+
+    xe-0/0/1 {
+        description "SERVER :: esxi-02.msk :: PROD-DC1 :: VLAN100,200,300";
+        native-vlan-id 1;
+        unit 0 {
+            family ethernet-switching {
+                interface-mode trunk;
+                vlan {
+                    members [ VLAN-PROD-APP VLAN-PROD-DB VLAN-PROD-MGMT ];
+                }
+            }
+        }
+    }
+
+    # ===== ESXi BAREMETAL — ОТДЕЛЬНЫЙ VLAN =====
+    xe-0/0/2 {
+        description "SERVER :: baremetal-01.msk :: PROD-DC1 :: VLAN-BARE";
+        unit 0 {
+            family ethernet-switching {
+                interface-mode access;
+                vlan {
+                    members VLAN-PROD-BARE;
+                }
+            }
+        }
+    }
+}
+
+# ===== VLAN ОПРЕДЕЛЕНИЯ =====
+vlans {
+    VLAN-PROD-APP {
+        description "Application servers PROD-DC1";
+        vlan-id 100;
+        l3-interface irb.100;
+        vxlan {
+            vni 10100;
+            ingress-node-replication;
+        }
+    }
+
+    VLAN-PROD-DB {
+        description "Database servers PROD-DC1";
+        vlan-id 200;
+        l3-interface irb.200;
+        vxlan {
+            vni 10200;
+            ingress-node-replication;
+        }
+    }
+
+    VLAN-PROD-MGMT {
+        description "Management network PROD-DC1";
+        vlan-id 300;
+        l3-interface irb.300;
+        vxlan {
+            vni 10300;
+            ingress-node-replication;
+        }
+    }
+
+    VLAN-PROD-BARE {
+        description "Bare-metal servers PROD-DC1";
+        vlan-id 400;
+        l3-interface irb.400;
+        vxlan {
+            vni 10400;
+            ingress-node-replication;
+        }
+    }
+}
+
+# ===== IRB-ИНТЕРФЕЙСЫ (ANYCAST GATEWAY) =====
+interfaces {
+    irb {
+        unit 100 {
+            description "GW :: VLAN-PROD-APP :: 10.10.100.0/24";
+            mac 00:00:5e:00:01:01;        # Anycast MAC
+            virtual-gateway-accept-data;
+            family inet {
+                address 10.10.100.1/24 {
+                    virtual-gateway-address 10.10.100.254;
+                }
+            }
+        }
+        unit 200 {
+            description "GW :: VLAN-PROD-DB :: 10.10.200.0/24";
+            mac 00:00:5e:00:01:02;
+            virtual-gateway-accept-data;
+            family inet {
+                address 10.10.200.1/24 {
+                    virtual-gateway-address 10.10.200.254;
+                }
+            }
+        }
+        unit 300 {
+            description "GW :: VLAN-PROD-MGMT :: 172.16.100.0/24";
+            mac 00:00:5e:00:01:03;
+            virtual-gateway-accept-data;
+            family inet {
+                address 172.16.100.1/24 {
+                    virtual-gateway-address 172.16.100.254;
+                }
+            }
+        }
+        unit 400 {
+            description "GW :: VLAN-PROD-BARE :: 10.10.40.0/24";
+            mac 00:00:5e:00:01:04;
+            virtual-gateway-accept-data;
+            family inet {
+                address 10.10.40.1/24 {
+                    virtual-gateway-address 10.10.40.254;
+                }
+            }
+        }
+    }
+}
+
+# ===== ПРОТОКОЛЫ =====
+protocols {
+    # EVPN
+    evpn {
+        encapsulation vxlan;
+        default-gateway no-gateway-community;
+        extended-vni-list all;
+    }
+
+    # BGP (EVPN control plane)
+    bgp {
+        group UNDERLAY-EBGP {
+            description "UNDERLAY :: SPINE-LEAF eBGP";
+            type external;
+            import UNDERLAY-IMPORT;
+            export UNDERLAY-EXPORT;
+            local-as 65011;
+
+            neighbor 10.1.0.0 {
+                description "UNDERLAY :: dc1-spine-01.msk";
+                peer-as 65001;
+            }
+            neighbor 10.1.1.0 {
+                description "UNDERLAY :: dc1-spine-02.msk";
+                peer-as 65001;
+            }
+        }
+
+        group OVERLAY-EVPN {
+            description "OVERLAY :: EVPN control plane";
+            type external;
+            multihop {
+                ttl 2;
+            }
+            local-address 10.255.1.11;
+            family evpn {
+                signaling;
+            }
+            local-as 65011;
+
+            neighbor 10.255.1.1 {
+                description "EVPN :: dc1-spine-01.msk";
+                peer-as 65001;
+            }
+            neighbor 10.255.1.2 {
+                description "EVPN :: dc1-spine-02.msk";
+                peer-as 65001;
+            }
+        }
+    }
+}
+
+# ===== ROUTING OPTIONS =====
+routing-options {
+    autonomous-system 65011;
+    forwarding-table {
+        export LOAD-BALANCE;
+        ecmp-fast-reroute;
+    }
+}
+
+policy-options {
+    policy-statement UNDERLAY-IMPORT {
+        term ACCEPT-LOOPBACKS {
+            from {
+                route-filter 10.255.1.0/24 orlonger;
+            }
+            then accept;
+        }
+        term REJECT-ALL {
+            then reject;
+        }
+    }
+    policy-statement UNDERLAY-EXPORT {
+        term ADVERTISE-LOOPBACK {
+            from {
+                interface lo0.0;
+            }
+            then accept;
+        }
+        term REJECT-ALL {
+            then reject;
+        }
+    }
+    policy-statement LOAD-BALANCE {
+        then {
+            load-balance per-flow;
+        }
+    }
+}

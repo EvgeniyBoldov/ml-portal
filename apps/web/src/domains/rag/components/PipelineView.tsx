@@ -28,6 +28,7 @@ interface PipelineViewProps {
   stages: PipelineStage[];
   embeddings: EmbeddingModel[];
   indexes: EmbeddingModel[];
+  activeStageSlugs?: string[];
   selectedStage: string | null;
   selectedModel: string | null;
   onSelectStage: (stage: string | null, model?: string | null) => void;
@@ -51,20 +52,25 @@ const STATUS_COLORS: Record<PipelineStageStatus, string> = {
 
 function StageNode({
   stage,
+  stageSlug,
+  isControlActive,
   isSelected,
   onClick,
 }: {
   stage: PipelineStage;
+  stageSlug: string;
+  isControlActive: boolean;
   isSelected: boolean;
   onClick: () => void;
 }) {
   const statusColor = STATUS_COLORS[stage.status];
-  const isActive = stage.status === 'processing';
+  const isActive = stage.status === 'processing' || isControlActive;
 
   return (
     <button
-      className={`${styles.stageNode} ${isSelected ? styles.selected : ''} ${isActive ? styles.active : ''}`}
+      className={`${styles.stageNode} ${isSelected ? styles.selected : ''} ${isActive ? styles.active : ''} ${isControlActive ? styles.controlActive : ''}`}
       onClick={onClick}
+      data-stage={stageSlug}
       style={{ '--status-color': statusColor } as React.CSSProperties}
     >
       <div className={styles.stageIcon}>
@@ -79,21 +85,23 @@ function StageNode({
 function ModelNode({
   model,
   type,
+  isControlActive,
   isSelected,
   onClick,
 }: {
   model: EmbeddingModel;
   type: 'embed' | 'index';
+  isControlActive: boolean;
   isSelected: boolean;
   onClick: () => void;
 }) {
   const statusColor = STATUS_COLORS[model.status];
-  const isActive = model.status === 'processing';
+  const isActive = model.status === 'processing' || isControlActive;
   const shortName = model.model.replace('embed.', '').replace('index.', '');
 
   return (
     <button
-      className={`${styles.modelNode} ${isSelected ? styles.selected : ''} ${isActive ? styles.active : ''}`}
+      className={`${styles.modelNode} ${isSelected ? styles.selected : ''} ${isActive ? styles.active : ''} ${isControlActive ? styles.controlActive : ''}`}
       onClick={onClick}
       style={{ '--status-color': statusColor } as React.CSSProperties}
     >
@@ -159,7 +167,7 @@ function BranchConnector({
   }
 
   // Branching connector for multiple models
-  const itemHeight = 50;
+  const itemHeight = 52;
   const gap = 8;
   const height = count * itemHeight + (count - 1) * gap;
   const midY = height / 2;
@@ -191,10 +199,13 @@ export function PipelineView({
   stages,
   embeddings,
   indexes,
+  activeStageSlugs = [],
   selectedStage,
   selectedModel,
   onSelectStage,
 }: PipelineViewProps) {
+  const activeSet = React.useMemo(() => new Set(activeStageSlugs), [activeStageSlugs]);
+
   // Get main pipeline stages (upload, extract, normalize, chunk)
   const mainStages = stages.filter(s => 
     ['upload', 'extract', 'normalize', 'chunk'].includes(s.key)
@@ -210,6 +221,11 @@ export function PipelineView({
     return from.status;
   };
 
+  const uniqueModels = Array.from(new Set([
+    ...embeddings.map(e => e.model),
+    ...indexes.map(i => i.model)
+  ]));
+
   return (
     <div className={styles.pipeline}>
       {/* Main pipeline row */}
@@ -218,6 +234,8 @@ export function PipelineView({
           <React.Fragment key={stage.key}>
             <StageNode
               stage={stage}
+              stageSlug={stage.key}
+              isControlActive={activeSet.has(stage.key)}
               isSelected={selectedStage === stage.key && !selectedModel}
               onClick={() => onSelectStage(stage.key, null)}
             />
@@ -227,56 +245,75 @@ export function PipelineView({
           </React.Fragment>
         ))}
 
-        {/* Branch to embeddings */}
-        {embeddings.length > 0 && (
+        {/* Branch to models (Embedding -> Index lanes) */}
+        {uniqueModels.length > 0 && (
           <>
             <BranchConnector
-              count={embeddings.length}
-              statuses={embeddings.map(e => e.status)}
+              count={uniqueModels.length}
+              statuses={uniqueModels.map(m => embeddings.find(e => e.model === m)?.status || 'pending')}
               fromStatus={mainStages[mainStages.length - 1]?.status}
             />
-            <div className={styles.modelColumn}>
-              <div className={styles.columnHeader}>Embedding</div>
-              <div className={styles.modelList}>
-                {embeddings.map(emb => (
-                  <ModelNode
-                    key={emb.model}
-                    model={emb}
-                    type="embed"
-                    isSelected={selectedStage === 'embedding' && selectedModel === emb.model}
-                    onClick={() => onSelectStage('embedding', emb.model)}
-                  />
-                ))}
+            <div className={styles.lanesWrapper}>
+              <div 
+                className={styles.lanesHeader}
+                style={{ gridTemplateColumns: indexes.length > 0 ? 'minmax(120px, auto) 48px minmax(120px, auto)' : 'minmax(120px, auto)' }}
+              >
+                <div className={styles.laneHeaderCell}>Embedding</div>
+                {indexes.length > 0 && (
+                  <>
+                    <div /> {/* Connector placeholder */}
+                    <div className={styles.laneHeaderCell}>Index</div>
+                  </>
+                )}
+              </div>
+              <div 
+                className={styles.lanesGrid}
+                style={{ gridTemplateColumns: indexes.length > 0 ? 'minmax(120px, auto) 48px minmax(120px, auto)' : 'minmax(120px, auto)' }}
+              >
+                {uniqueModels.map(modelName => {
+                  const emb = embeddings.find(e => e.model === modelName);
+                  const idx = indexes.find(i => i.model === modelName);
+                  
+                  const connectorStatus = emb?.status === 'completed' && idx
+                    ? (idx.status === 'pending' ? 'pending' : idx.status)
+                    : (emb?.status || 'pending');
+
+                  return (
+                    <React.Fragment key={modelName}>
+                      {emb ? (
+                        <ModelNode
+                          model={emb}
+                          type="embed"
+                          isControlActive={activeSet.has(`embed.${emb.model}`)}
+                          isSelected={selectedStage === 'embedding' && selectedModel === emb.model}
+                          onClick={() => onSelectStage('embedding', emb.model)}
+                        />
+                      ) : (
+                        <div className={styles.modelNodePlaceholder} />
+                      )}
+
+                      {indexes.length > 0 && (
+                        <>
+                          <Connector status={connectorStatus} />
+                          {idx ? (
+                            <ModelNode
+                              model={idx}
+                              type="index"
+                              isControlActive={activeSet.has(`index.${idx.model}`)}
+                              isSelected={selectedStage === 'index' && selectedModel === idx.model}
+                              onClick={() => onSelectStage('index', idx.model)}
+                            />
+                          ) : (
+                            <div className={styles.modelNodePlaceholder} />
+                          )}
+                        </>
+                      )}
+                    </React.Fragment>
+                  );
+                })}
               </div>
             </div>
           </>
-        )}
-
-        {/* Connector to indexes */}
-        {indexes.length > 0 && embeddings.length > 0 && (
-          <BranchConnector
-            count={indexes.length}
-            statuses={indexes.map(i => i.status)}
-            fromStatus={embeddings.every(e => e.status === 'completed') ? 'completed' : 'pending'}
-          />
-        )}
-
-        {/* Index column */}
-        {indexes.length > 0 && (
-          <div className={styles.modelColumn}>
-            <div className={styles.columnHeader}>Index</div>
-            <div className={styles.modelList}>
-              {indexes.map(idx => (
-                <ModelNode
-                  key={idx.model}
-                  model={idx}
-                  type="index"
-                  isSelected={selectedStage === 'index' && selectedModel === idx.model}
-                  onClick={() => onSelectStage('index', idx.model)}
-                />
-              ))}
-            </div>
-          </div>
         )}
       </div>
 

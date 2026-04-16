@@ -1,0 +1,24 @@
+.type-document {
+  background: var(--status-warning, #f97316) !important;
+  color: var(--text-on-primary, #ffffff) !important;
+}
+
+.type-table {
+  background: var(--info, #0ea5e9) !important;
+  color: var(--text-on-primary, #ffffff) !important;
+}
+
+.type-sql {
+  background: var(--text-secondary, #64748b) !important;
+  color: var(--text-on-primary, #ffffff) !important;
+}
+
+.status-active {
+  background: var(--status-success, #22c55e) !important;
+  color: var(--text-on-primary, #ffffff) !important;
+}
+
+.status-inactive {
+  background: var(--status-warning, #f59e0b) !important;
+  color: var(--text-on-primary, #ffffff) !important;
+}

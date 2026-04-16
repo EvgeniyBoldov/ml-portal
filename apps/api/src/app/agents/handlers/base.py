@@ -3,7 +3,7 @@
 """
 from __future__ import annotations
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional, ClassVar
+from typing import Any, Dict, List, Optional, ClassVar
 
 from app.agents.context import ToolContext, ToolResult
 from app.core.schema_hash import compute_schema_hash as _compute_hash
@@ -15,8 +15,9 @@ class ToolHandler(ABC):
     
     Каждый tool должен:
     1. Определить slug, name, description
-    2. Определить input_schema (JSON Schema для аргументов)
-    3. Реализовать execute()
+    2. Определить domains для runtime grouping
+    3. Определить input_schema (JSON Schema для аргументов)
+    4. Реализовать execute()
     
     Пример:
         class MyTool(ToolHandler):
@@ -39,7 +40,7 @@ class ToolHandler(ABC):
     slug: ClassVar[str]
     name: ClassVar[str]
     description: ClassVar[str]
-    tool_group: ClassVar[str]  # Group slug (e.g., "rag", "collection")
+    domains: ClassVar[List[str]] = []  # Business domains this tool serves
     input_schema: ClassVar[Dict[str, Any]]
     output_schema: ClassVar[Optional[Dict[str, Any]]] = None
     
@@ -109,9 +110,24 @@ class ToolHandler(ABC):
         Преобразовать tool в формат для LLM (JSON в промпте).
         """
         return {
+            "type": "function",
+            "function": {
+                "name": self.slug,
+                "description": self.description,
+                "parameters": self.input_schema
+            }
+        }
+
+    def to_mcp_descriptor(self) -> Dict[str, Any]:
+        """
+        Экспортировать локальную операцию в MCP-compatible descriptor format.
+        """
+        return {
             "name": self.slug,
             "description": self.description,
-            "parameters": self.input_schema
+            "inputSchema": self.input_schema or {"type": "object", "properties": {}, "required": []},
+            "outputSchema": self.output_schema,
+            "domains": self.domains or [],
         }
     
     def __repr__(self) -> str:

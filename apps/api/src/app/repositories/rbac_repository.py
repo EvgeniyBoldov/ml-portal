@@ -168,6 +168,7 @@ class RbacRuleRepository:
         owner_tenant_id: Optional[UUID] = None,
         owner_platform: Optional[bool] = None,
         resource_type: Optional[str] = None,
+        resource_id: Optional[UUID] = None,
         effect: Optional[str] = None,
         skip: int = 0,
         limit: int = 500,
@@ -185,6 +186,8 @@ class RbacRuleRepository:
             stmt = stmt.where(RbacRule.owner_platform == owner_platform)
         if resource_type:
             stmt = stmt.where(RbacRule.resource_type == resource_type)
+        if resource_id is not None:
+            stmt = stmt.where(RbacRule.resource_id == resource_id)
         if effect:
             stmt = stmt.where(RbacRule.effect == effect)
 

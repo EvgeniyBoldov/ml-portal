@@ -153,4 +153,4 @@ class IngestResponse(BaseModel):
     document_id: UUID
     status: DocumentStatus
     progress: IngestProgress
-    ingest_run_id: UUID
+    ingest_run_id: Optional[UUID] = None

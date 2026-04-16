@@ -54,9 +54,9 @@ class TestValidTransitions:
         """CANCELLED can go to QUEUED (retry)"""
         assert StageStatus.QUEUED in VALID_TRANSITIONS[StageStatus.CANCELLED]
     
-    def test_completed_is_terminal(self):
-        """COMPLETED has no valid transitions (terminal state)"""
-        assert VALID_TRANSITIONS.get(StageStatus.COMPLETED, set()) == set()
+    def test_completed_transitions(self):
+        """COMPLETED can go to QUEUED (explicit re-run)"""
+        assert StageStatus.QUEUED in VALID_TRANSITIONS[StageStatus.COMPLETED]
 
 
 class TestRAGStatusManager:
@@ -65,16 +65,19 @@ class TestRAGStatusManager:
     @pytest.fixture
     def mock_status_repo(self):
         """Mock status repository"""
-        repo = AsyncMock()
+        repo = MagicMock()
         repo.get_node = AsyncMock(return_value=None)
         repo.upsert_node = AsyncMock()
         repo.get_all_nodes = AsyncMock(return_value=[])
+        repo.get_pipeline_nodes = AsyncMock(return_value=[])
+        repo.get_embedding_nodes = AsyncMock(return_value=[])
+        repo.get_index_nodes = AsyncMock(return_value=[])
         return repo
     
     @pytest.fixture
     def mock_event_publisher(self):
         """Mock event publisher"""
-        publisher = AsyncMock()
+        publisher = MagicMock()
         publisher.publish_status_update = AsyncMock()
         return publisher
     
@@ -87,13 +90,22 @@ class TestRAGStatusManager:
         return factory
     
     @pytest.fixture
-    def status_manager(self, mock_session, mock_repo_factory, mock_event_publisher):
+    def status_manager(self, mock_repo_factory, mock_event_publisher):
         """Create RAGStatusManager with mocks"""
-        return RAGStatusManager(
-            session=mock_session,
+        execute_result = MagicMock()
+        execute_result.scalar_one_or_none = MagicMock(return_value=uuid4())
+        session = MagicMock()
+        session.execute = AsyncMock(return_value=execute_result)
+        session.flush = AsyncMock()
+        manager = RAGStatusManager(
+            session=session,
             repo_factory=mock_repo_factory,
             event_publisher=mock_event_publisher
         )
+        manager.status_repo = mock_repo_factory.get_rag_status_repository()
+        manager._update_aggregate_status = AsyncMock()
+        manager._cascade_reset_downstream = AsyncMock()
+        return manager
     
     @pytest.mark.asyncio
     async def test_transition_stage_valid(self, status_manager, mock_status_repo):

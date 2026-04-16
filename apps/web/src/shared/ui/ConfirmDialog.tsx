@@ -11,6 +11,7 @@ export interface ConfirmDialogProps {
   open: boolean;
   title: string;
   message?: React.ReactNode;
+  description?: React.ReactNode;
   confirmLabel?: string;
   cancelLabel?: string;
   variant?: 'danger' | 'warning' | 'info';
@@ -22,25 +23,30 @@ export default function ConfirmDialog({
   open,
   title,
   message,
+  description,
   confirmLabel = 'Confirm',
   cancelLabel = 'Cancel',
   variant = 'danger',
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
+  const confirmVariant = variant === 'info' ? 'primary' : variant;
+
   return (
     <Modal open={open} title={title} onClose={onCancel} size="md">
       <div className={styles.content}>
-        {message && (
+        {(message || description) && (
           <div className={styles.message}>
-            {typeof message === 'string' ? <p>{message}</p> : message}
+            {typeof (message ?? description) === 'string'
+              ? <p>{message ?? description}</p>
+              : (message ?? description)}
           </div>
         )}
         <div className={styles.actions}>
           <Button variant="outline" onClick={onCancel}>
             {cancelLabel}
           </Button>
-          <Button variant={variant} onClick={onConfirm}>
+          <Button variant={confirmVariant} onClick={onConfirm}>
             {confirmLabel}
           </Button>
         </div>

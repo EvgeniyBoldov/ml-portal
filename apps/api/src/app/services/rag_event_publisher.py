@@ -8,6 +8,15 @@ from datetime import datetime, timezone
 import json
 
 from app.core.logging import get_logger
+from app.schemas.rag_events import (
+    RAGSSEEventType,
+    RAGStatusUpdatePayload,
+    RAGStatusInitializedPayload,
+    RAGIngestStartedPayload,
+    RAGAggregateUpdatePayload,
+    RAGDocumentArchivedPayload,
+    build_rag_event,
+)
 
 logger = get_logger(__name__)
 
@@ -56,27 +65,18 @@ class RAGEventPublisher:
         if not self.redis:
             return
         
-        event = {
-            'event_type': 'status_update',
-            'document_id': str(doc_id),
-            'tenant_id': str(tenant_id),
-            'user_id': str(user_id) if user_id else None,
-            'stage': stage,
-            'status': status,
-            'error': error,
-            'metrics': metrics or {},
-            'timestamp': datetime.now(timezone.utc).isoformat()
-        }
+        event = build_rag_event(RAGStatusUpdatePayload(
+            document_id=str(doc_id),
+            tenant_id=str(tenant_id),
+            user_id=str(user_id) if user_id else None,
+            stage=stage,
+            status=status,
+            error=error,
+            metrics=metrics or {},
+            timestamp=datetime.now(timezone.utc).isoformat(),
+        ))
         
-        try:
-            tenant_channel = self.CHANNEL_TENANT_FMT.format(tenant_id=str(tenant_id))
-            payload = json.dumps(event)
-            await self.redis.publish(self.CHANNEL_ADMIN, payload)
-            await self.redis.publish(tenant_channel, payload)
-            await self.redis.publish(self.CHANNEL_LEGACY, payload)
-            logger.debug(f"Published status update: {doc_id} - {stage} -> {status}")
-        except Exception as e:
-            logger.error(f"Failed to publish status update: {e}")
+        await self._broadcast(event, tenant_id, f"status update: {doc_id} - {stage} -> {status}")
     
     async def publish_status_initialized(
         self,
@@ -95,23 +95,14 @@ class RAGEventPublisher:
         if not self.redis:
             return
         
-        event = {
-            'event_type': 'status_initialized',
-            'document_id': str(doc_id),
-            'tenant_id': str(tenant_id),
-            'user_id': str(user_id) if user_id else None,
-            'timestamp': datetime.now(timezone.utc).isoformat()
-        }
+        event = build_rag_event(RAGStatusInitializedPayload(
+            document_id=str(doc_id),
+            tenant_id=str(tenant_id),
+            user_id=str(user_id) if user_id else None,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+        ))
         
-        try:
-            tenant_channel = self.CHANNEL_TENANT_FMT.format(tenant_id=str(tenant_id))
-            payload = json.dumps(event)
-            await self.redis.publish(self.CHANNEL_ADMIN, payload)
-            await self.redis.publish(tenant_channel, payload)
-            await self.redis.publish(self.CHANNEL_LEGACY, payload)
-            logger.debug(f"Published status initialized: {doc_id}")
-        except Exception as e:
-            logger.error(f"Failed to publish status initialized: {e}")
+        await self._broadcast(event, tenant_id, f"status initialized: {doc_id}")
     
     async def publish_ingest_started(
         self,
@@ -130,23 +121,14 @@ class RAGEventPublisher:
         if not self.redis:
             return
         
-        event = {
-            'event_type': 'ingest_started',
-            'document_id': str(doc_id),
-            'tenant_id': str(tenant_id),
-            'user_id': str(user_id) if user_id else None,
-            'timestamp': datetime.now(timezone.utc).isoformat()
-        }
+        event = build_rag_event(RAGIngestStartedPayload(
+            document_id=str(doc_id),
+            tenant_id=str(tenant_id),
+            user_id=str(user_id) if user_id else None,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+        ))
         
-        try:
-            tenant_channel = self.CHANNEL_TENANT_FMT.format(tenant_id=str(tenant_id))
-            payload = json.dumps(event)
-            await self.redis.publish(self.CHANNEL_ADMIN, payload)
-            await self.redis.publish(tenant_channel, payload)
-            await self.redis.publish(self.CHANNEL_LEGACY, payload)
-            logger.debug(f"Published ingest started: {doc_id}")
-        except Exception as e:
-            logger.error(f"Failed to publish ingest started: {e}")
+        await self._broadcast(event, tenant_id, f"ingest started: {doc_id}")
     
     async def publish_aggregate_status(
         self,
@@ -167,26 +149,17 @@ class RAGEventPublisher:
         if not self.redis:
             return
         
-        event = {
-            'event_type': 'status_update',
-            'document_id': str(doc_id),
-            'doc_id': str(doc_id),  # Alias for frontend compatibility
-            'tenant_id': str(tenant_id),
-            'status': agg_status,
-            'agg_status': agg_status,
-            'agg_details': agg_details or {},
-            'timestamp': datetime.now(timezone.utc).isoformat()
-        }
+        event = build_rag_event(RAGAggregateUpdatePayload(
+            document_id=str(doc_id),
+            tenant_id=str(tenant_id),
+            agg_status=agg_status,
+            agg_details=agg_details or {},
+            timestamp=datetime.now(timezone.utc).isoformat(),
+        ))
+        # Legacy aliases for frontend backward compatibility
+        event['status'] = agg_status
         
-        try:
-            tenant_channel = self.CHANNEL_TENANT_FMT.format(tenant_id=str(tenant_id))
-            payload = json.dumps(event)
-            await self.redis.publish(self.CHANNEL_ADMIN, payload)
-            await self.redis.publish(tenant_channel, payload)
-            await self.redis.publish(self.CHANNEL_LEGACY, payload)
-            logger.debug(f"Published aggregate status: {doc_id} -> {agg_status}")
-        except Exception as e:
-            logger.error(f"Failed to publish aggregate status: {e}")
+        await self._broadcast(event, tenant_id, f"aggregate status: {doc_id} -> {agg_status}")
 
     async def publish_document_archived(
         self,
@@ -205,23 +178,29 @@ class RAGEventPublisher:
         if not self.redis:
             return
         
-        event = {
-            'event_type': 'document_archived' if archived else 'document_unarchived',
-            'document_id': str(doc_id),
-            'tenant_id': str(tenant_id),
-            'archived': archived,
-            'timestamp': datetime.now(timezone.utc).isoformat()
-        }
+        et = RAGSSEEventType.DOCUMENT_ARCHIVED if archived else RAGSSEEventType.DOCUMENT_UNARCHIVED
+        event = build_rag_event(RAGDocumentArchivedPayload(
+            document_id=str(doc_id),
+            tenant_id=str(tenant_id),
+            event_type=et.value,
+            archived=archived,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+        ))
         
+        label = 'archived' if archived else 'unarchived'
+        await self._broadcast(event, tenant_id, f"document {label}: {doc_id}")
+
+    async def _broadcast(self, event: Dict[str, Any], tenant_id: UUID, label: str) -> None:
+        """Publish event to admin, tenant, and legacy channels."""
         try:
             tenant_channel = self.CHANNEL_TENANT_FMT.format(tenant_id=str(tenant_id))
             payload = json.dumps(event)
             await self.redis.publish(self.CHANNEL_ADMIN, payload)
             await self.redis.publish(tenant_channel, payload)
             await self.redis.publish(self.CHANNEL_LEGACY, payload)
-            logger.debug(f"Published document {'archived' if archived else 'unarchived'}: {doc_id}")
+            logger.debug(f"Published {label}")
         except Exception as e:
-            logger.error(f"Failed to publish document archive event: {e}")
+            logger.error(f"Failed to publish {label}: {e}")
 
 
 class RAGEventSubscriber:

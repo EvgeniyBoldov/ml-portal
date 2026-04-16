@@ -1,0 +1,28 @@
+.agent-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.agent-slug {
+  font-weight: 500;
+}
+
+.agent-id {
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+}
+
+.muted {
+  color: var(--text-muted);
+}
+
+.filters {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.filter-item {
+  width: 260px;
+}

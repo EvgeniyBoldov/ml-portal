@@ -11,30 +11,12 @@ export interface SSEMessage {
   seq?: number;
 }
 
-export interface RAGStatusEvent {
-  id: string;
-  status: string;
-  error_message?: string;
-  updated_at?: string;
-}
-
-export interface RAGEmbedProgressEvent {
-  id: string;
-  model_alias: string;
-  done_count: number;
-  total_count: number;
-  last_error?: string;
-  updated_at?: string;
-}
-
-export interface RAGTagsUpdatedEvent {
-  id: string;
-  tags: string[];
-  updated_at?: string;
-}
-
-export interface RAGDeletedEvent {
-  id: string;
+export interface SSEClientOptions {
+  url: string;
+  onMessage: (events: SSEMessage[]) => void;
+  batchInterval?: number;
+  getAccessToken?: () => Promise<string | null> | string | null;
+  onError?: (event: Event) => void;
 }
 
 type EventBuffer = SSEMessage[];
@@ -55,18 +37,33 @@ export class SSEClient {
   private batchInterval: number = 100; // ms
   private intervalId: ReturnType<typeof globalThis.setInterval> | null = null;
   private onBatchCallback: ((events: SSEMessage[]) => void) | null = null;
+  private getAccessToken: (() => Promise<string | null> | string | null) | null = null;
+  private onErrorCallback: ((event: Event) => void) | null = null;
   // Manual reconnect is disabled; rely on native EventSource auto-reconnect
   private lastErrorLogAt = 0;
   private errorLogIntervalMs = 2000;
+  private url: string;
 
+  constructor(url: string, onBatch: (events: SSEMessage[]) => void);
+  constructor(options: SSEClientOptions);
   constructor(
-    private url: string,
-    private onBatch: (events: SSEMessage[]) => void
+    urlOrOptions: string | SSEClientOptions,
+    onBatch?: (events: SSEMessage[]) => void
   ) {
-    this.onBatchCallback = onBatch;
+    if (typeof urlOrOptions === 'string') {
+      this.url = urlOrOptions;
+      this.onBatchCallback = onBatch ?? null;
+      return;
+    }
+
+    this.url = urlOrOptions.url;
+    this.onBatchCallback = urlOrOptions.onMessage;
+    this.batchInterval = urlOrOptions.batchInterval ?? this.batchInterval;
+    this.getAccessToken = urlOrOptions.getAccessToken ?? null;
+    this.onErrorCallback = urlOrOptions.onError ?? null;
   }
 
-  connect(): void {
+  async connect(): Promise<void> {
     if (this.eventSource) {
       return;
     }
@@ -77,9 +74,17 @@ export class SSEClient {
       return;
     }
 
+    let connectionUrl = this.url;
+    if (this.getAccessToken) {
+      const token = await this.getAccessToken();
+      if (token) {
+        const delimiter = connectionUrl.includes('?') ? '&' : '?';
+        connectionUrl = `${connectionUrl}${delimiter}token=${encodeURIComponent(token)}`;
+      }
+    }
+
     // EventSource with withCredentials: true automatically sends httpOnly cookies
-    // No need for token in query params or custom headers
-    this.eventSource = new EventSourceCtorLocal(this.url, {
+    this.eventSource = new EventSourceCtorLocal(connectionUrl, {
       withCredentials: true,
     }) as EventSourceInstance;
 
@@ -179,6 +184,7 @@ export class SSEClient {
         console.error('SSE connection error:', error);
         this.lastErrorLogAt = now;
       }
+      this.onErrorCallback?.(error as Event);
       // Do not manually reconnect; EventSource will auto-retry
     };
 
@@ -227,6 +233,6 @@ export const openSSE = (
   onBatch: (events: SSEMessage[]) => void
 ): SSEClient => {
   const client = new SSEClient(url, onBatch);
-  client.connect();
+  void client.connect();
   return client;
 };

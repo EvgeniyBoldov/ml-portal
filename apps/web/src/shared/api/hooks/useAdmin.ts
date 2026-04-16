@@ -6,6 +6,7 @@ import {
   useMutation,
   useQueryClient,
   type QueryKey,
+  keepPreviousData,
 } from '@tanstack/react-query';
 import {
   adminApi,
@@ -16,9 +17,6 @@ import {
   type TenantCreate,
   type TenantUpdate,
   type Tenant,
-  type EmailSettings,
-  type EmailSettingsUpdate,
-  type ModelRegistry,
   type Model,
   type ModelCreate,
   type ModelUpdate,
@@ -42,7 +40,7 @@ export function useUsers(params: UseUsersParams = {}) {
     queryKey: qk.admin.users.list({ page: params.cursor ? undefined : 1, q: params.query }),
     queryFn: () => adminApi.getUsers(params),
     staleTime: 60000, // 1 minute for lists
-    keepPreviousData: true,
+    placeholderData: keepPreviousData,
   });
 }
 
@@ -145,10 +143,17 @@ export interface UseModelsParams {
 
 export function useModels(params: UseModelsParams = {}) {
   return useQuery({
-    queryKey: qk.admin.models.list({ page: params.page, size: params.size }),
+    queryKey: qk.admin.models.list({
+      page: params.page,
+      size: params.size,
+      type: params.type,
+      enabled_only: params.enabled_only,
+      status: params.status,
+      search: params.search,
+    }),
     queryFn: () => adminApi.getModels(params),
     staleTime: 60000, // 1 minute for lists
-    keepPreviousData: true,
+    placeholderData: keepPreviousData,
   });
 }
 
@@ -275,30 +280,6 @@ export function useAuditLog(params: UseAuditParams = {}) {
     queryKey: qk.admin.audit({ page: params.cursor ? undefined : 1 }),
     queryFn: () => adminApi.getAuditLogs(params),
     staleTime: 60000, // 1 minute for lists
-    keepPreviousData: true,
-  });
-}
-
-// ============================================================================
-// Email Settings
-// ============================================================================
-
-export function useEmailSettings() {
-  return useQuery<EmailSettings>({
-    queryKey: ['admin', 'email-settings'],
-    queryFn: () => adminApi.getEmailSettings(),
-    staleTime: 30000, // 30 seconds for detail
-  });
-}
-
-export function useUpdateEmailSettings() {
-  const queryClient = useQueryClient();
-
-  return useMutation<EmailSettings, Error, EmailSettingsUpdate>({
-    mutationFn: (data: EmailSettingsUpdate) =>
-      adminApi.updateEmailSettings(data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['admin', 'email-settings'] });
-    },
+    placeholderData: keepPreviousData,
   });
 }

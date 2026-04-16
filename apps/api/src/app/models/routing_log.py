@@ -14,7 +14,7 @@ from app.models.base import Base
 
 class RoutingLog(Base):
     """
-    Лог решений AgentRouter.
+    Лог routing/preflight решений.
     
     Сохраняет информацию о:
     - Классификации intent
@@ -56,9 +56,9 @@ class RoutingLog(Base):
     
     execution_mode: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     
-    effective_tools: Mapped[List[str]] = mapped_column(JSONB, default=list)
-    effective_collections: Mapped[List[str]] = mapped_column(JSONB, default=list)
-    tool_instances_map: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict)
+    effective_operations: Mapped[List[str]] = mapped_column(JSONB, default=list)
+    effective_data_instances: Mapped[List[str]] = mapped_column(JSONB, default=list)
+    operation_targets: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict)
     
     routed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

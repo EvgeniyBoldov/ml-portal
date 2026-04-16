@@ -9,9 +9,32 @@
  */
 import { useState, useEffect } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, type QueryKey } from '@tanstack/react-query';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
 import type { EntityPageMode, BreadcrumbItem } from '@/shared/ui';
+
+function getErrorMessage(err: unknown, fallback: string): string {
+  if (err instanceof Error && err.message) {
+    return err.message;
+  }
+  return fallback;
+}
+
+function getEntityIdentity(value: unknown): string | null {
+  if (!value || typeof value !== 'object') return null;
+  const record = value as Record<string, unknown>;
+  if (typeof record.id === 'string' && record.id.length > 0) return record.id;
+  if (typeof record.slug === 'string' && record.slug.length > 0) return record.slug;
+  return null;
+}
+
+function getEntityLabel(value: unknown, fallback: string): string {
+  if (!value || typeof value !== 'object') return fallback;
+  const record = value as Record<string, unknown>;
+  if (typeof record.name === 'string' && record.name.length > 0) return record.name;
+  if (typeof record.login === 'string' && record.login.length > 0) return record.login;
+  return fallback;
+}
 
 export interface EntityEditorConfig<T, TCreate, TUpdate> {
   // Entity identification
@@ -26,15 +49,15 @@ export interface EntityEditorConfig<T, TCreate, TUpdate> {
   // API
   api: {
     get: (id: string) => Promise<T>;
-    create: (data: TCreate) => Promise<T>;
-    update: (id: string, data: TUpdate) => Promise<T>;
+    create: (data: TCreate) => Promise<unknown>;
+    update: (id: string, data: TUpdate) => Promise<unknown>;
     delete?: (id: string) => Promise<void>;
   };
   
   // Query keys
   queryKeys: {
-    list: any[];
-    detail: (id: string) => any[];
+    list: QueryKey;
+    detail: (id: string) => QueryKey;
   };
   
   // Form configuration
@@ -52,7 +75,7 @@ export interface EntityEditorConfig<T, TCreate, TUpdate> {
   };
 }
 
-export function useEntityEditor<T, TCreate = any, TUpdate = any>(config: EntityEditorConfig<T, TCreate, TUpdate>) {
+export function useEntityEditor<T, TCreate = unknown, TUpdate = unknown>(config: EntityEditorConfig<T, TCreate, TUpdate>) {
   const navigate = useNavigate();
   const { id, slug } = useParams<{ id?: string; slug?: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -64,6 +87,7 @@ export function useEntityEditor<T, TCreate = any, TUpdate = any>(config: EntityE
   const entityIdentifier = id || slug;
   const isNew = !entityIdentifier || entityIdentifier === 'new';
   const isEditMode = searchParams.get('mode') === 'edit';
+  
   const mode: EntityPageMode = isNew ? 'create' : isEditMode ? 'edit' : 'view';
 
   // Form state
@@ -90,41 +114,60 @@ export function useEntityEditor<T, TCreate = any, TUpdate = any>(config: EntityE
   // Mutations
   const createMutation = useMutation({
     mutationFn: (data: TCreate) => config.api.create(data),
-    onSuccess: (created: T) => {
-      queryClient.invalidateQueries({ queryKey: config.queryKeys.list });
+    onSuccess: (created) => {
+      // For models, invalidate ALL list queries (with any filters) using prefix
+      if (config.entityType === 'model') {
+        queryClient.invalidateQueries({ queryKey: ['admin', 'models', 'list'] });
+      } else {
+        queryClient.invalidateQueries({ queryKey: config.queryKeys.list as QueryKey });
+      }
       showSuccess(config.messages.create);
-      const newId = (created as any).id || (created as any).slug;
+      const newId = getEntityIdentity(created);
+      if (!newId) {
+        showError('Сущность создана, но API не вернул id/slug для перехода');
+        return;
+      }
       navigate(`${config.basePath}/${newId}`);
     },
-    onError: (err: any) => showError(err?.message || 'Ошибка создания'),
+    onError: (err: unknown) => showError(getErrorMessage(err, 'Ошибка создания')),
   });
 
   const updateMutation = useMutation({
     mutationFn: (data: TUpdate) => config.api.update(entityIdentifier!, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: config.queryKeys.detail(entityIdentifier!) });
-      queryClient.invalidateQueries({ queryKey: config.queryKeys.list });
+      // For models, invalidate ALL list queries (with any filters) using prefix
+      if (config.entityType === 'model') {
+        queryClient.invalidateQueries({ queryKey: ['admin', 'models', 'list'] });
+      } else {
+        queryClient.invalidateQueries({ queryKey: config.queryKeys.list as QueryKey });
+      }
       showSuccess(config.messages.update);
       setSearchParams({});
     },
-    onError: (err: any) => showError(err?.message || 'Ошибка обновления'),
+    onError: (err: unknown) => showError(getErrorMessage(err, 'Ошибка обновления')),
   });
 
   const deleteMutation = useMutation({
-    mutationFn: () => config.api.delete?.(entityIdentifier!),
+    mutationFn: (): Promise<void> => config.api.delete ? config.api.delete(entityIdentifier!) : Promise.resolve(),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: config.queryKeys.list });
+      // For models, invalidate ALL list queries (with any filters) using prefix
+      if (config.entityType === 'model') {
+        queryClient.invalidateQueries({ queryKey: ['admin', 'models', 'list'] });
+      } else {
+        queryClient.invalidateQueries({ queryKey: config.queryKeys.list as QueryKey });
+      }
       if (config.messages.delete) {
         showSuccess(config.messages.delete);
       }
       navigate(config.listPath);
     },
-    onError: (err: any) => showError(err?.message || 'Ошибка удаления'),
+    onError: (err: unknown) => showError(getErrorMessage(err, 'Ошибка удаления')),
   });
 
   // Handlers
-  const handleFieldChange = (key: string, value: any) => {
-    setFormData((prev: any) => ({ ...prev, [key]: value }));
+  const handleFieldChange = (key: string, value: unknown) => {
+    setFormData((prev: unknown) => ({ ...(prev as Record<string, unknown>), [key]: value }));
   };
 
   const handleSave = async () => {
@@ -182,7 +225,7 @@ export function useEntityEditor<T, TCreate = any, TUpdate = any>(config: EntityE
   // Breadcrumbs
   const breadcrumbs: BreadcrumbItem[] = [
     { label: config.entityNameLabel, href: config.listPath },
-    { label: (entity as any)?.name || (entity as any)?.login || `Новый ${config.entityTypeLabel}` },
+    { label: getEntityLabel(entity, `Новый ${config.entityTypeLabel}`) },
   ];
 
   return {

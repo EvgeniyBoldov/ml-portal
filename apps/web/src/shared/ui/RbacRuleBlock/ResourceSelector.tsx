@@ -9,31 +9,22 @@ interface ResourceSelectorProps {
   value: string;
   onChange: (resourceId: string) => void;
   agents: any[];
-  toolGroups: any[];
 }
 
-export function ResourceSelector({ 
-  resourceType, 
-  value, 
-  onChange, 
-  agents, 
-  toolGroups 
+export function ResourceSelector({
+  resourceType,
+  value,
+  onChange,
+  agents,
 }: ResourceSelectorProps) {
-  
   const getResourceOptions = () => {
     switch (resourceType) {
       case 'agent':
-        return agents.map(agent => ({
+        return agents.map((agent) => ({
           value: agent.id,
-          label: `${agent.name} (${agent.slug})`
+          label: `${agent.name} (${agent.slug})`,
         }));
-      
-      case 'toolgroup':
-        return toolGroups.map(group => ({
-          value: group.id,
-          label: `${group.name} (${group.slug})`
-        }));
-      
+
       default:
         return [];
     }
@@ -51,7 +42,7 @@ export function ResourceSelector({
       <option value="">
         {!resourceType ? 'Сначала выберите тип ресурса' : 'Выберите ресурс'}
       </option>
-      {options.map(option => (
+      {options.map((option) => (
         <option key={option.value} value={option.value}>
           {option.label}
         </option>

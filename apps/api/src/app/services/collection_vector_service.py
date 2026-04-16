@@ -11,7 +11,7 @@ from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct
 
 from app.models.collection import Collection
-from app.core.config import settings
+from app.core.config import get_settings
 
 
 class CollectionVectorService:
@@ -19,6 +19,7 @@ class CollectionVectorService:
     
     def __init__(self, session: AsyncSession, qdrant_client: Optional[QdrantClient] = None):
         self.session = session
+        settings = get_settings()
         self.qdrant_client = qdrant_client or QdrantClient(
             url=settings.QDRANT_URL,
             api_key=settings.QDRANT_API_KEY if hasattr(settings, 'QDRANT_API_KEY') else None,

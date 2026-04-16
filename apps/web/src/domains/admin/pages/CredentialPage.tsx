@@ -1,20 +1,18 @@
 /**
- * CredentialPage - создание/просмотр/редактирование credential
- * 
- * Режимы:
- * - new - создание нового credential
- * - {id} - просмотр/редактирование существующего credential
- * - mode=edit - режим редактирования
+ * CredentialPage — просмотр/создание/редактирование/удаление credential.
+ *
+ * Использует useEntityEditor для стандартной CRUD логики.
+ * Payload — вложенный объект, обрабатывается через handleFieldChange.
  */
-import { useState, useEffect } from 'react';
-import { useParams, useSearchParams, useNavigate } from 'react-router-dom';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMemo } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { credentialsApi, type Credential, type CredentialCreate } from '@/shared/api/credentials';
 import { toolInstancesApi, type ToolInstance } from '@/shared/api/toolInstances';
 import { qk } from '@/shared/api/keys';
-import { EntityPageV2, Tab, type EntityPageMode, type BreadcrumbItem } from '@/shared/ui';
-import { ContentBlock, Input, Select, Badge, type FieldDefinition } from '@/shared/ui';
-import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
+import { useEntityEditor } from '@/shared/hooks/useEntityEditor';
+import { EntityPageV2, Tab, type BreadcrumbItem } from '@/shared/ui';
+import { Block, type FieldConfig } from '@/shared/ui/GridLayout';
+import { Badge, Button, ConfirmDialog } from '@/shared/ui';
 
 const AUTH_TYPE_LABELS: Record<string, string> = {
   token: 'Bearer Token',
@@ -30,299 +28,262 @@ const AUTH_TYPE_OPTIONS = [
   { value: 'oauth', label: AUTH_TYPE_LABELS.oauth },
 ];
 
-const containerFields: FieldDefinition[] = [
-  {
-    key: 'instance_id',
-    label: 'Инстанс',
-    type: 'select',
-    required: true,
-    options: [], // Заполняется динамически
-  },
-  {
-    key: 'auth_type',
-    label: 'Тип авторизации',
-    type: 'select',
-    required: true,
-    options: AUTH_TYPE_OPTIONS,
-  },
-  {
-    key: 'is_active',
-    label: 'Статус',
-    type: 'boolean',
-    editable: false, // Только для просмотра
-  },
-  {
-    key: 'created_at',
-    label: 'Создан',
-    type: 'date',
-    editable: false, // Только для просмотра
-  },
-];
+/* ─── Field configs ─── */
 
-// Получение полей payload в зависимости от типа авторизации
-const getPayloadFields = (authType: string): FieldDefinition[] => {
-  const fields: Record<string, FieldDefinition[]> = {
+// Get payload fields based on auth type
+const getPayloadFields = (authType: string): FieldConfig[] => {
+  const fields: Record<string, FieldConfig[]> = {
     token: [
-      { key: 'token', label: 'Token', type: 'text', required: true },
+      { key: 'payload.token', type: 'password', label: 'Token', required: true },
     ],
     basic: [
-      { key: 'username', label: 'Имя пользователя', type: 'text', required: true },
-      { key: 'password', label: 'Пароль', type: 'text', required: true },
+      { key: 'payload.username', type: 'text', label: 'Имя пользователя', required: true },
+      { key: 'payload.password', type: 'password', label: 'Пароль', required: true },
     ],
     api_key: [
-      { key: 'key', label: 'API Key', type: 'text', required: true },
+      { key: 'payload.api_key', type: 'password', label: 'API Key', required: true },
     ],
     oauth: [
-      { key: 'client_id', label: 'Client ID', type: 'text', required: true },
-      { key: 'client_secret', label: 'Client Secret', type: 'text', required: true },
+      { key: 'payload.client_id', type: 'text', label: 'Client ID', required: true },
+      { key: 'payload.client_secret', type: 'password', label: 'Client Secret', required: true },
     ],
   };
   
   return fields[authType] || [];
 };
 
-// Получение шаблона payload
+// Get payload template
 const getPayloadTemplate = (authType: string): Record<string, string> => {
   const fields = getPayloadFields(authType);
   const template: Record<string, string> = {};
   fields.forEach(field => {
-    template[field.key] = '';
+    const key = field.key.replace('payload.', '');
+    template[key] = '';
   });
   return template;
 };
 
-export default function CredentialPage() {
-  const { id } = useParams();
-  const [searchParams, setSearchParams] = useSearchParams();
-  const navigate = useNavigate();
-  const queryClient = useQueryClient();
-  const showError = useErrorToast();
-  const showSuccess = useSuccessToast();
+const BASE_FIELDS: FieldConfig[] = [
+  {
+    key: 'instance_id',
+    type: 'select',
+    label: 'Коннектор',
+    required: true,
+    description: 'Удалённый коннектор для этого доступа',
+  },
+  {
+    key: 'auth_type',
+    type: 'select',
+    label: 'Тип авторизации',
+    required: true,
+    description: 'Способ аутентификации с коннектором',
+  },
+];
 
-  const isCreate = id === 'new';
-  const isEditMode = searchParams.get('mode') === 'edit';
-  const mode: EntityPageMode = isCreate ? 'create' : isEditMode ? 'edit' : 'view';
-  const isEditable = mode === 'edit' || mode === 'create';
+const META_FIELDS: FieldConfig[] = [
+  { key: 'is_active', type: 'badge', label: 'Статус', editable: false },
+  { key: 'created_at', type: 'date', label: 'Создан', editable: false },
+  { key: 'updated_at', type: 'date', label: 'Обновлен', editable: false },
+];
 
-  // Form state
-  const [formData, setFormData] = useState({
-    instance_id: '',
-    auth_type: 'token',
-    payload: getPayloadTemplate('token'),
-    is_active: 'inactive',
-    created_at: '',
-  });
-
-  // Queries
-  const { data: instances = [] } = useQuery({
-    queryKey: qk.toolInstances.list(),
-    queryFn: () => toolInstancesApi.list(),
-  });
-
-  const { data: credential, isLoading } = useQuery({
-    queryKey: qk.credentials.detail(id!),
-    queryFn: () => credentialsApi.get(id!),
-    enabled: !isCreate && !!id,
-  });
-
-  // Filter remote instances only
-  const remoteInstances = instances.filter((i: ToolInstance) => i.instance_type === 'remote');
-  const instanceOptions = remoteInstances.map((i: ToolInstance) => ({
-    value: i.id,
-    label: i.name,
-  }));
-
-  // Поля для первого ContentBlock (основные данные + секреты)
-  const mainFields: FieldDefinition[] = [
-    {
-      key: 'instance_id',
-      label: 'Инстанс',
-      type: 'select',
-      required: true,
-      options: instanceOptions,
-    },
-    {
-      key: 'auth_type',
-      label: 'Тип авторизации',
-      type: 'select',
-      required: true,
-      options: AUTH_TYPE_OPTIONS,
-    },
-    ...getPayloadFields(formData.auth_type || 'token').map(field => ({
-      ...field,
-      type: 'text' as const,
-    })),
-  ];
-
-  // Поля для второго ContentBlock (статус и даты)
-  const statusFields: FieldDefinition[] = [
-    {
-      key: 'is_active',
-      label: 'Статус',
-      type: 'badge',
-      badgeTone: (credential?.is_active || formData.is_active === 'active') ? 'success' : 'neutral',
-    },
-    {
-      key: 'created_at',
-      label: 'Создан',
-      type: 'date',
-    },
-  ];
-
-  // Sync form data
-  useEffect(() => {
-    if (credential) {
-      setFormData({
-        instance_id: credential.instance_id,
-        auth_type: credential.auth_type,
-        payload: credential.payload || {},
-        is_active: credential.is_active ? 'active' : 'inactive',
-        created_at: credential.created_at,
-      });
-    }
-  }, [credential]);
-
-  // Mutations
-  const createMutation = useMutation({
-    mutationFn: (data: CredentialCreate) => credentialsApi.create(data),
-    onSuccess: () => {
-      showSuccess('Credential создан');
-      queryClient.invalidateQueries({ queryKey: qk.credentials.all() });
-      navigate('/admin/credentials');
-    },
-    onError: () => {
-      showError('Не удалось создать credential');
-    },
-  });
-
-  const updateMutation = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: Partial<CredentialCreate> }) =>
-      credentialsApi.update(id, data),
-    onSuccess: () => {
-      showSuccess('Credential обновлён');
-      queryClient.invalidateQueries({ queryKey: qk.credentials.all() });
-      queryClient.invalidateQueries({ queryKey: qk.credentials.detail(id!) });
-      setSearchParams({});
-    },
-    onError: () => {
-      showError('Не удалось обновить credential');
-    },
-  });
-
-  const deleteMutation = useMutation({
-    mutationFn: (id: string) => credentialsApi.delete(id),
-    onSuccess: () => {
-      showSuccess('Credential удалён');
-      queryClient.invalidateQueries({ queryKey: qk.credentials.all() });
-      navigate('/admin/credentials');
-    },
-    onError: () => {
-      showError('Не удалось удалить credential');
-    },
-  });
-
-  // Handlers
-  const handleSave = async () => {
-    if (!formData.instance_id) {
-      showError('Выберите инстанс');
+function normalizeMaskedPayload(
+  authType: string,
+  maskedPayload: Record<string, string> | null | undefined,
+  hasPayload: boolean | undefined,
+): Record<string, string> {
+  const template = getPayloadTemplate(authType);
+  const source = maskedPayload ?? {};
+  const result: Record<string, string> = {};
+  Object.keys(template).forEach((key) => {
+    const raw = source[key];
+    if (raw && String(raw).trim()) {
+      const len = String(raw).length;
+      result[key] = '*'.repeat(Math.max(len, 3));
       return;
     }
+    result[key] = hasPayload ? '********' : '';
+  });
+  return result;
+}
 
-    try {
-      const data: CredentialCreate = {
+function prefixedPayload(payload: Record<string, string> | Record<string, unknown>): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  Object.entries(payload).forEach(([key, value]) => {
+    result[`payload.${key}`] = value;
+  });
+  return result;
+}
+
+/* ─── Component ─── */
+
+export default function CredentialPage() {
+  const {
+    mode,
+    isNew,
+    isEditable,
+    entity: credential,
+    isLoading,
+    formData,
+    saving,
+    showDeleteConfirm,
+    setShowDeleteConfirm,
+    breadcrumbs,
+    handleFieldChange: baseHandleFieldChange,
+    handleSave,
+    handleEdit,
+    handleCancel,
+    handleDelete,
+    handleDeleteConfirm,
+  } = useEntityEditor<Credential, CredentialCreate, Partial<CredentialCreate>>({
+    entityType: 'credential',
+    entityNameLabel: 'Доступы',
+    entityTypeLabel: 'доступ',
+    basePath: '/admin/credentials',
+    listPath: '/admin/platform',
+    api: {
+      get: (id) => credentialsApi.get(id),
+      create: (data) => credentialsApi.create(data),
+      update: (id, data) => credentialsApi.update(id, data),
+      delete: (id) => credentialsApi.delete(id),
+    },
+    queryKeys: {
+      list: qk.credentials.list({}),
+      detail: (id) => qk.credentials.detail(id),
+    },
+    getInitialFormData: (cred) => ({
+      instance_id: cred?.instance_id ?? '',
+      auth_type: cred?.auth_type ?? 'token',
+      payload: cred ? getPayloadTemplate(cred.auth_type) : getPayloadTemplate('token'),
+      owner_platform: cred?.owner_platform ?? true,
+    }),
+    transformCreate: (data) => ({
+      instance_id: data.instance_id ?? '',
+      auth_type: data.auth_type ?? 'token',
+      payload: data.payload ?? {},
+      owner_platform: true,
+    }),
+    transformUpdate: (data) => ({
+      instance_id: data.instance_id,
+      auth_type: data.auth_type,
+      payload: data.payload ?? {},
+      owner_platform: true,
+    }),
+    messages: {
+      create: 'Доступ создан',
+      update: 'Доступ обновлён',
+      delete: 'Доступ удалён',
+    },
+  });
+
+  // ─── Payload field change — вложенные ключи ───
+  const handleFieldChange = (key: string, value: any) => {
+    if (key.startsWith('payload.')) {
+      const payloadKey = key.replace('payload.', '');
+      baseHandleFieldChange('payload', { ...(formData.payload ?? {}), [payloadKey]: value });
+    } else if (key === 'auth_type') {
+      baseHandleFieldChange('auth_type', value);
+      baseHandleFieldChange('payload', getPayloadTemplate(value));
+    } else {
+      baseHandleFieldChange(key, value);
+    }
+  };
+
+  // ─── Коннекторы для select ───
+  const { data: instances = [] } = useQuery({
+    queryKey: qk.toolInstances.list({ placement: 'remote' }),
+    queryFn: () => toolInstancesApi.list({ placement: 'remote' }),
+    staleTime: 60_000,
+  });
+
+  const remoteInstances = instances.filter((i: ToolInstance) => i.placement === 'remote');
+
+  const instanceOptions = useMemo(
+    () => remoteInstances.map((i: ToolInstance) => ({ value: i.id, label: i.name })),
+    [remoteInstances]
+  );
+
+  // ─── Динамические поля ───
+  const payloadFields = useMemo(
+    () => getPayloadFields(formData.auth_type ?? 'token'),
+    [formData.auth_type]
+  );
+
+  const mainFields = useMemo(() => {
+    const baseWithOpts = BASE_FIELDS.map((f) => ({
+      ...f,
+      options: f.key === 'instance_id' ? instanceOptions : AUTH_TYPE_OPTIONS,
+    }));
+    return [...baseWithOpts, ...payloadFields];
+  }, [instanceOptions, payloadFields]);
+
+  // ─── Derived ───
+  const mainData = isEditable
+    ? {
         instance_id: formData.instance_id,
         auth_type: formData.auth_type,
-        payload: formData.payload,
-        owner_platform: true, // Platform-level credentials
+        ...prefixedPayload((formData.payload ?? {}) as Record<string, unknown>),
+      }
+    : {
+        instance_id: credential?.instance_id ?? '',
+        auth_type: credential?.auth_type ?? 'token',
+        ...prefixedPayload(
+          normalizeMaskedPayload(
+            credential?.auth_type ?? 'token',
+            credential?.masked_payload,
+            credential?.has_payload,
+          ),
+        ),
       };
 
-      if (isCreate) {
-        await createMutation.mutateAsync(data);
-      } else {
-        await updateMutation.mutateAsync({ id: id!, data });
-      }
-    } catch (error) {
-      // Error handled in mutation
-    }
+  const metaData = {
+    is_active: credential?.is_active ? 'Активен' : 'Неактивен',
+    created_at: credential?.created_at ?? '',
+    updated_at: '',
   };
 
-  const handleEdit = () => {
-    setSearchParams({ mode: 'edit' });
-  };
+  const instanceName = remoteInstances.find((i) => i.id === (credential?.instance_id ?? formData.instance_id))?.name ?? 'Доступ';
 
-  const handleCancel = () => {
-    if (isCreate) {
-      navigate('/admin/credentials');
-    } else {
-      setSearchParams({});
-    }
-  };
-
-  const handleDelete = () => {
-    if (id && window.confirm('Удалить этот credential?')) {
-      deleteMutation.mutate(id);
-    }
-  };
-
-  // Breadcrumbs
-  const breadcrumbs: BreadcrumbItem[] = [
-    { label: 'Общие доступы', href: '/admin/credentials' },
-    { label: isCreate ? 'Новый доступ' : 'Доступ' },
-  ];
-
-  const instanceName = remoteInstances.find(i => i.id === formData.instance_id)?.name || formData.instance_id;
-  const saving = createMutation.isPending || updateMutation.isPending;
-
-  // Create mode — single tab, single column
-  if (isCreate) {
+  // ─── Create mode ───
+  if (isNew) {
     return (
       <EntityPageV2
         title="Новый доступ"
-        mode={mode}
+        mode="create"
         saving={saving}
         breadcrumbs={breadcrumbs}
-        backPath="/admin/credentials"
+        backPath="/admin/platform"
         onSave={handleSave}
         onCancel={handleCancel}
       >
         <Tab title="Создание" layout="grid">
-          <ContentBlock 
-            title="Основные настройки" 
-            icon="key" 
-            width="full" 
+          <Block
+            title="Основные настройки"
+            icon="key"
+            iconVariant="primary"
+            width="1/2"
             fields={mainFields}
-            data={formData}
-            onChange={(key: string, value: any) => {
-              setFormData((prev: any) => ({ ...prev, [key]: value }));
-              if (key === 'auth_type') {
-                setFormData((prev: any) => ({
-                  ...prev,
-                  auth_type: value,
-                  payload: getPayloadTemplate(value),
-                }));
-              }
-            }}
+            data={mainData}
+            editable
+            onChange={handleFieldChange}
           />
-          <ContentBlock 
-            title="Статус и даты" 
-            icon="clock" 
-            width="full" 
-            fields={statusFields}
-            data={formData}
-            onChange={(key: string, value: any) => {
-              setFormData((prev: any) => ({ ...prev, [key]: value }));
-            }}
+          <Block
+            title="Статус и даты"
+            icon="clock"
+            iconVariant="info"
+            width="1/2"
+            fields={META_FIELDS}
+            data={metaData}
           />
         </Tab>
       </EntityPageV2>
     );
   }
 
-  // View/Edit mode — two tabs
+  // ─── View / Edit mode ───
   return (
     <>
       <EntityPageV2
-        title={instanceName || 'Доступ'}
+        title={instanceName}
         mode={mode}
         loading={isLoading}
         saving={saving}
@@ -330,46 +291,62 @@ export default function CredentialPage() {
         onEdit={handleEdit}
         onSave={handleSave}
         onCancel={handleCancel}
-        onDelete={handleDelete}
+        actionButtons={
+          mode === 'view' ? (
+            <>
+              <Button onClick={handleEdit}>Редактировать</Button>
+              <Button variant="danger" onClick={handleDelete}>Удалить</Button>
+            </>
+          ) : undefined
+        }
       >
         <Tab title="Обзор" layout="grid" id="overview">
-          <ContentBlock 
-            title="Основные настройки" 
-            icon="key" 
-            width="full" 
-            editable={isEditable}
+          <Block
+            title="Основные настройки"
+            icon="key"
+            iconVariant="primary"
+            width="1/2"
             fields={mainFields}
-            data={mode === 'edit' ? formData : (credential || formData)}
-            onChange={(key: string, value: any) => {
-              setFormData((prev: any) => ({ ...prev, [key]: value }));
-              if (key === 'auth_type') {
-                setFormData((prev: any) => ({
-                  ...prev,
-                  auth_type: value,
-                  payload: getPayloadTemplate(value),
-                }));
-              }
-            }}
+            data={mainData}
+            editable={isEditable}
+            onChange={handleFieldChange}
+            headerActions={
+              credential ? (
+                <Badge tone={credential.is_active ? 'success' : 'neutral'}>
+                  {credential.is_active ? 'Активен' : 'Неактивен'}
+                </Badge>
+              ) : undefined
+            }
           />
-          <ContentBlock 
-            title="Статус и даты" 
-            icon="clock" 
-            width="full" 
-            editable={false}
-            fields={statusFields}
-            data={credential || formData}
-            onChange={() => {}} // Статус и даты не редактируются
+          <Block
+            title="Статус и даты"
+            icon="clock"
+            iconVariant="info"
+            width="1/2"
+            fields={META_FIELDS}
+            data={metaData}
           />
         </Tab>
 
         <Tab title="Журнал" layout="full" id="activity">
-          <ContentBlock title="Активность" icon="clock">
+          <Block title="Активность" icon="clock" iconVariant="info" width="full">
             <div style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', textAlign: 'center', padding: '2rem' }}>
               Журнал активности credential будет доступен в следующих версиях
             </div>
-          </ContentBlock>
+          </Block>
         </Tab>
       </EntityPageV2>
+
+      <ConfirmDialog
+        open={showDeleteConfirm}
+        title="Удалить доступ?"
+        description="Это действие необратимо."
+        confirmLabel="Удалить"
+        cancelLabel="Отмена"
+        variant="danger"
+        onConfirm={handleDeleteConfirm}
+        onCancel={() => setShowDeleteConfirm(false)}
+      />
     </>
   );
 }

@@ -137,8 +137,10 @@ celerybeat.pid
 # SageMath parsed files
 *.sage.py
 
-# Environments
+# Environment variables
 .env
+.env.test
+.env.test.local
 .venv
 env/
 venv/
@@ -185,3 +187,5 @@ review/
 *.tar.gz
 *.zip
 
+.windsurf/
+.windsurfrules/

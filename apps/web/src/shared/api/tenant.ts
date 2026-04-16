@@ -13,6 +13,7 @@ export interface Tenant {
   rerank_model?: string;
   ocr?: boolean;
   layout?: boolean;
+  default_agent_slug?: string;
   created_at: string;
   updated_at: string;
 }
@@ -24,6 +25,7 @@ export interface TenantCreate {
   extra_embed_model?: string;
   ocr?: boolean;
   layout?: boolean;
+  default_agent_slug?: string;
 }
 
 export interface TenantUpdate {
@@ -33,6 +35,7 @@ export interface TenantUpdate {
   extra_embed_model?: string | null;
   ocr?: boolean;
   layout?: boolean;
+  default_agent_slug?: string | null;
 }
 
 export interface TenantListResponse {
@@ -40,7 +43,7 @@ export interface TenantListResponse {
   total: number;
   page: number;
   size: number;
-  pages: number;
+  has_more: boolean;
 }
 
 export const tenantApi = {

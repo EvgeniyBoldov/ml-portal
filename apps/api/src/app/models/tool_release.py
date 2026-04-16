@@ -110,17 +110,18 @@ class ToolBackendRelease(Base):
 class ToolRelease(Base):
     """
     Версия инструмента для использования агентами.
-    
-    Аналог PromptVersion/BaselineVersion/PolicyVersion.
-    Привязывается к конкретной версии из кода (ToolBackendRelease).
-    
+
+    Содержит:
+    - Human-readable semantic profile
+    - Policy hints for safe usage
+
     Жизненный цикл:
-    - draft: можно редактировать (выбор backend_release, config)
+    - draft: можно редактировать
     - active: используется агентами, нельзя редактировать
     - archived: только для истории
     """
     __tablename__ = "tool_releases"
-    
+
     __table_args__ = (
         UniqueConstraint('tool_id', 'version', name='uq_tool_release_version'),
     )
@@ -128,95 +129,71 @@ class ToolRelease(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    
+
     tool_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("tools.id", ondelete="CASCADE"),
         nullable=False,
         index=True
     )
-    
-    # Автоинкрементный номер версии (1, 2, 3, ...)
+
     version: Mapped[int] = mapped_column(Integer, nullable=False)
-    
-    # Привязка к версии из кода
-    backend_release_id: Mapped[uuid.UUID] = mapped_column(
+
+    backend_release_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("tool_backend_releases.id", ondelete="RESTRICT"),
-        nullable=False,
+        nullable=True,
         index=True
     )
-    
-    # Статус версии
+
     status: Mapped[str] = mapped_column(
-        String(20), 
-        default=ToolReleaseStatus.DRAFT.value, 
+        String(20),
+        default=ToolReleaseStatus.DRAFT.value,
         nullable=False,
         index=True
     )
-    
-    # Дополнительная конфигурация (timeout, retries, etc.)
-    config: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
-    
-    # Описание для LLM (как использовать этот инструмент)
-    description_for_llm: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    
-    # Категория инструмента (для группировки в UI)
-    category: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    
-    # Теги для поиска и фильтрации
-    tags: Mapped[list[str]] = mapped_column(JSONB, default=list, nullable=False)
-    
-    # Подсказки для полей (JSON: {field_name: hint_text})
-    field_hints: Mapped[Dict[str, str]] = mapped_column(JSONB, default=dict, nullable=False)
-    
-    # Примеры использования (JSON: [{"input": {...}, "output": {...}}])
-    examples: Mapped[list[Dict[str, Any]]] = mapped_column(JSONB, default=list, nullable=False)
-    
-    # Краткое описание возвращаемого значения
-    return_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    
-    # Хеш метаданных (для отслеживания изменений)
+
+    # ── Human-readable profile ──────────────────────────────────────────
+    semantic_profile: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
+    policy_hints: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
+
+    # ── Meta ────────────────────────────────────────────────────────────
     meta_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
-    
-    # Фиксируется при activate из backend_release.schema_hash — для детекта schema drift
     expected_schema_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
-    
-    # Ссылка на родительскую версию (для наследования мета-данных)
+
     parent_release_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("tool_releases.id", ondelete="SET NULL"),
         nullable=True
     )
-    
-    # Заметки об изменениях
+
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    
+
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), 
-        default=lambda: datetime.now(timezone.utc), 
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
         nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), 
-        default=lambda: datetime.now(timezone.utc), 
-        onupdate=lambda: datetime.now(timezone.utc), 
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
         nullable=False
     )
-    
+
     # Relationships
     tool: Mapped["Tool"] = relationship(
-        "Tool", 
+        "Tool",
         back_populates="releases",
         foreign_keys=[tool_id]
     )
-    
+
     backend_release: Mapped["ToolBackendRelease"] = relationship(
         "ToolBackendRelease",
         back_populates="releases",
         foreign_keys=[backend_release_id]
     )
-    
+
     parent_release: Mapped[Optional["ToolRelease"]] = relationship(
         "ToolRelease",
         remote_side="ToolRelease.id",
@@ -225,12 +202,10 @@ class ToolRelease(Base):
 
     @property
     def is_editable(self) -> bool:
-        """Можно ли редактировать версию"""
         return self.status == ToolReleaseStatus.DRAFT.value
-    
+
     @property
     def can_activate(self) -> bool:
-        """Можно ли активировать версию"""
         return self.status == ToolReleaseStatus.DRAFT.value
 
     def __repr__(self) -> str:

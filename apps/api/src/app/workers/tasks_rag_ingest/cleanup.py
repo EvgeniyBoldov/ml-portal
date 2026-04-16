@@ -17,10 +17,7 @@ logger = get_logger(__name__)
 @celery_app.task(
     queue="cleanup_low",
     bind=True,
-    autoretry_for=(Exception,),
-    retry_backoff=True,
-    retry_backoff_max=600,
-    max_retries=3
+    max_retries=3,
 )
 def cleanup_document_artifacts(self: Task, tenant_id: str, source_id: str) -> Dict[str, Any]:
     """
@@ -50,12 +47,12 @@ def cleanup_document_artifacts(self: Task, tenant_id: str, source_id: str) -> Di
                 prefix = get_document_prefix(t_uuid, s_uuid)
             except ValueError:
                 logger.error(f"Invalid UUIDs: tenant={tenant_id}, source={source_id}")
-                return {"status": "failed", "error": "Invalid UUIDs"}
+                raise ValueError("Invalid UUIDs")
             
             # Safety check: prefix should not be empty or root
             if not prefix or len(prefix) < 10:
                 logger.error(f"Dangerous prefix deletion attempted: {prefix}")
-                return {"status": "failed", "error": "Dangerous prefix"}
+                raise ValueError(f"Dangerous prefix '{prefix}'")
             
             logger.info(f"Deleting S3 prefix: {prefix}")
             
@@ -71,17 +68,24 @@ def cleanup_document_artifacts(self: Task, tenant_id: str, source_id: str) -> Di
             try:
                 from app.adapters.impl.qdrant import QdrantVectorStore
                 from app.repositories.rag_status_repo import AsyncRAGStatusRepository
+                from app.repositories.rag_ingest_repos import AsyncSourceRepository
                 from app.schemas.common import EmbeddingModel
+                from app.services.document_artifacts import normalize_document_source_meta
                 
                 # Determine which models were used for this document
                 # by querying the RAGStatus table
                 used_models = []
+                collection_qdrant_name = None
                 
                 try:
                     async with get_worker_session() as session:
                         status_repo = AsyncRAGStatusRepository(session, tenant_id=uuid.UUID(tenant_id))
+                        source_repo = AsyncSourceRepository(session, tenant_id=uuid.UUID(tenant_id))
                         embedding_nodes = await status_repo.get_embedding_nodes(uuid.UUID(source_id))
                         used_models = [node.node_key for node in embedding_nodes]
+                        source = await source_repo.get_by_id(uuid.UUID(source_id))
+                        source_meta = normalize_document_source_meta((source.meta or {}) if source else {})
+                        collection_qdrant_name = source_meta.get("collection", {}).get("qdrant_collection_name")
                 except Exception as db_err:
                     logger.warning(f"Could not fetch used models from DB: {db_err}. Falling back to all known models.")
                 
@@ -93,9 +97,11 @@ def cleanup_document_artifacts(self: Task, tenant_id: str, source_id: str) -> Di
                 
                 vector_store = QdrantVectorStore()
                 client = await vector_store.get_client()
-                
-                for model_alias in used_models:
-                    collection_name = f"{tenant_id}__{model_alias}"
+                target_collections = {f"{tenant_id}__{model_alias}" for model_alias in used_models}
+                if collection_qdrant_name:
+                    target_collections.add(collection_qdrant_name)
+
+                for collection_name in target_collections:
                     try:
                         # Qdrant delete by filter
                         from qdrant_client.http import models
@@ -116,7 +122,6 @@ def cleanup_document_artifacts(self: Task, tenant_id: str, source_id: str) -> Di
                     except Exception as q_err:
                         # Collection might not exist or other error
                         logger.warning(f"Failed to delete from {collection_name}: {q_err}")
-                        pass
                         
             except Exception as v_err:
                 logger.error(f"Failed to clean up vectors: {v_err}")
@@ -125,7 +130,8 @@ def cleanup_document_artifacts(self: Task, tenant_id: str, source_id: str) -> Di
                 "source_id": source_id,
                 "status": "completed",
                 "prefix_deleted": prefix,
-                "models_cleaned": used_models if 'used_models' in locals() else []
+                "models_cleaned": used_models if 'used_models' in locals() else [],
+                "collections_cleaned": sorted(target_collections) if 'target_collections' in locals() else [],
             }
 
         return asyncio.run(_cleanup())

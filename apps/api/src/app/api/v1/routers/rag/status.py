@@ -16,7 +16,7 @@ from app.repositories.factory import get_async_repository_factory, AsyncReposito
 from app.services.rag_status_manager import RAGStatusManager
 from app.services.status_aggregator import calculate_aggregate_status
 
-from .schemas import StatusGraphResponse, PipelineStage, EmbeddingModel
+from app.schemas.document_status_graph import StatusGraphResponse, PipelineStage, EmbeddingModel
 
 logger = get_logger(__name__)
 
@@ -80,8 +80,15 @@ async def get_status_graph(
                     updated_at=datetime.now(timezone.utc).isoformat()
                 ))
         
+        target_set = set(target_models)
+        # Statuses that indicate real activity (not stale pending nodes)
+        _active_statuses = {'processing', 'completed', 'failed', 'queued'}
+        
         embedding_models = []
         for node in embedding_nodes:
+            # Keep node if it's a target model OR has real activity
+            if node.node_key not in target_set and node.status not in _active_statuses:
+                continue
             embedding_models.append(EmbeddingModel(
                 model=node.node_key,
                 version=node.model_version,
@@ -93,7 +100,7 @@ async def get_status_graph(
                 updated_at=node.updated_at.isoformat()
             ))
         
-        existing_models = {node.node_key for node in embedding_nodes}
+        existing_models = {em.model for em in embedding_models}
         for model in target_models:
             if model not in existing_models:
                 embedding_models.append(EmbeddingModel(
@@ -107,8 +114,13 @@ async def get_status_graph(
                     updated_at=datetime.now(timezone.utc).isoformat()
                 ))
         
+        # Relevant embedding model keys (for index filtering)
+        relevant_embed_keys = {em.model for em in embedding_models}
+        
         index_models: List[EmbeddingModel] = []
         for node in index_nodes:
+            if node.node_key not in relevant_embed_keys and node.status not in _active_statuses:
+                continue
             index_models.append(EmbeddingModel(
                 model=node.node_key,
                 version=node.model_version,
@@ -120,20 +132,20 @@ async def get_status_graph(
                 updated_at=node.updated_at.isoformat()
             ))
         
-        existing_index_models = {node.node_key for node in index_nodes}
-        for emb_node in embedding_nodes:
-            if emb_node.node_key not in existing_index_models:
-                if emb_node.status == 'completed':
-                    index_models.append(EmbeddingModel(
-                        model=emb_node.node_key,
-                        version=emb_node.model_version,
-                        status='pending',
-                        error=None,
-                        metrics=None,
-                        started_at=None,
-                        finished_at=None,
-                        updated_at=datetime.now(timezone.utc).isoformat()
-                    ))
+        existing_index_models = {im.model for im in index_models}
+        # Add placeholder index models for all expected embedding models
+        for emb_model in embedding_models:
+            if emb_model.model not in existing_index_models:
+                index_models.append(EmbeddingModel(
+                    model=emb_model.model,
+                    version=emb_model.version,
+                    status='pending',
+                    error=None,
+                    metrics=None,
+                    started_at=None,
+                    finished_at=None,
+                    updated_at=datetime.now(timezone.utc).isoformat()
+                ))
         
         clean_agg_details = {k: v for k, v in agg_details.items() if k != 'pipeline'}
         

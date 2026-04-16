@@ -25,16 +25,6 @@ export default function GPTLayout() {
           </NavLink>
           {canAccessRag && (
             <NavLink
-              to="/gpt/rag"
-              className={({ isActive }) =>
-                [styles.segBtn, isActive ? styles.active : ''].join(' ')
-              }
-            >
-              База знаний
-            </NavLink>
-          )}
-          {canAccessRag && (
-            <NavLink
               to="/gpt/collections"
               className={({ isActive }) =>
                 [styles.segBtn, isActive ? styles.active : ''].join(' ')
@@ -55,6 +45,8 @@ export default function GPTLayout() {
         variant="default"
         userLabel={user?.role || ''}
         centerContent={centerNav}
+        showSandboxButton={isAdmin}
+        onSandboxClick={() => nav('/sandbox')}
         showAdminButton={isAdmin}
         onAdminClick={() => nav('/admin')}
         showProfileButton

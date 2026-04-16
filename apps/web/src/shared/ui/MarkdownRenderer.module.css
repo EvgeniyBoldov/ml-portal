@@ -2,6 +2,7 @@
   line-height: 1.6;
   color: var(--text);
   /* БЕЗ white-space: pre-wrap - пусть переносами управляет сам Markdown */
+  overflow-wrap: anywhere;
 }
 
 /* Инлайн код */
@@ -16,17 +17,41 @@
 }
 
 /* Блоки кода */
-.preBlock {
-  background: var(--bg-tertiary);
+.codeContainer {
   border: 1px solid var(--border-color);
   border-radius: 0.5em;
-  padding: 1em;
+  overflow: hidden;
   margin: 0.5em 0;
+  background: #1e1e1e;
+}
+
+.codeHeader {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  height: 28px;
+  padding: 0 0.65em;
+  background: #151515;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.75);
+  font-size: 0.75em;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: lowercase;
+}
+
+.preBlock {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 1em;
+  margin: 0;
   overflow-x: auto;
   font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
   font-size: 0.9em;
   line-height: 1.4;
   position: relative;
+  max-width: 100%;
 }
 
 .codeBlock {
@@ -95,6 +120,10 @@
   color: var(--primary-hover);
 }
 
+.fileLink {
+  font-weight: 600;
+}
+
 /* Выделение текста */
 .markdown strong {
   font-weight: bold;
@@ -118,4 +147,33 @@
   padding-left: 1em;
   color: var(--muted);
   font-style: italic;
+}
+
+.tableWrap {
+  width: 100%;
+  overflow-x: auto;
+  margin: 0.75em 0;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 420px;
+}
+
+.tableHead,
+.tableCell {
+  border: 1px solid var(--border-color);
+  padding: 0.5em 0.6em;
+  text-align: left;
+  vertical-align: top;
+}
+
+.tableHead {
+  background: var(--bg-tertiary);
+  font-weight: 600;
+}
+
+.tableCell code {
+  white-space: pre-wrap;
 }

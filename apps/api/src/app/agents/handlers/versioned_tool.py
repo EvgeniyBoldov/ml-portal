@@ -5,14 +5,14 @@ Versioned Tool Base Class
 Каждый инструмент должен наследовать этот класс и определять версии как методы.
 
 Структура версионирования:
-- Класс инструмента определяет tool_slug и tool_group
+- Класс инструмента определяет tool_slug и domains
 - Каждая версия — это метод класса с декоратором @tool_version
 - При старте воркера все версии регистрируются в БД как ToolBackendRelease
 
 Пример:
     class JiraSearchTool(VersionedTool):
         tool_slug = "jira.search"
-        tool_group = "jira"
+        domains = ["jira"]
         name = "Jira Search"
         description = "Search Jira issues"
         
@@ -30,8 +30,8 @@ Versioned Tool Base Class
 """
 from __future__ import annotations
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional, ClassVar, List, Callable, TypeVar, Awaitable
-from dataclasses import dataclass, field
+from typing import Any, Dict, Optional, ClassVar, List, Callable
+from dataclasses import dataclass
 from functools import wraps
 import inspect
 
@@ -122,7 +122,7 @@ class VersionedTool(ABC):
     Абстрактный базовый класс для версионированных инструментов.
     
     Каждый инструмент должен:
-    1. Определить tool_slug, tool_group, name, description
+    1. Определить tool_slug, domains, name, description
     2. Определить версии через методы с декоратором @tool_version
     3. Каждая версия имеет свою input_schema и output_schema
     
@@ -134,11 +134,11 @@ class VersionedTool(ABC):
     
     # Обязательные атрибуты класса
     tool_slug: ClassVar[str]
-    tool_group: ClassVar[str]
     name: ClassVar[str]
     description: ClassVar[str]
     
     # Опциональные атрибуты
+    domains: ClassVar[List[str]] = []  # Business domains this tool serves
     requires_instance: ClassVar[bool] = False  # Требуется ли ToolInstance
     
     def __init__(self):
@@ -272,9 +272,12 @@ class VersionedTool(ABC):
             return {}
         
         return {
-            "name": self.tool_slug,
-            "description": self.description,
-            "parameters": version_info.input_schema
+            "type": "function",
+            "function": {
+                "name": self.tool_slug,
+                "description": self.description,
+                "parameters": version_info.input_schema
+            }
         }
     
     @staticmethod
@@ -317,9 +320,9 @@ class ToolRegistry:
         """Получить все зарегистрированные инструменты"""
         return list(self._tools.values())
     
-    def get_by_group(self, group: str) -> List[VersionedTool]:
-        """Получить инструменты по группе"""
-        return [t for t in self._tools.values() if t.tool_group == group]
+    def get_by_domain(self, domain: str) -> List[VersionedTool]:
+        """Получить инструменты по домену"""
+        return [t for t in self._tools.values() if domain in (t.domains or [])]
     
     def clear(self) -> None:
         """Очистить реестр (для тестов)"""

@@ -79,6 +79,8 @@ class ModelHealthChecker:
     
     def _resolve_base_url(self, model: Model) -> Optional[str]:
         """Resolve base URL from instance or extra_config"""
+        if model.base_url:
+            return model.base_url
         # Try instance url first
         if model.instance and model.instance.url:
             return model.instance.url
@@ -197,9 +199,9 @@ class ModelHealthChecker:
     
     async def _check_embedding(self, model: Model, session: Optional[AsyncSession] = None) -> Tuple[bool, dict]:
         """Check embedding model by sending minimal embed request"""
-        provider = model.provider.lower()
+        connector = (model.connector or "").lower()
         
-        if provider == "local":
+        if connector == "local_emb_http":
             return await self._check_local_embedding(model)
         else:
             return await self._check_openai_embedding(model, session)
@@ -279,25 +281,37 @@ class ModelHealthChecker:
         base_url = self._resolve_base_url(model)
         if not base_url:
             return False, {"error": "No base URL configured (no instance linked)"}
-        
-        url = f"{base_url.rstrip('/')}/rerank"
-        
+
+        candidate_base_urls = [base_url]
+        if "://reranker:" in base_url:
+            candidate_base_urls.append(base_url.replace("://reranker:", "://rerank:"))
+        if self.settings.RERANK_SERVICE_URL:
+            candidate_base_urls.append(self.settings.RERANK_SERVICE_URL)
+        deduped_candidates: list[str] = []
+        for item in candidate_base_urls:
+            if item and item not in deduped_candidates:
+                deduped_candidates.append(item)
+
         payload = {
             "query": "test query",
             "documents": ["test document"],
             "top_k": 1
         }
-        
+
         async with httpx.AsyncClient(timeout=self.timeout) as client:
-            try:
-                response = await client.post(url, json=payload)
-                
+            errors: list[str] = []
+            for candidate in deduped_candidates:
+                url = f"{candidate.rstrip('/')}/rerank"
+                try:
+                    response = await client.post(url, json=payload)
+                except httpx.ConnectError:
+                    errors.append(f"{url}: connect error")
+                    continue
+
                 if response.status_code == 200:
-                    return True, {"status": "ok"}
-                else:
-                    return False, {"error": f"HTTP {response.status_code}"}
-            except httpx.ConnectError:
-                return False, {"error": f"Cannot connect to {base_url}"}
+                    return True, {"status": "ok", "endpoint": candidate}
+                errors.append(f"{url}: HTTP {response.status_code}")
+            return False, {"error": " ; ".join(errors) or f"Cannot connect to {base_url}"}
     
     async def _check_http_endpoint(self, url: str) -> Tuple[bool, dict]:
         """Simple HTTP health check"""

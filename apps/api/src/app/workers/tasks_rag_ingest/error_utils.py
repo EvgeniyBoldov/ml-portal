@@ -15,6 +15,7 @@ async def notify_stage_error(source_id: str, tenant_id: str, stage: str, error: 
     Notify status manager about task failure for a specific stage.
     This helper encapsulates session/redis/publisher setup for reuse across tasks.
     """
+    redis_client = None
     try:
         from app.workers.session_factory import get_worker_session
         from app.core.config import get_settings
@@ -38,12 +39,20 @@ async def notify_stage_error(source_id: str, tenant_id: str, stage: str, error: 
             await session.flush()  # Flush error status
     except Exception as notify_error:
         logger.error(f"notify_stage_error failed for {source_id}:{stage}: {notify_error}")
+    finally:
+        if redis_client:
+            try:
+                await redis_client.close()
+                await redis_client.connection_pool.disconnect()
+            except Exception:
+                pass
 
 
 async def notify_embed_error(source_id: str, tenant_id: str, model_alias: str, error: Exception) -> None:
     """
     Notify about embed error and emit progress snapshot for the model.
     """
+    redis_client = None
     try:
         from app.workers.session_factory import get_worker_session
         from app.core.config import get_settings
@@ -91,3 +100,10 @@ async def notify_embed_error(source_id: str, tenant_id: str, model_alias: str, e
             await session.flush()  # Flush error status
     except Exception as notify_error:
         logger.error(f"notify_embed_error failed for {source_id}:{model_alias}: {notify_error}")
+    finally:
+        if redis_client:
+            try:
+                await redis_client.close()
+                await redis_client.connection_pool.disconnect()
+            except Exception:
+                pass

@@ -126,6 +126,121 @@
   font-size: var(--font-size-sm);
 }
 
+/* Confirmation Banner */
+.confirmationBanner {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  margin: var(--sp-2) var(--sp-5);
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid var(--warning, #f59e0b);
+  border-radius: var(--radius-md);
+  flex-shrink: 0;
+}
+
+.confirmationText {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  font-size: var(--font-size-sm);
+  color: var(--text-primary);
+  line-height: 1.5;
+}
+
+.confirmationActions {
+  display: flex;
+  gap: var(--sp-2);
+  justify-content: flex-end;
+}
+
+.confirmBtn {
+  padding: var(--sp-2) var(--sp-4);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: all 0.15s ease;
+}
+
+.confirmBtnApprove {
+  background: var(--primary);
+  color: white;
+}
+
+.confirmBtnApprove:hover {
+  opacity: 0.9;
+}
+
+.confirmBtnCancel {
+  background: transparent;
+  color: var(--text-secondary);
+  border-color: var(--border-color);
+}
+
+.confirmBtnCancel:hover {
+  background: var(--bg-secondary);
+}
+
+/* Waiting Input Banner */
+.waitingInputBanner {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-4);
+  margin: var(--sp-2) var(--sp-5);
+  background: rgba(59, 130, 246, 0.08);
+  border: 1px solid var(--info, #3b82f6);
+  border-radius: var(--radius-md);
+  flex-shrink: 0;
+}
+
+.waitingInputText {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  font-size: var(--font-size-sm);
+  color: var(--text-primary);
+  line-height: 1.5;
+}
+
+.clarifyBox {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  margin: var(--sp-2) var(--sp-5);
+  background: rgba(59, 130, 246, 0.08);
+  border: 1px solid var(--info, #3b82f6);
+  border-radius: var(--radius-md);
+  flex-shrink: 0;
+}
+
+.clarifyRow {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--sp-2);
+}
+
+.clarifyInput {
+  flex: 1;
+  min-height: 48px;
+  max-height: 140px;
+  resize: vertical;
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-sm);
+  background: var(--panel);
+  color: var(--text-primary);
+}
+
+.clarifyInput:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+
 /* Empty State */
 .emptyContainer {
   display: flex;

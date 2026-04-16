@@ -6,7 +6,7 @@ export interface ActionItem {
   label: string;
   onClick: () => void;
   disabled?: boolean;
-  variant?: 'default' | 'danger';
+  variant?: 'default' | 'danger' | 'outline' | 'primary';
   icon?: React.ReactNode;
 }
 

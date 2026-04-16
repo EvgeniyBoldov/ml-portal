@@ -1,0 +1,130 @@
+# Конфигурация интерфейсов — Huawei NE40E-X8, cr-02.spb (PROD-CORE)
+# Компания "Дубалайн"
+# Дата: 2025-10-20
+# Инженер: Алексей Воронов (Ведущий сетевой инженер, Core Network)
+# Заявка: CHG-2025-1062
+
+#------------------------------------------------------------
+# UPLINK — Провайдер Санкт-Петербург (MegaFon)
+#------------------------------------------------------------
+interface XGigabitEthernet1/0/0
+ description UPLINK :: Provider-MegaFon :: AS31133 :: 10Gbps
+ ip address 46.61.128.2 255.255.255.252
+ ipv6 address 2A02:6B8:FF00::2 64
+ traffic-filter inbound ip-group PROVIDER-IN-ACL
+ traffic-filter outbound ip-group PROVIDER-OUT-ACL
+ undo shutdown
+#
+interface XGigabitEthernet1/0/1
+ description UPLINK :: Provider-Vympelkom-SPB :: AS3216 :: 10Gbps :: BACKUP
+ ip address 93.180.14.6 255.255.255.252
+ traffic-filter inbound ip-group PROVIDER-IN-ACL
+ undo shutdown
+#
+
+#------------------------------------------------------------
+# CORE-TO-CORE ЛИНК SPB-MSK
+#------------------------------------------------------------
+interface XGigabitEthernet1/1/0
+ description CORE-LINK :: cr-01.msk :: PROD-CORE :: 10Gbps :: ISIS
+ mtu 9192
+ ip address 10.0.0.2 255.255.255.252
+ mpls
+ mpls ldp
+ isis enable 1
+ isis circuit-type p2p
+ isis cost 10
+ undo shutdown
+#
+
+#------------------------------------------------------------
+# CORE-TO-CORE ЛИНК SPB-EKB
+#------------------------------------------------------------
+interface XGigabitEthernet1/1/1
+ description CORE-LINK :: cr-03.ekb :: PROD-CORE :: 10Gbps :: ISIS
+ mtu 9192
+ ip address 10.0.0.5 255.255.255.252
+ mpls
+ mpls ldp
+ isis enable 1
+ isis circuit-type p2p
+ isis cost 10
+ undo shutdown
+#
+
+#------------------------------------------------------------
+# ЛИНК В ЦОД SPB (PROD-DC2)
+#------------------------------------------------------------
+interface XGigabitEthernet2/0/0
+ description DC-LINK :: dc2-core-01.spb :: PROD-DC2 :: 10Gbps
+ mtu 9192
+ ip address 10.0.1.9 255.255.255.252
+ mpls
+ undo shutdown
+#
+
+#------------------------------------------------------------
+# LAG К PROD-DC2 (2x10G)
+#------------------------------------------------------------
+interface Eth-Trunk0
+ description LAG :: dc2-core-01.spb :: PROD-DC2 :: 2x10Gbps LACP
+ mode lacp-static
+ max active-linknumber 2
+ ip address 10.0.2.9 255.255.255.252
+ mpls
+ undo shutdown
+#
+interface XGigabitEthernet2/0/1
+ description LAG-MEMBER :: Eth-Trunk0 :: dc2-core-01.spb
+ eth-trunk 0
+ undo shutdown
+#
+interface XGigabitEthernet2/0/2
+ description LAG-MEMBER :: Eth-Trunk0 :: dc2-core-01.spb
+ eth-trunk 0
+ undo shutdown
+#
+
+#------------------------------------------------------------
+# LOOPBACK
+#------------------------------------------------------------
+interface LoopBack0
+ description LOOPBACK :: cr-02.spb :: PROD-CORE
+ ip address 10.255.0.2 255.255.255.255
+ isis enable 1
+#
+
+#------------------------------------------------------------
+# MANAGEMENT (OOB)
+#------------------------------------------------------------
+interface MEth0/0/0
+ description MGMT :: PROD-MGMT :: OOB
+ ip address 192.168.100.2 255.255.255.0
+ undo shutdown
+#
+
+#------------------------------------------------------------
+# ЛИНК В DMZ SPB
+#------------------------------------------------------------
+interface XGigabitEthernet3/0/0
+ description DMZ-LINK :: fw-dmz-01.spb :: PROD-DMZ :: 1Gbps
+ ip address 10.0.3.9 255.255.255.252
+ traffic-filter inbound ip-group DMZ-IN-ACL
+ traffic-filter outbound ip-group DMZ-OUT-ACL
+ undo shutdown
+#
+
+#------------------------------------------------------------
+# ACL
+#------------------------------------------------------------
+acl name PROVIDER-IN-ACL basic
+ rule 5 deny source 10.0.0.0 0.255.255.255
+ rule 10 deny source 172.16.0.0 0.15.255.255
+ rule 15 deny source 192.168.0.0 0.0.255.255
+ rule 100 permit
+#
+acl name PROVIDER-OUT-ACL basic
+ rule 5 permit source 46.61.128.0 0.0.0.255
+ rule 10 permit source 93.180.14.0 0.0.0.255
+ rule 100 deny
+#

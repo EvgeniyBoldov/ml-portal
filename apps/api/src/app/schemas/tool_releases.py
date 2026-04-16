@@ -4,7 +4,7 @@ Schemas for Tool Releases API
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 from uuid import UUID
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict, model_validator
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -50,31 +50,85 @@ class ToolBackendReleaseListItem(BaseModel):
 # TOOL RELEASE (CRUD, for agents)
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _normalize_text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _normalize_str_list(value: Any) -> list[str]:
+    if isinstance(value, list):
+        raw_items = value
+    elif isinstance(value, str):
+        raw_items = value.splitlines()
+    else:
+        raw_items = []
+
+    result: list[str] = []
+    for item in raw_items:
+        normalized = _normalize_text(item)
+        if normalized and normalized not in result:
+            result.append(normalized)
+    return result
+
+
+class ToolSemanticProfileSchema(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    summary: str = ""
+    when_to_use: str = ""
+    limitations: str = ""
+    examples: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize(cls, value: Any) -> Any:
+        payload = value if isinstance(value, dict) else {}
+        return {
+            "summary": _normalize_text(payload.get("summary") or payload.get("description")),
+            "when_to_use": _normalize_text(payload.get("when_to_use")),
+            "limitations": _normalize_text(payload.get("limitations")),
+            "examples": _normalize_str_list(payload.get("examples")),
+        }
+
+
+class ToolPolicyHintsSchema(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    dos: list[str] = Field(default_factory=list)
+    donts: list[str] = Field(default_factory=list)
+    guardrails: list[str] = Field(default_factory=list)
+    sensitive_inputs: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize(cls, value: Any) -> Any:
+        payload = value if isinstance(value, dict) else {}
+        return {
+            "dos": _normalize_str_list(payload.get("dos")),
+            "donts": _normalize_str_list(payload.get("donts")),
+            "guardrails": _normalize_str_list(payload.get("guardrails")),
+            "sensitive_inputs": _normalize_str_list(payload.get("sensitive_inputs")),
+        }
+
+
 class ToolReleaseCreate(BaseModel):
     """Create tool release request"""
-    backend_release_id: UUID = Field(..., description="Backend release to use")
+    backend_release_id: Optional[UUID] = Field(None, description="Backend release to use (optional for draft)")
     from_release_id: Optional[UUID] = Field(None, description="Parent release to inherit meta-fields from")
-    config: Dict[str, Any] = Field(default_factory=dict, description="Additional configuration")
-    description_for_llm: Optional[str] = Field(None, description="Description for LLM")
-    category: Optional[str] = Field(None, description="Tool category")
-    tags: List[str] = Field(default_factory=list, description="Tags for search")
-    field_hints: Dict[str, str] = Field(default_factory=dict, description="Field hints")
-    examples: List[Dict[str, Any]] = Field(default_factory=list, description="Usage examples")
-    return_summary: Optional[str] = Field(None, description="Return value summary")
-    notes: Optional[str] = Field(None, description="Release notes")
+    semantic_profile: Optional[ToolSemanticProfileSchema] = Field(
+        default=None,
+        description="Human-readable profile for LLM usage",
+    )
+    policy_hints: Optional[ToolPolicyHintsSchema] = Field(
+        default=None,
+        description="Safety and usage hints",
+    )
 
 
 class ToolReleaseUpdate(BaseModel):
     """Update tool release request (only draft)"""
     backend_release_id: Optional[UUID] = Field(None, description="Backend release to use")
-    config: Optional[Dict[str, Any]] = Field(None, description="Additional configuration")
-    description_for_llm: Optional[str] = Field(None, description="Description for LLM")
-    category: Optional[str] = Field(None, description="Tool category")
-    tags: Optional[List[str]] = Field(None, description="Tags for search")
-    field_hints: Optional[Dict[str, str]] = Field(None, description="Field hints")
-    examples: Optional[List[Dict[str, Any]]] = Field(None, description="Usage examples")
-    return_summary: Optional[str] = Field(None, description="Return value summary")
-    notes: Optional[str] = Field(None, description="Release notes")
+    semantic_profile: Optional[ToolSemanticProfileSchema] = None
+    policy_hints: Optional[ToolPolicyHintsSchema] = None
 
 
 class ToolReleaseResponse(BaseModel):
@@ -82,22 +136,17 @@ class ToolReleaseResponse(BaseModel):
     id: UUID
     tool_id: UUID
     version: int
-    backend_release_id: UUID
+    backend_release_id: Optional[UUID] = None
     status: str
-    config: Dict[str, Any]
-    description_for_llm: Optional[str] = None
-    category: Optional[str] = None
-    tags: List[str] = []
-    field_hints: Dict[str, str] = {}
-    examples: List[Dict[str, Any]] = []
-    return_summary: Optional[str] = None
+    semantic_profile: dict[str, Any] = Field(default_factory=dict)
+    policy_hints: dict[str, Any] = Field(default_factory=dict)
+    # Meta
     meta_hash: Optional[str] = None
     expected_schema_hash: Optional[str] = None
     parent_release_id: Optional[UUID] = None
-    notes: Optional[str] = None
     created_at: datetime
     updated_at: datetime
-    
+
     # Nested backend release info (full, with schemas)
     backend_release: Optional["ToolBackendReleaseResponse"] = None
 
@@ -110,76 +159,15 @@ class ToolReleaseListItem(BaseModel):
     id: UUID
     version: int
     status: str
-    backend_release_id: UUID
-    backend_version: Optional[str] = None  # From backend_release.version
+    backend_release_id: Optional[UUID] = None
+    backend_version: Optional[str] = None
     expected_schema_hash: Optional[str] = None
     parent_release_id: Optional[UUID] = None
-    category: Optional[str] = None
-    tags: List[str] = []
-    notes: Optional[str] = None
     created_at: datetime
 
     class Config:
         from_attributes = True
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# TOOL (with releases)
-# ─────────────────────────────────────────────────────────────────────────────
-
-class ToolResponse(BaseModel):
-    """Tool response (v2 container)"""
-    id: UUID
-    slug: str
-    name: str
-    kind: str
-    tags: Optional[List[str]] = None
-    tool_group_id: UUID
-    current_version_id: Optional[UUID] = None
-    created_at: datetime
-
-    class Config:
-        from_attributes = True
-
-
-class ToolDetailResponse(BaseModel):
-    """Tool detail response with releases (v2)"""
-    id: UUID
-    slug: str
-    name: str
-    kind: str
-    tags: Optional[List[str]] = None
-    tool_group_id: UUID
-    tool_group_slug: Optional[str] = None
-    current_version_id: Optional[UUID] = None
-    created_at: datetime
-
-    backend_releases: List[ToolBackendReleaseListItem] = []
-    releases: List[ToolReleaseListItem] = []
-    current_version: Optional[ToolReleaseResponse] = None
-
-    class Config:
-        from_attributes = True
-
-
-class ToolListItem(BaseModel):
-    """Tool list item (v2)"""
-    id: UUID
-    slug: str
-    name: str
-    kind: str
-    tags: Optional[List[str]] = None
-    backend_releases_count: int = 0
-    releases_count: int = 0
-    has_current_version: bool = False
-
-    class Config:
-        from_attributes = True
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# TOOL GROUP (with tools)
-# ─────────────────────────────────────────────────────────────────────────────
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SCHEMA DIFF
@@ -205,60 +193,3 @@ class SchemaDiffResponse(BaseModel):
     added_fields: List[SchemaDiffField] = []
     removed_fields: List[SchemaDiffField] = []
     changed_fields: List[SchemaDiffChangedField] = []
-
-
-class ToolGroupCreate(BaseModel):
-    slug: str = Field(..., min_length=1, max_length=50)
-    name: str = Field(..., min_length=1, max_length=255)
-    description: Optional[str] = None
-    type: Optional[str] = None
-    description_for_router: Optional[str] = None
-
-
-class ToolGroupUpdate(BaseModel):
-    name: Optional[str] = Field(None, min_length=1, max_length=255)
-    description: Optional[str] = None
-    type: Optional[str] = None
-    description_for_router: Optional[str] = None
-
-
-class ToolGroupResponse(BaseModel):
-    id: UUID
-    slug: str
-    name: str
-    description: Optional[str] = None
-    type: Optional[str] = None
-    description_for_router: Optional[str] = None
-    created_at: datetime
-
-    class Config:
-        from_attributes = True
-
-
-class ToolGroupDetailResponse(BaseModel):
-    id: UUID
-    slug: str
-    name: str
-    description: Optional[str] = None
-    type: Optional[str] = None
-    description_for_router: Optional[str] = None
-    created_at: datetime
-
-    tools: List[ToolListItem] = []
-    instances_count: int = 0
-
-    class Config:
-        from_attributes = True
-
-
-class ToolGroupListItem(BaseModel):
-    id: UUID
-    slug: str
-    name: str
-    description: Optional[str] = None
-    type: Optional[str] = None
-    tools_count: int = 0
-    instances_count: int = 0
-
-    class Config:
-        from_attributes = True

@@ -27,6 +27,7 @@ class Chats(Base):
     
     # Relationships
     messages = relationship("ChatMessages", back_populates="chat", cascade="all, delete-orphan")
+    summaries = relationship("ChatSummary", back_populates="chat", cascade="all, delete-orphan")
     
     __table_args__ = (
         Index("ix_chats_tenant_id", "tenant_id"),

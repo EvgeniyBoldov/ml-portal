@@ -5,7 +5,6 @@
  *   <EntityPageV2>
  *     <Tab title="Обзор" layout="grid" actions={[...]}>
  *       <EntityInfoBlock />
- *       <ShortEntityBlock />
  *     </Tab>
  *     <Tab title="Версии" layout="full" actions={[...]}>
  *       <VersionsBlock />
@@ -13,14 +12,13 @@
  *   </EntityPageV2>
  * 
  * Header renders action buttons from the ACTIVE tab.
- * Tabs use existing styles from EntityTabsPage.module.css.
  */
 import React, { useState, Children, isValidElement } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Button from '../Button';
 import { Breadcrumbs, type BreadcrumbItem } from '../Breadcrumbs';
+import { GridLayout } from '../GridLayout';
 import pageStyles from './EntityPage.module.css';
-import tabStyles from '../EntityTabsPage/EntityTabsPage.module.css';
 
 export type EntityPageMode = 'view' | 'edit' | 'create';
 export type { BreadcrumbItem };
@@ -189,17 +187,17 @@ export function EntityPageV2({
     const visibleTabs = tabs.filter(t => !t.hidden);
 
     return (
-      <div className={tabStyles.tabsSection}>
+      <div className={pageStyles.tabsSection}>
         {visibleTabs.map(tab => (
           <button
             key={tab.id}
-            className={`${tabStyles.tab} ${tab.id === activeTabId ? tabStyles.active : ''}`}
+            className={`${pageStyles.tab} ${tab.id === activeTabId ? pageStyles.active : ''}`}
             onClick={() => setActiveTabId(tab.id!)}
             type="button"
           >
             {tab.title}
             {tab.badge !== undefined && (
-              <span className={tabStyles.tabCount}>{tab.badge}</span>
+              <span className={pageStyles.tabCount}>{tab.badge}</span>
             )}
           </button>
         ))}
@@ -216,26 +214,23 @@ export function EntityPageV2({
     switch (layout) {
       case 'grid':
         return (
-          <div className={tabStyles.overviewTab}>
-            <div 
-              className={tabStyles.splitLayout}
-              style={activeTab.gridColumns ? { gridTemplateColumns: activeTab.gridColumns } : undefined}
-            >
+          <div className={pageStyles.overviewTab}>
+            <GridLayout>
               {activeTab.children}
-            </div>
+            </GridLayout>
           </div>
         );
 
       case 'full':
         return (
-          <div className={tabStyles.versionsTab}>
+          <div className={pageStyles.versionsTab}>
             {activeTab.children}
           </div>
         );
 
       case 'single':
         return (
-          <div className={tabStyles.createTab}>
+          <div className={pageStyles.createTab}>
             {activeTab.children}
           </div>
         );
@@ -277,7 +272,7 @@ export function EntityPageV2({
       {renderTabsBar()}
 
       {/* Content */}
-      <div className={tabStyles.tabContent}>
+      <div className={pageStyles.tabContent}>
         {loading ? (
           <div className={pageStyles.loading}>Загрузка...</div>
         ) : (

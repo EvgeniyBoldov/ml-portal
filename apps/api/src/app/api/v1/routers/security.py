@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Response, Request
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.api.deps import db_session, get_current_user
+from app.api.deps import db_session, get_current_user, rate_limit_dependency
 from app.repositories.users_repo import AsyncUsersRepository
 from app.services.users_service import AsyncUsersService
 from app.core.security import create_access_token, create_refresh_token, decode_jwt, UserCtx
@@ -30,7 +30,12 @@ class LoginResponse(BaseModel):
     user: UserResponse
 
 @router.post("/login", response_model=LoginResponse, tags=["auth"])
-async def login(payload: LoginRequest, response: Response, session: AsyncSession = Depends(db_session)):
+async def login(
+    payload: LoginRequest,
+    response: Response,
+    session: AsyncSession = Depends(db_session),
+    _rl: None = Depends(rate_limit_dependency(key_prefix="auth_login", rpm=30, rph=600)),
+):
     service = AsyncUsersService(AsyncUsersRepository(session))
     user = await service.authenticate_user(payload.login, payload.password)
     if not user:
@@ -121,13 +126,21 @@ async def refresh(request: Request, response: Response, session: AsyncSession = 
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="User not found"
             )
+
+        # Load tenant mapping from DB (same source as login).
+        from sqlalchemy import text
+        tenant_rows = await session.execute(
+            text("SELECT tenant_id FROM user_tenants WHERE user_id = :user_id"),
+            {"user_id": user.id},
+        )
+        tenant_ids = [str(row[0]) for row in tenant_rows.fetchall()]
         
         # Create new access token
         access_token = create_access_token(
             user_id=str(user.id),
             email=user.email,
             role=user.role or "reader",
-            tenant_ids=getattr(user, "tenant_ids", []) or [],
+            tenant_ids=tenant_ids,
             scopes=getattr(user, "scopes", []) or []
         )
         

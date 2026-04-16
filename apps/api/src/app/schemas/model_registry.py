@@ -36,13 +36,25 @@ class HealthStatusEnum(str, Enum):
     UNAVAILABLE = "unavailable"
 
 
+class ModelConnectorEnum(str, Enum):
+    """Model connector kind"""
+    OPENAI_HTTP = "openai_http"
+    AZURE_OPENAI_HTTP = "azure_openai_http"
+    LOCAL_EMB_HTTP = "local_emb_http"
+    LOCAL_RERANK_HTTP = "local_rerank_http"
+    LOCAL_LLM_HTTP = "local_llm_http"
+    GRPC = "grpc"
+
+
 class ModelBase(BaseModel):
     """Base model schema"""
     alias: str = Field(..., min_length=1, max_length=100, description="Unique identifier (e.g. llm.chat.default)")
     name: str = Field(..., min_length=1, max_length=255, description="Human-readable name")
     type: ModelTypeEnum = Field(..., description="Model type")
-    provider: str = Field(..., min_length=1, max_length=50, description="Provider (openai, groq, local, etc.)")
+    provider: str = Field(default="", max_length=50, description="Deprecated provider label")
+    connector: ModelConnectorEnum = Field(..., description="Connection driver")
     provider_model_name: str = Field(..., min_length=1, max_length=255, description="Model name at provider")
+    base_url: Optional[str] = Field(None, max_length=500, description="Direct endpoint URL for local or standalone model connectors")
     instance_id: Optional[str] = Field(None, description="FK to tool_instances (provider connection)")
     extra_config: Optional[Dict[str, Any]] = Field(None, description="Provider-specific config (JSON)")
     status: ModelStatusEnum = Field(default=ModelStatusEnum.AVAILABLE, description="Availability status")
@@ -54,6 +66,15 @@ class ModelBase(BaseModel):
 
     model_config = ConfigDict(use_enum_values=True)
 
+    @field_validator("base_url")
+    @classmethod
+    def validate_base_url_for_local_connector(cls, value: Optional[str], info):
+        connector = info.data.get("connector")
+        instance_id = info.data.get("instance_id")
+        if connector and str(connector).startswith("local_") and not value and not instance_id:
+            raise ValueError("Local connectors require instance_id or base_url")
+        return value
+
 
 class ModelCreate(ModelBase):
     """Schema for creating a new model"""
@@ -63,7 +84,7 @@ class ModelCreate(ModelBase):
 class ModelUpdate(BaseModel):
     """Schema for updating a model"""
     name: Optional[str] = Field(None, min_length=1, max_length=255)
-    provider: Optional[str] = Field(None, min_length=1, max_length=50)
+    provider: Optional[str] = Field(None, max_length=50)
     provider_model_name: Optional[str] = Field(None, min_length=1, max_length=255)
     instance_id: Optional[str] = Field(None, description="FK to tool_instances")
     extra_config: Optional[Dict[str, Any]] = None
@@ -72,6 +93,8 @@ class ModelUpdate(BaseModel):
     default_for_type: Optional[bool] = None
     model_version: Optional[str] = Field(None, max_length=50)
     description: Optional[str] = None
+    connector: Optional[ModelConnectorEnum] = None
+    base_url: Optional[str] = Field(None, max_length=500)
 
     model_config = ConfigDict(use_enum_values=True)
 

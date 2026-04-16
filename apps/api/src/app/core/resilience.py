@@ -3,6 +3,7 @@ import asyncio
 import time
 from typing import Any, Callable, Dict, Optional, TypeVar
 from enum import Enum
+from app.core.exceptions import CircuitBreakerOpen as CircuitBreakerOpenError
 from app.core.logging import get_logger
 from app.core.config import get_settings
 
@@ -91,9 +92,6 @@ class CircuitBreaker:
             self.record_failure()
             raise
 
-class CircuitBreakerOpenError(Exception):
-    """Raised when circuit breaker is open"""
-    pass
 
 class RetryConfig:
     """Configuration for retry logic"""

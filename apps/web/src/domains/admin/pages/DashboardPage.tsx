@@ -1,9 +1,10 @@
 import React from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { adminApi } from '@shared/api/admin';
-import { qk } from '@shared/api/keys';
+import { adminApi } from '@/shared/api/admin';
+import { qk } from '@/shared/api/keys';
 import { StatCard } from '../components';
-import { AdminPage, EntityCard, QuickAction, QuickActionGrid, Badge, Button } from '@/shared/ui';
+import { EntityPageV2, Tab } from '@/shared/ui/EntityPage';
+import { EntityCard, QuickAction, QuickActionGrid, Badge, Button } from '@/shared/ui';
 import styles from './DashboardPage.module.css';
 
 export function DashboardPage() {
@@ -29,17 +30,14 @@ export function DashboardPage() {
   const activeModels = models?.items?.filter(m => m.enabled).length || 0;
 
   return (
-    <AdminPage
-      title="Дашборд" 
-      subtitle="Обзор системы"
-      actions={[
-        {
-          label: 'Обновить',
-          onClick: () => window.location.reload(),
-          variant: 'outline',
-        }
-      ]}
+    <EntityPageV2
+      title="Дашборд"
+      mode="view"
+      actionButtons={
+        <Button variant="outline" onClick={() => window.location.reload()}>Обновить</Button>
+      }
     >
+      <Tab title="Обзор" layout="custom">
       <div className={styles.content}>
         <section className={styles.stats}>
           <StatCard
@@ -92,7 +90,7 @@ export function DashboardPage() {
 
           <EntityCard
             title="Модели"
-            actions={<Button variant="outline" size="small" onClick={() => window.location.href = '/admin/models'}>Все модели</Button>}
+            actions={<Button variant="outline" size="small" onClick={() => window.location.href = '/admin/platform/models'}>Все модели</Button>}
           >
             {models?.items?.slice(0, 5).map(model => (
               <EntityCard.Item
@@ -141,13 +139,14 @@ export function DashboardPage() {
             <QuickActionGrid>
               <QuickAction icon="👤" label="Новый пользователь" href="/admin/users/new" />
               <QuickAction icon="🏢" label="Новый тенант" href="/admin/tenants/new" />
-              <QuickAction icon="🤖" label="Новая модель" href="/admin/models/new" />
+              <QuickAction icon="🤖" label="Новая модель" href="/admin/platform/models/new" />
               <QuickAction icon="🕵️" label="Новый агент" href="/admin/agents/new" />
             </QuickActionGrid>
           </EntityCard>
         </div>
       </div>
-    </AdminPage>
+      </Tab>
+    </EntityPageV2>
   );
 }
 

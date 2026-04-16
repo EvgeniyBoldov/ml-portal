@@ -4,6 +4,7 @@
 from __future__ import annotations
 import time
 from dataclasses import dataclass, field
+from dataclasses import fields as dataclass_fields
 from typing import Any, Dict, List, Optional
 from datetime import datetime, timezone
 import uuid
@@ -42,7 +43,7 @@ class ToolLogger:
 
     Usage inside a ToolHandler:
         async def execute(self, ctx: ToolContext, args: Dict) -> ToolResult:
-            log = ctx.tool_logger("rag.search")
+            log = ctx.tool_logger("collection.search")
             log.info("Starting search", query=args["query"])
 
             try:
@@ -105,36 +106,119 @@ class ToolLogger:
 # TOOL CONTEXT
 # ─────────────────────────────────────────────────────────────────────────────
 
+
+@dataclass
+class RuntimeDependencies:
+    """Typed runtime dependencies passed through ToolContext."""
+
+    session_factory: Any = None
+    operation_executor: Any = None
+    execution_graph: Any = None
+    sandbox_overrides: Dict[str, Any] = field(default_factory=dict)
+    helper_summary: Optional[Dict[str, Any]] = None
+    execution_outline: Optional[Dict[str, Any]] = None
+    runtime_trace_logger: Any = None
+
+
 @dataclass
 class ToolContext:
     """
     Контекст, передаваемый в каждый tool при выполнении.
     Содержит информацию о tenant, user, chat и RBAC scopes.
     """
-    tenant_id: str
-    user_id: str
+    tenant_id: uuid.UUID
+    user_id: uuid.UUID
     request_id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    chat_id: Optional[str] = None
+    chat_id: Optional[uuid.UUID] = None
     scopes: List[str] = field(default_factory=list)
     denied_tools: List[str] = field(default_factory=list)
     denied_reasons: Dict[str, str] = field(default_factory=dict)
     extra: Dict[str, Any] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        self.tenant_id = self._to_uuid(self.tenant_id, "tenant_id")
+        self.user_id = self._to_uuid(self.user_id, "user_id")
+        if self.chat_id is not None:
+            self.chat_id = self._to_uuid(self.chat_id, "chat_id")
+
+    @staticmethod
+    def _to_uuid(value: Any, field_name: str) -> uuid.UUID:
+        if isinstance(value, uuid.UUID):
+            return value
+        try:
+            return uuid.UUID(str(value))
+        except Exception:
+            # Backward-compat: legacy code may still pass non-UUID identifiers.
+            return uuid.uuid5(uuid.NAMESPACE_URL, f"{field_name}:{value}")
+
     def tool_logger(self, tool_slug: str) -> ToolLogger:
         """Create a ToolLogger scoped to a specific tool execution."""
         return ToolLogger(tool_slug)
+
+    def get_runtime_deps(self) -> RuntimeDependencies:
+        raw = self.extra.get("runtime_deps")
+        if isinstance(raw, RuntimeDependencies):
+            return raw
+        if isinstance(raw, dict):
+            allowed = {item.name for item in dataclass_fields(RuntimeDependencies)}
+            normalized = {key: value for key, value in raw.items() if key in allowed}
+            deps = RuntimeDependencies(**normalized)
+        else:
+            deps = RuntimeDependencies()
+
+        # Backward-compatible hydration from legacy extra keys.
+        deps.session_factory = deps.session_factory or self.extra.get("session_factory")
+        deps.operation_executor = deps.operation_executor or self.extra.get("operation_executor")
+        deps.execution_graph = deps.execution_graph or self.extra.get("execution_graph")
+        deps.sandbox_overrides = deps.sandbox_overrides or dict(self.extra.get("sandbox_overrides") or {})
+        if deps.helper_summary is None:
+            helper_summary = self.extra.get("helper_summary")
+            deps.helper_summary = helper_summary if isinstance(helper_summary, dict) else None
+        if deps.execution_outline is None:
+            execution_outline = self.extra.get("execution_outline")
+            deps.execution_outline = execution_outline if isinstance(execution_outline, dict) else None
+        deps.runtime_trace_logger = deps.runtime_trace_logger or self.extra.get("runtime_trace_logger")
+        self.set_runtime_deps(deps)
+        return deps
+
+    def set_runtime_deps(self, deps: RuntimeDependencies) -> None:
+        self.extra["runtime_deps"] = deps
+        # Keep legacy aliases for compatibility until full cleanup.
+        self.extra["session_factory"] = deps.session_factory
+        self.extra["operation_executor"] = deps.operation_executor
+        self.extra["execution_graph"] = deps.execution_graph
+        self.extra["sandbox_overrides"] = deps.sandbox_overrides
+        if deps.helper_summary is not None:
+            self.extra["helper_summary"] = deps.helper_summary
+        if deps.execution_outline is not None:
+            self.extra["execution_outline"] = deps.execution_outline
+        if deps.runtime_trace_logger is not None:
+            self.extra["runtime_trace_logger"] = deps.runtime_trace_logger
+
+    def with_runtime_deps(self, **kwargs: Any) -> ToolContext:
+        deps = self.get_runtime_deps()
+        for key, value in kwargs.items():
+            if hasattr(deps, key):
+                setattr(deps, key, value)
+        self.set_runtime_deps(deps)
+        return self
     
     def with_extra(self, **kwargs) -> ToolContext:
         """Создать копию контекста с дополнительными данными"""
         new_extra = {**self.extra, **kwargs}
-        return ToolContext(
+        ctx = ToolContext(
             tenant_id=self.tenant_id,
             user_id=self.user_id,
             request_id=self.request_id,
             chat_id=self.chat_id,
             scopes=self.scopes.copy(),
+            denied_tools=self.denied_tools.copy(),
+            denied_reasons=self.denied_reasons.copy(),
             extra=new_extra
         )
+        # Re-hydrate runtime deps to preserve typed view.
+        ctx.get_runtime_deps()
+        return ctx
 
 
 @dataclass
@@ -170,67 +254,18 @@ class ToolResult:
 
 
 @dataclass
-class ToolCall:
+class OperationCall:
     """
-    Запрос на вызов tool от LLM.
+    Запрос на вызов operation от LLM.
     """
     id: str
-    tool_slug: str
+    operation_slug: str
     arguments: Dict[str, Any]
-    
+
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> ToolCall:
+    def from_dict(cls, data: Dict[str, Any]) -> OperationCall:
         return cls(
             id=data.get("id", str(uuid.uuid4())),
-            tool_slug=data["tool"],
+            operation_slug=data["operation"],
             arguments=data.get("arguments", {})
         )
-
-
-@dataclass
-class RunStep:
-    """
-    Один шаг выполнения агента (для трейсинга и персистентности).
-    """
-    step_id: str
-    step_type: str  # "llm_request", "tool_call", "tool_result", "final"
-    timestamp: datetime
-    data: Dict[str, Any]
-    
-    @classmethod
-    def create(cls, step_type: str, data: Dict[str, Any]) -> RunStep:
-        return cls(
-            step_id=str(uuid.uuid4()),
-            step_type=step_type,
-            timestamp=datetime.now(timezone.utc),
-            data=data
-        )
-
-
-@dataclass
-class RunContext:
-    """
-    Контекст выполнения агента (in-memory state).
-    Может быть расширен для персистентности (RunStore).
-    """
-    run_id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    messages: List[Dict[str, Any]] = field(default_factory=list)
-    steps: List[RunStep] = field(default_factory=list)
-    tool_calls_count: int = 0
-    started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    
-    def add_message(self, role: str, content: str, **extra) -> None:
-        """Добавить сообщение в историю"""
-        msg = {"role": role, "content": content, **extra}
-        self.messages.append(msg)
-    
-    def add_step(self, step_type: str, data: Dict[str, Any]) -> RunStep:
-        """Добавить шаг выполнения"""
-        step = RunStep.create(step_type, data)
-        self.steps.append(step)
-        return step
-    
-    def increment_tool_calls(self) -> int:
-        """Увеличить счётчик вызовов tools"""
-        self.tool_calls_count += 1
-        return self.tool_calls_count

@@ -1,0 +1,26 @@
+.indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+}
+
+.icon {
+  display: block;
+}
+
+.healthy {
+  color: var(--success-color, #16a34a);
+}
+
+.unhealthy {
+  color: var(--danger-color, #dc2626);
+}
+
+.unknown {
+  color: var(--warning-color, #d97706);
+}
+
+.inactive {
+  color: var(--text-secondary);
+}

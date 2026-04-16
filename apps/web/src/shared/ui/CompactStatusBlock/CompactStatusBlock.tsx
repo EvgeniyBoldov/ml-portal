@@ -1,8 +1,8 @@
 /**
  * CompactStatusBlock - Status display without header
  * 
- * Like ToolsGroup status - label and value inline
- * Used in ToolGroup and other compact status displays
+ * Like a compact entity status block - label and value inline.
+ * Used in tool, agent and other compact status displays.
  */
 import React from 'react';
 import Badge from '../Badge';

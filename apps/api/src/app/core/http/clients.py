@@ -57,12 +57,19 @@ class HTTPEmbClient:
         self._client = httpx.AsyncClient(base_url=base_url, timeout=timeout)
         self._retries = max_retries
         self._breaker = breaker
+        settings = get_settings()
+        self._default_model = settings.EMB_MODEL_ALIAS or "all-MiniLM-L6-v2"
 
     async def embed_texts(self, texts: list[str], model: str = "default") -> list[list[float]]:
-        return await self._post_json("/embed/texts", {"texts": texts, "model": model})
+        resolved_model = self._default_model if not model or model == "default" else model
+        payload = {"texts": texts, "model": resolved_model}
+        # Primary endpoint in emb service.
+        data = await self._post_json("/embed/batch", payload)
+        return data.get("vectors", [])
 
     async def embed_query(self, query: str, model: str = "default") -> list[float]:
-        data = await self._post_json("/embed/query", {"query": query, "model": model})
+        resolved_model = self._default_model if not model or model == "default" else model
+        data = await self._post_json("/embed/query", {"query": query, "model": resolved_model})
         return data.get("vector", [])
 
     async def _post_json(self, path: str, payload: dict) -> dict:

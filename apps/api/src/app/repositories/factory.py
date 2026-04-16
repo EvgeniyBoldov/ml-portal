@@ -4,7 +4,8 @@ Repository factory with tenant isolation and dependency injection
 from __future__ import annotations
 from typing import Optional, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession
-from fastapi import Depends
+from fastapi import Depends, HTTPException
+from sqlalchemy import select
 import uuid
 
 from app.repositories.base import AsyncTenantRepository
@@ -18,6 +19,8 @@ from app.repositories.tenants_repo import AsyncTenantsRepository
 from app.api.deps import db_uow, get_current_user
 from app.core.security import UserCtx
 from app.core.logging import get_logger
+from app.core.config import is_local
+from app.models.tenant import UserTenants, Tenants
 
 logger = get_logger(__name__)
 
@@ -182,34 +185,63 @@ class AsyncRepositoryFactory:
 
 
 # Dependency injection functions
-def get_async_repository_factory(
+async def get_async_repository_factory(
     session: AsyncSession = Depends(db_uow),
     user: UserCtx = Depends(get_current_user)
 ) -> AsyncRepositoryFactory:
     """Get async repository factory with tenant isolation from current user"""
     # Extract tenant_id from user context - CRITICAL: no defaults in production
-    tenant_id = _extract_tenant_id_from_user(user)
+    tenant_id = await _extract_tenant_id_from_user(session, user)
     
     return AsyncRepositoryFactory(session, tenant_id, user.id)
 
 
-def _extract_tenant_id_from_user(user: UserCtx) -> uuid.UUID:
+async def _extract_tenant_id_from_user(session: AsyncSession, user: UserCtx) -> uuid.UUID:
     """Extract tenant_id from user context with validation"""
-    from app.core.config import is_local, get_settings
-    
-    # Check if user has tenant_ids list
-    if user.tenant_ids and len(user.tenant_ids) > 0:
+    # 1) Try tenant IDs from token first.
+    for raw_tenant_id in (user.tenant_ids or []):
         try:
-            return uuid.UUID(user.tenant_ids[0])  # Use first tenant
-        except ValueError:
-            raise ValueError(f"Invalid tenant_id format: {user.tenant_ids[0]}")
-    
-    # CRITICAL: In non-local environments, users MUST have tenant_ids
-    if not is_local():
-        raise ValueError(f"User {user.id} has no tenant_ids. This is not allowed in {get_settings().ENV} environment.")
-    
-    # For local development only - this should not happen if _ensure_default_admin works correctly
-    logger.warning(f"User {user.id} has no valid tenant_id. User should be linked to a tenant.")
-    raise ValueError(f"User {user.id} has no tenant_ids. Please re-login to refresh your token.")
+            return uuid.UUID(str(raw_tenant_id))
+        except (TypeError, ValueError):
+            continue
 
+    # 2) Fallback: load tenant mapping from DB (handles stale JWT without tenant_ids).
+    try:
+        user_id = uuid.UUID(str(user.id))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=401, detail="Invalid user id in token")
+
+    tenant_result = await session.execute(
+        select(UserTenants.tenant_id)
+        .where(UserTenants.user_id == user_id)
+        .order_by(UserTenants.is_default.desc())
+        .limit(1)
+    )
+    mapped_tenant_id = tenant_result.scalar_one_or_none()
+    if mapped_tenant_id:
+        user.tenant_ids = [str(mapped_tenant_id)]
+        return mapped_tenant_id
+
+    # 3) Local/dev fallback only: pick first active tenant.
+    if is_local():
+        fallback_result = await session.execute(
+            select(Tenants.id)
+            .where(Tenants.is_active.is_(True))
+            .order_by(Tenants.created_at.asc())
+            .limit(1)
+        )
+        fallback_tenant_id = fallback_result.scalar_one_or_none()
+        if fallback_tenant_id:
+            logger.warning(
+                "User %s has no tenant mapping; using fallback tenant %s in local mode",
+                user.id,
+                fallback_tenant_id,
+            )
+            user.tenant_ids = [str(fallback_tenant_id)]
+            return fallback_tenant_id
+
+    raise HTTPException(
+        status_code=400,
+        detail=f"User {user.id} has no tenant assigned. Re-login or assign a tenant.",
+    )
 

@@ -7,6 +7,7 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.exceptions import CredentialNotFoundError, AppError as CredentialError
 from app.core.logging import get_logger
 from app.core.crypto import CryptoError, get_crypto_service
 from app.models.credential_set import Credential, AuthType
@@ -16,19 +17,19 @@ from app.repositories.tool_instance_repository import ToolInstanceRepository
 logger = get_logger(__name__)
 
 
-class CredentialError(Exception):
-    pass
-
-
-class CredentialNotFoundError(CredentialError):
-    pass
-
-
 @dataclass
 class DecryptedCredentials:
     """Decrypted credentials with metadata"""
     auth_type: str
     payload: Dict[str, Any]
+    credential_id: UUID
+    owner_type: str  # "user" | "tenant" | "platform"
+
+
+@dataclass
+class CredentialReference:
+    """Credential metadata without secret payload."""
+    auth_type: str
     credential_id: UUID
     owner_type: str  # "user" | "tenant" | "platform"
 
@@ -172,6 +173,29 @@ class CredentialService:
         if not cred:
             return None
         return await self._decrypt(cred)
+
+    async def resolve_credential_reference(
+        self,
+        instance_id: UUID,
+        strategy: str = "ANY",
+        user_id: Optional[UUID] = None,
+        tenant_id: Optional[UUID] = None,
+    ) -> Optional[CredentialReference]:
+        """Resolve credential metadata without decrypting secret payload."""
+        cred = await self.repo.resolve_for_instance(
+            instance_id=instance_id,
+            strategy=strategy,
+            user_id=user_id,
+            tenant_id=tenant_id,
+        )
+        if not cred:
+            return None
+        owner_type = "platform" if cred.owner_platform else ("user" if cred.owner_user_id else "tenant")
+        return CredentialReference(
+            auth_type=cred.auth_type,
+            credential_id=cred.id,
+            owner_type=owner_type,
+        )
 
     async def has_credentials(
         self,

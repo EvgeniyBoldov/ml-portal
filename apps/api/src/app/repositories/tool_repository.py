@@ -43,14 +43,11 @@ class ToolRepository:
         self,
         skip: int = 0,
         limit: int = 100,
-        tool_group_id: Optional[UUID] = None,
-        kind: Optional[str] = None,
+        domain: Optional[str] = None,
     ) -> Tuple[List[Tool], int]:
         stmt = select(Tool)
-        if tool_group_id:
-            stmt = stmt.where(Tool.tool_group_id == tool_group_id)
-        if kind:
-            stmt = stmt.where(Tool.kind == kind)
+        if domain:
+            stmt = stmt.where(Tool.domains.any(domain))
 
         count_stmt = select(func.count()).select_from(stmt.subquery())
         total = await self.session.scalar(count_stmt) or 0
@@ -60,13 +57,8 @@ class ToolRepository:
 
         return list(result.scalars().all()), total
 
-    async def get_by_tool_group(
-        self,
-        tool_group_id: UUID,
-    ) -> List[Tool]:
-        """Get all tools for a tool group"""
-        stmt = select(Tool).where(
-            Tool.tool_group_id == tool_group_id,
-        )
+    async def get_by_domain(self, domain: str) -> List[Tool]:
+        """Get all tools for a runtime domain"""
+        stmt = select(Tool).where(Tool.domains.any(domain))
         result = await self.session.execute(stmt)
         return list(result.scalars().all())

@@ -7,10 +7,10 @@
   font-family: var(--font-mono, monospace);
   font-size: 0.875rem;
   line-height: 1.5;
-  background: var(--code-bg, rgba(0, 0, 0, 0.2));
-  color: var(--code-text, #e11d48);
-  padding: 1rem;
-  border-radius: 6px;
+  background: var(--bg-secondary, #f9fafb);
+  color: var(--text-primary, #111827);
+  padding: 0;
+  border-radius: var(--radius-lg, 8px);
   border: 1px solid var(--border-color, #e5e7eb);
   overflow: auto;
   margin: 0;
@@ -23,6 +23,71 @@
   color: inherit;
   font-family: inherit;
   font-size: inherit;
+  padding: 1rem;
+  border: none;
+}
+
+.jsonDisplay .header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border-color, #e5e7eb);
+  margin-bottom: 0;
+}
+
+.jsonDisplay .headerInfo {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.jsonDisplay .headerTitle {
+  font-weight: 600;
+  color: var(--text-primary, #111827);
+}
+
+.jsonDisplay .headerSize {
+  font-size: 0.75rem;
+  color: var(--text-secondary, #6b7280);
+}
+
+.jsonDisplay .headerActions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.jsonDisplay .code {
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  font-size: inherit;
+  padding: 0 1rem;
+  border: none;
+  margin: 0;
+}
+
+/* Simplified version without header */
+.jsonDisplaySimple {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.875rem;
+  line-height: 1.5;
+  background: var(--bg-secondary, #f9fafb);
+  color: var(--text-primary, #111827);
+  padding: 1rem;
+  border-radius: var(--radius-md, 6px);
+  border: 1px solid var(--border-color, #e5e7eb);
+  overflow: auto;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.jsonDisplaySimple code {
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  font-size: inherit;
   padding: 0;
   border: none;
 }
@@ -30,8 +95,22 @@
 /* Dark theme adjustments */
 @media (prefers-color-scheme: dark) {
   .jsonDisplay {
-    background: var(--code-bg, #1f2937);
-    color: var(--code-text, #f472b6);
+    background: var(--bg-secondary, #1f2937);
+    color: var(--text-primary, #f9fafb);
+    border-color: var(--border-color, #374151);
+  }
+  
+  .jsonDisplay .headerTitle {
+    color: var(--text-primary, #f9fafb);
+  }
+  
+  .jsonDisplay .headerSize {
+    color: var(--text-secondary, #6b7280);
+  }
+  
+  .jsonDisplaySimple {
+    background: var(--bg-secondary, #1f2937);
+    color: var(--text-primary, #f9fafb);
     border-color: var(--border-color, #374151);
   }
 }

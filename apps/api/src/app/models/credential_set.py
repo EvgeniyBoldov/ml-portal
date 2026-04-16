@@ -32,7 +32,8 @@ class Credential(Base):
     - owner_tenant_id: shared tenant credentials
     - owner_platform=True: platform-wide credentials
     
-    Resolution priority depends on AgentBinding.credential_strategy.
+    Resolution priority depends on operation/tool credential scope and
+    compatibility strategies for legacy bindings.
     """
     __tablename__ = "credentials"
 
@@ -61,6 +62,12 @@ class Credential(Base):
     
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
     )
 
     __table_args__ = (

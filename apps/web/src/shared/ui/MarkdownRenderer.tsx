@@ -1,6 +1,7 @@
 import React from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkBreaks from 'remark-breaks';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import styles from './MarkdownRenderer.module.css';
@@ -14,53 +15,62 @@ export default function MarkdownRenderer({
   content,
   enableSyntaxHighlighting = true,
 }: MarkdownRendererProps) {
+  const isSafeHref = (href?: string) => {
+    if (!href) return false;
+    const normalized = href.trim().toLowerCase();
+    if (normalized.startsWith('javascript:')) return false;
+    if (normalized.startsWith('data:')) return false;
+    return true;
+  };
+
+  const isFileLink = (href: string) => {
+    return /\/api\/v1\/files\/[^/]+\/download/i.test(href) || /\/files\/[^/]+\/download/i.test(href);
+  };
+
+  const renderCode = ({
+    inline,
+    className,
+    children,
+    ...props
+  }: React.HTMLAttributes<HTMLElement> & { children?: React.ReactNode; inline?: boolean }) => {
+    const match = /language-(\w+)/.exec(className || '');
+    const language = match ? match[1] : '';
+    const code = String(children ?? '').replace(/\n$/, '');
+
+    if (!inline && enableSyntaxHighlighting) {
+      const label = language || 'text';
+      return (
+        <div className={styles.codeContainer}>
+          <div className={styles.codeHeader}>{label}</div>
+          <SyntaxHighlighter
+            style={oneDark}
+            language={language || 'text'}
+            PreTag="div"
+            className={styles.preBlock}
+            customStyle={{ margin: 0, borderRadius: 0, border: 'none', background: 'transparent' }}
+            codeTagProps={{ style: { fontFamily: 'inherit' } }}
+            {...props}
+          >
+            {code}
+          </SyntaxHighlighter>
+        </div>
+      );
+    }
+
+    return (
+      <code className={inline ? styles.inlineCode : styles.codeBlock} {...props}>
+        {children}
+      </code>
+    );
+  };
+
   return (
     <div className={styles.markdown}>
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={[remarkGfm, remarkBreaks]}
+        urlTransform={(url) => (isSafeHref(url) ? url : '')}
         components={{
-          // Стилизация для инлайн кода
-          code({ inline, className, children, ...props }) {
-            if (inline) {
-              return (
-                <code className={styles.inlineCode} {...props}>
-                  {children}
-                </code>
-              );
-            }
-            return (
-              <code className={styles.codeBlock} {...props}>
-                {children}
-              </code>
-            );
-          },
-          // Стилизация для блоков кода с подсветкой синтаксиса
-          pre({ children, ...props }) {
-            const match = /language-(\w+)/.exec(props.className || '');
-            const language = match ? match[1] : '';
-
-            // Используем подсветку только если включена
-            if (language && enableSyntaxHighlighting) {
-              return (
-                <SyntaxHighlighter
-                  style={oneDark}
-                  language={language}
-                  PreTag="div"
-                  className={styles.preBlock}
-                  {...props}
-                >
-                  {String(children).replace(/\n$/, '')}
-                </SyntaxHighlighter>
-              );
-            }
-
-            // Простой блок кода без подсветки
-            return (
-              <pre className={styles.preBlock} {...props}>
-                {children}
-              </pre>
-            );
-          },
+          code: renderCode,
           // Стилизация для параграфов
           p({ children, ...props }) {
             return (
@@ -111,6 +121,45 @@ export default function MarkdownRenderer({
               <h3 className={styles.h3} {...props}>
                 {children}
               </h3>
+            );
+          },
+          a({ href, children, ...props }) {
+            const safeHref = isSafeHref(href) ? (href as string) : '#';
+            const external = /^https?:\/\//i.test(safeHref);
+            const fileLink = isFileLink(safeHref);
+            return (
+              <a
+                href={safeHref}
+                className={fileLink ? styles.fileLink : undefined}
+                target={external || fileLink ? '_blank' : undefined}
+                rel={external || fileLink ? 'noopener noreferrer' : undefined}
+                {...props}
+              >
+                {children}
+              </a>
+            );
+          },
+          table({ children, ...props }) {
+            return (
+              <div className={styles.tableWrap}>
+                <table className={styles.table} {...props}>
+                  {children}
+                </table>
+              </div>
+            );
+          },
+          th({ children, ...props }) {
+            return (
+              <th className={styles.tableHead} {...props}>
+                {children}
+              </th>
+            );
+          },
+          td({ children, ...props }) {
+            return (
+              <td className={styles.tableCell} {...props}>
+                {children}
+              </td>
             );
           },
         }}

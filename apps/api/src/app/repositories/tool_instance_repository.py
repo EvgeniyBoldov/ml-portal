@@ -6,6 +6,7 @@ from uuid import UUID
 
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.models.tool_instance import ToolInstance
 
@@ -21,7 +22,11 @@ class ToolInstanceRepository:
         return instance
 
     async def get_by_id(self, instance_id: UUID) -> Optional[ToolInstance]:
-        stmt = select(ToolInstance).where(ToolInstance.id == instance_id)
+        stmt = (
+            select(ToolInstance)
+            .options(selectinload(ToolInstance.access_via))
+            .where(ToolInstance.id == instance_id)
+        )
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
@@ -39,19 +44,27 @@ class ToolInstanceRepository:
         self,
         skip: int = 0,
         limit: int = 100,
-        tool_group_id: Optional[UUID] = None,
         is_active: Optional[bool] = None,
-        instance_type: Optional[str] = None,
+        instance_kind: Optional[str] = None,
+        connector_type: Optional[str] = None,
+        connector_subtype: Optional[str] = None,
+        placement: Optional[str] = None,
+        domain: Optional[str] = None,
     ) -> Tuple[List[ToolInstance], int]:
         """List tool instances with filters"""
         stmt = select(ToolInstance)
-        
-        if tool_group_id:
-            stmt = stmt.where(ToolInstance.tool_group_id == tool_group_id)
         if is_active is not None:
             stmt = stmt.where(ToolInstance.is_active == is_active)
-        if instance_type is not None:
-            stmt = stmt.where(ToolInstance.instance_type == instance_type)
+        if instance_kind is not None:
+            stmt = stmt.where(ToolInstance.instance_kind == instance_kind)
+        if connector_type is not None:
+            stmt = stmt.where(ToolInstance.connector_type == connector_type)
+        if connector_subtype is not None:
+            stmt = stmt.where(ToolInstance.connector_subtype == connector_subtype)
+        if placement is not None:
+            stmt = stmt.where(ToolInstance.placement == placement)
+        if domain is not None:
+            stmt = stmt.where(ToolInstance.domain == domain)
         
         count_stmt = select(func.count()).select_from(stmt.subquery())
         total = await self.session.scalar(count_stmt) or 0
@@ -60,32 +73,6 @@ class ToolInstanceRepository:
         result = await self.session.execute(stmt)
         
         return list(result.scalars().all()), total
-
-    async def get_by_tool_group(
-        self,
-        tool_group_id: UUID,
-        is_active: bool = True,
-    ) -> List[ToolInstance]:
-        """Get all instances for a tool group"""
-        stmt = select(ToolInstance).where(
-            ToolInstance.tool_group_id == tool_group_id,
-            ToolInstance.is_active == is_active,
-        )
-        result = await self.session.execute(stmt)
-        return list(result.scalars().all())
-
-    async def get_by_slug_and_group(
-        self,
-        slug: str,
-        tool_group_id: UUID,
-    ) -> Optional[ToolInstance]:
-        """Get instance by slug within a tool group"""
-        stmt = select(ToolInstance).where(
-            ToolInstance.slug == slug,
-            ToolInstance.tool_group_id == tool_group_id,
-        )
-        result = await self.session.execute(stmt)
-        return result.scalar_one_or_none()
 
     async def get_by_slug(self, slug: str) -> Optional[ToolInstance]:
         """Get instance by slug (globally unique in practice)"""

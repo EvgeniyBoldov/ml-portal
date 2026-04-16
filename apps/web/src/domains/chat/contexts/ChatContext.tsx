@@ -1,6 +1,12 @@
 import React, { createContext, useContext, useState, useCallback, ReactNode } from 'react';
-import { useChats, useChatMessages, useSendMessage } from '@shared/api/hooks/useChats';
+import { useChats } from '@shared/api/hooks/useChats';
 import { useQueryClient } from '@tanstack/react-query';
+import type { Chat, ChatMessage } from '@shared/api/types';
+
+type MessageMeta = Record<string, unknown> & {
+  rag_sources?: unknown[];
+  attachments?: unknown[];
+};
 
 interface Message {
   id: string;
@@ -8,32 +14,64 @@ interface Message {
   content: string;
   created_at: string;
   isOptimistic?: boolean;
-  meta?: Record<string, any>;
+  meta?: MessageMeta;
+}
+
+interface PendingConfirmation {
+  reason: string;
+  action: Record<string, unknown>;
+}
+
+interface PendingInput {
+  question?: string;
+  reason?: string;
 }
 
 interface ChatState {
+  chatsOrder: string[];
+  chatsById: Record<string, Chat>;
   messagesByChat: Record<string, { items: Message[]; loading: boolean; loaded?: boolean }>;
   error: string | null;
   isLoading: boolean;
   currentChatId: string | null;
   streamStatus: string | null;
+  pendingConfirmation: PendingConfirmation | null;
+  pendingInput: PendingInput | null;
+  stopReason: string | null;
+  pausedRunId: string | null;
 }
 
 interface ChatContextValue {
   state: ChatState;
   loadMessages: (chatId: string) => Promise<void>;
   setCurrentChat: (chatId: string) => void;
+  clearPendingState: () => void;
   sendMessageStream: (
     chatId: string,
     message: string,
     useRag: boolean,
     onChunk: (chunk: string) => void,
     onError: (error: string) => void,
-    agentSlug?: string
+    agentSlug?: string,
+    attachmentIds?: string[],
+    attachmentMeta?: unknown[]
   ) => Promise<void>;
 }
 
 const ChatContext = createContext<ChatContextValue | null>(null);
+
+function toRenderableMessage(message: ChatMessage): Message | null {
+  if (message.role !== 'user' && message.role !== 'assistant') {
+    return null;
+  }
+  return {
+    id: message.id,
+    role: message.role,
+    content: typeof message.content === 'string' ? message.content : String(message.content ?? ''),
+    created_at: message.created_at ?? new Date().toISOString(),
+    meta: (message.meta as MessageMeta | undefined) ?? undefined,
+  };
+}
 
 export function ChatProvider({ children }: { children: ReactNode }) {
   const [messagesByChat, setMessagesByChat] = useState<Record<string, { items: Message[]; loading: boolean; loaded?: boolean }>>({});
@@ -41,10 +79,19 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [currentChatId, setCurrentChatId] = useState<string | null>(null);
+  const [pendingConfirmation, setPendingConfirmation] = useState<PendingConfirmation | null>(null);
+  const [pendingInput, setPendingInput] = useState<PendingInput | null>(null);
+  const [stopReason, setStopReason] = useState<string | null>(null);
+  const [pausedRunId, setPausedRunId] = useState<string | null>(null);
 
   const { data: chats } = useChats();
-  const sendMessageMutation = useSendMessage();
   const queryClient = useQueryClient();
+  const chatItems = chats?.items ?? [];
+  const chatsOrder = chatItems.map((chat) => chat.id);
+  const chatsById = chatItems.reduce<Record<string, Chat>>((acc, chat) => {
+    acc[chat.id] = chat;
+    return acc;
+  }, {});
 
   const loadMessages = useCallback(async (chatId: string) => {
     setIsLoading(true);
@@ -52,17 +99,21 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     try {
       const chatsApi = await import('@shared/api/chats');
       const resp = await chatsApi.listMessages(chatId, 100);
-      const items = Array.isArray((resp as any)?.items) ? (resp as any).items : [];
+      const items = Array.isArray(resp?.items)
+        ? resp.items
+            .map((item) => toRenderableMessage(item))
+            .filter((item): item is Message => item !== null)
+        : [];
       setMessagesByChat(prev => ({
         ...prev,
         [chatId]: { items, loading: false, loaded: true }
       }));
-    } catch (err: any) {
+    } catch (err: unknown) {
       setMessagesByChat(prev => ({
         ...prev,
         [chatId]: { items: [], loading: false, loaded: true }
       }));
-      setError(err?.message || 'Ошибка загрузки сообщений');
+      setError(err instanceof Error ? err.message : 'Ошибка загрузки сообщений');
     } finally {
       setIsLoading(false);
     }
@@ -72,17 +123,31 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     setCurrentChatId(chatId);
   }, []);
 
+  const clearPendingState = useCallback(() => {
+    setPendingConfirmation(null);
+    setPendingInput(null);
+    setStopReason(null);
+    setPausedRunId(null);
+    setStreamStatus(null);
+  }, []);
+
   const sendMessageStream = useCallback(async (
     chatId: string,
     message: string,
     useRag: boolean,
     onChunk: (chunk: string) => void,
     onError: (error: string) => void,
-    agentSlug?: string
+    agentSlug?: string,
+    attachmentIds?: string[],
+    attachmentMeta?: unknown[]
   ) => {
     try {
       setError(null);
       setStreamStatus(null);
+      setPendingConfirmation(null);
+      setPendingInput(null);
+      setStopReason(null);
+      setPausedRunId(null);
 
       // 1. Optimistically add user message to local state
       const tempUserId = `temp-user-${Date.now()}`;
@@ -91,7 +156,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         role: 'user',
         content: message,
         created_at: new Date().toISOString(),
-        isOptimistic: true
+        isOptimistic: true,
+        meta: attachmentMeta?.length ? { attachments: attachmentMeta } : undefined,
       };
 
       setMessagesByChat(prev => {
@@ -145,7 +211,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         method: 'POST',
         headers,
         credentials: 'include',
-        body: JSON.stringify({ content: message, use_rag: useRag, agent_slug: agentSlug }),
+        body: JSON.stringify({
+          content: message,
+          use_rag: useRag,
+          agent_slug: agentSlug,
+          attachment_ids: attachmentIds ?? [],
+        }),
       });
 
       if (!response.ok || !response.body) {
@@ -168,8 +239,34 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
       let buffer = '';
       let assistantContent = '';
+      let pendingRenderedContent = '';
+      let flushTimer: ReturnType<typeof setTimeout> | null = null;
       let realUserId: string | null = null;
       let realAssistantId: string | null = null;
+
+      const flushAssistantContent = () => {
+        setMessagesByChat(prev => {
+          const current = prev[chatId];
+          if (!current) return prev;
+          return {
+            ...prev,
+            [chatId]: {
+              ...current,
+              items: current.items.map(m =>
+                m.id === tempAssistantId ? { ...m, content: pendingRenderedContent } : m
+              )
+            }
+          };
+        });
+      };
+
+      const scheduleFlush = () => {
+        if (flushTimer) return;
+        flushTimer = setTimeout(() => {
+          flushTimer = null;
+          flushAssistantContent();
+        }, 40);
+      };
 
       while (true) {
         const { done, value } = await reader.read();
@@ -334,8 +431,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               // If this is rag.search result, extract sources
               if (parsed.tool === 'rag.search' && parsed.success && parsed.data?.hits) {
                 const sources = parsed.data.hits.map((hit: any) => ({
-                  source_id: hit.source_id,
-                  text: hit.text?.slice(0, 200),
+                  source_id: hit.source_id || '',
+                  source_name: hit.source_name || '',
+                  text: hit.text?.slice(0, 200) || '',
                   page: hit.page,
                   score: hit.score
                 }));
@@ -364,20 +462,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           // Handle delta events
           else if (eventType === 'delta') {
             assistantContent += data;
-            // Update assistant message content in-place
-            setMessagesByChat(prev => {
-              const current = prev[chatId];
-              if (!current) return prev;
-              return {
-                ...prev,
-                [chatId]: {
-                  ...current,
-                  items: current.items.map(m =>
-                    m.id === tempAssistantId ? { ...m, content: assistantContent } : m
-                  )
-                }
-              };
-            });
+            pendingRenderedContent = assistantContent;
+            scheduleFlush();
             onChunk(assistantContent);
           }
           // Handle final event
@@ -389,6 +475,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               // Update sources if present in final event
               const finalSources = parsed.sources;
               // Update temp assistant message with real ID, created_at and sources
+              if (flushTimer) {
+                clearTimeout(flushTimer);
+                flushTimer = null;
+              }
+              pendingRenderedContent = assistantContent;
+              flushAssistantContent();
               setMessagesByChat(prev => {
                 const current = prev[chatId];
                 if (!current) return prev;
@@ -412,6 +504,75 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               console.error('Failed to parse final event', e);
             }
           }
+          // Handle planner_action events
+          else if (eventType === 'planner_action') {
+            try {
+              const parsed = JSON.parse(data);
+              const toolSlug = parsed.tool_slug;
+              const actionType = parsed.action_type;
+              const iteration = parsed.iteration || 0;
+              if (actionType === 'tool_call' && toolSlug) {
+                setStreamStatus(`Шаг ${iteration}: ${toolSlug}...`);
+              } else if (actionType === 'final') {
+                setStreamStatus('Формирую ответ...');
+              } else if (actionType === 'ask_user') {
+                setStreamStatus('Нужно уточнение...');
+              } else {
+                setStreamStatus(`Планирую шаг ${iteration}...`);
+              }
+            } catch (e) {
+              console.error('Failed to parse planner_action event', e);
+            }
+          }
+          // Handle confirmation_required events
+          else if (eventType === 'confirmation_required') {
+            try {
+              const parsed = JSON.parse(data);
+              setPendingConfirmation({
+                reason: parsed.reason || 'Требуется подтверждение',
+                action: parsed.action || {},
+              });
+              setStreamStatus('Ожидание подтверждения...');
+            } catch (e) {
+              console.error('Failed to parse confirmation_required event', e);
+            }
+          }
+          // Handle waiting_input events
+          else if (eventType === 'waiting_input') {
+            try {
+              const parsed = JSON.parse(data);
+              setPendingInput({
+                question: parsed.question,
+                reason: parsed.reason,
+              });
+              setStreamStatus('Ожидание ввода...');
+            } catch (e) {
+              console.error('Failed to parse waiting_input event', e);
+            }
+          }
+          // Handle stop events
+          else if (eventType === 'stop') {
+            try {
+              const parsed = JSON.parse(data);
+              setStopReason(parsed.reason || 'stopped');
+              if (parsed.run_id) {
+                setPausedRunId(parsed.run_id);
+              }
+            } catch (e) {
+              console.error('Failed to parse stop event', e);
+            }
+          }
+          // Handle agent_selected events
+          else if (eventType === 'agent_selected') {
+            try {
+              const parsed = JSON.parse(data);
+              if (parsed.auto) {
+                setStreamStatus(`Выбран агент: ${parsed.agent}`);
+              }
+            } catch (e) {
+              console.error('Failed to parse agent_selected event', e);
+            }
+          }
           // Handle error events
           else if (eventType === 'error') {
             onError(data);
@@ -421,6 +582,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
       // Clear stream status after completion
       setStreamStatus(null);
+      if (flushTimer) {
+        clearTimeout(flushTimer);
+      }
       
     } catch (err: any) {
       const errorMsg = err?.message || 'Ошибка отправки сообщения';
@@ -433,14 +597,21 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
   const value: ChatContextValue = {
     state: {
+      chatsOrder,
+      chatsById,
       messagesByChat,
       error,
       isLoading,
       currentChatId,
       streamStatus,
+      pendingConfirmation,
+      pendingInput,
+      stopReason,
+      pausedRunId,
     },
     loadMessages,
     setCurrentChat,
+    clearPendingState,
     sendMessageStream,
   };
 

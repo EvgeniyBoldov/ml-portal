@@ -43,6 +43,10 @@
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--status-color) 20%, transparent);
 }
 
+.stageNode.controlActive {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--warning) 35%, transparent);
+}
+
 .stageNode.active .stageIcon {
   animation: pulse 1.5s ease-in-out infinite;
 }
@@ -94,6 +98,10 @@
 .modelNode.selected {
   border-color: var(--status-color);
   background: color-mix(in srgb, var(--status-color) 10%, var(--bg-primary));
+}
+
+.modelNode.controlActive {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--warning) 35%, transparent);
 }
 
 .modelNode.active .modelIcon {
@@ -156,26 +164,37 @@
   padding: 0 4px;
 }
 
-/* Model Column */
-.modelColumn {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+/* Lanes Grid */
+.lanesWrapper {
+  position: relative;
 }
 
-.columnHeader {
+.lanesHeader {
+  position: absolute;
+  top: -24px;
+  left: 0;
+  right: 0;
+  display: grid;
+}
+
+.lanesGrid {
+  display: grid;
+  row-gap: 8px;
+  align-items: center;
+}
+
+.laneHeaderCell {
   font-size: 11px;
   font-weight: 600;
   color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 1px;
-  padding-left: 4px;
+  text-align: center;
 }
 
-.modelList {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+.modelNodePlaceholder {
+  width: 120px;
+  height: 52px;
 }
 
 /* Legend */

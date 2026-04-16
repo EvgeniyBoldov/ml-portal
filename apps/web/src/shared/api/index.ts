@@ -7,15 +7,11 @@ export * from './prompts';
 export * from './toolReleases';
 export * from './toolInstances';
 export * from './credentials';
-export * from './permissions';
-export * from './policies';
-export * from './limits';
 export * from './agents';
 export * from './agentRuns';
 export * from './rbac';
-export * from './platform';
-
-export * from './rag';
+export * from './aiGenerate';
+export * from './plans';
 export * from './collections';
 export { ApiError, toApiError } from './errors';
 export { apiRequest, setAuthTokens, clearAuthTokens, getAccessToken, refreshAccessToken } from './http';

@@ -1,337 +1,262 @@
 /**
- * ToolViewPage - Tool container with versions using EntityTabsPage
- * 
- * Refactored to follow AgentPage pattern with EntityTabsPage
- * Tool container: slug, name, description, kind, tags
- * Versions hold: releases with backend_version, status, notes
+ * ToolPage — tool release page.
+ *
+ * Shows the backend tool registry record, active release version, schema releases and release version history.
+ * Version editing stays on ToolVersionPage.
  */
-import { useState, useEffect } from 'react';
-import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
-import { 
-  toolReleasesApi, 
-  toolReleasesKeys,
-  type ToolReleaseListItem,
-  type ToolBackendReleaseListItem,
-} from '@/shared/api/toolReleases';
-import { 
-  EntityPageV2,
-  Tab,
-  type BreadcrumbItem,
-  type EntityPageMode,
-} from '@/shared/ui';
-import { 
-  type FieldDefinition, 
-  DataTable,
-  type DataTableColumn,
-  Badge,
-  Button,
-  ContentBlock,
-  ShortVersionBlock,
-} from '@/shared/ui';
-import { getStatusProps } from '@/shared/lib/statusConfig';
-import { convertBadgeTone } from '@/shared/lib/badgeHelpers';
-
-const KIND_LABELS: Record<string, string> = {
-  read: 'Read',
-  write: 'Write',
-  mixed: 'Mixed',
-};
-
-const KIND_TONES: Record<string, 'warn' | 'success' | 'info' | 'neutral'> = {
-  read: 'info',
-  write: 'warn',
-  mixed: 'neutral',
-};
+import { useParams } from 'react-router-dom';
+import { useQueries } from '@tanstack/react-query';
+import { useToolDetail } from '@/shared/api/hooks';
+import { toolReleasesApi } from '@/shared/api/toolReleases';
+import { EntityPageV2, Tab, type BreadcrumbItem } from '@/shared/ui';
+import { Block } from '@/shared/ui/GridLayout';
+import { VersionsBlock } from '@/shared/ui/VersionsBlock';
+import {
+  TOOL_INFO_FIELDS,
+  TOOL_META_FIELDS,
+  TOOL_BACKEND_RELEASE_INFO_FIELDS,
+  TOOL_BACKEND_RELEASE_META_FIELDS,
+  TOOL_VERSION_POLICY_FIELDS,
+  TOOL_VERSION_PROFILE_FIELDS,
+  TOOL_STATS_FIELDS,
+  buildToolReleaseVersionData,
+  buildJsonFieldConfig,
+  buildToolVersionMetaData,
+  buildToolBackendReleaseInfoData,
+  buildToolBackendReleaseMetaData,
+} from '../shared/toolFields';
 
 export function ToolPage() {
-  const { toolSlug } = useParams<{ toolSlug: string }>();
-  const navigate = useNavigate();
-  const [searchParams, setSearchParams] = useSearchParams();
-  const queryClient = useQueryClient();
-  const showError = useErrorToast();
-  const showSuccess = useSuccessToast();
+  const { id } = useParams<{ id: string }>();
 
-  const isNew = toolSlug === 'new';
-  const isEditMode = searchParams.get('mode') === 'edit';
-  const mode: EntityPageMode = isNew ? 'create' : isEditMode ? 'edit' : 'view';
-  const [saving, setSaving] = useState(false);
-
-  const [formData, setFormData] = useState({
-    slug: '',
-    name: '',
-    description: '',
-    kind: '',
-    tags: '',
-  });
-  
-  const { data: tool, isLoading } = useQuery({
-    queryKey: toolReleasesKeys.toolDetail(toolSlug!),
-    queryFn: () => toolReleasesApi.getTool(toolSlug!),
-    enabled: !!toolSlug && !isNew,
-  });
-
-  useEffect(() => {
-    if (tool) {
-      setFormData({
-        slug: tool.slug,
-        name: tool.name,
-        description: tool.description || '',
-        kind: tool.kind,
-        tags: tool.tags?.join(', ') || '',
-      });
-    }
-  }, [tool]);
-
-  const rescanMutation = useMutation({
-    mutationFn: () => toolReleasesApi.rescanBackendReleases(toolSlug!),
-    onSuccess: (data: any) => {
-      queryClient.invalidateQueries({ queryKey: toolReleasesKeys.toolDetail(toolSlug!) });
-      queryClient.invalidateQueries({ queryKey: toolReleasesKeys.backendReleases(toolSlug!) });
-      const br = data.stats?.backend_releases || {};
-      showSuccess(`Синхронизация: ${br.backend_releases_created || 0} создано, ${br.backend_releases_updated || 0} обновлено`);
-    },
-    onError: (err: Error) => showError(err?.message || 'Ошибка синхронизации'),
-  });
-
-  const handleFieldChange = (key: string, value: string) => {
-    setFormData((prev: typeof formData) => ({ ...prev, [key]: value }));
-  };
-
-  const handleEdit = () => {
-    setSearchParams({ mode: 'edit' });
-  };
-
-  const handleCancel = () => {
-    setSearchParams({});
-    setFormData(tool ? {
-      slug: tool.slug,
-      name: tool.name,
-      description: tool.description || '',
-      kind: tool.kind,
-      tags: tool.tags?.join(', ') || '',
-    } : {
-      slug: '',
-      name: '',
-      description: '',
-      kind: '',
-      tags: '',
-    });
-  };
-
-  const handleSave = async () => {
-    setSaving(true);
-    try {
-      // Tool editing logic would go here
-      showSuccess('Инструмент сохранен');
-      setSearchParams({});
-    } catch (error) {
-      showError('Ошибка сохранения');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const containerFields: FieldDefinition[] = [
-    { key: 'slug', label: 'Slug', type: 'text' },
-    { key: 'name', label: 'Название', type: 'text' },
-    { key: 'kind', label: 'Тип', type: 'text' },
-    { key: 'tags', label: 'Теги', type: 'text' },
-    { key: 'description', label: 'Описание', type: 'textarea', rows: 2 },
-  ];
-
-  const releaseColumns: DataTableColumn<ToolReleaseListItem>[] = [
-    {
-      key: 'version',
-      label: 'Версия',
-      render: (row) => <strong>v{row.version}</strong>,
-    },
-    {
-      key: 'backend_version',
-      label: 'Бэкенд',
-      render: (row) => row.backend_version || '—',
-    },
-    {
-      key: 'status',
-      label: 'Статус',
-      render: (row) => (
-        <Badge tone={convertBadgeTone(getStatusProps('version', row.status).tone)}>
-          {getStatusProps('version', row.status).label}
-        </Badge>
-      ),
-    },
-    {
-      key: 'current',
-      label: 'Основная',
-      render: (row) => (
-        tool?.current_version_id === row.id ? (
-          <Badge tone="info">★ Основная</Badge>
-        ) : null
-      ),
-    },
-    {
-      key: 'created_at',
-      label: 'Создана',
-      render: (row) => new Date(row.created_at).toLocaleDateString('ru-RU'),
-    },
-  ];
-
-  const backendColumns: DataTableColumn<ToolBackendReleaseListItem>[] = [
-    {
-      key: 'version',
-      label: 'Версия',
-      render: (row) => <strong>{row.version}</strong>,
-    },
-    {
-      key: 'description',
-      label: 'Описание',
-      render: (row) => row.description || '—',
-    },
-    {
-      key: 'schema_hash',
-      label: 'Schema',
-      render: (row) => row.schema_hash ? row.schema_hash.slice(0, 8) : '—',
-    },
-    {
-      key: 'deprecated',
-      label: 'Статус',
-      render: (row) => (
-        <Badge tone={row.deprecated ? 'warn' : 'success'}>
-          {row.deprecated ? 'Устарела' : 'Актуальна'}
-        </Badge>
-      ),
-    },
-    {
-      key: 'synced_at',
-      label: 'Синхронизировано',
-      render: (row) => new Date(row.synced_at).toLocaleDateString('ru-RU'),
-    },
-  ];
+  const {
+    entity: tool,
+    isLoading,
+  } = useToolDetail(id!);
 
   const breadcrumbs: BreadcrumbItem[] = [
     { label: 'Инструменты', href: '/admin/tools' },
-    { label: tool?.name || 'Новый инструмент' },
+    { label: tool?.name || id || '' },
   ];
+
+  const versionInfo =
+    tool?.releases?.map((v) => ({
+      id: v.id,
+      version: v.version,
+      status: v.status,
+      created_at: v.created_at,
+    })) || [];
+
+  const toolData = tool ? {
+    name: tool.name ?? '',
+    domains: tool.domains ?? [],
+    tags: tool.tags ?? [],
+  } : {};
+  const statsData = {
+    releases_count: tool?.releases?.length || 0,
+    backend_releases_count: tool?.backend_releases?.length || 0,
+    has_current_version: tool?.current_version ? 'Да' : 'Нет',
+  };
+  const versionMetaData = tool ? buildToolVersionMetaData(tool) : {};
+  const activeVersionData = buildToolReleaseVersionData(tool?.current_version);
+  const hasRelease = !!activeVersionData;
+  const backendReleaseDetails = useQueries({
+    queries: (tool?.backend_releases ?? []).map((release) => ({
+      queryKey: ['tools', 'backend-release', id, release.version],
+      queryFn: () => toolReleasesApi.getBackendRelease(id!, release.version),
+      enabled: !!id,
+    })),
+  });
+
+  if (isLoading) {
+    return (
+      <EntityPageV2 title="Загрузка..." mode="view" breadcrumbs={breadcrumbs} loading>
+        <></>
+      </EntityPageV2>
+    );
+  }
+
+  if (!tool) {
+    return (
+      <EntityPageV2 title="Не найдено" mode="view" breadcrumbs={breadcrumbs} loading={false}>
+        <></>
+      </EntityPageV2>
+    );
+  }
 
   return (
     <EntityPageV2
-      title={tool?.name || 'Новый инструмент'}
-      mode={mode}
+      title={tool.name}
+      mode="view"
       breadcrumbs={breadcrumbs}
-      loading={isLoading}
-      saving={saving}
+      loading={false}
+      backPath="/admin/tools"
     >
-      <Tab 
-        title="Обзор" 
+      <Tab
+        title="Основное"
         layout="grid"
-        actions={
-          mode === 'view' ? [
-            <Button key="edit" onClick={handleEdit}>
-              Редактировать
-            </Button>,
-          ] : mode === 'edit' ? [
-            <Button key="save" onClick={handleSave} disabled={saving}>
-              {saving ? 'Сохранение...' : 'Сохранить'}
-            </Button>,
-            <Button key="cancel" variant="outline" onClick={handleCancel}>
-              Отмена
-            </Button>,
-          ] : []
-        }
+        id="overview"
       >
-        <ContentBlock
-          title="Основные сведения"
-          icon="info"
-          editable={mode === 'edit'}
-          fields={containerFields}
-          data={formData}
-          onChange={handleFieldChange}
-          headerActions={
-            <Badge tone={KIND_TONES[tool?.kind || 'mixed'] || 'neutral'}>
-              {KIND_LABELS[tool?.kind || 'mixed'] || tool?.kind || '—'}
-            </Badge>
-          }
-        />
-        <ShortVersionBlock
-          title="Основная версия"
-          entityType="tool"
-          version={
-            tool?.releases?.find(r => r.id === tool?.recommended_release_id) || 
-            tool?.releases?.[0] || 
-            {
-              version: 0,
-              created_at: new Date().toISOString(),
-              status: 'draft'
-            }
-          }
+        <Block
+          title="Deprecated"
+          icon="alert-triangle"
+          iconVariant="warn"
+          width="full"
         >
-          <div style={{ padding: '1rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
-            {tool?.releases?.length ? (
-              <div>
-                <div style={{ marginBottom: '0.5rem' }}>
-                  Backend: {tool?.releases?.find(r => r.id === tool?.recommended_release_id)?.backend_version || tool?.releases?.[0]?.backend_version || '—'}
-                </div>
-                <div style={{ fontSize: '0.875rem' }}>
-                  {tool?.releases?.find(r => r.id === tool?.recommended_release_id)?.description_for_llm || tool?.releases?.[0]?.description_for_llm || 'Нет описания'}
-                </div>
-              </div>
-            ) : (
-              <div>Нет версий</div>
-            )}
-          </div>
-        </ShortVersionBlock>
-      </Tab>
-      
-      <Tab 
-        title="Версии" 
-        layout="full" 
-        badge={tool?.releases?.length || 0}
-        actions={[
-          <Button key="create" onClick={() => navigate(`/admin/tools/${toolSlug}/versions/new`)}>
-            Создать версию
-          </Button>,
-          ...(tool?.releases?.some(r => r.status === 'draft') ? [
-            <Button key="edit-bindings" variant="outline">
-              Редактировать привязки
-            </Button>,
-          ] : []),
-        ]}
-      >
-        <DataTable
-          columns={releaseColumns}
-          data={tool?.releases || []}
-          keyField="id"
-          onRowClick={(v: ToolReleaseListItem) => navigate(`/admin/tools/${toolSlug}/versions/${v.version}`)}
-          emptyText="Нет версий. Нажмите 'Создать версию'."
+          Этот экран относится к legacy tool-container/release модели и сохранен только для обратной совместимости.
+        </Block>
+        <Block
+          title="Информация об инструменте"
+          icon="tool"
+          iconVariant="primary"
+          width="2/3"
+          fields={TOOL_INFO_FIELDS}
+          data={toolData}
         />
-      </Tab>
-      
-      <Tab 
-        title="Бэкенд" 
-        layout="full" 
-        badge={tool?.backend_releases?.length || 0}
-        actions={[
-          <Button 
-            key="rescan"
-            variant="outline"
-            onClick={() => rescanMutation.mutate()}
-            disabled={rescanMutation.isPending}
+        <Block
+          title="Статистика"
+          icon="bar-chart"
+          iconVariant="info"
+          width="1/3"
+          fields={TOOL_STATS_FIELDS}
+          data={statsData}
+          editable={false}
+        />
+        <Block
+          title="Основное"
+          icon="info"
+          iconVariant="primary"
+          width="1/2"
+          fields={TOOL_META_FIELDS}
+          data={versionMetaData}
+          editable={false}
+        />
+        {!!activeVersionData && (
+          <Block
+            title="Версия релиза"
+            icon="history"
+            iconVariant="info"
+            width="1/2"
+            fields={TOOL_META_FIELDS}
+            data={versionMetaData}
+            editable={false}
+          />
+        )}
+        {!!tool.current_version?.backend_release && (
+          <>
+            <Block
+              title="Backend release"
+              icon="database"
+              iconVariant="primary"
+              width="1/2"
+              fields={TOOL_BACKEND_RELEASE_INFO_FIELDS}
+              data={buildToolBackendReleaseInfoData(tool.current_version.backend_release)}
+              editable={false}
+            />
+            <Block
+              title="Backend release meta"
+              icon="clock"
+              iconVariant="neutral"
+              width="1/2"
+              fields={TOOL_BACKEND_RELEASE_META_FIELDS}
+              data={buildToolBackendReleaseMetaData(tool.current_version.backend_release)}
+              editable={false}
+            />
+          </>
+        )}
+        {!hasRelease && (
+          <Block
+            title="Семантический релиз"
+            icon="sparkles"
+            iconVariant="warn"
+            width="full"
           >
-            {rescanMutation.isPending ? 'Синхронизация...' : 'Rescan Backend'}
-          </Button>,
-        ]}
-      >
-        <DataTable
-          columns={backendColumns}
-          data={tool?.backend_releases || []}
-          keyField="id"
-          onRowClick={(row: ToolBackendReleaseListItem) =>
-            navigate(`/admin/tools/${toolSlug}/backend/${row.version}`)
-          }
-          emptyText="Нет бэкенд-релизов. Нажмите 'Rescan Backend'."
-        />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div style={{ color: 'var(--text-secondary)' }}>
+                У этого backend-инструмента пока нет связанного релиза.
+                Режим релизов для tool-container переведен в deprecated.
+              </div>
+            </div>
+          </Block>
+        )}
       </Tab>
+
+      {!!activeVersionData && (
+        <Tab title="Профайл" layout="grid" id="profile">
+          <Block
+            title="Профайл инструмента"
+            icon="message-square"
+            iconVariant="info"
+            width="full"
+            fields={TOOL_VERSION_PROFILE_FIELDS}
+            data={activeVersionData}
+            editable={false}
+          />
+        </Tab>
+      )}
+
+      {!!activeVersionData && (
+        <Tab title="Policy Hints" layout="grid" id="policy-hints">
+          <Block
+            title="Правила использования"
+            icon="shield"
+            iconVariant="primary"
+            width="full"
+            fields={TOOL_VERSION_POLICY_FIELDS}
+            data={activeVersionData}
+            editable={false}
+          />
+        </Tab>
+      )}
+
+      {!!tool.backend_releases?.length && (
+        <Tab title="Схемы" layout="full" id="backend" badge={tool.backend_releases.length}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            {tool.backend_releases.map((release, index) => {
+              const detail = backendReleaseDetails[index]?.data;
+              return (
+                <div key={release.id} style={{ display: 'grid', gap: 16 }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 16 }}>
+                    <Block
+                      title="Input Schema"
+                      icon="arrow-down"
+                      iconVariant="info"
+                      width="1/2"
+                      fields={[buildJsonFieldConfig('input_schema', 'JSON')]}
+                      data={{ input_schema: detail?.input_schema ?? {} }}
+                      editable={false}
+                    />
+                    <Block
+                      title="Output Schema"
+                      icon="arrow-up"
+                      iconVariant="success"
+                      width="1/2"
+                      fields={[buildJsonFieldConfig('output_schema', 'JSON')]}
+                      data={{ output_schema: detail?.output_schema ?? {} }}
+                      editable={false}
+                    />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </Tab>
+      )}
+
+      {!!id && (
+        <Tab
+          title="Версии релиза"
+          layout="full"
+          id="versions"
+          badge={versionInfo.length}
+        >
+          <VersionsBlock
+            entityType="tool"
+            versions={versionInfo}
+            recommendedVersionId={tool.current_version_id ?? undefined}
+          />
+        </Tab>
+      )}
     </EntityPageV2>
   );
 }

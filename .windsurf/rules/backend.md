@@ -84,27 +84,14 @@ async def get_effective_permissions(
     return self._merge_permissions(user_perms, tenant_perms, default_perms)
 ```
 
-### Baseline Merge
-Приоритет агента над default:
+### Agent/Tool v2: границы ответственности
 
-```python
-async def merge_baselines(
-    self,
-    default_baseline: Prompt | None,
-    agent_baseline: Prompt | None
-) -> str:
-    if not default_baseline and not agent_baseline:
-        return ""
-    
-    if not default_baseline:
-        return agent_baseline.template
-    
-    if not agent_baseline:
-        return default_baseline.template
-    
-    # Merge с приоритетом агента
-    return f"{default_baseline.template}\n\n{agent_baseline.template}"
-```
+1. **Agent container** хранит human/routing metadata (name, slug, description, short_info, tags, is_routable, routing_keywords, routing_negative_keywords).
+2. **AgentVersion** хранит версионируемую конфигурацию: prompt parts (identity, mission, scope, rules, tool_use_rules, output_format, examples), execution config (model, timeout_s, max_steps, max_retries, max_tokens, temperature), safety knobs (requires_confirmation_for_write, risk_level, never_do, allowed_ops).
+3. **Prompt parts храним отдельными колонками** (не JSONB) — строгая типизация, удобная дифференциация.
+4. **Tool container** хранит human/routing metadata (name, slug, short_info, tags, is_routable, routing_keywords, routing_negative_keywords).
+5. **ToolRelease** хранит routing metadata (resource, ops, systems, risk_level, etc.), execution config (timeout_s, max_retries, etc.), LLM help (description_for_llm, field_hints, examples, common_errors).
+6. **Версионирование**: агенты по умолчанию используют active ToolRelease; AgentBinding.tool_release_id позволяет пиннить конкретную версию.
 
 ## API
 
@@ -131,22 +118,70 @@ async def get_current_admin(
 
 ### Error Handling
 ```python
-@router.post("/agents/{slug}")
+@router.post("/agents")
 async def create_agent(
-    slug: str,
-    request: CreateAgentRequest,
-    session: AsyncSession = Depends(get_session),
-    user: Users = Depends(get_current_admin)
+    data: AgentCreate,
+    db: AsyncSession = Depends(db_session),
+    _: UserCtx = Depends(require_admin),
 ):
     try:
-        service = AgentService(AgentRepository(session), session)
-        agent = await service.create(slug, request)
-        return agent
-    except AgentAlreadyExistsError:
-        raise HTTPException(status_code=409, detail="Agent already exists")
-    except ValidationError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        service = AgentService(db)
+        result = await service.create_agent(
+            slug=data.slug, name=data.name, ...
+        )
+        await db.commit()
+        return result
+    except AgentAlreadyExistsError as e:
+        raise HTTPException(status_code=409, detail=str(e))
 ```
+
+## Роутеры (Admin API)
+
+### Организация
+- Путь: `app/api/v1/routers/admin/`
+- **1 домен = 1 файл роутера**. Не смешивать сущности.
+- `__init__.py` — импорт и include sub-роутеров с prefix/tags
+- Prefix задаётся в `__init__.py`, не внутри роутера
+- Каждый файл экспортирует `router = APIRouter(tags=[...])`
+- Все admin-эндпоинты защищены `require_admin`
+- Мутации: `await db.commit()` в роутере
+- Create/Update возвращают detail response (re-fetch после commit)
+
+## Schemas (Pydantic)
+
+### Организация
+- Путь: `app/schemas/`
+- **1 домен = 1 файл**. Никаких inline-схем в роутерах.
+
+### Паттерн Short / Detail
+
+```python
+# Мутации
+class EntityCreate(BaseModel): ...
+class EntityUpdate(BaseModel): ...
+
+# Short — для списков (без вложенных объектов, с count-полями)
+class EntityListItem(BaseModel):
+    id: UUID
+    slug: str
+    name: str
+    children_count: int = 0
+    created_at: datetime
+
+# Detail — для GET /{id} (с вложенными short-версиями дочерних)
+class EntityDetailResponse(BaseModel):
+    id: UUID
+    slug: str
+    name: str
+    children: List[ChildListItem] = []
+    created_at: datetime
+```
+
+### Правила
+- `EntityListItem` — **никаких** вложенных объектов, только count/bool агрегаты
+- `EntityDetailResponse` — вложенные дочерние через их `ListItem` схемы
+- Для versioned entities (Agent, Tool): versions возвращаются **полными** (`VersionResponse`)
+- Naming: `Create`, `Update`, `ListItem`, `Response`/`DetailResponse`
 
 ## Agent Runtime
 

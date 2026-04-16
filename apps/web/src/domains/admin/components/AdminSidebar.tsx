@@ -26,15 +26,13 @@ const navigation: NavGroup[] = [
     items: [
       { path: '/admin/users', label: 'Пользователи', icon: 'user' },
       { path: '/admin/tenants', label: 'Тенанты', icon: 'database' },
-      { path: '/admin/platform', label: 'Платформа', icon: 'sliders' },
     ],
   },
   {
-    title: 'Безопасность',
+    title: 'Платформа',
     items: [
+      { path: '/admin/platform', label: 'Настройки', icon: 'sliders' },
       { path: '/admin/rbac', label: 'RBAC', icon: 'shield' },
-      { path: '/admin/policies', label: 'Политики', icon: 'shield-check' },
-      { path: '/admin/limits', label: 'Лимиты', icon: 'shield' },
     ],
   },
   {
@@ -42,14 +40,20 @@ const navigation: NavGroup[] = [
     items: [
       { path: '/admin/tools', label: 'Инструменты', icon: 'settings' },
       { path: '/admin/agents', label: 'Агенты', icon: 'sparkles' },
-      { path: '/admin/agents/router', label: 'Agent Router', icon: 'activity' },
+      { path: '/admin/collections', label: 'Данные', icon: 'database' },
+      { path: '/admin/orchestration', label: 'Оркестрация', icon: 'settings' },
     ],
   },
   {
     title: 'Интеграции',
     items: [
-      { path: '/admin/instances', label: 'Инстансы', icon: 'server' },
-      { path: '/admin/collections', label: 'Коллекции', icon: 'database' },
+      { path: '/admin/connectors', label: 'Коннекторы', icon: 'server' },
+    ],
+  },
+  {
+    title: 'Тестирование',
+    items: [
+      { path: '/admin/sandbox', label: 'Песочницы', icon: 'settings' },
     ],
   },
   {

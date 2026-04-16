@@ -42,6 +42,22 @@ export interface ChatMessage {
   meta?: Record<string, unknown>;
 }
 
+export interface ChatAttachment {
+  id: string;
+  file_id?: string;
+  file_name: string;
+  file_ext: string;
+  content_type?: string | null;
+  size_bytes: number;
+  status: string;
+}
+
+export interface ChatUploadPolicy {
+  max_bytes: number;
+  allowed_extensions: string[];
+  allowed_content_types_by_extension?: Record<string, string[]>;
+}
+
 export interface ChatCreateRequest {
   name?: string | null;
   tags?: string[] | null;
@@ -59,6 +75,7 @@ export interface ChatMessageCreateRequest {
   content: string;
   use_rag?: boolean;
   response_stream?: boolean;
+  attachment_ids?: string[];
 }
 
 export interface ChatMessageResponse {

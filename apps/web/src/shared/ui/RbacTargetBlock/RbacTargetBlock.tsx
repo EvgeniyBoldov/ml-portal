@@ -19,23 +19,20 @@ interface RbacTargetBlockProps {
 }
 
 export function RbacTargetBlock({ data, editable = false }: RbacTargetBlockProps) {
-  
-  const getOwnerInfo = (): { type: string; label: string; id?: string } => {
+  const getOwnerInfo = (): { type: string; label: string } => {
     if (data.owner_platform) {
       return { type: 'platform', label: 'Платформа' };
     }
     if (data.owner_tenant_id) {
       return { 
         type: 'tenant', 
-        label: 'Тенант', 
-        id: data.owner_tenant_id 
+        label: 'Тенант',
       };
     }
     if (data.owner_user_id) {
       return { 
         type: 'user', 
-        label: 'Пользователь', 
-        id: data.owner_user_id 
+        label: 'Пользователь',
       };
     }
     return { type: 'unknown', label: 'Неизвестно' };
@@ -56,16 +53,6 @@ export function RbacTargetBlock({ data, editable = false }: RbacTargetBlockProps
           </div>
         </div>
 
-        {/* ID владельца */}
-        {ownerInfo.id && (
-          <div className={styles.field}>
-            <label className={styles.label}>ID владельца</label>
-            <div className={styles.value}>
-              {ownerInfo.id.slice(0, 8)}...
-            </div>
-          </div>
-        )}
-
         {/* Дата создания */}
         <div className={styles.field}>
           <label className={styles.label}>Создано</label>
@@ -74,15 +61,7 @@ export function RbacTargetBlock({ data, editable = false }: RbacTargetBlockProps
           </div>
         </div>
 
-        {/* Создатель */}
-        {data.created_by_user_id && (
-          <div className={styles.field}>
-            <label className={styles.label}>Создатель</label>
-            <div className={styles.value}>
-              {data.created_by_user_id.slice(0, 8)}...
-            </div>
-          </div>
-        )}
+        {/* Создатель intentionally omitted to avoid raw UUID display */}
       </div>
     </div>
   );

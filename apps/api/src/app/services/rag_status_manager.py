@@ -2,56 +2,31 @@
 RAG Status Manager - управление статусами этапов обработки документов
 """
 from __future__ import annotations
-from typing import Dict, List, Optional, Any, Set
+from typing import Dict, List, Optional, Any
 from uuid import UUID
 from datetime import datetime, timezone
-from enum import Enum
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.exceptions import StatusTransitionError
 from app.core.logging import get_logger
 from app.repositories.rag_status_repo import AsyncRAGStatusRepository
 from app.repositories.factory import AsyncRepositoryFactory
 from app.services.status_aggregator import calculate_aggregate_status
+from app.services.rag_target_model_service import RAGTargetModelService
+from app.services.rag_status_views import build_document_status, build_ingest_policy
+from app.services.rag_status_policy import (
+    PipelineStage,
+    StageStatus,
+    VALID_TRANSITIONS,
+    build_stage_control,
+    format_stage_name,
+    is_retry_supported,
+    split_stage_name,
+)
 from app.models.rag import RAGDocument
 from sqlalchemy import select, update
 
 logger = get_logger(__name__)
-
-
-class StageStatus(str, Enum):
-    """Статусы этапов обработки"""
-    PENDING = "pending"        # Ожидает запуска
-    QUEUED = "queued"          # В очереди Celery
-    PROCESSING = "processing"  # Выполняется
-    COMPLETED = "completed"    # Успешно завершён
-    FAILED = "failed"          # Завершён с ошибкой
-    CANCELLED = "cancelled"    # Отменён пользователем
-
-
-class PipelineStage(str, Enum):
-    """Этапы pipeline обработки"""
-    UPLOAD = "upload"
-    EXTRACT = "extract"
-    NORMALIZE = "normalize"
-    CHUNK = "chunk"
-    # embed этапы динамические: embed.<model_id>
-    # index этапы динамические: index.<model_id>
-
-
-class StatusTransitionError(Exception):
-    """Ошибка при невалидном переходе статуса"""
-    pass
-
-
-# Валидные переходы между статусами
-VALID_TRANSITIONS: Dict[StageStatus, Set[StageStatus]] = {
-    StageStatus.PENDING: {StageStatus.QUEUED, StageStatus.PROCESSING, StageStatus.FAILED, StageStatus.CANCELLED},
-    StageStatus.QUEUED: {StageStatus.PROCESSING, StageStatus.CANCELLED},
-    StageStatus.PROCESSING: {StageStatus.COMPLETED, StageStatus.FAILED, StageStatus.CANCELLED},
-    StageStatus.COMPLETED: {StageStatus.QUEUED},
-    StageStatus.FAILED: {StageStatus.QUEUED, StageStatus.CANCELLED},
-    StageStatus.CANCELLED: {StageStatus.QUEUED},
-}
 
 
 class RAGStatusManager:
@@ -74,7 +49,23 @@ class RAGStatusManager:
         self.session = session
         self.repo_factory = repo_factory
         self.status_repo = AsyncRAGStatusRepository(session)
+        self.target_models = RAGTargetModelService(session, repo_factory)
         self.event_publisher = event_publisher
+
+    @staticmethod
+    def _format_stage_name(node_type: str, node_key: str) -> str:
+        """Convert status node identity into public stage slug."""
+        return format_stage_name(node_type, node_key)
+
+    @staticmethod
+    def _split_stage_name(stage: str) -> tuple[str, str]:
+        """Convert public stage slug into node_type/node_key."""
+        return split_stage_name(stage)
+
+    @staticmethod
+    def is_retry_supported(stage: str) -> bool:
+        """Check whether the platform supports direct retry dispatch for a stage."""
+        return is_retry_supported(stage)
     
     async def initialize_document_statuses(
         self,
@@ -162,15 +153,7 @@ class RAGStatusManager:
             celery_task_id: ID Celery задачи
         """
         # Получаем текущий статус
-        if stage.startswith('embed.'):
-            node_type = 'embedding'
-            node_key = stage.replace('embed.', '', 1)  # Только первое вхождение
-        elif stage.startswith('index.'):
-            node_type = 'index'
-            node_key = stage.replace('index.', '', 1)  # Только первое вхождение
-        else:
-            node_type = 'pipeline'
-            node_key = stage
+        node_type, node_key = self._split_stage_name(stage)
         
         current_node = await self.status_repo.get_node(doc_id, node_type, node_key)
         
@@ -250,6 +233,34 @@ class RAGStatusManager:
         
         logger.info(f"Status transition: {doc_id} - {stage} -> {new_status.value}")
     
+    async def check_ingest_allowed(self, doc_id: UUID) -> Dict[str, Any]:
+        policy = await self.get_ingest_policy(doc_id)
+        if not policy["start_allowed"]:
+            return {
+                "allowed": False,
+                "reason": policy.get("start_reason"),
+                "active_stages": policy.get("active_stages", []),
+            }
+        return {"allowed": True}
+
+    async def get_ingest_policy(self, doc_id: UUID) -> Dict[str, Any]:
+        return await build_ingest_policy(self.status_repo, self.target_models, doc_id)
+
+    def _build_stage_control(
+        self,
+        stage: str,
+        node_type: str,
+        status: str,
+        archived: bool,
+    ) -> Dict[str, Any]:
+        """Derive control capabilities for a single stage."""
+        return build_stage_control(
+            stage=stage,
+            node_type=node_type,
+            status=status,
+            archived=archived,
+        )
+
     async def start_ingest(self, doc_id: UUID) -> None:
         """
         Запустить инжест: перевести все pending этапы в queued
@@ -275,19 +286,76 @@ class RAGStatusManager:
                 embedding_nodes = await self.status_repo.get_embedding_nodes(doc_id)
                 index_nodes = await self.status_repo.get_index_nodes(doc_id)
         
-        # Переводим в queued
-        for node in pipeline_nodes + embedding_nodes + index_nodes:
-            if node.status == StageStatus.PENDING.value:
-                await self.transition_stage(
-                    doc_id=doc_id,
-                    stage=(
-                        node.node_key if node.node_type == 'pipeline'
-                        else (f"embed.{node.node_key}" if node.node_type == 'embedding' else f"index.{node.node_key}")
-                    ),
-                    new_status=StageStatus.QUEUED
-                )
+        # Reset pipeline/model stages for a fresh run.
+        # Important: rerun after completed ingest must not keep extract=completed,
+        # otherwise worker transition completed->processing becomes invalid.
+        for node in pipeline_nodes:
+            if node.node_key == PipelineStage.UPLOAD.value:
+                continue
+            await self._reset_stage_if_needed(
+                doc_id,
+                node.node_key,
+                StageStatus.PENDING,
+                force=True,
+            )
+
+        for node in embedding_nodes:
+            await self._reset_stage_if_needed(
+                doc_id,
+                f"embed.{node.node_key}",
+                StageStatus.PENDING,
+                force=True,
+            )
+
+        for node in index_nodes:
+            await self._reset_stage_if_needed(
+                doc_id,
+                f"index.{node.node_key}",
+                StageStatus.PENDING,
+                force=True,
+            )
+
+        # Kick off from extract stage only. Downstream stages are picked by the chain.
+        await self.transition_stage(
+            doc_id=doc_id,
+            stage=PipelineStage.EXTRACT.value,
+            new_status=StageStatus.QUEUED,
+        )
         
         logger.info(f"Ingest started for document {doc_id}")
+
+    async def dispatch_ingest_pipeline(self, doc_id: UUID, tenant_id: UUID) -> List[str]:
+        """Enqueue the full ingest pipeline for a document."""
+        from app.workers.tasks_rag_ingest import (
+            extract_document,
+            normalize_document,
+            chunk_document,
+            embed_chunks_model,
+            index_model,
+        )
+        from celery import chain, group
+        embedding_models = await self._get_target_models(doc_id)
+        if not embedding_models:
+            raise ValueError(
+                f"No embedding models configured for tenant {tenant_id}. "
+                "Configure embedding models in Admin (models + defaults/tenant overrides)."
+            )
+
+        extract_task = extract_document.s(str(doc_id), str(tenant_id))
+        normalize_task = normalize_document.s(str(tenant_id))
+        chunk_task = chunk_document.s(str(tenant_id))
+
+        embedding_index_chains = [
+            chain(
+                embed_chunks_model.s(str(tenant_id), model_alias),
+                index_model.s(str(tenant_id)),
+            )
+            for model_alias in embedding_models
+        ]
+
+        pipeline = chain(extract_task, normalize_task, chunk_task, group(embedding_index_chains))
+        pipeline.apply_async()
+        return embedding_models
     
     async def stop_stage(self, doc_id: UUID, stage: str) -> Optional[str]:
         """
@@ -302,15 +370,7 @@ class RAGStatusManager:
         """
         logger.info(f"Stopping stage {stage} for document {doc_id}")
         
-        if stage.startswith('embed.'):
-            node_type = 'embedding'
-            node_key = stage.replace('embed.', '', 1)  # Только первое вхождение
-        elif stage.startswith('index.'):
-            node_type = 'index'
-            node_key = stage.replace('index.', '', 1)  # Только первое вхождение
-        else:
-            node_type = 'pipeline'
-            node_key = stage
+        node_type, node_key = self._split_stage_name(stage)
         
         current_node = await self.status_repo.get_node(doc_id, node_type, node_key)
         
@@ -365,6 +425,26 @@ class RAGStatusManager:
 
         await self._cascade_reset_downstream(doc_id, stage, reset_to_pending=True)
 
+    async def dispatch_stage_retry(self, doc_id: UUID, tenant_id: UUID, stage: str) -> None:
+        """Enqueue concrete retry execution for a supported stage."""
+        from app.workers.tasks_rag_ingest import embed_chunks_model, index_model
+
+        if stage == "extract":
+            await self.dispatch_ingest_pipeline(doc_id, tenant_id)
+            return
+
+        if stage.startswith("embed."):
+            model_alias = stage.split(".", 1)[1]
+            embed_chunks_model.delay({"source_id": str(doc_id)}, str(tenant_id), model_alias)
+            return
+
+        if stage.startswith("index."):
+            model_alias = stage.split(".", 1)[1]
+            index_model.delay({"source_id": str(doc_id), "model_alias": model_alias}, str(tenant_id))
+            return
+
+        raise ValueError(f"Retry dispatch is not supported for stage '{stage}'")
+
     async def archive_document(self, doc_id: UUID) -> None:
         """Архивировать документ."""
         logger.info(f"Archiving document {doc_id}")
@@ -385,43 +465,7 @@ class RAGStatusManager:
         await self.status_repo.delete_node(doc_id, 'archive', 'archive')
 
     async def get_document_status(self, doc_id: UUID) -> Dict[str, Any]:
-        """Получить полный статус документа."""
-        pipeline_nodes = await self.status_repo.get_pipeline_nodes(doc_id)
-        embedding_nodes = await self.status_repo.get_embedding_nodes(doc_id)
-
-        result = {
-            'document_id': str(doc_id),
-            'pipeline': {},
-            'embeddings': {},
-            'archived': False,
-        }
-
-        for node in pipeline_nodes:
-            result['pipeline'][node.node_key] = {
-                'status': node.status,
-                'error': node.error_short,
-                'metrics': node.metrics_json,
-                'started_at': node.started_at.isoformat() if node.started_at else None,
-                'finished_at': node.finished_at.isoformat() if node.finished_at else None,
-                'updated_at': node.updated_at.isoformat(),
-            }
-
-        for node in embedding_nodes:
-            result['embeddings'][node.node_key] = {
-                'status': node.status,
-                'model_version': node.model_version,
-                'error': node.error_short,
-                'metrics': node.metrics_json,
-                'started_at': node.started_at.isoformat() if node.started_at else None,
-                'finished_at': node.finished_at.isoformat() if node.finished_at else None,
-                'updated_at': node.updated_at.isoformat(),
-            }
-
-        archive_node = await self.status_repo.get_node(doc_id, 'archive', 'archive')
-        if archive_node:
-            result['archived'] = True
-
-        return result
+        return await build_document_status(self.status_repo, doc_id)
 
     async def _cascade_reset_downstream(
         self,
@@ -483,15 +527,7 @@ class RAGStatusManager:
         force: bool = False,
     ) -> None:
         """Сбросить статус этапа, если он не в финальном состоянии."""
-        if stage.startswith('embed.'):
-            node_type = 'embedding'
-            node_key = stage.replace('embed.', '', 1)  # Только первое вхождение
-        elif stage.startswith('index.'):
-            node_type = 'index'
-            node_key = stage.replace('index.', '', 1)  # Только первое вхождение
-        else:
-            node_type = 'pipeline'
-            node_key = stage
+        node_type, node_key = self._split_stage_name(stage)
 
         current_node = await self.status_repo.get_node(doc_id, node_type, node_key)
 
@@ -564,44 +600,39 @@ class RAGStatusManager:
                 agg_details=agg_details,
             )
 
+        await self._refresh_collection_statuses_for_document(doc_id)
+
         logger.debug(f"Updated aggregate status for {doc_id}: {agg_status}")
+
+    async def _refresh_collection_statuses_for_document(self, doc_id: UUID) -> None:
+        """Refresh document collection readiness for collections that contain the document."""
+        from sqlalchemy import text
+        from app.services.collection_service import CollectionService
+
+        result = await self.session.execute(
+            text(
+                "SELECT c.id "
+                "FROM collections c "
+                "JOIN sources src "
+                "ON ((src.meta #>> '{collection,id}') = c.id::text OR (src.meta ->> 'collection_id') = c.id::text) "
+                "WHERE src.source_id = :doc_id"
+            ),
+            {"doc_id": doc_id},
+        )
+        collection_ids = [row.id for row in result.mappings().all()]
+        if not collection_ids:
+            return
+
+        collection_service = CollectionService(self.session)
+        for collection_id in collection_ids:
+            collection = await collection_service.get_by_id(collection_id)
+            if collection:
+                await collection_service.sync_collection_status(collection, persist=False)
 
     async def _get_target_models(self, doc_id: UUID) -> List[str]:
         """Получить список target-моделей для документа."""
-        result = await self.session.execute(
-            select(RAGDocument).where(RAGDocument.id == doc_id)
-        )
-        document = result.scalar_one_or_none()
+        return await self.target_models.get_target_models(doc_id)
 
-        if not document:
-            return []
-
-        from app.models.tenant import Tenants
-
-        result = await self.session.execute(
-            select(Tenants).where(Tenants.id == document.tenant_id)
-        )
-        tenant = result.scalar_one_or_none()
-
-        if not tenant:
-            return []
-
-        # Resolve global embedding + optional extra
-        from app.models.model_registry import ModelRegistry, ModelType, ModelStatus
-
-        models: List[str] = []
-        result = await self.session.execute(
-            select(ModelRegistry).where(
-                (ModelRegistry.type == ModelType.EMBEDDING) & 
-                (ModelRegistry.default_for_type == True) &
-                (ModelRegistry.enabled == True)
-            )
-        )
-        global_embed = result.scalars().first()
-        if global_embed and global_embed.status == ModelStatus.AVAILABLE:
-            models.append(global_embed.alias)
-
-        if tenant.embedding_model_alias and tenant.embedding_model_alias not in models:
-            models.append(tenant.embedding_model_alias)
-
-        return models
+    async def get_target_models_for_tenant(self, tenant_id: UUID) -> List[str]:
+        """Resolve effective embedding models for a tenant: global default + optional tenant-specific model."""
+        return await self.target_models.get_target_models_for_tenant(tenant_id)

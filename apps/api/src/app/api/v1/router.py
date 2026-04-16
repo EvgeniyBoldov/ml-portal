@@ -21,7 +21,12 @@ from app.api.v1.routers import profile as profile_router
 from app.api.v1.routers.rag import router as rag_router
 from app.api.v1.routers.collections import router as collections_router
 from app.api.v1.routers.admin import router as admin_router
+from app.api.v1.routers.plans import router as plans_router
+from app.api.v1.routers.system_llm_traces import router as system_llm_traces_router
+from app.api.v1.routers.files import router as files_router
+from app.api.v1.routers.internal_mcp_credentials import router as internal_mcp_credentials_router
 from app.api.mcp import router as mcp_router
+from app.api.v1.routers.sandbox import router as sandbox_router
 
 api_v1 = APIRouter()
 
@@ -46,8 +51,23 @@ api_v1.include_router(api_keys_router.router, prefix="/api-keys", tags=["api-key
 # Profile endpoints (user profile and API tokens)
 api_v1.include_router(profile_router.router, tags=["profile"])
 
+# Plans endpoints (execution plan management)
+api_v1.include_router(plans_router, tags=["plans"])
+
+# Unified file delivery endpoints
+api_v1.include_router(files_router)
+
+# Internal MCP credential broker resolve endpoint
+api_v1.include_router(internal_mcp_credentials_router)
+
+# System LLM Traces endpoints (LLM call logging and analysis)
+api_v1.include_router(system_llm_traces_router, tags=["system-llm-traces"])
+
 # Admin endpoints (users, tenants, models, prompts, tools, agents, agent-runs, audit-logs)
 api_v1.include_router(admin_router)
 
 # MCP (Model Context Protocol) endpoint for IDE integration
 api_v1.include_router(mcp_router, tags=["mcp"])
+
+# Sandbox (agent testing with config overrides)
+api_v1.include_router(sandbox_router)

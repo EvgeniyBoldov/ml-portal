@@ -1,54 +1,13 @@
 /**
- * API client for Tool Groups, Tools, and Releases
+ * API client for tool registry/release pages and releases
  */
 import { apiRequest } from './http';
-
-// ─────────────────────────────────────────────────────────────────────────────
-// TYPES
-// ─────────────────────────────────────────────────────────────────────────────
-
-export interface ToolGroupListItem {
-  id: string;
-  slug: string;
-  name: string;
-  description: string | null;
-  type: string | null;
-  tools_count: number;
-  instances_count: number;
-}
-
-export interface ToolGroupDetail {
-  id: string;
-  slug: string;
-  name: string;
-  description: string | null;
-  type: string | null;
-  description_for_router: string | null;
-  created_at: string;
-  tools: ToolListItem[];
-  instances_count: number;
-}
-
-export interface ToolGroupCreate {
-  slug: string;
-  name: string;
-  description?: string | null;
-  type?: string | null;
-  description_for_router?: string | null;
-}
-
-export interface ToolGroupUpdate {
-  name?: string;
-  description?: string | null;
-  type?: string | null;
-  description_for_router?: string | null;
-}
 
 export interface ToolListItem {
   id: string;
   slug: string;
   name: string;
-  kind: string;
+  domains: string[];
   tags: string[] | null;
   backend_releases_count: number;
   releases_count: number;
@@ -59,10 +18,8 @@ export interface ToolDetail {
   id: string;
   slug: string;
   name: string;
-  kind: string;
+  domains: string[];
   tags: string[] | null;
-  tool_group_id: string;
-  tool_group_slug: string | null;
   current_version_id: string | null;
   created_at: string;
   backend_releases: ToolBackendReleaseListItem[];
@@ -101,31 +58,37 @@ export interface ToolReleaseListItem {
   id: string;
   version: number;
   status: 'draft' | 'active' | 'archived';
-  backend_release_id: string;
+  backend_release_id: string | null;
   backend_version: string | null;
-  category: string | null;
-  tags: string[];
-  notes: string | null;
   created_at: string;
   expected_schema_hash: string | null;
   parent_release_id: string | null;
+}
+
+export interface ToolSemanticProfile {
+  summary: string;
+  when_to_use: string;
+  limitations: string;
+  examples: string[];
+}
+
+export interface ToolPolicyHints {
+  dos: string[];
+  donts: string[];
+  guardrails: string[];
+  sensitive_inputs: string[];
 }
 
 export interface ToolReleaseResponse {
   id: string;
   tool_id: string;
   version: number;
-  backend_release_id: string;
+  backend_release_id: string | null;
   status: 'draft' | 'active' | 'archived';
-  config: Record<string, unknown>;
-  description_for_llm: string | null;
-  category: string | null;
-  tags: string[];
-  field_hints: Record<string, string>;
-  examples: Array<Record<string, unknown>>;
-  return_summary: string | null;
+  semantic_profile: ToolSemanticProfile;
+  policy_hints: ToolPolicyHints;
+  // Meta
   meta_hash: string | null;
-  notes: string | null;
   expected_schema_hash: string | null;
   parent_release_id: string | null;
   created_at: string;
@@ -134,28 +97,22 @@ export interface ToolReleaseResponse {
 }
 
 export interface ToolReleaseCreate {
-  backend_release_id: string;
+  backend_release_id?: string | null;
   from_release_id?: string;
-  config?: Record<string, unknown>;
-  description_for_llm?: string | null;
-  category?: string | null;
-  tags?: string[];
-  field_hints?: Record<string, string>;
-  examples?: Array<Record<string, unknown>>;
-  return_summary?: string | null;
-  notes?: string | null;
+  semantic_profile?: Partial<ToolSemanticProfile> | null;
+  policy_hints?: Partial<ToolPolicyHints> | null;
 }
 
 export interface ToolReleaseUpdate {
-  backend_release_id?: string;
-  config?: Record<string, unknown>;
-  description_for_llm?: string | null;
-  category?: string | null;
-  tags?: string[];
-  field_hints?: Record<string, string>;
-  examples?: Array<Record<string, unknown>>;
-  return_summary?: string | null;
-  notes?: string | null;
+  backend_release_id?: string | null;
+  semantic_profile?: Partial<ToolSemanticProfile> | null;
+  policy_hints?: Partial<ToolPolicyHints> | null;
+}
+
+export interface ToolUpdateRequest {
+  name?: string;
+  domains?: string[] | null;
+  tags?: string[] | null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -164,130 +121,87 @@ export interface ToolReleaseUpdate {
 
 export const toolReleasesApi = {
   // ─────────────────────────────────────────────────────────────────────────
-  // TOOL GROUPS
+  // TOOLS — UUID-based detail/profile surface
   // ─────────────────────────────────────────────────────────────────────────
-  
-  listGroups: async (): Promise<ToolGroupListItem[]> => {
-    return apiRequest<ToolGroupListItem[]>('/admin/tool-groups', { method: 'GET' });
+
+  getTool: async (id: string): Promise<ToolDetail> => {
+    return apiRequest<ToolDetail>(`/admin/tools/${id}`, { method: 'GET' });
   },
 
-  getGroup: async (slug: string): Promise<ToolGroupDetail> => {
-    return apiRequest<ToolGroupDetail>(`/admin/tool-groups/${slug}`, { method: 'GET' });
+  updateTool: async (
+    id: string,
+    data: ToolUpdateRequest,
+  ): Promise<ToolDetail> => {
+    return apiRequest<ToolDetail>(`/admin/tools/${id}`, { method: 'PATCH', body: JSON.stringify(data) });
   },
 
-  createGroup: async (data: ToolGroupCreate): Promise<ToolGroupDetail> => {
-    return apiRequest<ToolGroupDetail>('/admin/tool-groups', { method: 'POST', body: data });
-  },
-
-  updateGroup: async (slug: string, data: ToolGroupUpdate): Promise<ToolGroupDetail> => {
-    return apiRequest<ToolGroupDetail>(`/admin/tool-groups/${slug}`, { method: 'PATCH', body: data });
-  },
-
-  deleteGroup: async (slug: string): Promise<void> => {
-    return apiRequest<void>(`/admin/tool-groups/${slug}`, { method: 'DELETE' });
+  setCurrentVersion: async (toolId: string, releaseId: string): Promise<ToolDetail> => {
+    return apiRequest<ToolDetail>(`/admin/tools/${toolId}/current-version?release_id=${releaseId}`, { method: 'PUT' });
   },
 
   // ─────────────────────────────────────────────────────────────────────────
-  // TOOLS
+  // BACKEND RELEASES (read-only) — all by tool UUID
   // ─────────────────────────────────────────────────────────────────────────
 
-  listToolsByGroup: async (groupSlug: string): Promise<ToolListItem[]> => {
-    return apiRequest<ToolListItem[]>(`/admin/tool-groups/${groupSlug}/tools`, { method: 'GET' });
+  listBackendReleases: async (toolId: string): Promise<ToolBackendReleaseListItem[]> => {
+    return apiRequest<ToolBackendReleaseListItem[]>(`/admin/tools/${toolId}/backend-releases`, { method: 'GET' });
   },
 
-  getTool: async (slug: string): Promise<ToolDetail> => {
-    return apiRequest<ToolDetail>(`/admin/tools/${slug}`, { method: 'GET' });
-  },
-
-  setCurrentVersion: async (toolSlug: string, releaseId: string): Promise<ToolDetail> => {
-    return apiRequest<ToolDetail>(`/admin/tools/${toolSlug}/current-version?release_id=${releaseId}`, { method: 'PUT' });
+  getBackendRelease: async (toolId: string, version: string): Promise<ToolBackendReleaseDetail> => {
+    return apiRequest<ToolBackendReleaseDetail>(`/admin/tools/${toolId}/backend-releases/${version}`, { method: 'GET' });
   },
 
   // ─────────────────────────────────────────────────────────────────────────
-  // BACKEND RELEASES (read-only)
+  // TOOL RELEASES (CRUD) — all by tool UUID
   // ─────────────────────────────────────────────────────────────────────────
 
-  listBackendReleases: async (toolSlug: string): Promise<ToolBackendReleaseListItem[]> => {
-    return apiRequest<ToolBackendReleaseListItem[]>(`/admin/tools/${toolSlug}/backend-releases`, { method: 'GET' });
+  listReleases: async (toolId: string): Promise<ToolReleaseListItem[]> => {
+    return apiRequest<ToolReleaseListItem[]>(`/admin/tools/${toolId}/releases`, { method: 'GET' });
   },
 
-  getBackendRelease: async (toolSlug: string, version: string): Promise<ToolBackendReleaseDetail> => {
-    return apiRequest<ToolBackendReleaseDetail>(`/admin/tools/${toolSlug}/backend-releases/${version}`, { method: 'GET' });
+  getRelease: async (toolId: string, version: number): Promise<ToolReleaseResponse> => {
+    return apiRequest<ToolReleaseResponse>(`/admin/tools/${toolId}/releases/${version}`, { method: 'GET' });
   },
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // TOOL RELEASES (CRUD)
-  // ─────────────────────────────────────────────────────────────────────────
-
-  listReleases: async (toolSlug: string): Promise<ToolReleaseListItem[]> => {
-    return apiRequest<ToolReleaseListItem[]>(`/admin/tools/${toolSlug}/releases`, { method: 'GET' });
+  createRelease: async (toolId: string, data: ToolReleaseCreate): Promise<ToolReleaseResponse> => {
+    return apiRequest<ToolReleaseResponse>(`/admin/tools/${toolId}/releases`, { method: 'POST', body: data });
   },
 
-  getRelease: async (toolSlug: string, version: number): Promise<ToolReleaseResponse> => {
-    return apiRequest<ToolReleaseResponse>(`/admin/tools/${toolSlug}/releases/${version}`, { method: 'GET' });
+  updateRelease: async (toolId: string, version: number, data: ToolReleaseUpdate): Promise<ToolReleaseResponse> => {
+    return apiRequest<ToolReleaseResponse>(`/admin/tools/${toolId}/releases/${version}`, { method: 'PATCH', body: data });
   },
 
-  createRelease: async (toolSlug: string, data: ToolReleaseCreate): Promise<ToolReleaseResponse> => {
-    return apiRequest<ToolReleaseResponse>(`/admin/tools/${toolSlug}/releases`, { method: 'POST', body: data });
+  activateRelease: async (toolId: string, version: number): Promise<ToolReleaseResponse> => {
+    return apiRequest<ToolReleaseResponse>(`/admin/tools/${toolId}/releases/${version}/activate`, { method: 'POST' });
   },
 
-  updateRelease: async (toolSlug: string, version: number, data: ToolReleaseUpdate): Promise<ToolReleaseResponse> => {
-    return apiRequest<ToolReleaseResponse>(`/admin/tools/${toolSlug}/releases/${version}`, { method: 'PATCH', body: data });
+  archiveRelease: async (toolId: string, version: number): Promise<ToolReleaseResponse> => {
+    return apiRequest<ToolReleaseResponse>(`/admin/tools/${toolId}/releases/${version}/archive`, { method: 'POST' });
   },
 
-  activateRelease: async (toolSlug: string, version: number): Promise<ToolReleaseResponse> => {
-    return apiRequest<ToolReleaseResponse>(`/admin/tools/${toolSlug}/releases/${version}/activate`, { method: 'POST' });
+  deleteRelease: async (toolId: string, version: number): Promise<void> => {
+    await apiRequest(`/admin/tools/${toolId}/releases/${version}`, { method: 'DELETE' });
   },
 
-  archiveRelease: async (toolSlug: string, version: number): Promise<ToolReleaseResponse> => {
-    return apiRequest<ToolReleaseResponse>(`/admin/tools/${toolSlug}/releases/${version}/archive`, { method: 'POST' });
-  },
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // SYNC / RESCAN
-  // ─────────────────────────────────────────────────────────────────────────
-
-  rescanAllTools: async (): Promise<{ message: string; stats: Record<string, number> }> => {
-    return apiRequest<{ message: string; stats: Record<string, number> }>('/admin/tool-groups/rescan', { method: 'POST' });
-  },
-
-  rescanGroupTools: async (groupSlug: string): Promise<{ message: string; stats: Record<string, number>; group_id: string }> => {
-    return apiRequest<{ message: string; stats: Record<string, number>; group_id: string }>(`/admin/tool-groups/${groupSlug}/rescan`, { method: 'POST' });
-  },
-
-  rescanBackendReleases: async (toolSlug: string): Promise<{ message: string; stats: Record<string, number>; backend_releases: ToolBackendReleaseListItem[] }> => {
-    return apiRequest<{ message: string; stats: Record<string, number>; backend_releases: ToolBackendReleaseListItem[] }>(`/admin/tools/${toolSlug}/rescan-backend`, { method: 'POST' });
+  rescanBackendReleases: async (toolId: string): Promise<{ message: string; stats: Record<string, number>; backend_releases: ToolBackendReleaseListItem[] }> => {
+    return apiRequest<{ message: string; stats: Record<string, number>; backend_releases: ToolBackendReleaseListItem[] }>(`/admin/tools/${toolId}/rescan-backend`, { method: 'POST' });
   },
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// QUERY KEYS
-// ─────────────────────────────────────────────────────────────────────────────
-
-// Aliases for backward compatibility
-export const toolGroupsApi = toolReleasesApi;
-export const toolsApi = toolReleasesApi;
-
 export const toolReleasesKeys = {
   all: ['tool-releases'] as const,
-  
-  // Tool Groups
-  groups: () => [...toolReleasesKeys.all, 'groups'] as const,
-  groupsList: () => [...toolReleasesKeys.groups(), 'list'] as const,
-  groupDetail: (slug: string) => [...toolReleasesKeys.groups(), 'detail', slug] as const,
-  
+
   // Tools
   tools: () => [...toolReleasesKeys.all, 'tools'] as const,
-  toolsByGroup: (groupSlug: string) => [...toolReleasesKeys.tools(), 'by-group', groupSlug] as const,
-  toolDetail: (slug: string) => [...toolReleasesKeys.tools(), 'detail', slug] as const,
+  toolDetail: (id: string) => [...toolReleasesKeys.tools(), 'detail', id] as const,
   
   // Backend Releases
-  backendReleases: (toolSlug: string) => [...toolReleasesKeys.all, 'backend-releases', toolSlug] as const,
-  backendReleaseDetail: (toolSlug: string, version: string) => 
-    [...toolReleasesKeys.backendReleases(toolSlug), 'detail', version] as const,
+  backendReleases: (toolId: string) => [...toolReleasesKeys.all, 'backend-releases', toolId] as const,
+  backendReleaseDetail: (toolId: string, version: string) => 
+    [...toolReleasesKeys.backendReleases(toolId), 'detail', version] as const,
   
   // Tool Releases
-  releases: (toolSlug: string) => [...toolReleasesKeys.all, 'releases', toolSlug] as const,
-  releaseDetail: (toolSlug: string, version: number) => 
-    [...toolReleasesKeys.releases(toolSlug), 'detail', version] as const,
+  releases: (toolId: string) => [...toolReleasesKeys.all, 'releases', toolId] as const,
+  releaseDetail: (toolId: string, version: number) => 
+    [...toolReleasesKeys.releases(toolId), 'detail', version] as const,
 };

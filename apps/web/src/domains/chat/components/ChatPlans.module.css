@@ -1,0 +1,29 @@
+.container {
+  margin: 16px 0;
+}
+
+.header {
+  margin-bottom: 12px;
+}
+
+.header h4 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.loading {
+  padding: 16px;
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+.plansList {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}

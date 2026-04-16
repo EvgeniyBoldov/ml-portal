@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from typing import Optional, Any, Dict, List
 import jwt
 from argon2 import PasswordHasher
-from fastapi import HTTPException, status
 from .config import get_settings
 
 ph = PasswordHasher()
@@ -93,6 +92,7 @@ def create_refresh_token(user_id: str) -> str:
 def decode_jwt(token: str) -> Dict[str, Any]:
     """Decode and validate JWT token with RSA (production) or HS256 (dev)"""
     s = get_settings()
+    from app.core.exceptions import UnauthorizedError
     try:
         verification_key = _get_verification_key()
         payload = jwt.decode(
@@ -104,17 +104,9 @@ def decode_jwt(token: str) -> Dict[str, Any]:
         )
         return payload
     except jwt.ExpiredSignatureError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token has expired",
-            headers={"WWW-Authenticate": "Bearer"}
-        )
+        raise UnauthorizedError("Token has expired")
     except jwt.InvalidTokenError as e:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Invalid token: {str(e)}",
-            headers={"WWW-Authenticate": "Bearer"}
-        )
+        raise UnauthorizedError(f"Invalid token: {str(e)}")
 
 def get_jwks() -> Dict[str, Any]:
     """Generate JWKS (JSON Web Key Set) - only public keys for RSA"""

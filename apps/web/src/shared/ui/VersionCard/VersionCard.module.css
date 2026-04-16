@@ -62,28 +62,6 @@
   overflow-y: auto;
 }
 
-/* Limits table (Policy) */
-.limitsTable {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-2);
-}
-
-.limitsLabel {
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-medium);
-  color: var(--text-secondary);
-}
-
-.limitsGrid {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
-  padding: var(--sp-2) var(--sp-3);
-}
 
 .notesText {
   padding: var(--sp-2) var(--sp-3);

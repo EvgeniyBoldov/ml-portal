@@ -6,12 +6,32 @@ import { apiRequest } from './http';
 export interface AgentRunStep {
   id: string;
   step_number: number;
-  step_type: 'llm_request' | 'tool_call' | 'tool_result' | 'final_response';
+  step_type: 'user_request' | 'routing' | 'llm_request' | 'llm_response' | 'tool_call' | 'tool_result' | 'final_response' | 'error';
   data: Record<string, unknown>;
   tokens_in?: number;
   tokens_out?: number;
   duration_ms?: number;
+  error?: string;
   created_at: string;
+}
+
+export interface AgentRunContextSnapshot {
+  agent_slug?: string;
+  agent_version_id?: string;
+  prompt_hash?: string;
+  model?: string;
+  execution_mode?: string;
+  policy?: {
+    max_steps?: number;
+    max_tool_calls?: number;
+    max_wall_time_ms?: number;
+    tool_timeout_ms?: number;
+    streaming_enabled?: boolean;
+  };
+  tools?: Array<{ slug: string; instance_id?: string; has_credentials?: boolean }>;
+  routing_duration_ms?: number;
+  routing_reasons?: string[];
+  request_text?: string;
 }
 
 export interface AgentRun {
@@ -21,15 +41,18 @@ export interface AgentRun {
   user_id?: string;
   tenant_id: string;
   agent_slug: string;
+  logging_level?: 'none' | 'brief' | 'full';
   status: 'running' | 'completed' | 'failed';
   total_steps: number;
   total_tool_calls: number;
+  total_llm_calls?: number;
   tokens_in?: number;
   tokens_out?: number;
   duration_ms?: number;
   error?: string;
   started_at: string;
   finished_at?: string;
+  context_snapshot?: AgentRunContextSnapshot;
 }
 
 export interface AgentRunDetail extends AgentRun {

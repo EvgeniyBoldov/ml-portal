@@ -3,17 +3,36 @@
  * Centralized query keys prevent hardcoding and ensure consistency
  * 
  * Usage:
- * - useQuery({ queryKey: qk.rag.list({ page: 1 }) })
- * - queryClient.invalidateQueries({ queryKey: qk.rag.list() })
+ * - useQuery({ queryKey: qk.collections.list() })
+ * - queryClient.invalidateQueries({ queryKey: qk.collections.all() })
  */
 
 export const qk = {
-  rag: {
-    all: () => ['rag'] as const,
-    list: (params?: { page?: number; size?: number; status?: string; q?: string }) =>
-      ['rag', 'list', params] as const,
-    detail: (id: string) => ['rag', 'detail', id] as const,
-    statusGraph: (id: string) => ['rag', 'status-graph', id] as const,
+  sandbox: {
+    sessions: {
+      all: () => ['sandbox', 'sessions'] as const,
+      list: (params?: { status?: string }) =>
+        ['sandbox', 'sessions', 'list', params] as const,
+      detail: (id: string) => ['sandbox', 'sessions', id] as const,
+    },
+    branches: {
+      list: (sessionId: string) =>
+        ['sandbox', 'branches', sessionId] as const,
+    },
+    branchOverrides: {
+      list: (sessionId: string, branchId: string) =>
+        ['sandbox', 'branch-overrides', sessionId, branchId] as const,
+    },
+    runs: {
+      list: (sessionId: string, branchId?: string) =>
+        ['sandbox', 'runs', sessionId, branchId ?? 'all'] as const,
+      detail: (sessionId: string, runId: string) =>
+        ['sandbox', 'runs', sessionId, runId] as const,
+    },
+    catalog: {
+      detail: (sessionId: string) =>
+        ['sandbox', 'catalog', sessionId] as const,
+    },
   },
   admin: {
     all: () => ['admin'] as const,
@@ -30,10 +49,25 @@ export const qk = {
     },
     models: {
       all: () => ['admin', 'models'] as const,
-      list: (params?: { page?: number; size?: number }) => ['admin', 'models', 'list', params] as const,
+      list: (params?: { page?: number; size?: number; type?: string; enabled_only?: boolean; status?: string; search?: string }) => ['admin', 'models', 'list', params] as const,
       detail: (id: string) => ['admin', 'models', id] as const,
     },
-    audit: (params?: { page?: number }) => ['admin', 'audit', params] as const,
+    orchestration: {
+      all: () => ['admin', 'orchestration'] as const,
+      settings: () => ['admin', 'orchestration', 'settings'] as const,
+    },
+    systemLlmRoles: {
+      active: (role: 'triage' | 'planner' | 'summary' | 'memory') => ['admin', 'system-llm-roles', 'active', role] as const,
+    },
+    audit: (params?: {
+      page?: number;
+      page_size?: number;
+      user_id?: string;
+      action?: string;
+      status?: string;
+      from_date?: string;
+      to_date?: string;
+    }) => ['admin', 'audit', params] as const,
   },
   agents: {
     all: () => ['agents'] as const,
@@ -41,7 +75,12 @@ export const qk = {
     detail: (slug: string) => ['agents', 'detail', slug] as const,
     versions: (slug: string) => ['agents', 'versions', slug] as const,
     version: (slug: string, version: number) => ['agents', 'version', slug, version] as const,
-    bindings: (slug: string, version: number) => ['agents', 'bindings', slug, version] as const,
+  },
+  discoveredTools: {
+    all: () => ['discovered-tools'] as const,
+    list: (params?: { source?: string; domain?: string; is_active?: boolean }) =>
+      ['discovered-tools', 'list', params] as const,
+    detail: (id: string) => ['discovered-tools', 'detail', id] as const,
   },
   prompts: {
     all: () => ['prompts'] as const,
@@ -54,47 +93,19 @@ export const qk = {
   tools: {
     all: () => ['tools'] as const,
     list: (params?: { q?: string }) => ['tools', 'list', params] as const,
-    detail: (slug: string) => ['tools', 'detail', slug] as const,
+    detail: (id: string) => ['tools', 'detail', id] as const,
   },
   toolInstances: {
-    all: () => ['tool-instances'] as const,
-    list: (params?: { tool_group_id?: string; is_active?: boolean }) =>
-      ['tool-instances', 'list', params] as const,
-    detail: (id: string) => ['tool-instances', 'detail', id] as const,
-  },
-  toolGroups: {
-    all: () => ['tool-groups'] as const,
-    list: (params?: { skip?: number; limit?: number }) =>
-      ['tool-groups', 'list', params] as const,
-    detail: (id: string) => ['tool-groups', 'detail', id] as const,
+    all: () => ['connectors'] as const,
+    list: (params?: { is_active?: boolean; instance_kind?: string; connector_type?: string; connector_subtype?: string; placement?: string; limit?: number; skip?: number }) =>
+      ['connectors', 'list', params] as const,
+    detail: (id: string) => ['connectors', 'detail', id] as const,
   },
   credentials: {
     all: () => ['credentials'] as const,
     list: (params?: Record<string, unknown>) =>
       ['credentials', 'list', params] as const,
     detail: (id: string) => ['credentials', 'detail', id] as const,
-  },
-  permissions: {
-    all: () => ['permissions'] as const,
-    list: (params?: { scope?: string; tenant_id?: string; user_id?: string }) =>
-      ['permissions', 'list', params] as const,
-    detail: (id: string) => ['permissions', 'detail', id] as const,
-    effective: (params?: { user_id?: string; tenant_id?: string }) =>
-      ['permissions', 'effective', params] as const,
-  },
-  policies: {
-    all: () => ['policies'] as const,
-    list: (params?: Record<string, unknown>) => ['policies', 'list', params] as const,
-    detail: (slug: string) => ['policies', 'detail', slug] as const,
-    versions: (slug: string, params?: { status?: string }) => ['policies', 'versions', slug, params] as const,
-    version: (slug: string, version: number) => ['policies', 'version', slug, version] as const,
-  },
-  limits: {
-    all: () => ['limits'] as const,
-    list: (params?: Record<string, unknown>) => ['limits', 'list', params] as const,
-    detail: (slug: string) => ['limits', 'detail', slug] as const,
-    versions: (slug: string, params?: { status?: string }) => ['limits', 'versions', slug, params] as const,
-    version: (slug: string, version: number) => ['limits', 'version', slug, version] as const,
   },
   agentRuns: {
     all: () => ['agent-runs'] as const,
@@ -121,13 +132,26 @@ export const qk = {
     detail: (id: string) => ['chats', 'detail', id] as const,
     messages: (chatId: string) => ['chats', 'messages', chatId] as const,
   },
+  plans: {
+    all: () => ['plans'] as const,
+    detail: (id: string) => ['plans', 'detail', id] as const,
+    chatPlans: (chatId: string, status?: string) =>
+      ['plans', 'chat', chatId, status ?? 'all'] as const,
+    runPlans: (runId: string, status?: string) =>
+      ['plans', 'run', runId, status ?? 'all'] as const,
+  },
   collections: {
     all: () => ['collections'] as const,
     list: (params?: { tenant_id?: string; is_active?: boolean }) =>
       ['collections', 'list', params] as const,
+    presets: () => ['collections', 'type-presets'] as const,
     detail: (slug: string) => ['collections', 'detail', slug] as const,
-    data: (slug: string, params?: { limit?: number; offset?: number }) =>
+    versions: (id: string) => ['collections', 'versions', id] as const,
+    version: (id: string, version: number) => ['collections', 'version', id, version] as const,
+    data: (slug: string, params?: { limit?: number; offset?: number; search?: string; tenant_id?: string }) =>
       ['collections', 'data', slug, params] as const,
+    documents: (id: string, params?: { page?: number; size?: number; status?: string }) =>
+      ['collections', 'documents', id, params] as const,
   },
   auth: {
     me: () => ['auth', 'me'] as const,

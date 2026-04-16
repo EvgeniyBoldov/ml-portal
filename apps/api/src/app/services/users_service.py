@@ -92,7 +92,27 @@ class AsyncUsersService:
         
         if "full_name" in user_data:
             user.full_name = user_data["full_name"]
-        
+
+        if "tenant_ids" in user_data:
+            new_tenant_ids = [uuid.UUID(t) for t in (user_data["tenant_ids"] or [])]
+            user_uuid = uuid.UUID(str(user.id))
+
+            from sqlalchemy import select, delete
+            from app.models.tenant import UserTenants
+
+            result = await self.users_repo.session.execute(
+                select(UserTenants.tenant_id).where(UserTenants.user_id == user_uuid)
+            )
+            current_tenant_ids = set(row[0] for row in result.fetchall())
+            new_set = set(new_tenant_ids)
+
+            for tenant_id in current_tenant_ids - new_set:
+                await self.users_repo.remove_from_tenant(user_uuid, tenant_id)
+
+            for i, tenant_id in enumerate(new_set - current_tenant_ids):
+                is_default = (i == 0 and not current_tenant_ids)
+                await self.users_repo.add_to_tenant(user_uuid, tenant_id, is_default=is_default)
+
         # Flush changes to trigger onupdate
         await self.users_repo.session.flush()
         await self.users_repo.session.refresh(user)

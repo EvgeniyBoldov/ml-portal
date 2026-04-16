@@ -2,22 +2,20 @@
 AgentVersion model - versioned agent configuration.
 
 Architecture (v2):
-- Agent (container) - holds metadata: slug, name, description, current_version_id
-- AgentVersion - holds versioned data: prompt, policy_id, limit_id
-- ToolBind (AgentBinding) links to agent_version_id
-
+- Agent (container) - holds human-readable metadata (name, slug, description, tags)
+- AgentVersion - holds prompt parts, execution config, safety knobs, and routing fields
 Version statuses:
-- draft: can be edited, can be activated
-- active: used in runtime (only one per agent)
-- deprecated: no longer used, kept for history
+- draft: can be edited, can be published
+- published: used in runtime (only one per agent)
+- archived: no longer used, kept for history
 """
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional, List
 
-from sqlalchemy import String, DateTime, Text, Integer, ForeignKey, UniqueConstraint
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import String, DateTime, Text, Integer, Float, Boolean, ForeignKey, UniqueConstraint
+from sqlalchemy.dialects.postgresql import UUID, ARRAY
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -25,21 +23,15 @@ from app.models.base import Base
 
 class AgentVersionStatus(str, Enum):
     DRAFT = "draft"
-    ACTIVE = "active"
-    DEPRECATED = "deprecated"
+    PUBLISHED = "published"
+    ARCHIVED = "archived"
 
 
 class AgentVersion(Base):
     """
-    Agent version - holds prompt text, policy and limit references.
+    Agent version - holds structured prompt parts, execution config, safety knobs, and routing fields.
 
-    Each version belongs to an Agent and contains:
-    - prompt: System prompt text for the agent
-    - policy_id: Optional reference to Policy (behavioral rules)
-    - limit_id: Optional reference to Limit (execution constraints)
-
-    Only one version per agent can be ACTIVE at a time.
-    Tool bindings (AgentBinding) are linked to agent_version_id.
+    Only one version per agent can be PUBLISHED at a time.
     """
     __tablename__ = "agent_versions"
     __table_args__ = (
@@ -66,21 +58,35 @@ class AgentVersion(Base):
         index=True
     )
 
-    prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    # ── Prompt parts (structured, each column) ──────────────────────────
+    identity: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    mission: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    scope: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    rules: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    tool_use_rules: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    output_format: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    examples: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
-    policy_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey('policies.id', ondelete='SET NULL'),
-        nullable=True,
-        index=True
-    )
+    # ── Execution config ────────────────────────────────────────────────
+    model: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    timeout_s: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    max_steps: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    max_retries: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    max_tokens: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    temperature: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
-    limit_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey('limits.id', ondelete='SET NULL'),
-        nullable=True,
-        index=True
-    )
+    # ── Safety knobs ────────────────────────────────────────────────────
+    requires_confirmation_for_write: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    risk_level: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    never_do: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    allowed_ops: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # ── Routing (for agent router) ────────────────────────────────────────
+    short_info: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    tags: Mapped[Optional[List[str]]] = mapped_column(ARRAY(String), nullable=True)
+    is_routable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    routing_keywords: Mapped[Optional[List[str]]] = mapped_column(ARRAY(String), nullable=True)
+    routing_negative_keywords: Mapped[Optional[List[str]]] = mapped_column(ARRAY(String), nullable=True)
 
     parent_version_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),
@@ -100,6 +106,30 @@ class AgentVersion(Base):
         nullable=False
     )
 
+    @property
+    def compiled_prompt(self) -> str:
+        """Assemble prompt parts into a single system prompt string."""
+        parts = []
+        if self.identity:
+            parts.append(f"# Identity\n{self.identity}")
+        if self.mission:
+            parts.append(f"# Mission\n{self.mission}")
+        if self.scope:
+            parts.append(f"# Scope\n{self.scope}")
+        if self.rules:
+            parts.append(f"# Rules\n{self.rules}")
+        if self.tool_use_rules:
+            parts.append(f"# Tool Use Rules\n{self.tool_use_rules}")
+        if self.output_format:
+            parts.append(f"# Output Format\n{self.output_format}")
+        if self.examples:
+            parts.append(f"# Examples\n{self.examples}")
+        if self.never_do:
+            parts.append(f"# ЗАПРЕЩЕНО\n{self.never_do}")
+        if self.allowed_ops:
+            parts.append(f"# РАЗРЕШЁННЫЕ ОПЕРАЦИИ\n{self.allowed_ops}")
+        return "\n\n".join(parts) if parts else ""
+
     agent: Mapped["Agent"] = relationship(
         "Agent",
         back_populates="versions",
@@ -112,23 +142,17 @@ class AgentVersion(Base):
         foreign_keys=[parent_version_id]
     )
 
-    bindings: Mapped[List["AgentBinding"]] = relationship(
-        "AgentBinding",
-        back_populates="agent_version",
-        cascade="all, delete-orphan"
-    )
-
     @property
     def is_editable(self) -> bool:
         return self.status == AgentVersionStatus.DRAFT.value
 
     @property
-    def can_activate(self) -> bool:
+    def can_publish(self) -> bool:
         return self.status == AgentVersionStatus.DRAFT.value
 
     @property
-    def can_deactivate(self) -> bool:
-        return self.status in (AgentVersionStatus.DRAFT.value, AgentVersionStatus.ACTIVE.value)
+    def can_archive(self) -> bool:
+        return self.status == AgentVersionStatus.PUBLISHED.value
 
     def __repr__(self) -> str:
         return f"<AgentVersion {self.agent_id} v{self.version} ({self.status})>"

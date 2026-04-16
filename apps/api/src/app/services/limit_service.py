@@ -17,35 +17,17 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.exceptions import (
+    LimitNotFoundError,
+    LimitVersionNotFoundError,
+    LimitAlreadyExistsError,
+    LimitVersionNotEditableError,
+    AppError as LimitError,
+)
 from app.models.limit import Limit, LimitVersion, LimitStatus
 from app.repositories.limit_repository import LimitRepository, LimitVersionRepository
 
 logger = logging.getLogger(__name__)
-
-
-class LimitError(Exception):
-    """Base exception for limit operations"""
-    pass
-
-
-class LimitNotFoundError(LimitError):
-    """Limit not found"""
-    pass
-
-
-class LimitVersionNotFoundError(LimitError):
-    """Limit version not found"""
-    pass
-
-
-class LimitAlreadyExistsError(LimitError):
-    """Limit with this slug already exists"""
-    pass
-
-
-class LimitVersionNotEditableError(LimitError):
-    """Limit version cannot be edited (not in draft status)"""
-    pass
 
 
 class LimitService:

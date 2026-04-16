@@ -2,31 +2,29 @@
 Admin agents router v2 - container + version CRUD.
 
 Endpoints:
-- GET/POST /agents - list/create containers
-- GET/PUT/DELETE /agents/{slug} - container CRUD
-- GET/POST /agents/{slug}/versions - list/create versions
-- GET/PATCH/DELETE /agents/{slug}/versions/{version} - version CRUD
-- POST /agents/{slug}/versions/{version}/activate
-- POST /agents/{slug}/versions/{version}/deactivate
+- GET/POST /agents                                    - list/create containers
+- GET/PUT/DELETE /agents/{agent_id}                   - container CRUD by UUID
+- GET/POST /agents/{agent_id}/versions                - list/create versions
+- GET/PATCH/DELETE /agents/{agent_id}/versions/{version_number} - version CRUD
+- POST /agents/{agent_id}/versions/{version_number}/publish
+- POST /agents/{agent_id}/versions/{version_number}/archive
+
+All entity operations use UUID, not slug.
 """
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, status
+from uuid import UUID
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
 from app.api.deps import db_session, require_admin
 from app.core.security import UserCtx
-from app.services.agent_service import (
-    AgentService,
-    AgentError,
-    AgentNotFoundError,
-    AgentAlreadyExistsError,
-    AgentVersionNotFoundError,
-    AgentVersionNotEditableError,
-)
+from app.services.agent_service import AgentService
 from app.schemas.agents import (
     AgentCreate,
     AgentUpdate,
     AgentResponse,
+    AgentListItem,
     AgentDetailResponse,
     AgentVersionCreate,
     AgentVersionUpdate,
@@ -39,8 +37,6 @@ router = APIRouter(tags=["agents"])
 
 class AgentRouteRequest(BaseModel):
     request_text: str = Field(..., min_length=1)
-    category: Optional[str] = None
-    tag: Optional[str] = None
 
 
 class AgentRouteResponse(BaseModel):
@@ -51,16 +47,43 @@ class AgentRouteResponse(BaseModel):
 # AGENT CONTAINER
 # ─────────────────────────────────────────────────────────────────────────────
 
-@router.get("", response_model=List[AgentResponse])
+@router.get("", response_model=List[AgentListItem])
 async def list_agents(
     skip: int = 0,
     limit: int = 100,
     db: AsyncSession = Depends(db_session),
     _: UserCtx = Depends(require_admin),
 ):
-    service = AgentService(db)
-    agents, _ = await service.list_agents(skip=skip, limit=limit)
-    return agents
+    """List all agents (short schema with versions_count)."""
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+    from app.models.agent import Agent
+
+    stmt = (
+        select(Agent)
+        .options(selectinload(Agent.versions))
+        .offset(skip)
+        .limit(limit)
+    )
+    result = await db.execute(stmt)
+    agents = result.scalars().all()
+
+    return [
+        AgentListItem(
+            id=a.id,
+            slug=a.slug,
+            name=a.name,
+            description=a.description,
+            tags=a.tags,
+            current_version_id=a.current_version_id,
+            logging_level=a.logging_level,
+            allowed_collection_ids=a.allowed_collection_ids,
+            versions_count=len(a.versions),
+            created_at=a.created_at,
+            updated_at=a.updated_at,
+        )
+        for a in agents
+    ]
 
 
 @router.post("", response_model=AgentResponse, status_code=status.HTTP_201_CREATED)
@@ -69,33 +92,28 @@ async def create_agent(
     db: AsyncSession = Depends(db_session),
     _: UserCtx = Depends(require_admin),
 ):
-    try:
-        service = AgentService(db)
-        result = await service.create_agent(
-            slug=data.slug, name=data.name, description=data.description,
-            tag=data.tag,
-            category=data.category,
-            routing_example=data.routing_example,
-            is_routable=data.is_routable,
-            logging_level=data.logging_level,
-        )
-        await db.commit()
-        return result
-    except AgentAlreadyExistsError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+    service = AgentService(db)
+    result = await service.create_agent(
+        slug=data.slug,
+        name=data.name,
+        description=data.description,
+        tags=data.tags,
+        logging_level=data.logging_level,
+        model=data.model,
+        allowed_collection_ids=data.allowed_collection_ids,
+    )
+    await db.commit()
+    return result
 
 
-@router.get("/{slug}", response_model=AgentDetailResponse)
+@router.get("/{agent_id}", response_model=AgentDetailResponse)
 async def get_agent(
-    slug: str,
+    agent_id: UUID,
     db: AsyncSession = Depends(db_session),
     _: UserCtx = Depends(require_admin),
 ):
-    try:
-        service = AgentService(db)
-        return await service.get_agent_with_versions(slug)
-    except AgentNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+    service = AgentService(db)
+    return await service.get_agent_detail(agent_id)
 
 
 @router.post("/router/route", response_model=AgentRouteResponse)
@@ -107,203 +125,156 @@ async def route_agent(
     service = AgentService(db)
     selected = await service.route_agent(
         request_text=data.request_text,
-        category=data.category,
-        tag=data.tag,
     )
     if not selected:
         raise HTTPException(status_code=404, detail="No routable agent matches request")
     return AgentRouteResponse(selected_agent=selected)
 
 
-@router.put("/{slug}", response_model=AgentResponse)
+@router.put("/{agent_id}", response_model=AgentResponse)
 async def update_agent(
-    slug: str,
+    agent_id: UUID,
     data: AgentUpdate,
     db: AsyncSession = Depends(db_session),
     _: UserCtx = Depends(require_admin),
 ):
-    try:
-        service = AgentService(db)
-        agent = await service.get_agent_by_slug(slug)
-        result = await service.update_agent(
-            agent_id=agent.id, name=data.name, description=data.description,
-            tag=data.tag,
-            category=data.category,
-            routing_example=data.routing_example,
-            is_routable=data.is_routable,
-            logging_level=data.logging_level,
-        )
-        await db.commit()
-        return result
-    except AgentNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+    service = AgentService(db)
+    result = await service.update_agent(
+        agent_id=agent_id,
+        name=data.name,
+        description=data.description,
+        tags=data.tags,
+        logging_level=data.logging_level,
+        model=data.model,
+        allowed_collection_ids=data.allowed_collection_ids,
+    )
+    await db.commit()
+    return result
 
 
-@router.delete("/{slug}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{agent_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_agent(
-    slug: str,
+    agent_id: UUID,
     db: AsyncSession = Depends(db_session),
     _: UserCtx = Depends(require_admin),
 ):
-    try:
-        service = AgentService(db)
-        agent = await service.get_agent_by_slug(slug)
-        await service.delete_agent(agent.id)
-        await db.commit()
-    except AgentNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+    service = AgentService(db)
+    await service.delete_agent(agent_id)
+    await db.commit()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # AGENT VERSIONS
 # ─────────────────────────────────────────────────────────────────────────────
 
-@router.get("/{slug}/versions", response_model=List[AgentVersionResponse])
+@router.get("/{agent_id}/versions", response_model=List[AgentVersionResponse])
 async def list_versions(
-    slug: str,
+    agent_id: UUID,
     status_filter: Optional[str] = None,
     db: AsyncSession = Depends(db_session),
     _: UserCtx = Depends(require_admin),
 ):
-    try:
-        service = AgentService(db)
-        return await service.list_versions(slug, status_filter)
-    except AgentNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+    service = AgentService(db)
+    return await service.list_versions_by_agent_id(agent_id, status_filter)
 
 
-@router.post("/{slug}/versions", response_model=AgentVersionResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/{agent_id}/versions", response_model=AgentVersionResponse, status_code=status.HTTP_201_CREATED)
 async def create_version(
-    slug: str,
+    agent_id: UUID,
     data: AgentVersionCreate,
     db: AsyncSession = Depends(db_session),
     _: UserCtx = Depends(require_admin),
 ):
-    try:
-        service = AgentService(db)
-        result = await service.create_version(
-            agent_slug=slug,
-            prompt=data.prompt,
-            policy_id=data.policy_id,
-            limit_id=data.limit_id,
-            notes=data.notes,
-            parent_version_id=data.parent_version_id,
-        )
-        await db.commit()
-        return result
-    except AgentNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+    service = AgentService(db)
+    result = await service.create_version_by_agent_id(
+        agent_id=agent_id,
+        data=data.model_dump(exclude_unset=True, exclude={"parent_version_id"}),
+        parent_version_id=data.parent_version_id,
+    )
+    await db.commit()
+    return result
 
 
-@router.get("/{slug}/versions/{version_number}", response_model=AgentVersionResponse)
+@router.get("/{agent_id}/versions/{version_number}", response_model=AgentVersionResponse)
 async def get_version(
-    slug: str,
+    agent_id: UUID,
     version_number: int,
     db: AsyncSession = Depends(db_session),
     _: UserCtx = Depends(require_admin),
 ):
-    try:
-        service = AgentService(db)
-        return await service.get_version_by_number(slug, version_number)
-    except (AgentNotFoundError, AgentVersionNotFoundError) as e:
-        raise HTTPException(status_code=404, detail=str(e))
+    service = AgentService(db)
+    return await service.get_version_by_number_and_agent_id(agent_id, version_number)
 
 
-@router.patch("/{slug}/versions/{version_number}", response_model=AgentVersionResponse)
+@router.patch("/{agent_id}/versions/{version_number}", response_model=AgentVersionResponse)
 async def update_version(
-    slug: str,
+    agent_id: UUID,
     version_number: int,
     data: AgentVersionUpdate,
     db: AsyncSession = Depends(db_session),
     _: UserCtx = Depends(require_admin),
 ):
-    try:
-        service = AgentService(db)
-        version = await service.get_version_by_number(slug, version_number)
-        result = await service.update_version(
-            version_id=version.id,
-            prompt=data.prompt,
-            policy_id=data.policy_id,
-            limit_id=data.limit_id,
-            notes=data.notes,
-        )
-        await db.commit()
-        return result
-    except (AgentNotFoundError, AgentVersionNotFoundError) as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except AgentVersionNotEditableError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    service = AgentService(db)
+    version = await service.get_version_by_number_and_agent_id(agent_id, version_number)
+    result = await service.update_version(
+        version_id=version.id,
+        data=data.model_dump(exclude_unset=True),
+    )
+    await db.commit()
+    return result
 
 
-@router.delete("/{slug}/versions/{version_number}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{agent_id}/versions/{version_number}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_version(
-    slug: str,
+    agent_id: UUID,
     version_number: int,
     db: AsyncSession = Depends(db_session),
     _: UserCtx = Depends(require_admin),
 ):
-    try:
-        service = AgentService(db)
-        version = await service.get_version_by_number(slug, version_number)
-        await service.delete_version(version.id)
-        await db.commit()
-    except (AgentNotFoundError, AgentVersionNotFoundError) as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except AgentError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    service = AgentService(db)
+    version = await service.get_version_by_number_and_agent_id(agent_id, version_number)
+    await service.delete_version(version.id)
+    await db.commit()
 
 
-@router.post("/{slug}/versions/{version_number}/activate", response_model=AgentVersionResponse)
-async def activate_version(
-    slug: str,
+@router.post("/{agent_id}/versions/{version_number}/publish", response_model=AgentVersionResponse)
+async def publish_version(
+    agent_id: UUID,
     version_number: int,
     db: AsyncSession = Depends(db_session),
     _: UserCtx = Depends(require_admin),
 ):
-    try:
-        service = AgentService(db)
-        version = await service.get_version_by_number(slug, version_number)
-        result = await service.activate_version(version.id)
-        await db.commit()
-        return result
-    except (AgentNotFoundError, AgentVersionNotFoundError) as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except AgentError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    service = AgentService(db)
+    version = await service.get_version_by_number_and_agent_id(agent_id, version_number)
+    result = await service.publish_version(version.id)
+    await db.commit()
+    return result
 
 
-@router.post("/{slug}/versions/{version_number}/deactivate", response_model=AgentVersionResponse)
-async def deactivate_version(
-    slug: str,
+@router.post("/{agent_id}/versions/{version_number}/archive", response_model=AgentVersionResponse)
+async def archive_version(
+    agent_id: UUID,
     version_number: int,
     db: AsyncSession = Depends(db_session),
     _: UserCtx = Depends(require_admin),
 ):
-    try:
-        service = AgentService(db)
-        version = await service.get_version_by_number(slug, version_number)
-        result = await service.deactivate_version(version.id)
-        await db.commit()
-        return result
-    except (AgentNotFoundError, AgentVersionNotFoundError) as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except AgentError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    """Archive an agent version"""
+    service = AgentService(db)
+    version = await service.get_version_by_number_and_agent_id(agent_id, version_number)
+    result = await service.archive_version(version.id)
+    await db.commit()
+    return result
 
 
-@router.delete("/{slug}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_agent(
-    slug: str,
+@router.put("/{agent_id}/current-version", response_model=AgentDetailResponse)
+async def set_current_version(
+    agent_id: UUID,
+    version_id: UUID = Query(..., description="Version ID to set as current"),
     db: AsyncSession = Depends(db_session),
     _: UserCtx = Depends(require_admin),
 ):
-    """Delete agent with cascade delete of all versions and bindings"""
-    try:
-        service = AgentService(db)
-        agent = await service.get_agent_by_slug(slug)
-        await service.delete_agent(agent.id)
-        await db.commit()
-    except AgentNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except AgentError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    """Set the current version for an agent. Version must be published. Admin only."""
+    service = AgentService(db)
+    result = await service.set_current_version(agent_id, version_id)
+    await db.commit()
+    return result

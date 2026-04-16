@@ -1,0 +1,203 @@
+/**
+ * GridLayout - Auto-fill grid system for entity pages
+ * 
+ * 12-column grid. Blocks specify width as fractions (1/2, 1/3, 2/3, full).
+ * Height: auto (by content) or stretch (fill row height).
+ * No gaps between blocks — CSS grid handles placement automatically.
+ */
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+  gap: 20px;
+  align-items: start;
+  width: 100%;
+}
+
+/* Block container — wraps any content */
+.block {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* ─── Width variants (grid-column span) ─── */
+.w-full  { grid-column: span 12; }
+.w-1-2   { grid-column: span 6; }
+.w-1-3   { grid-column: span 4; }
+.w-2-3   { grid-column: span 8; }
+.w-1-4   { grid-column: span 3; }
+.w-3-4   { grid-column: span 9; }
+
+/* ─── Height variants ─── */
+.h-auto    { align-self: start; }
+.h-stretch { align-self: stretch; }
+
+/* ─── Block card styling ─── */
+.card {
+  background: var(--bg-secondary, #f9fafb);
+  border: 1px solid var(--border-color, #e5e7eb);
+  border-radius: var(--radius-lg, 8px);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
+
+.card-header {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3, 12px);
+  padding: var(--sp-4, 16px) var(--sp-5, 20px);
+  border-bottom: 1px solid var(--border-color, #e5e7eb);
+  flex-shrink: 0;
+}
+
+.card-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-md, 6px);
+  flex-shrink: 0;
+}
+
+.card-icon.primary {
+  background: var(--primary-bg, rgba(139, 92, 246, 0.15));
+  color: var(--primary, #8b5cf6);
+}
+
+.card-icon.success {
+  background: var(--success-bg, rgba(34, 197, 94, 0.15));
+  color: var(--success, #22c55e);
+}
+
+.card-icon.warning {
+  background: var(--warning-bg, rgba(234, 179, 8, 0.15));
+  color: var(--warning, #eab308);
+}
+
+.card-icon.danger {
+  background: var(--danger-bg, rgba(239, 68, 68, 0.15));
+  color: var(--danger, #ef4444);
+}
+
+.card-icon.info {
+  background: var(--info-bg, rgba(59, 130, 246, 0.15));
+  color: var(--info, #3b82f6);
+}
+
+.card-title {
+  font-size: var(--font-size-md, 15px);
+  font-weight: var(--font-weight-semibold, 600);
+  margin: 0;
+  color: var(--text-primary, #111827);
+  flex: 1;
+}
+
+.card-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2, 8px);
+  margin-left: auto;
+}
+
+.card-body {
+  padding: var(--sp-5, 20px);
+  background: var(--bg-primary, #ffffff);
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.card-body.compact {
+  padding: var(--sp-4, 16px);
+}
+
+/* ─── Field rows inside block ─── */
+.field-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 1.5rem;
+  padding: 0.75rem 0;
+  border-bottom: 1px solid var(--border-light, rgba(255, 255, 255, 0.05));
+}
+
+.field-row:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.field-row:first-child {
+  padding-top: 0;
+}
+
+.field-label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 0 0 180px;
+  max-width: 35%;
+  padding-top: 0.5rem;
+}
+
+.field-label-text {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text, #111827);
+  line-height: 1.5;
+}
+
+.field-description {
+  font-size: 0.8125rem;
+  color: var(--text-secondary, #6b7280);
+}
+
+.field-value {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.field-empty {
+  color: var(--muted, #9ca3af);
+  font-size: 0.9375rem;
+  padding: 0.5rem 0;
+}
+
+/* ─── Responsive ─── */
+@media (max-width: 1200px) {
+  .w-1-3 { grid-column: span 6; }
+  .w-1-4 { grid-column: span 6; }
+}
+
+@media (max-width: 768px) {
+  .grid {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+
+  .w-full,
+  .w-1-2,
+  .w-1-3,
+  .w-2-3,
+  .w-1-4,
+  .w-3-4 {
+    grid-column: span 1;
+  }
+
+  .field-row {
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .field-label {
+    flex: none;
+    max-width: 100%;
+    padding-top: 0;
+  }
+}

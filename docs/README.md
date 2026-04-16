@@ -4,7 +4,8 @@
 - [Project Overview](0.DESCRIPTION.md) — что это и как работает
 - [Platform Overview](PLATFORM_OVERVIEW.md) — бизнес-логика и архитектура крупными мазками
 - [Project Concept](CONCEPT.md) — продуктовый и технический концепт развития
-- [Architecture](2.ARCHITECTURE.md) — техническая архитектура
+- [Backend Architecture](2.ARCHITECTURE.md) — техническая архитектура backend (FastAPI, SQLAlchemy, agents runtime)
+- [Frontend Architecture](2.FRONTEND_ARCHITECTURE.md) — техническая архитектура frontend (React, TanStack Query, SSE)
 - [Admin Panel](ADMIN_STRUCTURE.md) — структура админки
 - [Glossary](GLOSSARY.md) — термины и определения
 
@@ -26,7 +27,7 @@
 
 ## Architecture Deep Dive
 - [Data Model](architecture/DATA_MODEL.md) — модели данных
+- [Collection Asset Refactor](architecture/COLLECTION_ASSET_REFACTOR.md) — целевая модель collection/instance/runtime binding
 - [Agent Runtime](architecture/AGENT_RUNTIME.md) — система выполнения агентов
-
-## Planning
-- [Roadmap](ROADMAP.md) — план развития проекта
+- [Flows](architecture/FLOWS.md) — связывающие runtime-флоу
+- [Chat File Attachments](architecture/CHAT_FILE_ATTACHMENTS.md) — файловый контур чата и генерации файлов ответа

@@ -7,7 +7,7 @@ Architecture (v3 — flattened):
   resource_type + resource_id → allow/deny
 
 Levels: platform → tenant → user (resolution priority: user > tenant > platform)
-Resource types: agent, toolgroup, tool, instance
+Resource types: agent, tool, instance, collection, operation
 Effects: allow, deny
 
 No more RbacPolicy container — rules are bound directly to owners.
@@ -34,9 +34,10 @@ class RbacLevel(str, Enum):
 class ResourceType(str, Enum):
     """RBAC resource type"""
     AGENT = "agent"
-    TOOLGROUP = "toolgroup"
     TOOL = "tool"
     INSTANCE = "instance"
+    COLLECTION = "collection"
+    OPERATION = "operation"
 
 
 class RbacEffect(str, Enum):
@@ -54,7 +55,7 @@ class RbacRule(Base):
     - owner_tenant_id: shared tenant rule
     - owner_platform=True: platform-wide rule
     
-    resource_type: agent | toolgroup | tool | instance
+    resource_type: agent | tool | instance | collection | operation
     resource_id: UUID of the resource
     effect: allow | deny
     level: platform | tenant | user (for resolution priority)
@@ -107,7 +108,7 @@ class RbacRule(Base):
             name="ck_rbac_rule_level"
         ),
         CheckConstraint(
-            "resource_type IN ('agent', 'toolgroup', 'tool', 'instance')",
+            "resource_type IN ('agent', 'tool', 'instance', 'collection', 'operation')",
             name="ck_rbac_rule_resource_type"
         ),
         CheckConstraint(

@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import db_session, require_admin
 from app.core.security import UserCtx
 from app.repositories.routing_log_repository import RoutingLogRepository
-from app.schemas.tool_instances import RoutingLogResponse
+from app.schemas.routing_logs import RoutingLogResponse
 
 router = APIRouter(tags=["routing-logs"])
 

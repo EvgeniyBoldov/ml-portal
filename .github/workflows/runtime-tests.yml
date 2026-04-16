@@ -1,0 +1,261 @@
+name: Runtime Refactor E2E Tests
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'apps/api/src/app/agents/**'
+      - 'apps/api/tests/e2e/**'
+      - 'apps/web/e2e-tests/**'
+      - 'tests/**'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'apps/api/src/app/agents/**'
+      - 'apps/api/tests/e2e/**'
+      - 'apps/web/e2e-tests/**'
+      - 'tests/**'
+
+jobs:
+  runtime-tests:
+    runs-on: ubuntu-latest
+    
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_DB: ml_portal_test
+          POSTGRES_USER: ml_portal
+          POSTGRES_PASSWORD: ml_portal_password
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+      
+      redis:
+        image: redis
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Cache Python dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('apps/api/requirements*.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install Python dependencies
+        run: |
+          cd apps/api
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-test.txt
+
+      - name: Install Node.js dependencies
+        run: |
+          cd apps/web
+          npm ci --legacy-peer-deps
+
+      - name: Install Playwright
+        run: |
+          cd apps/web
+          npx playwright install --with-deps
+
+      - name: Run database migrations
+        run: |
+          cd apps/api
+          alembic upgrade heads
+        env:
+          DATABASE_URL: postgresql://ml_portal:ml_portal_password@localhost:5432/ml_portal_test
+
+      - name: Run backend runtime tests
+        run: |
+          cd apps/api
+          python -m pytest tests/e2e/test_runtime_refactor.py -v --tb=short --junitxml=backend-results.xml
+        env:
+          DATABASE_URL: postgresql://ml_portal:ml_portal_password@localhost:5432/ml_portal_test
+          REDIS_URL: redis://localhost:6379/0
+          LLM_PROVIDER: mock
+          ENVIRONMENT: test
+
+      - name: Run backend performance tests
+        run: |
+          cd apps/api
+          python -m pytest tests/e2e/test_runtime_performance.py -v --tb=short --junitxml=performance-results.xml
+        env:
+          DATABASE_URL: postgresql://ml_portal:ml_portal_password@localhost:5432/ml_portal_test
+          REDIS_URL: redis://localhost:6379/0
+          LLM_PROVIDER: mock
+          ENVIRONMENT: test
+
+      - name: Run backend regression tests
+        run: |
+          cd apps/api
+          python -m pytest tests/e2e/test_runtime_regression.py -v --tb=short --junitxml=regression-results.xml
+        env:
+          DATABASE_URL: postgresql://ml_portal:ml_portal_password@localhost:5432/ml_portal_test
+          REDIS_URL: redis://localhost:6379/0
+          LLM_PROVIDER: mock
+          ENVIRONMENT: test
+
+      - name: Run frontend runtime tests
+        run: |
+          cd apps/web
+          npx playwright test e2e-tests/runtime-refactor.spec.ts --reporter=junit --outputDir=playwright-results
+        env:
+          CI: true
+
+      - name: Generate coverage report
+        run: |
+          cd apps/api
+          python -m pytest tests/e2e/test_runtime_refactor.py --cov=app.agents --cov-report=xml --cov-report=html
+        env:
+          DATABASE_URL: postgresql://ml_portal:ml_portal_password@localhost:5432/ml_portal_test
+          REDIS_URL: redis://localhost:6379/0
+          LLM_PROVIDER: mock
+          ENVIRONMENT: test
+
+      - name: Upload backend test results
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: backend-test-results
+          path: |
+            apps/api/backend-results.xml
+            apps/api/performance-results.xml
+            apps/api/regression-results.xml
+            apps/api/coverage.xml
+            apps/api/htmlcov/
+
+      - name: Upload frontend test results
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: frontend-test-results
+          path: apps/web/playwright-results/
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
+        if: always()
+        with:
+          file: apps/api/coverage.xml
+          flags: runtime-tests
+          name: runtime-coverage
+
+      - name: Comment test results
+        uses: actions/github-script@v7
+        if: always()
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            
+            // Read test results
+            const backendResults = fs.existsSync('apps/api/backend-results.xml') ? fs.readFileSync('apps/api/backend-results.xml', 'utf8') : '';
+            const performanceResults = fs.existsSync('apps/api/performance-results.xml') ? fs.readFileSync('apps/api/performance-results.xml', 'utf8') : '';
+            const regressionResults = fs.existsSync('apps/api/regression-results.xml') ? fs.readFileSync('apps/api/regression-results.xml', 'utf8') : '';
+            
+            // Parse XML to get test counts
+            function parseJUnitXML(xml) {
+              const tests = xml.match(/tests="(\d+)"/);
+              const failures = xml.match(/failures="(\d+)"/);
+              const errors = xml.match(/errors="(\d+)"/);
+              
+              return {
+                total: tests ? parseInt(tests[1]) : 0,
+                failures: failures ? parseInt(failures[1]) : 0,
+                errors: errors ? parseInt(errors[1]) : 0
+              };
+            }
+            
+            const backend = parseJUnitXML(backendResults);
+            const performance = parseJUnitXML(performanceResults);
+            const regression = parseJUnitXML(regressionResults);
+            
+            const totalTests = backend.total + performance.total + regression.total;
+            const totalFailures = backend.failures + performance.failures + regression.failures;
+            const totalErrors = backend.errors + performance.errors + regression.errors;
+            
+            const status = totalFailures + totalErrors === 0 ? '✅ PASSED' : '❌ FAILED';
+            
+            const comment = `## Runtime Refactor E2E Tests ${status}
+            
+            ### Test Summary
+            - **Total Tests**: ${totalTests}
+            - **Failures**: ${totalFailures}
+            - **Errors**: ${totalErrors}
+            
+            ### Backend Tests
+            - **Core Runtime**: ${backend.total} tests, ${backend.failures} failures
+            - **Performance**: ${performance.total} tests, ${performance.failures} failures  
+            - **Regression**: ${regression.total} tests, ${regression.failures} failures
+            
+            ### What was tested
+            - ✅ Planner loop execution
+            - ✅ Tool call handling
+            - ✅ Conversation summaries
+            - ✅ Policy limits enforcement
+            - ✅ Error handling and recovery
+            - ✅ Legacy code removal
+            - ✅ Performance benchmarks
+            - ✅ UI responsiveness
+            
+            ${totalFailures + totalErrors === 0 ? '🎉 Runtime refactor is ready for production!' : '🔧 Some tests failed - check logs for details.'}`;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
+
+  docker-runtime-tests:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build test environment
+        run: |
+          docker-compose -f docker-compose.test.yml build --profile test
+
+      - name: Run runtime tests in Docker
+        run: |
+          python tests/e2e/run_runtime_tests.py
+
+      - name: Upload Docker test results
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: docker-test-results
+          path: coverage/

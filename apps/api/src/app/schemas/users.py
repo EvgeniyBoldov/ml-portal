@@ -52,5 +52,7 @@ class UserUpdate(BaseModel):
 class UserResponse(UserBase):
     """User response schema"""
     id: uuid.UUID
+    full_name: Optional[str] = None
+    tenant_id: Optional[str] = None
     created_at: str
     updated_at: Optional[str] = None

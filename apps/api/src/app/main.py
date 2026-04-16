@@ -2,7 +2,14 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1.router import api_v1
 from app.core.db import lifespan
-from app.core.errors import install_exception_handlers
+from app.core.exceptions import install_exception_handlers
+from app.core.middleware import (
+    GlobalRateLimitMiddleware,
+    RequestContextMiddleware,
+    StartupReadinessMiddleware,
+    TenantMiddleware,
+    TimeoutMiddleware,
+)
 
 app = FastAPI(title="ML-Portal API", lifespan=lifespan)
 
@@ -31,6 +38,11 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type", "Idempotency-Key", "X-Tenant-Id", "X-Request-ID", "Last-Event-ID"],
     expose_headers=["X-Total-Count", "X-Page", "X-Page-Size"],
 )
+app.add_middleware(TimeoutMiddleware)
+app.add_middleware(TenantMiddleware)
+app.add_middleware(GlobalRateLimitMiddleware)
+app.add_middleware(StartupReadinessMiddleware)
+app.add_middleware(RequestContextMiddleware)
 
 
 @app.get("/version")
@@ -40,8 +52,10 @@ async def version():
 @app.get("/metrics")
 async def metrics():
     """Prometheus metrics endpoint"""
-    from app.core.prometheus_metrics import get_metrics_text
+    from app.core.prometheus_metrics import get_metrics_text, record_db_pool_stats
+    from app.core.db import get_pool_stats
     from fastapi.responses import Response
+    record_db_pool_stats(get_pool_stats())
     return Response(
         content=get_metrics_text(),
         media_type="text/plain; version=0.0.4"

@@ -3,10 +3,11 @@
  */
 import React, { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import type { User } from '@shared/api/admin';
+import type { User, UserListResponse } from '@shared/api/admin';
 import { useUsers } from '@shared/api/hooks/useAdmin';
 import { useTenants } from '@shared/hooks/useTenants';
-import { EntityPageV2, Tab } from '@/shared/ui/EntityPage/EntityPageV2';
+import type { Tenant } from '@shared/api/tenant';
+import { EntityPageV2, Tab } from '@/shared/ui/EntityPage';
 import { DataTable, type DataTableColumn, Badge, Button, Input } from '@/shared/ui';
 
 const ROLE_CONFIG: Record<string, { label: string; tone: 'danger' | 'warn' | 'info' | 'neutral' }> = {
@@ -34,14 +35,14 @@ export function UsersListPage() {
   );
 
   const { data, isLoading, error } = useUsers(queryParams);
-  const { tenants } = useTenants();
+  const { tenants = [] } = useTenants();
 
-  const users = data?.users || [];
+  const users = (data as UserListResponse | undefined)?.users ?? [];
 
   const getTenantName = React.useCallback(
     (tenantId: string | undefined) => {
       if (!tenantId || !tenants) return null;
-      const tenant = tenants.find((t: any) => t.id === tenantId);
+      const tenant = tenants.find((t: Tenant) => t.id === tenantId);
       return tenant?.name || null;
     },
     [tenants]
@@ -57,6 +58,11 @@ export function UsersListPage() {
       label: 'ЛОГИН / EMAIL',
       width: 280,
       sortable: true,
+      filter: {
+        kind: 'text',
+        placeholder: 'Логин или email',
+        getValue: (user) => `${user.login ?? ''} ${user.email ?? ''}`,
+      },
       render: (user) => (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
           <span style={{ fontWeight: 500 }}>{user.login}</span>
@@ -69,10 +75,20 @@ export function UsersListPage() {
       label: 'РОЛЬ',
       width: 100,
       sortable: true,
+      filter: {
+        kind: 'select',
+        placeholder: 'Все роли',
+        options: [
+          { value: 'admin', label: 'Админ' },
+          { value: 'editor', label: 'Редактор' },
+          { value: 'reader', label: 'Читатель' },
+        ],
+        getValue: (user) => user.role,
+      },
       render: (user) => {
         const roleConfig = ROLE_CONFIG[user.role] || ROLE_CONFIG.reader;
         return (
-          <Badge tone={roleConfig.tone} size="small">
+          <Badge tone={roleConfig.tone}>
             {roleConfig.label}
           </Badge>
         );
@@ -82,6 +98,11 @@ export function UsersListPage() {
       key: 'tenant_id',
       label: 'ТЕНАНТ',
       sortable: true,
+      filter: {
+        kind: 'text',
+        placeholder: 'Тенант',
+        getValue: (user) => getTenantName(user.tenant_id) ?? '',
+      },
       render: (user) => {
         const tenantName = getTenantName(user.tenant_id);
         return tenantName ? (
@@ -96,8 +117,17 @@ export function UsersListPage() {
       label: 'СТАТУС',
       width: 100,
       sortable: true,
+      filter: {
+        kind: 'select',
+        placeholder: 'Все статусы',
+        options: [
+          { value: 'true', label: 'Активен' },
+          { value: 'false', label: 'Неактивен' },
+        ],
+        getValue: (user) => String(user.is_active),
+      },
       render: (user) => (
-        <Badge tone={user.is_active ? 'success' : 'neutral'} size="small">
+        <Badge tone={user.is_active ? 'success' : 'neutral'}>
           {user.is_active ? 'Активен' : 'Неактивен'}
         </Badge>
       ),
@@ -123,7 +153,7 @@ export function UsersListPage() {
         <Input
           placeholder="Поиск пользователей..."
           value={q}
-          onChange={setQ}
+          onChange={(e) => setQ(e.target.value)}
         />
       }
       actionButtons={

@@ -8,6 +8,8 @@ export interface Credential {
   instance_id: string;
   auth_type: string;
   is_active: boolean;
+  has_payload?: boolean;
+  masked_payload?: Record<string, string> | null;
   owner_user_id?: string | null;
   owner_tenant_id?: string | null;
   owner_platform: boolean;

@@ -149,16 +149,31 @@ def create_idempotency_key_hash(request: Request) -> str:
 
 
 class IdempotencyManager:
-    """Manager for idempotency operations with Redis"""
+    """Canonical Redis-based idempotency manager.
+
+    Usage:
+        idem = IdempotencyManager(redis, prefix="chat:message:")
+        cached = await idem.get_cached_result(key)
+        await idem.cache_result(key, data)
+    """
     
-    def __init__(self, redis_client):
+    def __init__(
+        self,
+        redis_client,
+        prefix: str = "chat:message:",
+        ttl_seconds: int = 86400,
+    ):
         self.redis = redis_client
-        self.ttl_seconds = 86400  # 24 hours
+        self.prefix = prefix
+        self.ttl_seconds = ttl_seconds
     
+    def _make_key(self, key: str) -> str:
+        return f"{self.prefix}{key}"
+
     async def get_cached_result(self, key: str) -> Optional[Dict[str, Any]]:
         """Get cached result from Redis"""
         try:
-            cache_key = f"chat:message:{key}"
+            cache_key = self._make_key(key)
             cached_data = await self.redis.get(cache_key)
             if cached_data:
                 return json.loads(cached_data)
@@ -169,12 +184,21 @@ class IdempotencyManager:
     async def cache_result(self, key: str, data: Dict[str, Any]):
         """Cache result in Redis"""
         try:
-            cache_key = f"chat:message:{key}"
+            cache_key = self._make_key(key)
             await self.redis.setex(
                 cache_key,
                 self.ttl_seconds,
                 json.dumps(data)
             )
-            logger.info(f"Cached result for key: {key}")
+            logger.debug(f"Cached result for key: {self.prefix}{key}")
         except Exception as e:
             logger.warning(f"Failed to cache result: {e}")
+
+    async def delete(self, key: str) -> bool:
+        """Delete cached result. Returns True if key existed."""
+        try:
+            cache_key = self._make_key(key)
+            return bool(await self.redis.delete(cache_key))
+        except Exception as e:
+            logger.warning(f"Failed to delete cached result: {e}")
+            return False

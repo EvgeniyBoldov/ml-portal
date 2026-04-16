@@ -1,141 +1,345 @@
 /**
- * InstancePage - Create/View/Edit tool instance
+ * InstancePage v3 — просмотр/создание/редактирование/удаление коннектора.
  *
- * Tabs:
- * 1. Обзор - основная информация, конфигурация, статус
- * 2. Креденшалы - таблица привязанных креденшалов
+ * Classification axes: connector_type (data|mcp|model), connector_subtype (sql|api), placement (local|remote).
  */
-import { useState, useEffect, useMemo } from 'react';
-import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMemo } from 'react';
 import {
   toolInstancesApi,
-  toolGroupsApi,
   credentialsApi,
+  type ToolInstanceDetail,
   type ToolInstanceCreate,
   type ToolInstanceUpdate,
-  type Credential,
+  type ToolInstance,
 } from '@/shared/api';
 import { qk } from '@/shared/api/keys';
+import { useEntityEditor } from '@/shared/hooks/useEntityEditor';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
-import { EntityPageV2, Tab, type EntityPageMode, type BreadcrumbItem } from '@/shared/ui/EntityPage/EntityPageV2';
-import { ContentBlock, Badge, DataTable, Button, type FieldDefinition, type DataTableColumn } from '@/shared/ui';
+import { EntityPageV2, Tab } from '@/shared/ui/EntityPage';
+import { Block, type FieldConfig } from '@/shared/ui/GridLayout';
+import { Button, ConfirmDialog, Badge, HealthIndicator } from '@/shared/ui';
+import DataTable, { type DataTableColumn } from '@/shared/ui/DataTable/DataTable';
+import { type Credential } from '@/shared/api/credentials';
 
-// --- Constants ---
+/* ─── Field configs ─── */
 
-const INSTANCE_TYPE_OPTIONS = [
-  { value: 'local', label: 'Локальный' },
-  { value: 'remote', label: 'Удаленный' },
+const INFO_FIELDS: FieldConfig[] = [
+  {
+    key: 'slug',
+    type: 'text',
+    label: 'Slug (ID)',
+    description: 'Уникальный идентификатор (нельзя изменить после создания)',
+    placeholder: 'my-instance',
+    editable: false,
+  },
+  {
+    key: 'name',
+    type: 'text',
+    label: 'Название',
+    required: true,
+    placeholder: 'My Tool Instance',
+  },
+  {
+    key: 'description',
+    type: 'textarea',
+    label: 'Описание',
+    placeholder: 'Описание коннектора...',
+    rows: 3,
+  },
+  {
+    key: 'is_active',
+    type: 'boolean',
+    label: 'Активен',
+    description: 'Коннектор доступен для использования',
+  },
 ];
 
-const CATEGORY_OPTIONS = [
-  { value: 'collection', label: 'Collection' },
-  { value: 'rag', label: 'RAG' },
-  { value: 'llm', label: 'LLM' },
-  { value: 'dcbox', label: 'DCBox' },
-  { value: 'jira', label: 'Jira' },
-  { value: 'database', label: 'Database' },
-  { value: 'api', label: 'API' },
-  { value: 'other', label: 'Другое' },
+const CLASSIFICATION_FIELDS: FieldConfig[] = [
+  {
+    key: 'connector_type',
+    type: 'select',
+    label: 'Тип',
+    description: 'Тип коннектора',
+    options: [
+      { value: 'data', label: 'Data — источник данных' },
+      { value: 'mcp', label: 'MCP — провайдер инструментов' },
+      { value: 'model', label: 'Model — провайдер моделей' },
+    ],
+  },
+  {
+    key: 'connector_subtype',
+    type: 'select',
+    label: 'Подтип data-коннектора',
+    description: 'Способ подключения к источнику данных',
+    options: [
+      { value: 'sql', label: 'SQL' },
+      { value: 'api', label: 'API' },
+    ],
+  },
+  {
+    key: 'access_via_instance_id',
+    type: 'select',
+    label: 'MCP-коннектор',
+    description: 'Коннектор, через который доступен data-коннектор',
+  },
+  {
+    key: 'placement',
+    type: 'select',
+    label: 'Размещение',
+    description: 'Локальный или удаленный',
+    editable: false,
+    options: [
+      { value: 'local', label: 'Локальный (auto-managed)' },
+      { value: 'remote', label: 'Удалённый (user-managed)' },
+    ],
+  },
 ];
 
-const CATEGORY_LABELS: Record<string, string> = Object.fromEntries(
-  CATEGORY_OPTIONS.map(o => [o.value, o.label])
-);
+const CONNECTION_FIELDS: FieldConfig[] = [
+  {
+    key: 'url',
+    type: 'text',
+    label: 'URL',
+    placeholder: 'https://api.example.com/v1',
+    description: 'Endpoint для подключения',
+  },
+];
 
-// --- Component ---
+const SQL_CONFIG_FIELDS: FieldConfig[] = [
+  {
+    key: 'database_name',
+    type: 'text',
+    label: 'Database name',
+    required: true,
+    placeholder: 'netbox',
+    description: 'Имя базы данных для SQL подключения',
+  },
+  {
+    key: 'schema_name',
+    type: 'text',
+    label: 'Schema name',
+    placeholder: 'public',
+    description: 'Опционально: схема БД',
+  },
+];
+
+const API_CONFIG_FIELDS: FieldConfig[] = [
+  {
+    key: 'base_path',
+    type: 'text',
+    label: 'Base path',
+    placeholder: '/v1',
+    description: 'Опционально: базовый путь API',
+  },
+  {
+    key: 'timeout_seconds',
+    type: 'number',
+    label: 'Timeout (sec)',
+    placeholder: '30',
+    description: 'Таймаут запроса',
+  },
+];
+
+const META_FIELDS: FieldConfig[] = [
+  { key: 'id', type: 'code', label: 'ID', editable: false },
+  { key: 'created_at', type: 'date', label: 'Создан', editable: false },
+  { key: 'updated_at', type: 'date', label: 'Обновлён', editable: false },
+];
+
+const AUTH_TYPE_LABELS: Record<string, string> = {
+  token: 'Bearer Token',
+  basic: 'Basic Auth',
+  api_key: 'API Key',
+  oauth: 'OAuth 2.0',
+};
+
+const credentialColumns: DataTableColumn<Credential>[] = [
+  {
+    key: 'auth_type',
+    label: 'Тип',
+    render: (c: Credential) => (
+      <Badge tone="neutral">{AUTH_TYPE_LABELS[c.auth_type] || c.auth_type}</Badge>
+    ),
+  },
+  {
+    key: 'is_active',
+    label: 'Статус',
+    render: (c: Credential) => (
+      <Badge tone={c.is_active ? 'success' : 'warn'}>{c.is_active ? 'Активен' : 'Отключен'}</Badge>
+    ),
+  },
+  {
+    key: 'owner_platform',
+    label: 'Уровень',
+    render: (c: Credential) => {
+      if (c.owner_platform) return <Badge tone="info">Platform</Badge>;
+      if (c.owner_tenant_id) return <Badge tone="neutral">Tenant</Badge>;
+      return <Badge tone="neutral">User</Badge>;
+    },
+  },
+  {
+    key: 'created_at',
+    label: 'Создан',
+    render: (c: Credential) => new Date(c.created_at).toLocaleDateString('ru-RU'),
+  },
+];
+
+function isSystemRuntimeInstance(instance: ToolInstance): boolean {
+  const providerKind = typeof instance.provider_kind === 'string'
+    ? instance.provider_kind.toLowerCase()
+    : typeof instance.config?.provider_kind === 'string'
+      ? String(instance.config.provider_kind).toLowerCase()
+      : '';
+  return (
+    providerKind === 'local_documents'
+    || providerKind === 'local_tables'
+    || providerKind === 'local_runtime'
+  );
+}
+
+/* ─── Component ─── */
 
 export function InstancePage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const showError = useErrorToast();
   const showSuccess = useSuccessToast();
 
-  const isCreate = !id;
-  const isEditMode = searchParams.get('mode') === 'edit';
-  const mode: EntityPageMode = isCreate ? 'create' : isEditMode ? 'edit' : 'view';
-  const isEditable = mode === 'edit' || mode === 'create';
+  // ─── useEntityEditor ───
 
-  // --- Form state ---
-  const [formData, setFormData] = useState({
-    tool_group_id: '',
-    name: '',
-    instance_type: 'local',
-    url: '',
-    description: '',
-    config: '{}',
-    category: '',
-    is_active: true,
+  const {
+    mode,
+    isNew,
+    isEditable,
+    entity: instance,
+    isLoading,
+    formData,
+    saving,
+    showDeleteConfirm,
+    setShowDeleteConfirm,
+    breadcrumbs,
+    handleFieldChange,
+    handleSave,
+    handleEdit,
+    handleCancel,
+    handleDelete,
+    handleDeleteConfirm,
+  } = useEntityEditor<ToolInstanceDetail, ToolInstanceCreate, ToolInstanceUpdate>({
+    entityType: 'instance',
+    entityNameLabel: 'Коннекторы',
+    entityTypeLabel: 'коннектор',
+    basePath: '/admin/connectors',
+    listPath: '/admin/connectors',
+    api: {
+      get: (entityId) => toolInstancesApi.get(entityId),
+      create: (data) => toolInstancesApi.create(data) as Promise<ToolInstanceDetail>,
+      update: (entityId, data) => toolInstancesApi.update(entityId, data) as Promise<ToolInstanceDetail>,
+      delete: (entityId) => toolInstancesApi.delete(entityId),
+    },
+    queryKeys: {
+      list: qk.toolInstances.list({ placement: 'remote' }),
+      detail: (entityId) => qk.toolInstances.detail(entityId),
+    },
+    getInitialFormData: (inst) => ({
+      slug: inst?.slug ?? '',
+      name: inst?.name ?? '',
+      description: inst?.description ?? '',
+      connector_type: inst?.connector_type ?? 'data',
+      connector_subtype: inst?.connector_subtype ?? 'api',
+      placement: inst?.placement ?? 'remote',
+      url: inst?.url ?? '',
+      access_via_instance_id: inst?.access_via_instance_id ?? '',
+      is_active: inst?.is_active ?? true,
+      database_name: String(inst?.config?.database_name ?? ''),
+      schema_name: String(inst?.config?.schema_name ?? ''),
+      base_path: String(inst?.config?.base_path ?? ''),
+      timeout_seconds: Number(inst?.config?.timeout_seconds ?? 30),
+    }),
+    validateCreate: (data) => {
+      if (!data.name?.trim()) return 'Введите название';
+      if (data.connector_type === 'data' && !data.connector_subtype) {
+        return 'Выберите подтип data-коннектора';
+      }
+      if (data.connector_type === 'data' && data.connector_subtype === 'sql' && !String(data.database_name ?? '').trim()) {
+        return 'Для SQL-коннектора укажите database_name';
+      }
+      return null;
+    },
+    transformCreate: (data) => {
+      const config = data.connector_type === 'data'
+        ? (
+            data.connector_subtype === 'sql'
+              ? {
+                  database_name: String(data.database_name ?? '').trim(),
+                  schema_name: String(data.schema_name ?? '').trim() || undefined,
+                }
+              : {
+                  base_path: String(data.base_path ?? '').trim() || undefined,
+                  timeout_seconds: Number(data.timeout_seconds ?? 30),
+                }
+          )
+        : undefined;
+      return {
+        slug: data.slug || undefined,
+        name: data.name,
+        description: data.description || undefined,
+        connector_type: data.connector_type || 'data',
+        connector_subtype: data.connector_type === 'data' ? (data.connector_subtype || 'api') : undefined,
+        url: data.url || undefined,
+        access_via_instance_id: data.access_via_instance_id || undefined,
+        config,
+      };
+    },
+    transformUpdate: (data) => {
+      const config = data.connector_type === 'data'
+        ? (
+            data.connector_subtype === 'sql'
+              ? {
+                  database_name: String(data.database_name ?? '').trim(),
+                  schema_name: String(data.schema_name ?? '').trim() || undefined,
+                }
+              : {
+                  base_path: String(data.base_path ?? '').trim() || undefined,
+                  timeout_seconds: Number(data.timeout_seconds ?? 30),
+                }
+          )
+        : undefined;
+      return {
+        name: data.name,
+        description: data.description,
+        connector_type: data.connector_type,
+        connector_subtype: data.connector_type === 'data' ? (data.connector_subtype || 'api') : null,
+        url: data.url || undefined,
+        access_via_instance_id: data.access_via_instance_id || null,
+        config,
+        is_active: data.is_active,
+      };
+    },
+    messages: {
+      create: 'Коннектор создан',
+      update: 'Коннектор обновлён',
+      delete: 'Коннектор удалён',
+    },
   });
 
-  // --- Queries ---
+  // ─── Queries ───
 
-  const { data: instance, isLoading } = useQuery({
-    queryKey: qk.toolInstances.detail(id!),
-    queryFn: () => toolInstancesApi.get(id!),
-    enabled: !isCreate && !!id,
-  });
-
-  const { data: toolGroups = [] } = useQuery({
-    queryKey: qk.toolGroups.list({}),
-    queryFn: () => toolGroupsApi.listGroups(),
-    staleTime: 300000,
+  const { data: allInstances = [] } = useQuery({
+    queryKey: qk.toolInstances.list({ connector_type: 'mcp', placement: 'remote' }),
+    queryFn: () => toolInstancesApi.list({ connector_type: 'mcp', placement: 'remote' }),
+    staleTime: 300_000,
   });
 
   const { data: credentials = [] } = useQuery({
     queryKey: [...qk.credentials.list({ instance_id: id! }), 'instance'],
     queryFn: () => credentialsApi.list({ instance_id: id! }),
-    enabled: !isCreate && !!id,
+    enabled: !isNew && !!id,
   });
 
-  // --- Options ---
-
-  const toolGroupOptions = useMemo(() =>
-    toolGroups.map((g: any) => ({ value: g.id, label: `${g.name} (${g.slug})` })),
-    [toolGroups],
-  );
-
-  // --- Sync form data ---
-
-  useEffect(() => {
-    if (instance) {
-      setFormData({
-        tool_group_id: instance.tool_group_id,
-        name: instance.name || '',
-        instance_type: instance.instance_type || 'local',
-        url: instance.url || '',
-        description: instance.description || '',
-        config: JSON.stringify(instance.config || {}, null, 2),
-        category: instance.category || '',
-        is_active: instance.is_active,
-      });
-    }
-  }, [instance]);
-
-  // --- Mutations ---
-
-  const createMutation = useMutation({
-    mutationFn: (data: ToolInstanceCreate) => toolInstancesApi.create(data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.toolInstances.all() });
-      showSuccess('Инстанс создан');
-      navigate('/admin/instances');
-    },
-    onError: (err: Error) => showError(err.message),
-  });
-
-  const updateMutation = useMutation({
-    mutationFn: (data: ToolInstanceUpdate) => toolInstancesApi.update(id!, data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.toolInstances.detail(id!) });
-      queryClient.invalidateQueries({ queryKey: qk.toolInstances.all() });
-      showSuccess('Инстанс обновлён');
-      setSearchParams({});
-    },
-    onError: (err: Error) => showError(err.message),
-  });
+  // ─── Health check ───
 
   const healthCheckMutation = useMutation({
     mutationFn: () => toolInstancesApi.healthCheck(id!),
@@ -146,301 +350,291 @@ export function InstancePage() {
     onError: (err: Error) => showError(err.message),
   });
 
-  // --- Handlers ---
+  // ─── Derived ───
 
-  const handleSave = async () => {
-    let config: Record<string, unknown> = {};
-    if (formData.config.trim()) {
-      try {
-        config = JSON.parse(formData.config);
-      } catch {
-        showError('Неверный формат JSON в конфигурации');
-        return;
-      }
-    }
+  const isDataInstance = (isEditable ? formData.connector_type : instance?.connector_type) === 'data';
+  const isRemote = (isEditable ? formData.placement : instance?.placement) === 'remote';
+  const isSystemInstance = instance ? isSystemRuntimeInstance(instance) : false;
 
-    if (isCreate) {
-      if (!formData.tool_group_id) {
-        showError('Выберите группу инструментов');
-        return;
-      }
-      if (!formData.name.trim()) {
-        showError('Введите название');
-        return;
-      }
-      createMutation.mutate({
-        tool_group_id: formData.tool_group_id,
-        name: formData.name,
-        url: formData.url || undefined,
-        description: formData.description || undefined,
-        config,
-        category: formData.category || undefined,
-      });
-    } else {
-      updateMutation.mutate({
-        name: formData.name,
-        url: formData.url || undefined,
-        description: formData.description || undefined,
-        config,
-        is_active: formData.is_active,
-        category: formData.category || undefined,
-      });
-    }
+  const serviceInstanceOptions = allInstances
+    .filter((i: ToolInstance) => i.connector_type === 'mcp' && i.id !== id)
+    .map((i: ToolInstance) => ({ value: i.id, label: i.name }));
+
+  const viewData = {
+    slug: instance?.slug ?? '',
+    name: instance?.name ?? '',
+    description: instance?.description ?? '',
+    connector_type: instance?.connector_type ?? 'data',
+    connector_subtype: instance?.connector_subtype ?? 'api',
+    placement: instance?.placement ?? 'remote',
+    url: instance?.url ?? '',
+    access_via_instance_id: instance?.access_via_instance_id ?? '',
+    is_active: instance?.is_active ?? false,
+    database_name: String(instance?.config?.database_name ?? ''),
+    schema_name: String(instance?.config?.schema_name ?? ''),
+    base_path: String(instance?.config?.base_path ?? ''),
+    timeout_seconds: Number(instance?.config?.timeout_seconds ?? 30),
+    health_status: instance?.health_status ?? 'unknown',
+    id: instance?.id ?? '',
+    created_at: instance?.created_at ?? '',
+    updated_at: instance?.updated_at ?? '',
   };
 
-  const handleEdit = () => setSearchParams({ mode: 'edit' });
+  const blockData = isEditable ? formData : viewData;
 
-  const handleCancel = () => {
-    if (isCreate) {
-      navigate('/admin/instances');
-    } else {
-      if (instance) {
-        setFormData({
-          tool_group_id: instance.tool_group_id,
-          name: instance.name || '',
-          instance_type: instance.instance_type || 'local',
-          url: instance.url || '',
-          description: instance.description || '',
-          config: JSON.stringify(instance.config || {}, null, 2),
-          category: instance.category || '',
-          is_active: instance.is_active,
-        });
-      }
-      setSearchParams({});
+  // Slug editable only on create
+  const infoFieldsForMode = isNew
+    ? INFO_FIELDS.map(f => f.key === 'slug' ? { ...f, editable: true } : f)
+    : INFO_FIELDS;
+
+  const classificationFieldsForMode = useMemo(() => {
+    const connectorOptions = [
+      { value: '', label: 'Без MCP (напрямую)' },
+      ...serviceInstanceOptions,
+    ];
+
+    let fields = CLASSIFICATION_FIELDS.map((field) =>
+      field.key === 'access_via_instance_id'
+        ? { ...field, options: connectorOptions }
+        : field
+    );
+
+    if (isEditable) {
+      fields = fields.filter((field) => field.key !== 'placement');
     }
-  };
 
-  // --- Field definitions ---
+    if (!isDataInstance) {
+      return fields.filter((field) => field.key !== 'access_via_instance_id' && field.key !== 'connector_subtype');
+    }
 
-  const mainFields: FieldDefinition[] = [
-    {
-      key: 'tool_group_id',
-      label: 'Группа инструментов',
-      type: 'select',
-      required: true,
-      options: toolGroupOptions,
-      disabled: !isCreate, // Нельзя менять группу после создания
-    },
-    {
-      key: 'name',
-      label: 'Название',
-      type: 'text',
-      required: true,
-    },
-    {
-      key: 'instance_type',
-      label: 'Тип',
-      type: 'select',
-      options: INSTANCE_TYPE_OPTIONS,
-      disabled: !isCreate, // Нельзя менять тип после создания
-    },
-    {
-      key: 'url',
-      label: 'URL',
-      type: 'text',
-      placeholder: 'https://api.example.com/v1',
-    },
-    {
-      key: 'category',
-      label: 'Категория',
-      type: 'select',
-      options: CATEGORY_OPTIONS,
-    },
-    {
-      key: 'description',
-      label: 'Описание',
-      type: 'textarea',
-      rows: 3,
-    },
-  ];
+    return fields;
+  }, [isDataInstance, isEditable, serviceInstanceOptions]);
 
-  const statusFields: FieldDefinition[] = [
-    {
-      key: 'is_active',
-      label: 'Статус',
-      type: 'boolean',
-    },
-    {
-      key: 'health_status',
-      label: 'Health',
-      type: 'badge',
-      badgeTone: instance?.health_status === 'healthy' ? 'success'
-        : instance?.health_status === 'unhealthy' ? 'danger' : 'neutral',
-    },
-    {
-      key: 'created_at',
-      label: 'Создан',
-      type: 'date',
-    },
-  ];
+  const connectionFieldsForMode = useMemo(
+    () => (isRemote ? CONNECTION_FIELDS : []),
+    [isRemote]
+  );
+  const dataSubtype = (isEditable ? formData.connector_subtype : viewData.connector_subtype) || 'api';
+  const connectorConfigFields = useMemo(() => {
+    if (!isDataInstance) return [];
+    return dataSubtype === 'sql' ? SQL_CONFIG_FIELDS : API_CONFIG_FIELDS;
+  }, [isDataInstance, dataSubtype]);
 
-  const configFields: FieldDefinition[] = [
-    {
-      key: 'config',
-      label: 'JSON конфигурация',
-      type: 'textarea',
-      rows: 10,
-      placeholder: '{"key": "value"}',
-    },
-  ];
+  // ─── Create mode ───
 
-  // --- View data ---
-
-  const viewData = instance ? {
-    tool_group_id: instance.tool_group_name || instance.tool_group_slug || instance.tool_group_id,
-    name: instance.name,
-    instance_type: instance.instance_type === 'local' ? 'Локальный' : 'Удаленный',
-    url: instance.url || '—',
-    category: CATEGORY_LABELS[instance.category || ''] || instance.category || '—',
-    description: instance.description || '—',
-    is_active: instance.is_active,
-    health_status: instance.health_status || '—',
-    created_at: instance.created_at ? new Date(instance.created_at).toLocaleString('ru-RU') : '—',
-    config: JSON.stringify(instance.config || {}, null, 2),
-  } : formData;
-
-  // --- Credential columns ---
-
-  const credentialColumns: DataTableColumn<Credential>[] = [
-    {
-      key: 'auth_type',
-      label: 'ТИП',
-      width: 120,
-      render: (c) => <Badge tone="neutral">{c.auth_type}</Badge>,
-    },
-    {
-      key: 'owner',
-      label: 'ВЛАДЕЛЕЦ',
-      render: (c) => {
-        if (c.owner_platform) return <Badge tone="info">Платформа</Badge>;
-        if (c.owner_tenant_id) return <span style={{ fontSize: '0.8125rem' }}>Тенант: <code>{c.owner_tenant_id.slice(0, 8)}…</code></span>;
-        if (c.owner_user_id) return <span style={{ fontSize: '0.8125rem' }}>Юзер: <code>{c.owner_user_id.slice(0, 8)}…</code></span>;
-        return <span style={{ color: 'var(--text-secondary)' }}>—</span>;
-      },
-    },
-    {
-      key: 'is_active',
-      label: 'СТАТУС',
-      width: 100,
-      render: (c) => (
-        <Badge tone={c.is_active ? 'success' : 'neutral'}>
-          {c.is_active ? 'Активен' : 'Неактивен'}
-        </Badge>
-      ),
-    },
-    {
-      key: 'created_at',
-      label: 'СОЗДАН',
-      width: 120,
-      render: (c) => (
-        <span style={{ color: 'var(--text-secondary)', fontSize: '0.8125rem' }}>
-          {new Date(c.created_at).toLocaleDateString('ru-RU')}
-        </span>
-      ),
-    },
-  ];
-
-  // --- Breadcrumbs ---
-
-  const breadcrumbs: BreadcrumbItem[] = [
-    { label: 'Инстансы', href: '/admin/instances' },
-    { label: isCreate ? 'Новый инстанс' : (instance?.name || 'Инстанс') },
-  ];
-
-  const saving = createMutation.isPending || updateMutation.isPending;
-
-  // --- Create mode ---
-
-  if (isCreate) {
+  if (isNew) {
     return (
       <EntityPageV2
-        title="Новый инстанс"
-        mode={mode}
+        title="Новый коннектор"
+        mode="create"
         saving={saving}
         breadcrumbs={breadcrumbs}
-        backPath="/admin/instances"
+        backPath="/admin/connectors"
         onSave={handleSave}
         onCancel={handleCancel}
       >
         <Tab title="Создание" layout="grid">
-          <ContentBlock
+          <Block
             title="Основная информация"
             icon="server"
-            fields={mainFields}
+            iconVariant="info"
+            width="1/2"
+            fields={infoFieldsForMode}
             data={formData}
-            editable={true}
-            onChange={(key, value) => setFormData(prev => ({ ...prev, [key]: value }))}
+            editable
+            onChange={handleFieldChange}
+            headerActions={
+              <HealthIndicator
+                healthStatus={formData.health_status}
+                isActive={formData.is_active}
+              />
+            }
           />
-          <ContentBlock
-            title="Конфигурация"
-            icon="settings"
-            fields={configFields}
+          <Block
+            title="Классификация"
+            icon="layers"
+            iconVariant="primary"
+            width="1/2"
+            height="stretch"
+            fields={classificationFieldsForMode}
             data={formData}
-            editable={true}
-            onChange={(key, value) => setFormData(prev => ({ ...prev, [key]: value }))}
+            editable
+            onChange={handleFieldChange}
           />
+          {connectionFieldsForMode.length > 0 && (
+            <Block
+              title="Подключение"
+              icon="link"
+              iconVariant="info"
+              width="1/2"
+              fields={connectionFieldsForMode}
+              data={formData}
+              editable
+              onChange={handleFieldChange}
+            />
+          )}
+          {connectorConfigFields.length > 0 && (
+            <Block
+              title="Параметры коннектора"
+              icon="code"
+              iconVariant="info"
+              width="full"
+              fields={connectorConfigFields}
+              data={formData}
+              editable
+              onChange={handleFieldChange}
+            />
+          )}
         </Tab>
       </EntityPageV2>
     );
   }
 
-  // --- View/Edit mode ---
+  // ─── View / Edit mode ───
+
+  const placementLabel = instance?.placement === 'local' ? 'локальный' : 'удалённый';
+  const kindLabel = instance?.connector_type ?? 'data';
 
   return (
-    <EntityPageV2
-      title={instance?.name || 'Инстанс'}
-      mode={mode}
-      loading={isLoading}
-      saving={saving}
-      breadcrumbs={breadcrumbs}
-      onEdit={handleEdit}
-      onSave={handleSave}
-      onCancel={handleCancel}
-    >
-      <Tab title="Обзор" layout="grid" actions={
-        mode === 'view' ? [
-          <Button key="health" variant="outline" onClick={() => healthCheckMutation.mutate()} disabled={healthCheckMutation.isPending}>
-            Health Check
-          </Button>,
-        ] : []
-      }>
-        <ContentBlock
-          title="Основная информация"
-          icon="server"
-          fields={mainFields}
-          data={isEditable ? formData : viewData}
-          editable={isEditable}
-          onChange={(key, value) => setFormData(prev => ({ ...prev, [key]: value }))}
-        />
-        <ContentBlock
-          title="Статус"
-          icon="activity"
-          fields={statusFields}
-          data={isEditable ? { ...formData, health_status: instance?.health_status || '—', created_at: instance?.created_at } : viewData}
-          editable={isEditable}
-          onChange={(key, value) => setFormData(prev => ({ ...prev, [key]: value }))}
-        />
-        <ContentBlock
-          title="Конфигурация"
-          icon="settings"
-          width="full"
-          fields={configFields}
-          data={isEditable ? formData : viewData}
-          editable={isEditable}
-          onChange={(key, value) => setFormData(prev => ({ ...prev, [key]: value }))}
-        />
-      </Tab>
+    <>
+      <EntityPageV2
+        title={instance ? `${instance.name} (${kindLabel} · ${placementLabel})` : 'Коннектор'}
+        mode={mode}
+        loading={isLoading}
+        saving={saving}
+        breadcrumbs={breadcrumbs}
+        headerActions={
+          isSystemInstance ? <Badge tone="warn">system managed</Badge> : undefined
+        }
+      >
+        {/* ── Tab 1: Обзор ── */}
+        <Tab
+          title="Обзор"
+          layout="grid"
+          id="overview"
+        actions={
+          mode === 'view' ? [
+              !isSystemInstance && (
+                <Button key="edit" onClick={handleEdit}>Редактировать</Button>
+              ),
+              <Button
+                key="health"
+                variant="outline"
+                onClick={() => healthCheckMutation.mutate()}
+                disabled={healthCheckMutation.isPending}
+              >
+                {healthCheckMutation.isPending ? '...' : 'Health Check'}
+              </Button>,
+              !isSystemInstance && (
+                <Button key="delete" variant="danger" onClick={handleDelete}>Удалить</Button>
+              ),
+            ].filter(Boolean) : mode === 'edit' ? [
+              <Button key="save" onClick={handleSave} disabled={saving}>
+                {saving ? 'Сохранение...' : 'Сохранить'}
+              </Button>,
+              <Button key="cancel" variant="outline" onClick={handleCancel} disabled={saving}>
+                Отмена
+              </Button>,
+            ] : undefined
+          }
+        >
+          <Block
+            title="Основная информация"
+            icon="server"
+            iconVariant="info"
+            width="1/2"
+            fields={infoFieldsForMode}
+            data={blockData}
+            editable={isEditable}
+            onChange={handleFieldChange}
+            headerActions={
+              <HealthIndicator
+                healthStatus={viewData.health_status}
+                isActive={blockData.is_active}
+              />
+            }
+          />
+          <Block
+            title="Классификация"
+            icon="layers"
+            iconVariant="primary"
+            width="1/2"
+            height="stretch"
+            fields={classificationFieldsForMode}
+            data={blockData}
+            editable={isEditable}
+            onChange={handleFieldChange}
+          />
+          {connectionFieldsForMode.length > 0 && (
+            <Block
+              title="Подключение"
+              icon="link"
+              iconVariant="info"
+              width="1/2"
+              fields={connectionFieldsForMode}
+              data={blockData}
+              editable={isEditable}
+              onChange={handleFieldChange}
+            />
+          )}
+          <Block
+            title="Метаданные"
+            icon="database"
+            iconVariant="info"
+            width="1/2"
+            fields={META_FIELDS}
+            data={viewData}
+          />
+        </Tab>
 
-      <Tab title="Креденшалы" layout="full" badge={credentials.length || undefined}>
-        <DataTable
-          columns={credentialColumns}
-          data={credentials}
-          keyField="id"
-          emptyText="Нет привязанных креденшалов"
-          onRowClick={(c) => navigate(`/admin/credentials/${c.id}`)}
-        />
-      </Tab>
-    </EntityPageV2>
+        {connectorConfigFields.length > 0 && (
+          <Tab title="Параметры" layout="grid" id="config">
+            <Block
+              title="Параметры коннектора"
+              icon="code"
+              iconVariant="info"
+              width="full"
+              fields={connectorConfigFields}
+              data={blockData}
+              editable={isEditable}
+              onChange={handleFieldChange}
+            />
+          </Tab>
+        )}
+
+        {/* ── Tab 3: Креденшалы ── */}
+        <Tab
+          title="Креденшалы"
+          layout="full"
+          id="credentials"
+          badge={credentials.length}
+          actions={[
+            <Button key="add" onClick={() => navigate(`/admin/credentials/new?instance_id=${id}`)}>
+              Добавить креденшал
+            </Button>,
+          ]}
+        >
+          <DataTable<Credential>
+            columns={credentialColumns}
+            data={credentials}
+            keyField="id"
+            emptyText="Нет credentials. Нажмите 'Добавить креденшал'."
+            onRowClick={(c) => navigate(`/admin/credentials/${c.id}`)}
+          />
+        </Tab>
+      </EntityPageV2>
+
+      <ConfirmDialog
+        open={showDeleteConfirm}
+        title="Удалить коннектор?"
+        message={`Удаление коннектора "${instance?.name}" также удалит все привязанные креденшалы. Это действие необратимо.`}
+        confirmLabel="Удалить"
+        cancelLabel="Отмена"
+        variant="danger"
+        onConfirm={handleDeleteConfirm}
+        onCancel={() => setShowDeleteConfirm(false)}
+      />
+    </>
   );
 }
 

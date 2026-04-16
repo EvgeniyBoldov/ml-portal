@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import os
 from typing import List, Dict, Any, Optional, Union
 from datetime import datetime, timezone
 from dataclasses import dataclass
@@ -18,6 +19,7 @@ import torch
 import numpy as np
 
 logger = logging.getLogger(__name__)
+DEFAULT_MODEL_ALIAS = os.getenv("EMB_MODEL_ALIAS", "all-MiniLM-L6-v2")
 
 app = FastAPI(
     title="Embedding Gateway",
@@ -35,21 +37,21 @@ class Priority(str, Enum):
 class SingleEmbedRequest(BaseModel):
     """Request for embedding single text"""
     text: str = Field(..., min_length=1, max_length=10000)
-    model: str = Field(default="all-MiniLM-L6-v2", description="Model alias")
+    model: str = Field(default=DEFAULT_MODEL_ALIAS, description="Model alias")
     priority: Priority = Field(default=Priority.LOW, description="Request priority")
 
 
 class BatchEmbedRequest(BaseModel):
     """Request for embedding multiple texts"""
     texts: List[str] = Field(..., min_items=1, max_items=1000)
-    model: str = Field(default="all-MiniLM-L6-v2", description="Model alias")
+    model: str = Field(default=DEFAULT_MODEL_ALIAS, description="Model alias")
     priority: Priority = Field(default=Priority.LOW, description="Request priority")
 
 
 class QueryRequest(BaseModel):
     """Request for embedding query"""
     query: str = Field(..., min_length=1, max_length=10000)
-    model: str = Field(default="default", description="Model alias")
+    model: str = Field(default=DEFAULT_MODEL_ALIAS, description="Model alias")
     priority: Priority = Field(default=Priority.LOW, description="Request priority")
 
 
@@ -202,23 +204,34 @@ class EmbeddingGateway:
         self._load_models()
     
     def _load_models(self):
-        """Load model configurations"""
-        # Load from environment variables
-        import os
-        
-        models_str = os.getenv("EMB_MODELS", "all-MiniLM-L6-v2")
-        model_aliases = [m.strip() for m in models_str.split(",")]
-        
+        """Load model configurations.
+
+        Preferred simple mode:
+        - EMB_MODEL_ALIAS=<alias>
+        - EMB_MODEL_PATH=<path>
+        This maps 1 container -> 1 embedding model.
+
+        Backward-compatible mode:
+        - EMB_MODELS=a,b,c with per-model EMB_MODEL_<ALIAS>_* vars.
+        """
+        single_alias = (os.getenv("EMB_MODEL_ALIAS") or "").strip()
+        if single_alias:
+            model_aliases = [single_alias]
+        else:
+            models_str = os.getenv("EMB_MODELS", "all-MiniLM-L6-v2")
+            model_aliases = [m.strip() for m in models_str.split(",") if m.strip()]
+
         for alias in model_aliases:
+            env_alias = alias.upper().replace('-', '_')
             config = ModelConfig(
                 alias=alias,
-                dimensions=int(os.getenv(f"EMB_MODEL_{alias.upper().replace('-', '_')}_DIMENSIONS", "384")),
-                max_tokens=int(os.getenv(f"EMB_MODEL_{alias.upper().replace('-', '_')}_MAX_TOKENS", "512")),
-                version=os.getenv(f"EMB_MODEL_{alias.upper().replace('-', '_')}_VERSION", "1.0"),
+                dimensions=int(os.getenv("EMB_MODEL_DIMENSIONS", os.getenv(f"EMB_MODEL_{env_alias}_DIMENSIONS", "384"))),
+                max_tokens=int(os.getenv("EMB_MODEL_MAX_TOKENS", os.getenv(f"EMB_MODEL_{env_alias}_MAX_TOKENS", "512"))),
+                version=os.getenv("EMB_MODEL_VERSION", os.getenv(f"EMB_MODEL_{env_alias}_VERSION", "1.0")),
                 batch_size=int(os.getenv("EMB_BATCH_SIZE", "128")),
                 max_wait_ms=int(os.getenv("EMB_MAX_WAIT_MS", "8")),
-                parallelism=int(os.getenv(f"EMB_PARALLELISM_{alias.upper().replace('-', '_')}", "2")),
-                path=os.getenv(f"EMB_MODEL_{alias.upper().replace('-', '_')}_PATH", f"/models/{alias}")
+                parallelism=int(os.getenv("EMB_MODEL_PARALLELISM", os.getenv(f"EMB_PARALLELISM_{env_alias}", "2"))),
+                path=os.getenv("EMB_MODEL_PATH", os.getenv(f"EMB_MODEL_{env_alias}_PATH", f"/models/{alias}"))
             )
             
             self.models[alias] = EmbeddingEngine(config)
@@ -273,6 +286,12 @@ async def embed_single(request: SingleEmbedRequest):
 @app.post("/embed/batch", response_model=EmbedResponse)
 async def embed_batch(request: BatchEmbedRequest):
     """Embed multiple texts"""
+    return await _embed_texts(request.texts, request.model, request.priority)
+
+
+@app.post("/embed/texts", response_model=EmbedResponse)
+async def embed_texts(request: BatchEmbedRequest):
+    """Compatibility endpoint for API client contract."""
     return await _embed_texts(request.texts, request.model, request.priority)
 
 

@@ -4,6 +4,7 @@
  * Features:
  * - Row selection (single/multiple)
  * - Search/filter
+ * - Column filters in header
  * - Pagination
  * - Custom cell renderers
  * - Bulk actions
@@ -28,16 +29,40 @@
 import React, { useState, useMemo, useCallback } from 'react';
 import Input from '../Input';
 import Button from '../Button';
+import { Select, type SelectOption } from '../Select';
 import { Icon } from '../Icon';
+import { Tags } from '../Tags';
 import { TableHeader } from '../TableHeader';
+import { ActionsButton, type ActionItem } from '../ActionsButton';
 import styles from './DataTable.module.css';
+
+export type DataTableFilterKind = 'text' | 'select' | 'tags' | 'date-range';
+export type DataTableFilterValue =
+  | string
+  | string[]
+  | { from?: string; to?: string }
+  | null;
+
+export interface DataTableColumnFilter<T = any> {
+  kind: DataTableFilterKind;
+  placeholder?: string;
+  options?: SelectOption[];
+  match?: 'contains' | 'equals' | 'any' | 'all';
+  fromPlaceholder?: string;
+  toPlaceholder?: string;
+  getValue?: (row: T, columnKey: string) => unknown;
+}
 
 export interface DataTableColumn<T = any> {
   key: string;
-  label: string;
+  label?: string;
+  /** Legacy alias */
+  title?: string;
   width?: number | string;
   align?: 'left' | 'center' | 'right';
   sortable?: boolean;
+  sortValue?: (row: T) => unknown;
+  filter?: DataTableColumnFilter<T>;
   render?: (row: T, index: number) => React.ReactNode;
   className?: string;
 }
@@ -45,7 +70,11 @@ export interface DataTableColumn<T = any> {
 export interface DataTableProps<T = any> {
   columns: DataTableColumn<T>[];
   data: T[];
-  keyField: string;
+  keyField?: string;
+  /** Legacy alias */
+  idField?: string;
+  headerActions?: React.ReactNode | ActionItem[];
+  beforeTableContent?: React.ReactNode;
   
   // Selection
   selectable?: boolean;
@@ -70,6 +99,7 @@ export interface DataTableProps<T = any> {
   
   // Bulk actions
   bulkActions?: React.ReactNode;
+  selectedCountLabel?: (count: number) => React.ReactNode;
   
   // Empty state
   emptyState?: React.ReactNode;
@@ -90,6 +120,7 @@ export default function DataTable<T = any>({
   columns,
   data,
   keyField,
+  idField,
   selectable = false,
   selectedKeys: controlledSelectedKeys,
   onSelectionChange,
@@ -99,27 +130,41 @@ export default function DataTable<T = any>({
   onSearchChange,
   searchFilter,
   paginated = false,
-  pageSize: controlledPageSize = 50,
-  currentPage: controlledCurrentPage = 1,
+  pageSize: controlledPageSize,
+  currentPage: controlledCurrentPage,
   totalItems,
   onPageChange,
   onPageSizeChange,
   pageSizeOptions = [25, 50, 100],
   bulkActions,
+  selectedCountLabel,
   emptyState,
   emptyText = 'Нет данных',
   loading = false,
   className,
+  headerActions,
+  beforeTableContent,
   rowClassName,
   onRowClick,
 }: DataTableProps<T>) {
+  const rowKeyField = keyField || idField || 'id';
+  const normalizedColumns = useMemo(
+    () =>
+      columns.map((column) => ({
+        ...column,
+        label: column.label ?? column.title ?? column.key,
+      })),
+    [columns],
+  );
+
   // Internal state for uncontrolled mode
   const [internalSelectedKeys, setInternalSelectedKeys] = useState<Set<string | number>>(new Set());
   const [internalSearchValue, setInternalSearchValue] = useState('');
   const [internalCurrentPage, setInternalCurrentPage] = useState(1);
-  const [internalPageSize, setInternalPageSize] = useState(controlledPageSize);
+  const [internalPageSize, setInternalPageSize] = useState(controlledPageSize ?? 50);
   const [sortKey, setSortKey] = useState<string | null>(null);
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
+  const [columnFilters, setColumnFilters] = useState<Record<string, DataTableFilterValue>>({});
 
   // Use controlled or internal state
   const selectedKeys = controlledSelectedKeys ?? internalSelectedKeys;
@@ -172,36 +217,71 @@ export default function DataTable<T = any>({
     }
   }, [sortKey]);
 
+  const updateColumnFilter = useCallback((key: string, value: DataTableFilterValue) => {
+    setColumnFilters(prev => ({
+      ...prev,
+      [key]: value,
+    }));
+    setInternalCurrentPage(1);
+  }, []);
+
+  const resetColumnFilters = useCallback(() => {
+    setColumnFilters({});
+    setInternalCurrentPage(1);
+  }, []);
+
   // Filter data
   const filteredData = useMemo(() => {
-    if (!searchable || !searchValue) return data;
-    
-    if (searchFilter) {
-      return data.filter(row => searchFilter(row, searchValue));
-    }
-    
-    // Default search: check all string fields
-    const query = searchValue.toLowerCase();
-    return data.filter(row => {
-      return Object.values(row as any).some(value => {
-        if (typeof value === 'string') {
-          return value.toLowerCase().includes(query);
-        }
-        if (typeof value === 'number') {
-          return String(value).includes(query);
-        }
-        return false;
-      });
+    const hasSearch = searchable && Boolean(searchValue);
+    const activeColumnFilters = normalizedColumns.filter(column => {
+      const filter = column.filter;
+      if (!filter) return false;
+      return !isEmptyFilterValue(columnFilters[column.key], filter.kind);
     });
-  }, [data, searchValue, searchable, searchFilter]);
+
+    let result = data;
+
+    if (hasSearch) {
+      if (searchFilter) {
+        result = result.filter(row => searchFilter(row, searchValue));
+      } else {
+        const query = searchValue.toLowerCase();
+        result = result.filter(row => {
+          return Object.values(toRecord(row)).some(value => {
+            if (typeof value === 'string') {
+              return value.toLowerCase().includes(query);
+            }
+            if (typeof value === 'number') {
+              return String(value).includes(query);
+            }
+            if (Array.isArray(value)) {
+              return value.some(item => String(item).toLowerCase().includes(query));
+            }
+            return false;
+          });
+        });
+      }
+    }
+
+    if (activeColumnFilters.length > 0) {
+      result = result.filter((row) =>
+        activeColumnFilters.every((column) =>
+          matchesColumnFilter(row, column, columnFilters[column.key]),
+        ),
+      );
+    }
+
+    return result;
+  }, [normalizedColumns, columnFilters, data, searchValue, searchable, searchFilter]);
 
   // Sort data
   const sortedData = useMemo(() => {
     if (!sortKey) return filteredData;
     
     return [...filteredData].sort((a, b) => {
-      const aVal = (a as any)[sortKey];
-      const bVal = (b as any)[sortKey];
+      const column = normalizedColumns.find(col => col.key === sortKey);
+      const aVal = column?.sortValue ? column.sortValue(a) : getRowValue(a, sortKey);
+      const bVal = column?.sortValue ? column.sortValue(b) : getRowValue(b, sortKey);
       
       if (aVal == null && bVal == null) return 0;
       if (aVal == null) return 1;
@@ -218,7 +298,7 @@ export default function DataTable<T = any>({
       
       return sortOrder === 'asc' ? cmp : -cmp;
     });
-  }, [filteredData, sortKey, sortOrder]);
+  }, [filteredData, normalizedColumns, sortKey, sortOrder]);
 
   // Paginate data
   const paginatedData = useMemo(() => {
@@ -230,16 +310,21 @@ export default function DataTable<T = any>({
   const total = totalItems ?? filteredData.length;
   const totalPages = Math.ceil(total / pageSize);
   const offset = (currentPage - 1) * pageSize;
+  const hasActiveColumnFilters = normalizedColumns.some(column =>
+    column.filter && !isEmptyFilterValue(columnFilters[column.key], column.filter.kind),
+  );
 
   // Selection handlers
   const handleSelectAll = useCallback(() => {
     const currentPageKeys = new Set(
-      paginatedData.map(row => (row as any)[keyField])
+      paginatedData
+        .map(row => getRowSelectionKey(row, rowKeyField))
+        .filter((key): key is string | number => key !== undefined)
     );
     
     // Check if all current page items are selected
     const allSelected = paginatedData.every(row => 
-      selectedKeys.has((row as any)[keyField])
+      hasSelectedKey(selectedKeys, row, rowKeyField)
     );
     
     if (allSelected) {
@@ -253,7 +338,7 @@ export default function DataTable<T = any>({
       currentPageKeys.forEach(key => newKeys.add(key));
       handleSelectionChange(newKeys);
     }
-  }, [paginatedData, selectedKeys, keyField, handleSelectionChange]);
+  }, [paginatedData, selectedKeys, rowKeyField, handleSelectionChange]);
 
   const handleSelectRow = useCallback((key: string | number) => {
     const newKeys = new Set(selectedKeys);
@@ -267,15 +352,27 @@ export default function DataTable<T = any>({
 
   // Check if all current page items are selected
   const allCurrentPageSelected = paginatedData.length > 0 && paginatedData.every(row =>
-    selectedKeys.has((row as any)[keyField])
+    hasSelectedKey(selectedKeys, row, rowKeyField)
   );
 
   const someCurrentPageSelected = paginatedData.some(row =>
-    selectedKeys.has((row as any)[keyField])
+    hasSelectedKey(selectedKeys, row, rowKeyField)
   );
 
   return (
     <div className={`${styles.container} ${className || ''}`}>
+      {headerActions && (
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
+          {Array.isArray(headerActions) ? <ActionsButton actions={headerActions} /> : headerActions}
+        </div>
+      )}
+
+      {beforeTableContent && (
+        <div style={{ marginBottom: 12 }}>
+          {beforeTableContent}
+        </div>
+      )}
+
       {/* Toolbar */}
       {(searchable || selectable) && (
         <div className={styles.toolbar}>
@@ -298,7 +395,7 @@ export default function DataTable<T = any>({
                 {selectedKeys.size > 0 && (
                   <>
                     <span className={styles.selectedCount}>
-                      Выбрано: {selectedKeys.size}
+                      {selectedCountLabel ? selectedCountLabel(selectedKeys.size) : `Выбрано: ${selectedKeys.size}`}
                     </span>
                     {bulkActions && (
                       <div className={styles.bulkActions}>{bulkActions}</div>
@@ -309,6 +406,15 @@ export default function DataTable<T = any>({
             )}
           </div>
           <div className={styles.toolbarRight}>
+            {hasActiveColumnFilters && (
+              <Button
+                variant="outline"
+                size="small"
+                onClick={resetColumnFilters}
+              >
+                Сбросить фильтры
+              </Button>
+            )}
             {searchable && (
               <Input
                 placeholder={searchPlaceholder}
@@ -352,16 +458,18 @@ export default function DataTable<T = any>({
                     />
                   </th>
                 )}
-                {columns.map(col => (
+                {normalizedColumns.map(col => (
                   <TableHeader
                     key={col.key}
-                    label={col.label}
+                    label={col.label || col.key}
                     width={col.width}
                     align={col.align}
                     sortable={col.sortable}
                     sortActive={sortKey === col.key}
                     sortOrder={sortKey === col.key ? sortOrder : undefined}
                     onSort={col.sortable ? () => handleSort(col.key) : undefined}
+                    filter={col.filter ? renderColumnFilter(col, columnFilters[col.key], updateColumnFilter) : undefined}
+                    filterActive={col.filter ? !isEmptyFilterValue(columnFilters[col.key], col.filter.kind) : false}
                     className={col.className}
                   />
                 ))}
@@ -369,7 +477,7 @@ export default function DataTable<T = any>({
             </thead>
             <tbody>
               {paginatedData.map((row, index) => {
-                const rowKey = (row as any)[keyField];
+                const rowKey = getRowSelectionKey(row, rowKeyField) ?? index;
                 const isSelected = selectedKeys.has(rowKey);
                 const customRowClass = rowClassName?.(row, index);
                 
@@ -392,7 +500,7 @@ export default function DataTable<T = any>({
                         />
                       </td>
                     )}
-                    {columns.map(col => (
+                    {normalizedColumns.map(col => (
                       <td
                         key={col.key}
                         style={{ textAlign: col.align || 'left' }}
@@ -400,7 +508,7 @@ export default function DataTable<T = any>({
                       >
                         {col.render
                           ? col.render(row, index)
-                          : String((row as any)[col.key] ?? '—')}
+                          : String(getRowValue(row, col.key) ?? '—')}
                       </td>
                     ))}
                   </tr>
@@ -472,4 +580,194 @@ export default function DataTable<T = any>({
       )}
     </div>
   );
+}
+
+function isEmptyFilterValue(value: DataTableFilterValue, kind: DataTableFilterKind): boolean {
+  if (value == null) return true;
+  if (kind === 'text' || kind === 'select') {
+    return String(value).trim().length === 0;
+  }
+  if (kind === 'tags') {
+    return !Array.isArray(value) || value.length === 0;
+  }
+  if (kind === 'date-range') {
+    const range = value as { from?: string; to?: string };
+    return !range.from && !range.to;
+  }
+  return false;
+}
+
+function toRecord<T>(row: T): Record<string, unknown> {
+  if (row && typeof row === 'object') {
+    return row as Record<string, unknown>;
+  }
+  return {};
+}
+
+function getRowValue<T>(row: T, key: string): unknown {
+  return toRecord(row)[key];
+}
+
+function getRowSelectionKey<T>(row: T, rowKeyField: string): string | number | undefined {
+  const key = getRowValue(row, rowKeyField);
+  if (typeof key === 'string' || typeof key === 'number') {
+    return key;
+  }
+  return undefined;
+}
+
+function hasSelectedKey<T>(selectedKeys: Set<string | number>, row: T, rowKeyField: string): boolean {
+  const key = getRowSelectionKey(row, rowKeyField);
+  return key !== undefined && selectedKeys.has(key);
+}
+
+function normalizeCellValues(value: unknown): string[] {
+  if (value == null) return [];
+  if (Array.isArray(value)) {
+    return value.flatMap(item => normalizeCellValues(item));
+  }
+  if (value instanceof Date) {
+    return [value.toISOString()];
+  }
+  if (typeof value === 'string') {
+    return [value];
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return [String(value)];
+  }
+  return [String(value)];
+}
+
+function matchesColumnFilter<T>(
+  row: T,
+  column: DataTableColumn<T>,
+  value: DataTableFilterValue,
+): boolean {
+  if (!column.filter || isEmptyFilterValue(value, column.filter.kind)) return true;
+
+  const cellValue = column.filter.getValue
+    ? column.filter.getValue(row, column.key)
+    : getRowValue(row, column.key);
+  const filter = column.filter;
+
+  switch (filter.kind) {
+    case 'text': {
+      const query = String(value ?? '').trim().toLowerCase();
+      if (!query) return true;
+      const haystack = normalizeCellValues(cellValue).join(' ').toLowerCase();
+      return haystack.includes(query);
+    }
+    case 'select': {
+      const selected = String(value ?? '').trim();
+      if (!selected) return true;
+      if (Array.isArray(cellValue)) {
+        return cellValue.map(String).includes(selected);
+      }
+      return String(cellValue ?? '') === selected;
+    }
+    case 'tags': {
+      const selectedTags = Array.isArray(value) ? value.map(v => String(v).trim()).filter(Boolean) : [];
+      if (selectedTags.length === 0) return true;
+      const rowTags = normalizeCellValues(cellValue)
+        .flatMap(v => v.split(/[,\s]+/g))
+        .map(v => v.trim())
+        .filter(Boolean);
+
+      const match = filter.match || 'any';
+      if (match === 'all') {
+        return selectedTags.every(tag => rowTags.includes(tag));
+      }
+      return selectedTags.some(tag => rowTags.includes(tag));
+    }
+    case 'date-range': {
+      const range = value as { from?: string; to?: string };
+      const raw = cellValue;
+      if (!raw) return false;
+
+      const date = raw instanceof Date ? raw : new Date(String(raw));
+      if (Number.isNaN(date.getTime())) return false;
+
+      if (range.from) {
+        const from = new Date(`${range.from}T00:00:00`);
+        if (!Number.isNaN(from.getTime()) && date < from) return false;
+      }
+
+      if (range.to) {
+        const to = new Date(`${range.to}T23:59:59.999`);
+        if (!Number.isNaN(to.getTime()) && date > to) return false;
+      }
+
+      return true;
+    }
+    default:
+      return true;
+  }
+}
+
+function renderColumnFilter<T>(
+  column: DataTableColumn<T>,
+  value: DataTableFilterValue,
+  onChange: (key: string, value: DataTableFilterValue) => void,
+) {
+  const filter = column.filter!;
+
+  switch (filter.kind) {
+    case 'text':
+      return (
+        <Input
+          value={typeof value === 'string' ? value : ''}
+          onChange={e => onChange(column.key, e.target.value)}
+          placeholder={filter.placeholder || 'Фильтр...'}
+          className={styles.columnFilterInput}
+        />
+      );
+
+    case 'select':
+      return (
+        <Select
+          value={typeof value === 'string' ? value : ''}
+          onChange={v => onChange(column.key, v)}
+          placeholder={filter.placeholder || 'Все'}
+          options={[
+            { value: '', label: 'Все' },
+            ...(filter.options || []),
+          ]}
+          className={styles.columnFilterSelect}
+        />
+      );
+
+    case 'tags':
+      return (
+        <Tags
+          value={Array.isArray(value) ? value : []}
+          onChange={(tags) => onChange(column.key, tags)}
+          placeholder={filter.placeholder || 'Теги...'}
+        />
+      );
+
+    case 'date-range': {
+      const range = (value && typeof value === 'object' ? value : {}) as { from?: string; to?: string };
+      return (
+        <div className={styles.dateRangeFilter}>
+          <Input
+            type="date"
+            value={range.from || ''}
+            onChange={e => onChange(column.key, { ...range, from: e.target.value || undefined })}
+            className={styles.dateRangeInput}
+            placeholder={filter.fromPlaceholder || 'От'}
+          />
+          <Input
+            type="date"
+            value={range.to || ''}
+            onChange={e => onChange(column.key, { ...range, to: e.target.value || undefined })}
+            className={styles.dateRangeInput}
+            placeholder={filter.toPlaceholder || 'До'}
+          />
+        </div>
+      );
+    }
+
+    default:
+      return null;
+  }
 }

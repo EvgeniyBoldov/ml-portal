@@ -230,6 +230,7 @@ async def list_models(
             {"id": "llama-3.1-8b-instant", "object": "model", "owned_by": "groq"},
             {"id": "llama-3.1-70b-versatile", "object": "model", "owned_by": "groq"},
             {"id": "mixtral-8x7b-32768", "object": "model", "owned_by": "groq"},
+            {"id": "compound-beta", "object": "model", "owned_by": "groq"},
         ]
     elif settings.LLM_PROVIDER == "openai":
         models = [

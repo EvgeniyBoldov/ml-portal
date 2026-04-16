@@ -2,198 +2,268 @@
 Collection service for managing dynamic data collections
 """
 import uuid
-import re
 from typing import List, Optional, Any
-from datetime import datetime
 
-from sqlalchemy import text, TextClause
+from sqlalchemy import text, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.future import select
 
-from app.models.collection import Collection, FieldType, SearchMode
-from app.models.permission_set import PermissionSet
-from app.models.tool_instance import ToolInstance, InstanceType
-from app.models.tool_group import ToolGroup
+from app.models.collection import (
+    Collection,
+    CollectionType,
+    CollectionVersion,
+    FieldType,
+)
+from app.core.exceptions import (
+    CollectionNotFoundError,
+    CollectionAlreadyExistsError as CollectionExistsError,
+    InvalidSchemaError,
+)
+from app.models.tool_instance import ToolInstance
 from app.core.logging import get_logger
+from app.services.tool_instance_service import ToolInstanceService
+from app.services.collection.ddl import (
+    FIELD_TYPE_TO_PG,
+    build_create_table_sql as _build_create_table_sql,
+    build_indexes_sql as _build_indexes_sql,
+    build_drop_indexes_sql as _build_drop_indexes_sql,
+    apply_typed_binds as _apply_typed_binds,
+)
+from app.services.collection.field_coercion import (
+    RowValidationError,
+    coerce_value as _coerce_value,
+    validate_and_prepare_payload as _validate_and_prepare_payload,
+)
+from app.services.collection.version_service import CollectionVersionService
+from app.services.collection.row_service import CollectionRowService
+from app.services.collection.vector_lifecycle import CollectionVectorLifecycleService
+from app.services.collection.status_snapshot_service import CollectionStatusSnapshotService
+from app.services.collection.schema_evolution_service import CollectionSchemaEvolutionService
+from app.services.collection.lifecycle_service import CollectionLifecycleService
+from app.services.collection.schema_contract_service import CollectionSchemaContractService
+from app.services.collection.query_service import CollectionQueryService
+from app.services.collection.type_profiles import get_collection_type_profile
 
 logger = get_logger(__name__)
-
-
-FIELD_TYPE_TO_PG = {
-    FieldType.STRING.value: "VARCHAR(255)",
-    FieldType.TEXT.value: "TEXT",
-    FieldType.INTEGER.value: "BIGINT",
-    FieldType.FLOAT.value: "DOUBLE PRECISION",
-    FieldType.BOOLEAN.value: "BOOLEAN",
-    FieldType.DATETIME.value: "TIMESTAMPTZ",
-    FieldType.DATE.value: "DATE",
-    FieldType.ENUM.value: "VARCHAR(100)",
-    FieldType.JSON.value: "JSONB",
-}
-
-VALID_SLUG_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
-
-
-class CollectionServiceError(Exception):
-    """Base exception for collection service"""
-    pass
-
-
-class CollectionNotFoundError(CollectionServiceError):
-    """Collection not found"""
-    pass
-
-
-class CollectionExistsError(CollectionServiceError):
-    """Collection with this slug already exists"""
-    pass
-
-
-class InvalidSchemaError(CollectionServiceError):
-    """Invalid collection schema"""
-    pass
-
+_UNSET = object()
 
 class CollectionService:
     """Service for managing collections and their dynamic tables"""
+    CollectionExistsError = CollectionExistsError
+    FieldType = FieldType
+    logger = logger
 
     def __init__(self, session: AsyncSession):
         self.session = session
+        self.tool_instance_service = ToolInstanceService(session)
+        self.versions = CollectionVersionService(session)
+        self.rows = CollectionRowService(session)
+        self.vector = CollectionVectorLifecycleService(session)
+        self.status_snapshot = CollectionStatusSnapshotService(session)
+        self.contract = CollectionSchemaContractService()
+        self.query = CollectionQueryService(session, self)
+        self.schema_evolution = CollectionSchemaEvolutionService(
+            session,
+            self,
+            self.contract,
+            field_type_to_pg=FIELD_TYPE_TO_PG,
+        )
+        self.lifecycle = CollectionLifecycleService(session, self, self.contract)
+
+    @staticmethod
+    def get_type_specific_field_presets() -> dict[str, list[dict]]:
+        return CollectionSchemaContractService.get_type_specific_field_presets()
 
     def _generate_table_name(self, tenant_id: uuid.UUID, slug: str) -> str:
-        """Generate unique table name for collection data"""
         tenant_short = str(tenant_id).replace("-", "")[:8]
         return f"coll_{tenant_short}_{slug}"
 
     def _validate_slug(self, slug: str) -> None:
-        """Validate collection slug"""
-        if not slug or len(slug) > 50:
-            raise InvalidSchemaError("Slug must be 1-50 characters")
-        if not VALID_SLUG_PATTERN.match(slug):
-            raise InvalidSchemaError(
-                "Slug must start with letter, contain only lowercase letters, numbers, underscores"
-            )
+        self.contract.validate_slug(slug)
 
-    def _validate_fields(self, fields: List[dict]) -> None:
-        """Validate fields schema with search_modes support"""
-        if not fields:
-            raise InvalidSchemaError("At least one field is required")
+    def _validate_fields(self, fields: List[dict], collection_type: str) -> None:
+        self.contract.validate_fields(fields, collection_type)
 
-        field_names = set()
-        reserved_names = {"id", "_created_at", "_updated_at", "_vector_status", "_vector_chunk_count", "_vector_error"}
-
-        for field in fields:
-            name = field.get("name")
-            if not name:
-                raise InvalidSchemaError("Field name is required")
-            
-            if not re.match(r"^[a-z][a-z0-9_]*$", name):
-                raise InvalidSchemaError(
-                    f"Field '{name}' must start with letter, contain only lowercase letters, numbers, underscores"
-                )
-            
-            if name in reserved_names:
-                raise InvalidSchemaError(f"Field name '{name}' is reserved")
-            
-            if name in field_names:
-                raise InvalidSchemaError(f"Duplicate field name: {name}")
-            field_names.add(name)
-
-            field_type = field.get("type")
-            if field_type not in [ft.value for ft in FieldType]:
-                raise InvalidSchemaError(
-                    f"Invalid field type '{field_type}' for field '{name}'"
-                )
-
-            # Validate search_modes (array)
-            search_modes = field.get("search_modes", ["exact"])
-            if not isinstance(search_modes, list):
-                raise InvalidSchemaError(
-                    f"Field '{name}': search_modes must be an array"
-                )
-            
-            valid_modes = {sm.value for sm in SearchMode}
-            for mode in search_modes:
-                if mode not in valid_modes:
-                    raise InvalidSchemaError(
-                        f"Field '{name}': invalid search mode '{mode}'"
-                    )
-            
-            # Vector only for text fields
-            if "vector" in search_modes and field_type != FieldType.TEXT.value:
-                raise InvalidSchemaError(
-                    f"Field '{name}': vector search only available for text fields"
-                )
-            
-            # Vector requires like
-            if "vector" in search_modes and "like" not in search_modes:
-                raise InvalidSchemaError(
-                    f"Field '{name}': vector search requires 'like' in search_modes"
-                )
-            
-            # Like only for text fields
-            if "like" in search_modes and field_type != FieldType.TEXT.value:
-                raise InvalidSchemaError(
-                    f"Field '{name}': like search only available for text fields"
-                )
-            
-            # Range only for numeric/date fields
-            if "range" in search_modes and field_type not in [
-                FieldType.INTEGER.value,
-                FieldType.FLOAT.value,
-                FieldType.DATETIME.value,
-                FieldType.DATE.value,
-            ]:
-                raise InvalidSchemaError(
-                    f"Field '{name}': range search not valid for field type '{field_type}'"
-                )
+    def _validate_admin_defined_fields(self, fields: List[dict], collection_type: str) -> None:
+        self.contract.validate_admin_defined_fields(fields, collection_type)
 
     def _build_create_table_sql(self, table_name: str, fields: List[dict]) -> str:
-        """Build CREATE TABLE SQL statement"""
-        columns = [
-            "id UUID PRIMARY KEY DEFAULT gen_random_uuid()",
-        ]
-
-        for field in fields:
-            name = field["name"]
-            pg_type = FIELD_TYPE_TO_PG[field["type"]]
-            nullable = "NOT NULL" if field.get("required", False) else ""
-            columns.append(f"{name} {pg_type} {nullable}".strip())
-
-        columns.append("_created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL")
-
-        columns_sql = ",\n    ".join(columns)
-        return f"CREATE TABLE {table_name} (\n    {columns_sql}\n)"
+        return _build_create_table_sql(table_name, fields)
 
     def _build_indexes_sql(self, table_name: str, fields: List[dict]) -> List[str]:
-        """Build CREATE INDEX statements based on search_modes"""
-        indexes = []
+        return _build_indexes_sql(table_name, fields)
 
-        for field in fields:
-            name = field["name"]
-            search_modes = field.get("search_modes", [])
-            
-            # Create indexes based on search modes
-            if "like" in search_modes:
-                # GIN trigram index for LIKE search
-                indexes.append(
-                    f"CREATE INDEX idx_{table_name}_{name}_trgm "
-                    f"ON {table_name} USING GIN ({name} gin_trgm_ops)"
-                )
-            elif "range" in search_modes:
-                # B-tree index for range queries
-                indexes.append(
-                    f"CREATE INDEX idx_{table_name}_{name}_btree "
-                    f"ON {table_name} ({name})"
-                )
-            elif "exact" in search_modes:
-                # B-tree index for exact match
-                indexes.append(
-                    f"CREATE INDEX idx_{table_name}_{name} "
-                    f"ON {table_name} ({name})"
-                )
+    def _coerce_row_value(self, field_name: str, field_type: str, value: Any) -> Any:
+        return _coerce_value(field_name, field_type, value)
 
-        return indexes
+    def _validate_and_prepare_row_payload(
+        self, collection: Collection, payload: dict, *, partial: bool
+    ) -> dict:
+        return _validate_and_prepare_payload(collection, payload, partial=partial)
+
+    @staticmethod
+    def _apply_typed_binds(sql, field_defs: List[dict]):
+        return _apply_typed_binds(sql, field_defs)
+
+    def _build_drop_indexes_sql(self, table_name: str, field_name: str) -> List[str]:
+        return _build_drop_indexes_sql(table_name, field_name)
+
+    def _fields_require_table_vector_search(self, fields: List[dict]) -> bool:
+        """Check if table collection fields require vector infra."""
+        return self.vector.fields_require_table_vector_search(fields)
+
+    def _vector_signature(self, fields: List[dict]) -> List[tuple[str, str, bool]]:
+        """Stable signature of user field retrieval semantics."""
+        return self.vector.vector_signature(fields)
+
+    async def _table_has_rows(self, table_name: str) -> bool:
+        """Check if dynamic table contains data."""
+        return await self.vector.table_has_rows(table_name)
+
+    async def _count_nulls(self, table_name: str, field_name: str) -> int:
+        """Count rows where the field is NULL."""
+        return await self.vector.count_nulls(table_name, field_name)
+
+    async def _ensure_table_vector_infra(self, collection: Collection) -> None:
+        """Ensure table collection has vector metadata columns and qdrant identity."""
+        await self.vector.ensure_table_vector_infra(collection)
+
+    async def _drop_table_vector_infra(self, collection: Collection) -> None:
+        """Remove table collection vector infra when no retrieval fields remain."""
+        await self.vector.drop_table_vector_infra(collection)
+
+    async def _reset_table_vector_state(self, collection: Collection) -> None:
+        """Reset row-level and collection-level table vector state after schema-affecting changes."""
+        await self.vector.reset_table_vector_state(collection)
+
+    async def _resolve_primary_vector_model(self, tenant_id: uuid.UUID) -> Optional[str]:
+        """Resolve primary embedding model alias for vector collection provisioning."""
+        return await self.vector.resolve_primary_vector_model(tenant_id)
+
+    async def _resolve_embedding_dimensions(self, model_alias: str) -> int:
+        """Resolve vector dimensions for embedding model; fallback to 384."""
+        return await self.vector.resolve_embedding_dimensions(model_alias)
+
+    async def _provision_qdrant_collection(
+        self,
+        tenant_id: uuid.UUID,
+        qdrant_collection_name: str,
+    ) -> None:
+        """Create dedicated Qdrant collection for a platform collection."""
+        if not qdrant_collection_name:
+            return
+
+        from app.adapters.impl.qdrant import QdrantVectorStore
+
+        model_alias = await self._resolve_primary_vector_model(tenant_id)
+        vector_dim = await self._resolve_embedding_dimensions(model_alias) if model_alias else 384
+
+        vector_store = QdrantVectorStore()
+        await vector_store.ensure_collection(qdrant_collection_name, vector_dim)
+
+    async def _cleanup_qdrant_collection(self, qdrant_collection_name: str) -> None:
+        """Best-effort cleanup for partially provisioned Qdrant collections."""
+        await self.vector.cleanup_qdrant_collection(qdrant_collection_name)
+
+    async def _cleanup_collection_creation_artifacts(
+        self,
+        *,
+        table_name: Optional[str],
+        qdrant_collection_name: Optional[str],
+    ) -> None:
+        """Best-effort cleanup for partially created collection artifacts."""
+        try:
+            if table_name:
+                await self.session.execute(text(f"DROP TABLE IF EXISTS {table_name} CASCADE"))
+        except Exception as cleanup_err:
+            logger.warning(
+                "Failed to drop table during collection cleanup",
+                extra={"table_name": table_name, "error": str(cleanup_err)},
+            )
+        await self._cleanup_qdrant_collection(qdrant_collection_name or "")
+
+    async def get_status_snapshot(self, collection: Collection) -> dict:
+        """Build effective readiness status and diagnostics for a collection."""
+        return await self.status_snapshot.get_status_snapshot(collection)
+
+    async def sync_collection_status(
+        self,
+        collection: Collection,
+        *,
+        persist: bool = True,
+    ) -> dict:
+        """Recompute collection readiness status from actual underlying state."""
+        return await self.status_snapshot.sync_collection_status(collection, persist=persist)
+
+    async def _rebuild_structural_indexes(
+        self,
+        table_name: str,
+        previous_fields: List[dict],
+        current_fields: List[dict],
+    ) -> None:
+        """Rebuild generated field indexes after schema changes."""
+        touched_names = {field["name"] for field in previous_fields} | {field["name"] for field in current_fields}
+        for field_name in touched_names:
+            for drop_sql in self._build_drop_indexes_sql(table_name, field_name):
+                await self.session.execute(text(drop_sql))
+        for create_sql in self._build_indexes_sql(table_name, current_fields):
+            await self.session.execute(text(create_sql))
+
+    def _normalize_default_sort(self, collection: Collection, fields: List[dict]) -> None:
+        self.contract.normalize_default_sort(collection, fields)
+
+    def _ensure_document_preset_fields(self, fields: List[dict]) -> List[dict]:
+        return self.contract.ensure_document_preset_fields(fields)
+
+    def _ensure_sql_preset_fields(self, fields: List[dict]) -> List[dict]:
+        return self.contract.ensure_sql_preset_fields(fields)
+
+    async def ensure_sql_storage_table(self, collection: Collection) -> None:
+        """
+        Ensure SQL collection has local catalog storage for discovered table rows.
+
+        Legacy SQL collections may have no local table/fields; this method bootstraps
+        required schema on first read/write from collection data endpoints.
+        """
+        profile = get_collection_type_profile(collection.collection_type)
+        if profile.expected_data_connector_subtype() is None:
+            return
+
+        changed = False
+        current_fields = list(collection.fields or [])
+        next_fields = profile.ensure_specific_fields(self.contract, current_fields)
+        if next_fields != current_fields:
+            collection.fields = next_fields
+            changed = True
+
+        table_name = str(collection.table_name or "").strip()
+        if not table_name:
+            table_name = self._generate_table_name(collection.tenant_id, collection.slug)
+            collection.table_name = table_name
+            changed = True
+
+        await self.session.execute(text(self._build_create_table_sql(table_name, collection.fields)))
+        await self.session.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
+
+        for field in collection.get_row_writable_fields():
+            field_name = str(field.get("name") or "").strip()
+            if not field_name:
+                continue
+            pg_type = FIELD_TYPE_TO_PG.get(str(field.get("data_type") or ""), "TEXT")
+            required = bool(field.get("required", False))
+            constraint = "NOT NULL" if required else ""
+            await self.session.execute(
+                text(
+                    f"ALTER TABLE {table_name} "
+                    f"ADD COLUMN IF NOT EXISTS {field_name} {pg_type} {constraint}".strip()
+                )
+            )
+
+        for index_sql in self._build_indexes_sql(table_name, collection.fields):
+            await self.session.execute(text(index_sql))
+
+        if changed:
+            self.session.add(collection)
+            await self.session.flush()
 
     async def create_collection(
         self,
@@ -202,489 +272,290 @@ class CollectionService:
         name: str,
         fields: List[dict],
         description: Optional[str] = None,
+        source_contract: Optional[dict] = None,
         vector_config: Optional[dict] = None,
+        collection_type: str = CollectionType.TABLE.value,
+        data_instance_id: Optional[uuid.UUID] = None,
+        table_name: Optional[str] = None,
+        table_schema: Optional[dict] = None,
     ) -> Collection:
-        """
-        Create a new collection with its dynamic table.
-        Automatically creates Qdrant collection if any field has 'vector' in search_modes.
-        
-        Args:
-            tenant_id: Tenant UUID
-            slug: Unique identifier (within tenant)
-            name: Human-readable name
-            fields: List of field definitions with search_modes
-            description: Optional description for LLM
-            vector_config: Optional vector search configuration
-        
-        Returns:
-            Created Collection object
-        """
-        self._validate_slug(slug)
-        self._validate_fields(fields)
-
-        existing = await self.get_by_slug(tenant_id, slug)
-        if existing:
-            raise CollectionExistsError(f"Collection '{slug}' already exists")
-
-        table_name = self._generate_table_name(tenant_id, slug)
-        
-        # Check if any field has vector search
-        has_vector_fields = any(
-            "vector" in field.get("search_modes", []) 
-            for field in fields
-        )
-        
-        # Auto-generate vector config if needed
-        if has_vector_fields and not vector_config:
-            vector_config = {
-                "chunk_strategy": "by_paragraphs",
-                "chunk_size": 512,
-                "overlap": 50,
-            }
-        
-        # Generate Qdrant collection name if vector search enabled
-        qdrant_collection_name = None
-        if has_vector_fields:
-            tenant_short = str(tenant_id).replace("-", "")[:8]
-            qdrant_collection_name = f"coll_{tenant_short}_{slug}"
-
-        collection = Collection(
-            id=uuid.uuid4(),
+        return await self.lifecycle.create_collection(
             tenant_id=tenant_id,
             slug=slug,
             name=name,
-            description=description,
             fields=fields,
-            table_name=table_name,
-            row_count=0,
+            description=description,
+            source_contract=source_contract,
             vector_config=vector_config,
-            qdrant_collection_name=qdrant_collection_name,
-            total_rows=0,
-            vectorized_rows=0,
-            total_chunks=0,
-            failed_rows=0,
-            is_active=True,
+            collection_type=collection_type,
+            data_instance_id=data_instance_id,
+            table_name=table_name,
+            table_schema=table_schema,
         )
 
-        # Create SQL table
-        create_table_sql = self._build_create_table_sql(table_name, fields)
-        await self.session.execute(text(create_table_sql))
-        
-        # Add vector metadata columns if needed
-        if has_vector_fields:
-            await self.session.execute(text(
-                f"ALTER TABLE {table_name} "
-                f"ADD COLUMN _vector_status TEXT DEFAULT 'pending', "
-                f"ADD COLUMN _vector_chunk_count INTEGER DEFAULT 0, "
-                f"ADD COLUMN _vector_error TEXT"
-            ))
-            await self.session.execute(text(
-                f"CREATE INDEX idx_{table_name}_vector_status "
-                f"ON {table_name} (_vector_status)"
-            ))
+    async def _create_local_collection(
+        self,
+        tenant_id: uuid.UUID,
+        slug: str,
+        name: str,
+        fields: List[dict],
+        description: Optional[str] = None,
+        source_contract: Optional[dict] = None,
+        vector_config: Optional[dict] = None,
+        collection_type: str = CollectionType.TABLE.value,
+    ) -> Collection:
+        return await self.lifecycle.create_local_collection(
+            tenant_id=tenant_id,
+            slug=slug,
+            name=name,
+            fields=fields,
+            description=description,
+            source_contract=source_contract,
+            vector_config=vector_config,
+            collection_type=collection_type,
+        )
 
-        # Create trigram extension for LIKE search
-        await self.session.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
+    async def _create_remote_collection(
+        self,
+        tenant_id: uuid.UUID,
+        slug: str,
+        name: str,
+        fields: List[dict],
+        description: Optional[str] = None,
+        source_contract: Optional[dict] = None,
+        collection_type: str = CollectionType.SQL.value,
+        data_instance_id: Optional[uuid.UUID] = None,
+        table_name: Optional[str] = None,
+        table_schema: Optional[dict] = None,
+    ) -> Collection:
+        return await self.lifecycle.create_remote_collection(
+            tenant_id=tenant_id,
+            slug=slug,
+            name=name,
+            fields=fields,
+            description=description,
+            source_contract=source_contract,
+            collection_type=collection_type,
+            data_instance_id=data_instance_id,
+            table_name=table_name,
+            table_schema=table_schema,
+        )
 
-        # Create indexes
-        for index_sql in self._build_indexes_sql(table_name, fields):
-            await self.session.execute(text(index_sql))
-        
-        # TODO: Create Qdrant collection here when vector service is implemented
-        # if qdrant_collection_name:
-        #     await self._create_qdrant_collection(qdrant_collection_name, vector_config)
+    def _build_initial_version(self, collection: Collection) -> CollectionVersion:
+        return CollectionVersionService.build_initial_version(collection)
+
+    async def update_collection(
+        self,
+        collection_id: uuid.UUID,
+        *,
+        name: Any = _UNSET,
+        description: Any = _UNSET,
+        is_active: Any = _UNSET,
+        data_instance_id: Any = _UNSET,
+        table_name: Any = _UNSET,
+        table_schema: Any = _UNSET,
+        schema_ops: Optional[List[dict]] = None,
+    ) -> Collection:
+        """
+        Update mutable collection metadata and apply controlled schema evolution.
+
+        Schema evolution is limited to `user` fields and is executed transactionally
+        against the dynamic SQL table.
+        """
+        collection = await self.get_by_id(collection_id)
+        if not collection:
+            raise CollectionNotFoundError(f"Collection {collection_id} not found")
+
+        if name is not _UNSET:
+            collection.name = name
+        if description is not _UNSET:
+            collection.description = description
+        if is_active is not _UNSET:
+            collection.is_active = is_active
+        if data_instance_id is not _UNSET:
+            if data_instance_id is not None:
+                result = await self.session.execute(
+                    select(ToolInstance).where(ToolInstance.id == data_instance_id)
+                )
+                instance = result.scalar_one_or_none()
+                if not instance:
+                    raise InvalidSchemaError(f"Data instance {data_instance_id} not found")
+                if not instance.is_active:
+                    raise InvalidSchemaError(f"Data instance {data_instance_id} is not active")
+                if instance.connector_type != "data":
+                    raise InvalidSchemaError(f"Connector {data_instance_id} is not a data connector")
+                expected_subtype = get_collection_type_profile(collection.collection_type).expected_data_connector_subtype()
+                if expected_subtype and str(instance.connector_subtype or "").strip().lower() != expected_subtype:
+                    raise InvalidSchemaError(f"Connector {data_instance_id} is not {expected_subtype} subtype")
+            collection.data_instance_id = data_instance_id
+        if table_name is not _UNSET:
+            collection.table_name = table_name
+        if table_schema is not _UNSET:
+            collection.table_schema = table_schema
+
+        if schema_ops:
+            await self._apply_schema_operations(collection, schema_ops)
+
+        await self.sync_collection_status(collection, persist=False)
 
         self.session.add(collection)
         await self.session.flush()
-        
-        # Auto-create ToolInstance for this collection
-        tool_instance = await self._create_tool_instance_for_collection(collection)
-        if tool_instance:
-            collection.tool_instance_id = tool_instance.id
-            await self.session.flush()
-        
-        # Auto-add instance to default permission set (use instance slug, not collection slug)
-        if tool_instance:
-            await self._add_instance_to_default_permissions(tool_instance.slug)
-
         return collection
-    
-    async def _add_instance_to_default_permissions(self, instance_slug: str):
-        """Add new instance to default permission set with 'denied' status"""
-        # Get default permission set
-        stmt = select(PermissionSet).where(
-            PermissionSet.scope == "default",
-            PermissionSet.tenant_id.is_(None),
-            PermissionSet.user_id.is_(None)
+
+    async def list_versions(self, collection_id: uuid.UUID) -> List[CollectionVersion]:
+        return await self.versions.list_versions(collection_id)
+
+    async def get_version(self, collection_id: uuid.UUID, version: int) -> CollectionVersion:
+        return await self.versions.get_version(collection_id, version)
+
+    async def create_version(
+        self,
+        collection_id: uuid.UUID,
+        *,
+        semantic_profile: Optional[dict] = None,
+        policy_hints: Optional[dict] = None,
+        notes: Optional[str] = None,
+    ) -> CollectionVersion:
+        return await self.versions.create_version(
+            collection_id,
+            semantic_profile=semantic_profile,
+            policy_hints=policy_hints,
+            notes=notes,
         )
-        result = await self.session.execute(stmt)
-        default_perms = result.scalar_one_or_none()
-        
-        if not default_perms:
-            logger.warning("Default permission set not found, skipping auto-add")
-            return
-        
-        # Check if instance already in permissions
-        instance_permissions = dict(default_perms.instance_permissions or {})
-        if instance_slug in instance_permissions:
-            return
-        
-        # Add with 'denied' status by default
-        instance_permissions[instance_slug] = "denied"
-        default_perms.instance_permissions = instance_permissions
-        
-        self.session.add(default_perms)
-        await self.session.flush()
-        
-        logger.info(f"Added instance '{instance_slug}' to default permissions (status: denied)")
+
+    async def update_version(
+        self,
+        collection_id: uuid.UUID,
+        version: int,
+        *,
+        semantic_profile: Any = _UNSET,
+        policy_hints: Any = _UNSET,
+        notes: Any = _UNSET,
+    ) -> CollectionVersion:
+        return await self.versions.update_version(
+            collection_id, version,
+            semantic_profile=semantic_profile if semantic_profile is not _UNSET else None,
+            policy_hints=policy_hints if policy_hints is not _UNSET else None,
+            notes=notes if notes is not _UNSET else None,
+            _UNSET=_UNSET,
+        )
+
+    async def publish_version(self, collection_id: uuid.UUID, version: int) -> CollectionVersion:
+        return await self.versions.publish_version(collection_id, version)
+
+    async def set_current_version(self, collection_id: uuid.UUID, version_id: uuid.UUID) -> Collection:
+        return await self.versions.set_current_version(collection_id, version_id)
+
+    async def archive_version(self, collection_id: uuid.UUID, version: int) -> CollectionVersion:
+        return await self.versions.archive_version(collection_id, version)
+
+    async def delete_version(self, collection_id: uuid.UUID, version: int) -> None:
+        return await self.versions.delete_version(collection_id, version)
+
+    async def activate_version(self, collection_id: uuid.UUID, version: int) -> CollectionVersion:
+        return await self.versions.activate_version(collection_id, version)
+
+    async def deactivate_version(self, collection_id: uuid.UUID, version: int) -> CollectionVersion:
+        return await self.versions.deactivate_version(collection_id, version)
+
+    async def _apply_schema_operations(
+        self,
+        collection: Collection,
+        schema_ops: List[dict],
+    ) -> None:
+        return await self.schema_evolution.apply_schema_operations(collection, schema_ops)
+    
 
     async def _create_tool_instance_for_collection(self, collection: Collection) -> Optional[ToolInstance]:
         """
-        Auto-create ToolInstance for a collection.
-        
-        Each collection gets its own ToolInstance in the 'collection' tool group.
-        This allows binding collections to agents through the standard bindings mechanism.
+        Resolve canonical local service instance for a collection.
+
+        Collection no longer creates dedicated local DATA instances.
+        It is linked directly to the shared local SERVICE provider by type.
         """
-        # Get or create 'collection' tool group
-        stmt = select(ToolGroup).where(ToolGroup.slug == "collection")
-        result = await self.session.execute(stmt)
-        tool_group = result.scalar_one_or_none()
-        
-        if not tool_group:
-            logger.warning("ToolGroup 'collection' not found, cannot create ToolInstance for collection")
-            return None
-        
-        # Create ToolInstance
-        instance_slug = f"collection-{collection.slug}"
-        
-        # Check if instance already exists (by name + group)
-        stmt = select(ToolInstance).where(
-            ToolInstance.tool_group_id == tool_group.id,
-            ToolInstance.name == f"Collection: {collection.name}",
+        local_service = await self.tool_instance_service.resolve_local_service_for_collection_type(
+            collection.collection_type
         )
-        result = await self.session.execute(stmt)
-        existing = result.scalar_one_or_none()
-        
-        if existing:
-            logger.info(f"ToolInstance for collection '{collection.slug}' already exists, reusing")
-            return existing
-        
-        tool_instance = ToolInstance(
-            id=uuid.uuid4(),
-            tool_group_id=tool_group.id,
-            slug=f"collection-{collection.slug}",
-            name=f"Collection: {collection.name}",
-            description=collection.description or f"Data collection: {collection.name}",
-            url="",
-            instance_type=InstanceType.LOCAL.value,
-            config={
-                "collection_id": str(collection.id),
-                "collection_slug": collection.slug,
-                "tenant_id": str(collection.tenant_id),
-                "table_name": collection.table_name,
-            },
-            health_status="healthy",
-            is_active=True,
-        )
-        
-        self.session.add(tool_instance)
-        await self.session.flush()
-        
-        logger.info(f"Created ToolInstance '{instance_slug}' for collection '{collection.slug}'")
-        return tool_instance
+        return local_service
 
     async def get_by_id(self, collection_id: uuid.UUID) -> Optional[Collection]:
-        """Get collection by ID"""
-        result = await self.session.execute(
-            select(Collection).where(Collection.id == collection_id)
-        )
-        return result.scalar_one_or_none()
+        return await self.query.get_by_id(collection_id)
 
     async def get_by_slug(
         self, tenant_id: uuid.UUID, slug: str
     ) -> Optional[Collection]:
-        """Get collection by tenant and slug"""
-        result = await self.session.execute(
-            select(Collection).where(
-                Collection.tenant_id == tenant_id,
-                Collection.slug == slug,
-            )
-        )
-        return result.scalar_one_or_none()
+        return await self.query.get_by_slug(tenant_id, slug)
 
     async def list_collections(
         self,
         tenant_id: uuid.UUID,
         active_only: bool = True,
     ) -> List[Collection]:
-        """List all collections for a tenant"""
-        query = select(Collection).where(Collection.tenant_id == tenant_id)
-        if active_only:
-            query = query.where(Collection.is_active == True)
-        query = query.order_by(Collection.created_at.desc())
-
-        result = await self.session.execute(query)
-        return list(result.scalars().all())
+        return await self.query.list_collections(tenant_id, active_only=active_only)
 
     async def delete_collection(
         self, tenant_id: uuid.UUID, slug: str, drop_table: bool = True
     ) -> bool:
-        """
-        Delete a collection and optionally its data table.
-        
-        Args:
-            tenant_id: Tenant UUID
-            slug: Collection slug
-            drop_table: If True, also drop the data table
-        
-        Returns:
-            True if deleted, False if not found
-        """
-        collection = await self.get_by_slug(tenant_id, slug)
-        if not collection:
-            return False
-
-        if drop_table:
-            await self.session.execute(
-                text(f"DROP TABLE IF EXISTS {collection.table_name} CASCADE")
-            )
-
-        # Auto-delete linked tool instance
-        if collection.tool_instance_id:
-            await self._delete_tool_instance_for_collection(collection.tool_instance_id)
-
-        await self.session.delete(collection)
-        await self.session.flush()
-
-        return True
+        return await self.lifecycle.delete_collection(
+            tenant_id, slug, drop_table=drop_table
+        )
 
     async def _delete_tool_instance_for_collection(self, instance_id: uuid.UUID) -> None:
         """Auto-delete the ToolInstance linked to a collection."""
         try:
-            stmt = select(ToolInstance).where(ToolInstance.id == instance_id)
-            result = await self.session.execute(stmt)
-            instance = result.scalar_one_or_none()
-            if instance:
-                await self.session.delete(instance)
-                await self.session.flush()
-                logger.info(f"Deleted tool instance '{instance.slug}' for collection")
+            instance = await self.tool_instance_service.get_instance(instance_id)
+            if instance.connector_type != "data":
+                return
+            await self.tool_instance_service.delete_local_instance(instance_id)
+            logger.info(f"Deleted tool instance '{instance.slug}' for collection")
         except Exception as e:
             logger.error(f"Failed to delete tool instance {instance_id}: {e}")
 
     async def update_row_count(self, collection_id: uuid.UUID) -> int:
-        """Update and return the row count for a collection"""
-        collection = await self.get_by_id(collection_id)
-        if not collection:
-            raise CollectionNotFoundError(f"Collection {collection_id} not found")
+        return await self.query.update_row_count(collection_id)
 
-        result = await self.session.execute(
-            text(f"SELECT COUNT(*) FROM {collection.table_name}")
-        )
-        count = result.scalar()
-
-        collection.row_count = count
-        await self.session.flush()
-
+    async def insert_rows(self, collection: Collection, rows: List[dict]) -> int:
+        count = await self.rows.insert_rows(collection, rows)
+        await self.sync_collection_status(collection, persist=False)
         return count
 
-    async def insert_rows(
-        self,
-        collection: Collection,
-        rows: List[dict],
-    ) -> int:
-        """
-        Insert rows into collection table.
-        
-        Args:
-            collection: Collection object
-            rows: List of row dictionaries
-        
-        Returns:
-            Number of inserted rows
-        """
-        if not rows:
-            return 0
+    async def create_row(self, collection: Collection, payload: dict) -> dict:
+        row = await self.rows.create_row(collection, payload)
+        await self.sync_collection_status(collection, persist=False)
+        return row
 
-        field_names = [f["name"] for f in collection.fields]
-        columns = ", ".join(field_names)
-        placeholders = ", ".join([f":{name}" for name in field_names])
+    async def get_row_by_id(
+        self, collection: Collection, row_id: uuid.UUID
+    ) -> Optional[dict]:
+        return await self.rows.get_row_by_id(collection, row_id)
 
-        insert_sql = text(
-            f"INSERT INTO {collection.table_name} ({columns}) VALUES ({placeholders})"
-        )
-
-        for row in rows:
-            filtered_row = {k: v for k, v in row.items() if k in field_names}
-            await self.session.execute(insert_sql, filtered_row)
-
-        collection.row_count += len(rows)
-        await self.session.flush()
-
-        return len(rows)
+    async def update_row(
+        self, collection: Collection, row_id: uuid.UUID, payload: dict
+    ) -> Optional[dict]:
+        row = await self.rows.update_row(collection, row_id, payload)
+        if row is not None:
+            await self.sync_collection_status(collection, persist=False)
+        return row
 
     async def search(
         self,
         collection: Collection,
-        filters: dict,
+        filters: Optional[dict] = None,
         limit: int = 50,
         offset: int = 0,
         query: Optional[str] = None,
     ) -> List[dict]:
-        """
-        Search collection with filters.
-        
-        Args:
-            collection: Collection object
-            filters: Dict of field_name -> value or {op: value}
-            limit: Max results
-            offset: Offset for pagination
-            query: Free text search query (searches all LIKE fields with OR)
-        
-        Returns:
-            List of matching rows as dicts
-        """
-        where_clauses = []
-        params = {}
-
-        # Handle free text query - search across all LIKE fields with OR
-        if query:
-            like_clauses = []
-            for field_def in collection.get_searchable_fields():
-                field_name = field_def["name"]
-                search_mode = field_def.get("search_mode", SearchMode.EXACT.value)
-                if search_mode == SearchMode.LIKE.value:
-                    like_clauses.append(f"{field_name} ILIKE :query_param")
-            if like_clauses:
-                params["query_param"] = f"%{query}%"
-                where_clauses.append(f"({' OR '.join(like_clauses)})")
-
-        # Handle specific field filters
-        for field_def in collection.get_searchable_fields():
-            field_name = field_def["name"]
-            if field_name not in filters:
-                continue
-
-            value = filters[field_name]
-            search_mode = field_def.get("search_mode", SearchMode.EXACT.value)
-
-            if search_mode == SearchMode.LIKE.value:
-                where_clauses.append(f"{field_name} ILIKE :p_{field_name}")
-                params[f"p_{field_name}"] = f"%{value}%"
-
-            elif search_mode == SearchMode.RANGE.value:
-                if isinstance(value, dict):
-                    if "from" in value:
-                        where_clauses.append(f"{field_name} >= :p_{field_name}_from")
-                        params[f"p_{field_name}_from"] = value["from"]
-                    if "to" in value:
-                        where_clauses.append(f"{field_name} <= :p_{field_name}_to")
-                        params[f"p_{field_name}_to"] = value["to"]
-                else:
-                    where_clauses.append(f"{field_name} = :p_{field_name}")
-                    params[f"p_{field_name}"] = value
-
-            else:
-                where_clauses.append(f"{field_name} = :p_{field_name}")
-                params[f"p_{field_name}"] = value
-
-        where_sql = " AND ".join(where_clauses) if where_clauses else "TRUE"
-
-        sql_query = text(
-            f"SELECT * FROM {collection.table_name} "
-            f"WHERE {where_sql} "
-            f"ORDER BY _created_at DESC "
-            f"LIMIT :limit OFFSET :offset"
-        )
-        params["limit"] = limit
-        params["offset"] = offset
-
-        result = await self.session.execute(sql_query, params)
-        rows = result.mappings().all()
-
-        return [dict(row) for row in rows]
+        return await self.rows.search(collection, filters=filters, limit=limit, offset=offset, query=query)
 
     async def count(
         self,
         collection: Collection,
-        filters: dict,
+        filters: Optional[dict] = None,
         query: Optional[str] = None,
     ) -> int:
-        """Count matching rows"""
-        where_clauses = []
-        params = {}
+        return await self.rows.count(collection, filters=filters, query=query)
 
-        # Handle free text query - search across all LIKE fields with OR
-        if query:
-            like_clauses = []
-            for field_def in collection.get_searchable_fields():
-                field_name = field_def["name"]
-                search_mode = field_def.get("search_mode", SearchMode.EXACT.value)
-                if search_mode == SearchMode.LIKE.value:
-                    like_clauses.append(f"{field_name} ILIKE :query_param")
-            if like_clauses:
-                params["query_param"] = f"%{query}%"
-                where_clauses.append(f"({' OR '.join(like_clauses)})")
-
-        for field_def in collection.get_searchable_fields():
-            field_name = field_def["name"]
-            if field_name not in filters:
-                continue
-
-            value = filters[field_name]
-            search_mode = field_def.get("search_mode", SearchMode.EXACT.value)
-
-            if search_mode == SearchMode.LIKE.value:
-                where_clauses.append(f"{field_name} ILIKE :p_{field_name}")
-                params[f"p_{field_name}"] = f"%{value}%"
-            elif search_mode == SearchMode.RANGE.value:
-                if isinstance(value, dict):
-                    if "from" in value:
-                        where_clauses.append(f"{field_name} >= :p_{field_name}_from")
-                        params[f"p_{field_name}_from"] = value["from"]
-                    if "to" in value:
-                        where_clauses.append(f"{field_name} <= :p_{field_name}_to")
-                        params[f"p_{field_name}_to"] = value["to"]
-                else:
-                    where_clauses.append(f"{field_name} = :p_{field_name}")
-                    params[f"p_{field_name}"] = value
-            else:
-                where_clauses.append(f"{field_name} = :p_{field_name}")
-                params[f"p_{field_name}"] = value
-
-        where_sql = " AND ".join(where_clauses) if where_clauses else "TRUE"
-
-        sql_query = text(
-            f"SELECT COUNT(*) FROM {collection.table_name} WHERE {where_sql}"
-        )
-
-        result = await self.session.execute(sql_query, params)
-        return result.scalar()
-
-    async def delete_rows(self, collection: Collection, ids: List[int]) -> int:
-        """
-        Delete rows from collection by IDs.
-        
-        Args:
-            collection: Collection object
-            ids: List of row IDs to delete
-        
-        Returns:
-            Number of deleted rows
-        """
-        if not ids:
-            return 0
-
-        placeholders = ", ".join([f":id_{i}" for i in range(len(ids))])
-        params = {f"id_{i}": id_val for i, id_val in enumerate(ids)}
-
-        delete_sql = text(
-            f"DELETE FROM {collection.table_name} WHERE _id IN ({placeholders})"
-        )
-
-        result = await self.session.execute(delete_sql, params)
-        deleted_count = result.rowcount
-
-        collection.row_count = max(0, collection.row_count - deleted_count)
-        await self.session.flush()
-
-        return deleted_count
+    async def delete_rows(self, collection: Collection, ids: List[uuid.UUID]) -> int:
+        count = await self.rows.delete_rows(collection, ids)
+        await self.sync_collection_status(collection, persist=False)
+        return count

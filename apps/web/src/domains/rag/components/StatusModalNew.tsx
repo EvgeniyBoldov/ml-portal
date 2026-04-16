@@ -3,10 +3,10 @@ import { useQueryClient } from '@tanstack/react-query';
 import Modal from '@shared/ui/Modal';
 import { useToast } from '@shared/ui/Toast';
 import { apiRequest } from '@shared/api/http';
+import { buildFileDownloadUrl, buildRagDocFileId } from '@shared/api/files';
 import { config } from '@shared/config';
 import { openSSE, SSEMessage } from '@shared/lib/sse';
-import { applyRagEvents } from '@/app/providers/applyRagEvents';
-import { useRagDocument } from '@shared/api/hooks/useRagDocuments';
+import { useDocumentStatus } from '@shared/api/hooks/useDocumentStatus';
 import { PipelineView, PipelineStage, EmbeddingModel } from './PipelineView';
 import { StageDetails } from './StageDetails';
 import styles from './StatusModalNew.module.css';
@@ -15,32 +15,75 @@ interface StatusModalNewProps {
   docId: string;
   docName?: string;
   onClose: () => void;
+  /** Override SSE events URL (default: config.ragEventsUrl) */
+  sseUrl?: string;
+  /** Override status-graph fetch URL (default: /rag/{docId}/status-graph) */
+  statusGraphUrl?: string;
+  /** Override retry ingest URL prefix (default: /rag/status/{docId}/ingest/retry) */
+  retryUrlPrefix?: string;
+  /** Override stop ingest URL prefix (default: /rag/status/{docId}/ingest/stop) */
+  stopUrlPrefix?: string;
+  /** Override download URL prefix (default: /rag/{docId}/download) */
+  downloadUrlPrefix?: string;
 }
 
-export function StatusModalNew({ docId, docName, onClose }: StatusModalNewProps) {
+export function StatusModalNew({ docId, docName, onClose, sseUrl, statusGraphUrl, retryUrlPrefix, stopUrlPrefix, downloadUrlPrefix }: StatusModalNewProps) {
   const queryClient = useQueryClient();
   const sseRef = useRef<ReturnType<typeof openSSE> | null>(null);
+  const invalidateAtRef = useRef<number>(0);
+  const invalidateTimerRef = useRef<number | null>(null);
   const { showToast } = useToast();
   
   const [selectedStage, setSelectedStage] = useState<string | null>(null);
   const [selectedModel, setSelectedModel] = useState<string | null>(null);
 
-  const { data: docStatus, isLoading, error } = useRagDocument(docId);
+  const { data: docStatus, isLoading, error } = useDocumentStatus(docId, statusGraphUrl);
+  const queryKey = React.useMemo(
+    () => (statusGraphUrl ? ['collections', 'doc-status', docId] : ['document-status', docId]),
+    [docId, statusGraphUrl],
+  );
+
+  const scheduleInvalidate = React.useCallback(() => {
+    const minIntervalMs = 500;
+    const now = Date.now();
+    const diff = now - invalidateAtRef.current;
+    if (diff >= minIntervalMs) {
+      invalidateAtRef.current = now;
+      queryClient.invalidateQueries({ queryKey });
+      return;
+    }
+
+    if (invalidateTimerRef.current != null) {
+      return;
+    }
+    const delay = minIntervalMs - diff;
+    invalidateTimerRef.current = window.setTimeout(() => {
+      invalidateAtRef.current = Date.now();
+      invalidateTimerRef.current = null;
+      queryClient.invalidateQueries({ queryKey });
+    }, delay);
+  }, [queryClient, queryKey]);
 
   // SSE subscription for real-time updates
   useEffect(() => {
-    const url = `${config.ragEventsUrl}?document_id=${encodeURIComponent(docId)}`;
-    const client = openSSE(url, (events: SSEMessage[]) => {
-      applyRagEvents(events, queryClient);
+    const baseUrl = sseUrl || config.ragEventsUrl;
+    const url = `${baseUrl}?document_id=${encodeURIComponent(docId)}`;
+    const client = openSSE(url, (_events: SSEMessage[]) => {
+      // Refetch fresh StatusGraph with throttle to avoid request burst on dense event streams.
+      scheduleInvalidate();
     });
     sseRef.current = client;
     return () => {
+      if (invalidateTimerRef.current != null) {
+        window.clearTimeout(invalidateTimerRef.current);
+        invalidateTimerRef.current = null;
+      }
       if (sseRef.current) {
         sseRef.current.disconnect();
         sseRef.current = null;
       }
     };
-  }, [docId, queryClient]);
+  }, [docId, scheduleInvalidate, sseUrl]);
 
   // Keyboard navigation
   useEffect(() => {
@@ -58,7 +101,7 @@ export function StatusModalNew({ docId, docName, onClose }: StatusModalNewProps)
   const stages: PipelineStage[] = React.useMemo(() => {
     if (!docStatus?.stages) return [];
     
-    const stageOrder = ['upload', 'extract', 'normalize', 'chunk'];
+    const stageOrder: Array<'upload' | 'extract' | 'normalize' | 'chunk'> = ['upload', 'extract', 'normalize', 'chunk'];
     return stageOrder.map(key => {
       const stage = docStatus.stages[key];
       return {
@@ -76,14 +119,12 @@ export function StatusModalNew({ docId, docName, onClose }: StatusModalNewProps)
   const embeddings: EmbeddingModel[] = React.useMemo(() => {
     if (!docStatus?.embed_models) return [];
     return docStatus.embed_models
-      // Filter out models that were never started (pending without any activity)
-      .filter(m => m.state !== 'idle' || m.started_at)
       .map(m => ({
         model: m.id || m.name,
         status: mapStateToStatus(m.state),
         version: m.version,
         error: m.error,
-        metrics: (m as any).metrics,
+        metrics: m.metrics,
         started_at: m.started_at,
         finished_at: m.finished_at,
       }));
@@ -92,14 +133,12 @@ export function StatusModalNew({ docId, docName, onClose }: StatusModalNewProps)
   const indexes: EmbeddingModel[] = React.useMemo(() => {
     if (!docStatus?.index_models) return [];
     return docStatus.index_models
-      // Filter out models that were never started (pending without any activity)
-      .filter(m => m.state !== 'idle' || m.started_at)
       .map(m => ({
         model: m.id || m.name,
         status: mapStateToStatus(m.state),
         version: m.version,
         error: m.error,
-        metrics: (m as any).metrics,
+        metrics: m.metrics,
         started_at: m.started_at,
         finished_at: m.finished_at,
       }));
@@ -123,6 +162,53 @@ export function StatusModalNew({ docId, docName, onClose }: StatusModalNewProps)
     return null;
   }, [selectedStage, selectedModel, embeddings, indexes]);
 
+  const selectedStageSlug = React.useMemo(() => {
+    if (!selectedStage) return null;
+    if (selectedStage === 'embedding' && selectedModel) return `embed.${selectedModel}`;
+    if (selectedStage === 'index' && selectedModel) return `index.${selectedModel}`;
+    if (['upload', 'extract', 'normalize', 'chunk'].includes(selectedStage)) return selectedStage;
+    return null;
+  }, [selectedStage, selectedModel]);
+
+  const selectedRetryStage = React.useMemo(() => {
+    if (!selectedStageSlug) return null;
+    if (['upload', 'extract', 'normalize', 'chunk'].includes(selectedStageSlug)) {
+      return 'extract';
+    }
+    return selectedStageSlug;
+  }, [selectedStageSlug]);
+
+  const controls = React.useMemo(() => docStatus?.ingest_policy?.controls || [], [docStatus?.ingest_policy?.controls]);
+  const controlByStage = React.useMemo(
+    () => new Map(controls.map((item) => [item.stage, item])),
+    [controls],
+  );
+  const activeStageSlugs = docStatus?.ingest_policy?.active_stages || [];
+
+  const canRetrySelectedStage = React.useMemo(() => {
+    if (!selectedRetryStage) return false;
+    const control = controlByStage.get(selectedRetryStage);
+    return Boolean(control?.can_retry);
+  }, [controlByStage, selectedRetryStage]);
+
+  const selectedStopStage = React.useMemo(() => {
+    if (!selectedStageSlug) return null;
+    const selectedControl = controlByStage.get(selectedStageSlug);
+    if (selectedControl?.can_stop) {
+      return selectedControl.stage;
+    }
+    if (['upload', 'extract', 'normalize', 'chunk'].includes(selectedStageSlug)) {
+      const activePipeline = controls.find((item) => item.node_type === 'pipeline' && item.can_stop);
+      return activePipeline?.stage || null;
+    }
+    return null;
+  }, [controlByStage, controls, selectedStageSlug]);
+
+  const canStopSelectedStage = React.useMemo(() => {
+    if (!selectedStopStage) return false;
+    return Boolean(controlByStage.get(selectedStopStage)?.can_stop);
+  }, [controlByStage, selectedStopStage]);
+
   // Handlers
   const handleSelectStage = (stage: string | null, model?: string | null) => {
     setSelectedStage(stage);
@@ -130,19 +216,15 @@ export function StatusModalNew({ docId, docName, onClose }: StatusModalNewProps)
   };
 
   const handleRestart = async () => {
-    if (!selectedStage) return;
+    if (!selectedRetryStage) return;
+    if (!canRetrySelectedStage) {
+      showToast('Этот этап сейчас нельзя перезапустить', 'error');
+      return;
+    }
 
     try {
-      let stage = selectedStage;
-      if (selectedStage === 'embedding' && selectedModel) {
-        stage = `embed.${selectedModel}`;
-      } else if (selectedStage === 'index' && selectedModel) {
-        stage = `index.${selectedModel}`;
-      } else if (['upload', 'extract', 'normalize', 'chunk'].includes(selectedStage)) {
-        stage = 'extract'; // Restart from extract for pipeline stages
-      }
-
-      await apiRequest(`/rag/status/${docId}/ingest/retry?stage=${stage}`, {
+      const retryBase = retryUrlPrefix || `/rag/status/${docId}/ingest/retry`;
+      await apiRequest(`${retryBase}?stage=${selectedRetryStage}`, {
         method: 'POST',
         idempotent: true,
       });
@@ -153,10 +235,32 @@ export function StatusModalNew({ docId, docName, onClose }: StatusModalNewProps)
     }
   };
 
+  const handleStop = async () => {
+    if (!selectedStopStage || !canStopSelectedStage) {
+      showToast('Этот этап сейчас нельзя остановить', 'error');
+      return;
+    }
+    try {
+      const stopBase = stopUrlPrefix || `/rag/status/${docId}/ingest/stop`;
+      await apiRequest(`${stopBase}?stage=${selectedStopStage}`, {
+        method: 'POST',
+        idempotent: true,
+      });
+      showToast('Остановка запрошена', 'success');
+    } catch {
+      showToast('Ошибка остановки', 'error');
+    }
+  };
+
   const handleDownloadOriginal = async () => {
     try {
-      const response = await apiRequest<{ url: string }>(`/rag/${docId}/download?kind=original`);
-      window.open(response.url, '_blank');
+      if (downloadUrlPrefix) {
+        const response = await apiRequest<{ url: string }>(`${downloadUrlPrefix}?kind=original`);
+        window.open(response.url, '_blank');
+        return;
+      }
+      const fileId = buildRagDocFileId(docId, 'original');
+      window.open(buildFileDownloadUrl(fileId), '_blank', 'noopener,noreferrer');
     } catch (error) {
       showToast('Ошибка скачивания', 'error');
     }
@@ -164,8 +268,13 @@ export function StatusModalNew({ docId, docName, onClose }: StatusModalNewProps)
 
   const handleDownloadNormalized = async () => {
     try {
-      const response = await apiRequest<{ url: string }>(`/rag/${docId}/download?kind=canonical`);
-      window.open(response.url, '_blank');
+      if (downloadUrlPrefix) {
+        const response = await apiRequest<{ url: string }>(`${downloadUrlPrefix}?kind=canonical`);
+        window.open(response.url, '_blank');
+        return;
+      }
+      const fileId = buildRagDocFileId(docId, 'canonical');
+      window.open(buildFileDownloadUrl(fileId), '_blank', 'noopener,noreferrer');
     } catch (error) {
       showToast('Ошибка скачивания', 'error');
     }
@@ -208,6 +317,7 @@ export function StatusModalNew({ docId, docName, onClose }: StatusModalNewProps)
             stages={stages}
             embeddings={embeddings}
             indexes={indexes}
+            activeStageSlugs={activeStageSlugs}
             selectedStage={selectedStage}
             selectedModel={selectedModel}
             onSelectStage={handleSelectStage}
@@ -221,7 +331,10 @@ export function StatusModalNew({ docId, docName, onClose }: StatusModalNewProps)
             model={selectedModelData}
             stageType={stageType}
             docId={docId}
+            canRestart={canRetrySelectedStage}
+            canStop={canStopSelectedStage}
             onRestart={handleRestart}
+            onStop={handleStop}
             onDownloadOriginal={handleDownloadOriginal}
             onDownloadNormalized={handleDownloadNormalized}
           />

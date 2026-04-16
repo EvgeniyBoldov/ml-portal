@@ -1,39 +1,26 @@
 /**
  * AgentListPage - Список агентов (контейнеры)
  */
-import { useState, useMemo } from 'react';
-import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { agentsApi, type Agent } from '@/shared/api';
-import { qk } from '@/shared/api/keys';
-import { EntityPageV2, Tab } from '@/shared/ui/EntityPage/EntityPageV2';
+import { useAgentList } from '@/shared/api/hooks';
+import { type Agent } from '@/shared/api/agents';
+import { EntityPageV2, Tab } from '@/shared/ui/EntityPage';
 import { DataTable, type DataTableColumn, Badge, Button, Input } from '@/shared/ui';
 
 export function AgentListPage() {
   const navigate = useNavigate();
-  const [q, setQ] = useState('');
-
-  const { data: agents, isLoading, error } = useQuery({
-    queryKey: qk.agents.list({ q: q || undefined }),
-    queryFn: () => agentsApi.list(),
-    staleTime: 60000,
-  });
-
-  const filteredAgents = useMemo(() => {
-    if (!agents) return [];
-    if (!q.trim()) return agents;
-    const query = q.toLowerCase();
-    return agents.filter((a: Agent) =>
-      a.name.toLowerCase().includes(query) ||
-      a.slug.toLowerCase().includes(query)
-    );
-  }, [agents, q]);
+  const { filtered: filteredAgents, isLoading, search, setSearch, goToCreate, goToDetail } = useAgentList();
 
   const columns: DataTableColumn<Agent>[] = [
     {
       key: 'slug',
       label: 'SLUG / ИМЯ',
       sortable: true,
+      filter: {
+        kind: 'text',
+        placeholder: 'Slug или имя',
+        getValue: (agent) => `${agent.slug ?? ''} ${agent.name ?? ''}`,
+      },
       render: (agent) => (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
           <span style={{ fontWeight: 500 }}>{agent.slug}</span>
@@ -45,6 +32,15 @@ export function AgentListPage() {
       key: 'current_version_id',
       label: 'ВЕРСИЯ',
       width: 120,
+      filter: {
+        kind: 'select',
+        placeholder: 'Все варианты',
+        options: [
+          { value: 'has_version', label: 'Есть версия' },
+          { value: 'no_version', label: 'Нет версии' },
+        ],
+        getValue: (agent) => (agent.current_version_id ? 'has_version' : 'no_version'),
+      },
       render: (agent) => agent.current_version_id ? (
         <Badge tone="success">Активна</Badge>
       ) : (
@@ -54,6 +50,11 @@ export function AgentListPage() {
     {
       key: 'description',
       label: 'ОПИСАНИЕ',
+      filter: {
+        kind: 'text',
+        placeholder: 'Описание',
+        getValue: (agent) => agent.description ?? '',
+      },
       render: (agent) => (
         <span style={{ color: 'var(--text-secondary)', fontSize: '0.8125rem' }}>
           {agent.description || '—'}
@@ -65,6 +66,12 @@ export function AgentListPage() {
       label: 'СОЗДАН',
       width: 120,
       sortable: true,
+      filter: {
+        kind: 'date-range',
+        fromPlaceholder: 'От',
+        toPlaceholder: 'До',
+        getValue: (agent) => agent.created_at,
+      },
       render: (agent) => (
         <span style={{ color: 'var(--text-secondary)' }}>
           {new Date(agent.created_at).toLocaleDateString('ru-RU')}
@@ -83,8 +90,8 @@ export function AgentListPage() {
       headerActions={
         <Input
           placeholder="Поиск агентов..."
-          value={q}
-          onChange={(event) => setQ(event.target.value)}
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
         />
       }
     >
@@ -92,20 +99,11 @@ export function AgentListPage() {
         title="Список" 
         layout="full"
         actions={[
-          <Button key="router" variant="outline" onClick={() => navigate('/admin/agents/router')}>
-            Agent Router
-          </Button>,
-          <Button key="create" onClick={() => navigate('/admin/agents/new')}>
+          <Button key="create" onClick={goToCreate}>
             Создать агента
           </Button>,
         ]}
       >
-        {error && (
-          <div style={{ padding: '16px', background: 'var(--danger-bg)', borderRadius: '8px', marginBottom: '16px' }}>
-            Не удалось загрузить агентов. Попробуйте снова.
-          </div>
-        )}
-
         <DataTable
           columns={columns}
           data={filteredAgents}
@@ -114,7 +112,7 @@ export function AgentListPage() {
           emptyText="Агенты не найдены. Нажмите «Создать агента» для создания."
           paginated
           pageSize={20}
-          onRowClick={(agent: Agent) => navigate(`/admin/agents/${agent.slug}`)}
+          onRowClick={goToDetail}
         />
       </Tab>
     </EntityPageV2>

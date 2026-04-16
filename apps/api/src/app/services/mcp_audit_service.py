@@ -20,7 +20,7 @@ class MCPAuditService:
     Service for logging MCP requests.
     
     Usage:
-        async with audit.log_request("mcp.tools/call", "rag.search") as ctx:
+        async with audit.log_request("mcp.tools/call", "collection.search") as ctx:
             result = await handler.execute(...)
             ctx.set_response(result)
     """
@@ -115,7 +115,7 @@ class MCPAuditService:
         Context manager for logging requests with automatic timing.
         
         Usage:
-            async with audit.log_request("mcp.tools/call", "rag.search") as ctx:
+            async with audit.log_request("mcp.tools/call", "collection.search") as ctx:
                 result = await do_something()
                 ctx.set_response({"hits": result})
         """

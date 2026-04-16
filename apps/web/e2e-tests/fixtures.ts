@@ -1,4 +1,4 @@
-import { test as base, expect } from '@playwright/test';
+import { test as base, expect, type Page, type TestType } from '@playwright/test';
 
 /**
  * Test fixtures for e2e tests
@@ -31,18 +31,20 @@ export const testUsers: Record<string, TestUser> = {
 };
 
 // Extended test with authenticated page
-export const test = base.extend<{
-  authenticatedPage: ReturnType<typeof base['page']>;
-  adminPage: ReturnType<typeof base['page']>;
-}>({
+type MyFixtures = {
+  authenticatedPage: Page;
+  adminPage: Page;
+};
+
+export const test = base.extend<MyFixtures>({
   // Page authenticated as default user (admin)
-  authenticatedPage: async ({ page }, use) => {
+  authenticatedPage: async ({ page }, use: (page: Page) => Promise<void>) => {
     await login(page, testUsers.admin);
     await use(page);
   },
 
   // Page authenticated as admin (explicit)
-  adminPage: async ({ page }, use) => {
+  adminPage: async ({ page }, use: (page: Page) => Promise<void>) => {
     await login(page, testUsers.admin);
     await use(page);
   },
@@ -52,7 +54,7 @@ export const test = base.extend<{
  * Login helper function
  */
 export async function login(
-  page: ReturnType<typeof base['page']>,
+  page: Page,
   user: TestUser
 ): Promise<void> {
   await page.goto('/login');
@@ -70,7 +72,7 @@ export async function login(
  * Logout helper function
  */
 export async function logout(
-  page: ReturnType<typeof base['page']>
+  page: Page
 ): Promise<void> {
   // Try to find and click logout button
   const logoutBtn = page.getByRole('button', { name: /выход|logout|выйти/i });
@@ -85,11 +87,11 @@ export async function logout(
  * Wait for API response
  */
 export async function waitForApi(
-  page: ReturnType<typeof base['page']>,
+  page: Page,
   urlPattern: string | RegExp
 ): Promise<void> {
   await page.waitForResponse(
-    response => {
+    (response: any) => {
       const url = response.url();
       if (typeof urlPattern === 'string') {
         return url.includes(urlPattern);
@@ -104,17 +106,21 @@ export async function waitForApi(
  * Upload file helper
  */
 export async function uploadFile(
-  page: ReturnType<typeof base['page']>,
+  page: Page,
   fileName: string,
   content: string,
   mimeType = 'text/plain'
 ): Promise<void> {
   const fileInput = page.locator('input[type="file"]');
 
+  // Use TextEncoder instead of Buffer for browser compatibility
+  const encoder = new TextEncoder();
+  const uint8Array = encoder.encode(content);
+
   await fileInput.setInputFiles({
     name: fileName,
     mimeType,
-    buffer: Buffer.from(content),
+    buffer: uint8Array,
   });
 }
 
@@ -137,7 +143,7 @@ export function createTestDocument(lines = 100): string {
  * Wait for toast notification
  */
 export async function waitForToast(
-  page: ReturnType<typeof base['page']>,
+  page: Page,
   textPattern: string | RegExp
 ): Promise<void> {
   await expect(
@@ -149,7 +155,7 @@ export async function waitForToast(
  * Close modal if open
  */
 export async function closeModal(
-  page: ReturnType<typeof base['page']>
+  page: Page
 ): Promise<void> {
   const closeBtn = page
     .getByRole('button', { name: /close|закрыть|×/i })
@@ -167,7 +173,7 @@ export async function closeModal(
  * Get table row count
  */
 export async function getTableRowCount(
-  page: ReturnType<typeof base['page']>
+  page: Page
 ): Promise<number> {
   const rows = page.locator('tbody tr');
   return await rows.count();
@@ -177,7 +183,7 @@ export async function getTableRowCount(
  * Select option from dropdown
  */
 export async function selectOption(
-  page: ReturnType<typeof base['page']>,
+  page: Page,
   label: string | RegExp,
   value: string
 ): Promise<void> {
@@ -185,6 +191,118 @@ export async function selectOption(
 
   await select.click();
   await page.getByRole('option', { name: value }).click();
+}
+
+/**
+ * Runtime refactor specific test data
+ */
+export const runtimeTestData = {
+  simpleChat: {
+    messages: [
+      { role: 'user', content: 'Hello, how are you?' }
+    ],
+    expectedTools: [],
+    expectedSteps: 1
+  },
+  toolExecution: {
+    messages: [
+      { role: 'user', content: 'Search for information about AI' }
+    ],
+    expectedTools: ['rag.search'],
+    expectedSteps: 2
+  },
+  multiTool: {
+    messages: [
+      { role: 'user', content: 'Search for AI and then machine learning' }
+    ],
+    expectedTools: ['rag.search'],
+    expectedSteps: 3
+  },
+  errorScenario: {
+    messages: [
+      { role: 'user', content: 'This should cause an error' }
+    ],
+    expectedTools: [],
+    expectedSteps: 1,
+    shouldError: true
+  }
+};
+
+/**
+ * Send chat message helper
+ */
+export async function sendChatMessage(
+  page: Page,
+  message: string
+): Promise<void> {
+  const messageInput = page.getByPlaceholder(/сообщение|message|напишите/i)
+    .or(page.locator('textarea').first());
+  
+  await messageInput.fill(message);
+  await page.getByRole('button', { name: /отправить|send/i }).click();
+}
+
+/**
+ * Wait for assistant response
+ */
+export async function waitForAssistantResponse(
+  page: Page,
+  timeout = 30000
+): Promise<void> {
+  await expect(page.locator('.message.assistant').last()).toBeVisible({ timeout });
+}
+
+/**
+ * Check for tool execution indicator
+ */
+export async function checkToolExecution(
+  page: Page
+): Promise<boolean> {
+  const toolIndicator = page.locator('[class*="tool"], [data-testid*="tool"], .tool-call');
+  return await toolIndicator.isVisible({ timeout: 5000 }).catch(() => false);
+}
+
+/**
+ * Get current chat messages
+ */
+export async function getChatMessages(
+  page: Page
+): Promise<string[]> {
+  const messages = page.locator('.message');
+  const count = await messages.count();
+  const texts: string[] = [];
+  
+  for (let i = 0; i < count; i++) {
+    const text = await messages.nth(i).textContent();
+    if (text) {
+      texts.push(text.trim());
+    }
+  }
+  
+  return texts;
+}
+
+/**
+ * Check for error message
+ */
+export async function checkForError(
+  page: Page
+): Promise<boolean> {
+  const errorElement = page.locator('[class*="error"], [data-testid*="error"], .error-message');
+  return await errorElement.isVisible({ timeout: 5000 }).catch(() => false);
+}
+
+/**
+ * Wait for loading indicator to disappear
+ */
+export async function waitForLoadingComplete(
+  page: Page
+): Promise<void> {
+  const loadingIndicator = page.locator('[class*="loading"], [class*="thinking"], .spinner');
+  
+  if (await loadingIndicator.isVisible({ timeout: 1000 })) {
+    await expect(loadingIndicator).not.toBeVisible({ timeout: 30000 });
+  }
 }
 
 // Re-export expect for convenience

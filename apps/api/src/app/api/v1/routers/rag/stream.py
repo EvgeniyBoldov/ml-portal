@@ -2,12 +2,12 @@
 RAG Status Stream - SSE endpoint для получения обновлений статусов
 """
 from __future__ import annotations
-from typing import AsyncGenerator
+from typing import Any, AsyncGenerator
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user, get_current_user_sse, db_session
+from app.api.deps import get_current_user, get_current_user_sse, db_session, db_uow
 from app.core.security import UserCtx
 from app.core.sse import format_sse
 from app.services.rag_event_publisher import RAGEventSubscriber
@@ -18,10 +18,35 @@ logger = get_logger(__name__)
 
 router = APIRouter(tags=["rag-status"])
 
-
 # Redis dependency уже определён в app.api.deps
 # Импортируем его здесь для использования
 from app.api.deps import get_redis_client as redis_dependency
+
+def _rag_problem(status_code: int, error: str, reason: str, **extra: Any) -> HTTPException:
+    detail = {
+        "error": error,
+        "reason": reason,
+    }
+    detail.update(extra)
+    return HTTPException(status_code=status_code, detail=detail)
+
+def _is_retry_supported(stage: str) -> bool:
+    return stage == "extract" or stage.startswith("embed.") or stage.startswith("index.")
+
+async def _ensure_worker_ready() -> None:
+    from app.celery_app import app as celery_app
+
+    loop = asyncio.get_event_loop()
+    inspect_result = await loop.run_in_executor(
+        None,
+        lambda: celery_app.control.ping(timeout=2.0),
+    )
+    if not inspect_result:
+        raise _rag_problem(
+            status_code=503,
+            error="RAG worker is not available",
+            reason="worker_unavailable",
+        )
 
 
 @router.get("/events")
@@ -188,7 +213,7 @@ async def get_document_status(
 async def start_ingest(
     document_id: str,
     user: UserCtx = Depends(get_current_user),
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_uow),
     redis = Depends(redis_dependency)
 ):
     """
@@ -232,55 +257,83 @@ async def start_ingest(
     event_publisher = RAGEventPublisher(redis)
     
     status_manager = RAGStatusManager(session, repo_factory, event_publisher)
-    await status_manager.start_ingest(doc_uuid)
-    
-    # Публикуем событие
-    await event_publisher.publish_ingest_started(
-        doc_id=doc_uuid,
-        tenant_id=document.tenant_id,
-        user_id=user.id
-    )
-    
-    # Запустить Celery задачи (новый модульный pipeline)
-    from app.workers.tasks_rag_ingest import (
-        extract_document,
-        normalize_document,
-        chunk_document,
-        embed_chunks_model,
-        index_model,
-    )
-    from celery import chain, group
+    await _ensure_worker_ready()
+     
+    start_lock = redis.lock(f"lock:ingest:start:{doc_uuid}", timeout=30, blocking_timeout=0) if redis else None
+    lock_acquired = False
+    if start_lock is not None:
+        lock_acquired = bool(await start_lock.acquire(blocking=False))
+        if not lock_acquired:
+            return {
+                "status": "success",
+                "message": "Ingest already running",
+                "document_id": document_id,
+                "embedding_models": [],
+                "already_running": True,
+                "active_stages": [],
+            }
 
-    # Получаем embedding models
-    embedding_models = await status_manager._get_target_models(doc_uuid)
-    if not embedding_models:
-        from app.core.config import get_embedding_models
-        embedding_models = get_embedding_models()
-
-    # Создаём pipeline: extract → normalize → chunk → group(embed per model)
-    extract_task = extract_document.s(str(doc_uuid), str(document.tenant_id))
-    normalize_task = normalize_document.s(str(document.tenant_id))
-    chunk_task = chunk_document.s(str(document.tenant_id))
-
-    # Для каждой модели собираем цепочку: embed -> index
-    embedding_index_chains = [
-        chain(
-            embed_chunks_model.s(str(document.tenant_id), model_alias),
-            index_model.s(str(document.tenant_id))
+    try:
+        # Guard: проверяем можно ли запустить инжест
+        guard = await status_manager.check_ingest_allowed(doc_uuid)
+        if not guard["allowed"]:
+            reason = guard["reason"]
+            logger.info(
+                "rag_ingest_guard_rejected",
+                extra={
+                    "document_id": str(doc_uuid),
+                    "tenant_id": str(document.tenant_id),
+                    "user_id": str(user.id),
+                    "reason": reason,
+                    "active_stages": guard.get("active_stages", []),
+                },
+            )
+            if reason == "ingest_already_running":
+                return {
+                    "status": "success",
+                    "message": "Ingest already running",
+                    "document_id": document_id,
+                    "embedding_models": [],
+                    "already_running": True,
+                    "active_stages": guard.get("active_stages", []),
+                }
+            elif reason == "document_archived":
+                raise _rag_problem(
+                    status_code=409,
+                    error="Document is archived",
+                    reason=reason,
+                )
+            else:
+                raise _rag_problem(
+                    status_code=409,
+                    error="Ingest not allowed",
+                    reason=reason,
+                )
+        
+        await status_manager.start_ingest(doc_uuid)
+        
+        # Публикуем событие
+        await event_publisher.publish_ingest_started(
+            doc_id=doc_uuid,
+            tenant_id=document.tenant_id,
+            user_id=user.id
         )
-        for model_alias in embedding_models
-    ]
-
-    # Полный пайплайн: extract → normalize → chunk → group(embed→index per model)
-    pipeline = chain(extract_task, normalize_task, chunk_task, group(embedding_index_chains))
-    pipeline.apply_async()
-    
-    return {
-        'status': 'success',
-        'message': 'Ingest started',
-        'document_id': document_id,
-        'embedding_models': embedding_models
-    }
+        
+        # Запускаем Celery pipeline через единый диспетчер
+        embedding_models = await status_manager.dispatch_ingest_pipeline(doc_uuid, document.tenant_id)
+        
+        return {
+            'status': 'success',
+            'message': 'Ingest started',
+            'document_id': document_id,
+            'embedding_models': embedding_models
+        }
+    finally:
+        if start_lock is not None and lock_acquired:
+            try:
+                await start_lock.release()
+            except Exception:
+                pass
 
 
 @router.post("/{document_id}/ingest/stop")
@@ -288,7 +341,7 @@ async def stop_ingest(
     document_id: str,
     stage: str,
     user: UserCtx = Depends(get_current_user),
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_uow),
     redis = Depends(redis_dependency)
 ):
     """
@@ -333,6 +386,42 @@ async def stop_ingest(
     event_publisher = RAGEventPublisher(redis)
     
     status_manager = RAGStatusManager(session, repo_factory, event_publisher)
+    if stage == "pipeline":
+        ingest_policy = await status_manager.get_ingest_policy(doc_uuid)
+        active_controls = [item for item in ingest_policy.get("controls", []) if item.get("can_stop")]
+        pipeline_control = next((item for item in active_controls if item.get("node_type") == "pipeline"), None)
+        selected = pipeline_control or (active_controls[0] if active_controls else None)
+        if not selected:
+            raise _rag_problem(
+                status_code=409,
+                error="Stage is not stoppable",
+                reason="stage_not_stoppable",
+                stage=stage,
+            )
+        stage = selected["stage"]
+
+    current_node = await status_manager.status_repo.get_node(
+        doc_uuid,
+        'embedding' if stage.startswith('embed.') else ('index' if stage.startswith('index.') else 'pipeline'),
+        stage.replace('embed.', '', 1).replace('index.', '', 1) if (stage.startswith('embed.') or stage.startswith('index.')) else stage,
+    )
+    if not current_node:
+        raise _rag_problem(
+            status_code=404,
+            error="Stage not found",
+            reason="stage_not_found",
+            stage=stage,
+        )
+
+    if current_node.status not in {"queued", "processing"}:
+        raise _rag_problem(
+            status_code=409,
+            error="Stage is not stoppable",
+            reason="stage_not_stoppable",
+            stage=stage,
+            status=current_node.status,
+        )
+    
     celery_task_id = await status_manager.stop_stage(doc_uuid, stage)
     
     # Убиваем Celery задачу, если известен task_id
@@ -356,7 +445,7 @@ async def retry_ingest(
     document_id: str,
     stage: str,
     user: UserCtx = Depends(get_current_user),
-    session: AsyncSession = Depends(db_session),
+    session: AsyncSession = Depends(db_uow),
     redis = Depends(redis_dependency)
 ):
     """
@@ -396,81 +485,54 @@ async def retry_ingest(
     if user.role == 'editor' and str(document.tenant_id) != user_tenant_id:
         raise HTTPException(status_code=403, detail="Access denied")
     
+    await _ensure_worker_ready()
+
+    if not _is_retry_supported(stage):
+        raise _rag_problem(
+            status_code=409,
+            error="Retry is not supported for this stage",
+            reason="retry_not_supported",
+            stage=stage,
+        )
+
     # Перезапускаем этап (толерантно к текущему статусу)
     from app.services.rag_event_publisher import RAGEventPublisher
     event_publisher = RAGEventPublisher(redis)
     status_manager = RAGStatusManager(session, repo_factory, event_publisher)
 
-    # Узнаём текущий статус узла
-    node_type = 'embedding' if stage.startswith('embed.') else 'pipeline'
-    node_key = stage.replace('embed.', '', 1) if stage.startswith('embed.') else stage  # Только первое вхождение
-    current_node = await status_manager.status_repo.get_node(doc_uuid, node_type, node_key)
-    current = None
-    if current_node:
-        from app.services.rag_status_manager import StageStatus as _Stage
-        current = _Stage(current_node.status)
-
-    # Переходим в queued только если это уместно
-    # - если failed/cancelled/completed → queued
-    # - если pending → queued
-    # - если уже queued → пропускаем смену статуса
-    # - если processing → не трогаем статус
-    from app.services.rag_status_manager import StageStatus as StageStatusEnum
-    should_queue = False
-    if current is None:
-        should_queue = True
-    elif current in {StageStatusEnum.FAILED, StageStatusEnum.CANCELLED, StageStatusEnum.COMPLETED, StageStatusEnum.PENDING}:
-        should_queue = True
-
-    if should_queue:
-        try:
-            await status_manager.transition_stage(doc_uuid, stage, StageStatusEnum.QUEUED)
-        except Exception:
-            # Игнорируем ошибки идемпотентности (например, QUEUED->QUEUED)
-            pass
-
-    # Запускаем соответствующие Celery задачи
-    if stage == 'extract':
-        from app.workers.tasks_rag_ingest import (
-            extract_document,
-            normalize_document,
-            chunk_document,
-            embed_chunks_model,
-            index_model,
-        )
-        from celery import chain, group
-
-        embedding_models = await status_manager._get_target_models(doc_uuid)
-        if not embedding_models:
-            from app.core.config import get_embedding_models
-            embedding_models = get_embedding_models()
-
-        extract_task = extract_document.s(str(doc_uuid), str(document.tenant_id))
-        normalize_task = normalize_document.s(str(document.tenant_id))
-        chunk_task = chunk_document.s(str(document.tenant_id))
-        model_task_chains = [
-            chain(
-                embed_chunks_model.s(str(document.tenant_id), model_alias),
-                index_model.s(str(document.tenant_id))
-            )
-            for model_alias in embedding_models
-        ]
-        pipeline = chain(
-            extract_task,
-            normalize_task,
-            chunk_task,
-            group(model_task_chains)
-        )
-        pipeline.apply_async()
-
-    elif stage.startswith('embed.'):
-        model_alias = stage.split('.', 1)[1]
-        from app.workers.tasks_rag_ingest import embed_chunks_model
-        # Допускаем прямой перезапуск embed: задача сама подтянет чанки из БД
-        embed_chunks_model.delay({"source_id": str(doc_uuid)}, str(document.tenant_id), model_alias)
+    if stage.startswith('embed.'):
+        node_type = 'embedding'
+        node_key = stage.replace('embed.', '', 1)
+    elif stage.startswith('index.'):
+        node_type = 'index'
+        node_key = stage.replace('index.', '', 1)
     else:
-        # Для остальных стадий пока требуем полный рестарт или реализацию спец-логики
-        logger.info(f"Retry for stage '{stage}' is not directly supported, use start_ingest or extract retry")
+        node_type = 'pipeline'
+        node_key = stage
+
+    current_node = await status_manager.status_repo.get_node(doc_uuid, node_type, node_key)
+    if not current_node:
+        raise _rag_problem(
+            status_code=404,
+            error="Stage not found",
+            reason="stage_not_found",
+            stage=stage,
+        )
+
+    from app.services.rag_status_manager import StageStatus as _Stage
+    current = _Stage(current_node.status)
+
+    if current in {_Stage.PROCESSING, _Stage.QUEUED}:
+        raise _rag_problem(
+            status_code=409,
+            error="Stage is already running",
+            reason="stage_already_running",
+            stage=stage,
+            status=current.value,
+        )
+
+    await status_manager.retry_stage(doc_uuid, stage)
+    await status_manager.dispatch_stage_retry(doc_uuid, document.tenant_id, stage)
 
     return {
         'status': 'success',

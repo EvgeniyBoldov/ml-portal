@@ -15,6 +15,7 @@ import {
   Badge,
   type DataTableColumn,
 } from '@/shared/ui';
+import styles from './CollectionsListPage.module.css';
 
 export default function CollectionsListPage() {
   const navigate = useNavigate();
@@ -38,61 +39,136 @@ export default function CollectionsListPage() {
     );
   }, [collections, search]);
 
+  const formatDate = (iso?: string) => {
+    if (!iso) return '—';
+    try {
+      return new Date(iso).toLocaleString('ru-RU', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+    } catch {
+      return '—';
+    }
+  };
+
   const columns: DataTableColumn<Collection>[] = [
     {
-      key: 'slug',
-      label: 'SLUG / ИМЯ',
-      width: 250,
+      key: 'name',
+      label: 'НАЗВАНИЕ',
+      width: 260,
       sortable: true,
+      filter: {
+        kind: 'text',
+        placeholder: 'Название или slug',
+        getValue: (row) => `${row.name ?? ''} ${row.slug ?? ''}`,
+      },
       render: (row) => (
         <div>
-          <div style={{ fontWeight: 500 }}>{row.slug}</div>
-          <div style={{ fontSize: '0.8125rem', color: 'var(--muted)' }}>{row.name}</div>
+          <div style={{ fontWeight: 600 }}>{row.name}</div>
+          <div style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>{row.slug}</div>
         </div>
       ),
     },
     {
-      key: 'fields',
-      label: 'ПОЛЯ',
-      width: 200,
-      render: (row) => {
-        const fields = row.fields ?? [];
-        return (
-          <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
-            {fields.slice(0, 3).map(f => (
-              <Badge key={f.name} variant="default" size="small">{f.name}</Badge>
-            ))}
-            {fields.length > 3 && (
-              <Badge variant="default" size="small">+{fields.length - 3}</Badge>
-            )}
-          </div>
-        );
+      key: 'collection_type',
+      label: 'ТИП',
+      width: 130,
+      sortable: true,
+      filter: {
+        kind: 'select',
+        placeholder: 'Все типы',
+        options: [
+          { value: 'document', label: 'Документы' },
+          { value: 'table', label: 'Таблица' },
+          { value: 'sql', label: 'SQL' },
+          { value: 'api', label: 'API' },
+        ],
+        getValue: (row) => row.collection_type,
       },
-    },
-    {
-      key: 'row_count',
-      label: 'ЗАПИСЕЙ',
-      width: 100,
-      render: (row) => row.row_count?.toLocaleString() ?? '0',
-    },
-    {
-      key: 'vector',
-      label: 'ВЕКТОР',
-      width: 100,
       render: (row) => (
-        <Badge variant={row.has_vector_search ? 'success' : 'default'}>
-          {row.has_vector_search ? 'Да' : 'Нет'}
+        <Badge
+          className={
+            row.collection_type === 'document'
+              ? styles['type-document']
+              : row.collection_type === 'sql'
+                ? styles['type-sql']
+                : styles['type-table']
+          }
+        >
+          {row.collection_type === 'document' ? 'Документы' : row.collection_type === 'sql' ? 'SQL' : row.collection_type === 'api' ? 'API' : 'Таблица'}
         </Badge>
       ),
     },
     {
       key: 'status',
       label: 'СТАТУС',
-      width: 100,
+      width: 110,
+      sortable: true,
+      filter: {
+        kind: 'select',
+        placeholder: 'Все статусы',
+        options: [
+          { value: 'true', label: 'Активна' },
+          { value: 'false', label: 'Неактивна' },
+        ],
+        getValue: (row) => String(row.is_active),
+      },
       render: (row) => (
-        <Badge variant={row.is_active ? 'success' : 'warning'}>
+        <Badge
+          className={row.is_active ? styles['status-active'] : styles['status-inactive']}
+        >
           {row.is_active ? 'Активна' : 'Неактивна'}
         </Badge>
+      ),
+    },
+    {
+      key: 'total_rows',
+      label: 'ЗАПИСЕЙ',
+      width: 100,
+      sortable: true,
+      align: 'right',
+      filter: {
+        kind: 'text',
+        placeholder: 'Кол-во',
+        getValue: (row) => row.total_rows,
+      },
+      render: (row) => row.total_rows?.toLocaleString() ?? '0',
+    },
+    {
+      key: 'created_at',
+      label: 'СОЗДАНА',
+      width: 160,
+      sortable: true,
+      filter: {
+        kind: 'date-range',
+        fromPlaceholder: 'От',
+        toPlaceholder: 'До',
+        getValue: (row) => row.created_at,
+      },
+      render: (row) => (
+        <span style={{ fontSize: '0.8125rem', color: 'var(--muted)' }}>
+          {formatDate(row.created_at)}
+        </span>
+      ),
+    },
+    {
+      key: 'updated_at',
+      label: 'ОБНОВЛЕНА',
+      width: 160,
+      sortable: true,
+      filter: {
+        kind: 'date-range',
+        fromPlaceholder: 'От',
+        toPlaceholder: 'До',
+        getValue: (row) => row.updated_at,
+      },
+      render: (row) => (
+        <span style={{ fontSize: '0.8125rem', color: 'var(--muted)' }}>
+          {formatDate(row.updated_at)}
+        </span>
       ),
     },
   ];

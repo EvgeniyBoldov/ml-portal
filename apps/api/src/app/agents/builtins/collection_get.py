@@ -8,6 +8,7 @@ import uuid
 from app.core.logging import get_logger
 from app.agents.handlers.versioned_tool import VersionedTool, tool_version, register_tool
 from app.agents.context import ToolContext, ToolResult
+from app.models.collection import FieldType
 
 logger = get_logger(__name__)
 
@@ -56,7 +57,7 @@ class CollectionGetTool(VersionedTool):
     """
     
     tool_slug: ClassVar[str] = "collection.get"
-    tool_group: ClassVar[str] = "collection"
+    domains: ClassVar[list] = ["collection.table"]
     name: ClassVar[str] = "Collection Get"
     description: ClassVar[str] = "Get a single record from a collection by its primary key"
     
@@ -165,7 +166,7 @@ class CollectionGetTool(VersionedTool):
                 if isinstance(value, uuid.UUID):
                     value = str(value)
                 # Truncate very long text fields
-                if field["type"] == "text" and value and len(str(value)) > 1000:
+                if field["data_type"] == FieldType.TEXT.value and value and len(str(value)) > 1000:
                     value = str(value)[:997] + "..."
                 formatted[field_name] = value
         
