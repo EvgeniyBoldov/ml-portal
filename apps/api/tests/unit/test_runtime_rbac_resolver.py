@@ -8,6 +8,7 @@ import pytest
 
 from app.agents.runtime_rbac_resolver import RuntimeRbacResolver
 from app.core.config import get_settings
+from app.services.permission_service import EffectivePermissions
 
 
 @pytest.mark.asyncio
@@ -71,3 +72,43 @@ async def test_runtime_rbac_resolver_calls_permission_service_when_enforced(monk
     assert call.kwargs["default_tool_allow"] is True
     assert call.kwargs["default_collection_allow"] is True
     get_settings.cache_clear()
+
+
+def test_runtime_rbac_resolver_filter_agents_by_slug_respects_explicit_rules(monkeypatch):
+    monkeypatch.setenv("RUNTIME_RBAC_ENFORCE_RULES", "true")
+    monkeypatch.setenv("RUNTIME_RBAC_ALLOW_UNDEFINED", "false")
+    get_settings.cache_clear()
+
+    resolver = RuntimeRbacResolver(permission_service=SimpleNamespace(resolve_permissions=AsyncMock()))
+    perms = EffectivePermissions(agent_permissions={"allowed-agent": True, "denied-agent": False})
+    agents = [
+        SimpleNamespace(slug="allowed-agent"),
+        SimpleNamespace(slug="denied-agent"),
+        SimpleNamespace(slug="undefined-agent"),
+    ]
+
+    filtered, denied = resolver.filter_agents_by_slug(
+        agents,
+        effective_permissions=perms,
+        slug_getter=lambda item: item.slug,
+        default_allow=True,
+    )
+
+    assert [a.slug for a in filtered] == ["allowed-agent", "undefined-agent"]
+    assert denied == ["denied-agent"]
+    get_settings.cache_clear()
+
+
+def test_runtime_rbac_resolver_checks_tool_and_collection_permissions():
+    resolver = RuntimeRbacResolver(permission_service=SimpleNamespace(resolve_permissions=AsyncMock()))
+    perms = EffectivePermissions(
+        tool_permissions={"tool.allowed": True, "tool.denied": False},
+        collection_permissions={"collection.allowed": True, "collection.denied": False},
+        default_tool_allow=False,
+        default_collection_allow=False,
+    )
+
+    assert resolver.is_tool_allowed(perms, "tool.allowed") is True
+    assert resolver.is_tool_allowed(perms, "tool.denied") is False
+    assert resolver.is_collection_allowed(perms, "collection.allowed") is True
+    assert resolver.is_collection_allowed(perms, "collection.denied") is False

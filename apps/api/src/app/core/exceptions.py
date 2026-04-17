@@ -239,9 +239,18 @@ class AgentUnavailableError(UnavailableError):
 
     code = "AGENT_UNAVAILABLE"
 
-    def __init__(self, message: str, missing: Any = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        missing: Any = None,
+        *,
+        reason_code: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> None:
         super().__init__(message)
         self.missing = missing
+        self.reason_code = reason_code
+        self.details = details or {}
 
 
 # — Tools ─────────────────────────────────────────────────────────────────────

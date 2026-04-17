@@ -5,6 +5,7 @@ from uuid import UUID
 
 from app.agents.contracts import OperationCredentialContext, ProviderExecutionTarget, ResolvedOperation
 from app.agents.operation_publication import build_runtime_operation_slug
+from app.agents.runtime_rbac_resolver import RuntimeRbacResolver
 from app.agents.tool_resolver import ResolvedTool, ToolResolver
 from app.core.logging import get_logger
 from app.models.discovered_tool import DiscoveredTool
@@ -21,8 +22,10 @@ class OperationBuilder:
         self,
         *,
         tool_resolver: ToolResolver,
+        runtime_rbac_resolver: RuntimeRbacResolver,
     ) -> None:
         self.tool_resolver = tool_resolver
+        self.runtime_rbac_resolver = runtime_rbac_resolver
 
     async def build_operations_for_instance(
         self,
@@ -91,7 +94,10 @@ class OperationBuilder:
         raw_operation_name = discovered_tool.slug
         if not raw_operation_name.strip():
             return None
-        if effective_permissions is not None and not effective_permissions.is_tool_allowed(raw_operation_name):
+        if not self.runtime_rbac_resolver.is_tool_allowed(
+            effective_permissions=effective_permissions,
+            tool_slug=raw_operation_name,
+        ):
             return None
 
         discovered_tool_id = getattr(discovered_tool, "id", None)

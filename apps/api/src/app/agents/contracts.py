@@ -283,3 +283,36 @@ class StopReason(str, Enum):
     FAILED = "failed"
     MAX_ITERS = "max_iters"
     LOOP_DETECTED = "loop_detected"
+
+
+class RuntimePipelineRequest(BaseModel):
+    """Unified input contract for runtime pipeline execution."""
+
+    request_text: str = Field(..., min_length=1)
+    user_id: str = Field(..., min_length=1)
+    tenant_id: str = Field(..., min_length=1)
+    messages: List[Dict[str, Any]] = Field(default_factory=list)
+    agent_slug: Optional[str] = None
+    agent_version_id: Optional[str] = None
+    model: Optional[str] = None
+
+
+class RuntimeTriageDecision(BaseModel):
+    """Normalized triage result used by runtime pipeline."""
+
+    type: Literal["final", "clarify", "orchestrate"]
+    confidence: float = 0.0
+    answer: Optional[str] = None
+    clarify_prompt: Optional[str] = None
+    goal: Optional[str] = None
+    inputs: Dict[str, Any] = Field(default_factory=dict)
+    trace_id: Optional[str] = None
+
+
+@dataclass
+class RuntimeExecutionSnapshot:
+    """Precomputed runtime context shared across triage/preflight/planner."""
+
+    effective_permissions: Any
+    routable_agents: List[Any] = field(default_factory=list)
+    denied_routable_agents: List[str] = field(default_factory=list)

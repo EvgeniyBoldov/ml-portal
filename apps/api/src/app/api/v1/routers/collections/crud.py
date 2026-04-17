@@ -17,7 +17,9 @@ from app.core.security import UserCtx
 from app.core.logging import get_logger
 from app.core.config import is_local
 from app.models.tenant import UserTenants, Tenants
+from app.agents.runtime_rbac_resolver import RuntimeRbacResolver
 from app.services.collection_service import CollectionService
+from app.services.permission_service import PermissionService
 
 logger = get_logger(__name__)
 
@@ -43,6 +45,24 @@ async def _build_collection_response(
         has_vector_search=collection.has_vector_search,
         created_at=collection.created_at.isoformat(),
         updated_at=collection.updated_at.isoformat(),
+    )
+
+
+async def _resolve_collection_permissions(
+    *,
+    resolver: RuntimeRbacResolver,
+    user: UserCtx,
+    tenant_id: uuid.UUID,
+):
+    try:
+        user_uuid = uuid.UUID(str(user.id))
+    except (TypeError, ValueError):
+        user_uuid = None
+    return await resolver.resolve_effective_permissions(
+        user_id=user_uuid,
+        tenant_id=tenant_id,
+        default_tool_allow=True,
+        default_collection_allow=True,
     )
 
 
@@ -150,7 +170,21 @@ async def list_collections(
     """List collections for the resolved tenant scope."""
     service = CollectionService(session)
     resolved_tenant_id = await _resolve_requested_tenant_id(session, user, tenant_id)
+    resolver = RuntimeRbacResolver(PermissionService(session))
+    effective_permissions = await _resolve_collection_permissions(
+        resolver=resolver,
+        user=user,
+        tenant_id=resolved_tenant_id,
+    )
     collections = await service.list_collections(resolved_tenant_id, active_only=active_only)
+    collections = [
+        collection
+        for collection in collections
+        if resolver.is_collection_allowed(
+            effective_permissions=effective_permissions,
+            collection_slug=str(getattr(collection, "slug", "") or ""),
+        )
+    ]
 
     items = [await _build_collection_response(service, c) for c in collections]
 
@@ -167,9 +201,20 @@ async def get_collection(
     """Get a collection by slug inside the resolved tenant scope."""
     service = CollectionService(session)
     resolved_tenant_id = await _resolve_requested_tenant_id(session, user, tenant_id)
+    resolver = RuntimeRbacResolver(PermissionService(session))
+    effective_permissions = await _resolve_collection_permissions(
+        resolver=resolver,
+        user=user,
+        tenant_id=resolved_tenant_id,
+    )
     collection = await service.get_by_slug(resolved_tenant_id, slug)
 
     if not collection:
+        raise HTTPException(status_code=404, detail=f"Collection '{slug}' not found")
+    if not resolver.is_collection_allowed(
+        effective_permissions=effective_permissions,
+        collection_slug=str(getattr(collection, "slug", "") or ""),
+    ):
         raise HTTPException(status_code=404, detail=f"Collection '{slug}' not found")
 
     return await _build_collection_response(service, collection)

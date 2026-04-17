@@ -121,6 +121,8 @@ class CachedPayload(BaseModel):
 
 class ErrorPayload(BaseModel):
     error: str
+    code: Optional[str] = None
+    details: Optional[Dict[str, Any]] = None
 
 
 # ── Payload type mapping ───────────────────────────────────────────

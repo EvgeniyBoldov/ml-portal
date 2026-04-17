@@ -10,10 +10,11 @@ import uuid
 from typing import Any, List, Optional
 
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import CollectionNotFoundError, RowValidationError, AppError
-from app.models.collection import Collection, FieldType
+from app.models.collection import Collection, FieldType, CollectionType
 from app.services.collection.ddl import apply_typed_binds
 from app.services.collection.field_coercion import validate_and_prepare_payload
 
@@ -100,6 +101,7 @@ class CollectionRowService:
         prepared = validate_and_prepare_payload(collection, payload, partial=False)
         if not prepared:
             raise RowValidationError("Row payload is empty")
+        await self._ensure_sql_table_name_unique(collection, prepared)
 
         columns = ", ".join(prepared.keys())
         placeholders = ", ".join([f":{name}" for name in prepared.keys()])
@@ -110,7 +112,14 @@ class CollectionRowService:
         field_defs = [f for f in collection.get_row_writable_fields() if f["name"] in prepared]
         insert_sql = apply_typed_binds(insert_sql, field_defs)
 
-        result = await self.session.execute(insert_sql, prepared)
+        try:
+            result = await self.session.execute(insert_sql, prepared)
+        except IntegrityError as exc:
+            if collection.collection_type == CollectionType.SQL.value and "table_name" in prepared:
+                raise RowValidationError(
+                    f"Table '{str(prepared.get('table_name') or '').strip()}' is already registered in this SQL collection"
+                ) from exc
+            raise
         row_id = result.scalar_one()
 
         collection.total_rows = (collection.total_rows or 0) + 1
@@ -132,6 +141,7 @@ class CollectionRowService:
         prepared = validate_and_prepare_payload(collection, payload, partial=True)
         if not prepared:
             raise RowValidationError("Row payload is empty")
+        await self._ensure_sql_table_name_unique(collection, prepared, row_id=row_id)
 
         assignments = ", ".join([f"{name} = :{name}" for name in prepared.keys()])
         update_sql = text(
@@ -143,7 +153,14 @@ class CollectionRowService:
         update_sql = apply_typed_binds(update_sql, field_defs)
 
         params = {**prepared, "row_id": row_id}
-        result = await self.session.execute(update_sql, params)
+        try:
+            result = await self.session.execute(update_sql, params)
+        except IntegrityError as exc:
+            if collection.collection_type == CollectionType.SQL.value and "table_name" in prepared:
+                raise RowValidationError(
+                    f"Table '{str(prepared.get('table_name') or '').strip()}' is already registered in this SQL collection"
+                ) from exc
+            raise
         if not result.rowcount:
             return None
 
@@ -235,6 +252,46 @@ class CollectionRowService:
         return deleted_count
 
     # ── Helpers ───────────────────────────────────────────────────────────────
+
+    async def _ensure_sql_table_name_unique(
+        self,
+        collection: Collection,
+        payload: dict,
+        *,
+        row_id: uuid.UUID | None = None,
+    ) -> None:
+        """Enforce uniqueness of table_name for SQL collection catalog rows."""
+        if collection.collection_type != CollectionType.SQL.value:
+            return
+        if "table_name" not in payload:
+            return
+
+        raw_value = payload.get("table_name")
+        normalized = str(raw_value or "").strip()
+        if not normalized:
+            raise RowValidationError("Field 'table_name' is required")
+
+        table_name = self._require_table_name(collection)
+        params: dict[str, Any] = {"table_name": normalized}
+        exclude_self_sql = ""
+        if row_id is not None:
+            params["row_id"] = row_id
+            exclude_self_sql = " AND id <> :row_id"
+
+        duplicate_result = await self.session.execute(
+            text(
+                f"SELECT id FROM {table_name} "
+                f"WHERE lower(btrim(table_name)) = lower(btrim(:table_name))"
+                f"{exclude_self_sql} "
+                f"LIMIT 1"
+            ),
+            params,
+        )
+        duplicate_id = duplicate_result.scalar_one_or_none()
+        if duplicate_id is not None:
+            raise RowValidationError(
+                f"Table '{normalized}' is already registered in this SQL collection"
+            )
 
     @staticmethod
     def _serialize_row(collection: Collection, row: dict) -> dict:

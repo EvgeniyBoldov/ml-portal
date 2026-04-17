@@ -2,6 +2,12 @@
 
 Гид для platform admin и tenant admin: как устроена система управления, что на что влияет, и где типичные риски.
 
+Сопутствующие практические инструкции:
+- [Admin Docs Index](../admin/README.md)
+- [Environment Setup](../admin/ENV.md)
+- [Build Guide](../admin/BUILD.md)
+- [Run Guide](../admin/RUN.md)
+
 ## 1. Зона ответственности администратора
 
 Администратор управляет:

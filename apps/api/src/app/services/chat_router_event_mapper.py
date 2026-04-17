@@ -122,7 +122,11 @@ def map_service_event_to_sse(event: Dict[str, Any]) -> Optional[str]:
     if et == "error":
         return format_chat_sse(
             ChatSSEEventType.ERROR,
-            ErrorPayload(error=event.get("error", "Unknown error")),
+            ErrorPayload(
+                error=event.get("error", "Unknown error"),
+                code=event.get("code"),
+                details=event.get("details"),
+            ),
         )
     return None
 

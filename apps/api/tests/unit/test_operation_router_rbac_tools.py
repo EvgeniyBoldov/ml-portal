@@ -82,6 +82,43 @@ async def test_operation_router_passes_effective_permissions_to_operation_resolv
 
 
 @pytest.mark.asyncio
+async def test_operation_router_reuses_effective_permissions_override():
+    router = OperationRouter(session=MagicMock())
+    effective_permissions = EffectivePermissions(
+        tool_permissions={"collection.search": True},
+        default_tool_allow=False,
+        default_collection_allow=False,
+    )
+    router.runtime_rbac_resolver.resolve_effective_permissions = AsyncMock(
+        side_effect=AssertionError("should not be called")
+    )
+
+    ready_instance = _instance()
+    router.data_instance_resolver.resolve = AsyncMock(
+        return_value=[
+            SimpleNamespace(
+                instance=ready_instance,
+                profile=None,
+                provider=None,
+                readiness_reason="ready",
+                runtime_domain="collection.table",
+            )
+        ]
+    )
+    router.operation_resolver.resolve_for_instance = AsyncMock(return_value=[])
+
+    result = await router.resolve(
+        user_id=uuid4(),
+        tenant_id=uuid4(),
+        effective_permissions=effective_permissions,
+    )
+
+    assert result.effective_permissions is effective_permissions
+    kwargs = router.operation_resolver.resolve_for_instance.await_args.kwargs
+    assert kwargs["effective_permissions"] is effective_permissions
+
+
+@pytest.mark.asyncio
 async def test_data_instance_resolver_marks_provider_unhealthy_as_missing():
     session = MagicMock()
     instance_service = MagicMock()
@@ -120,4 +157,3 @@ async def test_data_instance_resolver_marks_provider_unhealthy_as_missing():
 def test_parse_mcp_response_body_raises_on_empty_payload():
     with pytest.raises(ValueError, match="Empty MCP response body"):
         _parse_mcp_response_body("")
-

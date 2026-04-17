@@ -356,10 +356,27 @@ class ChatStreamService:
                         yield mapped
 
         except AgentUnavailableError as e:
-            logger.warning(f"Agent unavailable: {e}")
+            reason_code = str(getattr(e, "reason_code", "") or "").strip() or None
+            details = dict(getattr(e, "details", {}) or {})
+            logger.warning(
+                "Agent unavailable: %s",
+                e,
+                extra={
+                    "reason_code": reason_code,
+                    "details": details,
+                },
+            )
+            if reason_code == "rbac_agent_invoke_denied":
+                yield {
+                    "type": "status",
+                    "stage": "rbac_agent_invoke_denied",
+                    "agent_slug": details.get("agent_slug"),
+                }
             yield {
                 "type": "error",
                 "error": str(e),
+                "code": reason_code,
+                "details": details,
                 "missing_tools": e.missing.tools if e.missing else [],
                 "missing_collections": e.missing.collections if e.missing else [],
                 "missing_credentials": e.missing.credentials if e.missing else [],

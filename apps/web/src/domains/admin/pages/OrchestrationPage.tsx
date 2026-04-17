@@ -21,10 +21,68 @@ import type { GridFieldConfig as FieldConfig } from '@/shared/ui';
 
 // Field configurations for orchestration settings
 const executorFields = (modelOptions: Array<{ value: string; label: string }>): FieldConfig[] => [
-  { key: 'executor_model', label: 'Модель исполнителя', type: 'select', options: modelOptions },
-  { key: 'executor_temperature', label: 'Temperature исполнителя', type: 'number' },
-  { key: 'executor_timeout_s', label: 'Таймаут по умолчанию (сек)', type: 'number' },
-  { key: 'executor_max_steps', label: 'Макс. шагов', type: 'number' },
+  {
+    key: 'executor_model',
+    label: 'Модель исполнителя',
+    type: 'select',
+    options: modelOptions,
+    description: 'LLM-модель, которой выполняются шаги выполнения.',
+  },
+  {
+    key: 'executor_temperature',
+    label: 'Temperature исполнителя',
+    type: 'number',
+    description: 'Степень вариативности ответа исполнителя.',
+    placeholder: 'Пример: 0.3',
+  },
+  {
+    key: 'executor_timeout_s',
+    label: 'Таймаут по умолчанию (сек)',
+    type: 'number',
+    description: 'Ограничение времени одного вызова исполнителя.',
+    placeholder: 'Пример: 60',
+  },
+  {
+    key: 'executor_max_steps',
+    label: 'Макс. шагов',
+    type: 'number',
+    description: 'Ограничение числа шагов планера на один запуск.',
+    placeholder: 'Пример: 10',
+  },
+  {
+    key: 'triage_fail_open',
+    label: 'Triage fail-open',
+    type: 'boolean',
+    description: 'Если triage падает, продолжаем выполнение через orchestrate.',
+  },
+  {
+    key: 'preflight_fail_open',
+    label: 'Preflight fail-open',
+    type: 'boolean',
+    description: 'Если preflight недоступен, продолжаем выполнение с предупреждением.',
+  },
+  {
+    key: 'preflight_fail_open_message',
+    label: 'Сообщение preflight fail-open',
+    type: 'textarea',
+    rows: 3,
+    description: 'Текст уведомления пользователю при fail-open на preflight.',
+    placeholder: 'Пример: Проверка доступности агентов временно недоступна, продолжаю выполнение.',
+  },
+  {
+    key: 'planner_fail_open',
+    label: 'Planner fail-open',
+    type: 'boolean',
+    description: 'Если planner падает, завершаем с мягким сообщением без ошибки.',
+  },
+  {
+    key: 'planner_fail_open_message',
+    label: 'Сообщение planner fail-open',
+    type: 'textarea',
+    rows: 3,
+    description: 'Текст уведомления пользователю при fail-open на planner.',
+    placeholder: 'Пример: Планировщик временно недоступен, попробуйте повторить запрос позже.',
+  },
 ];
 
 // SystemLLMRole field configurations

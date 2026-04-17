@@ -13,7 +13,7 @@
 - Список сущностей: `<Entity>ListPage.tsx`
 - Одна сущность: `<Entity>Page.tsx`
 - Страница версии: `<Entity>VersionPage.tsx`
-- `*EditorPage.tsx` — legacy, не использовать в новом коде.
+- `*EditorPage.tsx` — старый формат страниц, в новом коде не использовать.
 - Компоненты: `PascalCase.tsx`
 - Стили компонента: `PascalCase.module.css`
 - CSS-классы: `kebab-case`

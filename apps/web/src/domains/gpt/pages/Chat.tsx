@@ -183,6 +183,8 @@ export default function Chat() {
 
   function _friendlyError(raw: string): string {
     if (!raw) return 'Произошла ошибка';
+    if (raw.includes('rbac_agent_invoke_denied'))
+      return '🚫 Нет прав на запуск этого агента. Обратитесь к администратору.';
     if (raw.includes('Paused run not found'))
       return 'Сессия ожидания уже завершена или устарела. Отправьте сообщение заново.';
     if (raw.includes('Missing tools') || raw.includes('no instance'))

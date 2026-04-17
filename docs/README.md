@@ -1,33 +1,37 @@
 # ML Portal Documentation
 
-## Quick Start
-- [Project Overview](0.DESCRIPTION.md) — что это и как работает
-- [Platform Overview](PLATFORM_OVERVIEW.md) — бизнес-логика и архитектура крупными мазками
-- [Project Concept](CONCEPT.md) — продуктовый и технический концепт развития
-- [Backend Architecture](2.ARCHITECTURE.md) — техническая архитектура backend (FastAPI, SQLAlchemy, agents runtime)
-- [Frontend Architecture](2.FRONTEND_ARCHITECTURE.md) — техническая архитектура frontend (React, TanStack Query, SSE)
-- [Admin Panel](ADMIN_STRUCTURE.md) — структура админки
-- [Glossary](GLOSSARY.md) — термины и определения
+## Start Here
+- [Platform Overview](PLATFORM_OVERVIEW.md) — обзор платформы и бизнес-контуров
+- [Glossary](GLOSSARY.md) — основные термины
+
+## Admin Guides
+- [Admin Docs Index](admin/README.md) — навигация для администраторов
+- [Environment Setup](admin/ENV.md) — как подготовить `.env`
+- [Build Guide](admin/BUILD.md) — как собрать сервисы
+- [Run Guide](admin/RUN.md) — как запускать и останавливать стенд
 
 ## Role-based Guides
-- [User Guide](guides/USER_GUIDE.md) — что может пользователь и как эффективно работать
-- [Admin Guide](guides/ADMIN_GUIDE.md) — как управлять платформой и доступами
-- [AI Engineer Guide](guides/AI_ENGINEER_GUIDE.md) — runtime/data flow/contracts для инженерного контура
+- [User Guide](guides/USER_GUIDE.md) — работа пользователя в системе
+- [Admin Guide](guides/ADMIN_GUIDE.md) — управление доступами и эксплуатацией
+- [AI Engineer Guide](guides/AI_ENGINEER_GUIDE.md) — runtime/data/tool контуры
 
-## Development  
-- [Backend Rules](backend/RULES.md) — правила разработки бэкенда
-- [Backend Patterns](backend/PATTERNS.md) — паттерны и лучшие практики
-- [Tool Developer Guide](backend/TOOL_DEVELOPER_GUIDE.md) — как добавлять новые backend tools
-- [Tool Developer Rules](backend/TOOL_DEVELOPER_RULES.md) — обязательные требования для tool-разработки
-- [Frontend Rules](frontend/RULES.md) — правила разработки фронтенда
-- [Frontend Patterns](frontend/PATTERNS.md) — паттерны и лучшие практики
+## Architecture
+- [Data Model](architecture/DATA_MODEL.md)
+- [Agent Runtime](architecture/AGENT_RUNTIME.md)
+- [Flows](architecture/FLOWS.md)
+- [Collection Asset Refactor](architecture/COLLECTION_ASSET_REFACTOR.md)
+- [MCP Credential Flow](architecture/MCP_CREDENTIAL_FLOW.md)
+- [Sandbox Runtime](architecture/SANDBOX_RUNTIME.md)
+- [Chat File Attachments](architecture/CHAT_FILE_ATTACHMENTS.md)
+- [Entity Builder Pattern](architecture/ENTITY_BUILDER_PATTERN.md)
 
-## Deployment
-- [DevOps Guide](1.DEVOPS.md) — развертывание и инфраструктура
+## Development Rules
+- [Backend Rules](backend/RULES.md)
+- [Backend Patterns](backend/PATTERNS.md)
+- [Tool Developer Guide](backend/TOOL_DEVELOPER_GUIDE.md)
+- [Tool Developer Rules](backend/TOOL_DEVELOPER_RULES.md)
+- [Frontend Rules](frontend/RULES.md)
+- [Frontend Patterns](frontend/PATTERNS.md)
 
-## Architecture Deep Dive
-- [Data Model](architecture/DATA_MODEL.md) — модели данных
-- [Collection Asset Refactor](architecture/COLLECTION_ASSET_REFACTOR.md) — целевая модель collection/instance/runtime binding
-- [Agent Runtime](architecture/AGENT_RUNTIME.md) — система выполнения агентов
-- [Flows](architecture/FLOWS.md) — связывающие runtime-флоу
-- [Chat File Attachments](architecture/CHAT_FILE_ATTACHMENTS.md) — файловый контур чата и генерации файлов ответа
+## Implementation Notes
+- [Base Functionality](implementation/base-functionality/)

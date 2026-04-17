@@ -34,12 +34,13 @@ from app.agents.contracts import (
 )
 from app.agents.operation_router import OperationRouter
 from app.agents.preflight_policy import apply_operation_policy_filter
+from app.agents.runtime_rbac_resolver import RuntimeRbacResolver
 from app.agents.runtime_graph import RuntimeExecutionGraph
 from app.agents.runtime_trace_logger import RuntimeTraceLogger
 from app.core.exceptions import AgentUnavailableError, AppError as PreflightError
 from app.core.logging import get_logger
 from app.models.agent import Agent
-from app.services.permission_service import EffectivePermissions
+from app.services.permission_service import EffectivePermissions, PermissionService
 
 logger = get_logger(__name__)
 
@@ -117,6 +118,7 @@ class ExecutionPreflight:
         self.session = session
         self.agent_resolver = AgentResolver(session)
         self.operation_router = OperationRouter(session)
+        self.runtime_rbac_resolver = RuntimeRbacResolver(PermissionService(session))
         self.trace_logger = RuntimeTraceLogger(session=session)
 
     async def prepare(
@@ -130,6 +132,8 @@ class ExecutionPreflight:
         platform_config: Optional[Dict[str, Any]] = None,
         sandbox_overrides: Optional[Dict[str, Any]] = None,
         include_routable_agents: bool = True,
+        routable_agents_override: Optional[List[Any]] = None,
+        effective_permissions_override: Optional[EffectivePermissions] = None,
     ) -> ExecutionRequest:
         """Prepare ExecutionRequest for an already selected agent.
 
@@ -170,10 +174,22 @@ class ExecutionPreflight:
             operation_result = await self.operation_router.resolve(
                 user_id=user_id,
                 tenant_id=tenant_id,
+                effective_permissions=effective_permissions_override,
                 default_tool_allow=default_tool_allow,
                 default_collection_allow=default_collection_allow,
                 sandbox_overrides=sandbox_overrides,
             )
+            if not self.runtime_rbac_resolver.is_agent_allowed(
+                effective_permissions=operation_result.effective_permissions,
+                agent_slug=agent_slug,
+                default_allow=True,
+            ):
+                raise AgentUnavailableError(
+                    f"Access denied for agent '{agent_slug}' by RBAC policy",
+                    missing=MissingRequirements(),
+                    reason_code="rbac_agent_invoke_denied",
+                    details={"agent_slug": agent_slug},
+                )
             routing_reasons.append(
                 f"Permissions resolved: "
                 f"{len(operation_result.resolved_operations)} operations, "
@@ -218,11 +234,28 @@ class ExecutionPreflight:
                 )
 
             # 3. Build available_actions from resolved operations
-            routable_agents = (
-                await self.agent_resolver.agent_service.list_routable_agents()
-                if include_routable_agents
-                else []
-            )
+            if include_routable_agents:
+                if routable_agents_override is not None:
+                    routable_agents = list(routable_agents_override)
+                    routing_reasons.append(
+                        f"Routable agents source: snapshot ({len(routable_agents)})"
+                    )
+                else:
+                    routable_agents = await self.agent_resolver.agent_service.list_routable_agents()
+            else:
+                routable_agents = []
+            if routable_agents:
+                routable_agents, denied_agent_slugs = self.runtime_rbac_resolver.filter_agents_by_slug(
+                    routable_agents,
+                    effective_permissions=operation_result.effective_permissions,
+                    slug_getter=lambda item: getattr(item, "slug", None),
+                    default_allow=True,
+                )
+                if denied_agent_slugs:
+                    routing_reasons.append(
+                        "RBAC filtered routable agents: "
+                        + ", ".join(sorted(denied_agent_slugs))
+                    )
             agent_result_with_actions = await self.agent_resolver.available_actions_builder.build(
                 agent=agent_result.agent,
                 agent_version=agent_result.agent_version,

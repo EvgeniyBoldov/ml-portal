@@ -49,10 +49,14 @@ class OperationRouter:
         self.session = session
         self.credential_service = CredentialService(session)
         self.permission_service = PermissionService(session)
+        self.runtime_rbac_resolver = RuntimeRbacResolver(self.permission_service)
         self.instance_service = ToolInstanceService(session)
         self.collection_resolver = CollectionResolver(session)
         self.tool_resolver = ToolResolver(session)
-        self.operation_builder = OperationBuilder(tool_resolver=self.tool_resolver)
+        self.operation_builder = OperationBuilder(
+            tool_resolver=self.tool_resolver,
+            runtime_rbac_resolver=self.runtime_rbac_resolver,
+        )
         self.collection_tool_resolver = CollectionToolResolver(self.session)
         settings = get_settings()
         self.mcp_credential_broker_enabled = bool(
@@ -72,23 +76,24 @@ class OperationRouter:
             collection_tool_resolver=self.collection_tool_resolver,
             credential_resolver=self.runtime_credential_resolver,
         )
-        self.runtime_rbac_resolver = RuntimeRbacResolver(self.permission_service)
 
     async def resolve(
         self,
         user_id: UUID,
         tenant_id: UUID,
         *,
+        effective_permissions: Optional[EffectivePermissions] = None,
         default_tool_allow: bool = True,
         default_collection_allow: bool = True,
         sandbox_overrides: Optional[Dict[str, Any]] = None,
     ) -> OperationResolveResult:
-        effective_permissions = await self.runtime_rbac_resolver.resolve_effective_permissions(
-            user_id=user_id,
-            tenant_id=tenant_id,
-            default_tool_allow=default_tool_allow,
-            default_collection_allow=default_collection_allow,
-        )
+        if effective_permissions is None:
+            effective_permissions = await self.runtime_rbac_resolver.resolve_effective_permissions(
+                user_id=user_id,
+                tenant_id=tenant_id,
+                default_tool_allow=default_tool_allow,
+                default_collection_allow=default_collection_allow,
+            )
         instances = await self.data_instance_resolver.resolve()
 
         result = OperationResolveResult(effective_permissions=effective_permissions)
@@ -115,6 +120,14 @@ class OperationRouter:
             binding = extract_collection_binding(instance.config)
             collection_id = str(binding.collection_id) if binding and binding.collection_id else None
             collection_slug = binding.collection_slug if binding else None
+            if not self.runtime_rbac_resolver.is_collection_allowed(
+                effective_permissions=effective_permissions,
+                collection_slug=collection_slug,
+            ):
+                result.missing.collections.append(
+                    f"{collection_slug or instance.slug} (rbac_denied)"
+                )
+                continue
 
             resolved_instance = self._build_resolved_data_instance(
                 instance=instance,

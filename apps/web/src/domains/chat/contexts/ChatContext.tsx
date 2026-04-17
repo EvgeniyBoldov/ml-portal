@@ -386,6 +386,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                 'thinking_step_2': 'Обрабатываю результаты...',
                 'thinking_step_3': 'Формирую ответ...',
                 'streaming': 'Генерирую ответ...',
+                'rbac_agent_invoke_denied': 'Нет прав на запуск агента...',
                 'completed': '',
                 // Legacy stages (for backward compatibility)
                 'rag_search_started': 'Ищу в базе знаний...',
@@ -575,7 +576,18 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           }
           // Handle error events
           else if (eventType === 'error') {
-            onError(data);
+            try {
+              const parsed = JSON.parse(data);
+              const errorMessage = String(parsed?.error || data || 'Ошибка');
+              const errorCode = String(parsed?.code || '').trim();
+              if (errorCode) {
+                onError(`${errorCode}: ${errorMessage}`);
+              } else {
+                onError(errorMessage);
+              }
+            } catch {
+              onError(data);
+            }
           }
         }
       }

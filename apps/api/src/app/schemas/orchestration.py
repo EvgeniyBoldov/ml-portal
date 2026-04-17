@@ -18,6 +18,11 @@ class OrchestrationBase(BaseModel):
     executor_temperature: Optional[float] = Field(0.7, description="Default temperature for execution/generation")
     executor_timeout_s: Optional[int] = Field(None, description="Default executor timeout in seconds")
     executor_max_steps: Optional[int] = Field(None, description="Default max planner loop iterations")
+    triage_fail_open: Optional[bool] = Field(True, description="Fail-open for triage stage")
+    preflight_fail_open: Optional[bool] = Field(False, description="Fail-open for preflight stage")
+    planner_fail_open: Optional[bool] = Field(False, description="Fail-open for planner stage")
+    preflight_fail_open_message: Optional[str] = Field(None, description="User-facing message for preflight fail-open")
+    planner_fail_open_message: Optional[str] = Field(None, description="User-facing message for planner fail-open")
 
 
 class ExecutorSettingsUpdate(BaseModel):
@@ -26,6 +31,11 @@ class ExecutorSettingsUpdate(BaseModel):
     executor_temperature: Optional[float] = Field(None, description="Default temperature for execution/generation")
     executor_timeout_s: Optional[int] = Field(None, description="Default executor timeout in seconds")
     executor_max_steps: Optional[int] = Field(None, description="Default max planner loop iterations")
+    triage_fail_open: Optional[bool] = Field(None, description="Fail-open for triage stage")
+    preflight_fail_open: Optional[bool] = Field(None, description="Fail-open for preflight stage")
+    planner_fail_open: Optional[bool] = Field(None, description="Fail-open for planner stage")
+    preflight_fail_open_message: Optional[str] = Field(None, description="User-facing message for preflight fail-open")
+    planner_fail_open_message: Optional[str] = Field(None, description="User-facing message for planner fail-open")
 
 
 class OrchestrationSettingsResponse(OrchestrationBase):

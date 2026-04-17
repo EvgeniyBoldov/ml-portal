@@ -6,6 +6,7 @@ The resolver prefers explicit collection binding metadata over instance domain.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import List, Optional
 
 from sqlalchemy import select
@@ -20,6 +21,16 @@ from app.services.collection_binding import resolve_collection_runtime_domain
 from app.services.instance_capabilities import is_mcp_service_instance
 
 
+@dataclass(frozen=True)
+class CollectionToolResolutionContext:
+    instance: ToolInstance
+    provider: ToolInstance
+    bound_collection: Optional[Collection]
+    runtime_domain: str
+    provider_kind: str  # "mcp" | "local"
+    is_service_instance: bool
+
+
 class CollectionToolResolver:
     def __init__(self, session: AsyncSession):
         self.session = session
@@ -31,35 +42,92 @@ class CollectionToolResolver:
         provider: ToolInstance,
         include_unpublished: bool = False,
     ) -> List[DiscoveredTool]:
-        _ = include_unpublished
-        bound_collection = await self._resolve_bound_collection(instance)
-        if self._is_mcp_provider(provider):
-            mcp_tools = await self._load_provider_tools(provider)
-            local_catalog_tools = await self._load_local_collection_catalog_tools()
-            tools = self._dedupe_tools([*mcp_tools, *local_catalog_tools])
-        else:
-            if not provider.id:
-                return []
-            tools = await self._load_local_tools_for_provider(provider)
-
-        if str(getattr(instance, "instance_kind", "") or "").strip().lower() == "service":
-            return tools
-
+        context = await self._build_context(instance=instance, provider=provider)
+        tools = await self._load_tools_for_context(
+            context=context,
+            include_unpublished=include_unpublished,
+        )
+        deduped = self._dedupe_tools(tools)
+        if context.is_service_instance:
+            return deduped
         return [
-            tool for tool in tools
-            if self._is_tool_supported_for_instance(
+            tool
+            for tool in deduped
+            if self._is_tool_supported_for_context(
                 tool=tool,
-                instance=instance,
-                bound_collection=bound_collection,
+                context=context,
             )
         ]
 
-    async def _load_provider_tools(self, provider: ToolInstance) -> List[DiscoveredTool]:
+    async def _build_context(
+        self,
+        *,
+        instance: ToolInstance,
+        provider: ToolInstance,
+    ) -> CollectionToolResolutionContext:
+        bound_collection = await self._resolve_bound_collection(instance)
+        runtime_domain = resolve_collection_runtime_domain(
+            getattr(instance, "config", None),
+            getattr(instance, "domain", ""),
+        )
+        provider_kind = "mcp" if self._is_mcp_provider(provider) else "local"
+        is_service_instance = (
+            str(getattr(instance, "instance_kind", "") or "").strip().lower() == "service"
+        )
+        return CollectionToolResolutionContext(
+            instance=instance,
+            provider=provider,
+            bound_collection=bound_collection,
+            runtime_domain=runtime_domain,
+            provider_kind=provider_kind,
+            is_service_instance=is_service_instance,
+        )
+
+    async def _load_tools_for_context(
+        self,
+        *,
+        context: CollectionToolResolutionContext,
+        include_unpublished: bool,
+    ) -> List[DiscoveredTool]:
+        tools: List[DiscoveredTool] = []
+        if context.provider_kind == "mcp":
+            tools.extend(
+                await self._load_provider_tools(
+                    provider=context.provider,
+                    include_unpublished=include_unpublished,
+                )
+            )
+        else:
+            if not context.provider.id:
+                return []
+            tools.extend(
+                await self._load_local_tools_for_provider(
+                    provider=context.provider,
+                    include_unpublished=include_unpublished,
+                )
+            )
+
+        # collection.catalog should be available for any bound collection,
+        # regardless of the provider kind.
+        if context.bound_collection is not None:
+            tools.extend(
+                await self._load_local_collection_catalog_tools(
+                    include_unpublished=include_unpublished,
+                )
+            )
+        return tools
+
+    async def _load_provider_tools(
+        self,
+        *,
+        provider: ToolInstance,
+        include_unpublished: bool,
+    ) -> List[DiscoveredTool]:
         stmt = (
             select(DiscoveredTool)
             .options(selectinload(DiscoveredTool.tool))
             .where(
-                DiscoveredTool.is_active.is_(True),
+                *self._base_discovered_filters(include_unpublished),
                 DiscoveredTool.source == "mcp",
                 DiscoveredTool.provider_instance_id == provider.id,
             )
@@ -68,12 +136,17 @@ class CollectionToolResolver:
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
-    async def _load_local_tools_for_provider(self, provider: ToolInstance) -> List[DiscoveredTool]:
+    async def _load_local_tools_for_provider(
+        self,
+        *,
+        provider: ToolInstance,
+        include_unpublished: bool,
+    ) -> List[DiscoveredTool]:
         stmt = (
             select(DiscoveredTool)
             .options(selectinload(DiscoveredTool.tool))
             .where(
-                DiscoveredTool.is_active.is_(True),
+                *self._base_discovered_filters(include_unpublished),
                 DiscoveredTool.source == "local",
                 DiscoveredTool.provider_instance_id == provider.id,
             )
@@ -82,12 +155,16 @@ class CollectionToolResolver:
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
-    async def _load_local_collection_catalog_tools(self) -> List[DiscoveredTool]:
+    async def _load_local_collection_catalog_tools(
+        self,
+        *,
+        include_unpublished: bool,
+    ) -> List[DiscoveredTool]:
         stmt = (
             select(DiscoveredTool)
             .options(selectinload(DiscoveredTool.tool))
             .where(
-                DiscoveredTool.is_active.is_(True),
+                *self._base_discovered_filters(include_unpublished),
                 DiscoveredTool.source == "local",
                 DiscoveredTool.slug == "collection.catalog",
             )
@@ -95,6 +172,13 @@ class CollectionToolResolver:
         )
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
+
+    @staticmethod
+    def _base_discovered_filters(include_unpublished: bool):
+        # Publication lifecycle is handled by operation resolver/publication policy.
+        # Discovery resolver always serves active observed capabilities.
+        _ = include_unpublished
+        return [DiscoveredTool.is_active.is_(True)]
 
     @staticmethod
     def _dedupe_tools(tools: List[DiscoveredTool]) -> List[DiscoveredTool]:
@@ -138,20 +222,17 @@ class CollectionToolResolver:
         return await resolve_bound_collection(self.session, getattr(instance, "config", None))
 
     @staticmethod
-    def _is_tool_supported_for_instance(
+    def _is_tool_supported_for_context(
         *,
         tool: DiscoveredTool,
-        instance: ToolInstance,
-        bound_collection: Optional[Collection],
+        context: CollectionToolResolutionContext,
     ) -> bool:
         if tool.source != "local":
             return True
 
         raw_slug = str(tool.slug or "").strip()
-        runtime_domain = resolve_collection_runtime_domain(
-            getattr(instance, "config", None),
-            getattr(instance, "domain", ""),
-        )
+        runtime_domain = context.runtime_domain
+        bound_collection = context.bound_collection
 
         if raw_slug == "collection.doc_search":
             return runtime_domain == "collection.document" and bool(

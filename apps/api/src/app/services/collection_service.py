@@ -261,6 +261,15 @@ class CollectionService:
         for index_sql in self._build_indexes_sql(table_name, collection.fields):
             await self.session.execute(text(index_sql))
 
+        if collection.collection_type == CollectionType.SQL.value:
+            await self.session.execute(
+                text(
+                    f"CREATE UNIQUE INDEX IF NOT EXISTS idx_{table_name}_table_name_uniq "
+                    f"ON {table_name} (lower(btrim(table_name))) "
+                    f"WHERE table_name IS NOT NULL"
+                )
+            )
+
         if changed:
             self.session.add(collection)
             await self.session.flush()

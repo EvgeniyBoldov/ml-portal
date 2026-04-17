@@ -22,6 +22,11 @@ export interface OrchestrationSettings {
   executor_temperature?: number | null;
   executor_timeout_s?: number | null;
   executor_max_steps?: number | null;
+  triage_fail_open?: boolean | null;
+  preflight_fail_open?: boolean | null;
+  planner_fail_open?: boolean | null;
+  preflight_fail_open_message?: string | null;
+  planner_fail_open_message?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -32,6 +37,11 @@ export type ExecutorSettingsUpdate = Partial<Pick<
   | 'executor_temperature'
   | 'executor_timeout_s'
   | 'executor_max_steps'
+  | 'triage_fail_open'
+  | 'preflight_fail_open'
+  | 'planner_fail_open'
+  | 'preflight_fail_open_message'
+  | 'planner_fail_open_message'
 >>;
 
 // === SystemLLMRole Types ===
