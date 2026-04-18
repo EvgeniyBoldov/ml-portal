@@ -18,8 +18,8 @@ from redis.asyncio import Redis
 from app.repositories.chats_repo import AsyncChatsRepository, AsyncChatMessagesRepository
 from app.core.http.clients import LLMClientProtocol
 from app.services.run_store import RunStore
-from app.agents import AgentRuntime, ToolContext, RuntimeEvent, RuntimeEventType
-from app.agents.runtime.pipeline import RuntimePipeline
+from app.agents import AgentRuntime, ToolContext
+from app.runtime import RuntimePipeline, PipelineRequest, RuntimeEvent, RuntimeEventType
 from app.agents.execution_preflight import AgentUnavailableError
 from app.core.logging import get_logger
 from app.core.idempotency import IdempotencyManager
@@ -289,7 +289,7 @@ class ChatStreamService:
         model: Optional[str],
         content: str,
     ) -> AsyncGenerator[Dict[str, Any], None]:
-        """Run agent via RuntimePipeline with event mapping and summary generation."""
+        """Run the turn via runtime v3 Pipeline, translating events to SSE payloads."""
         try:
             runtime_deps = tool_ctx.get_runtime_deps()
             runtime_deps.session_factory = get_session_factory()
@@ -303,15 +303,18 @@ class ChatStreamService:
 
             text_content = content.get("text", str(content)) if isinstance(content, dict) else str(content)
 
-            async for event in pipeline.execute(
+            pipeline_request = PipelineRequest(
                 request_text=text_content,
-                user_id=uuid.UUID(user_id),
-                tenant_id=uuid.UUID(tenant_id),
+                chat_id=str(tool_ctx.chat_id),
+                user_id=user_id,
+                tenant_id=tenant_id,
                 messages=llm_messages,
-                ctx=tool_ctx,
                 agent_slug=agent_slug,
                 model=model,
-            ):
+                continuation_meta=(tool_ctx.extra or {}).get("continuation_meta", {}) if hasattr(tool_ctx, "extra") else {},
+            )
+
+            async for event in pipeline.execute(pipeline_request, tool_ctx):
                 # FINAL and STOP are handled specially below — skip _map for them
                 if event.type == RuntimeEventType.FINAL:
                     final_content = event.data.get("content", "")
