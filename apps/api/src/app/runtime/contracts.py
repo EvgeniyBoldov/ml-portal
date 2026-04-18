@@ -29,7 +29,8 @@ class PipelineRequest(BaseModel):
     or Sandbox. All ids are strings at this boundary for easy serialization."""
 
     request_text: str = Field(..., min_length=1)
-    chat_id: str = Field(..., min_length=1)
+    # chat_id is None for sandbox runs that have no persistent chat binding.
+    chat_id: Optional[str] = None
     user_id: str = Field(..., min_length=1)
     tenant_id: str = Field(..., min_length=1)
 

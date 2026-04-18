@@ -4,7 +4,7 @@ Chat streaming service with idempotency, context loading, and Agent Runtime inte
 This service acts as a thin transport layer:
 - Handles idempotency
 - Manages message persistence
-- Delegates agent execution to AgentRuntime
+- Delegates agent execution to the v3 RuntimePipeline
 """
 from __future__ import annotations
 from typing import Optional, Dict, Any, List, AsyncGenerator
@@ -18,7 +18,7 @@ from redis.asyncio import Redis
 from app.repositories.chats_repo import AsyncChatsRepository, AsyncChatMessagesRepository
 from app.core.http.clients import LLMClientProtocol
 from app.services.run_store import RunStore
-from app.agents import AgentRuntime, ToolContext
+from app.agents import ToolContext
 from app.runtime import RuntimePipeline, PipelineRequest, RuntimeEvent, RuntimeEventType
 from app.agents.execution_preflight import AgentUnavailableError
 from app.core.logging import get_logger
@@ -55,7 +55,6 @@ class ChatStreamService:
         self.idempotency = IdempotencyManager(redis)
         # Keep constructor test-friendly: RunStore resolves global factory lazily on first write.
         self.run_store = RunStore(session=session)
-        self.runtime = AgentRuntime(llm_client, run_store=self.run_store)
         self.context_service = ChatContextService(session, llm_client, messages_repo)
         self.title_service = ChatTitleService(session, llm_client, chats_repo)
         self.persistence_service = ChatPersistenceService(session, messages_repo)
@@ -298,7 +297,7 @@ class ChatStreamService:
             pipeline = RuntimePipeline(
                 session=self.session,
                 llm_client=self.llm_client,
-                runtime=self.runtime,
+                run_store=self.run_store,
             )
 
             text_content = content.get("text", str(content)) if isinstance(content, dict) else str(content)

@@ -12,7 +12,6 @@ __all__ = [
     "ToolResult",
     "ToolHandler",
     "ToolRegistry",
-    "AgentRuntime",
     "RuntimeEvent",
     "RuntimeEventType",
     "PolicyLimits",
@@ -24,11 +23,10 @@ __all__ = [
 
 
 def __getattr__(name: str):
-    if name in {"AgentRuntime", "RuntimeEvent", "RuntimeEventType", "PolicyLimits"}:
-        from app.agents.runtime import AgentRuntime, RuntimeEvent, RuntimeEventType, PolicyLimits
+    if name in {"RuntimeEvent", "RuntimeEventType", "PolicyLimits"}:
+        from app.agents.runtime import RuntimeEvent, RuntimeEventType, PolicyLimits
 
         return {
-            "AgentRuntime": AgentRuntime,
             "RuntimeEvent": RuntimeEvent,
             "RuntimeEventType": RuntimeEventType,
             "PolicyLimits": PolicyLimits,

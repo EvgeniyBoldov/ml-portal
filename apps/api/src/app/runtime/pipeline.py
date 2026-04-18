@@ -31,11 +31,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.context import ToolContext
 from app.agents.execution_preflight import ExecutionMode
-from app.agents.runtime import AgentRuntime
 from app.core.db import get_session_factory
 from app.core.http.clients import LLMClientProtocol
 from app.core.logging import get_logger
 from app.runtime.agent_executor import AgentExecutor
+from app.services.run_store import RunStore
 from app.runtime.contracts import (
     NextStep,
     NextStepKind,
@@ -72,17 +72,17 @@ class RuntimePipeline:
         *,
         session: AsyncSession,
         llm_client: LLMClientProtocol,
-        runtime: AgentRuntime,
+        run_store: Optional[RunStore] = None,
     ) -> None:
         self.session = session
         self.llm_client = llm_client
-        self.runtime = runtime
+        self.run_store = run_store
 
         self.memory_repo = WorkingMemoryRepository(session)
         self.triage = Triage(session=session, llm_client=llm_client)
         self.planner = Planner(session=session, llm_client=llm_client)
         self.agent_executor = AgentExecutor(
-            session=session, llm_client=llm_client, runtime=runtime,
+            session=session, llm_client=llm_client, run_store=run_store,
         )
         self.synthesizer = Synthesizer(session=session, llm_client=llm_client)
         self.config_service = RuntimeConfigService(session)
@@ -98,7 +98,7 @@ class RuntimePipeline:
     ) -> AsyncGenerator[RuntimeEvent, None]:
         phase = OrchestrationPhase.PIPELINE
         event_seq = 0
-        chat_uuid = UUID(request.chat_id)
+        chat_uuid: Optional[UUID] = UUID(request.chat_id) if request.chat_id else None
         user_uuid = UUID(request.user_id)
         tenant_uuid = UUID(request.tenant_id)
 
@@ -113,8 +113,14 @@ class RuntimePipeline:
             )
 
         # --- 1. Load latest memory for cross-turn context & paused-run detection.
-        latest_memory = await self.memory_repo.load_latest_for_chat(chat_uuid)
-        paused_runs = await self.memory_repo.load_paused_for_chat(chat_uuid)
+        # In sandbox mode (chat_id is None) there is no cross-turn context to
+        # pull — each run is standalone.
+        latest_memory = (
+            await self.memory_repo.load_latest_for_chat(chat_uuid) if chat_uuid else None
+        )
+        paused_runs = (
+            await self.memory_repo.load_paused_for_chat(chat_uuid) if chat_uuid else []
+        )
 
         platform_config = await self._load_platform_config()
 
@@ -446,7 +452,7 @@ class RuntimePipeline:
         request: PipelineRequest,
         user_id: UUID,
         tenant_id: UUID,
-        chat_id: UUID,
+        chat_id: Optional[UUID],
         latest: Optional[WorkingMemory],
     ) -> WorkingMemory:
         memory = WorkingMemory(

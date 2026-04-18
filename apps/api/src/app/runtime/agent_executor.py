@@ -22,7 +22,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.context import ToolContext
 from app.agents.execution_preflight import ExecutionMode, ExecutionPreflight
-from app.agents.runtime import AgentRuntime
 from app.agents.runtime.agent import AgentToolRuntime
 from app.agents.runtime.events import (
     RuntimeEvent as LegacyEvent,
@@ -33,6 +32,7 @@ from app.core.logging import get_logger
 from app.runtime.contracts import NextStep
 from app.runtime.events import RuntimeEvent, RuntimeEventType
 from app.runtime.memory.working_memory import AgentResult, WorkingMemory
+from app.services.run_store import RunStore
 
 logger = get_logger(__name__)
 
@@ -54,15 +54,15 @@ class AgentExecutor:
         *,
         session: AsyncSession,
         llm_client: LLMClientProtocol,
-        runtime: AgentRuntime,
+        run_store: Optional[RunStore] = None,
     ) -> None:
         self.session = session
         self.llm_client = llm_client
-        self.runtime = runtime
+        self.run_store = run_store
         self.preflight = ExecutionPreflight(session)
         self._tool_runtime = AgentToolRuntime(
             llm_client=llm_client,
-            run_store=runtime.run_store,
+            run_store=run_store,
         )
 
     async def execute(
