@@ -26,8 +26,10 @@ from app.repositories.factory import AsyncRepositoryFactory, get_async_repositor
 from app.schemas.chat_events import ChatSSEEventType, ErrorPayload, format_chat_sse, format_chat_sse_done
 from app.schemas.chats import ChatMessageStreamRequest
 from app.services.chat_router_event_mapper import build_resume_content, map_service_event_to_sse
+from app.services.chat_resume_orchestrator import ChatResumeOrchestrator
 from app.services.chat_stream_service import ChatStreamService
 from app.services.runtime_resume_checkpoint_service import RuntimeResumeCheckpointService
+from app.services.runtime_terminal_status import normalize_run_status_for_storage
 
 router = APIRouter()
 logger = get_logger(__name__)
@@ -198,7 +200,7 @@ async def resume_run(
     paused_context = run.paused_context
 
     if action == "cancel":
-        run.status = "cancelled"
+        run.status = normalize_run_status_for_storage("cancelled")
         run.error = "Cancelled by user"
         run.finished_at = datetime.now(timezone.utc)
         run.paused_action = None
@@ -226,7 +228,7 @@ async def resume_run(
         user_input=user_input or None,
     )
 
-    run.status = "resumed"
+    run.status = normalize_run_status_for_storage("resumed")
     run.error = None
     run.finished_at = datetime.now(timezone.utc)
     snapshot = dict(getattr(run, "context_snapshot", None) or {})
@@ -278,72 +280,14 @@ async def resume_run(
         messages_repo=messages_repo,
     )
 
-    continuation_status = "completed"
-    continuation_error: Optional[str] = None
-    assistant_message_id: Optional[str] = None
-    paused_again_reason: Optional[str] = None
-    paused_again_run_id: Optional[str] = None
-
-    async for event in service.send_message_stream(
+    return await ChatResumeOrchestrator(service).continue_chat(
+        run_id=run_id,
         chat_id=str(run.chat_id),
         user_id=str(current_user.id),
-        content=resume_content,
-        attachment_ids=[],
-        idempotency_key=None,
-        model=None,
         agent_slug=run.agent_slug,
-        continuation_meta={
-            "resume_checkpoint": checkpoint,
-            "resumed_from_run_id": str(run_uuid),
-        },
-    ):
-        et = event.get("type")
-        if et == "error":
-            continuation_status = "error"
-            continuation_error = str(event.get("error") or "Unknown continuation error")
-        elif et == "final":
-            assistant_message_id = str(event.get("message_id")) if event.get("message_id") else None
-        elif et == "run_paused":
-            continuation_status = "paused"
-            paused_again_reason = str(event.get("reason") or "")
-            paused_again_run_id = str(event.get("run_id") or "")
-
-    if continuation_status == "error":
-        payload = {
-            "run_id": run_id,
-            "status": "resumed_with_error",
-            "paused_action": paused_action,
-            "paused_context": paused_context,
-            "resume_checkpoint": checkpoint,
-            "error": continuation_error,
-        }
-        if action == "input":
-            payload["user_input"] = user_input
-        return payload
-
-    if continuation_status == "paused":
-        payload = {
-            "run_id": run_id,
-            "status": "resumed_paused_again",
-            "paused_action": paused_action,
-            "paused_context": paused_context,
-            "resume_checkpoint": checkpoint,
-            "paused_again_reason": paused_again_reason,
-            "paused_again_run_id": paused_again_run_id,
-        }
-        if action == "input":
-            payload["user_input"] = user_input
-        return payload
-
-    payload = {
-        "run_id": run_id,
-        "status": "resumed_completed",
-        "paused_action": paused_action,
-        "paused_context": paused_context,
-        "resume_checkpoint": checkpoint,
-    }
-    if action == "input":
-        payload["user_input"] = user_input
-    if assistant_message_id:
-        payload["assistant_message_id"] = assistant_message_id
-    return payload
+        resume_content=resume_content,
+        checkpoint=checkpoint,
+        paused_action=paused_action if isinstance(paused_action, dict) else None,
+        paused_context=paused_context if isinstance(paused_context, dict) else None,
+        user_input=user_input or None,
+    )

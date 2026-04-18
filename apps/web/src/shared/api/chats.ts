@@ -185,6 +185,10 @@ export async function resumeRun(runId: string, action: 'confirm' | 'cancel' | 'i
     status: string;
     paused_action?: Record<string, unknown>;
     paused_context?: Record<string, unknown>;
+    paused_again_reason?: string;
+    paused_again_run_id?: string;
+    paused_again_action?: Record<string, unknown>;
+    paused_again_context?: Record<string, unknown>;
     user_input?: string;
   }>(`/chats/runs/${runId}/resume`, {
     method: 'POST',

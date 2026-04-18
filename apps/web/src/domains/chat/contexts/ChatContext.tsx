@@ -27,6 +27,32 @@ interface PendingInput {
   reason?: string;
 }
 
+interface OrchestrationEnvelope {
+  phase?: string;
+  event_type?: string;
+  stage?: string;
+  run_id?: string | null;
+  chat_id?: string | null;
+  sequence?: number;
+  ts?: string;
+}
+
+interface OrchestrationState {
+  run_status?: string;
+  intent_type?: string;
+  current_phase_id?: string;
+  current_agent_slug?: string;
+  open_questions?: string[];
+}
+
+interface ResumePausedState {
+  runId?: string | null;
+  reason?: string | null;
+  question?: string | null;
+  message?: string | null;
+  action?: Record<string, unknown> | null;
+}
+
 interface ChatState {
   chatsOrder: string[];
   chatsById: Record<string, Chat>;
@@ -39,6 +65,8 @@ interface ChatState {
   pendingInput: PendingInput | null;
   stopReason: string | null;
   pausedRunId: string | null;
+  orchestrationEnvelope: OrchestrationEnvelope | null;
+  orchestrationState: OrchestrationState | null;
 }
 
 interface ChatContextValue {
@@ -46,6 +74,7 @@ interface ChatContextValue {
   loadMessages: (chatId: string) => Promise<void>;
   setCurrentChat: (chatId: string) => void;
   clearPendingState: () => void;
+  applyPausedState: (state: ResumePausedState) => void;
   sendMessageStream: (
     chatId: string,
     message: string,
@@ -83,6 +112,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const [pendingInput, setPendingInput] = useState<PendingInput | null>(null);
   const [stopReason, setStopReason] = useState<string | null>(null);
   const [pausedRunId, setPausedRunId] = useState<string | null>(null);
+  const [orchestrationEnvelope, setOrchestrationEnvelope] = useState<OrchestrationEnvelope | null>(null);
+  const [orchestrationState, setOrchestrationState] = useState<OrchestrationState | null>(null);
 
   const { data: chats } = useChats();
   const queryClient = useQueryClient();
@@ -128,7 +159,37 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     setPendingInput(null);
     setStopReason(null);
     setPausedRunId(null);
+    setOrchestrationEnvelope(null);
+    setOrchestrationState(null);
     setStreamStatus(null);
+  }, []);
+
+  const applyPausedState = useCallback((resumeState: ResumePausedState) => {
+    const reason = (resumeState.reason || '').trim() || 'paused';
+    const question = (resumeState.question || '').trim();
+    const message = (resumeState.message || '').trim();
+    const runId = (resumeState.runId || '').trim();
+    const action = resumeState.action || {};
+
+    setStopReason(reason);
+    setPausedRunId(runId || null);
+
+    if (reason === 'waiting_confirmation') {
+      setPendingConfirmation({
+        reason: message || question || 'Требуется подтверждение',
+        action,
+      });
+      setPendingInput(null);
+      setStreamStatus('Ожидание подтверждения...');
+      return;
+    }
+
+    setPendingConfirmation(null);
+    setPendingInput({
+      question: question || message || undefined,
+      reason,
+    });
+    setStreamStatus('Ожидание ввода...');
   }, []);
 
   const sendMessageStream = useCallback(async (
@@ -148,6 +209,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       setPendingInput(null);
       setStopReason(null);
       setPausedRunId(null);
+      setOrchestrationEnvelope(null);
+      setOrchestrationState(null);
 
       // 1. Optimistically add user message to local state
       const tempUserId = `temp-user-${Date.now()}`;
@@ -299,6 +362,17 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           }
 
           // Handle user_message event
+          const applyEnvelope = (parsed: Record<string, unknown>) => {
+            const raw = parsed.orchestration_envelope;
+            if (!raw || typeof raw !== 'object') return;
+            setOrchestrationEnvelope(raw as OrchestrationEnvelope);
+          };
+          const applyOrchestrationState = (parsed: Record<string, unknown>) => {
+            const raw = parsed.orchestration_state;
+            if (!raw || typeof raw !== 'object') return;
+            setOrchestrationState(raw as OrchestrationState);
+          };
+
           if (eventType === 'user_message') {
             try {
               const parsed = JSON.parse(data);
@@ -354,6 +428,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           else if (eventType === 'status') {
             try {
               const parsed = JSON.parse(data);
+              applyEnvelope(parsed as Record<string, unknown>);
+              applyOrchestrationState(parsed as Record<string, unknown>);
               const stage = parsed.stage || '';
               
               // Handle RAG sources if present
@@ -509,14 +585,22 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           else if (eventType === 'planner_action') {
             try {
               const parsed = JSON.parse(data);
-              const toolSlug = parsed.tool_slug;
-              const actionType = parsed.action_type;
-              const iteration = parsed.iteration || 0;
-              if (actionType === 'tool_call' && toolSlug) {
-                setStreamStatus(`Шаг ${iteration}: ${toolSlug}...`);
-              } else if (actionType === 'final') {
+              applyEnvelope(parsed as Record<string, unknown>);
+              applyOrchestrationState(parsed as Record<string, unknown>);
+              const actionType = String(parsed.action_type || '').trim();
+              const stepType = String(parsed.step_type || '').trim();
+              const iteration = Number(parsed.iteration || 0);
+              const agentSlug = String(parsed.agent_slug || parsed.tool_slug || '').trim();
+              const phaseTitle = String(parsed.phase_title || '').trim();
+              if ((actionType === 'agent_call' || stepType === 'call_agent') && agentSlug) {
+                if (phaseTitle) {
+                  setStreamStatus(`Шаг ${iteration}: ${agentSlug} (${phaseTitle})...`);
+                } else {
+                  setStreamStatus(`Шаг ${iteration}: ${agentSlug}...`);
+                }
+              } else if (actionType === 'final' || stepType === 'finalize') {
                 setStreamStatus('Формирую ответ...');
-              } else if (actionType === 'ask_user') {
+              } else if (actionType === 'ask_user' || stepType === 'ask_user') {
                 setStreamStatus('Нужно уточнение...');
               } else {
                 setStreamStatus(`Планирую шаг ${iteration}...`);
@@ -542,6 +626,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           else if (eventType === 'waiting_input') {
             try {
               const parsed = JSON.parse(data);
+              applyEnvelope(parsed as Record<string, unknown>);
+              applyOrchestrationState(parsed as Record<string, unknown>);
               setPendingInput({
                 question: parsed.question,
                 reason: parsed.reason,
@@ -555,6 +641,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           else if (eventType === 'stop') {
             try {
               const parsed = JSON.parse(data);
+              applyEnvelope(parsed as Record<string, unknown>);
+              applyOrchestrationState(parsed as Record<string, unknown>);
               setStopReason(parsed.reason || 'stopped');
               if (parsed.run_id) {
                 setPausedRunId(parsed.run_id);
@@ -594,6 +682,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
       // Clear stream status after completion
       setStreamStatus(null);
+      setOrchestrationEnvelope(null);
+      setOrchestrationState(null);
       if (flushTimer) {
         clearTimeout(flushTimer);
       }
@@ -603,6 +693,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       setError(errorMsg);
       onError(errorMsg);
       setStreamStatus(null);
+      setOrchestrationEnvelope(null);
+      setOrchestrationState(null);
     } finally {
     }
   }, []);
@@ -620,10 +712,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       pendingInput,
       stopReason,
       pausedRunId,
+      orchestrationEnvelope,
+      orchestrationState,
     },
     loadMessages,
     setCurrentChat,
     clearPendingState,
+    applyPausedState,
     sendMessageStream,
   };
 

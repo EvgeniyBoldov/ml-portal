@@ -44,6 +44,25 @@
   animation: pulse 1.5s ease-in-out infinite;
 }
 
+.envelopeBadge {
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+  padding: var(--sp-1) var(--sp-3);
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-full);
+  font-family: var(--font-family-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}
+
+.stateBadge {
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+  padding: var(--sp-1) var(--sp-3);
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-full);
+}
+
 @keyframes pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.6; }

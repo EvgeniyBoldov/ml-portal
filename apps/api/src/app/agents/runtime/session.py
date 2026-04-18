@@ -8,6 +8,7 @@ from typing import Any, Dict, Optional, TYPE_CHECKING
 from uuid import UUID
 
 from app.core.logging import get_logger
+from app.services.runtime_terminal_status import normalize_run_status_for_storage
 
 if TYPE_CHECKING:
     from app.services.execution_trace_logger import ExecutionTraceLogger
@@ -95,6 +96,7 @@ class RunSession:
         if not self._should_log or not self.run_id:
             return
         try:
-            await self.trace_logger.finish_run(self.run_id, status=status, error=error)
+            normalized_status = normalize_run_status_for_storage(status)
+            await self.trace_logger.finish_run(self.run_id, status=normalized_status, error=error)
         except Exception as e:
             logger.warning(f"Failed to finish run logging: {e}")

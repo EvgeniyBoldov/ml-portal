@@ -9,6 +9,10 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, TYPE_CHECKING
 from app.agents.contracts import RuntimeTriageDecision
 from app.agents.runtime.events import RuntimeEvent
 from app.schemas.system_llm_roles import TriageInput
+from app.services.orchestration_contract import (
+    intent_from_runtime_triage,
+    runtime_triage_from_intent,
+)
 from app.services.system_llm_executor import SystemLLMExecutor
 
 if TYPE_CHECKING:
@@ -62,7 +66,7 @@ class TriageUseCase:
             active_run=None,
         )
         triage_result, trace_id = await executor.execute_triage(triage_input)
-        return RuntimeTriageDecision(
+        runtime_decision = RuntimeTriageDecision(
             type=triage_result.type,
             confidence=triage_result.confidence,
             answer=getattr(triage_result, "answer", None),
@@ -71,6 +75,8 @@ class TriageUseCase:
             inputs=getattr(triage_result, "inputs", None) or {},
             trace_id=str(trace_id) if trace_id else None,
         )
+        # Normalize through orchestration contract to keep one canonical intent shape.
+        return runtime_triage_from_intent(intent_from_runtime_triage(runtime_decision))
 
 
 class PrepareExecutionUseCase:

@@ -92,6 +92,9 @@ async def test_pipeline_returns_clarify_stop(pipeline: RuntimePipeline):
     assert RuntimeEventType.WAITING_INPUT in event_types
     assert RuntimeEventType.STOP in event_types
     assert any(event.data.get("question") == "Уточни, какой регламент сравнивать" for event in events)
+    triage_events = [event for event in events if event.data.get("orchestration_envelope")]
+    assert triage_events
+    assert all(event.data["orchestration_envelope"]["phase"] == "triage" for event in triage_events)
 
 
 @pytest.mark.asyncio
@@ -152,6 +155,16 @@ async def test_pipeline_builds_outline_for_orchestrate(pipeline: RuntimePipeline
     assert "compare_findings" in phase_ids
     assert "finalize" in phase_ids
     assert any(event.type == RuntimeEventType.STATUS and event.data.get("stage") == "outline_ready" for event in events)
+    planner_stage = next(
+        (
+            event
+            for event in events
+            if event.type == RuntimeEventType.STATUS and event.data.get("stage") == "executing_planner"
+        ),
+        None,
+    )
+    assert planner_stage is not None
+    assert planner_stage.data.get("orchestration_envelope", {}).get("phase") == "planner"
 
 
 @pytest.mark.asyncio

@@ -32,6 +32,7 @@ from sqlalchemy.orm import selectinload
 
 from app.core.logging import get_logger
 from app.models.agent_run import AgentRun, AgentRunStep
+from app.services.runtime_terminal_status import normalize_run_status_for_storage
 
 logger = get_logger(__name__)
 
@@ -353,7 +354,7 @@ class RunStore:
             if not run:
                 return
 
-            run.status = status
+            run.status = normalize_run_status_for_storage(status)
             run.error = error
             run.finished_at = datetime.now(timezone.utc)
             async with self._state_lock:
@@ -497,7 +498,7 @@ class RunStore:
                 logger.warning(f"Cannot pause run {run_id}: not found")
                 return
 
-            run.status = status
+            run.status = normalize_run_status_for_storage(status)
             run.paused_action = paused_action
             run.paused_context = paused_context
 

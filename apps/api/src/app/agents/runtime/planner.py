@@ -25,6 +25,7 @@ from app.agents.runtime.sub_agent_dispatcher import SubAgentDispatcher
 from app.schemas.system_llm_roles import PlannerInput
 from app.services.execution_memory_service import ExecutionMemoryService
 from app.services.system_llm_executor import SystemLLMExecutor
+from app.services.orchestration_contract import planner_step_from_next_action
 from app.core.logging import get_logger
 from app.core.db import get_session_factory
 
@@ -295,43 +296,27 @@ class PlannerRuntime(BaseRuntime):
                         next_action.meta.phase_id = outline_progress.current_phase_id
                         next_action.meta.phase_title = current_phase.title if current_phase else None
 
-                    await run_session.log_step("planner_action", {
-                        "iteration": iteration + 1,
-                        "action_type": next_action.type.value,
-                        "agent_slug": next_action.agent.agent_slug if next_action.agent else None,
-                        "why": next_action.meta.why if next_action.meta else None,
-                        "phase_id": next_action.meta.phase_id if next_action.meta else None,
-                    }, duration_ms=planner_duration)
+                    step_decision = planner_step_from_next_action(next_action)
+                    step_payload = step_decision.to_runtime_payload(iteration + 1)
+
+                    await run_session.log_step(
+                        "planner_action",
+                        step_payload,
+                        duration_ms=planner_duration,
+                    )
 
                     await memory_service.record_step(
                         exec_request.run_id,
                         step_type="planner_action",
-                        payload={
-                            "iteration": iteration + 1,
-                            "action_type": next_action.type.value,
-                            "agent_slug": next_action.agent.agent_slug if next_action.agent else None,
-                            "why": next_action.meta.why if next_action.meta else None,
-                            "phase_id": next_action.meta.phase_id if next_action.meta else None,
-                            "phase_title": next_action.meta.phase_title if next_action.meta else None,
-                        },
-                        signature=(
-                            f"{next_action.type.value}:"
-                            f"{next_action.agent.agent_slug if next_action.agent else 'none'}:"
-                            f"{next_action.meta.phase_id if next_action.meta and next_action.meta.phase_id else outline_progress.current_phase_id or 'none'}"
-                        ),
+                        payload=step_payload,
+                        signature=step_decision.signature(outline_progress.current_phase_id),
                         chat_id=getattr(ctx, "chat_id", None),
                         tenant_id=getattr(ctx, "tenant_id", None),
                         current_phase_id=next_action.meta.phase_id if next_action.meta and next_action.meta.phase_id else outline_progress.current_phase_id,
                         current_agent_slug=next_action.agent.agent_slug if next_action.agent else None,
                     )
 
-                    yield RuntimeEvent(RuntimeEventType.PLANNER_ACTION, {
-                        "iteration": iteration + 1,
-                        "action_type": next_action.type.value,
-                        "agent_slug": next_action.agent.agent_slug if next_action.agent else None,
-                        "phase_id": next_action.meta.phase_id if next_action.meta else None,
-                        "phase_title": next_action.meta.phase_title if next_action.meta else None,
-                    })
+                    yield RuntimeEvent(RuntimeEventType.PLANNER_ACTION, step_payload)
 
                     previous_tail = list(compact_ctx.recent_signatures)[-2:]
                     compact_ctx.record_action(next_action)

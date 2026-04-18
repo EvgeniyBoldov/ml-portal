@@ -43,7 +43,7 @@ function asAnswerBlocks(value: unknown): Array<Record<string, unknown>> | undefi
 export default function Chat() {
   const { chatId } = useParams();
   const nav = useNavigate();
-  const { state, loadMessages, setCurrentChat, clearPendingState, sendMessageStream } = useChat();
+  const { state, loadMessages, setCurrentChat, clearPendingState, applyPausedState, sendMessageStream } = useChat();
   const historyRef = useRef<HTMLDivElement>(null);
   const [busy, setBusy] = React.useState(false);
   const [streamError, setStreamError] = React.useState<string | null>(null);
@@ -147,12 +147,24 @@ export default function Chat() {
     try {
       if (state.pausedRunId) {
         const { resumeRun } = await import('@shared/api/chats');
-        await resumeRun(state.pausedRunId, 'input', clarifyInput.trim());
+        const resume = await resumeRun(state.pausedRunId, 'input', clarifyInput.trim());
         setClarifyInput('');
         if (chatId) {
           await loadMessages(chatId);
         }
-        clearPendingState();
+        if (resume.status === 'resumed_paused_again') {
+          const pausedContext = (resume.paused_again_context || {}) as Record<string, unknown>;
+          const pausedAction = (resume.paused_again_action || {}) as Record<string, unknown>;
+          applyPausedState({
+            runId: resume.paused_again_run_id || null,
+            reason: resume.paused_again_reason || String(pausedContext.reason || ''),
+            question: String(pausedContext.question || pausedAction.question || ''),
+            message: String(pausedContext.message || pausedAction.message || ''),
+            action: pausedAction,
+          });
+        } else {
+          clearPendingState();
+        }
       } else {
         // Triage clarify path has no resumable run_id; continue as a normal user message.
         const message = clarifyInput.trim();
@@ -240,6 +252,22 @@ export default function Chat() {
       <div className={styles.header}>
         <div className={styles.headerInfo}>
           <h2 className={styles.headerTitle}>Чат</h2>
+          {state.orchestrationEnvelope && (
+            <span className={styles.envelopeBadge}>
+              {`${state.orchestrationEnvelope.phase || 'runtime'} #${state.orchestrationEnvelope.sequence || 0}`}
+            </span>
+          )}
+          {state.orchestrationState && (
+            <span className={styles.stateBadge}>
+              {[
+                state.orchestrationState.run_status,
+                state.orchestrationState.current_agent_slug,
+                state.orchestrationState.current_phase_id,
+              ]
+                .filter(Boolean)
+                .join(' · ') || 'runtime'}
+            </span>
+          )}
           {state.streamStatus && (
             <span className={styles.streamStatus}>{state.streamStatus}</span>
           )}
@@ -292,8 +320,20 @@ export default function Chat() {
                 if (state.pausedRunId) {
                   try {
                     const { resumeRun } = await import('@shared/api/chats');
-                    await resumeRun(state.pausedRunId, 'cancel');
-                    clearPendingState();
+                    const resume = await resumeRun(state.pausedRunId, 'cancel');
+                    if (resume.status === 'resumed_paused_again') {
+                      const pausedContext = (resume.paused_again_context || {}) as Record<string, unknown>;
+                      const pausedAction = (resume.paused_again_action || {}) as Record<string, unknown>;
+                      applyPausedState({
+                        runId: resume.paused_again_run_id || null,
+                        reason: resume.paused_again_reason || String(pausedContext.reason || ''),
+                        question: String(pausedContext.question || pausedAction.question || ''),
+                        message: String(pausedContext.message || pausedAction.message || ''),
+                        action: pausedAction,
+                      });
+                    } else {
+                      clearPendingState();
+                    }
                   } catch (e) {
                     console.error('Failed to cancel run', e);
                   }
@@ -310,11 +350,23 @@ export default function Chat() {
                 if (state.pausedRunId) {
                   try {
                     const { resumeRun } = await import('@shared/api/chats');
-                    await resumeRun(state.pausedRunId, 'confirm');
+                    const resume = await resumeRun(state.pausedRunId, 'confirm');
                     if (chatId) {
                       await loadMessages(chatId);
                     }
-                    clearPendingState();
+                    if (resume.status === 'resumed_paused_again') {
+                      const pausedContext = (resume.paused_again_context || {}) as Record<string, unknown>;
+                      const pausedAction = (resume.paused_again_action || {}) as Record<string, unknown>;
+                      applyPausedState({
+                        runId: resume.paused_again_run_id || null,
+                        reason: resume.paused_again_reason || String(pausedContext.reason || ''),
+                        question: String(pausedContext.question || pausedAction.question || ''),
+                        message: String(pausedContext.message || pausedAction.message || ''),
+                        action: pausedAction,
+                      });
+                    } else {
+                      clearPendingState();
+                    }
                   } catch (e) {
                     console.error('Failed to confirm run', e);
                   }

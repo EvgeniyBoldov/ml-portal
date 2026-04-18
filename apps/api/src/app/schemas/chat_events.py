@@ -60,6 +60,8 @@ class ChatTitlePayload(BaseModel):
 
 class StatusPayload(BaseModel):
     stage: str
+    orchestration_envelope: Optional[Dict[str, Any]] = None
+    orchestration_state: Optional[Dict[str, Any]] = None
 
 
 class AgentSelectedPayload(BaseModel):
@@ -83,8 +85,16 @@ class ToolResultPayload(BaseModel):
 class PlannerActionPayload(BaseModel):
     iteration: Optional[int] = None
     action_type: Optional[str] = None
+    step_type: Optional[str] = None
+    agent_slug: Optional[str] = None
+    phase_id: Optional[str] = None
+    phase_title: Optional[str] = None
+    why: Optional[str] = None
+    # Legacy fields kept for backward compatibility with old clients.
     tool_slug: Optional[str] = None
     op: Optional[str] = None
+    orchestration_envelope: Optional[Dict[str, Any]] = None
+    orchestration_state: Optional[Dict[str, Any]] = None
 
 
 class DeltaPayload(BaseModel):
@@ -99,6 +109,8 @@ class ConfirmationRequiredPayload(BaseModel):
 class WaitingInputPayload(BaseModel):
     question: Optional[str] = None
     reason: Optional[str] = None
+    orchestration_envelope: Optional[Dict[str, Any]] = None
+    orchestration_state: Optional[Dict[str, Any]] = None
 
 
 class StopPayload(BaseModel):
@@ -106,6 +118,8 @@ class StopPayload(BaseModel):
     message: Optional[str] = None
     question: Optional[str] = None
     run_id: Optional[str] = None
+    orchestration_envelope: Optional[Dict[str, Any]] = None
+    orchestration_state: Optional[Dict[str, Any]] = None
 
 
 class FinalPayload(BaseModel):

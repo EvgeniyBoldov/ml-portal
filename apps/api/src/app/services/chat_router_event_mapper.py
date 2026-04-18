@@ -41,7 +41,11 @@ def map_service_event_to_sse(event: Dict[str, Any]) -> Optional[str]:
     if et == "status":
         return format_chat_sse(
             ChatSSEEventType.STATUS,
-            StatusPayload(stage=event.get("stage", "")),
+            StatusPayload(
+                stage=event.get("stage", ""),
+                orchestration_envelope=event.get("orchestration_envelope"),
+                orchestration_state=event.get("orchestration_state"),
+            ),
         )
     if et == "agent_selected":
         return format_chat_sse(
@@ -68,13 +72,22 @@ def map_service_event_to_sse(event: Dict[str, Any]) -> Optional[str]:
             ),
         )
     if et == "planner_action":
+        agent_slug = event.get("agent_slug")
+        step_type = event.get("step_type")
         return format_chat_sse(
             ChatSSEEventType.PLANNER_ACTION,
             PlannerActionPayload(
                 iteration=event.get("iteration"),
                 action_type=event.get("action_type"),
-                tool_slug=event.get("tool_slug"),
-                op=event.get("op"),
+                step_type=step_type,
+                agent_slug=agent_slug,
+                phase_id=event.get("phase_id"),
+                phase_title=event.get("phase_title"),
+                why=event.get("why"),
+                tool_slug=event.get("tool_slug") or agent_slug,
+                op=event.get("op") or step_type or event.get("action_type"),
+                orchestration_envelope=event.get("orchestration_envelope"),
+                orchestration_state=event.get("orchestration_state"),
             ),
         )
     if et == "delta":
@@ -90,7 +103,12 @@ def map_service_event_to_sse(event: Dict[str, Any]) -> Optional[str]:
     if et == "waiting_input":
         return format_chat_sse(
             ChatSSEEventType.WAITING_INPUT,
-            WaitingInputPayload(question=event.get("question"), reason=event.get("reason")),
+            WaitingInputPayload(
+                question=event.get("question"),
+                reason=event.get("reason"),
+                orchestration_envelope=event.get("orchestration_envelope"),
+                orchestration_state=event.get("orchestration_state"),
+            ),
         )
     if et == "stop":
         return format_chat_sse(
@@ -100,6 +118,8 @@ def map_service_event_to_sse(event: Dict[str, Any]) -> Optional[str]:
                 message=event.get("message"),
                 question=event.get("question"),
                 run_id=event.get("run_id"),
+                orchestration_envelope=event.get("orchestration_envelope"),
+                orchestration_state=event.get("orchestration_state"),
             ),
         )
     if et == "final":
