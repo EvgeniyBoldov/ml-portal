@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest
@@ -11,6 +11,7 @@ from app.runtime.contracts import PipelineRequest, TriageDecision, TriageIntent
 from app.runtime.events import RuntimeEventType
 from app.runtime.memory.working_memory import WorkingMemory
 from app.runtime.pipeline import RuntimePipeline
+from app.runtime.platform_config import PlatformSnapshot
 
 
 class _MemoryPort:
@@ -38,8 +39,27 @@ async def test_runtime_pipeline_direct_final_emits_enveloped_final():
         run_store=None,
     )
 
-    pipeline._memory = _MemoryPort()  # type: ignore[attr-defined]
-    pipeline._resume = SimpleNamespace(  # type: ignore[attr-defined]
+    # Pre-seed the assembler's cached_property slots so no real adapters are
+    # ever constructed (session/llm_client are SimpleNamespace stubs).
+    assembler = pipeline._assembler
+    memory_port = _MemoryPort()
+    assembler.__dict__["memory"] = memory_port
+    assembler.__dict__["triage"] = SimpleNamespace(
+        decide=AsyncMock(
+            return_value=TriageDecision(
+                intent=TriageIntent.FINAL,
+                confidence=0.9,
+                reason="smalltalk",
+                goal="hello",
+                answer="hey",
+            )
+        )
+    )
+    assembler.__dict__["summary"] = SimpleNamespace(run=AsyncMock(return_value=None))
+    assembler.__dict__["synthesizer"] = SimpleNamespace()  # unused on FINAL path
+    assembler.__dict__["planner"] = SimpleNamespace()
+    assembler.__dict__["agent_executor"] = SimpleNamespace()
+    assembler.__dict__["resume"] = SimpleNamespace(
         bootstrap=AsyncMock(
             return_value=SimpleNamespace(
                 memory=WorkingMemory(
@@ -56,20 +76,6 @@ async def test_runtime_pipeline_direct_final_emits_enveloped_final():
             )
         )
     )
-    pipeline._triage = SimpleNamespace(  # type: ignore[attr-defined]
-        decide=AsyncMock(
-            return_value=TriageDecision(
-                intent=TriageIntent.FINAL,
-                confidence=0.9,
-                reason="smalltalk",
-                goal="hello",
-                answer="hey",
-            )
-        )
-    )
-    pipeline._summary = SimpleNamespace(run=AsyncMock(return_value=None))  # type: ignore[attr-defined]
-    pipeline._config = SimpleNamespace(get_pipeline_config=AsyncMock(return_value={}))  # type: ignore[attr-defined]
-    pipeline._list_routable_agents = AsyncMock(return_value=[])  # type: ignore[method-assign]
 
     request = PipelineRequest(
         request_text="hello",
@@ -80,7 +86,12 @@ async def test_runtime_pipeline_direct_final_emits_enveloped_final():
     )
     ctx = ToolContext(tenant_id=uuid4(), user_id=uuid4(), chat_id=uuid4())
 
-    events = [event async for event in pipeline.execute(request, ctx)]
+    empty_platform = PlatformSnapshot()  # empty config/agents/default policy
+    with patch(
+        "app.runtime.pipeline.PlatformConfigLoader.load",
+        new=AsyncMock(return_value=empty_platform),
+    ):
+        events = [event async for event in pipeline.execute(request, ctx)]
 
     assert any(event.type == RuntimeEventType.FINAL for event in events)
     final_event = next(event for event in events if event.type == RuntimeEventType.FINAL)
