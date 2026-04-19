@@ -32,7 +32,14 @@ logger = get_logger(__name__)
 class PlannerLLMOutput(BaseModel):
     """Schema the planner LLM is required to produce."""
 
-    kind: Literal["call_agent", "ask_user", "final", "abort"]
+    kind: Literal[
+        "call_agent",
+        "direct_answer",
+        "clarify",
+        "ask_user",
+        "final",
+        "abort",
+    ]
     rationale: str = Field(..., min_length=1)
     agent_slug: Optional[str] = None
     agent_input: Dict[str, Any] = Field(default_factory=dict)
@@ -127,6 +134,8 @@ class Planner:
     def _to_next_step(raw: PlannerLLMOutput) -> NextStep:
         kind_map = {
             "call_agent": NextStepKind.CALL_AGENT,
+            "direct_answer": NextStepKind.DIRECT_ANSWER,
+            "clarify": NextStepKind.CLARIFY,
             "ask_user": NextStepKind.ASK_USER,
             "final": NextStepKind.FINAL,
             "abort": NextStepKind.ABORT,

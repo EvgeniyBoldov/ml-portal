@@ -22,7 +22,7 @@ from app.models.memory import FactScope
 from app.runtime.memory.dto import SummaryDTO
 from app.runtime.memory.fact_store import FactStore
 from app.runtime.memory.summary_store import SummaryStore
-from app.runtime.memory.transport import WorkingMemory
+from app.runtime.memory.transport import TurnMemory
 
 logger = get_logger(__name__)
 
@@ -51,7 +51,7 @@ class MemoryBuilder:
         chat_id: Optional[UUID],
         user_id: Optional[UUID],
         tenant_id: Optional[UUID],
-    ) -> WorkingMemory:
+    ) -> TurnMemory:
         summary = await self._load_summary(chat_id)
         facts = await self._fact_store.retrieve(
             scopes=_scopes_for(chat_id=chat_id, user_id=user_id, tenant_id=tenant_id),
@@ -61,7 +61,7 @@ class MemoryBuilder:
             limit=self._fact_limit,
         )
 
-        return WorkingMemory(
+        return TurnMemory(
             chat_id=chat_id,
             user_id=user_id,
             tenant_id=tenant_id,

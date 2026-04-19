@@ -1,6 +1,12 @@
-"""WorkingMemory — the runtime's in-turn transport object.
+"""TurnMemory — the runtime's in-turn transport object.
 
-This is NOT a persisted entity. It lives for the duration of one
+This is NOT a persisted entity.
+
+Named `TurnMemory` (not `WorkingMemory`) because the legacy runtime-state
+object in `app.runtime.memory.working_memory.WorkingMemory` still carries
+the per-run execution state used by the planner/stages during the turn.
+Once the legacy WorkingMemory is retired (M6), this class will carry all
+turn state and rename is trivial. It lives for the duration of one
 pipeline turn, is produced by `MemoryBuilder` at the top and consumed
 by `MemoryWriter` at the bottom. The Planner and Synthesizer mutate
 its `agent_results` / `planner_steps` / `final_answer` fields as the
@@ -22,7 +28,7 @@ from app.runtime.memory.fact_extractor import AgentResultSnippet
 
 
 @dataclass
-class WorkingMemory:
+class TurnMemory:
     """Per-turn state passed through stages."""
 
     # --- identity ---------------------------------------------------------

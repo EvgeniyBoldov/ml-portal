@@ -1,11 +1,14 @@
-"""Pipeline stages — the three discrete phases of a runtime turn."""
-from app.runtime.stages.triage_stage import TriageOutcome, TriageStage
+"""Pipeline stages — the two discrete phases of a runtime turn.
+
+Post-M5: triage is dead. The planner absorbed direct_answer / clarify /
+resume, so the pipeline is:
+
+    MemoryBuilder → PlanningStage → FinalizationStage? → MemoryWriter
+"""
 from app.runtime.stages.planning_stage import PlanningOutcome, PlanningStage
 from app.runtime.stages.finalization_stage import FinalizationStage
 
 __all__ = [
-    "TriageStage",
-    "TriageOutcome",
     "PlanningStage",
     "PlanningOutcome",
     "FinalizationStage",

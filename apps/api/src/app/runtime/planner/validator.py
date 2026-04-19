@@ -32,9 +32,13 @@ def validate_next_step(
                 f"{sorted(allowed)}"
             )
 
-    if step.kind == NextStepKind.ASK_USER:
+    if step.kind in (NextStepKind.ASK_USER, NextStepKind.CLARIFY):
         if not (step.question or "").strip():
-            return "ask_user step missing question"
+            return f"{step.kind.value} step missing question"
+
+    if step.kind == NextStepKind.DIRECT_ANSWER:
+        if not (step.final_answer or "").strip():
+            return "direct_answer step missing final_answer"
 
     if step.kind == NextStepKind.FINAL:
         if not (step.final_answer or "").strip():

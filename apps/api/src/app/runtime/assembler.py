@@ -21,24 +21,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.http.clients import LLMClientProtocol
 from app.runtime.agent_executor import AgentExecutor
 from app.runtime.memory import WorkingMemoryRepository
+from app.runtime.memory.builder import MemoryBuilder
+from app.runtime.memory.writer import MemoryWriter
 from app.runtime.planner import Planner
 from app.runtime.ports import (
     AgentExecutionPort,
     MemoryPort,
     PlannerServicePort,
-    SummaryPort,
     SynthesizerPort,
-    TriageServicePort,
 )
-from app.runtime.resume import ResumeResolver
 from app.runtime.stages import (
     FinalizationStage,
     PlanningStage,
-    TriageStage,
 )
-from app.runtime.summarizer_turn import TurnSummarizer
 from app.runtime.synthesizer import Synthesizer
-from app.runtime.triage import Triage
 from app.services.run_store import RunStore
 
 
@@ -62,11 +58,27 @@ class PipelineAssembler:
 
     @cached_property
     def memory(self) -> MemoryPort:
+        """Legacy WorkingMemory persistence (`execution_memories` table).
+
+        Still used until the legacy WorkingMemory class is retired in M6 —
+        the planner / synthesizer mutate a WorkingMemory per turn and the
+        pipeline needs somewhere to persist intermediate state so paused
+        runs can resume. New FactStore/SummaryStore handle cross-turn
+        memory independently.
+        """
         return WorkingMemoryRepository(self._session)
 
     @cached_property
-    def triage(self) -> TriageServicePort:
-        return Triage(session=self._session, llm_client=self._llm_client)
+    def memory_builder(self) -> MemoryBuilder:
+        """Read path for cross-turn memory — facts + structured summary."""
+        return MemoryBuilder(session=self._session)
+
+    @cached_property
+    def memory_writer(self) -> MemoryWriter:
+        """Write path — extracts facts + compacts summary at turn end."""
+        return MemoryWriter(
+            session=self._session, llm_client=self._llm_client
+        )
 
     @cached_property
     def planner(self) -> PlannerServicePort:
@@ -84,24 +96,9 @@ class PipelineAssembler:
     def synthesizer(self) -> SynthesizerPort:
         return Synthesizer(session=self._session, llm_client=self._llm_client)
 
-    @cached_property
-    def summary(self) -> SummaryPort:
-        return TurnSummarizer(session=self._session, llm_client=self._llm_client)
-
-    @cached_property
-    def resume(self) -> ResumeResolver:
-        return ResumeResolver(self.memory)
-
     # ------------------------------------------------------------------ #
     # Stage factories (fresh per turn)                                   #
     # ------------------------------------------------------------------ #
-
-    def build_triage_stage(self) -> TriageStage:
-        return TriageStage(
-            triage=self.triage,
-            memory_port=self.memory,
-            resume=self.resume,
-        )
 
     def build_planning_stage(
         self,
@@ -120,6 +117,5 @@ class PipelineAssembler:
     def build_finalization_stage(self) -> FinalizationStage:
         return FinalizationStage(
             synthesizer=self.synthesizer,
-            summary=self.summary,
             memory_port=self.memory,
         )

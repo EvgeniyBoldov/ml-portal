@@ -81,9 +81,16 @@ class TriageDecision(BaseModel):
 
 
 class NextStepKind(str, Enum):
+    # --- non-terminal ---
     CALL_AGENT = "call_agent"   # delegate to a sub-agent (the only way to touch tools)
-    ASK_USER = "ask_user"       # pause for user input
-    FINAL = "final"             # synthesize and emit final answer
+    # --- terminal ---
+    DIRECT_ANSWER = "direct_answer"  # answer without touching any agent; streamed verbatim
+    ASK_USER = "ask_user"       # pause for user input (legacy name for CLARIFY)
+    CLARIFY = "clarify"         # ask user a focused question — alias-kind with semantically
+                                # identical handling to ASK_USER; kept separate so planner
+                                # prompts can distinguish "I need a single clarification" from
+                                # "I need the user to fill an entire form".
+    FINAL = "final"             # synthesize and emit final answer (agent work complete)
     ABORT = "abort"             # give up (non-recoverable planner failure)
 
 

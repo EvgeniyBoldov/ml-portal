@@ -34,7 +34,7 @@ from app.runtime.memory.fact_extractor import (
 from app.runtime.memory.fact_store import FactStore
 from app.runtime.memory.summary_compactor import SummaryCompactor
 from app.runtime.memory.summary_store import SummaryStore
-from app.runtime.memory.transport import WorkingMemory
+from app.runtime.memory.transport import TurnMemory
 
 logger = get_logger(__name__)
 
@@ -60,7 +60,7 @@ class MemoryWriter:
     async def finalize(
         self,
         *,
-        memory: WorkingMemory,
+        memory: TurnMemory,
         user_message: str,
         assistant_final: Optional[str],
     ) -> None:
@@ -86,7 +86,7 @@ class MemoryWriter:
 
     async def _write_facts(
         self,
-        memory: WorkingMemory,
+        memory: TurnMemory,
         user_message: str,
     ) -> None:
         known = [
@@ -108,7 +108,7 @@ class MemoryWriter:
 
     async def _write_summary(
         self,
-        memory: WorkingMemory,
+        memory: TurnMemory,
         user_message: str,
         assistant_final: str,
     ) -> None:

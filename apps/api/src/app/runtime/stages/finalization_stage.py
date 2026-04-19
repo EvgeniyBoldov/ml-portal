@@ -1,18 +1,16 @@
 """
-FinalizationStage — synthesizer + rolling summary + terminal persist.
+FinalizationStage — synthesizer + terminal persist.
 
-Invoked by the pipeline when a stage reports NEEDS_FINAL (planner FINAL,
-loop-detected, max-iters) OR when triage answered directly (we still want
-the rolling summary to roll forward for the next turn).
+Invoked by the pipeline when PlanningStage reports NEEDS_FINAL (planner
+FINAL, loop-detected, max-iters). The planner's DIRECT_ANSWER path
+emits its final event inside PlanningStage itself and does NOT come
+through here.
 
-Responsibilities:
-    1. Stream the synthesizer's final answer events (SYNTHESIS phase).
-    2. Update memory.status / finished_at.
-    3. Invoke SummaryPort to roll the dialogue summary forward.
-    4. Persist memory once at the end.
-
-Terminal persistence happens here so the planner/triage stages never have
-to care about it after declaring their outcome.
+Cross-turn summary rolling was a concern of this stage in the v3.0
+pipeline; it now lives in `MemoryWriter` (which the pipeline invokes
+after every turn — success, pause, or abort). This stage only owns
+the synthesizer stream and writing the terminal state of the legacy
+WorkingMemory.
 """
 from __future__ import annotations
 
@@ -24,7 +22,7 @@ from app.runtime.contracts import PipelineStopReason
 from app.runtime.envelope import PhasedEvent
 from app.runtime.events import OrchestrationPhase
 from app.runtime.memory.working_memory import WorkingMemory
-from app.runtime.ports import MemoryPort, SummaryPort, SynthesizerPort
+from app.runtime.ports import MemoryPort, SynthesizerPort
 
 logger = get_logger(__name__)
 
@@ -36,11 +34,9 @@ class FinalizationStage:
         self,
         *,
         synthesizer: SynthesizerPort,
-        summary: SummaryPort,
         memory_port: MemoryPort,
     ) -> None:
         self._synth = synthesizer
-        self._summary = summary
         self._memory = memory_port
 
     async def run(
@@ -52,10 +48,12 @@ class FinalizationStage:
         model: Optional[str],
         run_synthesizer: bool = True,
     ) -> AsyncIterator[PhasedEvent]:
-        """Drive synthesizer → summary → terminal persist.
+        """Drive synthesizer → terminal persist.
 
-        If `run_synthesizer` is False (triage direct_answer path), we skip
-        the synthesizer step and only handle summary + persist.
+        `run_synthesizer=False` is retained as a kwarg for the rare case
+        where a caller needs the terminal-persist side effect without a
+        synth stream (currently unused). Default behaviour runs the
+        synthesizer.
         """
         if run_synthesizer:
             async for event in self._synth.stream(
@@ -68,30 +66,11 @@ class FinalizationStage:
 
         memory.status = stop_reason.value
         memory.finished_at = datetime.now(timezone.utc)
-        await self._roll_summary(memory)
         await self._persist(memory)
 
     # ------------------------------------------------------------------ #
     # Helpers                                                            #
     # ------------------------------------------------------------------ #
-
-    async def _roll_summary(self, memory: WorkingMemory) -> None:
-        user_message = memory.question or memory.goal or ""
-        assistant_answer = (memory.final_answer or "").strip()
-        if not user_message or not assistant_answer:
-            return
-        try:
-            await self._summary.run(
-                memory=memory,
-                user_message=user_message,
-                assistant_answer=assistant_answer,
-                recent_messages=[
-                    {"role": r.role, "content": r.preview}
-                    for r in memory.recent_messages
-                ],
-            )
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.warning("Rolling summary update failed: %s", exc)
 
     async def _persist(self, memory: WorkingMemory) -> None:
         try:

@@ -20,7 +20,7 @@ import pytest
 from app.models.memory import FactScope, FactSource
 from app.runtime.memory.builder import MemoryBuilder, _scopes_for
 from app.runtime.memory.dto import FactDTO, SummaryDTO
-from app.runtime.memory.transport import WorkingMemory
+from app.runtime.memory.transport import TurnMemory
 from app.runtime.memory.writer import MemoryWriter, _rebuild_raw_tail
 
 
@@ -62,7 +62,7 @@ async def test_builder_returns_wm_with_existing_summary_and_facts():
         user_id=user_id, tenant_id=tenant_id,
     )
 
-    assert isinstance(wm, WorkingMemory)
+    assert isinstance(wm, TurnMemory)
     assert wm.goal == "что я уже сделал?"
     assert wm.summary is existing_summary
     assert wm.retrieved_facts == [fact]
@@ -121,7 +121,7 @@ def _writer() -> MemoryWriter:
 
 @pytest.mark.asyncio
 async def test_writer_noop_without_chat_id(_writer):
-    wm = WorkingMemory(
+    wm = TurnMemory(
         chat_id=None, user_id=uuid4(), tenant_id=uuid4(),
         turn_number=1, goal="x", summary=SummaryDTO.empty(uuid4()),
     )
@@ -144,7 +144,7 @@ async def test_writer_persists_extracted_facts(_writer):
         return_value=SummaryDTO(chat_id=chat_id, last_updated_turn=2)
     )
 
-    wm = WorkingMemory(
+    wm = TurnMemory(
         chat_id=chat_id, user_id=user_id, tenant_id=None,
         turn_number=2, goal="hi",
         summary=SummaryDTO(chat_id=chat_id, last_updated_turn=1),
@@ -161,7 +161,7 @@ async def test_writer_raw_tail_appended_and_carried_to_save(_writer):
     compacted = SummaryDTO(chat_id=chat_id, goals=["g"], last_updated_turn=2)
     _writer._compactor.compact = AsyncMock(return_value=compacted)
 
-    wm = WorkingMemory(
+    wm = TurnMemory(
         chat_id=chat_id, user_id=None, tenant_id=None,
         turn_number=2, goal="",
         summary=SummaryDTO(chat_id=chat_id, raw_tail="prev tail", last_updated_turn=1),
@@ -181,7 +181,7 @@ async def test_writer_swallows_extractor_exception(_writer):
     chat_id = uuid4()
     _writer._extractor.extract = AsyncMock(side_effect=RuntimeError("boom"))
 
-    wm = WorkingMemory(
+    wm = TurnMemory(
         chat_id=chat_id, user_id=uuid4(), tenant_id=None,
         turn_number=1, goal="", summary=SummaryDTO.empty(chat_id),
     )

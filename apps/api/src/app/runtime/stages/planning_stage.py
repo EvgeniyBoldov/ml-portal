@@ -47,7 +47,8 @@ logger = get_logger(__name__)
 
 class PlanningOutcomeKind(str, Enum):
     NEEDS_FINAL = "needs_final"        # synthesizer should run
-    PAUSED = "paused"                  # ASK_USER — stop, no synth
+    DIRECT = "direct"                  # planner answered directly; final already emitted
+    PAUSED = "paused"                  # ASK_USER / CLARIFY — stop, no synth
     ABORTED = "aborted"                # planner-driven abort
     FAILED = "failed"                  # planner raised
 
@@ -160,6 +161,32 @@ class PlanningStage:
             # planner records — check after agent execution below.
 
             # --- Dispatch -------------------------------------------------
+            if step.kind == NextStepKind.DIRECT_ANSWER:
+                # Planner answered without touching any agent (small-talk,
+                # chitchat, purely-knowledge reply). Stream its text verbatim
+                # as a single delta + final; no synthesizer roundtrip.
+                answer = (step.final_answer or "").strip()
+                memory.final_answer = answer
+                memory.status = PipelineStopReason.COMPLETED.value
+                await self._memory.save(memory)
+                if answer:
+                    yield PhasedEvent(
+                        RuntimeEvent.delta(answer),
+                        OrchestrationPhase.SYNTHESIS,
+                    )
+                yield PhasedEvent(
+                    RuntimeEvent.final(
+                        answer, sources=[], run_id=str(run_id),
+                    ),
+                    OrchestrationPhase.SYNTHESIS,
+                )
+                self.outcome = PlanningOutcome(
+                    kind=PlanningOutcomeKind.DIRECT,
+                    stop_reason=PipelineStopReason.COMPLETED,
+                    planner_hint=answer,
+                )
+                return
+
             if step.kind == NextStepKind.FINAL:
                 self.outcome = PlanningOutcome(
                     kind=PlanningOutcomeKind.NEEDS_FINAL,
@@ -168,7 +195,7 @@ class PlanningStage:
                 )
                 return
 
-            if step.kind == NextStepKind.ASK_USER:
+            if step.kind in (NextStepKind.ASK_USER, NextStepKind.CLARIFY):
                 question = step.question or "Нужны дополнительные данные для продолжения."
                 memory.add_open_question(question)
                 memory.status = PipelineStopReason.WAITING_INPUT.value

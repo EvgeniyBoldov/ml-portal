@@ -28,7 +28,7 @@ from typing import (
 from uuid import UUID
 
 from app.agents.context import ToolContext
-from app.runtime.contracts import NextStep, TriageDecision
+from app.runtime.contracts import NextStep
 from app.runtime.events import RuntimeEvent
 from app.runtime.memory.working_memory import WorkingMemory
 
@@ -53,45 +53,13 @@ class MemoryPort(Protocol):
 
 
 # --------------------------------------------------------------------------- #
-# Rolling summary                                                              #
+# Planner                                                                      #
 # --------------------------------------------------------------------------- #
-
-
-@runtime_checkable
-class SummaryPort(Protocol):
-    """Produces & persists a rolling dialogue summary at turn end."""
-
-    async def run(
-        self,
-        *,
-        memory: WorkingMemory,
-        user_message: str,
-        assistant_answer: str,
-        recent_messages: Optional[List[Dict[str, Any]]] = None,
-    ) -> Optional[str]: ...
-
-
-# --------------------------------------------------------------------------- #
-# Triage / Planner                                                             #
-# --------------------------------------------------------------------------- #
-
-
-@runtime_checkable
-class TriageServicePort(Protocol):
-    """Stateless classifier — decides final / clarify / orchestrate / resume."""
-
-    async def decide(
-        self,
-        *,
-        request_text: str,
-        memory: WorkingMemory,
-        routable_agents: List[Dict[str, Any]],
-        paused_runs: List[WorkingMemory],
-        platform_config: Dict[str, Any],
-        chat_id: Optional[UUID],
-        tenant_id: UUID,
-        user_id: UUID,
-    ) -> TriageDecision: ...
+#
+# Post-M5: TriageServicePort removed. The planner is the sole decision
+# engine — direct_answer / clarify / call_agent / final / abort all come
+# from a single `next_step` call. SummaryPort removed too — rolling
+# summary is owned by `MemoryWriter` + `SummaryCompactor` now.
 
 
 @runtime_checkable
