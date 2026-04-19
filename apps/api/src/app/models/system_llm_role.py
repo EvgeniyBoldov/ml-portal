@@ -27,6 +27,7 @@ class SystemLLMRoleType(str, Enum):
     PLANNER = "planner"
     SUMMARY = "summary"
     MEMORY = "memory"
+    SYNTHESIZER = "synthesizer"
 
 
 class RetryBackoffType(str, Enum):
@@ -51,7 +52,7 @@ class SystemLLMRole(Base):
     # === Role Identification ===
     role_type: Mapped[str] = mapped_column(
         String(20),
-        CheckConstraint("role_type IN ('triage', 'planner', 'summary', 'memory')", name="check_system_llm_role_type"),
+        CheckConstraint("role_type IN ('triage', 'planner', 'summary', 'memory', 'synthesizer')", name="check_system_llm_role_type"),
         nullable=False,
         comment="Role type: triage | planner | summary | memory"
     )

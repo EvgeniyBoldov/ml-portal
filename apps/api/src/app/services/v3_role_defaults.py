@@ -176,9 +176,35 @@ MEMORY_V3: Dict[str, Any] = {
 }
 
 
+SYNTHESIZER_V3: Dict[str, Any] = {
+    "identity": "Ты — старший инженер корпоративного AI-портала.",
+    "mission": (
+        "Сформируй точный, лаконичный и структурированный ответ для пользователя "
+        "на основе предоставленных фактов и промежуточных результатов агентов."
+    ),
+    "rules": (
+        "Не придумывай того, чего нет в фактах. "
+        "Если данных не хватает — честно отметь это в конце ответа. "
+        "Отвечай на русском, если пользователь писал на русском; иначе — на языке пользователя. "
+        "Не добавляй служебных оговорок про инструменты, планировщика и внутреннюю кухню."
+    ),
+    "safety": "Не раскрывай секреты, токены, пароли и внутренние идентификаторы в финальном тексте.",
+    "output_requirements": (
+        "Формат ответа — связный читаемый текст (markdown допускается только для "
+        "структурирования списков/таблиц/кода, если это помогает восприятию)."
+    ),
+    "temperature": 0.3,
+    "max_tokens": 2000,
+    "timeout_s": 60,
+    "max_retries": 1,
+    "retry_backoff": "none",
+}
+
+
 V3_ROLE_DEFAULTS: Dict[SystemLLMRoleType, Dict[str, Any]] = {
     SystemLLMRoleType.TRIAGE: TRIAGE_V3,
     SystemLLMRoleType.PLANNER: PLANNER_V3,
     SystemLLMRoleType.SUMMARY: SUMMARY_V3,
     SystemLLMRoleType.MEMORY: MEMORY_V3,
+    SystemLLMRoleType.SYNTHESIZER: SYNTHESIZER_V3,
 }

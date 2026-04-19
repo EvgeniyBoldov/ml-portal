@@ -26,19 +26,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.http.clients import LLMClientProtocol
 from app.core.logging import get_logger
+from app.models.system_llm_role import SystemLLMRoleType
 from app.runtime.events import RuntimeEvent
 from app.runtime.memory.working_memory import WorkingMemory
+from app.services.system_llm_role_service import SystemLLMRoleService
 
 logger = get_logger(__name__)
 
 
-DEFAULT_SYSTEM_PROMPT = (
+# Last-resort prompt used only if the DB role cannot be loaded (schema drift,
+# migration not run, etc.). Admins should edit the SYNTHESIZER row in
+# `system_llm_roles` rather than this constant.
+_FALLBACK_SYSTEM_PROMPT = (
     "Ты — старший инженер корпоративного AI-портала. Сформируй точный, "
-    "лаконичный и структурированный ответ для пользователя на основе "
-    "предоставленных фактов и промежуточных результатов агентов. "
-    "Не придумывай того, чего нет в фактах. Если данных не хватает — честно "
-    "отметь это в конце ответа. Отвечай на русском, если пользователь писал "
-    "на русском; иначе — на языке пользователя."
+    "лаконичный ответ для пользователя на основе предоставленных фактов и "
+    "результатов агентов. Не придумывай ничего сверх фактов."
 )
 
 
@@ -77,12 +79,31 @@ class Synthesizer:
             yield RuntimeEvent.final(short_answer, sources=sources, run_id=str(run_id))
             return
 
-        # Full synthesis path.
+        # Full synthesis path. Load role-level config (prompt + model +
+        # temperature + max_tokens) from the SYNTHESIZER system LLM role;
+        # caller-supplied `model` still wins when provided.
+        role_cfg = await self._load_role_config()
+        system_prompt = role_cfg["prompt"]
+        effective_model = model or role_cfg.get("model")
+        params: Dict[str, float] = {}
+        if role_cfg.get("temperature") is not None:
+            params["temperature"] = role_cfg["temperature"]
+        if role_cfg.get("max_tokens") is not None:
+            params["max_tokens"] = role_cfg["max_tokens"]
+
         yield RuntimeEvent.status("synthesizing")
-        messages = self._build_messages(memory, planner_hint=planner_hint)
+        messages = self._build_messages(
+            memory,
+            planner_hint=planner_hint,
+            system_prompt=system_prompt,
+        )
         buffer: List[str] = []
         try:
-            async for chunk in self.llm_client.chat_stream(messages, model=model):
+            async for chunk in self.llm_client.chat_stream(
+                messages,
+                model=effective_model,
+                params=params or None,
+            ):
                 if not chunk:
                     continue
                 buffer.append(chunk)
@@ -116,11 +137,29 @@ class Synthesizer:
             return None
         return text
 
+    async def _load_role_config(self) -> Dict[str, object]:
+        """Load SYNTHESIZER role config from DB with a safe fallback."""
+        try:
+            service = SystemLLMRoleService(self.session)
+            return await service.get_role_config(SystemLLMRoleType.SYNTHESIZER)
+        except Exception as exc:
+            logger.warning(
+                "Synthesizer role config load failed, falling back to defaults: %s",
+                exc,
+            )
+            return {
+                "prompt": _FALLBACK_SYSTEM_PROMPT,
+                "model": None,
+                "temperature": 0.3,
+                "max_tokens": 2000,
+            }
+
     @staticmethod
     def _build_messages(
         memory: WorkingMemory,
         *,
         planner_hint: Optional[str],
+        system_prompt: str,
     ) -> List[Dict[str, str]]:
         parts: List[str] = []
         parts.append(f"Цель: {memory.goal or '(не указана)'}")
@@ -143,7 +182,7 @@ class Synthesizer:
 
         user = "\n\n".join(parts)
         return [
-            {"role": "system", "content": DEFAULT_SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": user},
         ]
 
