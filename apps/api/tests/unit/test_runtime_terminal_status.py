@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.agents.runtime.events import RuntimeEvent, RuntimeEventType
+from app.runtime.events import RuntimeEvent, RuntimeEventType
 from app.services.runtime_terminal_status import (
     ContinuationApiStatus,
     ContinuationTerminalStatus,

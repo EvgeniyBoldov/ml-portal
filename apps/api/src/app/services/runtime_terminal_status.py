@@ -3,7 +3,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any, Dict, Optional, Tuple
 
-from app.agents.runtime.events import RuntimeEvent, RuntimeEventType
+from app.runtime.events import RuntimeEvent, RuntimeEventType
 
 
 class RunTerminalStatus(str, Enum):

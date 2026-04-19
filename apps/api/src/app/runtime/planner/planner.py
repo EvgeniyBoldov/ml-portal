@@ -24,7 +24,6 @@ from app.models.system_llm_role import SystemLLMRoleType
 from app.runtime.contracts import NextStep, NextStepKind
 from app.runtime.llm.structured import StructuredLLMCall, StructuredCallError
 from app.runtime.memory.working_memory import WorkingMemory
-from app.runtime.planner.prompt import PLANNER_SYSTEM_PROMPT
 from app.runtime.planner.validator import validate_next_step
 
 logger = get_logger(__name__)
@@ -93,7 +92,8 @@ class Planner:
             try:
                 result = await self.llm.invoke(
                     role=SystemLLMRoleType.PLANNER,
-                    system_prompt=PLANNER_SYSTEM_PROMPT,
+                    # system_prompt left unset → StructuredLLMCall loads the
+                    # compiled prompt from the active PLANNER system_llm_roles row.
                     payload=payload,
                     schema=PlannerLLMOutput,
                     chat_id=chat_id,

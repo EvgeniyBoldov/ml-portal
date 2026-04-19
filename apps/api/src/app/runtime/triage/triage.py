@@ -29,7 +29,6 @@ from app.models.system_llm_role import SystemLLMRoleType
 from app.runtime.contracts import TriageDecision, TriageIntent
 from app.runtime.llm.structured import StructuredLLMCall, StructuredCallError
 from app.runtime.memory.working_memory import WorkingMemory
-from app.runtime.triage.prompt import TRIAGE_SYSTEM_PROMPT
 
 logger = get_logger(__name__)
 
@@ -91,7 +90,8 @@ class Triage:
         try:
             result = await self.llm.invoke(
                 role=SystemLLMRoleType.TRIAGE,
-                system_prompt=TRIAGE_SYSTEM_PROMPT,
+                # system_prompt left unset → StructuredLLMCall loads the
+                # compiled prompt from the active TRIAGE system_llm_roles row.
                 payload=payload,
                 schema=TriageLLMOutput,
                 chat_id=chat_id,

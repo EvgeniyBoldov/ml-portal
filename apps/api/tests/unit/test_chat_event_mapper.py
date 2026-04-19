@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from app.agents import RuntimeEventType
+from app.runtime.events import RuntimeEventType
 from app.services.chat_event_mapper import ChatEventMapper
 
 
@@ -21,6 +21,7 @@ class TestChatEventMapper:
             "operation": "rag.search",
             "call_id": "1",
             "arguments": {"q": "hi"},
+            "orchestration_envelope": None,
         }
 
     def test_returns_none_for_unhandled_event(self):
@@ -29,18 +30,18 @@ class TestChatEventMapper:
 
         assert mapper.map_runtime_event(event) is None
 
-    def test_maps_planner_action_with_modern_and_legacy_fields(self):
+    def test_maps_planner_step_event(self):
         mapper = ChatEventMapper()
         event = SimpleNamespace(
-            type=RuntimeEventType.PLANNER_ACTION,
+            type=RuntimeEventType.PLANNER_STEP,
             data={
                 "iteration": 3,
-                "action_type": "agent_call",
-                "step_type": "call_agent",
+                "kind": "call_agent",
                 "agent_slug": "netbox",
                 "phase_id": "search",
                 "phase_title": "Поиск",
-                "why": "Нужны данные из NetBox",
+                "rationale": "Нужны данные из NetBox",
+                "risk": "low",
             },
         )
 
@@ -49,6 +50,5 @@ class TestChatEventMapper:
         assert result is not None
         assert result["type"] == "planner_action"
         assert result["agent_slug"] == "netbox"
-        assert result["step_type"] == "call_agent"
-        assert result["tool_slug"] == "netbox"
-        assert result["op"] == "call_agent"
+        assert result["kind"] == "call_agent"
+        assert result["rationale"] == "Нужны данные из NetBox"

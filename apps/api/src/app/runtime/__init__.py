@@ -21,7 +21,18 @@ from app.runtime.contracts import (
     PipelineStopReason,
 )
 from app.runtime.memory.working_memory import WorkingMemory, Fact, AgentResult
-from app.runtime.pipeline import RuntimePipeline
+
+
+def __getattr__(name: str):
+    # Lazy: avoids a circular import via
+    #   pipeline → services.run_store → services.runtime_terminal_status
+    #   → app.runtime.events (which re-enters this package's __init__).
+    if name == "RuntimePipeline":
+        from app.runtime.pipeline import RuntimePipeline
+
+        return RuntimePipeline
+    raise AttributeError(name)
+
 
 __all__ = [
     "RuntimePipeline",
