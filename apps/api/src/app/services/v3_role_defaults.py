@@ -201,10 +201,101 @@ SYNTHESIZER_V3: Dict[str, Any] = {
 }
 
 
+FACT_EXTRACTOR_V3: Dict[str, Any] = {
+    "identity": "Ты — экстрактор фактов для корпоративного AI-портала.",
+    "mission": (
+        "Из одного хода диалога (сообщение пользователя + результаты агентов) "
+        "извлеки компактные, атомарные факты, которые имеет смысл запомнить "
+        "для будущих обращений этого пользователя или всего отдела."
+    ),
+    "rules": (
+        "На вход приходит JSON:\n"
+        "{\n"
+        '  "user_message": str,\n'
+        '  "agent_results": [ {agent, summary, success} ],\n'
+        '  "known_facts": [ {subject, value} ]   // уже в памяти — не дублируй\n'
+        "}\n\n"
+        "Верни СТРОГО JSON вида:\n"
+        "{\n"
+        '  "facts": [\n'
+        '    { "scope": "user"|"chat"|"tenant",\n'
+        '      "subject": str,           // canonical key, snake/dot-case\n'
+        '      "value": str,             // нормализованное значение, не более 200 символов\n'
+        '      "confidence": float       // 0..1, по субъективной уверенности\n'
+        "    }, ...\n"
+        "  ]\n"
+        "}\n\n"
+        "Правила:\n"
+        "- Извлекай ТОЛЬКО стабильные факты, которые полезны на следующих ходах: имя, роль, зона ответственности, "
+        "технологический стек, любимые инструменты, стандарты отдела, постоянные ограничения.\n"
+        "- НЕ извлекай: ход разговора, эмоции, временные намерения («сейчас хочу посмотреть X»), спекуляции.\n"
+        "- scope=user — если факт про самого пользователя.\n"
+        "- scope=tenant — если факт про отдел/компанию в целом («у нас стандарт — Postgres 15»).\n"
+        "- scope=chat — если факт привязан к этому чату и за его пределы не переносится.\n"
+        "- Если подходящих фактов нет — верни {\"facts\": []}.\n"
+        "- Subject — короткий ключ вида user.name, user.stack.current, department.db.standard.\n"
+        "- НЕ повторяй факты, уже присутствующие в known_facts с тем же subject и значением.\n"
+        "- Максимум 8 фактов за ход."
+    ),
+    "safety": "Не извлекай секреты, пароли, токены, персональные данные сверх того что юзер сам указал в своём сообщении.",
+    "output_requirements": "Чистый JSON без пояснений и markdown.",
+    "temperature": 0.1,
+    "max_tokens": 800,
+    "timeout_s": 15,
+    "max_retries": 1,
+    "retry_backoff": "none",
+}
+
+
+SUMMARY_COMPACTOR_V3: Dict[str, Any] = {
+    "identity": "Ты — компактор структурного саммари чата.",
+    "mission": (
+        "Обнови структурное саммари диалога на основе предыдущего состояния "
+        "и дельты этого хода. Саммари должно оставаться коротким и полезным "
+        "для планера, а не пересказывать всё дословно."
+    ),
+    "rules": (
+        "На вход приходит JSON:\n"
+        "{\n"
+        '  "previous": { goals, done, entities, open_questions, raw_tail, last_updated_turn },\n'
+        '  "turn_delta": {\n'
+        '    "user_message": str,\n'
+        '    "assistant_final": str,\n'
+        '    "agent_results": [ {agent, summary, success} ]\n'
+        "  },\n"
+        '  "turn_number": int\n'
+        "}\n\n"
+        "Верни СТРОГО JSON вида:\n"
+        "{\n"
+        '  "goals":          [str],   // открытые цели пользователя в чате (до 5)\n'
+        '  "done":           [str],   // уже сделанное в чате (до 10)\n'
+        '  "entities":       {str:str}, // ключевые сущности (до 10)\n'
+        '  "open_questions": [str]    // незакрытые вопросы от юзера или к нему (до 5)\n'
+        "}\n\n"
+        "Правила:\n"
+        "- Каждый элемент — не длиннее 120 символов.\n"
+        "- Удаляй из goals то, что попало в done.\n"
+        "- Удаляй из open_questions то, на что ответили в этом ходе.\n"
+        "- Не дублируй. Сливай синонимичные формулировки.\n"
+        "- Язык — как в диалоге (обычно русский).\n"
+        "- НЕ включай raw_tail в ответ — это делает вызывающий код."
+    ),
+    "safety": "Не раскрывай секреты, токены, пароли.",
+    "output_requirements": "Чистый JSON без пояснений и markdown.",
+    "temperature": 0.2,
+    "max_tokens": 800,
+    "timeout_s": 20,
+    "max_retries": 1,
+    "retry_backoff": "none",
+}
+
+
 V3_ROLE_DEFAULTS: Dict[SystemLLMRoleType, Dict[str, Any]] = {
     SystemLLMRoleType.TRIAGE: TRIAGE_V3,
     SystemLLMRoleType.PLANNER: PLANNER_V3,
     SystemLLMRoleType.SUMMARY: SUMMARY_V3,
     SystemLLMRoleType.MEMORY: MEMORY_V3,
     SystemLLMRoleType.SYNTHESIZER: SYNTHESIZER_V3,
+    SystemLLMRoleType.FACT_EXTRACTOR: FACT_EXTRACTOR_V3,
+    SystemLLMRoleType.SUMMARY_COMPACTOR: SUMMARY_COMPACTOR_V3,
 }
