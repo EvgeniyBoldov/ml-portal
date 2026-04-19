@@ -323,16 +323,9 @@ class ChatStreamService:
                         "content": final_content,
                         "sources": final_sources,
                     }
-                    try:
-                        await self.context_service.generate_and_store_summary(
-                            chat_id=tool_ctx.chat_id,
-                            user_message=text_content,
-                            agent_response=final_content,
-                            execution_run_id=event.data.get("run_id"),
-                            tenant_id=tenant_id,
-                        )
-                    except Exception as e:
-                        logger.warning(f"Failed to generate summary: {e}")
+                    # Rolling dialogue summary is produced by the pipeline's
+                    # TurnSummarizer (see app.runtime.summarizer_turn) right
+                    # before FINAL is emitted; nothing to do here.
 
                 elif event.type == RuntimeEventType.STOP:
                     stop_payload = dict(event.data or {})
