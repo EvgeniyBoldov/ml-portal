@@ -64,7 +64,7 @@ class ModelBase(BaseModel):
     model_version: Optional[str] = Field(None, max_length=50, description="Model version (for tracking changes)")
     description: Optional[str] = Field(None, description="Model description")
 
-    model_config = ConfigDict(use_enum_values=True)
+    model_config = ConfigDict(use_enum_values=True, protected_namespaces=())
 
     @field_validator("base_url")
     @classmethod
@@ -96,7 +96,7 @@ class ModelUpdate(BaseModel):
     connector: Optional[ModelConnectorEnum] = None
     base_url: Optional[str] = Field(None, max_length=500)
 
-    model_config = ConfigDict(use_enum_values=True)
+    model_config = ConfigDict(use_enum_values=True, protected_namespaces=())
 
 
 class Model(ModelBase):
@@ -111,7 +111,7 @@ class Model(ModelBase):
     updated_at: datetime
     deleted_at: Optional[datetime] = None
     
-    model_config = ConfigDict(from_attributes=True, use_enum_values=True)
+    model_config = ConfigDict(from_attributes=True, use_enum_values=True, protected_namespaces=())
 
 
 class ModelListResponse(BaseModel):
@@ -136,6 +136,8 @@ class HealthCheckResponse(BaseModel):
     latency_ms: Optional[int] = None
     error: Optional[str] = None
     checked_at: datetime
+
+    model_config = ConfigDict(protected_namespaces=())
 
 
 # Backward compatibility aliases (will be removed after migration)

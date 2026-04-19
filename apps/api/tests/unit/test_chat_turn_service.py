@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -32,7 +31,9 @@ class TestChatTurnService:
     @pytest.mark.asyncio
     async def test_complete_turn_sets_status_and_assistant_message(self, service: ChatTurnService):
         turn = SimpleNamespace(status="started", assistant_message_id=None, agent_run_id=None, completed_at=None)
-        service.get_by_id = AsyncMock(return_value=turn)
+        async def _get_by_id(_turn_id):
+            return turn
+        service.get_by_id = _get_by_id
 
         assistant_message_id = uuid4()
         agent_run_id = uuid4()
@@ -50,7 +51,9 @@ class TestChatTurnService:
     @pytest.mark.asyncio
     async def test_fail_turn_sets_error_message(self, service: ChatTurnService):
         turn = SimpleNamespace(status="started", error_message=None, agent_run_id=None, completed_at=None)
-        service.get_by_id = AsyncMock(return_value=turn)
+        async def _get_by_id(_turn_id):
+            return turn
+        service.get_by_id = _get_by_id
 
         result = await service.fail_turn(uuid4(), error_message="boom")
 

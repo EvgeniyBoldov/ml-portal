@@ -13,7 +13,7 @@ Credentials and RoutingLogs schemas live in their own files:
 from typing import Optional, Dict, Any, List
 from uuid import UUID
 from datetime import datetime
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, model_validator, ConfigDict
 
 # Re-exports for backward compatibility
 from app.schemas.credentials import CredentialCreate, CredentialUpdate, CredentialResponse  # noqa: F401
@@ -94,8 +94,7 @@ class ToolInstanceListItem(BaseModel):
     access_via_instance_id: Optional[UUID] = None
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ToolInstanceResponse(BaseModel):
@@ -116,8 +115,7 @@ class ToolInstanceResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class RuntimeOperationListItem(BaseModel):

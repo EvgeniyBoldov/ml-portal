@@ -27,8 +27,7 @@ class ToolBackendReleaseResponse(BaseModel):
     last_seen_at: Optional[datetime] = None
     synced_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ToolBackendReleaseListItem(BaseModel):
@@ -42,8 +41,7 @@ class ToolBackendReleaseListItem(BaseModel):
     last_seen_at: Optional[datetime] = None
     synced_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -150,8 +148,7 @@ class ToolReleaseResponse(BaseModel):
     # Nested backend release info (full, with schemas)
     backend_release: Optional["ToolBackendReleaseResponse"] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ToolReleaseListItem(BaseModel):
@@ -165,8 +162,7 @@ class ToolReleaseListItem(BaseModel):
     parent_release_id: Optional[UUID] = None
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

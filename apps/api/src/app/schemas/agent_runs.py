@@ -1,7 +1,7 @@
 from typing import Any, Dict, List, Optional
 from datetime import datetime
 from uuid import UUID
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 
 class AgentRunStepResponse(BaseModel):
@@ -20,8 +20,7 @@ class AgentRunStepResponse(BaseModel):
     error: Optional[str] = None
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class AgentRunResponse(BaseModel):
@@ -45,8 +44,7 @@ class AgentRunResponse(BaseModel):
     started_at: datetime
     finished_at: Optional[datetime] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class AgentRunDetailResponse(AgentRunResponse):
@@ -91,8 +89,7 @@ class CapabilityGraphEdgeResponse(BaseModel):
     type: str
     meta: Dict[str, Any] = {}
 
-    class Config:
-        populate_by_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class RuntimeCapabilityGraphResponse(BaseModel):
@@ -131,8 +128,7 @@ class RuntimeHitlPolicyContractResponse(BaseModel):
     operation_policies: List[RuntimeOperationPolicyResponse] = []
     resume_contract: Dict[str, Any] = {}
 
-    class Config:
-        populate_by_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class AgentRunFilter(BaseModel):

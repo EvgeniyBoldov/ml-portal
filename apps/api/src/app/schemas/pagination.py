@@ -1,6 +1,6 @@
 from __future__ import annotations
 from typing import Any, List, Optional
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 
 class PaginationQuery(BaseModel):
     """Query parameters for pagination"""
@@ -8,8 +8,9 @@ class PaginationQuery(BaseModel):
     cursor: Optional[str] = Field(default=None, description="Cursor for pagination")
     order: str = Field(default="desc", description="Sort order: asc or desc")
     
-    @validator('order')
-    def validate_order(cls, v):
+    @field_validator("order")
+    @classmethod
+    def validate_order(cls, v: str) -> str:
         if v not in ['asc', 'desc']:
             raise ValueError('Order must be "asc" or "desc"')
         return v

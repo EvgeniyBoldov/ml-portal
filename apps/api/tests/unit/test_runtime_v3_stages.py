@@ -26,12 +26,14 @@ from app.runtime.stages.triage_stage import TriageOutcomeKind, TriageStage
 class _MemoryPort:
     def __init__(self) -> None:
         self.saved: list[WorkingMemory] = []
+        self.by_run_id: dict = {}
 
     async def save(self, memory: WorkingMemory) -> None:
         self.saved.append(memory.model_copy(deep=True))
+        self.by_run_id[memory.run_id] = memory.model_copy(deep=True)
 
     async def load(self, run_id):
-        return None
+        return self.by_run_id.get(run_id)
 
     async def load_latest_for_chat(self, chat_id):
         return None
@@ -171,6 +173,65 @@ async def test_finalization_stage_runs_synthesizer_and_persists():
     assert memory.finished_at is not None
     assert len(memory_port.saved) >= 1
     summary.run.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_finalization_stage_without_synthesizer_still_persists_and_summarizes():
+    memory = _memory()
+    memory.final_answer = "direct answer"
+    synth = SimpleNamespace(stream=AsyncMock())
+    summary = SimpleNamespace(run=AsyncMock(return_value="summary"))
+    memory_port = _MemoryPort()
+    stage = FinalizationStage(
+        synthesizer=synth,
+        summary=summary,
+        memory_port=memory_port,
+    )
+
+    emitted = [phased async for phased in stage.run(
+        memory=memory,
+        stop_reason=PipelineStopReason.COMPLETED,
+        planner_hint=None,
+        model=None,
+        run_synthesizer=False,
+    )]
+
+    assert emitted == []
+    synth.stream.assert_not_called()
+    summary.run.assert_awaited_once()
+    assert memory.status == PipelineStopReason.COMPLETED.value
+    assert len(memory_port.saved) >= 1
+
+
+@pytest.mark.asyncio
+async def test_planning_stage_planner_exception_marks_failed_and_emits_error():
+    memory = _memory()
+    memory_port = _MemoryPort()
+    planner = SimpleNamespace(next_step=AsyncMock(side_effect=RuntimeError("planner boom")))
+    stage = PlanningStage(
+        planner=planner,
+        agent_executor=SimpleNamespace(execute=lambda **kwargs: _empty_async_iter()),
+        memory_port=memory_port,
+        max_iterations=3,
+        max_wall_time_ms=10_000,
+    )
+
+    events = [phased async for phased in stage.run(
+        memory=memory,
+        request=_request(),
+        ctx=ToolContext(tenant_id=uuid4(), user_id=uuid4(), chat_id=uuid4()),
+        user_id=uuid4(),
+        tenant_id=uuid4(),
+        available_agents=[{"slug": "ops", "description": ""}],
+        platform_config={},
+    )]
+
+    assert events
+    assert events[-1].event.type.value == "error"
+    assert stage.outcome is not None
+    assert stage.outcome.kind == PlanningOutcomeKind.FAILED
+    assert memory.status == PipelineStopReason.FAILED.value
+    assert memory.final_error is not None
 
 
 async def _empty_async_iter():

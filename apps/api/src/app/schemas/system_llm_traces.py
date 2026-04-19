@@ -3,7 +3,7 @@ Pydantic schemas for SystemLLMTrace API.
 """
 from typing import Optional, List, Dict, Any
 from datetime import datetime
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from uuid import UUID
 
 
@@ -61,8 +61,7 @@ class SystemLLMTraceResponse(SystemLLMTraceBase):
     context_variables: Optional[Dict[str, Any]] = Field(None, description="Extracted context variables")
     fallback_details: Optional[Dict[str, Any]] = Field(None, description="Details of fallback if applied")
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class SystemLLMTraceListResponse(BaseModel):
@@ -70,8 +69,7 @@ class SystemLLMTraceListResponse(BaseModel):
     traces: List[SystemLLMTraceResponse] = Field(..., description="List of traces")
     total: int = Field(..., description="Total number of traces")
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class TraceStatisticsResponse(BaseModel):
@@ -81,8 +79,7 @@ class TraceStatisticsResponse(BaseModel):
     days: int = Field(..., description="Number of days analyzed")
     statistics: Dict[str, Any] = Field(..., description="Statistics data")
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class TraceAnalysisRequest(BaseModel):
@@ -98,5 +95,4 @@ class TraceAnalysisResponse(BaseModel):
     results: Dict[str, Any] = Field(..., description="Analysis results")
     insights: List[str] = Field(..., description="Key insights from the analysis")
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

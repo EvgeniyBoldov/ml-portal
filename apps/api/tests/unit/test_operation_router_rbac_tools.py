@@ -119,6 +119,83 @@ async def test_operation_router_reuses_effective_permissions_override():
 
 
 @pytest.mark.asyncio
+async def test_operation_router_marks_collection_bound_instance_without_profile_as_missing():
+    router = OperationRouter(session=MagicMock())
+    effective_permissions = EffectivePermissions(
+        tool_permissions={},
+        default_tool_allow=True,
+        default_collection_allow=True,
+    )
+    router.runtime_rbac_resolver.resolve_effective_permissions = AsyncMock(
+        return_value=effective_permissions
+    )
+
+    bound_instance = _instance(
+        config={
+            "binding_type": "collection_asset",
+            "collection_id": str(uuid4()),
+            "collection_slug": "tickets",
+        }
+    )
+    router.data_instance_resolver.resolve = AsyncMock(
+        return_value=[
+            SimpleNamespace(
+                instance=bound_instance,
+                profile=None,
+                provider=None,
+                readiness_reason="ready",
+                runtime_domain="collection.table",
+            )
+        ]
+    )
+    router.operation_resolver.resolve_for_instance = AsyncMock(return_value=[])
+
+    result = await router.resolve(user_id=uuid4(), tenant_id=uuid4())
+
+    assert result.missing.collections == [f"{bound_instance.slug} (no semantic profile)"]
+    router.operation_resolver.resolve_for_instance.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_operation_router_marks_collection_as_missing_on_rbac_deny():
+    router = OperationRouter(session=MagicMock())
+    effective_permissions = EffectivePermissions(
+        tool_permissions={},
+        default_tool_allow=True,
+        default_collection_allow=False,
+    )
+    router.runtime_rbac_resolver.resolve_effective_permissions = AsyncMock(
+        return_value=effective_permissions
+    )
+
+    bound_instance = _instance(
+        slug="collection-tickets",
+        config={
+            "binding_type": "collection_asset",
+            "collection_id": str(uuid4()),
+            "collection_slug": "tickets",
+        },
+    )
+    router.data_instance_resolver.resolve = AsyncMock(
+        return_value=[
+            SimpleNamespace(
+                instance=bound_instance,
+                profile=object(),
+                provider=None,
+                readiness_reason="ready",
+                runtime_domain="collection.table",
+            )
+        ]
+    )
+    router.operation_resolver.resolve_for_instance = AsyncMock(return_value=[])
+
+    result = await router.resolve(user_id=uuid4(), tenant_id=uuid4())
+
+    assert result.missing.collections == ["tickets (rbac_denied)"]
+    router.operation_resolver.resolve_for_instance.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_data_instance_resolver_marks_provider_unhealthy_as_missing():
     session = MagicMock()
     instance_service = MagicMock()

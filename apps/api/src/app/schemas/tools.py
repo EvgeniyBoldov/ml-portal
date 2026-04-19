@@ -8,7 +8,7 @@ Pattern:
 from typing import Optional, List
 from datetime import datetime
 from uuid import UUID
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 from app.schemas.tool_releases import (
     ToolReleaseListItem,
@@ -48,8 +48,7 @@ class ToolListItem(BaseModel):
     has_current_version: bool = False
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ToolDetailResponse(BaseModel):
@@ -66,5 +65,4 @@ class ToolDetailResponse(BaseModel):
     releases: List[ToolReleaseListItem] = []
     current_version: Optional[ToolReleaseResponse] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

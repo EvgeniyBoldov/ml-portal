@@ -142,6 +142,8 @@ async def _runtime_tool_summary(
     db: AsyncSession,
     instance: ToolInstance,
 ) -> tuple[int, int, List[RuntimeOperationListItem]]:
+    if str(getattr(instance, "instance_kind", "")).strip().lower() != "data":
+        return 0, 0, []
     if not getattr(instance, "is_active", False):
         return 0, 0, []
 

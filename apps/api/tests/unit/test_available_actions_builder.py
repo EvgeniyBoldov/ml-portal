@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from app.agents.available_actions import AvailableActionsBuilder
+from app.agents.available_actions import AvailableActionsBuilder, _normalize_risk
 from app.agents.contracts import ProviderExecutionTarget, ResolvedOperation
 
 
@@ -52,3 +52,9 @@ async def test_available_actions_keeps_high_risk_operations_without_env_hardcode
     assert len(actions.operations) == 1
     assert actions.operations[0].operation_slug == "instance.jira-prod.jira.issue.delete"
     assert actions.operations[0].risk_level == "high"
+
+
+def test_normalize_risk_defaults_to_medium_for_unknown_values():
+    assert _normalize_risk(None) == "medium"
+    assert _normalize_risk("critical") == "medium"
+    assert _normalize_risk(" HIGH ") == "high"

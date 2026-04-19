@@ -11,6 +11,13 @@ from app.models.agent import Agent
 from app.models.agent_version import AgentVersion
 
 
+def _normalize_risk(value: Optional[str]) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"low", "medium", "high"}:
+        return normalized
+    return "medium"
+
+
 def _schema_hint(input_schema: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     if not input_schema:
         return None
@@ -74,7 +81,7 @@ class AvailableActionsBuilder:
                     description=resolved_operation.description,
                     input_schema_hint=_schema_hint(resolved_operation.input_schema),
                     side_effects=resolved_operation.side_effects,
-                    risk_level=resolved_operation.risk_level,
+                    risk_level=_normalize_risk(resolved_operation.risk_level),
                     idempotent=resolved_operation.idempotent,
                     requires_confirmation=resolved_operation.requires_confirmation,
                     credential_scope=resolved_operation.credential_scope,

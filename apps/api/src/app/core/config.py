@@ -2,7 +2,7 @@ from __future__ import annotations
 import os
 from functools import lru_cache
 from pydantic_settings import BaseSettings
-from pydantic import Field, ConfigDict, validator
+from pydantic import Field, ConfigDict, field_validator, ValidationInfo
 
 class Settings(BaseSettings):
     # Environment
@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     # Supported providers: openai, groq, azure, local, vllm, ollama, etc.
     LLM_PROVIDER: str = Field(default="groq", description="LLM provider name (for logging/monitoring)")
     LLM_BASE_URL: str = Field(default="https://api.groq.com/openai/v1", description="OpenAI-compatible API base URL")
-    LLM_API_KEY: str | None = Field(default=None, description="API key for LLM provider")
+    LLM_API_KEY: str | None = Field(default=None, description="API key for LLM provider", validate_default=True)
     LLM_DEFAULT_MODEL: str = Field(default="llama-3.1-8b-instant", description="Default model to use")
     LLM_TIMEOUT: int = Field(default=30, description="Request timeout in seconds")
     
@@ -168,18 +168,20 @@ class Settings(BaseSettings):
         case_sensitive=False
     )
 
-    @validator("JWT_SECRET")
-    def validate_jwt_secret(cls, v, values):
+    @field_validator("JWT_SECRET")
+    @classmethod
+    def validate_jwt_secret(cls, v: str, info: ValidationInfo) -> str:
         """Ensure JWT secret is not default in production"""
-        env = values.get("ENV", "local")
+        env = info.data.get("ENV", "local")
         if env != "local" and v == "change-me-in-production":
             raise ValueError("JWT_SECRET must be set in non-local environments")
         return v
 
-    @validator("LLM_API_KEY", always=True)
-    def validate_llm_api_key(cls, v, values):
+    @field_validator("LLM_API_KEY")
+    @classmethod
+    def validate_llm_api_key(cls, v: str | None, info: ValidationInfo) -> str:
         """Ensure LLM API key is set (except in local/dev)"""
-        env = os.getenv("ENV", values.get("ENV", "local"))
+        env = os.getenv("ENV", info.data.get("ENV", "local"))
         
         # Allow empty in local/dev, require in production
         if not v and env not in ["local", "development"]:
@@ -187,10 +189,11 @@ class Settings(BaseSettings):
         
         return v or "dev-key-placeholder"
 
-    @validator("S3_SECRET_KEY")
-    def validate_s3_secret(cls, v, values):
+    @field_validator("S3_SECRET_KEY")
+    @classmethod
+    def validate_s3_secret(cls, v: str, info: ValidationInfo) -> str:
         """Ensure S3 secret is not default in production"""
-        env = values.get("ENV", "local")
+        env = info.data.get("ENV", "local")
         if env != "local" and v == "minioadmin":
             raise ValueError("S3_SECRET_KEY must be set in non-local environments")
         return v

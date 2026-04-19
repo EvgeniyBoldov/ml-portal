@@ -29,7 +29,7 @@ def test_discovered_semantic_override_wins_over_instance_provider_config():
                 }
             }
         },
-        discovered_semantic_override={
+        draft_semantic_overrides={
             "title": "Discovered override title",
             "side_effects": "none",
             "risk_level": "low",
@@ -56,12 +56,12 @@ def test_discovered_semantic_override_can_set_examples_and_flags():
         instance_domain="collection.table",
         instance_config={},
         provider_config={},
-        discovered_semantic_override={
+        draft_semantic_overrides={
             "risk_flags": ["tenant_sensitive", "audit_required"],
-            "examples": [{"input": {"query": "urgent"}, "note": "Search urgent"}],
+            "semantic_profile": {"examples": ["Search urgent"]},
         },
     )
 
     assert semantics.quality == "curated"
     assert semantics.risk_flags == ["tenant_sensitive", "audit_required"]
-    assert semantics.examples == [{"input": {"query": "urgent"}, "note": "Search urgent"}]
+    assert semantics.examples == ["Search urgent"]

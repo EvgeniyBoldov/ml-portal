@@ -177,8 +177,7 @@ class CollectionResponse(BaseModel):
     created_at: str
     updated_at: str
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class CollectionListResponse(BaseModel):
@@ -325,8 +324,7 @@ class CollectionVersionResponse(BaseModel):
     created_at: str
     updated_at: str
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 CollectionResponse.model_rebuild()

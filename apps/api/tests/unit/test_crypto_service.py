@@ -136,8 +136,10 @@ class TestKeyDerivation:
     
     def test_same_key_same_result(self):
         """Same master key should produce consistent encryption"""
+        CryptoService.reset()
         with patch.dict('os.environ', {'CREDENTIALS_MASTER_KEY': 'consistent-key'}):
             service1 = CryptoService()
+            CryptoService.reset()
             service2 = CryptoService()
         
         payload = {"secret": "value"}
@@ -152,10 +154,12 @@ class TestKeyDerivation:
         """Different master key should fail to decrypt"""
         payload = {"secret": "value"}
         
+        CryptoService.reset()
         with patch.dict('os.environ', {'CREDENTIALS_MASTER_KEY': 'key-one'}):
             service1 = CryptoService()
             encrypted = service1.encrypt(payload)
         
+        CryptoService.reset()
         with patch.dict('os.environ', {'CREDENTIALS_MASTER_KEY': 'key-two'}):
             service2 = CryptoService()
             

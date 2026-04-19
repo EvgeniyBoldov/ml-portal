@@ -6,7 +6,7 @@ from uuid import UUID
 from datetime import datetime
 from enum import Enum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from app.models.user import Users
 from app.models.rag import DocumentScope
 
@@ -55,8 +55,7 @@ class UserResponse(BaseModel):
     created_at: datetime = Field(..., description="User creation time")
     updated_at: datetime = Field(..., description="User last update time")
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class UserCreate(BaseModel):
@@ -91,6 +90,4 @@ class UserUpdate(BaseModel):
     can_trigger_reindex: Optional[bool] = None
     can_manage_users: Optional[bool] = None
     
-    class Config:
-        validate_assignment = True
-
+    model_config = ConfigDict(validate_assignment=True)
