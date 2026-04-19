@@ -4,15 +4,17 @@ Runtime ports — Protocols that describe the boundaries of the pipeline.
 The pipeline (and its stages) depend on these abstractions, not on concrete
 adapters. Concrete adapters live next to them:
 
-    MemoryPort              ← app.runtime.memory.repository.WorkingMemoryRepository
-    SummaryPort             ← app.runtime.summarizer_turn.TurnSummarizer
     AgentExecutionPort      ← app.runtime.agent_executor.AgentExecutor
     SynthesizerPort         ← app.runtime.synthesizer.Synthesizer
-    TriageServicePort       ← app.runtime.triage.triage.Triage
     PlannerServicePort      ← app.runtime.planner.planner.Planner
 
 Keeping these as Protocols (structural typing) means we do not force existing
 adapters to inherit — they already match by method shape.
+
+Post-M6: MemoryPort / TriageServicePort / SummaryPort are all gone.
+Cross-turn memory is owned by FactStore + SummaryStore via
+MemoryBuilder/MemoryWriter; triage was subsumed by the planner; rolling
+summary is done by SummaryCompactor inside MemoryWriter.
 """
 from __future__ import annotations
 
@@ -31,25 +33,6 @@ from app.agents.context import ToolContext
 from app.runtime.contracts import NextStep
 from app.runtime.events import RuntimeEvent
 from app.runtime.memory.working_memory import WorkingMemory
-
-
-# --------------------------------------------------------------------------- #
-# Persistence                                                                  #
-# --------------------------------------------------------------------------- #
-
-
-@runtime_checkable
-class MemoryPort(Protocol):
-    """Persistence adapter for WorkingMemory. The runtime only speaks the
-    domain model — storage details (JSONB, columns, FKs) are hidden."""
-
-    async def save(self, memory: WorkingMemory) -> None: ...
-
-    async def load(self, run_id: UUID) -> Optional[WorkingMemory]: ...
-
-    async def load_latest_for_chat(self, chat_id: UUID) -> Optional[WorkingMemory]: ...
-
-    async def load_paused_for_chat(self, chat_id: UUID) -> List[WorkingMemory]: ...
 
 
 # --------------------------------------------------------------------------- #

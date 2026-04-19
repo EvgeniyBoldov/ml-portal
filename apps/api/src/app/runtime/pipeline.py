@@ -96,7 +96,6 @@ class RuntimePipeline:
             tenant_id=tenant_id,
             chat_id=chat_id,
         )
-        await self._assembler.memory.save(memory)
 
         # --- Planning (single decision engine) --------------------------
         explicit_slug = request.agent_slug

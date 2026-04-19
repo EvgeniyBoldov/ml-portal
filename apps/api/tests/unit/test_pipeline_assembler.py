@@ -26,7 +26,6 @@ def _assembler() -> PipelineAssembler:
 def test_pipeline_assembler_cached_properties_are_singletons_per_pipeline():
     assembler = _assembler()
 
-    assert assembler.memory is assembler.memory
     assert assembler.memory_builder is assembler.memory_builder
     assert assembler.memory_writer is assembler.memory_writer
     assert assembler.planner is assembler.planner
@@ -46,7 +45,6 @@ def test_pipeline_assembler_stage_factories_return_fresh_instances():
     assert planning_stage_1 is not planning_stage_2
     assert planning_stage_1._planner is assembler.planner
     assert planning_stage_1._agent is assembler.agent_executor
-    assert planning_stage_1._memory is assembler.memory
     assert planning_stage_1._max_iterations == 3
     assert planning_stage_1._max_wall_time_ms == 1000
 
@@ -54,14 +52,14 @@ def test_pipeline_assembler_stage_factories_return_fresh_instances():
     final_stage_2 = assembler.build_finalization_stage()
     assert final_stage_1 is not final_stage_2
     assert final_stage_1._synth is assembler.synthesizer
-    assert final_stage_1._memory is assembler.memory
 
 
 def test_pipeline_assembler_does_not_expose_removed_adapters():
-    """Defensive: triage / summary / resume should truly be gone so
-    accidental references (e.g. during rebases) fail loudly."""
+    """Defensive: triage / summary / resume / memory persistence should
+    truly be gone so accidental references fail loudly after rebase."""
     assembler = _assembler()
     assert not hasattr(assembler, "triage")
     assert not hasattr(assembler, "summary")
     assert not hasattr(assembler, "resume")
+    assert not hasattr(assembler, "memory")  # M6: legacy WM persistence gone
     assert not hasattr(assembler, "build_triage_stage")

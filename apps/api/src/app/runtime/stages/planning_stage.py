@@ -38,7 +38,6 @@ from app.runtime.memory.working_memory import (
 )
 from app.runtime.ports import (
     AgentExecutionPort,
-    MemoryPort,
     PlannerServicePort,
 )
 
@@ -69,13 +68,11 @@ class PlanningStage:
         *,
         planner: PlannerServicePort,
         agent_executor: AgentExecutionPort,
-        memory_port: MemoryPort,
         max_iterations: int,
         max_wall_time_ms: int,
     ) -> None:
         self._planner = planner
         self._agent = agent_executor
-        self._memory = memory_port
         self._max_iterations = max_iterations
         self._max_wall_time_ms = max_wall_time_ms  # reserved for deadline checks
         self.outcome: Optional[PlanningOutcome] = None
@@ -121,7 +118,6 @@ class PlanningStage:
                 memory.status = PipelineStopReason.FAILED.value
                 memory.final_error = f"planner_exception: {exc}"
                 memory.finished_at = datetime.now(timezone.utc)
-                await self._memory.save(memory)
                 yield PhasedEvent(
                     RuntimeEvent.error(f"Planner failed: {exc}", recoverable=False),
                     OrchestrationPhase.PLANNER,
@@ -141,7 +137,6 @@ class PlanningStage:
                 rationale=step.rationale,
             )
             memory.add_planner_step(step_record)
-            await self._memory.save(memory)
 
             yield PhasedEvent(
                 RuntimeEvent.planner_step(
@@ -168,7 +163,6 @@ class PlanningStage:
                 answer = (step.final_answer or "").strip()
                 memory.final_answer = answer
                 memory.status = PipelineStopReason.COMPLETED.value
-                await self._memory.save(memory)
                 if answer:
                     yield PhasedEvent(
                         RuntimeEvent.delta(answer),
@@ -199,7 +193,6 @@ class PlanningStage:
                 question = step.question or "Нужны дополнительные данные для продолжения."
                 memory.add_open_question(question)
                 memory.status = PipelineStopReason.WAITING_INPUT.value
-                await self._memory.save(memory)
                 yield PhasedEvent(
                     RuntimeEvent.waiting_input(question, run_id=str(run_id)),
                     OrchestrationPhase.PLANNER,
@@ -222,7 +215,6 @@ class PlanningStage:
                 memory.status = PipelineStopReason.ABORTED.value
                 memory.final_error = step.rationale
                 memory.finished_at = datetime.now(timezone.utc)
-                await self._memory.save(memory)
                 yield PhasedEvent(
                     RuntimeEvent.error(f"Aborted: {step.rationale}", recoverable=False),
                     OrchestrationPhase.PLANNER,
@@ -248,7 +240,6 @@ class PlanningStage:
             ):
                 yield PhasedEvent(event, OrchestrationPhase.AGENT)
 
-            await self._memory.save(memory)
 
             if memory.detect_loop():
                 memory.add_fact(

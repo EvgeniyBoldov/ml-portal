@@ -1,16 +1,16 @@
 """
-FinalizationStage — synthesizer + terminal persist.
+FinalizationStage — synthesizer stream + terminal state flag.
 
 Invoked by the pipeline when PlanningStage reports NEEDS_FINAL (planner
 FINAL, loop-detected, max-iters). The planner's DIRECT_ANSWER path
 emits its final event inside PlanningStage itself and does NOT come
 through here.
 
-Cross-turn summary rolling was a concern of this stage in the v3.0
-pipeline; it now lives in `MemoryWriter` (which the pipeline invokes
-after every turn — success, pause, or abort). This stage only owns
-the synthesizer stream and writing the terminal state of the legacy
-WorkingMemory.
+Post-M6: no persistence anywhere in the pipeline proper. Cross-turn
+memory is owned by FactStore + DialogueSummaryStore via
+MemoryBuilder/MemoryWriter; there is nothing left to persist at the
+stage level. The runtime-state `WorkingMemory` object is scoped to a
+single turn and garbage-collected with it.
 """
 from __future__ import annotations
 
@@ -22,22 +22,20 @@ from app.runtime.contracts import PipelineStopReason
 from app.runtime.envelope import PhasedEvent
 from app.runtime.events import OrchestrationPhase
 from app.runtime.memory.working_memory import WorkingMemory
-from app.runtime.ports import MemoryPort, SynthesizerPort
+from app.runtime.ports import SynthesizerPort
 
 logger = get_logger(__name__)
 
 
 class FinalizationStage:
-    """Produces the final answer stream and commits terminal state."""
+    """Produces the final answer stream and flips the turn to terminal."""
 
     def __init__(
         self,
         *,
         synthesizer: SynthesizerPort,
-        memory_port: MemoryPort,
     ) -> None:
         self._synth = synthesizer
-        self._memory = memory_port
 
     async def run(
         self,
@@ -48,13 +46,7 @@ class FinalizationStage:
         model: Optional[str],
         run_synthesizer: bool = True,
     ) -> AsyncIterator[PhasedEvent]:
-        """Drive synthesizer → terminal persist.
-
-        `run_synthesizer=False` is retained as a kwarg for the rare case
-        where a caller needs the terminal-persist side effect without a
-        synth stream (currently unused). Default behaviour runs the
-        synthesizer.
-        """
+        """Drive synthesizer and set the in-memory terminal flags."""
         if run_synthesizer:
             async for event in self._synth.stream(
                 memory=memory,
@@ -66,16 +58,3 @@ class FinalizationStage:
 
         memory.status = stop_reason.value
         memory.finished_at = datetime.now(timezone.utc)
-        await self._persist(memory)
-
-    # ------------------------------------------------------------------ #
-    # Helpers                                                            #
-    # ------------------------------------------------------------------ #
-
-    async def _persist(self, memory: WorkingMemory) -> None:
-        try:
-            await self._memory.save(memory)
-        except Exception as exc:
-            logger.warning(
-                "Failed to persist WorkingMemory run=%s: %s", memory.run_id, exc
-            )

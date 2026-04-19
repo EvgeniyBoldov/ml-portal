@@ -20,13 +20,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.http.clients import LLMClientProtocol
 from app.runtime.agent_executor import AgentExecutor
-from app.runtime.memory import WorkingMemoryRepository
 from app.runtime.memory.builder import MemoryBuilder
 from app.runtime.memory.writer import MemoryWriter
 from app.runtime.planner import Planner
 from app.runtime.ports import (
     AgentExecutionPort,
-    MemoryPort,
     PlannerServicePort,
     SynthesizerPort,
 )
@@ -55,18 +53,6 @@ class PipelineAssembler:
     # ------------------------------------------------------------------ #
     # Adapters (cached for the pipeline's lifetime)                      #
     # ------------------------------------------------------------------ #
-
-    @cached_property
-    def memory(self) -> MemoryPort:
-        """Legacy WorkingMemory persistence (`execution_memories` table).
-
-        Still used until the legacy WorkingMemory class is retired in M6 —
-        the planner / synthesizer mutate a WorkingMemory per turn and the
-        pipeline needs somewhere to persist intermediate state so paused
-        runs can resume. New FactStore/SummaryStore handle cross-turn
-        memory independently.
-        """
-        return WorkingMemoryRepository(self._session)
 
     @cached_property
     def memory_builder(self) -> MemoryBuilder:
@@ -109,13 +95,9 @@ class PipelineAssembler:
         return PlanningStage(
             planner=self.planner,
             agent_executor=self.agent_executor,
-            memory_port=self.memory,
             max_iterations=max_iterations,
             max_wall_time_ms=max_wall_time_ms,
         )
 
     def build_finalization_stage(self) -> FinalizationStage:
-        return FinalizationStage(
-            synthesizer=self.synthesizer,
-            memory_port=self.memory,
-        )
+        return FinalizationStage(synthesizer=self.synthesizer)
