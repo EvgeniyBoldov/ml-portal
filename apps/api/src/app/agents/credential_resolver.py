@@ -5,17 +5,19 @@ from uuid import UUID
 
 from app.agents.contracts import OperationCredentialContext
 from app.models.tool_instance import ToolInstance
+from app.services.credential_scope_resolver import (
+    CredentialScopeResolver,
+    OperationFlags,
+)
 from app.services.credential_service import CredentialService
-
-PLATFORM_CREDENTIAL_STRATEGY = "PLATFORM_ONLY"
 
 
 class RuntimeCredentialResolver:
     """Resolves execution credentials for runtime operations.
 
-    Current policy is intentionally strict and simple:
-    - resolve only platform-level credentials
-    - ignore operation credential_scope for now
+    Strategy selection is delegated to `CredentialScopeResolver` so that
+    risk-aware scope cascades (user-first for risky ops, platform-first for
+    read-only ones) can evolve without touching this resolver.
     """
 
     def __init__(
@@ -23,9 +25,11 @@ class RuntimeCredentialResolver:
         credential_service: CredentialService,
         *,
         mcp_credential_broker_enabled: bool,
+        scope_resolver: Optional[CredentialScopeResolver] = None,
     ) -> None:
         self.credential_service = credential_service
         self.mcp_credential_broker_enabled = bool(mcp_credential_broker_enabled)
+        self.scope_resolver = scope_resolver or CredentialScopeResolver()
 
     async def resolve_for_execution(
         self,
@@ -34,11 +38,21 @@ class RuntimeCredentialResolver:
         user_id: UUID,
         tenant_id: UUID,
         credential_scope: str = "any",
+        risk_level: str = "low",
+        side_effects: str = "none",
+        requires_confirmation: bool = False,
     ) -> Optional[OperationCredentialContext]:
         if instance.is_local:
             return None
 
-        strategy = PLATFORM_CREDENTIAL_STRATEGY
+        flags = OperationFlags(
+            risk_level=risk_level,  # type: ignore[arg-type]
+            side_effects=side_effects,  # type: ignore[arg-type]
+            requires_confirmation=bool(requires_confirmation),
+            credential_scope=credential_scope,  # type: ignore[arg-type]
+        )
+        strategy = self.scope_resolver.resolve_strategy(flags)
+
         if self.mcp_credential_broker_enabled:
             reference = await self.credential_service.resolve_credential_reference(
                 instance_id=instance.id,

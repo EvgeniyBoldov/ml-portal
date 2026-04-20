@@ -80,15 +80,14 @@ class OperationRouter:
         tenant_id: UUID,
         *,
         effective_permissions: Optional[EffectivePermissions] = None,
-        default_tool_allow: bool = True,
         default_collection_allow: bool = True,
         sandbox_overrides: Optional[Dict[str, Any]] = None,
+        **_legacy_kwargs,
     ) -> OperationResolveResult:
         if effective_permissions is None:
             effective_permissions = await self.runtime_rbac_resolver.resolve_effective_permissions(
                 user_id=user_id,
                 tenant_id=tenant_id,
-                default_tool_allow=default_tool_allow,
                 default_collection_allow=default_collection_allow,
             )
         instances = await self.data_instance_resolver.resolve()

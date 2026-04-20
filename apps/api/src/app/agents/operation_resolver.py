@@ -68,12 +68,18 @@ class RuntimeOperationResolver:
         user_id: UUID,
         tenant_id: UUID,
         credential_scope: str = "any",
+        risk_level: str = "low",
+        side_effects: str = "none",
+        requires_confirmation: bool = False,
     ) -> Optional[OperationCredentialContext]:
         return await self.credential_resolver.resolve_for_execution(
             instance,
             user_id=user_id,
             tenant_id=tenant_id,
             credential_scope=credential_scope,
+            risk_level=risk_level,
+            side_effects=side_effects,
+            requires_confirmation=requires_confirmation,
         )
 
     async def _load_discovered_capabilities(

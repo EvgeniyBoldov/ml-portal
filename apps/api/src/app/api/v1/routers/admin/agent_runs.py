@@ -62,7 +62,6 @@ async def get_runtime_capability_graph(
     resolved = await OperationRouter(session).resolve(
         user_id=runtime_user_id,
         tenant_id=tenant_id,
-        default_tool_allow=True,
         default_collection_allow=True,
     )
 
@@ -121,7 +120,6 @@ async def get_runtime_hitl_policy(
     resolved = await OperationRouter(session).resolve(
         user_id=runtime_user_id,
         tenant_id=tenant_id,
-        default_tool_allow=True,
         default_collection_allow=True,
     )
     platform_config = await PlatformSettingsProvider.get_instance().get_config(session)

@@ -86,11 +86,6 @@ class OperationBuilder:
         raw_operation_name = discovered_tool.slug
         if not raw_operation_name.strip():
             return None
-        if not self.runtime_rbac_resolver.is_tool_allowed(
-            effective_permissions=effective_permissions,
-            tool_slug=raw_operation_name,
-        ):
-            return None
 
         resolution: Optional[ResolvedTool] = await self.tool_resolver.resolve(
             discovered_tool=discovered_tool,
@@ -142,6 +137,9 @@ class OperationBuilder:
                     user_id=user_id,
                     tenant_id=tenant_id,
                     credential_scope=resolution.credential_scope,
+                    risk_level=resolution.risk_level,
+                    side_effects=resolution.side_effects,
+                    requires_confirmation=resolution.requires_confirmation,
                 )
                 if credential_context is None and provider_type == "mcp":
                     credential_context = await resolve_execution_credentials(
@@ -149,6 +147,9 @@ class OperationBuilder:
                         user_id=user_id,
                         tenant_id=tenant_id,
                         credential_scope=resolution.credential_scope,
+                        risk_level=resolution.risk_level,
+                        side_effects=resolution.side_effects,
+                        requires_confirmation=resolution.requires_confirmation,
                     )
             resolved_has_credentials = credential_context is not None or provider_for_target.is_local
             if not credential_context:

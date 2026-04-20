@@ -41,7 +41,7 @@ def _local_instance() -> ToolInstance:
 
 
 @pytest.mark.asyncio
-async def test_runtime_credential_resolver_uses_platform_only_strategy_without_broker():
+async def test_runtime_credential_resolver_uses_explicit_scope_strategy_without_broker():
     service = SimpleNamespace(
         resolve_credentials=AsyncMock(
             return_value=SimpleNamespace(
@@ -64,11 +64,11 @@ async def test_runtime_credential_resolver_uses_platform_only_strategy_without_b
     assert context is not None
     service.resolve_credentials.assert_awaited_once()
     call = service.resolve_credentials.await_args
-    assert call.kwargs["strategy"] == "PLATFORM_ONLY"
+    assert call.kwargs["strategy"] == "USER_ONLY"
 
 
 @pytest.mark.asyncio
-async def test_runtime_credential_resolver_uses_platform_only_reference_with_broker():
+async def test_runtime_credential_resolver_uses_explicit_scope_with_broker():
     cred_id = uuid4()
     service = SimpleNamespace(
         resolve_credential_reference=AsyncMock(
@@ -93,7 +93,7 @@ async def test_runtime_credential_resolver_uses_platform_only_reference_with_bro
     assert context.owner_type == "platform"
     service.resolve_credential_reference.assert_awaited_once()
     call = service.resolve_credential_reference.await_args
-    assert call.kwargs["strategy"] == "PLATFORM_ONLY"
+    assert call.kwargs["strategy"] == "TENANT_ONLY"
 
 
 @pytest.mark.asyncio

@@ -28,40 +28,25 @@ class RuntimeRbacResolver:
         *,
         user_id: Optional[UUID],
         tenant_id: Optional[UUID],
-        default_tool_allow: bool,
         default_collection_allow: bool,
+        **_legacy_kwargs,
     ) -> EffectivePermissions:
-        effective_default_tool_allow = bool(default_tool_allow)
         effective_default_collection_allow = bool(default_collection_allow)
 
         # Test mode: for any undefined resource fallback to allow.
         if self.allow_undefined:
-            effective_default_tool_allow = True
             effective_default_collection_allow = True
 
         if not self.enforce_rules:
             return EffectivePermissions(
-                default_tool_allow=effective_default_tool_allow,
                 default_collection_allow=effective_default_collection_allow,
             )
 
         return await self.permission_service.resolve_permissions(
             user_id=user_id,
             tenant_id=tenant_id,
-            default_tool_allow=effective_default_tool_allow,
             default_collection_allow=effective_default_collection_allow,
         )
-
-    def is_tool_allowed(
-        self,
-        effective_permissions: Optional[EffectivePermissions],
-        tool_slug: str,
-    ) -> bool:
-        if not tool_slug.strip():
-            return False
-        if effective_permissions is None:
-            return True
-        return bool(effective_permissions.is_tool_allowed(tool_slug))
 
     def is_collection_allowed(
         self,

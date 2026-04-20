@@ -20,8 +20,6 @@ async def test_prompt_assembler_renders_collection_description_and_entity_type_w
     router = OperationRouter(session=MagicMock())
 
     effective_permissions = EffectivePermissions(
-        tool_permissions={},
-        default_tool_allow=True,
         default_collection_allow=True,
     )
     router.runtime_rbac_resolver.resolve_effective_permissions = AsyncMock(return_value=effective_permissions)

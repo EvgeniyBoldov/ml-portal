@@ -61,7 +61,6 @@ async def _resolve_collection_permissions(
     return await resolver.resolve_effective_permissions(
         user_id=user_uuid,
         tenant_id=tenant_id,
-        default_tool_allow=True,
         default_collection_allow=True,
     )
 
