@@ -20,22 +20,9 @@ def apply_operation_policy_filter(
     forbid_destructive = bool(platform_config.get("forbid_destructive", False))
     forbid_write_in_prod = bool(platform_config.get("forbid_write_in_prod", False))
     forbid_high_risk = bool(platform_config.get("forbid_high_risk", False))
-    allow_derived_semantic_operations = bool(
-        platform_config.get("allow_derived_semantic_operations", True)
-    )
 
-    if not (
-        forbid_destructive
-        or forbid_write_in_prod
-        or forbid_high_risk
-        or not allow_derived_semantic_operations
-    ):
+    if not (forbid_destructive or forbid_write_in_prod or forbid_high_risk):
         return set()
-
-    semantic_by_instance_slug = {
-        instance.slug: instance.semantic_source
-        for instance in operation_result.resolved_data_instances
-    }
 
     kept_operations: List[ResolvedOperation] = []
     filtered_slugs: Set[str] = set()
@@ -47,11 +34,6 @@ def apply_operation_policy_filter(
         if forbid_write_in_prod and side_effects in {"write", "destructive"}:
             blocked = True
         if forbid_high_risk and operation.risk_level == "high":
-            blocked = True
-        if (
-            not allow_derived_semantic_operations
-            and semantic_by_instance_slug.get(operation.data_instance_slug) == "derived_collection"
-        ):
             blocked = True
 
         if blocked:

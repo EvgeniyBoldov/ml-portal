@@ -23,7 +23,7 @@ def test_aggregate_linked_runtime_counts_ready_and_operations():
             slug="jira-stage",
             domain="jira",
             is_runtime_ready=False,
-            runtime_readiness_reason="missing_active_semantic_profile",
+            runtime_readiness_reason="runtime_disabled_by_policy",
             semantic_source="none",
             discovered_tools_count=12,
             runtime_operations_count=0,

@@ -30,20 +30,4 @@ export const aiGenerateApi = {
       }
     );
   },
-
-  /**
-   * Generate content for tool version
-   */
-  async generateToolVersion(
-    toolId: string,
-    data: VersionGenerateRequest
-  ): Promise<VersionGenerateResponse> {
-    return apiRequest<VersionGenerateResponse>(
-      `/admin/ai-generate/tools/${toolId}/versions/generate`,
-      {
-        method: 'POST',
-        body: JSON.stringify(data),
-      }
-    );
-  },
 };

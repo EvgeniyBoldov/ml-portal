@@ -257,59 +257,11 @@ def _normalize_str_list(value: Any) -> list[str]:
     return result
 
 
-class CollectionSemanticProfileSchema(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    summary: str = ""
-    entity_types: list[str] = Field(default_factory=list)
-    use_cases: str = ""
-    limitations: str = ""
-    examples: list[str] = Field(default_factory=list)
-
-    @model_validator(mode="before")
-    @classmethod
-    def normalize(cls, value: Any) -> Any:
-        payload = value if isinstance(value, dict) else {}
-        return {
-            "summary": _normalize_text(payload.get("summary") or payload.get("description")),
-            "entity_types": _normalize_str_list(payload.get("entity_types")),
-            "use_cases": _normalize_text(payload.get("use_cases")),
-            "limitations": _normalize_text(payload.get("limitations")),
-            "examples": _normalize_str_list(payload.get("examples")),
-        }
-
-
-class CollectionPolicyHintsSchema(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    dos: list[str] = Field(default_factory=list)
-    donts: list[str] = Field(default_factory=list)
-    guardrails: list[str] = Field(default_factory=list)
-    citation_rules: list[str] = Field(default_factory=list)
-    sensitive_fields: list[str] = Field(default_factory=list)
-
-    @model_validator(mode="before")
-    @classmethod
-    def normalize(cls, value: Any) -> Any:
-        payload = value if isinstance(value, dict) else {}
-        return {
-            "dos": _normalize_str_list(payload.get("dos")),
-            "donts": _normalize_str_list(payload.get("donts")),
-            "guardrails": _normalize_str_list(payload.get("guardrails")),
-            "citation_rules": _normalize_str_list(payload.get("citation_rules")),
-            "sensitive_fields": _normalize_str_list(payload.get("sensitive_fields")),
-        }
-
-
 class CollectionVersionCreate(BaseModel):
-    semantic_profile: CollectionSemanticProfileSchema = Field(default_factory=CollectionSemanticProfileSchema)
-    policy_hints: CollectionPolicyHintsSchema = Field(default_factory=CollectionPolicyHintsSchema)
     notes: Optional[str] = None
 
 
 class CollectionVersionUpdate(BaseModel):
-    semantic_profile: Optional[CollectionSemanticProfileSchema] = None
-    policy_hints: Optional[CollectionPolicyHintsSchema] = None
     notes: Optional[str] = None
 
 
@@ -318,8 +270,6 @@ class CollectionVersionResponse(BaseModel):
     collection_id: uuid.UUID
     version: int
     status: str = CollectionVersionStatus.DRAFT.value
-    semantic_profile: CollectionSemanticProfileSchema = Field(default_factory=CollectionSemanticProfileSchema)
-    policy_hints: CollectionPolicyHintsSchema = Field(default_factory=CollectionPolicyHintsSchema)
     notes: Optional[str] = None
     created_at: str
     updated_at: str

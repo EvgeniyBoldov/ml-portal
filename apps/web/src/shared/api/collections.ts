@@ -42,43 +42,21 @@ export interface VectorConfig {
   overlap: number;
 }
 
-export interface CollectionSemanticProfile {
-  summary: string;
-  entity_types: string[];
-  use_cases: string;
-  limitations: string;
-  examples: string[];
-}
-
-export interface CollectionPolicyHints {
-  dos: string[];
-  donts: string[];
-  guardrails: string[];
-  citation_rules: string[];
-  sensitive_fields: string[];
-}
-
 export interface CollectionVersion {
   id: string;
   collection_id: string;
   version: number;
   status: string;
-  semantic_profile: CollectionSemanticProfile;
-  policy_hints: CollectionPolicyHints;
   notes?: string | null;
   created_at: string;
   updated_at: string;
 }
 
 export interface CollectionVersionCreate {
-  semantic_profile?: CollectionSemanticProfile;
-  policy_hints?: CollectionPolicyHints;
   notes?: string | null;
 }
 
 export interface CollectionVersionUpdate {
-  semantic_profile?: CollectionSemanticProfile;
-  policy_hints?: CollectionPolicyHints;
   notes?: string | null;
 }
 

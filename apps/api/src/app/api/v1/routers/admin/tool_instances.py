@@ -14,7 +14,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.agents.operation_publication import build_runtime_operation_slug, resolve_publication
-from app.agents.tool_semantics import build_tool_semantics
 from app.api.deps import db_session, require_admin
 from app.core.security import UserCtx
 from app.models.discovered_tool import DiscoveredTool
@@ -80,29 +79,21 @@ def _materialize_runtime_operations(
             continue
         seen.add(operation_slug)
 
-        semantics = build_tool_semantics(
-            slug=discovered_tool.slug,
-            source=discovered_tool.source,
-            discovered_name=discovered_tool.name,
-            discovered_description=discovered_tool.description,
-            input_schema=discovered_tool.input_schema or {},
-            domains=discovered_tool.domains or [],
-            instance_slug=instance.slug,
-            instance_domain=runtime_domain,
-            instance_config=instance.config or {},
-            provider_config=provider.config or {},
-            draft_semantic_overrides={},
-        )
+        # Defaults for runtime metadata; MCP schema does not carry these today.
+        risk_level = "low"
+        side_effects = "none"
+        idempotent = True
+        requires_confirmation = False
         semantic_override = getattr(discovered_tool, "semantic_override", None)
         if isinstance(semantic_override, dict):
             if "risk_level" in semantic_override:
-                semantics.risk_level = str(semantic_override["risk_level"])
+                risk_level = str(semantic_override["risk_level"])
             if "side_effects" in semantic_override:
-                semantics.side_effects = str(semantic_override["side_effects"])
+                side_effects = str(semantic_override["side_effects"])
             if "idempotent" in semantic_override:
-                semantics.idempotent = bool(semantic_override["idempotent"])
+                idempotent = bool(semantic_override["idempotent"])
             if "requires_confirmation" in semantic_override:
-                semantics.requires_confirmation = bool(semantic_override["requires_confirmation"])
+                requires_confirmation = bool(semantic_override["requires_confirmation"])
         items.append(
             RuntimeOperationListItem(
                 operation_slug=operation_slug,
@@ -110,10 +101,10 @@ def _materialize_runtime_operations(
                 source=discovered_tool.source,
                 discovered_tool_slug=discovered_tool.slug,
                 provider_instance_slug=provider.slug if provider else None,
-                risk_level=semantics.risk_level,
-                side_effects=semantics.side_effects,
-                idempotent=semantics.idempotent,
-                requires_confirmation=semantics.requires_confirmation,
+                risk_level=risk_level,
+                side_effects=side_effects,
+                idempotent=idempotent,
+                requires_confirmation=requires_confirmation,
             )
         )
     return items

@@ -41,7 +41,6 @@ from app.services.collection.schema_evolution_service import CollectionSchemaEvo
 from app.services.collection.lifecycle_service import CollectionLifecycleService
 from app.services.collection.schema_contract_service import CollectionSchemaContractService
 from app.services.collection.query_service import CollectionQueryService
-from app.services.collection.type_profiles import get_collection_type_profile
 
 logger = get_logger(__name__)
 _UNSET = object()
@@ -224,13 +223,16 @@ class CollectionService:
         Legacy SQL collections may have no local table/fields; this method bootstraps
         required schema on first read/write from collection data endpoints.
         """
-        profile = get_collection_type_profile(collection.collection_type)
-        if profile.expected_data_connector_subtype() is None:
+        collection_type = str(collection.collection_type or "").strip().lower()
+        if collection_type not in {CollectionType.SQL.value, CollectionType.API.value}:
             return
 
         changed = False
         current_fields = list(collection.fields or [])
-        next_fields = profile.ensure_specific_fields(self.contract, current_fields)
+        if collection_type == CollectionType.SQL.value:
+            next_fields = self.contract.ensure_sql_preset_fields(current_fields)
+        else:
+            next_fields = current_fields
         if next_fields != current_fields:
             collection.fields = next_fields
             changed = True
@@ -393,7 +395,12 @@ class CollectionService:
                     raise InvalidSchemaError(f"Data instance {data_instance_id} is not active")
                 if instance.connector_type != "data":
                     raise InvalidSchemaError(f"Connector {data_instance_id} is not a data connector")
-                expected_subtype = get_collection_type_profile(collection.collection_type).expected_data_connector_subtype()
+                expected_subtype = None
+                normalized_type = str(collection.collection_type or "").strip().lower()
+                if normalized_type == CollectionType.SQL.value:
+                    expected_subtype = "sql"
+                elif normalized_type == CollectionType.API.value:
+                    expected_subtype = "api"
                 if expected_subtype and str(instance.connector_subtype or "").strip().lower() != expected_subtype:
                     raise InvalidSchemaError(f"Connector {data_instance_id} is not {expected_subtype} subtype")
             collection.data_instance_id = data_instance_id
@@ -421,30 +428,19 @@ class CollectionService:
         self,
         collection_id: uuid.UUID,
         *,
-        semantic_profile: Optional[dict] = None,
-        policy_hints: Optional[dict] = None,
         notes: Optional[str] = None,
     ) -> CollectionVersion:
-        return await self.versions.create_version(
-            collection_id,
-            semantic_profile=semantic_profile,
-            policy_hints=policy_hints,
-            notes=notes,
-        )
+        return await self.versions.create_version(collection_id, notes=notes)
 
     async def update_version(
         self,
         collection_id: uuid.UUID,
         version: int,
         *,
-        semantic_profile: Any = _UNSET,
-        policy_hints: Any = _UNSET,
         notes: Any = _UNSET,
     ) -> CollectionVersion:
         return await self.versions.update_version(
             collection_id, version,
-            semantic_profile=semantic_profile if semantic_profile is not _UNSET else None,
-            policy_hints=policy_hints if policy_hints is not _UNSET else None,
             notes=notes if notes is not _UNSET else None,
             _UNSET=_UNSET,
         )

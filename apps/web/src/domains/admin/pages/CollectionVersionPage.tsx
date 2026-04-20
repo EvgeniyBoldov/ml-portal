@@ -13,96 +13,14 @@ import {
 } from '@/shared/hooks/useVersionLifecycleActions';
 import { useCollectionVersionEditor } from '@/shared/api/hooks';
 
-const PROFILE_FIELDS: FieldConfig[] = [
-  {
-    key: 'summary',
-    type: 'textarea',
-    label: 'Краткое описание',
-    description: 'Одним абзацем: что это за коллекция и какую фактуру в ней искать.',
-    placeholder: 'Регламенты эксплуатации и резервного копирования внутренних сервисов.',
-    rows: 4,
-  },
-  {
-    key: 'entity_types',
-    type: 'tags',
-    label: 'Типы сущностей',
-    description: 'Короткие типы данных без пробелов. Нужны LLM, чтобы понять природу записей.',
-    placeholder: 'document record incident',
-  },
-  {
-    key: 'use_cases',
-    type: 'textarea',
-    label: 'Когда использовать',
-    description: 'Какие запросы агент должен направлять в эту коллекцию.',
-    placeholder: 'Когда нужно найти регламент, подтвердить расписание бэкапов или проверить внутреннюю инструкцию.',
-    rows: 5,
-  },
-  {
-    key: 'limitations',
-    type: 'textarea',
-    label: 'Ограничения',
-    description: 'Что здесь неполно, ненадежно или чего тут точно нет.',
-    placeholder: 'Не содержит фактический статус систем и не подходит для проверки live-состояния инфраструктуры.',
-    rows: 5,
-  },
-  {
-    key: 'examples',
-    type: 'textarea',
-    label: 'Примеры запросов',
-    description: 'По одному примеру на строку. Это помогает LLM понять ожидаемые пользовательские вопросы.',
-    placeholder: 'Во сколько выполняется инкрементальное резервное копирование?\nГде описан регламент восстановления PostgreSQL?',
-    rows: 5,
-  },
+const DETAILS_FIELDS: FieldConfig[] = [
   {
     key: 'notes',
     type: 'textarea',
     label: 'Заметки к версии',
-    description: 'Что изменилось именно в этой версии профайла.',
-    placeholder: 'Уточнил ограничения и добавил примеры вопросов для поиска по регламентам.',
-    rows: 3,
-  },
-];
-
-const POLICY_FIELDS: FieldConfig[] = [
-  {
-    key: 'policy_dos',
-    type: 'textarea',
-    label: 'Что делать',
-    description: 'По одному правилу на строку. Ожидаемое поведение агента при работе с коллекцией.',
-    placeholder: 'Ссылайся на найденный документ по названию.\nУточняй период или систему, если запрос пользователя расплывчатый.',
-    rows: 5,
-  },
-  {
-    key: 'policy_donts',
-    type: 'textarea',
-    label: 'Чего не делать',
-    description: 'Запреты и анти-паттерны при работе с данными коллекции.',
-    placeholder: 'Не выдумывай регламент, если документ не найден.\nНе подменяй факт из документа общими знаниями модели.',
-    rows: 5,
-  },
-  {
-    key: 'policy_guardrails',
-    type: 'textarea',
-    label: 'Границы и проверки',
-    description: 'Какие проверки и оговорки агент обязан делать перед выводом.',
-    placeholder: 'Если найдено несколько похожих документов, покажи различия.\nЕсли данные устарели, явно скажи об этом в ответе.',
-    rows: 5,
-  },
-  {
-    key: 'policy_citation_rules',
-    type: 'textarea',
-    label: 'Правила цитирования',
-    description: 'Как ссылаться на источник и какие детали нужно тащить в ответ.',
-    placeholder: 'Указывай название документа и релевантный фрагмент.\nДля табличных данных указывай ключевые поля строки, по которым был сделан вывод.',
-    rows: 5,
-  },
-  {
-    key: 'policy_sensitive_fields',
-    type: 'textarea',
-    label: 'Чувствительные поля',
-    description: 'По одному полю или категории на строку. Что нельзя раскрывать без отдельного решения.',
-    placeholder: 'password\napi_key\npassport_data',
-    rows: 4,
+    description: 'Произвольные заметки для команды о том, что изменилось в версии.',
+    placeholder: 'Например: обновили описание коллекции и entity_type на карточке коллекции.',
+    rows: 6,
   },
 ];
 
@@ -209,13 +127,13 @@ export function CollectionVersionPage() {
       onCancel={isEditable ? handleCancel : undefined}
       actionButtons={isEditable ? undefined : actionButtons}
     >
-      <Tab title="Профайл" layout="grid" id="profile">
+      <Tab title="Версия" layout="grid" id="version">
         <Block
-          title="Профайл коллекции"
-          icon="sparkles"
+          title="Сведения"
+          icon="file-text"
           iconVariant="info"
           width="2/3"
-          fields={PROFILE_FIELDS}
+          fields={DETAILS_FIELDS}
           data={viewData}
           editable={isEditable}
           onChange={handleFieldChange}
@@ -228,19 +146,6 @@ export function CollectionVersionPage() {
           fields={META_FIELDS}
           data={metaData}
           editable={false}
-        />
-      </Tab>
-
-      <Tab title="Policy Hints" layout="grid" id="policy">
-        <Block
-          title="Правила использования"
-          icon="shield"
-          iconVariant="warn"
-          width="full"
-          fields={POLICY_FIELDS}
-          data={viewData}
-          editable={isEditable}
-          onChange={handleFieldChange}
         />
       </Tab>
     </EntityPageV2>

@@ -164,14 +164,10 @@ class ResolvedDataInstance(BaseModel):
     placement: Literal["local", "remote"]
     provider_instance_id: Optional[str] = None
     provider_instance_slug: Optional[str] = None
-    semantic_profile_id: Optional[str] = None
-    semantic_source: Optional[Literal["active_profile", "derived_collection"]] = None
-    summary: Optional[str] = None
-    entity_types: List[str] = Field(default_factory=list)
-    use_cases: Optional[str] = None
-    limitations: Optional[str] = None
-    schema_hints: Optional[Dict[str, Any]] = None
-    examples: Optional[Any] = None
+    # LLM-facing description of the collection / data asset.
+    # Source of truth: Collection.description on the bound collection (nullable).
+    description: Optional[str] = None
+    entity_type: Optional[str] = None
 
 
 class ProviderExecutionTarget(BaseModel):
@@ -217,8 +213,6 @@ class ResolvedOperation(BaseModel):
     systems: List[str] = Field(default_factory=list)
     return_summary: Optional[str] = None
     risk_flags: List[str] = Field(default_factory=list)
-    semantic_quality: Literal["raw", "enriched", "curated"] = "enriched"
-    examples: List[Any] = Field(default_factory=list)
     supports_partial_mode: bool = True
     target: ProviderExecutionTarget
 

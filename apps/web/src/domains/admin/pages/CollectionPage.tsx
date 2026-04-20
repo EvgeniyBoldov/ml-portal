@@ -13,7 +13,6 @@ import {
   type Collection,
   type CreateCollectionRequest,
   type CollectionField,
-  type CollectionVersion,
   type ToolInstanceDetail,
   type CollectionType,
 } from '@/shared/api';
@@ -35,8 +34,6 @@ import {
   STATS_FIELDS,
   VECTOR_STATS_FIELDS,
   STATUS_FIELDS,
-  SEMANTIC_FIELDS,
-  POLICY_FIELDS,
 } from './collection/fields/blockConfigs';
 import {
   ensureSqlPresetFields,
@@ -276,31 +273,6 @@ export function CollectionPage() {
     activeCollectionType,
     { editableCollectionType: false, connectorOptions },
   );
-
-  const currentVersion = useMemo<CollectionVersion | null>(() => {
-    if (collection?.current_version) return collection.current_version;
-    if (!versions.length) return null;
-    if (collection?.current_version_id) {
-      const byId = versions.find((version) => version.id === collection.current_version_id);
-      if (byId) return byId;
-    }
-    const published = versions.find((version) => version.status === 'published');
-    return published ?? versions[0] ?? null;
-  }, [collection?.current_version, collection?.current_version_id, versions]);
-
-  const semanticData = {
-    summary: currentVersion?.semantic_profile?.summary ?? '',
-    entity_types: currentVersion?.semantic_profile?.entity_types ?? [],
-    use_cases: currentVersion?.semantic_profile?.use_cases ?? '',
-    limitations: currentVersion?.semantic_profile?.limitations ?? '',
-    examples: (currentVersion?.semantic_profile?.examples ?? []).join('\n'),
-    notes: currentVersion?.notes ?? '',
-    dos: (currentVersion?.policy_hints?.dos ?? []).join('\n'),
-    donts: (currentVersion?.policy_hints?.donts ?? []).join('\n'),
-    guardrails: (currentVersion?.policy_hints?.guardrails ?? []).join('\n'),
-    citation_rules: (currentVersion?.policy_hints?.citation_rules ?? []).join('\n'),
-    sensitive_fields: (currentVersion?.policy_hints?.sensitive_fields ?? []).join('\n'),
-  };
 
   const runtimeOperations = dataConnector?.runtime_operations ?? [];
 
@@ -589,33 +561,6 @@ export function CollectionPage() {
             loading={sqlCollectionDataLoading}
           />
         </Tab>
-
-        {!isNew && (
-          <Tab
-            title="Семантический слой"
-            layout="grid"
-            id="semantic"
-          >
-            <Block
-              title="Semantic Profile (актуальная версия)"
-              icon="sparkles"
-              iconVariant="info"
-              width="1/2"
-              fields={SEMANTIC_FIELDS}
-              data={semanticData}
-              editable={false}
-            />
-            <Block
-              title="Policy Hints (актуальная версия)"
-              icon="shield"
-              iconVariant="warn"
-              width="1/2"
-              fields={POLICY_FIELDS}
-              data={semanticData}
-              editable={false}
-            />
-          </Tab>
-        )}
 
         {!isNew && (
           <Tab

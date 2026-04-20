@@ -222,20 +222,3 @@ export const STATUS_FIELDS: FieldConfig[] = [
     editable: false,
   },
 ];
-
-export const SEMANTIC_FIELDS: FieldConfig[] = [
-  { key: 'summary', type: 'textarea', label: 'Summary', editable: false, rows: 4 },
-  { key: 'entity_types', type: 'tags', label: 'Entity types', editable: false },
-  { key: 'use_cases', type: 'textarea', label: 'Use cases', editable: false, rows: 4 },
-  { key: 'limitations', type: 'textarea', label: 'Limitations', editable: false, rows: 4 },
-  { key: 'examples', type: 'textarea', label: 'Examples', editable: false, rows: 4 },
-  { key: 'notes', type: 'textarea', label: 'Notes', editable: false, rows: 3 },
-];
-
-export const POLICY_FIELDS: FieldConfig[] = [
-  { key: 'dos', type: 'textarea', label: 'Do', editable: false, rows: 4 },
-  { key: 'donts', type: 'textarea', label: 'Don’t', editable: false, rows: 4 },
-  { key: 'guardrails', type: 'textarea', label: 'Guardrails', editable: false, rows: 4 },
-  { key: 'citation_rules', type: 'textarea', label: 'Citation rules', editable: false, rows: 4 },
-  { key: 'sensitive_fields', type: 'textarea', label: 'Sensitive fields', editable: false, rows: 4 },
-];

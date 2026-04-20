@@ -6,10 +6,13 @@ from typing import List, Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agents.collection_resolver import CollectionResolver
-from app.agents.derived_semantics import DerivedSemanticProfile
+from app.models.collection import Collection
 from app.models.tool_instance import ToolInstance
-from app.services.collection_binding import resolve_collection_runtime_domain
+from app.services.collection_binding import (
+    has_collection_binding,
+    resolve_bound_collection,
+    resolve_collection_runtime_domain,
+)
 from app.services.tool_instance_service import ToolInstanceService
 
 
@@ -17,24 +20,22 @@ from app.services.tool_instance_service import ToolInstanceService
 class AllowedDataInstance:
     instance: ToolInstance
     provider: Optional[ToolInstance]
-    profile: Optional[DerivedSemanticProfile]
+    collection: Optional[Collection]
     readiness_reason: str
     runtime_domain: str
 
 
 class RuntimeDataInstanceResolver:
-    """Resolve runtime-ready data instances with providers and semantic profiles."""
+    """Resolve runtime-ready data instances with providers and bound collections."""
 
     def __init__(
         self,
         *,
         session: AsyncSession,
         instance_service: ToolInstanceService,
-        collection_resolver: CollectionResolver,
     ) -> None:
         self.session = session
         self.instance_service = instance_service
-        self.collection_resolver = collection_resolver
 
     async def resolve(self) -> List[AllowedDataInstance]:
         stmt = select(ToolInstance).where(
@@ -58,14 +59,14 @@ class RuntimeDataInstanceResolver:
                     AllowedDataInstance(
                         instance=instance,
                         provider=None,
-                        profile=None,
+                        collection=None,
                         readiness_reason=readiness_reason,
                         runtime_domain=runtime_domain,
                     )
                 )
                 continue
 
-            profile = await self._load_active_semantic_profile(instance)
+            collection = await self._load_bound_collection(instance)
             provider = await self._load_provider_instance(instance)
 
             if provider is not None:
@@ -75,7 +76,7 @@ class RuntimeDataInstanceResolver:
                         AllowedDataInstance(
                             instance=instance,
                             provider=None,
-                            profile=None,
+                            collection=None,
                             readiness_reason=f"provider_{provider_reason}",
                             runtime_domain=runtime_domain,
                         )
@@ -86,20 +87,20 @@ class RuntimeDataInstanceResolver:
                 AllowedDataInstance(
                     instance=instance,
                     provider=provider,
-                    profile=profile,
+                    collection=collection,
                     readiness_reason=readiness_reason,
                     runtime_domain=runtime_domain,
                 )
             )
         return resolved
 
-    async def _load_active_semantic_profile(
+    async def _load_bound_collection(
         self,
         instance: ToolInstance,
-    ) -> Optional[DerivedSemanticProfile]:
-        if instance.is_data:
-            return await self.collection_resolver.resolve_for_instance(instance)
-        return None
+    ) -> Optional[Collection]:
+        if not instance.is_data or not has_collection_binding(instance.config):
+            return None
+        return await resolve_bound_collection(self.session, instance.config)
 
     async def _load_provider_instance(
         self,

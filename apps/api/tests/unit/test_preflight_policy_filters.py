@@ -104,7 +104,7 @@ def test_preflight_policy_filters_write_and_destructive_operations():
     assert set(op_result.execution_graph.bindings.keys()) == {"instance.docs.get"}
 
 
-def test_preflight_policy_filters_derived_semantic_operations_when_disabled():
+def test_preflight_policy_ignores_removed_derived_semantic_toggle():
     derived_op = _resolved_operation(
         operation_slug="instance.collection_table.search",
         data_instance_slug="collection-table",
@@ -144,8 +144,11 @@ def test_preflight_policy_filters_derived_semantic_operations_when_disabled():
         platform_config={"allow_derived_semantic_operations": False},
     )
 
-    assert filtered == {"instance.collection_table.search"}
-    assert [op.operation_slug for op in op_result.resolved_operations] == ["instance.jira.search"]
+    assert filtered == set()
+    assert [op.operation_slug for op in op_result.resolved_operations] == [
+        "instance.collection_table.search",
+        "instance.jira.search",
+    ]
 
 
 def test_preflight_policy_filters_high_risk_when_forbidden():

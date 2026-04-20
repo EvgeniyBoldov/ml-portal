@@ -14,7 +14,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import CollectionNotFoundError, InvalidSchemaError
 from app.models.collection import (
     Collection,
-    CollectionType,
     CollectionVersion,
     CollectionVersionStatus,
 )
@@ -56,11 +55,9 @@ class CollectionVersionService:
         self,
         collection_id: UUID,
         *,
-        semantic_profile: dict | None = None,
-        policy_hints: dict | None = None,
         notes: str | None = None,
     ) -> CollectionVersion:
-        """Create a new draft semantic version."""
+        """Create a new draft version."""
         max_version = await self.session.execute(
             select(func.max(CollectionVersion.version)).where(
                 CollectionVersion.collection_id == collection_id
@@ -72,8 +69,6 @@ class CollectionVersionService:
             collection_id=collection_id,
             version=next_version,
             status=CollectionVersionStatus.DRAFT.value,
-            semantic_profile=semantic_profile or {},
-            policy_hints=policy_hints or {},
             notes=notes,
         )
         self.session.add(version)
@@ -85,8 +80,6 @@ class CollectionVersionService:
         collection_id: UUID,
         version: int,
         *,
-        semantic_profile: object = None,
-        policy_hints: object = None,
         notes: object = None,
         _UNSET: object = None,
     ) -> CollectionVersion:
@@ -95,10 +88,6 @@ class CollectionVersionService:
         if version_obj.status != CollectionVersionStatus.DRAFT.value:
             raise InvalidSchemaError("Only draft collection versions can be updated")
 
-        if semantic_profile is not _UNSET and semantic_profile is not None:
-            version_obj.semantic_profile = semantic_profile or {}
-        if policy_hints is not _UNSET and policy_hints is not None:
-            version_obj.policy_hints = policy_hints or {}
         if notes is not _UNSET and notes is not None:
             version_obj.notes = notes
 
@@ -189,32 +178,14 @@ class CollectionVersionService:
 
     @staticmethod
     def build_initial_version(collection: Collection) -> CollectionVersion:
-        """Build the v1 draft version for a newly created collection."""
+        """Build the v1 published version for a newly created collection."""
         return CollectionVersion(
             collection_id=collection.id,
             version=1,
             status=CollectionVersionStatus.PUBLISHED.value,
-            semantic_profile={
-                "summary": collection.description or "",
-                "entity_types": (
-                    ["document"]
-                    if collection.collection_type == CollectionType.DOCUMENT.value
-                    else ["record"]
-                ),
-                "use_cases": "",
-                "limitations": "",
-                "examples": [],
-            },
             retrieval_params={},
             prompt_context_params={},
-            policy_hints={
-                "dos": [],
-                "donts": [],
-                "guardrails": [],
-                "citation_rules": [],
-                "sensitive_fields": [],
-            },
-            notes="Initial semantic version",
+            notes="Initial version",
         )
 
     # ── Backward compat aliases ───────────────────────────────────────────────

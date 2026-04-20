@@ -65,28 +65,12 @@ export interface ToolReleaseListItem {
   parent_release_id: string | null;
 }
 
-export interface ToolSemanticProfile {
-  summary: string;
-  when_to_use: string;
-  limitations: string;
-  examples: string[];
-}
-
-export interface ToolPolicyHints {
-  dos: string[];
-  donts: string[];
-  guardrails: string[];
-  sensitive_inputs: string[];
-}
-
 export interface ToolReleaseResponse {
   id: string;
   tool_id: string;
   version: number;
   backend_release_id: string | null;
   status: 'draft' | 'active' | 'archived';
-  semantic_profile: ToolSemanticProfile;
-  policy_hints: ToolPolicyHints;
   // Meta
   meta_hash: string | null;
   expected_schema_hash: string | null;
@@ -99,14 +83,10 @@ export interface ToolReleaseResponse {
 export interface ToolReleaseCreate {
   backend_release_id?: string | null;
   from_release_id?: string;
-  semantic_profile?: Partial<ToolSemanticProfile> | null;
-  policy_hints?: Partial<ToolPolicyHints> | null;
 }
 
 export interface ToolReleaseUpdate {
   backend_release_id?: string | null;
-  semantic_profile?: Partial<ToolSemanticProfile> | null;
-  policy_hints?: Partial<ToolPolicyHints> | null;
 }
 
 export interface ToolUpdateRequest {

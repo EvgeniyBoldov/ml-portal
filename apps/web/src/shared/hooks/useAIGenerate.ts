@@ -6,7 +6,7 @@ import { aiGenerateApi, type VersionGenerateRequest } from '@/shared/api/aiGener
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
 
 export interface UseAIGenerateOptions {
-  entityType: 'agent' | 'tool';
+  entityType: 'agent';
   entityId: string;
   onSuccess?: (filledFields: Record<string, any>, suggestions: string[]) => void;
 }
@@ -17,13 +17,7 @@ export function useAIGenerate({ entityType, entityId, onSuccess }: UseAIGenerate
   const showSuccess = useSuccessToast();
 
   const generateMutation = useMutation({
-    mutationFn: (data: VersionGenerateRequest) => {
-      if (entityType === 'agent') {
-        return aiGenerateApi.generateAgentVersion(entityId, data);
-      } else {
-        return aiGenerateApi.generateToolVersion(entityId, data);
-      }
-    },
+    mutationFn: (data: VersionGenerateRequest) => aiGenerateApi.generateAgentVersion(entityId, data),
     onSuccess: (response) => {
       showSuccess('Контент сгенерирован успешно');
       onSuccess?.(response.filled_fields, response.suggestions);

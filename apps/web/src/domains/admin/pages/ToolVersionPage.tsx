@@ -1,10 +1,7 @@
 /**
  * ToolVersionPage — просмотр/создание/редактирование версии релиза инструмента.
  *
- * Структура сведена к логичной модели:
- * 1. Основное — версия и backend release
- * 2. Профайл — человекочитаемое описание инструмента
- * 3. Policy Hints — правила и ограничения
+ * После удаления semantic/policy слоя в релизе управляется только backend release.
  */
 import { useEffect } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
@@ -14,33 +11,21 @@ import {
   type ToolDetail,
   type ToolReleaseResponse,
   type ToolReleaseCreate,
-  type ToolReleaseUpdate,
 } from '@/shared/api/toolReleases';
 import { qk } from '@/shared/api/keys';
 import { useVersionEditor } from '@/shared/hooks/useVersionEditor';
 import { getVersionStatusPresentation, useVersionLifecycleActions } from '@/shared/hooks/useVersionLifecycleActions';
-import { AIGenerateButton } from '@/shared/ui';
 import { EntityPageV2, Tab, type BreadcrumbItem } from '@/shared/ui/EntityPage';
 import { Block, type FieldConfig } from '@/shared/ui/GridLayout';
 import {
   TOOL_BACKEND_RELEASE_INFO_FIELDS,
   TOOL_META_FIELDS,
-  TOOL_VERSION_POLICY_FIELDS,
-  TOOL_VERSION_PROFILE_FIELDS,
   buildToolReleasePayload,
   buildToolReleaseVersionData,
 } from '../shared/toolFields';
 
 type ToolReleaseFormData = {
   backend_release_id: string | null;
-  summary: string;
-  when_to_use: string;
-  limitations: string;
-  examples: string;
-  policy_dos: string;
-  policy_donts: string;
-  policy_guardrails: string;
-  policy_sensitive_inputs: string;
 };
 
 function buildBackendReleaseField(options: Array<{ value: string; label: string }>): FieldConfig {
@@ -53,10 +38,6 @@ function buildBackendReleaseField(options: Array<{ value: string; label: string 
   };
 }
 
-function buildBackendReleaseViewFields(): FieldConfig[] {
-  return TOOL_BACKEND_RELEASE_INFO_FIELDS;
-}
-
 function toBackendReleaseOptions(tool: ToolDetail | undefined) {
   return (tool?.backend_releases ?? []).map((release) => ({
     value: release.id,
@@ -66,7 +47,7 @@ function toBackendReleaseOptions(tool: ToolDetail | undefined) {
 
 export function ToolVersionPage() {
   const { id, version: versionParam } = useParams<{ id: string; version: string }>();
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchParams] = useSearchParams();
   const fromVersionParam = searchParams.get('from');
 
   const {
@@ -111,14 +92,6 @@ export function ToolVersionPage() {
       const data = buildToolReleaseVersionData(v);
       return {
         backend_release_id: data?.backend_release_id ? String(data.backend_release_id) : null,
-        summary: data?.summary ?? '',
-        when_to_use: data?.when_to_use ?? '',
-        limitations: data?.limitations ?? '',
-        examples: data?.examples ?? '',
-        policy_dos: data?.policy_dos ?? '',
-        policy_donts: data?.policy_donts ?? '',
-        policy_guardrails: data?.policy_guardrails ?? '',
-        policy_sensitive_inputs: data?.policy_sensitive_inputs ?? '',
       };
     },
     buildCreatePayload: (fd, sourceVersion) => ({
@@ -137,7 +110,6 @@ export function ToolVersionPage() {
 
   const backendReleaseOptions = toBackendReleaseOptions(tool);
   const backendReleaseSelectField = buildBackendReleaseField(backendReleaseOptions);
-  const backendReleaseInfoFields = buildBackendReleaseViewFields();
 
   useEffect(() => {
     if (isCreate && backendReleaseOptions.length > 0 && !formData.backend_release_id) {
@@ -154,19 +126,6 @@ export function ToolVersionPage() {
     { label: isCreate ? 'Новая версия релиза' : `Версия релиза ${versionNumber}` },
   ];
 
-  const availableFields = [
-    { key: 'summary', label: 'Краткое описание', description: 'Чем инструмент полезен' },
-    { key: 'when_to_use', label: 'Когда использовать', description: 'Сценарии применения' },
-    { key: 'limitations', label: 'Ограничения', description: 'Что важно не обещать инструменту' },
-    { key: 'examples', label: 'Примеры', description: 'Несколько примеров запросов' },
-  ];
-
-  const handleAIGenerate = (filledFields: Record<string, unknown>) => {
-    Object.entries(filledFields).forEach(([field, value]) => {
-      handleFieldChange(field, value);
-    });
-  };
-
   const isPrimary = Boolean(tool?.current_version?.id && version?.id && tool.current_version.id === version.id);
   const statusPresentation = getVersionStatusPresentation(version?.status);
 
@@ -174,14 +133,6 @@ export function ToolVersionPage() {
     ? formData
     : buildToolReleaseVersionData(version) ?? {
         backend_release_id: null,
-        summary: '',
-        when_to_use: '',
-        limitations: '',
-        examples: '',
-        policy_dos: '',
-        policy_donts: '',
-        policy_guardrails: '',
-        policy_sensitive_inputs: '',
       };
 
   const metaData = {
@@ -253,48 +204,8 @@ export function ToolVersionPage() {
           icon="database"
           iconVariant="primary"
           width="1/2"
-          fields={isEditable ? [backendReleaseSelectField] : backendViewData.version ? backendReleaseInfoFields : []}
+          fields={isEditable ? [backendReleaseSelectField] : backendViewData.version ? TOOL_BACKEND_RELEASE_INFO_FIELDS : []}
           data={backendViewData}
-          editable={isEditable}
-          onChange={handleFieldChange}
-        />
-      </Tab>
-
-      <Tab title="Профайл" layout="grid" id="profile">
-        <Block
-          title="Профайл инструмента"
-          icon="message-square"
-          iconVariant="info"
-          width="full"
-          fields={TOOL_VERSION_PROFILE_FIELDS}
-          data={viewData}
-          editable={isEditable}
-          onChange={handleFieldChange}
-          headerActions={
-            isEditable ? (
-              <AIGenerateButton
-                entityType="tool"
-                entityId={id || ''}
-                description={tool?.name || ''}
-                availableFields={availableFields}
-                onFieldsFilled={handleAIGenerate}
-                context={{ tool_name: tool?.name }}
-                disabled={!tool?.name}
-                size="sm"
-              />
-            ) : undefined
-          }
-        />
-      </Tab>
-
-      <Tab title="Policy Hints" layout="grid" id="policy-hints">
-        <Block
-          title="Правила использования"
-          icon="shield"
-          iconVariant="primary"
-          width="full"
-          fields={TOOL_VERSION_POLICY_FIELDS}
-          data={viewData}
           editable={isEditable}
           onChange={handleFieldChange}
         />

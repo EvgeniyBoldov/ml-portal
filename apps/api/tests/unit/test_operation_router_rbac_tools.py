@@ -64,7 +64,7 @@ async def test_operation_router_passes_effective_permissions_to_operation_resolv
         return_value=[
             SimpleNamespace(
                 instance=ready_instance,
-                profile=None,
+                collection=None,
                 provider=None,
                 readiness_reason="ready",
                 runtime_domain="collection.table",
@@ -98,7 +98,7 @@ async def test_operation_router_reuses_effective_permissions_override():
         return_value=[
             SimpleNamespace(
                 instance=ready_instance,
-                profile=None,
+                collection=None,
                 provider=None,
                 readiness_reason="ready",
                 runtime_domain="collection.table",
@@ -119,7 +119,7 @@ async def test_operation_router_reuses_effective_permissions_override():
 
 
 @pytest.mark.asyncio
-async def test_operation_router_marks_collection_bound_instance_without_profile_as_missing():
+async def test_operation_router_marks_collection_bound_instance_without_collection_as_missing():
     router = OperationRouter(session=MagicMock())
     effective_permissions = EffectivePermissions(
         tool_permissions={},
@@ -141,7 +141,7 @@ async def test_operation_router_marks_collection_bound_instance_without_profile_
         return_value=[
             SimpleNamespace(
                 instance=bound_instance,
-                profile=None,
+                collection=None,
                 provider=None,
                 readiness_reason="ready",
                 runtime_domain="collection.table",
@@ -152,7 +152,7 @@ async def test_operation_router_marks_collection_bound_instance_without_profile_
 
     result = await router.resolve(user_id=uuid4(), tenant_id=uuid4())
 
-    assert result.missing.collections == [f"{bound_instance.slug} (no semantic profile)"]
+    assert result.missing.collections == [f"{bound_instance.slug} (unresolved_collection_binding)"]
     router.operation_resolver.resolve_for_instance.assert_not_awaited()
 
 
@@ -180,7 +180,7 @@ async def test_operation_router_marks_collection_as_missing_on_rbac_deny():
         return_value=[
             SimpleNamespace(
                 instance=bound_instance,
-                profile=object(),
+                collection=object(),
                 provider=None,
                 readiness_reason="ready",
                 runtime_domain="collection.table",
@@ -199,11 +199,9 @@ async def test_operation_router_marks_collection_as_missing_on_rbac_deny():
 async def test_data_instance_resolver_marks_provider_unhealthy_as_missing():
     session = MagicMock()
     instance_service = MagicMock()
-    collection_resolver = MagicMock()
     resolver = RuntimeDataInstanceResolver(
         session=session,
         instance_service=instance_service,
-        collection_resolver=collection_resolver,
     )
 
     provider = _provider(placement="remote", url="http://mcp.example", health_status="unhealthy")
@@ -222,8 +220,6 @@ async def test_data_instance_resolver_marks_provider_unhealthy_as_missing():
     instance_service.evaluate_instance_readiness = AsyncMock(
         side_effect=[(True, "ready", "linked_provider"), (True, "ready", "none")]
     )
-    collection_resolver.resolve_for_instance = AsyncMock(return_value=None)
-
     instances = await resolver.resolve()
 
     assert len(instances) == 1

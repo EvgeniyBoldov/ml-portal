@@ -341,8 +341,6 @@ def _release_to_response(release) -> ToolReleaseResponse:
         version=release.version,
         backend_release_id=release.backend_release_id,
         status=release.status,
-        semantic_profile=release.semantic_profile or {},
-        policy_hints=release.policy_hints or {},
         # Meta
         meta_hash=release.meta_hash,
         expected_schema_hash=release.expected_schema_hash,

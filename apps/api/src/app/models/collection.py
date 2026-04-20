@@ -477,10 +477,8 @@ class CollectionVersion(Base):
         server_default=CollectionVersionStatus.DRAFT.value,
         index=True,
     )
-    semantic_profile: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     retrieval_params: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     prompt_context_params: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-    policy_hints: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

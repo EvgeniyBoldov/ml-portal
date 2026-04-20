@@ -26,15 +26,6 @@ from app.services.collection.row_service import CollectionRowService
 from app.services.collection.vector_lifecycle import CollectionVectorLifecycleService
 from app.services.collection.schema_contract_service import CollectionSchemaContractService
 from app.services.collection.query_service import CollectionQueryService
-from app.services.collection.type_profiles import (
-    BaseCollectionTypeProfile,
-    TableCollectionTypeProfile,
-    DocumentCollectionTypeProfile,
-    SqlCollectionTypeProfile,
-    ApiCollectionTypeProfile,
-    CollectionDiscoveryResult,
-    get_collection_type_profile,
-)
 
 __all__ = [
     "FIELD_TYPE_TO_PG",
@@ -54,11 +45,4 @@ __all__ = [
     "CollectionVectorLifecycleService",
     "CollectionSchemaContractService",
     "CollectionQueryService",
-    "BaseCollectionTypeProfile",
-    "TableCollectionTypeProfile",
-    "DocumentCollectionTypeProfile",
-    "SqlCollectionTypeProfile",
-    "ApiCollectionTypeProfile",
-    "CollectionDiscoveryResult",
-    "get_collection_type_profile",
 ]

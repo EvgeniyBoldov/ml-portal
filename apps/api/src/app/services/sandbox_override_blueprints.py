@@ -181,24 +181,6 @@ SANDBOX_BLUEPRINTS: List[Dict[str, Any]] = [
                 ],
             ),
             _section(
-                "Семантика",
-                [
-                    _field("summary", "Summary", "semantic_profile.summary", field_type="text"),
-                    _field("when_to_use", "When to use", "semantic_profile.when_to_use", field_type="text"),
-                    _field("limitations", "Limitations", "semantic_profile.limitations", field_type="text"),
-                    _field("examples", "Examples", "semantic_profile.examples", field_type="tags"),
-                ],
-            ),
-            _section(
-                "Policy Hints",
-                [
-                    _field("dos", "What is allowed", "policy_hints.dos", field_type="tags"),
-                    _field("donts", "What is forbidden", "policy_hints.donts", field_type="tags"),
-                    _field("guardrails", "Guardrails", "policy_hints.guardrails", field_type="tags"),
-                    _field("sensitive_inputs", "Sensitive inputs", "policy_hints.sensitive_inputs", field_type="tags"),
-                ],
-            ),
-            _section(
                 "Схемы",
                 [
                     _field("input_schema", "Input schema", "backend_release.input_schema", field_type="json", editable=False, source_key="backend_release.input_schema"),

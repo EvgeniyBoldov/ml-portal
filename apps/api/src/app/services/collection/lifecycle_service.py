@@ -9,8 +9,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import InvalidSchemaError
 from app.models.collection import Collection, CollectionStatus, CollectionType, FieldType
 from app.models.tool_instance import ToolInstance
-from app.services.collection.type_profiles import get_collection_type_profile
 from app.services.rbac_service import RbacService
+
+
+def _expected_data_connector_subtype(collection_type: str) -> Optional[str]:
+    normalized = str(collection_type or "").strip().lower()
+    if normalized == CollectionType.SQL.value:
+        return "sql"
+    if normalized == CollectionType.API.value:
+        return "api"
+    return None
+
+
+def _ensure_type_specific_fields(contract, fields: List[dict], collection_type: str) -> List[dict]:
+    expected_subtype = _expected_data_connector_subtype(collection_type)
+    if expected_subtype == "sql":
+        return contract.ensure_sql_preset_fields(fields)
+    # API/table no longer auto-inject specific fields; document keeps admin-defined preset path.
+    return list(fields or [])
 
 
 class CollectionLifecycleService:
@@ -42,8 +58,8 @@ class CollectionLifecycleService:
         if existing:
             raise self.host.CollectionExistsError(f"Collection '{slug}' already exists")
 
-        profile = get_collection_type_profile(collection_type)
-        is_remote = profile.expected_data_connector_subtype() is not None and data_instance_id is not None
+        expected_subtype = _expected_data_connector_subtype(collection_type)
+        is_remote = expected_subtype is not None and data_instance_id is not None
         if is_remote:
             return await self.create_remote_collection(
                 tenant_id=tenant_id,
@@ -82,8 +98,7 @@ class CollectionLifecycleService:
         collection_type: str = CollectionType.TABLE.value,
     ) -> Collection:
         self.contract.validate_admin_defined_fields(fields, collection_type)
-        profile = get_collection_type_profile(collection_type)
-        fields = profile.ensure_specific_fields(self.contract, fields)
+        fields = _ensure_type_specific_fields(self.contract, fields, collection_type)
 
         if collection_type == CollectionType.DOCUMENT.value:
             if not vector_config:
@@ -205,8 +220,7 @@ class CollectionLifecycleService:
         table_schema: Optional[dict] = None,
     ) -> Collection:
         self.contract.validate_admin_defined_fields(fields, collection_type)
-        profile = get_collection_type_profile(collection_type)
-        fields = profile.ensure_specific_fields(self.contract, fields)
+        fields = _ensure_type_specific_fields(self.contract, fields, collection_type)
         self.contract.validate_fields(fields, collection_type)
 
         if data_instance_id:
@@ -220,7 +234,7 @@ class CollectionLifecycleService:
                 raise InvalidSchemaError(f"Data instance {data_instance_id} is not active")
             if instance.connector_type != "data":
                 raise InvalidSchemaError(f"Connector {data_instance_id} is not a data connector")
-            expected_subtype = profile.expected_data_connector_subtype()
+            expected_subtype = _expected_data_connector_subtype(collection_type)
             if expected_subtype and str(instance.connector_subtype or "").strip().lower() != expected_subtype:
                 raise InvalidSchemaError(
                     f"Connector {data_instance_id} is not {expected_subtype} subtype"
