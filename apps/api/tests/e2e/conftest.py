@@ -10,7 +10,9 @@ import pytest
 import pytest_asyncio
 from httpx import AsyncClient
 
-TEST_API_BASE_URL = os.getenv("TEST_API_BASE_URL", "http://localhost:8080")
+# When tests run inside docker-compose (`docker compose run api pytest ...`),
+# localhost points to the test container itself; use service DNS by default.
+TEST_API_BASE_URL = os.getenv("TEST_API_BASE_URL", "http://api:8000")
 DEFAULT_ADMIN_LOGIN = os.getenv("DEFAULT_ADMIN_LOGIN", "admin")
 DEFAULT_ADMIN_PASSWORD = os.getenv("DEFAULT_ADMIN_PASSWORD", "admin123")
 

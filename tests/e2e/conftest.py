@@ -10,7 +10,9 @@ from uuid import uuid4
 
 
 # Конфигурация из .env.dev
-API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000/api/v1")
+# In docker-compose test runs, pytest executes inside the `api` container,
+# so `localhost` points to the test process itself. Prefer service DNS name.
+API_BASE_URL = os.getenv("API_BASE_URL", "http://api:8000/api/v1")
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@example.com")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
 

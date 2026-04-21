@@ -252,7 +252,7 @@ class TestSystemLLMTraceService:
         # Check the cutoff date
         call_args = mock_repo.delete_older_than.call_args[0]
         cutoff_date = call_args[0]
-        expected_cutoff = datetime.now(timezone.utc) - datetime.timedelta(days=14)
+        expected_cutoff = datetime.now(timezone.utc) - timedelta(days=14)
         assert abs((cutoff_date - expected_cutoff).total_seconds()) < 60  # Within 1 minute
     
     @pytest.mark.asyncio
@@ -351,5 +351,5 @@ class TestSystemLLMTraceService:
         call_args = mock_repo.create.call_args[0][0]
         context_vars = call_args.context_variables
         assert context_vars["available_agents"] == [{"slug": "agent1"}]
-        assert context_vars["available_tools"] == [{"tool_slug": "tool1"}]
+        assert context_vars["available_operations"] == [{"tool_slug": "tool1"}]
         assert context_vars["policies"] == "strict"
