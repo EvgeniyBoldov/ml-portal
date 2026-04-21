@@ -285,7 +285,7 @@ class CollectionLifecycleService:
             raise InvalidSchemaError(f"Data instance {data_instance_id} not found")
         if not instance.is_active:
             raise InvalidSchemaError(f"Data instance {data_instance_id} is not active")
-        if instance.connector_type != "data":
+        if not instance.is_data:
             raise InvalidSchemaError(f"Connector {data_instance_id} is not a data connector")
 
         # ToolInstance currently has no explicit tenant_id column in schema.

@@ -26,6 +26,23 @@ def test_create_request_requires_data_instance_id():
 
 
 @pytest.mark.asyncio
+async def test_create_rejects_missing_data_instance_id_in_service():
+    session = MagicMock()
+    service = CollectionService(session=session)
+    service.get_by_slug = AsyncMock(return_value=None)
+
+    with pytest.raises(InvalidSchemaError, match="data_instance_id is required"):
+        await service.create_collection(
+            tenant_id=uuid4(),
+            slug="devices",
+            name="Devices",
+            fields=[],
+            collection_type="table",
+            data_instance_id=None,
+        )
+
+
+@pytest.mark.asyncio
 async def test_create_rejects_non_data_instance_connector():
     session = MagicMock()
     session.execute = AsyncMock(

@@ -64,5 +64,9 @@ def test_upgrade_cleans_bindings_when_config_column_exists(monkeypatch):
     migration.upgrade()
 
     assert "fk_collections_data_instance_id_tool_instances" in fake_op.created_fk
+    assert any(
+        "ti.connector_type = 'data' OR ti.instance_kind = 'data'" in sql
+        for sql in fake_op.executed_sql
+    )
     assert any("config = config - 'bindings'" in sql for sql in fake_op.executed_sql)
     assert ("collections", "data_instance_id", False) in fake_op.altered_columns

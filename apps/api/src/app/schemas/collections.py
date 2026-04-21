@@ -113,7 +113,6 @@ class UpdateCollectionRequest(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=255)
     description: Optional[str] = None
     is_active: Optional[bool] = None
-    data_instance_id: Optional[uuid.UUID] = None
     table_name: Optional[str] = None
     table_schema: Optional[dict] = None
     schema_ops: List[SchemaOperation] = Field(default_factory=list)
@@ -122,7 +121,7 @@ class UpdateCollectionRequest(BaseModel):
     def validate_non_empty(self) -> "UpdateCollectionRequest":
         has_metadata_patch = bool(
             self.model_fields_set
-            & {"name", "description", "is_active", "data_instance_id", "table_name", "table_schema"}
+            & {"name", "description", "is_active", "table_name", "table_schema"}
         )
         if not has_metadata_patch and not self.schema_ops:
             raise ValueError("At least one mutable collection property or schema operation is required")

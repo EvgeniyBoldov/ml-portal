@@ -61,7 +61,7 @@ def upgrade() -> None:
                   AND c.config IS NOT NULL
                   AND (c.config -> 'bindings' -> 0 ->> 'instance_id') ~* '^[0-9a-f-]{36}$'
                   AND ti.id = ((c.config -> 'bindings' -> 0 ->> 'instance_id')::uuid)
-                  AND ti.instance_kind = 'data'
+                  AND (ti.connector_type = 'data' OR ti.instance_kind = 'data')
                 """
             )
         )

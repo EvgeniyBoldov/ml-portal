@@ -334,7 +334,6 @@ async def update_collection(
         name=body.name if "name" in body.model_fields_set else _UNSET,
         description=body.description if "description" in body.model_fields_set else _UNSET,
         is_active=body.is_active if "is_active" in body.model_fields_set else _UNSET,
-        data_instance_id=body.data_instance_id if "data_instance_id" in body.model_fields_set else _UNSET,
         table_name=body.table_name if "table_name" in body.model_fields_set else _UNSET,
         table_schema=body.table_schema if "table_schema" in body.model_fields_set else _UNSET,
         schema_ops=[op.model_dump() for op in body.schema_ops],
