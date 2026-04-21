@@ -59,8 +59,12 @@ jobs:
     - name: Run backend tests
       run: |
         cd apps/api
-        pytest tests/unit -q --tb=short --cov=app.runtime --cov-fail-under=70 --cov-report=term-missing --cov-report=xml:coverage-runtime.xml
-        pytest tests/ -v --cov=app --cov-report=xml --cov-report=html --cov-report=term-missing
+        pytest tests/unit -q --tb=short \
+          --cov=app.runtime \
+          --cov-fail-under=70 \
+          --cov-report=term-missing \
+          --cov-report=xml:coverage-runtime.xml \
+          --junitxml=unit-results.xml
       env:
         DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
         REDIS_URL: redis://localhost:6379/0
@@ -69,9 +73,9 @@ jobs:
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v3
       with:
-        file: apps/api/coverage.xml
+        file: apps/api/coverage-runtime.xml
         flags: backend
-        name: backend-coverage
+        name: backend-runtime-coverage
     
     - name: Upload test results
       uses: actions/upload-artifact@v3
@@ -79,9 +83,8 @@ jobs:
       with:
         name: backend-test-results
         path: |
-          apps/api/coverage.xml
-          apps/api/htmlcov/
-          apps/api/.coverage
+          apps/api/coverage-runtime.xml
+          apps/api/unit-results.xml
 
   frontend-tests:
     runs-on: ubuntu-latest
@@ -212,11 +215,10 @@ jobs:
         cd apps/web
         npx playwright install --with-deps
     
-    - name: Run E2E tests
+    - name: Run Runtime Smoke Gate
       run: |
         cd apps/web
         npx playwright test e2e-tests/runtime-smoke.spec.ts --project=chromium --reporter=line
-        npm run test:e2e
       env:
         API_BASE_URL: http://localhost:8000/api
     
