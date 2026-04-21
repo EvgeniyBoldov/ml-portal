@@ -37,9 +37,9 @@ class RuntimeCredentialResolver:
         *,
         user_id: UUID,
         tenant_id: UUID,
-        credential_scope: str = "any",
-        risk_level: str = "low",
-        side_effects: str = "none",
+        credential_scope: str = "auto",
+        risk_level: str = "safe",
+        side_effects: bool = False,
         requires_confirmation: bool = False,
     ) -> Optional[OperationCredentialContext]:
         if instance.is_local:
@@ -47,7 +47,7 @@ class RuntimeCredentialResolver:
 
         flags = OperationFlags(
             risk_level=risk_level,  # type: ignore[arg-type]
-            side_effects=side_effects,  # type: ignore[arg-type]
+            side_effects=bool(side_effects),
             requires_confirmation=bool(requires_confirmation),
             credential_scope=credential_scope,  # type: ignore[arg-type]
         )

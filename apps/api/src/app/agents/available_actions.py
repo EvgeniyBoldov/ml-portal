@@ -13,9 +13,9 @@ from app.models.agent_version import AgentVersion
 
 def _normalize_risk(value: Optional[str]) -> str:
     normalized = str(value or "").strip().lower()
-    if normalized in {"low", "medium", "high"}:
+    if normalized in {"safe", "write", "destructive"}:
         return normalized
-    return "medium"
+    return "safe"
 
 
 def _schema_hint(input_schema: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:

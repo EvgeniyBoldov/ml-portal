@@ -67,9 +67,9 @@ class RuntimeOperationResolver:
         *,
         user_id: UUID,
         tenant_id: UUID,
-        credential_scope: str = "any",
-        risk_level: str = "low",
-        side_effects: str = "none",
+        credential_scope: str = "auto",
+        risk_level: str = "safe",
+        side_effects: bool = False,
         requires_confirmation: bool = False,
     ) -> Optional[OperationCredentialContext]:
         return await self.credential_resolver.resolve_for_execution(
@@ -94,4 +94,3 @@ class RuntimeOperationResolver:
             provider=provider,
             include_unpublished=include_unpublished,
         )
-

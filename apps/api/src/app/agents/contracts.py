@@ -46,8 +46,8 @@ class FinalPayload(BaseModel):
 
 
 class ActionMeta(BaseModel):
-    side_effects: Optional[Literal["none", "write", "destructive"]] = None
-    risk_level: Optional[Literal["low", "medium", "high"]] = None
+    side_effects: Optional[bool] = None
+    risk_level: Optional[Literal["safe", "write", "destructive"]] = None
     why: Optional[str] = None
     phase_id: Optional[str] = None
     phase_title: Optional[str] = None
@@ -101,11 +101,11 @@ class OperationAction(BaseModel):
     data_instance_slug: Optional[str] = None
     description: Optional[str] = None
     input_schema_hint: Optional[Dict[str, Any]] = None
-    side_effects: Literal["none", "write", "destructive"] = "none"
-    risk_level: Literal["low", "medium", "high"] = "low"
+    side_effects: bool = False
+    risk_level: Literal["safe", "write", "destructive"] = "safe"
     idempotent: bool = True
     requires_confirmation: bool = False
-    credential_scope: Literal["any", "user_only", "tenant_only", "platform_only", "any_non_user"] = "any"
+    credential_scope: Literal["platform", "user", "auto"] = "auto"
     resource: Optional[str] = None
     systems: List[str] = Field(default_factory=list)
 
@@ -204,11 +204,11 @@ class ResolvedOperation(BaseModel):
     provider_instance_id: Optional[str] = None
     provider_instance_slug: Optional[str] = None
     source: Literal["local", "mcp"]
-    risk_level: Literal["low", "medium", "high"] = "low"
-    side_effects: Literal["none", "write", "destructive"] = "none"
+    risk_level: Literal["safe", "write", "destructive"] = "safe"
+    side_effects: bool = False
     idempotent: bool = True
     requires_confirmation: bool = False
-    credential_scope: Literal["any", "user_only", "tenant_only", "platform_only", "any_non_user"] = "any"
+    credential_scope: Literal["platform", "user", "auto"] = "auto"
     resource: Optional[str] = None
     systems: List[str] = Field(default_factory=list)
     return_summary: Optional[str] = None

@@ -125,7 +125,7 @@ class RuntimeOperationListItem(BaseModel):
     discovered_tool_slug: str
     provider_instance_slug: Optional[str] = None
     risk_level: str
-    side_effects: str
+    side_effects: bool
     idempotent: bool
     requires_confirmation: bool
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import Literal
 
 from app.agents.contracts import (
     ProviderExecutionTarget,
@@ -19,7 +20,8 @@ def _resolved_operation(
     *,
     operation_slug: str,
     data_instance_slug: str,
-    side_effects: str,
+    side_effects: bool,
+    risk_level: Literal["safe", "write", "destructive"] = "safe",
 ) -> ResolvedOperation:
     target = ProviderExecutionTarget(
         operation_slug=operation_slug,
@@ -35,6 +37,7 @@ def _resolved_operation(
         data_instance_id="data-1",
         data_instance_slug=data_instance_slug,
         source="local",
+        risk_level=risk_level,
         side_effects=side_effects,
         target=target,
     )
@@ -66,17 +69,19 @@ def test_preflight_policy_filters_write_and_destructive_operations():
     safe_op = _resolved_operation(
         operation_slug="instance.docs.get",
         data_instance_slug="docs",
-        side_effects="none",
+        side_effects=False,
     )
     write_op = _resolved_operation(
         operation_slug="instance.docs.update",
         data_instance_slug="docs",
-        side_effects="write",
+        side_effects=True,
+        risk_level="write",
     )
     destructive_op = _resolved_operation(
         operation_slug="instance.docs.delete",
         data_instance_slug="docs",
-        side_effects="destructive",
+        side_effects=True,
+        risk_level="destructive",
     )
 
     op_result = SimpleNamespace(
@@ -89,7 +94,6 @@ def test_preflight_policy_filters_write_and_destructive_operations():
                 name="Docs",
                 domain="collection.document",
                 placement="local",
-                semantic_source="derived_collection",
             )
         ],
     )
@@ -108,12 +112,12 @@ def test_preflight_policy_ignores_removed_derived_semantic_toggle():
     derived_op = _resolved_operation(
         operation_slug="instance.collection_table.search",
         data_instance_slug="collection-table",
-        side_effects="none",
+        side_effects=False,
     )
     active_op = _resolved_operation(
         operation_slug="instance.jira.search",
         data_instance_slug="jira-prod",
-        side_effects="none",
+        side_effects=False,
     )
 
     op_result = SimpleNamespace(
@@ -126,7 +130,6 @@ def test_preflight_policy_ignores_removed_derived_semantic_toggle():
                 name="Collection Table",
                 domain="collection.table",
                 placement="local",
-                semantic_source="derived_collection",
             ),
             ResolvedDataInstance(
                 instance_id="data-2",
@@ -134,7 +137,6 @@ def test_preflight_policy_ignores_removed_derived_semantic_toggle():
                 name="Jira Prod",
                 domain="jira",
                 placement="remote",
-                semantic_source="active_profile",
             ),
         ],
     )
@@ -155,15 +157,14 @@ def test_preflight_policy_filters_high_risk_when_forbidden():
     safe_op = _resolved_operation(
         operation_slug="instance.docs.get",
         data_instance_slug="docs",
-        side_effects="none",
+        side_effects=False,
     )
     high_risk_op = _resolved_operation(
         operation_slug="instance.docs.delete",
         data_instance_slug="docs",
-        side_effects="destructive",
+        side_effects=True,
+        risk_level="destructive",
     )
-    high_risk_op.risk_level = "high"
-    safe_op.risk_level = "low"
 
     op_result = SimpleNamespace(
         resolved_operations=[safe_op, high_risk_op],
@@ -175,7 +176,6 @@ def test_preflight_policy_filters_high_risk_when_forbidden():
                 name="Docs",
                 domain="collection.document",
                 placement="local",
-                semantic_source="derived_collection",
             )
         ],
     )

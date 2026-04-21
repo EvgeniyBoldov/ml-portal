@@ -90,19 +90,22 @@ class RuntimeHitlPolicyContractService:
         reasons: List[str] = []
         decision = "allow"
 
-        if operation.side_effects == "destructive" and forbid_destructive:
+        is_write_like = bool(operation.side_effects) or operation.risk_level in {"write", "destructive"}
+        is_destructive = operation.risk_level == "destructive"
+
+        if is_destructive and forbid_destructive:
             decision = "block"
             reasons.append("Blocked by platform setting forbid_destructive=true")
-        elif operation.side_effects in ("write", "destructive") and forbid_write_in_prod:
+        elif is_write_like and forbid_write_in_prod:
             decision = "block"
             reasons.append("Blocked by platform setting forbid_write_in_prod=true")
         elif operation.requires_confirmation:
             decision = "require_confirmation"
             reasons.append("Operation semantics requires confirmation")
-        elif operation.side_effects == "destructive" and require_confirmation_for_destructive:
+        elif is_destructive and require_confirmation_for_destructive:
             decision = "require_confirmation"
             reasons.append("Platform requires confirmation for destructive operations")
-        elif operation.side_effects == "write" and require_confirmation_for_write:
+        elif is_write_like and require_confirmation_for_write:
             decision = "require_confirmation"
             reasons.append("Platform requires confirmation for write operations")
         else:

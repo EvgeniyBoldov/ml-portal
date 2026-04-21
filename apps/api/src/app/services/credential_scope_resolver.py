@@ -23,11 +23,8 @@ from dataclasses import dataclass
 from typing import Literal
 
 
-RiskLevel = Literal["low", "medium", "high"]
-SideEffects = Literal["none", "write", "destructive"]
-CredentialScope = Literal[
-    "any", "user_only", "tenant_only", "platform_only", "any_non_user"
-]
+RiskLevel = Literal["safe", "write", "destructive"]
+CredentialScope = Literal["platform", "user", "auto"]
 
 Strategy = Literal[
     "USER_ONLY",
@@ -48,17 +45,17 @@ class OperationFlags:
     cheap, read-only, no confirmation, any credential scope.
     """
 
-    risk_level: RiskLevel = "low"
-    side_effects: SideEffects = "none"
+    risk_level: RiskLevel = "safe"
+    side_effects: bool = False
     requires_confirmation: bool = False
-    credential_scope: CredentialScope = "any"
+    credential_scope: CredentialScope = "auto"
 
     @property
     def is_risky(self) -> bool:
         """Operation changes state or requires explicit human confirmation."""
         return (
-            self.side_effects in ("write", "destructive")
-            or self.risk_level in ("medium", "high")
+            bool(self.side_effects)
+            or self.risk_level in ("write", "destructive")
             or self.requires_confirmation
         )
 
@@ -67,20 +64,18 @@ class CredentialScopeResolver:
     """Map `OperationFlags` → repository strategy string."""
 
     _EXPLICIT_SCOPE_MAP: dict[str, Strategy] = {
-        "user_only": "USER_ONLY",
-        "tenant_only": "TENANT_ONLY",
-        "platform_only": "PLATFORM_ONLY",
-        "any_non_user": "TENANT_THEN_PLATFORM",
+        "user": "USER_ONLY",
+        "platform": "PLATFORM_ONLY",
     }
 
     def resolve_strategy(self, flags: OperationFlags) -> Strategy:
         """Return the credential lookup strategy for the given flags.
 
         Rules (in order):
-        1. Explicit `credential_scope` always wins, unless it is "any".
-        2. "any" + risky operation → prefer user-owned credentials
+        1. Explicit `credential_scope` always wins, unless it is "auto".
+        2. "auto" + risky operation → prefer user-owned credentials
            (cascade user → tenant → platform).
-        3. "any" + safe operation → prefer platform credentials,
+        3. "auto" + safe operation → prefer platform credentials,
            fall back to tenant, then user (cascade platform → tenant → user).
         """
         explicit = self._EXPLICIT_SCOPE_MAP.get(flags.credential_scope)

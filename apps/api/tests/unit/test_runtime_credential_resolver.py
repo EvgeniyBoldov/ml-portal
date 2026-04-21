@@ -58,7 +58,7 @@ async def test_runtime_credential_resolver_uses_explicit_scope_strategy_without_
         _remote_instance(),
         user_id=uuid4(),
         tenant_id=uuid4(),
-        credential_scope="user_only",
+        credential_scope="user",
     )
 
     assert context is not None
@@ -85,7 +85,7 @@ async def test_runtime_credential_resolver_uses_explicit_scope_with_broker():
         _remote_instance(),
         user_id=uuid4(),
         tenant_id=uuid4(),
-        credential_scope="tenant_only",
+        credential_scope="platform",
     )
 
     assert context is not None
@@ -93,7 +93,7 @@ async def test_runtime_credential_resolver_uses_explicit_scope_with_broker():
     assert context.owner_type == "platform"
     service.resolve_credential_reference.assert_awaited_once()
     call = service.resolve_credential_reference.await_args
-    assert call.kwargs["strategy"] == "TENANT_ONLY"
+    assert call.kwargs["strategy"] == "PLATFORM_ONLY"
 
 
 @pytest.mark.asyncio
@@ -108,7 +108,7 @@ async def test_runtime_credential_resolver_skips_local_instance():
         _local_instance(),
         user_id=uuid4(),
         tenant_id=uuid4(),
-        credential_scope="any",
+        credential_scope="auto",
     )
 
     assert context is None

@@ -40,21 +40,27 @@ def _tool(**overrides):
         "source": "local",
         "name": "Search",
         "description": None,
-        "input_schema": {},
+        "input_schema": {"type": "object"},
+        "output_schema": None,
         "domains": ["collection.table"],
-        "semantic_override": None,
     }
     base.update(overrides)
     return SimpleNamespace(**base)
 
 
-def test_materialize_runtime_operations_deduplicates_and_applies_discovered_override():
+def test_materialize_runtime_operations_deduplicates_and_applies_runtime_flags():
     instance = _instance()
     provider = _provider()
     discovered_tools = [
         _tool(
             slug="collection.search",
-            semantic_override={"risk_level": "high", "requires_confirmation": True},
+            input_schema={
+                "type": "object",
+                "x-runtime": {
+                    "risk_level": "destructive",
+                    "requires_confirmation": True,
+                },
+            },
         ),
         _tool(slug="collection.table.search"),
         _tool(slug="collection.unknown"),
@@ -71,7 +77,7 @@ def test_materialize_runtime_operations_deduplicates_and_applies_discovered_over
     assert op.operation == "collection.table.search"
     assert op.operation_slug == "instance.contracts.collection.table.search"
     assert op.provider_instance_slug == "mcp-prod"
-    assert op.risk_level == "high"
+    assert op.risk_level == "destructive"
     assert op.requires_confirmation is True
 
 

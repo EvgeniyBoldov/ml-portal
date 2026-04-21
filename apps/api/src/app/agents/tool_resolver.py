@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal, Optional
 
+from app.agents.mcp_discovery import parse_discovered_operation
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.operation_publication import PublicationDecision, resolve_publication
@@ -62,12 +63,12 @@ class ResolvedTool:
     description: str
     input_schema: Dict[str, Any]
     output_schema: Optional[Dict[str, Any]]
-    # Runtime metadata defaults (MCP schema does not carry these today).
-    side_effects: Literal["none", "write", "destructive"] = "none"
-    risk_level: Literal["low", "medium", "high"] = "low"
+    # Runtime metadata defaults are sourced from MCP schema extension x-runtime.
+    side_effects: bool = False
+    risk_level: Literal["safe", "write", "destructive"] = "safe"
     idempotent: bool = True
     requires_confirmation: bool = False
-    credential_scope: Literal["any", "user_only", "tenant_only", "platform_only", "any_non_user"] = "any"
+    credential_scope: Literal["platform", "user", "auto"] = "auto"
     risk_flags: List[str] = field(default_factory=list)
     publication: Optional[PublicationDecision] = None
     publication_view: Optional[ToolPublicationView] = None
@@ -134,14 +135,24 @@ class ToolResolver:
             source_kind="virtual",
             container=container,
         )
+        discovered_operation = parse_discovered_operation(
+            tool_name=discovered_tool.slug,
+            description=discovered_tool.description,
+            input_schema=discovered_tool.input_schema,
+            output_schema=discovered_tool.output_schema,
+        )
         return ResolvedTool(
             raw_slug=raw_operation_name,
             operation_name=operation_name,
             published=True,
             title=title,
             description=description,
-            input_schema=discovered_tool.input_schema or {},
-            output_schema=discovered_tool.output_schema,
+            input_schema=discovered_operation.input_schema,
+            output_schema=discovered_operation.output_schema,
+            risk_level=discovered_operation.risk_level,
+            side_effects=discovered_operation.side_effects,
+            requires_confirmation=discovered_operation.requires_confirmation,
+            credential_scope=discovered_operation.credential_scope,
             publication=publication,
             publication_view=publication_view,
             prompt_context={
