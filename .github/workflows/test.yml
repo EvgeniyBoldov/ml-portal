@@ -68,7 +68,7 @@ jobs:
       env:
         DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
         REDIS_URL: redis://localhost:6379/0
-        ENVIRONMENT: test
+        ENV: test
     
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v3
@@ -203,7 +203,7 @@ jobs:
       env:
         DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
         REDIS_URL: redis://localhost:6379/0
-        ENVIRONMENT: test
+        ENV: test
     
     - name: Build frontend
       run: |

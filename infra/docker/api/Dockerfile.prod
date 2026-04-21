@@ -61,7 +61,6 @@ RUN groupadd -r appuser && useradd -r -g appuser -u 1000 appuser && \
 # Copy application code
 COPY --chown=appuser:appuser apps/api/src/app/ ./app/
 COPY --chown=appuser:appuser apps/api/alembic.ini ./
-COPY --chown=appuser:appuser infra/scripts/ ./infra/scripts/
 
 # Set environment variables
 ENV PYTHONPATH=/app \

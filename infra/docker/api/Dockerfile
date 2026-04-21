@@ -13,9 +13,6 @@ USER appuser
 COPY apps/api/src/app/ ./app/
 COPY apps/api/alembic.ini ./
 
-# Copy infrastructure scripts
-COPY infra/scripts/ ./infra/scripts/
-
 # Set PYTHONPATH to /app so imports work as "from app."
 ENV PYTHONPATH=/app
 

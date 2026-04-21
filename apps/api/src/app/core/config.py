@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     JWT_AUDIENCE: str = Field(default="urn:ml-portal:api")
     JWT_ACCESS_TTL_MINUTES: int = Field(default=1440)  # 24 hours for comfortable work
     JWT_REFRESH_TTL_DAYS: int = Field(default=30)
+    JWT_JWKS_JSON: str | None = Field(default=None, description="Optional JWKS JSON string for key discovery")
     JWT_KID: str | None = Field(default=None, description="Key ID for key rotation")
 
     # Authentication
