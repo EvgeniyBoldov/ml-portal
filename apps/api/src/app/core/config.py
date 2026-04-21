@@ -130,6 +130,14 @@ class Settings(BaseSettings):
         default=None, 
         description="Master key for encrypting tool credentials. Required in production."
     )
+    CONFIRMATION_SECRET: str | None = Field(
+        default=None,
+        description="Secret for operation confirmation tokens",
+    )
+    CONFIRMATION_TTL_SECONDS: int = Field(
+        default=300,
+        description="TTL for operation confirmation tokens in seconds",
+    )
 
     # MCP Credential Broker (ephemeral access token for secret resolution)
     MCP_CREDENTIAL_BROKER_ENABLED: bool = Field(

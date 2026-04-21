@@ -69,6 +69,12 @@ class ChatEventMapper:
             return {
                 "type": "confirmation_required",
                 "message": event.data.get("message"),
+                "operation_fingerprint": event.data.get("operation_fingerprint"),
+                "tool_slug": event.data.get("tool_slug"),
+                "operation": event.data.get("operation"),
+                "risk_level": event.data.get("risk_level"),
+                "args_preview": event.data.get("args_preview"),
+                "summary": event.data.get("summary"),
                 "run_id": event.data.get("run_id"),
                 "orchestration_envelope": env,
             }

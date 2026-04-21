@@ -31,7 +31,7 @@ from app.runtime.contracts import (
     PipelineStopReason,
 )
 from app.runtime.envelope import PhasedEvent
-from app.runtime.events import OrchestrationPhase, RuntimeEvent
+from app.runtime.events import OrchestrationPhase, RuntimeEvent, RuntimeEventType
 from app.runtime.memory.working_memory import (
     PlannerStepRecord,
     WorkingMemory,
@@ -239,6 +239,22 @@ class PlanningStage:
                 model=request.model,
             ):
                 yield PhasedEvent(event, OrchestrationPhase.AGENT)
+                if event.type == RuntimeEventType.CONFIRMATION_REQUIRED:
+                    memory.status = PipelineStopReason.WAITING_CONFIRMATION.value
+                    message = str(event.data.get("summary") or event.data.get("message") or "").strip() or None
+                    yield PhasedEvent(
+                        RuntimeEvent.stop(
+                            PipelineStopReason.WAITING_CONFIRMATION.value,
+                            run_id=str(run_id),
+                            message=message,
+                        ),
+                        OrchestrationPhase.PLANNER,
+                    )
+                    self.outcome = PlanningOutcome(
+                        kind=PlanningOutcomeKind.PAUSED,
+                        stop_reason=PipelineStopReason.WAITING_CONFIRMATION,
+                    )
+                    return
 
 
             if memory.detect_loop():

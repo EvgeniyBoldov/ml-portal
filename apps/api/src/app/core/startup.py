@@ -134,7 +134,7 @@ async def register_embedding_models(session_factory: async_sessionmaker[AsyncSes
 
                         decrypted = await CredentialService(session).resolve_credentials(
                             instance_id=model.instance_id,
-                            strategy="ANY",
+                            strategy="PLATFORM_FIRST",
                         )
                         if decrypted:
                             if decrypted.auth_type == "api_key":

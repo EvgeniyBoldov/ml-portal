@@ -17,6 +17,7 @@ from app.agents.protocol import (
     build_operation_results_message,
     parse_llm_response,
 )
+from app.agents.runtime.tools import ConfirmationRequiredError
 from app.agents.runtime.base import BaseRuntime
 from app.agents.runtime.events import RuntimeEvent, RuntimeEventType
 from app.agents.runtime.policy import GenerationParams, PolicyLimits
@@ -214,10 +215,18 @@ class AgentToolRuntime(BaseRuntime):
                         "input": operation_call.arguments,
                     })
 
-                    result, sources = await self.tools.execute(
-                        operation_call, ctx, available_operations,
-                        timeout_s=int(policy.tool_timeout_ms / 1000) if policy.tool_timeout_ms else None,
-                    )
+                    try:
+                        result, sources = await self.tools.execute(
+                            operation_call, ctx, available_operations,
+                            timeout_s=int(policy.tool_timeout_ms / 1000) if policy.tool_timeout_ms else None,
+                        )
+                    except ConfirmationRequiredError as exc:
+                        yield RuntimeEvent(
+                            RuntimeEventType.CONFIRMATION_REQUIRED,
+                            dict(exc.payload),
+                        )
+                        await run_session.finish("waiting_confirmation", str(exc))
+                        return
                     operation_calls_total += 1
 
                     yield RuntimeEvent.operation_result(

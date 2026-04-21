@@ -1,0 +1,76 @@
+.card {
+  border: 1px solid var(--border-color);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  border-radius: 10px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.title {
+  font-weight: 600;
+}
+
+.risk {
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 12px;
+  border: 1px solid var(--border-color);
+}
+
+.riskSafe {
+  color: var(--success-color, #117a3f);
+}
+
+.riskWrite {
+  color: var(--warning-color, #8a5a00);
+}
+
+.riskDanger {
+  color: var(--danger-color, #a20f2a);
+}
+
+.line {
+  font-size: 13px;
+  opacity: 0.95;
+}
+
+.args {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: var(--bg-secondary, rgba(0, 0, 0, 0.03));
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 8px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 160px;
+  overflow: auto;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.btn {
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+.btnPrimary {
+  border-color: var(--warning-color, #8a5a00);
+}

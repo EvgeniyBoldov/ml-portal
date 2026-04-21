@@ -42,6 +42,7 @@ _PASS_THROUGH = {
     LegacyEventType.STATUS: RuntimeEventType.STATUS,
     LegacyEventType.OPERATION_CALL: RuntimeEventType.OPERATION_CALL,
     LegacyEventType.OPERATION_RESULT: RuntimeEventType.OPERATION_RESULT,
+    LegacyEventType.CONFIRMATION_REQUIRED: RuntimeEventType.CONFIRMATION_REQUIRED,
     LegacyEventType.ERROR: RuntimeEventType.ERROR,
 }
 

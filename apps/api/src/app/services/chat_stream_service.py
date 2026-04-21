@@ -164,6 +164,7 @@ class ChatStreamService:
         user_id: str,
         content: str,
         attachment_ids: Optional[list[str]] = None,
+        confirmation_tokens: Optional[list[str]] = None,
         idempotency_key: Optional[str] = None,
         model: Optional[str] = None,
         agent_slug: Optional[str] = None,
@@ -260,6 +261,7 @@ class ChatStreamService:
                 user_id=user_id,
                 content=content,
                 attachment_ids=attachment_ids,
+                confirmation_tokens=confirmation_tokens or [],
                 attachment_meta=self.attachment_service.to_meta(attachment_rows),
                 attachment_prompt_context=attachment_prompt_context,
                 idempotency_key=idempotency_key,
@@ -311,6 +313,7 @@ class ChatStreamService:
                 agent_slug=agent_slug,
                 model=model,
                 continuation_meta=(tool_ctx.extra or {}).get("continuation_meta", {}) if hasattr(tool_ctx, "extra") else {},
+                confirmation_tokens=list((tool_ctx.extra or {}).get("confirmation_tokens") or []),
             )
 
             async for event in pipeline.execute(pipeline_request, tool_ctx):

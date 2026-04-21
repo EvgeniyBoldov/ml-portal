@@ -109,10 +109,33 @@ class RuntimeEvent:
         return cls(RuntimeEventType.WAITING_INPUT, data)
 
     @classmethod
-    def confirmation_required(cls, message: str, *, run_id: Optional[str] = None) -> "RuntimeEvent":
+    def confirmation_required(
+        cls,
+        message: str,
+        *,
+        run_id: Optional[str] = None,
+        operation_fingerprint: Optional[str] = None,
+        tool_slug: Optional[str] = None,
+        operation: Optional[str] = None,
+        risk_level: Optional[str] = None,
+        args_preview: Optional[str] = None,
+        summary: Optional[str] = None,
+    ) -> "RuntimeEvent":
         data: Dict[str, Any] = {"message": message}
         if run_id:
             data["run_id"] = run_id
+        if operation_fingerprint:
+            data["operation_fingerprint"] = operation_fingerprint
+        if tool_slug:
+            data["tool_slug"] = tool_slug
+        if operation:
+            data["operation"] = operation
+        if risk_level:
+            data["risk_level"] = risk_level
+        if args_preview:
+            data["args_preview"] = args_preview
+        if summary:
+            data["summary"] = summary
         return cls(RuntimeEventType.CONFIRMATION_REQUIRED, data)
 
     @classmethod

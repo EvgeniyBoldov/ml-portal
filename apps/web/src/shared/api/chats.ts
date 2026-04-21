@@ -70,6 +70,7 @@ export async function* sendMessageStreamSSE(
     model?: string | null;
     agentSlug?: string | null;
     attachmentIds?: string[];
+    confirmationTokens?: string[];
   } = {}
 ) {
   const headers: Record<string, string> = {
@@ -99,6 +100,7 @@ export async function* sendMessageStreamSSE(
       model: opts?.model ?? null,
       agent_slug: opts?.agentSlug ?? null,
       attachment_ids: opts?.attachmentIds ?? [],
+      confirmation_tokens: opts?.confirmationTokens ?? [],
     }),
   });
 
@@ -150,6 +152,13 @@ export async function* sendMessageStreamSSE(
       }
     }
   }
+}
+
+export async function issueConfirmationToken(chatId: string, operationFingerprint: string) {
+  return apiRequest<{ token: string; expires_at: string }>(`/chats/${chatId}/confirm`, {
+    method: 'POST',
+    body: JSON.stringify({ operation_fingerprint: operationFingerprint }),
+  });
 }
 
 export async function renameChat(chat_id: string, name: string) {

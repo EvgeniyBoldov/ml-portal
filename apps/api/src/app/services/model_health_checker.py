@@ -53,7 +53,7 @@ class ModelHealthChecker:
                 cred_service = CredentialService(session)
                 decrypted = await cred_service.resolve_credentials(
                     instance_id=model.instance_id,
-                    strategy="ANY",
+                    strategy="PLATFORM_FIRST",
                 )
                 if decrypted:
                     payload = decrypted.payload

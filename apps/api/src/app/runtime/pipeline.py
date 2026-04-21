@@ -70,6 +70,8 @@ class RuntimePipeline:
         request: PipelineRequest,
         ctx: ToolContext,
     ) -> AsyncGenerator[RuntimeEvent, None]:
+        if request.confirmation_tokens:
+            ctx.extra["confirmation_tokens"] = list(request.confirmation_tokens)
         chat_id: Optional[UUID] = UUID(request.chat_id) if request.chat_id else None
         user_id = UUID(request.user_id)
         tenant_id = UUID(request.tenant_id)

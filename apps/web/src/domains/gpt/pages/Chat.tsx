@@ -6,6 +6,7 @@ import EmptyState from '@shared/ui/EmptyState';
 import Button from '@shared/ui/Button';
 import { ChatMessage } from '@/domains/chat/components/ChatMessage';
 import { ChatComposer } from '@/domains/chat/components/ChatComposer';
+import { ConfirmationPrompt } from '@/domains/chat/components/ConfirmationPrompt/ConfirmationPrompt';
 import { Icon } from '@/shared/ui/Icon';
 import type { RAGSource } from '@/domains/chat/components/RAGSources';
 
@@ -241,7 +242,8 @@ export default function Chat() {
     );
   }
 
-  const isWaitingInput = Boolean(state.pendingInput && !state.pendingConfirmation);
+  const pendingConfirmation = state.pendingConfirmations[0] || null;
+  const isWaitingInput = Boolean(state.pendingInput && !pendingConfirmation);
   // Get last message for streaming indicator
   const lastMessage = messages[messages.length - 1];
   const isStreaming = lastMessage?.role === 'assistant' && lastMessage?.isOptimistic;
@@ -306,79 +308,45 @@ export default function Chat() {
         )}
       </div>
 
-      {/* Confirmation required banner */}
-      {state.pendingConfirmation && (
-        <div className={styles.confirmationBanner}>
-          <div className={styles.confirmationText}>
-            <Icon name="alert-triangle" size={16} />
-            <span>{state.pendingConfirmation.reason}</span>
-          </div>
-          <div className={styles.confirmationActions}>
-            <button
-              className={`${styles.confirmBtn} ${styles.confirmBtnCancel}`}
-              onClick={async () => {
-                if (state.pausedRunId) {
-                  try {
-                    const { resumeRun } = await import('@shared/api/chats');
-                    const resume = await resumeRun(state.pausedRunId, 'cancel');
-                    if (resume.status === 'resumed_paused_again') {
-                      const pausedContext = (resume.paused_again_context || {}) as Record<string, unknown>;
-                      const pausedAction = (resume.paused_again_action || {}) as Record<string, unknown>;
-                      applyPausedState({
-                        runId: resume.paused_again_run_id || null,
-                        reason: resume.paused_again_reason || String(pausedContext.reason || ''),
-                        question: String(pausedContext.question || pausedAction.question || ''),
-                        message: String(pausedContext.message || pausedAction.message || ''),
-                        action: pausedAction,
-                      });
-                    } else {
-                      clearPendingState();
-                    }
-                  } catch (e) {
-                    console.error('Failed to cancel run', e);
-                  }
-                }
-                setStreamError(null);
-                setBusy(false);
-              }}
-            >
-              Отменить
-            </button>
-            <button
-              className={`${styles.confirmBtn} ${styles.confirmBtnApprove}`}
-              onClick={async () => {
-                if (state.pausedRunId) {
-                  try {
-                    const { resumeRun } = await import('@shared/api/chats');
-                    const resume = await resumeRun(state.pausedRunId, 'confirm');
-                    if (chatId) {
-                      await loadMessages(chatId);
-                    }
-                    if (resume.status === 'resumed_paused_again') {
-                      const pausedContext = (resume.paused_again_context || {}) as Record<string, unknown>;
-                      const pausedAction = (resume.paused_again_action || {}) as Record<string, unknown>;
-                      applyPausedState({
-                        runId: resume.paused_again_run_id || null,
-                        reason: resume.paused_again_reason || String(pausedContext.reason || ''),
-                        question: String(pausedContext.question || pausedAction.question || ''),
-                        message: String(pausedContext.message || pausedAction.message || ''),
-                        action: pausedAction,
-                      });
-                    } else {
-                      clearPendingState();
-                    }
-                  } catch (e) {
-                    console.error('Failed to confirm run', e);
-                  }
-                }
-                setStreamError(null);
-                setBusy(false);
-              }}
-            >
-              Подтвердить
-            </button>
-          </div>
-        </div>
+      {pendingConfirmation && (
+        <ConfirmationPrompt
+          item={pendingConfirmation}
+          onCancel={() => {
+            clearPendingState();
+            setStreamError(null);
+            setBusy(false);
+          }}
+          onConfirm={async () => {
+            if (!chatId || !pendingConfirmation.operationFingerprint || busy) return;
+            setBusy(true);
+            setStreamError(null);
+            try {
+              const { issueConfirmationToken } = await import('@shared/api/chats');
+              const issued = await issueConfirmationToken(chatId, pendingConfirmation.operationFingerprint);
+              const token = String(issued.token || '').trim();
+              clearPendingState();
+              if (!token) {
+                throw new Error('Confirmation token was not issued');
+              }
+              await sendMessageStream(
+                chatId,
+                'Подтверждаю выполнение операции. Продолжай.',
+                false,
+                () => {},
+                (err: string) => setStreamError(_friendlyError(err)),
+                undefined,
+                [],
+                [],
+                [token]
+              );
+            } catch (e) {
+              console.error('Failed to confirm operation', e);
+              setStreamError(_friendlyError(e instanceof Error ? e.message : 'Не удалось подтвердить операцию'));
+            } finally {
+              setBusy(false);
+            }
+          }}
+        />
       )}
 
       {/* Waiting for user input block */}

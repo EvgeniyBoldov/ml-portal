@@ -6,7 +6,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.agents.credential_resolver import RuntimeCredentialResolver
+from app.agents.credential_resolver import CredentialsUnavailableError, RuntimeCredentialResolver
 from app.models.tool_instance import ToolInstance
 
 
@@ -113,3 +113,24 @@ async def test_runtime_credential_resolver_skips_local_instance():
 
     assert context is None
     service.resolve_credentials.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_runtime_credential_resolver_raises_for_strict_missing_credentials():
+    service = SimpleNamespace(
+        resolve_credentials=AsyncMock(return_value=None),
+        resolve_credential_reference=AsyncMock(return_value=None),
+    )
+    resolver = RuntimeCredentialResolver(service, mcp_credential_broker_enabled=False)
+
+    with pytest.raises(CredentialsUnavailableError, match="requires user credentials"):
+        await resolver.resolve_for_execution(
+            _remote_instance(),
+            user_id=uuid4(),
+            tenant_id=uuid4(),
+            tool_slug="instance.netbox.delete",
+            operation="netbox.delete",
+            credential_scope="user",
+            risk_level="destructive",
+            side_effects=True,
+        )

@@ -48,6 +48,7 @@ class PipelineRequest(BaseModel):
     # Sandbox / continuation metadata (opaque)
     sandbox_overrides: Dict[str, Any] = Field(default_factory=dict)
     continuation_meta: Dict[str, Any] = Field(default_factory=dict)
+    confirmation_tokens: List[str] = Field(default_factory=list)
 
 
 # --------------------------------------------------------------------------- #

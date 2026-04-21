@@ -125,7 +125,7 @@ class ToolInstanceHealthService:
         expected_db = str(config.get("database_name") or "").strip()
 
         cred_service = CredentialService(self.host.session)
-        creds = await cred_service.resolve_credentials(instance_id=instance.id, strategy="ANY")
+        creds = await cred_service.resolve_credentials(instance_id=instance.id, strategy="PLATFORM_FIRST")
         payload = (creds.payload or {}) if creds else {}
         username = payload.get("username")
         password = payload.get("password")

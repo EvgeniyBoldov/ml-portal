@@ -8,10 +8,7 @@ requires_confirmation, credential_scope).
 Output: one of the strategies understood by
 `CredentialSetRepository.resolve_for_instance`:
 
-    USER_ONLY, TENANT_ONLY, PLATFORM_ONLY,
-    USER_THEN_TENANT, TENANT_THEN_PLATFORM,
-    ANY (= user → tenant → platform),
-    PLATFORM_FIRST (= platform → tenant → user).
+    USER_ONLY, PLATFORM_ONLY, PLATFORM_FIRST.
 
 The resolver is intentionally a pure function today; it exists as a dedicated
 service so behaviour can be swapped (config-driven, policy-driven, LLM-advised)
@@ -20,6 +17,7 @@ without touching the runtime credential resolver.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from typing import Literal
 
 
@@ -28,13 +26,15 @@ CredentialScope = Literal["platform", "user", "auto"]
 
 Strategy = Literal[
     "USER_ONLY",
-    "TENANT_ONLY",
     "PLATFORM_ONLY",
-    "USER_THEN_TENANT",
-    "TENANT_THEN_PLATFORM",
-    "ANY",
     "PLATFORM_FIRST",
 ]
+
+
+class CredentialStrategy(str, Enum):
+    USER_ONLY = "USER_ONLY"
+    PLATFORM_ONLY = "PLATFORM_ONLY"
+    PLATFORM_FIRST = "PLATFORM_FIRST"
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,26 +61,28 @@ class OperationFlags:
 
 
 class CredentialScopeResolver:
-    """Map `OperationFlags` → repository strategy string."""
+    """Map `OperationFlags` → strict repository strategy."""
 
-    _EXPLICIT_SCOPE_MAP: dict[str, Strategy] = {
-        "user": "USER_ONLY",
-        "platform": "PLATFORM_ONLY",
+    _EXPLICIT_SCOPE_MAP: dict[str, CredentialStrategy] = {
+        "user": CredentialStrategy.USER_ONLY,
+        "platform": CredentialStrategy.PLATFORM_ONLY,
     }
 
-    def resolve_strategy(self, flags: OperationFlags) -> Strategy:
-        """Return the credential lookup strategy for the given flags.
+    def resolve(self, flags: OperationFlags) -> CredentialStrategy:
+        """Return strict credential lookup strategy for the given flags.
 
         Rules (in order):
         1. Explicit `credential_scope` always wins, unless it is "auto".
-        2. "auto" + risky operation → prefer user-owned credentials
-           (cascade user → tenant → platform).
-        3. "auto" + safe operation → prefer platform credentials,
-           fall back to tenant, then user (cascade platform → tenant → user).
+        2. "auto" + safe read-only operation → PLATFORM_FIRST.
+        3. "auto" + side effects/write/destructive → USER_ONLY.
         """
         explicit = self._EXPLICIT_SCOPE_MAP.get(flags.credential_scope)
         if explicit is not None:
             return explicit
-        if flags.is_risky:
-            return "ANY"
-        return "PLATFORM_FIRST"
+        if flags.risk_level == "safe" and not flags.side_effects:
+            return CredentialStrategy.PLATFORM_FIRST
+        return CredentialStrategy.USER_ONLY
+
+    def resolve_strategy(self, flags: OperationFlags) -> Strategy:
+        """Backward-compatible adapter for old call sites."""
+        return self.resolve(flags).value  # type: ignore[return-value]
