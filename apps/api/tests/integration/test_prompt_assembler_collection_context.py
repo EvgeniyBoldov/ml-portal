@@ -27,6 +27,7 @@ async def test_prompt_assembler_renders_collection_description_and_entity_type_w
     tenant_id = uuid4()
     collection = Collection(
         id=uuid4(),
+        data_instance_id=uuid4(),
         tenant_id=tenant_id,
         slug="netbox_devices",
         name="Netbox devices",

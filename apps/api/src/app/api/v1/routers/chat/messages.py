@@ -32,7 +32,7 @@ from app.services.chat_resume_orchestrator import ChatResumeOrchestrator
 from app.services.chat_stream_service import ChatStreamService
 from app.services.runtime_resume_checkpoint_service import RuntimeResumeCheckpointService
 from app.services.runtime_terminal_status import normalize_run_status_for_storage
-from app.agents.runtime.confirmation import ConfirmationService
+from app.agents.runtime.confirmation import get_confirmation_service
 
 router = APIRouter()
 logger = get_logger(__name__)
@@ -182,7 +182,7 @@ async def issue_confirmation_token(
     ).scalar_one_or_none()
     if not chat_row or str(chat_row.owner_id) != str(current_user.id):
         raise HTTPException(status_code=404, detail="Chat not found")
-    service = ConfirmationService()
+    service = get_confirmation_service()
     token, expires_at = service.issue(
         user_id=uuid.UUID(str(chat_ctx.user_id)),
         chat_id=uuid.UUID(str(chat_ctx.chat_id)),

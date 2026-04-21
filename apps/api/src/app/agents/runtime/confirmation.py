@@ -3,14 +3,22 @@ from __future__ import annotations
 import hashlib
 import json
 import secrets
+import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from functools import lru_cache
 from typing import Any, Dict
 from uuid import UUID
 
 import jwt
+from redis import Redis
 
 from app.core.config import get_settings
+from app.core.logging import get_logger
+
+
+logger = get_logger(__name__)
 
 
 def canonical_json(value: Dict[str, Any]) -> str:
@@ -37,16 +45,36 @@ class ConfirmationToken:
 
 
 class ConfirmationService:
+    _fallback_nonce_store: dict[str, float] = {}
+    _fallback_nonce_lock = threading.Lock()
+
     def __init__(self) -> None:
         settings = get_settings()
         self._ttl_seconds = int(getattr(settings, "CONFIRMATION_TTL_SECONDS", 300) or 300)
-        secret = (
-            str(getattr(settings, "CONFIRMATION_SECRET", "") or "").strip()
-            or str(getattr(settings, "CREDENTIALS_MASTER_KEY", "") or "").strip()
-            or str(getattr(settings, "JWT_SECRET", "change-me-in-production") or "change-me-in-production").strip()
-        )
+        confirmation_secret = str(getattr(settings, "CONFIRMATION_SECRET", "") or "").strip()
+        if confirmation_secret:
+            secret = confirmation_secret
+            secret_source = "CONFIRMATION_SECRET"
+        else:
+            credentials_master_key = str(getattr(settings, "CREDENTIALS_MASTER_KEY", "") or "").strip()
+            if credentials_master_key:
+                secret = credentials_master_key
+                secret_source = "CREDENTIALS_MASTER_KEY"
+            else:
+                secret = str(
+                    getattr(settings, "JWT_SECRET", "change-me-in-production")
+                    or "change-me-in-production"
+                ).strip()
+                secret_source = "JWT_SECRET/default"
+            logger.warning(
+                "ConfirmationService secret fallback in use (%s); set CONFIRMATION_SECRET explicitly",
+                secret_source,
+            )
         self._secret = secret
         self._algorithm = "HS256"
+        self._nonce_prefix = "runtime:confirmation:nonce:"
+        redis_url = str(getattr(settings, "REDIS_URL", "") or "").strip()
+        self._redis = Redis.from_url(redis_url, decode_responses=True) if redis_url else None
 
     def issue(self, *, user_id: UUID, chat_id: UUID, fingerprint: str) -> tuple[str, datetime]:
         issued_at = datetime.now(timezone.utc)
@@ -76,13 +104,51 @@ class ConfirmationService:
         user_id: UUID,
         chat_id: UUID,
         fingerprint: str,
+        consume: bool = False,
     ) -> bool:
         try:
             payload = jwt.decode(token, self._secret, algorithms=[self._algorithm])
         except Exception:
             return False
-        return (
+        is_valid = (
             str(payload.get("uid") or "") == str(user_id)
             and str(payload.get("cid") or "") == str(chat_id)
             and str(payload.get("fp") or "") == str(fingerprint)
         )
+        if not is_valid:
+            return False
+        if consume:
+            return self._consume_nonce(payload)
+        return True
+
+    def _consume_nonce(self, payload: Dict[str, Any]) -> bool:
+        nonce = str(payload.get("nonce") or "").strip()
+        if not nonce:
+            return False
+        exp_ts = int(payload.get("exp") or 0)
+        ttl = max(1, exp_ts - int(time.time()))
+        token_key = f"{self._nonce_prefix}{nonce}"
+
+        if self._redis is not None:
+            try:
+                created = self._redis.set(token_key, "1", ex=ttl, nx=True)
+                if created is not None:
+                    return bool(created)
+            except Exception as exc:
+                logger.warning("Failed to write confirmation nonce to Redis: %s", exc)
+
+        now = time.time()
+        expire_at = now + ttl
+        with self._fallback_nonce_lock:
+            stale = [k for k, ts in self._fallback_nonce_store.items() if ts <= now]
+            for key in stale:
+                self._fallback_nonce_store.pop(key, None)
+            if token_key in self._fallback_nonce_store:
+                return False
+            self._fallback_nonce_store[token_key] = expire_at
+            return True
+
+
+@lru_cache()
+def get_confirmation_service() -> ConfirmationService:
+    return ConfirmationService()

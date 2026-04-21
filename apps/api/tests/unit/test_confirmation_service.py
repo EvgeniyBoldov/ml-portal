@@ -80,3 +80,32 @@ def test_verify_rejects_expired_token(monkeypatch):
         fingerprint=fingerprint,
     )
     monkeypatch.setattr(jwt, "decode", real_decode)
+
+
+def test_verify_consume_blocks_replay():
+    service = ConfirmationService()
+    service._redis = None
+    service._fallback_nonce_store.clear()
+    user_id = uuid4()
+    chat_id = uuid4()
+    fingerprint = "abc123fingerprint"
+    token, _ = service.issue(
+        user_id=user_id,
+        chat_id=chat_id,
+        fingerprint=fingerprint,
+    )
+
+    assert service.verify(
+        token=token,
+        user_id=user_id,
+        chat_id=chat_id,
+        fingerprint=fingerprint,
+        consume=True,
+    )
+    assert not service.verify(
+        token=token,
+        user_id=user_id,
+        chat_id=chat_id,
+        fingerprint=fingerprint,
+        consume=True,
+    )

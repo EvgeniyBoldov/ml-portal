@@ -78,16 +78,26 @@ const DATA_CONNECTOR_FIELD: FieldConfig = {
 
 type ConfigStrategyCtx = {
   editableCollectionType: boolean;
+  editableDataInstance: boolean;
   connectorOptions: Array<{ value: string; label: string }>;
 };
 
 type ConfigStrategy = (ctx: ConfigStrategyCtx) => FieldConfig[];
 
 const CONFIG_FIELDS_BY_TYPE: Record<CollectionType, ConfigStrategy> = {
-  table: () => [TABLE_NAME_FIELD],
-  document: () => [],
-  sql: ({ connectorOptions }) => [{ ...DATA_CONNECTOR_FIELD, options: connectorOptions }],
-  api: ({ connectorOptions }) => [{ ...DATA_CONNECTOR_FIELD, options: connectorOptions }],
+  table: ({ connectorOptions, editableDataInstance }) => [
+    TABLE_NAME_FIELD,
+    { ...DATA_CONNECTOR_FIELD, options: connectorOptions, editable: editableDataInstance },
+  ],
+  document: ({ connectorOptions, editableDataInstance }) => [
+    { ...DATA_CONNECTOR_FIELD, options: connectorOptions, editable: editableDataInstance },
+  ],
+  sql: ({ connectorOptions, editableDataInstance }) => [
+    { ...DATA_CONNECTOR_FIELD, options: connectorOptions, editable: editableDataInstance },
+  ],
+  api: ({ connectorOptions, editableDataInstance }) => [
+    { ...DATA_CONNECTOR_FIELD, options: connectorOptions, editable: editableDataInstance },
+  ],
 };
 
 export function buildConfigFieldsByType(

@@ -52,6 +52,12 @@ export interface CollectionVersion {
   updated_at: string;
 }
 
+export interface DataInstanceShort {
+  id: string;
+  slug: string;
+  name: string;
+}
+
 export interface CollectionVersionCreate {
   notes?: string | null;
 }
@@ -105,7 +111,8 @@ export interface Collection {
   status_details?: Record<string, unknown> | null;
   table_name?: string;
   table_schema?: Record<string, unknown> | null;
-  data_instance_id?: string | null;
+  data_instance_id: string;
+  data_instance?: DataInstanceShort | null;
   
   // Vector search fields
   has_vector_search: boolean;
@@ -145,7 +152,7 @@ export interface CreateCollectionRequest {
   fields: CollectionField[];
   vector_config?: VectorConfig;
   table_schema?: Record<string, unknown> | null;
-  data_instance_id?: string | null;
+  data_instance_id: string;
 }
 
 export interface SchemaOperation {

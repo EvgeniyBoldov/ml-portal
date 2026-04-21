@@ -9,3 +9,8 @@ Runtime использует MCP-compatible operation descriptor как конт
 Дополнительные runtime-флаги операций задаются через расширение JSON Schema `x-runtime`.
 
 Подробный контракт и правила валидации: [MCP_RUNTIME_FLAGS.md](./MCP_RUNTIME_FLAGS.md).
+
+### Collection/DataInstance Binding
+
+- Runtime `DataInstanceResolver` использует только `collections.data_instance_id` (FK).
+- Legacy binding через `tool_instances.config.bindings` больше не является источником истины.

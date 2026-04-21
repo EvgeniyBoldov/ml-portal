@@ -35,14 +35,13 @@ async def test_create_rbac_rule_for_sql(client, admin_headers):
     
     # Create allow rule for tenant
     response = await client.post(
-        "/api/v1/admin/rbac/rules",
+        "/api/v1/admin/rbac",
         headers=admin_headers,
         json={
-            "scope": "tenant",
-            "tenant_id": test_tenant["id"],
-            "resource_type": "tool_instance",
+            "level": "tenant",
+            "owner_tenant_id": test_tenant["id"],
+            "resource_type": "instance",
             "resource_id": data_sql["id"],
-            "action": "allow",
             "effect": "allow",
         },
     )
@@ -79,14 +78,13 @@ async def test_create_rbac_rule_for_netbox(client, admin_headers):
     
     # Create allow rule for tenant
     response = await client.post(
-        "/api/v1/admin/rbac/rules",
+        "/api/v1/admin/rbac",
         headers=admin_headers,
         json={
-            "scope": "tenant",
-            "tenant_id": test_tenant["id"],
-            "resource_type": "tool_instance",
+            "level": "tenant",
+            "owner_tenant_id": test_tenant["id"],
+            "resource_type": "instance",
             "resource_id": data_netbox["id"],
-            "action": "allow",
             "effect": "allow",
         },
     )
@@ -101,7 +99,7 @@ async def test_create_rbac_rule_for_netbox(client, admin_headers):
 async def test_list_rbac_rules(client, admin_headers):
     """List all RBAC rules"""
     response = await client.get(
-        "/api/v1/admin/rbac/rules",
+        "/api/v1/admin/rbac",
         headers=admin_headers,
     )
     assert response.status_code == 200

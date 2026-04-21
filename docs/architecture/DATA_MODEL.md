@@ -107,14 +107,16 @@ PermissionSet and CredentialSet are still scope-aware, but scope is mainly used 
 │ slug            │
 │ name            │
 │ tenant_id       │
-│ tool_instance_  │
-│ id              │
-│ schema          │
-│ embedding_      │
-│ config          │
+│ data_instance_id│
+│ fields/schema   │
+│ vector_config   │
 │ status          │
 └─────────────────┘
 ```
+
+- `collections.data_instance_id` — обязательный FK на `tool_instances.id`.
+- Binding через `config.bindings` удалён из runtime-контракта.
+- Источник связи `Collection ↔ DataInstance` только реляционный FK.
 
 ### RAG Documents
 

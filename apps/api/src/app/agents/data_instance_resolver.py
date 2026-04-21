@@ -5,14 +5,10 @@ from typing import List, Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
-from app.models.collection import Collection
+from app.models.collection import Collection, CollectionType
 from app.models.tool_instance import ToolInstance
-from app.services.collection_binding import (
-    has_collection_binding,
-    resolve_bound_collection,
-    resolve_collection_runtime_domain,
-)
 from app.services.tool_instance_service import ToolInstanceService
 
 
@@ -47,13 +43,11 @@ class RuntimeDataInstanceResolver:
 
         resolved: List[AllowedDataInstance] = []
         for instance in instances:
-            runtime_domain = resolve_collection_runtime_domain(
-                instance.config,
-                fallback_domain=instance.domain,
-            )
             is_ready, readiness_reason, _ = await self.instance_service.evaluate_instance_readiness(
                 instance
             )
+            collection = await self._load_bound_collection(instance)
+            runtime_domain = self._resolve_runtime_domain(collection, instance)
             if not is_ready:
                 resolved.append(
                     AllowedDataInstance(
@@ -66,7 +60,6 @@ class RuntimeDataInstanceResolver:
                 )
                 continue
 
-            collection = await self._load_bound_collection(instance)
             provider = await self._load_provider_instance(instance)
 
             if provider is not None:
@@ -98,9 +91,34 @@ class RuntimeDataInstanceResolver:
         self,
         instance: ToolInstance,
     ) -> Optional[Collection]:
-        if not instance.is_data or not has_collection_binding(instance.config):
+        if not instance.is_data:
             return None
-        return await resolve_bound_collection(self.session, instance.config)
+        result = await self.session.execute(
+            select(Collection)
+            .options(
+                selectinload(Collection.schema),
+                selectinload(Collection.current_version),
+            )
+            .where(Collection.data_instance_id == instance.id)
+            .order_by(Collection.created_at.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
+    @staticmethod
+    def _resolve_runtime_domain(collection: Optional[Collection], instance: ToolInstance) -> str:
+        if collection is None:
+            return str(instance.domain or "").strip()
+        collection_type = str(collection.collection_type or "").strip().lower()
+        if collection_type == CollectionType.TABLE.value:
+            return "collection.table"
+        if collection_type == CollectionType.DOCUMENT.value:
+            return "collection.document"
+        if collection_type == CollectionType.SQL.value:
+            return "collection.sql"
+        if collection_type == CollectionType.API.value:
+            return "collection.api"
+        return str(instance.domain or "").strip()
 
     async def _load_provider_instance(
         self,

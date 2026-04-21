@@ -25,6 +25,7 @@ class CollectionQueryService:
             .options(
                 selectinload(Collection.schema),
                 selectinload(Collection.current_version),
+                selectinload(Collection.data_instance),
             )
             .where(Collection.id == collection_id)
         )
@@ -36,6 +37,7 @@ class CollectionQueryService:
             .options(
                 selectinload(Collection.schema),
                 selectinload(Collection.current_version),
+                selectinload(Collection.data_instance),
             )
             .where(
                 Collection.tenant_id == tenant_id,
@@ -49,6 +51,7 @@ class CollectionQueryService:
         query = query.options(
             selectinload(Collection.schema),
             selectinload(Collection.current_version),
+            selectinload(Collection.data_instance),
         )
         if active_only:
             query = query.where(Collection.is_active == True)

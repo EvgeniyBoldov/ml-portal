@@ -25,6 +25,7 @@ from app.workers.tasks_collection_vectorize import _build_point_id
 def _table_collection() -> Collection:
     return Collection(
         id=uuid4(),
+        data_instance_id=uuid4(),
         tenant_id=uuid4(),
         collection_type=CollectionType.TABLE.value,
         slug="tickets",
@@ -287,6 +288,7 @@ def test_collection_text_search_skips_stale_vector_hits_without_rows():
 def test_collection_field_layers_hide_system_and_limit_business_fields():
     collection = Collection(
         id=uuid4(),
+        data_instance_id=uuid4(),
         tenant_id=uuid4(),
         collection_type=CollectionType.DOCUMENT.value,
         slug="docs",
@@ -491,6 +493,7 @@ async def test_document_collection_status_snapshot_uses_document_lifecycle_reaso
 
     collection = Collection(
         id=uuid4(),
+        data_instance_id=uuid4(),
         tenant_id=uuid4(),
         collection_type=CollectionType.DOCUMENT.value,
         slug="docs",
@@ -598,6 +601,7 @@ def test_row_payload_validation_coerces_supported_types():
     service = CollectionService(session=None)
     collection = Collection(
         id=uuid4(),
+        data_instance_id=uuid4(),
         tenant_id=uuid4(),
         collection_type=CollectionType.TABLE.value,
         slug="typed_rows",

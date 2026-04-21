@@ -23,6 +23,18 @@ async def _find_collection_by_slug(client, admin_headers, slug: str):
     return None
 
 
+async def _resolve_data_instance_id(client, admin_headers) -> str:
+    instances_response = await client.get(
+        "/api/v1/admin/tool-instances",
+        headers=admin_headers,
+    )
+    assert instances_response.status_code == 200
+    instances = instances_response.json()
+    instance = next((i for i in instances if i.get("connector_type") == "data"), None)
+    assert instance is not None, "No data instance found"
+    return str(instance["id"])
+
+
 @pytest.mark.asyncio
 async def test_create_sql_collection(client, admin_headers):
     """Create SQL table collection"""
@@ -137,6 +149,8 @@ async def test_create_netbox_collection(client, admin_headers):
 @pytest.mark.asyncio
 async def test_create_rag_reglaments_collection(client, admin_headers):
     """Create RAG collection for reglaments"""
+    data_instance_id = await _resolve_data_instance_id(client, admin_headers)
+
     # Get test tenant
     tenants_response = await client.get(
         "/api/v1/admin/tenants",
@@ -156,6 +170,7 @@ async def test_create_rag_reglaments_collection(client, admin_headers):
             "name": "Reglaments",
             "description": "Corporate regulations and procedures",
             "collection_type": "document",
+            "data_instance_id": data_instance_id,
             "is_active": True,
             "has_vector_search": True,
         },
@@ -177,6 +192,8 @@ async def test_create_rag_reglaments_collection(client, admin_headers):
 @pytest.mark.asyncio
 async def test_create_rag_configs_collection(client, admin_headers):
     """Create RAG collection for switch configs"""
+    data_instance_id = await _resolve_data_instance_id(client, admin_headers)
+
     # Get test tenant
     tenants_response = await client.get(
         "/api/v1/admin/tenants",
@@ -196,6 +213,7 @@ async def test_create_rag_configs_collection(client, admin_headers):
             "name": "Switch Configs",
             "description": "Network device configuration examples",
             "collection_type": "document",
+            "data_instance_id": data_instance_id,
             "is_active": True,
             "has_vector_search": True,
         },

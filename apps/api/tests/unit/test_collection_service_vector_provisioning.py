@@ -171,15 +171,19 @@ async def test_create_collection_cleans_up_sql_and_qdrant_on_late_failure(monkey
     monkeypatch.setattr(service, "_build_indexes_sql", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(service, "_provision_qdrant_collection", AsyncMock())
     monkeypatch.setattr(
+        service.lifecycle,
+        "_resolve_and_validate_data_instance",
+        AsyncMock(return_value=SimpleNamespace(id=uuid4(), connector_type="data", is_active=True, config={})),
+    )
+    monkeypatch.setattr(
         service,
-        "_create_tool_instance_for_collection",
-        AsyncMock(side_effect=RuntimeError("tool instance boom")),
+        "sync_collection_status",
+        AsyncMock(side_effect=RuntimeError("status sync boom")),
     )
     cleanup_qdrant = AsyncMock()
     monkeypatch.setattr(service, "_cleanup_qdrant_collection", cleanup_qdrant)
-    monkeypatch.setattr(service, "sync_collection_status", AsyncMock())
 
-    with pytest.raises(RuntimeError, match="tool instance boom"):
+    with pytest.raises(RuntimeError, match="status sync boom"):
         await service.create_collection(
             tenant_id=tenant_id,
             slug=slug,
@@ -193,6 +197,7 @@ async def test_create_collection_cleans_up_sql_and_qdrant_on_late_failure(monkey
                 }
             ],
             collection_type="table",
+            data_instance_id=uuid4(),
         )
 
     assert any(
@@ -216,12 +221,9 @@ async def test_delete_collection_deletes_db_row_before_best_effort_cleanup(monke
         slug="docs",
         table_name="coll_test_docs",
         qdrant_collection_name="coll_test_docs",
-        tool_instance_id=uuid4(),
     )
 
     monkeypatch.setattr(service, "get_by_slug", AsyncMock(return_value=collection))
-    delete_tool_instance = AsyncMock()
-    monkeypatch.setattr(service, "_delete_tool_instance_for_collection", delete_tool_instance)
     monkeypatch.setattr(
         "app.adapters.impl.qdrant.QdrantVectorStore",
         lambda: SimpleNamespace(
@@ -235,7 +237,6 @@ async def test_delete_collection_deletes_db_row_before_best_effort_cleanup(monke
     assert result is True
     session.delete.assert_awaited_once_with(collection)
     session.flush.assert_awaited_once()
-    delete_tool_instance.assert_awaited_once_with(collection.tool_instance_id)
     assert any(
         "DROP TABLE IF EXISTS coll_test_docs CASCADE" in str(item.args[0])
         for item in session.execute.await_args_list

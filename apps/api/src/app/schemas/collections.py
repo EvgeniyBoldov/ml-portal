@@ -72,17 +72,8 @@ class CreateCollectionRequest(BaseModel):
     source_contract: Optional[dict] = None
     vector_config: Optional[VectorConfigSchema] = None
     table_schema: Optional[dict] = None
-    # SQL collections: link to existing data instance
-    data_instance_id: Optional[uuid.UUID] = None
-
-    @model_validator(mode="after")
-    def validate_sql_connector(self) -> "CreateCollectionRequest":
-        if (
-            self.collection_type in {CollectionType.SQL.value, CollectionType.API.value}
-            and self.data_instance_id is None
-        ):
-            raise ValueError("data_instance_id is required for sql/api collections")
-        return self
+    # Required FK: each collection is bound to a data instance.
+    data_instance_id: uuid.UUID
 
 
 class SchemaOperation(BaseModel):
@@ -166,7 +157,8 @@ class CollectionResponse(BaseModel):
     is_fully_vectorized: bool = False
     
     # Instance link
-    data_instance_id: Optional[uuid.UUID] = None
+    data_instance_id: uuid.UUID
+    data_instance: Optional["DataInstanceShort"] = None
     
     # Remote collection fields
     last_sync_at: Optional[str] = None
@@ -186,6 +178,12 @@ class CollectionListResponse(BaseModel):
     page: int
     size: int
     has_more: bool
+
+
+class DataInstanceShort(BaseModel):
+    id: uuid.UUID
+    slug: str
+    name: str
 
 
 class VectorCollectionAuditEntry(BaseModel):

@@ -25,10 +25,6 @@ from app.models.tool_instance import ToolInstance
 from app.services.credential_service import CredentialService
 from app.services.permission_service import EffectivePermissions, PermissionService
 from app.services.tool_instance_service import ToolInstanceService
-from app.services.collection_binding import (
-    has_collection_binding,
-    extract_collection_binding,
-)
 from app.services.collection_tool_resolver import CollectionToolResolver
 from app.core.config import get_settings
 
@@ -106,14 +102,13 @@ class OperationRouter:
                 )
                 continue
 
-            if collection is None and has_collection_binding(instance.config):
-                result.missing.collections.append(f"{instance.slug} (unresolved_collection_binding)")
+            if collection is None:
+                result.missing.collections.append(f"{instance.slug} (unbound_data_instance)")
                 continue
 
             provider_for_execution = provider if provider is not None else instance
-            binding = extract_collection_binding(instance.config)
-            collection_id = str(binding.collection_id) if binding and binding.collection_id else None
-            collection_slug = binding.collection_slug if binding else None
+            collection_id = str(collection.id)
+            collection_slug = str(collection.slug)
             if not self.runtime_rbac_resolver.is_collection_allowed(
                 effective_permissions=effective_permissions,
                 collection_slug=collection_slug,

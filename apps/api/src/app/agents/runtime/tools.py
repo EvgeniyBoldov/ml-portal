@@ -9,7 +9,11 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from app.agents.context import OperationCall, ToolContext, ToolResult
 from app.agents.contracts import ResolvedOperation
-from app.agents.runtime.confirmation import ConfirmationService, build_operation_fingerprint
+from app.agents.runtime.confirmation import (
+    ConfirmationService,
+    build_operation_fingerprint,
+    get_confirmation_service,
+)
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -23,6 +27,8 @@ class ConfirmationRequiredError(RuntimeError):
 
 class OperationExecutor:
     """Execute operation calls with validation, timeouts, and source extraction."""
+    def __init__(self, confirmation_service: Optional[ConfirmationService] = None) -> None:
+        self._confirmation_service = confirmation_service or get_confirmation_service()
 
     async def execute(
         self,
@@ -118,8 +124,8 @@ class OperationExecutor:
             )
             return ToolResult.fail(str(e)), []
 
-    @staticmethod
     def _ensure_confirmation_if_required(
+        self,
         *,
         operation: ResolvedOperation,
         operation_call: OperationCall,
@@ -134,26 +140,19 @@ class OperationExecutor:
             operation=operation.operation,
             args=operation_call.arguments or {},
         )
-        service = ConfirmationService()
         raw_tokens = ctx.extra.get("confirmation_tokens")
         tokens = raw_tokens if isinstance(raw_tokens, list) else []
-        used = ctx.extra.get("used_confirmation_tokens")
-        if not isinstance(used, set):
-            used = set()
-            ctx.extra["used_confirmation_tokens"] = used
 
         for token in tokens:
             if not isinstance(token, str) or not token.strip():
                 continue
-            if token in used:
-                continue
-            if service.verify(
+            if self._confirmation_service.verify(
                 token=token,
                 user_id=ctx.user_id,
                 chat_id=ctx.chat_id,
                 fingerprint=fingerprint,
+                consume=True,
             ):
-                used.add(token)
                 return
 
         args_preview = json.dumps(

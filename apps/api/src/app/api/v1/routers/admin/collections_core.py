@@ -172,6 +172,7 @@ async def list_all_collections(
     query = select(Collection).options(
         selectinload(Collection.schema),
         selectinload(Collection.current_version),
+        selectinload(Collection.data_instance),
     )
     if tenant_id:
         query = query.where(Collection.tenant_id == tenant_id)
@@ -240,6 +241,7 @@ async def create_collection(
         .options(
             selectinload(Collection.schema),
             selectinload(Collection.current_version),
+            selectinload(Collection.data_instance),
         )
         .where(Collection.id == collection.id)
     )
