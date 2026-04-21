@@ -17,6 +17,7 @@ def _instance(**overrides):
         "domain": "collection.table",
         "config": {},
         "instance_kind": "data",
+        "is_data": True,
         "is_active": True,
     }
     base.update(overrides)
@@ -83,7 +84,10 @@ def test_materialize_runtime_operations_deduplicates_and_applies_runtime_flags()
 
 @pytest.mark.asyncio
 async def test_runtime_tool_summary_returns_zero_for_non_data_instance():
-    summary = await _runtime_tool_summary(db=SimpleNamespace(), instance=_instance(instance_kind="service"))
+    summary = await _runtime_tool_summary(
+        db=SimpleNamespace(),
+        instance=_instance(instance_kind="service", is_data=False),
+    )
     assert summary == (0, 0, [])
 
 

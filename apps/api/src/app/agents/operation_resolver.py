@@ -8,10 +8,6 @@ from app.agents.credential_resolver import RuntimeCredentialResolver
 from app.agents.operation_builder import OperationBuilder
 from app.models.discovered_tool import DiscoveredTool
 from app.models.tool_instance import ToolInstance
-from app.services.collection_binding import (
-    resolve_collection_context_domain,
-    resolve_collection_runtime_domain,
-)
 from app.services.collection_tool_resolver import CollectionToolResolver
 from app.services.permission_service import EffectivePermissions
 
@@ -41,12 +37,8 @@ class RuntimeOperationResolver:
         tenant_id: Optional[UUID] = None,
         sandbox_overrides: Optional[Dict[str, Any]] = None,
     ) -> List[tuple[ResolvedOperation, Optional[OperationCredentialContext]]]:
-        runtime_domain = resolve_collection_runtime_domain(
-            instance.config,
-            fallback_domain=instance.domain,
-        )
-        collection_context_domain = resolve_collection_context_domain(instance.config)
-        context_domains = [collection_context_domain] if collection_context_domain else None
+        runtime_domain = str(instance.domain or "").strip()
+        context_domains = [runtime_domain] if runtime_domain.startswith("collection.") else None
         return await self.operation_builder.build_operations_for_instance(
             instance=instance,
             provider=provider,

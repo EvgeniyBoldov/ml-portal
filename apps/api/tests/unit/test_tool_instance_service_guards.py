@@ -126,6 +126,7 @@ async def test_remote_data_instance_without_access_binding_is_not_ready():
         instance_kind=InstanceKind.DATA.value,
     )
     instance.url = ""
+    service._resolve_bound_collection = AsyncMock(return_value=None)
 
     ready, reason, semantic_source = await service.evaluate_instance_readiness(instance)
 

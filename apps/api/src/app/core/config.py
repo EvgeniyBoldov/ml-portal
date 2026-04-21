@@ -206,6 +206,16 @@ class Settings(BaseSettings):
             raise ValueError("S3_SECRET_KEY must be set in non-local environments")
         return v
 
+    @field_validator("CONFIRMATION_SECRET")
+    @classmethod
+    def validate_confirmation_secret(cls, v: str | None, info: ValidationInfo) -> str | None:
+        env = str(info.data.get("ENV", "local") or "local").strip().lower()
+        strict_envs = {"production", "prod", "staging"}
+        secret = str(v or "").strip()
+        if env in strict_envs and not secret:
+            raise ValueError("CONFIRMATION_SECRET must be set in production-like environments")
+        return secret or None
+
 
 @lru_cache()
 def get_settings() -> Settings:

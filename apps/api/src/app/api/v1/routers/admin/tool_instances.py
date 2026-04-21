@@ -19,10 +19,6 @@ from app.api.deps import db_session, require_admin
 from app.core.security import UserCtx
 from app.models.discovered_tool import DiscoveredTool
 from app.models.tool_instance import ToolInstance
-from app.services.collection_binding import (
-    resolve_collection_context_domain,
-    resolve_collection_runtime_domain,
-)
 from app.services.instance_capabilities import is_mcp_service_instance
 from app.services.collection_tool_resolver import CollectionToolResolver
 from app.services.tool_discovery_service import ToolDiscoveryService
@@ -60,12 +56,8 @@ def _materialize_runtime_operations(
 ) -> List[RuntimeOperationListItem]:
     items: List[RuntimeOperationListItem] = []
     seen: set[str] = set()
-    runtime_domain = resolve_collection_runtime_domain(
-        instance.config,
-        fallback_domain=instance.domain,
-    )
-    collection_context_domain = resolve_collection_context_domain(instance.config)
-    context_domains = [collection_context_domain] if collection_context_domain else None
+    runtime_domain = str(instance.domain or "").strip()
+    context_domains = [runtime_domain] if runtime_domain.startswith("collection.") else None
     for discovered_tool in discovered_tools:
         publication = resolve_publication(
             raw_slug=discovered_tool.slug,
@@ -129,7 +121,7 @@ async def _runtime_tool_summary(
     db: AsyncSession,
     instance: ToolInstance,
 ) -> tuple[int, int, List[RuntimeOperationListItem]]:
-    if str(getattr(instance, "instance_kind", "")).strip().lower() != "data":
+    if not instance.is_data:
         return 0, 0, []
     if not getattr(instance, "is_active", False):
         return 0, 0, []

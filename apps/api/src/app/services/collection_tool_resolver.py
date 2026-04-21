@@ -2,7 +2,7 @@
 Collection-aware runtime tool resolver.
 
 Centralizes discovered-tool loading logic for runtime/admin summaries.
-The resolver prefers explicit collection binding metadata over instance domain.
+The resolver uses Collection.data_instance_id as single source of truth.
 """
 from __future__ import annotations
 
@@ -16,8 +16,10 @@ from sqlalchemy.orm import selectinload
 from app.models.discovered_tool import DiscoveredTool
 from app.models.tool_instance import ToolInstance
 from app.models.collection import Collection
-from app.services.collection_binding import resolve_bound_collection
-from app.services.collection_binding import resolve_collection_runtime_domain
+from app.services.collection_linking import (
+    resolve_bound_collection_by_instance_id,
+    runtime_domain_for_collection,
+)
 from app.services.instance_capabilities import is_mcp_service_instance
 
 
@@ -66,14 +68,12 @@ class CollectionToolResolver:
         provider: ToolInstance,
     ) -> CollectionToolResolutionContext:
         bound_collection = await self._resolve_bound_collection(instance)
-        runtime_domain = resolve_collection_runtime_domain(
-            getattr(instance, "config", None),
-            getattr(instance, "domain", ""),
+        runtime_domain = runtime_domain_for_collection(
+            collection=bound_collection,
+            fallback_domain=getattr(instance, "domain", ""),
         )
         provider_kind = "mcp" if self._is_mcp_provider(provider) else "local"
-        is_service_instance = (
-            str(getattr(instance, "instance_kind", "") or "").strip().lower() == "service"
-        )
+        is_service_instance = bool(getattr(instance, "is_service", False))
         return CollectionToolResolutionContext(
             instance=instance,
             provider=provider,
@@ -202,24 +202,21 @@ class CollectionToolResolver:
         Build ordered local runtime domains for compatibility filtering.
 
         Priority:
-        1. explicit collection-bound runtime domain from config
-        2. persisted instance domain
+        1. persisted instance domain
         """
         domains: List[str] = []
-        resolved = resolve_collection_runtime_domain(
-            getattr(instance, "config", None),
-            getattr(instance, "domain", ""),
-        )
-        fallback = str(getattr(instance, "domain", "") or "").strip()
-
-        for candidate in (resolved, fallback):
-            candidate = str(candidate or "").strip()
-            if candidate and candidate not in domains:
-                domains.append(candidate)
+        domain = str(getattr(instance, "domain", "") or "").strip()
+        if domain:
+            domains.append(domain)
         return domains
 
     async def _resolve_bound_collection(self, instance: ToolInstance) -> Optional[Collection]:
-        return await resolve_bound_collection(self.session, getattr(instance, "config", None))
+        if not getattr(instance, "is_data", False):
+            return None
+        return await resolve_bound_collection_by_instance_id(
+            self.session,
+            data_instance_id=instance.id,
+        )
 
     @staticmethod
     def _is_tool_supported_for_context(

@@ -51,24 +51,17 @@ class ConfirmationService:
     def __init__(self) -> None:
         settings = get_settings()
         self._ttl_seconds = int(getattr(settings, "CONFIRMATION_TTL_SECONDS", 300) or 300)
+        env = str(getattr(settings, "ENV", "local") or "local").strip().lower()
+        strict_envs = {"production", "prod", "staging"}
         confirmation_secret = str(getattr(settings, "CONFIRMATION_SECRET", "") or "").strip()
         if confirmation_secret:
             secret = confirmation_secret
-            secret_source = "CONFIRMATION_SECRET"
         else:
-            credentials_master_key = str(getattr(settings, "CREDENTIALS_MASTER_KEY", "") or "").strip()
-            if credentials_master_key:
-                secret = credentials_master_key
-                secret_source = "CREDENTIALS_MASTER_KEY"
-            else:
-                secret = str(
-                    getattr(settings, "JWT_SECRET", "change-me-in-production")
-                    or "change-me-in-production"
-                ).strip()
-                secret_source = "JWT_SECRET/default"
+            if env in strict_envs:
+                raise RuntimeError("CONFIRMATION_SECRET must be set in production-like environments")
+            secret = str(getattr(settings, "JWT_SECRET", "change-me-in-production") or "").strip()
             logger.warning(
-                "ConfirmationService secret fallback in use (%s); set CONFIRMATION_SECRET explicitly",
-                secret_source,
+                "ConfirmationService uses JWT_SECRET fallback in non-production environment; set CONFIRMATION_SECRET explicitly",
             )
         self._secret = secret
         self._algorithm = "HS256"

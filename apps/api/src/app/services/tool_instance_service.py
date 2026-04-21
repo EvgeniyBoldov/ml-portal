@@ -25,7 +25,7 @@ from app.core.logging import get_logger
 from app.models.tool_instance import ToolInstance, InstancePlacement, InstanceKind
 from app.models.collection import Collection
 from app.repositories.tool_instance_repository import ToolInstanceRepository
-from app.services.collection_binding import resolve_bound_collection
+from app.services.collection_linking import resolve_bound_collection_by_instance_id
 from app.services.connector_templates import (
     normalize_data_connector_subtype,
     validate_connector_config,
@@ -151,7 +151,12 @@ class ToolInstanceService:
         )
 
     async def _resolve_bound_collection(self, instance: ToolInstance) -> Optional[Collection]:
-        return await resolve_bound_collection(self.session, instance.config)
+        if not instance.is_data:
+            return None
+        return await resolve_bound_collection_by_instance_id(
+            self.session,
+            data_instance_id=instance.id,
+        )
 
     async def evaluate_instance_readiness(self, instance: ToolInstance) -> tuple[bool, str, str]:
         """

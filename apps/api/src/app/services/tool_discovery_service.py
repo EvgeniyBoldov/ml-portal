@@ -24,8 +24,9 @@ from app.agents.mcp_discovery import parse_discovered_operation
 from app.agents.registry import ToolRegistry
 from app.core.logging import get_logger
 from app.models.discovered_tool import DiscoveredTool
+from app.models.collection import Collection
 from app.models.tool_instance import ToolInstance
-from app.services.collection_binding import resolve_collection_context_domain
+from app.services.collection_linking import context_domain_for_collection
 from app.services.instance_capabilities import is_mcp_service_instance
 
 logger = get_logger(__name__)
@@ -361,7 +362,11 @@ class ToolDiscoveryService:
         linked_instances = list(result.scalars().all())
         linked_domains: List[str] = []
         for instance in linked_instances:
-            collection_domain = resolve_collection_context_domain(instance.config)
+            collection_result = await self.session.execute(
+                select(Collection).where(Collection.data_instance_id == instance.id).limit(1)
+            )
+            bound_collection = collection_result.scalar_one_or_none()
+            collection_domain = context_domain_for_collection(bound_collection)
             if collection_domain and collection_domain not in linked_domains:
                 linked_domains.append(collection_domain)
 

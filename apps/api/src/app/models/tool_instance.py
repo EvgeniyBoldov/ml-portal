@@ -11,11 +11,8 @@ Placement определяет операционную модель:
 - REMOTE: user-managed external system
 
 Semantic layer больше не живёт на инстансе.
-Локальные data-инстансы получают смысл через binding на collection asset,
+Локальные data-инстансы получают смысл через связанную Collection (FK),
 а service-инстансы описывают только доступ/провайдера.
-
-`config.collection_binding` is runtime cache metadata for collection-bound instances.
-Source of truth for relation stays in Collection.data_instance_id.
 """
 import uuid
 from datetime import datetime, timezone
