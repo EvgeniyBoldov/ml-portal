@@ -13,7 +13,6 @@ import {
   type Collection,
   type CreateCollectionRequest,
   type CollectionField,
-  type CollectionVersion,
   type ToolInstanceDetail,
   type CollectionType,
 } from '@/shared/api';
@@ -35,8 +34,6 @@ import {
   STATS_FIELDS,
   VECTOR_STATS_FIELDS,
   STATUS_FIELDS,
-  SEMANTIC_FIELDS,
-  POLICY_FIELDS,
 } from './collection/fields/blockConfigs';
 import {
   ensureSqlPresetFields,
@@ -119,8 +116,8 @@ export function CollectionPage() {
       if (!data.slug?.trim() || !data.name?.trim() || !data.tenant_id) {
         return 'Заполните slug, название и тенант';
       }
-      if ((data.collection_type === 'sql' || data.collection_type === 'api') && !data.data_instance_id) {
-        return 'Для SQL/API коллекции нужно выбрать коннектор данных';
+      if (!data.data_instance_id) {
+        return 'Нужно выбрать data instance';
       }
       return null;
     },
@@ -128,7 +125,6 @@ export function CollectionPage() {
       const isDocument = data.collection_type === 'document';
       const isApi = data.collection_type === 'api';
       const isSql = data.collection_type === 'sql';
-      const isRemote = data.collection_type === 'sql' || data.collection_type === 'api';
       const fields = (
         isApi
           ? []
@@ -146,7 +142,7 @@ export function CollectionPage() {
         name: data.name,
         description: data.description,
         fields,
-        data_instance_id: isRemote ? (data.data_instance_id || null) : null,
+        data_instance_id: String(data.data_instance_id || ''),
         vector_config: needsVectorConfig ? {
           chunk_strategy: data.chunk_strategy ?? 'by_paragraphs',
           chunk_size: data.chunk_size ?? 512,
@@ -215,6 +211,9 @@ export function CollectionPage() {
     id: collection?.id ?? '',
     created_at: collection?.created_at ?? '',
     updated_at: collection?.updated_at ?? '',
+    data_instance_name: collection?.data_instance?.name ?? dataConnector?.name ?? '—',
+    data_instance_slug: collection?.data_instance?.slug ?? dataConnector?.slug ?? '—',
+    data_instance_link: collection?.data_instance?.id ?? collection?.data_instance_id ?? '',
   };
 
   const blockData = isEditable ? formData : viewData;
@@ -226,13 +225,13 @@ export function CollectionPage() {
     ? 'sql'
     : activeCollectionType === 'api'
       ? 'api'
-      : null;
+      : '';
 
   const connectorOptions = useMemo(() => {
     const filtered = dataConnectors.filter((connector) => {
       if (connector.connector_type !== 'data') return false;
-      if (!connectorSubtypeFilter) return false;
-      return String(connector.connector_subtype || '').toLowerCase() === connectorSubtypeFilter;
+      if (!connectorSubtypeFilter) return true;
+      return String(connector.connector_subtype || '').toLowerCase() === String(connectorSubtypeFilter);
     });
 
     const options = filtered.map((connector) => ({
@@ -270,37 +269,12 @@ export function CollectionPage() {
 
   const configFieldsCreate = buildConfigFieldsByType(
     (formData.collection_type ?? 'table') as CollectionType,
-    { editableCollectionType: true, connectorOptions },
+    { editableCollectionType: true, editableDataInstance: true, connectorOptions },
   );
   const configFieldsViewEdit = buildConfigFieldsByType(
     activeCollectionType,
-    { editableCollectionType: false, connectorOptions },
+    { editableCollectionType: false, editableDataInstance: false, connectorOptions },
   );
-
-  const currentVersion = useMemo<CollectionVersion | null>(() => {
-    if (collection?.current_version) return collection.current_version;
-    if (!versions.length) return null;
-    if (collection?.current_version_id) {
-      const byId = versions.find((version) => version.id === collection.current_version_id);
-      if (byId) return byId;
-    }
-    const published = versions.find((version) => version.status === 'published');
-    return published ?? versions[0] ?? null;
-  }, [collection?.current_version, collection?.current_version_id, versions]);
-
-  const semanticData = {
-    summary: currentVersion?.semantic_profile?.summary ?? '',
-    entity_types: currentVersion?.semantic_profile?.entity_types ?? [],
-    use_cases: currentVersion?.semantic_profile?.use_cases ?? '',
-    limitations: currentVersion?.semantic_profile?.limitations ?? '',
-    examples: (currentVersion?.semantic_profile?.examples ?? []).join('\n'),
-    notes: currentVersion?.notes ?? '',
-    dos: (currentVersion?.policy_hints?.dos ?? []).join('\n'),
-    donts: (currentVersion?.policy_hints?.donts ?? []).join('\n'),
-    guardrails: (currentVersion?.policy_hints?.guardrails ?? []).join('\n'),
-    citation_rules: (currentVersion?.policy_hints?.citation_rules ?? []).join('\n'),
-    sensitive_fields: (currentVersion?.policy_hints?.sensitive_fields ?? []).join('\n'),
-  };
 
   const runtimeOperations = dataConnector?.runtime_operations ?? [];
 
@@ -321,11 +295,9 @@ export function CollectionPage() {
         handleFieldChange('chunk_strategy', 'by_paragraphs');
         handleFieldChange('chunk_size', 512);
         handleFieldChange('overlap', 50);
-        handleFieldChange('data_instance_id', '');
       } else if (nextType === 'table') {
         handleFieldChange('fields', applyCollectionTypeFieldPreset(nextType, (formData.fields ?? []) as CollectionField[]));
         handleFieldChange('has_vector_search', false);
-        handleFieldChange('data_instance_id', '');
       } else if (nextType === 'api') {
         handleFieldChange('fields', applyCollectionTypeFieldPreset(nextType, (formData.fields ?? []) as CollectionField[]));
         handleFieldChange('has_vector_search', false);
@@ -496,6 +468,33 @@ export function CollectionPage() {
             onChange={handleFieldChangeWrapped}
           />
           <Block
+            title="Data connector"
+            icon="link"
+            iconVariant="info"
+            width="1/2"
+            fields={[
+              { key: 'data_instance_name', type: 'text', label: 'Название', editable: false },
+              { key: 'data_instance_slug', type: 'code', label: 'Slug', editable: false },
+              {
+                key: 'data_instance_link',
+                type: 'custom',
+                label: 'Карточка',
+                editable: false,
+                render: (value: string) => value
+                  ? (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => navigate(`/admin/instances/${value}`)}
+                    >
+                      Открыть инстанс
+                    </Button>
+                  ) : '—',
+              },
+            ]}
+            data={viewData}
+          />
+          <Block
             title="Конфигурация"
             icon="settings"
             iconVariant="primary"
@@ -589,33 +588,6 @@ export function CollectionPage() {
             loading={sqlCollectionDataLoading}
           />
         </Tab>
-
-        {!isNew && (
-          <Tab
-            title="Семантический слой"
-            layout="grid"
-            id="semantic"
-          >
-            <Block
-              title="Semantic Profile (актуальная версия)"
-              icon="sparkles"
-              iconVariant="info"
-              width="1/2"
-              fields={SEMANTIC_FIELDS}
-              data={semanticData}
-              editable={false}
-            />
-            <Block
-              title="Policy Hints (актуальная версия)"
-              icon="shield"
-              iconVariant="warn"
-              width="1/2"
-              fields={POLICY_FIELDS}
-              data={semanticData}
-              editable={false}
-            />
-          </Tab>
-        )}
 
         {!isNew && (
           <Tab

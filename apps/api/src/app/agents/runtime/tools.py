@@ -4,17 +4,31 @@ OperationExecutor — выполнение operation calls с таймаутам
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.agents.context import OperationCall, ToolContext, ToolResult
 from app.agents.contracts import ResolvedOperation
+from app.agents.runtime.confirmation import (
+    ConfirmationService,
+    build_operation_fingerprint,
+    get_confirmation_service,
+)
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
 
+class ConfirmationRequiredError(RuntimeError):
+    def __init__(self, payload: Dict[str, Any]) -> None:
+        super().__init__(str(payload.get("summary") or "Operation requires confirmation"))
+        self.payload = payload
+
+
 class OperationExecutor:
     """Execute operation calls with validation, timeouts, and source extraction."""
+    def __init__(self, confirmation_service: Optional[ConfirmationService] = None) -> None:
+        self._confirmation_service = confirmation_service or get_confirmation_service()
 
     async def execute(
         self,
@@ -58,6 +72,12 @@ class OperationExecutor:
         if validation_error:
             logger.warning(f"Operation args validation failed: {validation_error}")
             return ToolResult.fail(validation_error), []
+
+        self._ensure_confirmation_if_required(
+            operation=operation,
+            operation_call=operation_call,
+            ctx=ctx,
+        )
 
         try:
             logger.info(f"Executing operation: {operation_call.operation_slug}")
@@ -103,6 +123,53 @@ class OperationExecutor:
                 exc_info=True,
             )
             return ToolResult.fail(str(e)), []
+
+    def _ensure_confirmation_if_required(
+        self,
+        *,
+        operation: ResolvedOperation,
+        operation_call: OperationCall,
+        ctx: ToolContext,
+    ) -> None:
+        if not bool(operation.requires_confirmation):
+            return
+        if ctx.chat_id is None:
+            return
+        fingerprint = build_operation_fingerprint(
+            tool_slug=operation.operation_slug,
+            operation=operation.operation,
+            args=operation_call.arguments or {},
+        )
+        raw_tokens = ctx.extra.get("confirmation_tokens")
+        tokens = raw_tokens if isinstance(raw_tokens, list) else []
+
+        for token in tokens:
+            if not isinstance(token, str) or not token.strip():
+                continue
+            if self._confirmation_service.verify(
+                token=token,
+                user_id=ctx.user_id,
+                chat_id=ctx.chat_id,
+                fingerprint=fingerprint,
+                consume=True,
+            ):
+                return
+
+        args_preview = json.dumps(
+            operation_call.arguments or {},
+            ensure_ascii=False,
+            default=str,
+        )[:600]
+        raise ConfirmationRequiredError(
+            payload={
+                "operation_fingerprint": fingerprint,
+                "tool_slug": operation.operation_slug,
+                "operation": operation.operation,
+                "risk_level": operation.risk_level,
+                "args_preview": args_preview,
+                "summary": operation.description or "Operation requires explicit confirmation",
+            }
+        )
 
     @staticmethod
     def _find_operation(

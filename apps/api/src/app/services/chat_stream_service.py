@@ -4,7 +4,7 @@ Chat streaming service with idempotency, context loading, and Agent Runtime inte
 This service acts as a thin transport layer:
 - Handles idempotency
 - Manages message persistence
-- Delegates agent execution to AgentRuntime
+- Delegates agent execution to the v3 RuntimePipeline
 """
 from __future__ import annotations
 from typing import Optional, Dict, Any, List, AsyncGenerator
@@ -18,8 +18,8 @@ from redis.asyncio import Redis
 from app.repositories.chats_repo import AsyncChatsRepository, AsyncChatMessagesRepository
 from app.core.http.clients import LLMClientProtocol
 from app.services.run_store import RunStore
-from app.agents import AgentRuntime, ToolContext, RuntimeEvent, RuntimeEventType
-from app.agents.runtime.pipeline import RuntimePipeline
+from app.agents import ToolContext
+from app.runtime import RuntimePipeline, PipelineRequest, RuntimeEvent, RuntimeEventType
 from app.agents.execution_preflight import AgentUnavailableError
 from app.core.logging import get_logger
 from app.core.idempotency import IdempotencyManager
@@ -55,7 +55,6 @@ class ChatStreamService:
         self.idempotency = IdempotencyManager(redis)
         # Keep constructor test-friendly: RunStore resolves global factory lazily on first write.
         self.run_store = RunStore(session=session)
-        self.runtime = AgentRuntime(llm_client, run_store=self.run_store)
         self.context_service = ChatContextService(session, llm_client, messages_repo)
         self.title_service = ChatTitleService(session, llm_client, chats_repo)
         self.persistence_service = ChatPersistenceService(session, messages_repo)
@@ -165,6 +164,7 @@ class ChatStreamService:
         user_id: str,
         content: str,
         attachment_ids: Optional[list[str]] = None,
+        confirmation_tokens: Optional[list[str]] = None,
         idempotency_key: Optional[str] = None,
         model: Optional[str] = None,
         agent_slug: Optional[str] = None,
@@ -261,6 +261,7 @@ class ChatStreamService:
                 user_id=user_id,
                 content=content,
                 attachment_ids=attachment_ids,
+                confirmation_tokens=confirmation_tokens or [],
                 attachment_meta=self.attachment_service.to_meta(attachment_rows),
                 attachment_prompt_context=attachment_prompt_context,
                 idempotency_key=idempotency_key,
@@ -289,7 +290,7 @@ class ChatStreamService:
         model: Optional[str],
         content: str,
     ) -> AsyncGenerator[Dict[str, Any], None]:
-        """Run agent via RuntimePipeline with event mapping and summary generation."""
+        """Run the turn via runtime v3 Pipeline, translating events to SSE payloads."""
         try:
             runtime_deps = tool_ctx.get_runtime_deps()
             runtime_deps.session_factory = get_session_factory()
@@ -298,20 +299,24 @@ class ChatStreamService:
             pipeline = RuntimePipeline(
                 session=self.session,
                 llm_client=self.llm_client,
-                runtime=self.runtime,
+                run_store=self.run_store,
             )
 
             text_content = content.get("text", str(content)) if isinstance(content, dict) else str(content)
 
-            async for event in pipeline.execute(
+            pipeline_request = PipelineRequest(
                 request_text=text_content,
-                user_id=uuid.UUID(user_id),
-                tenant_id=uuid.UUID(tenant_id),
+                chat_id=str(tool_ctx.chat_id),
+                user_id=user_id,
+                tenant_id=tenant_id,
                 messages=llm_messages,
-                ctx=tool_ctx,
                 agent_slug=agent_slug,
                 model=model,
-            ):
+                continuation_meta=(tool_ctx.extra or {}).get("continuation_meta", {}) if hasattr(tool_ctx, "extra") else {},
+                confirmation_tokens=list((tool_ctx.extra or {}).get("confirmation_tokens") or []),
+            )
+
+            async for event in pipeline.execute(pipeline_request, tool_ctx):
                 # FINAL and STOP are handled specially below — skip _map for them
                 if event.type == RuntimeEventType.FINAL:
                     final_content = event.data.get("content", "")
@@ -321,16 +326,9 @@ class ChatStreamService:
                         "content": final_content,
                         "sources": final_sources,
                     }
-                    try:
-                        await self.context_service.generate_and_store_summary(
-                            chat_id=tool_ctx.chat_id,
-                            user_message=text_content,
-                            agent_response=final_content,
-                            execution_run_id=event.data.get("run_id"),
-                            tenant_id=tenant_id,
-                        )
-                    except Exception as e:
-                        logger.warning(f"Failed to generate summary: {e}")
+                    # Rolling dialogue summary is produced by the pipeline's
+                    # TurnSummarizer (see app.runtime.summarizer_turn) right
+                    # before FINAL is emitted; nothing to do here.
 
                 elif event.type == RuntimeEventType.STOP:
                     stop_payload = dict(event.data or {})

@@ -6,7 +6,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.agents.credential_resolver import RuntimeCredentialResolver
+from app.agents.credential_resolver import CredentialsUnavailableError, RuntimeCredentialResolver
 from app.models.tool_instance import ToolInstance
 
 
@@ -41,7 +41,7 @@ def _local_instance() -> ToolInstance:
 
 
 @pytest.mark.asyncio
-async def test_runtime_credential_resolver_uses_platform_only_strategy_without_broker():
+async def test_runtime_credential_resolver_uses_explicit_scope_strategy_without_broker():
     service = SimpleNamespace(
         resolve_credentials=AsyncMock(
             return_value=SimpleNamespace(
@@ -58,17 +58,17 @@ async def test_runtime_credential_resolver_uses_platform_only_strategy_without_b
         _remote_instance(),
         user_id=uuid4(),
         tenant_id=uuid4(),
-        credential_scope="user_only",
+        credential_scope="user",
     )
 
     assert context is not None
     service.resolve_credentials.assert_awaited_once()
     call = service.resolve_credentials.await_args
-    assert call.kwargs["strategy"] == "PLATFORM_ONLY"
+    assert call.kwargs["strategy"] == "USER_ONLY"
 
 
 @pytest.mark.asyncio
-async def test_runtime_credential_resolver_uses_platform_only_reference_with_broker():
+async def test_runtime_credential_resolver_uses_explicit_scope_with_broker():
     cred_id = uuid4()
     service = SimpleNamespace(
         resolve_credential_reference=AsyncMock(
@@ -85,7 +85,7 @@ async def test_runtime_credential_resolver_uses_platform_only_reference_with_bro
         _remote_instance(),
         user_id=uuid4(),
         tenant_id=uuid4(),
-        credential_scope="tenant_only",
+        credential_scope="platform",
     )
 
     assert context is not None
@@ -108,8 +108,29 @@ async def test_runtime_credential_resolver_skips_local_instance():
         _local_instance(),
         user_id=uuid4(),
         tenant_id=uuid4(),
-        credential_scope="any",
+        credential_scope="auto",
     )
 
     assert context is None
     service.resolve_credentials.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_runtime_credential_resolver_raises_for_strict_missing_credentials():
+    service = SimpleNamespace(
+        resolve_credentials=AsyncMock(return_value=None),
+        resolve_credential_reference=AsyncMock(return_value=None),
+    )
+    resolver = RuntimeCredentialResolver(service, mcp_credential_broker_enabled=False)
+
+    with pytest.raises(CredentialsUnavailableError, match="requires user credentials"):
+        await resolver.resolve_for_execution(
+            _remote_instance(),
+            user_id=uuid4(),
+            tenant_id=uuid4(),
+            tool_slug="instance.netbox.delete",
+            operation="netbox.delete",
+            credential_scope="user",
+            risk_level="destructive",
+            side_effects=True,
+        )

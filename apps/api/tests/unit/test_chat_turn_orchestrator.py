@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 import pytest
 from uuid import uuid4
 
@@ -10,14 +10,12 @@ from app.services.chat_turn_orchestrator import ChatTurnOrchestrator
 
 @pytest.fixture
 def orchestrator() -> ChatTurnOrchestrator:
-    agent_service = AsyncMock()
-    agent_service.agent_repo = AsyncMock()
     context_service = AsyncMock()
     persistence_service = AsyncMock()
     title_service = AsyncMock()
     turn_service = AsyncMock()
+    turn_service.build_request_hash = MagicMock(return_value="request-hash")
     return ChatTurnOrchestrator(
-        agent_service=agent_service,
         context_service=context_service,
         persistence_service=persistence_service,
         title_service=title_service,
@@ -36,14 +34,14 @@ class TestChatTurnOrchestrator:
         orchestrator.persistence_service.create_assistant_message = AsyncMock(return_value=SimpleNamespace(message_id="assistant-1", created_at="2026-01-01T12:00:01Z"))
         orchestrator.context_service.load_chat_context_with_summary = AsyncMock(return_value=[])
         orchestrator.title_service.generate_chat_title = AsyncMock(return_value=None)
-        orchestrator.agent_service.resolve_active_version = AsyncMock(return_value=SimpleNamespace(agent_id="agent-1", version=1))
-        orchestrator.agent_service.agent_repo.get_by_id = AsyncMock(return_value=SimpleNamespace(slug="rag-search"))
 
         async def fake_run_with_router(**kwargs):
             yield {"type": "delta", "content": "Hello"}
             yield {"type": "final_content", "content": "Hello", "sources": []}
 
         store_idempotency = AsyncMock()
+        bind_attachments = AsyncMock()
+        process_generated_files = AsyncMock(return_value={"content": "Hello", "attachments": []})
 
         events = [
             event
@@ -52,11 +50,17 @@ class TestChatTurnOrchestrator:
                 chat_id="chat-1",
                 user_id="user-1",
                 content="hello",
+                attachment_ids=[],
+                attachment_meta=[],
+                attachment_prompt_context="",
                 idempotency_key="idem-1",
                 model=None,
                 agent_slug=None,
+                continuation_meta=None,
                 run_with_router=fake_run_with_router,
                 store_idempotency=store_idempotency,
+                bind_attachments=bind_attachments,
+                process_generated_files=process_generated_files,
             )
         ]
 
@@ -76,12 +80,13 @@ class TestChatTurnOrchestrator:
         orchestrator.turn_service.fail_turn = AsyncMock()
         orchestrator.persistence_service.create_user_message = AsyncMock(return_value=SimpleNamespace(message_id="user-1", created_at="2026-01-01T12:00:00Z"))
         orchestrator.context_service.load_chat_context_with_summary = AsyncMock(return_value=[{"role": "user", "content": "prev"}])
-        orchestrator.agent_service.resolve_active_version = AsyncMock(return_value=SimpleNamespace(agent_id="agent-1", version=1))
-        orchestrator.agent_service.agent_repo.get_by_id = AsyncMock(return_value=SimpleNamespace(slug="rag-search"))
 
         async def fake_run_with_router(**kwargs):
             if False:
                 yield {}
+
+        bind_attachments = AsyncMock()
+        process_generated_files = AsyncMock(return_value={"content": "", "attachments": []})
 
         events = [
             event
@@ -90,11 +95,17 @@ class TestChatTurnOrchestrator:
                 chat_id="00000000-0000-0000-0000-000000000010",
                 user_id="00000000-0000-0000-0000-000000000020",
                 content="hello",
+                attachment_ids=[],
+                attachment_meta=[],
+                attachment_prompt_context="",
                 idempotency_key=None,
                 model=None,
                 agent_slug=None,
+                continuation_meta=None,
                 run_with_router=fake_run_with_router,
                 store_idempotency=AsyncMock(),
+                bind_attachments=bind_attachments,
+                process_generated_files=process_generated_files,
             )
         ]
 
@@ -113,11 +124,12 @@ class TestChatTurnOrchestrator:
         orchestrator.persistence_service.create_user_message = AsyncMock(return_value=SimpleNamespace(message_id="user-1", created_at="2026-01-01T12:00:00Z"))
         orchestrator.context_service.load_chat_context_with_summary = AsyncMock(return_value=[])
         orchestrator.title_service.generate_chat_title = AsyncMock(return_value=None)
-        orchestrator.agent_service.resolve_active_version = AsyncMock(return_value=SimpleNamespace(agent_id="agent-1", version=1))
-        orchestrator.agent_service.agent_repo.get_by_id = AsyncMock(return_value=SimpleNamespace(slug="rag-search"))
 
         async def fake_run_with_router(**kwargs):
             yield {"type": "run_paused", "reason": "waiting_input", "run_id": "00000000-0000-0000-0000-000000000040"}
+
+        bind_attachments = AsyncMock()
+        process_generated_files = AsyncMock(return_value={"content": "", "attachments": []})
 
         events = [
             event
@@ -126,11 +138,17 @@ class TestChatTurnOrchestrator:
                 chat_id="chat-1",
                 user_id="user-1",
                 content="hello",
+                attachment_ids=[],
+                attachment_meta=[],
+                attachment_prompt_context="",
                 idempotency_key=None,
                 model=None,
                 agent_slug=None,
+                continuation_meta=None,
                 run_with_router=fake_run_with_router,
                 store_idempotency=AsyncMock(),
+                bind_attachments=bind_attachments,
+                process_generated_files=process_generated_files,
             )
         ]
 

@@ -37,9 +37,9 @@ class TestBuildCreateTableSql:
         assert "body" in sql
         assert "score" in sql
 
-    def test_specific_fields_excluded(self):
+    def test_specific_fields_included(self):
         sql = build_create_table_sql("test_table", SAMPLE_FIELDS)
-        assert "_sys" not in sql
+        assert "_sys" in sql
 
     def test_required_field_not_null(self):
         sql = build_create_table_sql("test_table", SAMPLE_FIELDS)
@@ -51,7 +51,7 @@ class TestBuildCreateTableSql:
 
     def test_table_name_in_output(self):
         sql = build_create_table_sql("my_table", SAMPLE_FIELDS)
-        assert "CREATE TABLE my_table" in sql
+        assert "CREATE TABLE IF NOT EXISTS my_table" in sql
 
     def test_json_field_type(self):
         sql = build_create_table_sql("t", SAMPLE_FIELDS)

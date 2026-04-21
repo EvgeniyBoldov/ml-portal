@@ -79,42 +79,38 @@ class CredentialRepository:
 
         Strategies:
         - USER_ONLY: only user creds
-        - TENANT_ONLY: only tenant creds
         - PLATFORM_ONLY: only platform creds
-        - USER_THEN_TENANT: user > tenant
-        - TENANT_THEN_PLATFORM: tenant > platform
-        - ANY: user > tenant > platform
+        - PLATFORM_FIRST: platform > tenant > user
         """
         base = [Credential.instance_id == instance_id, Credential.is_active == True]
 
-        async def _find_user() -> Optional[Credential]:
-            if not user_id:
-                return None
-            stmt = select(Credential).where(and_(*base, Credential.owner_user_id == user_id))
-            return (await self.session.execute(stmt)).scalar_one_or_none()
-
-        async def _find_tenant() -> Optional[Credential]:
-            if not tenant_id:
-                return None
-            stmt = select(Credential).where(and_(*base, Credential.owner_tenant_id == tenant_id))
-            return (await self.session.execute(stmt)).scalar_one_or_none()
-
-        async def _find_platform() -> Optional[Credential]:
-            stmt = select(Credential).where(and_(*base, Credential.owner_platform == True))
-            return (await self.session.execute(stmt)).scalar_one_or_none()
-
         if strategy == "USER_ONLY":
-            return await _find_user()
-        elif strategy == "TENANT_ONLY":
-            return await _find_tenant()
+            return await self._find_user(base=base, user_id=user_id)
         elif strategy == "PLATFORM_ONLY":
-            return await _find_platform()
-        elif strategy == "USER_THEN_TENANT":
-            return await _find_user() or await _find_tenant()
-        elif strategy == "TENANT_THEN_PLATFORM":
-            return await _find_tenant() or await _find_platform()
-        else:  # ANY
-            return await _find_user() or await _find_tenant() or await _find_platform()
+            return await self._find_platform(base=base)
+        elif strategy == "PLATFORM_FIRST":
+            return (
+                await self._find_platform(base=base)
+                or await self._find_tenant(base=base, tenant_id=tenant_id)
+                or await self._find_user(base=base, user_id=user_id)
+            )
+        return None
+
+    async def _find_user(self, *, base, user_id: Optional[UUID]) -> Optional[Credential]:
+        if not user_id:
+            return None
+        stmt = select(Credential).where(and_(*base, Credential.owner_user_id == user_id))
+        return (await self.session.execute(stmt)).scalar_one_or_none()
+
+    async def _find_tenant(self, *, base, tenant_id: Optional[UUID]) -> Optional[Credential]:
+        if not tenant_id:
+            return None
+        stmt = select(Credential).where(and_(*base, Credential.owner_tenant_id == tenant_id))
+        return (await self.session.execute(stmt)).scalar_one_or_none()
+
+    async def _find_platform(self, *, base) -> Optional[Credential]:
+        stmt = select(Credential).where(and_(*base, Credential.owner_platform == True))
+        return (await self.session.execute(stmt)).scalar_one_or_none()
 
     async def get_all_for_instance(
         self,
@@ -134,11 +130,12 @@ class CredentialRepository:
         user_id: Optional[UUID] = None,
         tenant_id: Optional[UUID] = None,
     ) -> bool:
-        """Check if any active credentials exist (ANY strategy)"""
-        cred = await self.resolve_for_instance(
-            instance_id=instance_id,
-            strategy="ANY",
-            user_id=user_id,
-            tenant_id=tenant_id,
+        """Check if any active credentials exist."""
+        base = [Credential.instance_id == instance_id, Credential.is_active == True]
+        return any(
+            (
+                await self._find_user(base=base, user_id=user_id),
+                await self._find_tenant(base=base, tenant_id=tenant_id),
+                await self._find_platform(base=base),
+            )
         )
-        return cred is not None

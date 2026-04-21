@@ -3,7 +3,7 @@ Shared helpers for admin collection routers.
 """
 from __future__ import annotations
 
-from app.schemas.collections import CollectionResponse, CollectionVersionResponse
+from app.schemas.collections import CollectionResponse, CollectionVersionResponse, DataInstanceShort
 from app.services.collection_service import CollectionService
 
 
@@ -15,8 +15,6 @@ async def build_collection_response(service: CollectionService, collection) -> C
             collection_id=collection.current_version.collection_id,
             version=collection.current_version.version,
             status=collection.current_version.status,
-            semantic_profile=collection.current_version.semantic_profile or {},
-            policy_hints=collection.current_version.policy_hints or {},
             notes=collection.current_version.notes,
             created_at=collection.current_version.created_at.isoformat(),
             updated_at=collection.current_version.updated_at.isoformat(),
@@ -46,6 +44,11 @@ async def build_collection_response(service: CollectionService, collection) -> C
         vectorization_progress=collection.vectorization_progress,
         is_fully_vectorized=collection.is_fully_vectorized,
         data_instance_id=collection.data_instance_id,
+        data_instance=DataInstanceShort(
+            id=collection.data_instance.id,
+            slug=collection.data_instance.slug,
+            name=collection.data_instance.name,
+        ) if collection.data_instance else None,
         last_sync_at=collection.last_sync_at.isoformat() if collection.last_sync_at else None,
         is_active=collection.is_active,
         current_version_id=collection.current_version_id,

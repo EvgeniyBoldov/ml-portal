@@ -8,7 +8,7 @@ import type { VersionGenerateRequest } from '@/shared/api/aiGenerate';
 import styles from './AIGenerateButton.module.css';
 
 interface AIGenerateButtonProps {
-  entityType: 'agent' | 'tool';
+  entityType: 'agent';
   entityId: string;
   description: string;
   availableFields: Array<{ key: string; label: string; description?: string }>;

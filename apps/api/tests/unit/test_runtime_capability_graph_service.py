@@ -38,8 +38,8 @@ def _resolved_fixture() -> OperationResolveResult:
         data_instance_id=data.instance_id,
         data_instance_slug=data.slug,
         source="local",
-        risk_level="low",
-        side_effects="none",
+        risk_level="safe",
+        side_effects=False,
         target=target,
     )
     result = OperationResolveResult(effective_permissions=EffectivePermissions())

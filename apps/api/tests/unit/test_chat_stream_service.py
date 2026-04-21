@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -28,15 +28,13 @@ def messages_repo() -> AsyncMock:
 
 @pytest.fixture
 def service(mock_session, mock_redis, mock_llm_client, chats_repo, messages_repo) -> ChatStreamService:
-    with patch("app.services.chat_stream_service.AgentRuntime"), patch("app.services.chat_stream_service.RunStore"):
-        svc = ChatStreamService(
-            session=mock_session,
-            redis=mock_redis,
-            llm_client=mock_llm_client,
-            chats_repo=chats_repo,
-            messages_repo=messages_repo,
-        )
-    return svc
+    return ChatStreamService(
+        session=mock_session,
+        redis=mock_redis,
+        llm_client=mock_llm_client,
+        chats_repo=chats_repo,
+        messages_repo=messages_repo,
+    )
 
 
 class TestChatStreamServiceInvariants:

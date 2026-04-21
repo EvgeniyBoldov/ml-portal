@@ -167,7 +167,6 @@ class ExecutionPreflight:
             routing_reasons.append(f"Agent '{agent_slug}' loaded")
 
             # 2. Resolve instances + operations + permissions
-            default_tool_allow = bool((platform_config or {}).get("default_tool_allow", True))
             default_collection_allow = bool(
                 (platform_config or {}).get("default_collection_allow", True)
             )
@@ -175,7 +174,6 @@ class ExecutionPreflight:
                 user_id=user_id,
                 tenant_id=tenant_id,
                 effective_permissions=effective_permissions_override,
-                default_tool_allow=default_tool_allow,
                 default_collection_allow=default_collection_allow,
                 sandbox_overrides=sandbox_overrides,
             )
@@ -196,30 +194,49 @@ class ExecutionPreflight:
                 f"{len(operation_result.resolved_data_instances)} data instances"
             )
 
-            # 2b. Apply agent capability filter (allowed_collection_ids on agent container)
-            allowed_collection_ids = agent_result.agent.allowed_collection_ids if agent_result.agent else None
-            if allowed_collection_ids is not None:
-                before_count = len(operation_result.resolved_data_instances)
-                allowed_set = {str(collection_id) for collection_id in allowed_collection_ids}
-                operation_result.resolved_data_instances = [
-                    inst for inst in operation_result.resolved_data_instances
-                    if str((inst.collection_id or "")) in allowed_set
-                ]
-                allowed_op_slugs = set()
-                for op in operation_result.resolved_operations:
-                    binding = operation_result.execution_graph.get(op.operation_slug)
-                    context_config = binding.context.config if binding else {}
-                    if str((context_config or {}).get("collection_id") or "") in allowed_set:
-                        allowed_op_slugs.add(op.operation_slug)
+            # 2b. Apply unified collection access filter.
+            #
+            # Two layers compose into an intersection (option B):
+            #   - Agent capability: `agent.allowed_collection_ids` declares which
+            #     collections this agent is allowed to work with (None/empty → any).
+            #   - User/tenant RBAC: `effective_permissions.is_collection_allowed(slug)`
+            #     decides whether the caller is permitted to see the collection
+            #     (honours `default_collection_allow` for unresolved slugs).
+            capability_ids: Optional[set[str]] = None
+            if agent_result.agent and agent_result.agent.allowed_collection_ids:
+                capability_ids = {str(cid) for cid in agent_result.agent.allowed_collection_ids}
+
+            def _collection_passes(collection_id, collection_slug: Optional[str]) -> bool:
+                cid_str = str(collection_id) if collection_id else ""
+                if capability_ids is not None and cid_str not in capability_ids:
+                    return False
+                if collection_slug and operation_result.effective_permissions is not None:
+                    if not operation_result.effective_permissions.is_collection_allowed(collection_slug):
+                        return False
+                return True
+
+            before_count = len(operation_result.resolved_data_instances)
+            filtered_instances = [
+                inst for inst in operation_result.resolved_data_instances
+                if _collection_passes(inst.collection_id, inst.collection_slug)
+            ]
+            if len(filtered_instances) != before_count:
+                operation_result.resolved_data_instances = filtered_instances
+                allowed_instance_slugs = {inst.slug for inst in filtered_instances}
+                allowed_op_slugs = {
+                    op.operation_slug
+                    for op in operation_result.resolved_operations
+                    if op.data_instance_slug in allowed_instance_slugs
+                }
                 operation_result.resolved_operations = [
                     op for op in operation_result.resolved_operations
                     if op.operation_slug in allowed_op_slugs
                 ]
                 operation_result.execution_graph.filter_by_operation_slugs(allowed_op_slugs)
-                after_count = len(operation_result.resolved_data_instances)
                 routing_reasons.append(
-                    f"Agent capability filter: {before_count} → {after_count} instances "
-                    f"(collections whitelist: {sorted(allowed_set)})"
+                    f"Collection access filter: {before_count} → {len(filtered_instances)} instances "
+                    f"(capability={'set' if capability_ids is not None else 'any'}, "
+                    f"rbac_default_allow={default_collection_allow})"
                 )
 
             # 2c. Apply platform operation policy filter before planner snapshot.

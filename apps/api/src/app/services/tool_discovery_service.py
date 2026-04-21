@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import selectinload
 
+from app.agents.mcp_discovery import parse_discovered_operation
 from app.agents.registry import ToolRegistry
 from app.core.logging import get_logger
 from app.models.discovered_tool import DiscoveredTool
@@ -124,13 +125,19 @@ class ToolDiscoveryService:
             name = str(tool.get("name") or "").strip()
             if not name:
                 continue
+            discovered = parse_discovered_operation(
+                tool_name=name,
+                description=tool.get("description"),
+                input_schema=tool.get("inputSchema"),
+                output_schema=tool.get("outputSchema"),
+            )
             preview.append(
                 {
-                    "slug": name,
-                    "name": name,
-                    "description": tool.get("description"),
-                    "has_input_schema": bool(tool.get("inputSchema")),
-                    "has_output_schema": bool(tool.get("outputSchema")),
+                    "slug": discovered.name,
+                    "name": discovered.name,
+                    "description": discovered.description,
+                    "has_input_schema": bool(discovered.input_schema),
+                    "has_output_schema": bool(discovered.output_schema),
                 }
             )
         return {
@@ -204,15 +211,21 @@ class ToolDiscoveryService:
                 if provider_domain not in domains:
                     continue
 
-                await self._upsert(
-                    slug=handler.slug,
-                    name=handler.name,
+                discovered = parse_discovered_operation(
+                    tool_name=handler.slug,
                     description=(descriptor.get("description") or handler.description),
+                    input_schema=descriptor.get("inputSchema"),
+                    output_schema=descriptor.get("outputSchema"),
+                )
+                await self._upsert(
+                    slug=discovered.name,
+                    name=handler.name,
+                    description=discovered.description,
                     source="local",
                     provider_instance_id=provider.id,
                     domains=domains,
-                    input_schema=descriptor.get("inputSchema"),
-                    output_schema=descriptor.get("outputSchema"),
+                    input_schema=discovered.input_schema,
+                    output_schema=discovered.output_schema,
                     now=now,
                 )
                 count += 1
@@ -266,15 +279,21 @@ class ToolDiscoveryService:
                     if not tool_name:
                         continue
 
-                    await self._upsert(
-                        slug=tool_name,
-                        name=tool_name,
+                    discovered = parse_discovered_operation(
+                        tool_name=tool_name,
                         description=tool.get("description", ""),
+                        input_schema=tool.get("inputSchema"),
+                        output_schema=tool.get("outputSchema"),
+                    )
+                    await self._upsert(
+                        slug=discovered.name,
+                        name=discovered.name,
+                        description=discovered.description,
                         source="mcp",
                         provider_instance_id=provider.id,
                         domains=mcp_domains,
-                        input_schema=tool.get("inputSchema"),
-                        output_schema=tool.get("outputSchema"),
+                        input_schema=discovered.input_schema,
+                        output_schema=discovered.output_schema,
                         now=now,
                     )
                     total += 1

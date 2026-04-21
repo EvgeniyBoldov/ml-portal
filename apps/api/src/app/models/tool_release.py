@@ -111,10 +111,6 @@ class ToolRelease(Base):
     """
     Версия инструмента для использования агентами.
 
-    Содержит:
-    - Human-readable semantic profile
-    - Policy hints for safe usage
-
     Жизненный цикл:
     - draft: можно редактировать
     - active: используется агентами, нельзя редактировать
@@ -152,10 +148,6 @@ class ToolRelease(Base):
         nullable=False,
         index=True
     )
-
-    # ── Human-readable profile ──────────────────────────────────────────
-    semantic_profile: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
-    policy_hints: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
 
     # ── Meta ────────────────────────────────────────────────────────────
     meta_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)

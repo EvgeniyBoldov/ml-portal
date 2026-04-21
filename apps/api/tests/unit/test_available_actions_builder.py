@@ -5,12 +5,12 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from app.agents.available_actions import AvailableActionsBuilder
+from app.agents.available_actions import AvailableActionsBuilder, _normalize_risk
 from app.agents.contracts import ProviderExecutionTarget, ResolvedOperation
 
 
 @pytest.mark.asyncio
-async def test_available_actions_keeps_high_risk_operations_without_env_hardcode():
+async def test_available_actions_keeps_destructive_operations_without_env_hardcode():
     builder = AvailableActionsBuilder(session=MagicMock())
     agent = SimpleNamespace(slug="analyst", description="Data analyst", tags=["data"])
     target = ProviderExecutionTarget(
@@ -35,8 +35,8 @@ async def test_available_actions_keeps_high_risk_operations_without_env_hardcode
         provider_instance_id="provider-1",
         provider_instance_slug="mcp-jira",
         source="mcp",
-        risk_level="high",
-        side_effects="destructive",
+        risk_level="destructive",
+        side_effects=True,
         idempotent=False,
         requires_confirmation=True,
         target=target,
@@ -51,4 +51,10 @@ async def test_available_actions_keeps_high_risk_operations_without_env_hardcode
 
     assert len(actions.operations) == 1
     assert actions.operations[0].operation_slug == "instance.jira-prod.jira.issue.delete"
-    assert actions.operations[0].risk_level == "high"
+    assert actions.operations[0].risk_level == "destructive"
+
+
+def test_normalize_risk_defaults_to_safe_for_unknown_values():
+    assert _normalize_risk(None) == "safe"
+    assert _normalize_risk("critical") == "safe"
+    assert _normalize_risk(" destructive ") == "destructive"

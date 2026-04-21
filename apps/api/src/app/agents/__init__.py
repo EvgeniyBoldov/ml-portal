@@ -12,7 +12,6 @@ __all__ = [
     "ToolResult",
     "ToolHandler",
     "ToolRegistry",
-    "AgentRuntime",
     "RuntimeEvent",
     "RuntimeEventType",
     "PolicyLimits",
@@ -24,15 +23,18 @@ __all__ = [
 
 
 def __getattr__(name: str):
-    if name in {"AgentRuntime", "RuntimeEvent", "RuntimeEventType", "PolicyLimits"}:
-        from app.agents.runtime import AgentRuntime, RuntimeEvent, RuntimeEventType, PolicyLimits
+    if name in {"RuntimeEvent", "RuntimeEventType"}:
+        from app.runtime import RuntimeEvent, RuntimeEventType
 
         return {
-            "AgentRuntime": AgentRuntime,
             "RuntimeEvent": RuntimeEvent,
             "RuntimeEventType": RuntimeEventType,
-            "PolicyLimits": PolicyLimits,
         }[name]
+
+    if name == "PolicyLimits":
+        from app.agents.runtime.policy import PolicyLimits
+
+        return PolicyLimits
 
     if name in {"ExecutionRequest", "ExecutionMode", "PreflightError", "AgentUnavailableError"}:
         from app.agents.execution_preflight import (

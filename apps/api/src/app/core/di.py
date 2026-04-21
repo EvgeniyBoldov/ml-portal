@@ -2,6 +2,7 @@ from __future__ import annotations
 from typing import Optional
 from .config import get_settings
 from .http.clients import HTTPLLMClient as _HTTPLLMClient, HTTPEmbClient as _HTTPEmbClient, LLMClientProtocol, EmbClientProtocol
+from .http.resolving_llm import ResolvingLLMClient
 from .circuit_breaker import CircuitBreaker, CircuitBreakerConfig
 from ..adapters.impl.openai_compatible_llm import OpenAICompatibleLLM
 
@@ -23,7 +24,7 @@ def get_llm_client() -> LLMClientProtocol:
         s = get_settings()
         # Use OpenAI-compatible client if API key is provided
         if s.LLM_API_KEY:
-            _llm_client = OpenAICompatibleLLM()
+            inner: LLMClientProtocol = OpenAICompatibleLLM()
         else:
             # Fallback to HTTP client for custom implementations
             breaker_config = CircuitBreakerConfig(
@@ -31,13 +32,15 @@ def get_llm_client() -> LLMClientProtocol:
                 open_timeout_seconds=s.CB_LLM_OPEN_TIMEOUT_SECONDS,
                 half_open_max_calls=s.CB_LLM_HALF_OPEN_MAX_CALLS
             )
-            _llm_client = HTTPLLMClient(
-                s.LLM_BASE_URL, 
-                timeout=s.HTTP_TIMEOUT_SECONDS, 
-                max_retries=s.HTTP_MAX_RETRIES, 
-                breaker=CircuitBreaker("llm", breaker_config), 
+            inner = HTTPLLMClient(
+                s.LLM_BASE_URL,
+                timeout=s.HTTP_TIMEOUT_SECONDS,
+                max_retries=s.HTTP_MAX_RETRIES,
+                breaker=CircuitBreaker("llm", breaker_config),
                 token=s.LLM_API_KEY or s.LLM_TOKEN
             )
+        # Single choke-point: resolve slug → provider_model_name on every call.
+        _llm_client = ResolvingLLMClient(inner)
     return _llm_client
 
 def get_emb_client() -> EmbClientProtocol:

@@ -28,8 +28,6 @@ def _serialize_version(entity) -> CollectionVersionResponse:
         collection_id=entity.collection_id,
         version=entity.version,
         status=entity.status,
-        semantic_profile=entity.semantic_profile or {},
-        policy_hints=entity.policy_hints or {},
         notes=entity.notes,
         created_at=entity.created_at.isoformat(),
         updated_at=entity.updated_at.isoformat(),
@@ -71,8 +69,6 @@ async def create_collection_version(
     service = CollectionService(session)
     created_version = await service.create_version(
         collection_id,
-        semantic_profile=body.semantic_profile.model_dump(),
-        policy_hints=body.policy_hints.model_dump(),
         notes=body.notes,
     )
     await session.commit()
@@ -92,8 +88,6 @@ async def update_collection_version(
     await service.update_version(
         collection_id,
         version,
-        semantic_profile=body.semantic_profile.model_dump() if "semantic_profile" in body.model_fields_set and body.semantic_profile is not None else _UNSET,
-        policy_hints=body.policy_hints.model_dump() if "policy_hints" in body.model_fields_set and body.policy_hints is not None else _UNSET,
         notes=body.notes if "notes" in body.model_fields_set else _UNSET,
     )
     await session.commit()

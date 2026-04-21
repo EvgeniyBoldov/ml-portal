@@ -22,14 +22,17 @@ from app.core.http.clients import LLMClientProtocol
 from app.core.logging import get_logger
 from app.core.security import UserCtx
 from app.models.agent_run import AgentRun
+from app.models.chat import Chats
 from app.repositories.factory import AsyncRepositoryFactory, get_async_repository_factory
 from app.schemas.chat_events import ChatSSEEventType, ErrorPayload, format_chat_sse, format_chat_sse_done
 from app.schemas.chats import ChatMessageStreamRequest
+from app.schemas.confirmations import ConfirmationIssueRequest, ConfirmationIssueResponse
 from app.services.chat_router_event_mapper import build_resume_content, map_service_event_to_sse
 from app.services.chat_resume_orchestrator import ChatResumeOrchestrator
 from app.services.chat_stream_service import ChatStreamService
 from app.services.runtime_resume_checkpoint_service import RuntimeResumeCheckpointService
 from app.services.runtime_terminal_status import normalize_run_status_for_storage
+from app.agents.runtime.confirmation import get_confirmation_service
 
 router = APIRouter()
 logger = get_logger(__name__)
@@ -115,6 +118,7 @@ async def send_message_stream(
     model = body.model
     agent_slug = body.agent_slug
     attachment_ids = body.attachment_ids or []
+    confirmation_tokens = body.confirmation_tokens or []
 
     if not content:
         raise HTTPException(status_code=400, detail="Content is required")
@@ -139,6 +143,7 @@ async def send_message_stream(
                 user_id=chat_ctx.user_id,
                 content=content,
                 attachment_ids=attachment_ids,
+                confirmation_tokens=confirmation_tokens,
                 idempotency_key=idempotency_key,
                 model=model,
                 agent_slug=agent_slug,
@@ -157,6 +162,33 @@ async def send_message_stream(
             yield format_chat_sse_done()
 
     return StreamingResponse(_gen(), media_type="text/event-stream")
+
+
+@router.post(
+    "/{chat_id}/confirm",
+    response_model=ConfirmationIssueResponse,
+)
+async def issue_confirmation_token(
+    chat_id: str,
+    body: ConfirmationIssueRequest,
+    chat_ctx: ChatContext = Depends(resolve_chat_context),
+    session: AsyncSession = Depends(db_session),
+    current_user: UserCtx = Depends(get_current_user),
+):
+    if str(chat_ctx.chat_id) != str(chat_id):
+        raise HTTPException(status_code=404, detail="Chat not found")
+    chat_row = (
+        await session.execute(select(Chats).where(Chats.id == uuid.UUID(str(chat_ctx.chat_id))))
+    ).scalar_one_or_none()
+    if not chat_row or str(chat_row.owner_id) != str(current_user.id):
+        raise HTTPException(status_code=404, detail="Chat not found")
+    service = get_confirmation_service()
+    token, expires_at = service.issue(
+        user_id=uuid.UUID(str(chat_ctx.user_id)),
+        chat_id=uuid.UUID(str(chat_ctx.chat_id)),
+        fingerprint=body.operation_fingerprint,
+    )
+    return ConfirmationIssueResponse(token=token, expires_at=expires_at)
 
 
 @router.post("/runs/{run_id}/resume")

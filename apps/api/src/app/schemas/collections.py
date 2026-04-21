@@ -72,17 +72,8 @@ class CreateCollectionRequest(BaseModel):
     source_contract: Optional[dict] = None
     vector_config: Optional[VectorConfigSchema] = None
     table_schema: Optional[dict] = None
-    # SQL collections: link to existing data instance
-    data_instance_id: Optional[uuid.UUID] = None
-
-    @model_validator(mode="after")
-    def validate_sql_connector(self) -> "CreateCollectionRequest":
-        if (
-            self.collection_type in {CollectionType.SQL.value, CollectionType.API.value}
-            and self.data_instance_id is None
-        ):
-            raise ValueError("data_instance_id is required for sql/api collections")
-        return self
+    # Required FK: each collection is bound to a data instance.
+    data_instance_id: uuid.UUID
 
 
 class SchemaOperation(BaseModel):
@@ -122,7 +113,6 @@ class UpdateCollectionRequest(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=255)
     description: Optional[str] = None
     is_active: Optional[bool] = None
-    data_instance_id: Optional[uuid.UUID] = None
     table_name: Optional[str] = None
     table_schema: Optional[dict] = None
     schema_ops: List[SchemaOperation] = Field(default_factory=list)
@@ -131,7 +121,7 @@ class UpdateCollectionRequest(BaseModel):
     def validate_non_empty(self) -> "UpdateCollectionRequest":
         has_metadata_patch = bool(
             self.model_fields_set
-            & {"name", "description", "is_active", "data_instance_id", "table_name", "table_schema"}
+            & {"name", "description", "is_active", "table_name", "table_schema"}
         )
         if not has_metadata_patch and not self.schema_ops:
             raise ValueError("At least one mutable collection property or schema operation is required")
@@ -166,7 +156,8 @@ class CollectionResponse(BaseModel):
     is_fully_vectorized: bool = False
     
     # Instance link
-    data_instance_id: Optional[uuid.UUID] = None
+    data_instance_id: uuid.UUID
+    data_instance: Optional["DataInstanceShort"] = None
     
     # Remote collection fields
     last_sync_at: Optional[str] = None
@@ -177,8 +168,7 @@ class CollectionResponse(BaseModel):
     created_at: str
     updated_at: str
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class CollectionListResponse(BaseModel):
@@ -187,6 +177,12 @@ class CollectionListResponse(BaseModel):
     page: int
     size: int
     has_more: bool
+
+
+class DataInstanceShort(BaseModel):
+    id: uuid.UUID
+    slug: str
+    name: str
 
 
 class VectorCollectionAuditEntry(BaseModel):
@@ -258,59 +254,11 @@ def _normalize_str_list(value: Any) -> list[str]:
     return result
 
 
-class CollectionSemanticProfileSchema(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    summary: str = ""
-    entity_types: list[str] = Field(default_factory=list)
-    use_cases: str = ""
-    limitations: str = ""
-    examples: list[str] = Field(default_factory=list)
-
-    @model_validator(mode="before")
-    @classmethod
-    def normalize(cls, value: Any) -> Any:
-        payload = value if isinstance(value, dict) else {}
-        return {
-            "summary": _normalize_text(payload.get("summary") or payload.get("description")),
-            "entity_types": _normalize_str_list(payload.get("entity_types")),
-            "use_cases": _normalize_text(payload.get("use_cases")),
-            "limitations": _normalize_text(payload.get("limitations")),
-            "examples": _normalize_str_list(payload.get("examples")),
-        }
-
-
-class CollectionPolicyHintsSchema(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    dos: list[str] = Field(default_factory=list)
-    donts: list[str] = Field(default_factory=list)
-    guardrails: list[str] = Field(default_factory=list)
-    citation_rules: list[str] = Field(default_factory=list)
-    sensitive_fields: list[str] = Field(default_factory=list)
-
-    @model_validator(mode="before")
-    @classmethod
-    def normalize(cls, value: Any) -> Any:
-        payload = value if isinstance(value, dict) else {}
-        return {
-            "dos": _normalize_str_list(payload.get("dos")),
-            "donts": _normalize_str_list(payload.get("donts")),
-            "guardrails": _normalize_str_list(payload.get("guardrails")),
-            "citation_rules": _normalize_str_list(payload.get("citation_rules")),
-            "sensitive_fields": _normalize_str_list(payload.get("sensitive_fields")),
-        }
-
-
 class CollectionVersionCreate(BaseModel):
-    semantic_profile: CollectionSemanticProfileSchema = Field(default_factory=CollectionSemanticProfileSchema)
-    policy_hints: CollectionPolicyHintsSchema = Field(default_factory=CollectionPolicyHintsSchema)
     notes: Optional[str] = None
 
 
 class CollectionVersionUpdate(BaseModel):
-    semantic_profile: Optional[CollectionSemanticProfileSchema] = None
-    policy_hints: Optional[CollectionPolicyHintsSchema] = None
     notes: Optional[str] = None
 
 
@@ -319,14 +267,11 @@ class CollectionVersionResponse(BaseModel):
     collection_id: uuid.UUID
     version: int
     status: str = CollectionVersionStatus.DRAFT.value
-    semantic_profile: CollectionSemanticProfileSchema = Field(default_factory=CollectionSemanticProfileSchema)
-    policy_hints: CollectionPolicyHintsSchema = Field(default_factory=CollectionPolicyHintsSchema)
     notes: Optional[str] = None
     created_at: str
     updated_at: str
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 CollectionResponse.model_rebuild()

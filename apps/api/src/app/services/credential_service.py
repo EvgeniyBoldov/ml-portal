@@ -155,7 +155,7 @@ class CredentialService:
     async def resolve_credentials(
         self,
         instance_id: UUID,
-        strategy: str = "ANY",
+        strategy: str = "PLATFORM_FIRST",
         user_id: Optional[UUID] = None,
         tenant_id: Optional[UUID] = None,
     ) -> Optional[DecryptedCredentials]:
@@ -177,7 +177,7 @@ class CredentialService:
     async def resolve_credential_reference(
         self,
         instance_id: UUID,
-        strategy: str = "ANY",
+        strategy: str = "PLATFORM_FIRST",
         user_id: Optional[UUID] = None,
         tenant_id: Optional[UUID] = None,
     ) -> Optional[CredentialReference]:
@@ -203,7 +203,7 @@ class CredentialService:
         user_id: Optional[UUID] = None,
         tenant_id: Optional[UUID] = None,
     ) -> bool:
-        """Check if credentials exist for a tool instance (ANY strategy)"""
+        """Check if credentials exist for a tool instance."""
         return await self.repo.has_credentials(
             instance_id=tool_instance_id,
             user_id=user_id,

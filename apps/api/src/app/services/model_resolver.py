@@ -69,7 +69,20 @@ class ModelResolver:
             logger.debug(f"Resolved model alias '{alias}' → '{provider_model_name}'")
             return provider_model_name
 
-        # 3. Fallback: alias might already be a provider_model_name (legacy data)
+        # 3. Fallback: alias might already be a provider_model_name (either
+        # legacy data, or a value that has already passed through the resolver
+        # once). Check by provider_model_name before logging a warning — this
+        # is normal for the wrapped LLM client path.
+        already_resolved = await self.session.execute(
+            select(Model.provider_model_name).where(
+                Model.provider_model_name == alias,
+                Model.deleted_at.is_(None),
+            ).limit(1)
+        )
+        if already_resolved.scalar_one_or_none():
+            _cache[alias] = (alias, time.time())
+            return alias
+
         logger.warning(
             f"Model alias '{alias}' not found in registry, using as-is (legacy fallback)"
         )

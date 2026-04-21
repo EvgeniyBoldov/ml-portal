@@ -8,7 +8,7 @@ from typing import List, Optional
 import uuid
 
 from fastapi import APIRouter, HTTPException, Depends, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -61,7 +61,6 @@ async def _resolve_collection_permissions(
     return await resolver.resolve_effective_permissions(
         user_id=user_uuid,
         tenant_id=tenant_id,
-        default_tool_allow=True,
         default_collection_allow=True,
     )
 
@@ -151,8 +150,7 @@ class CollectionResponse(BaseModel):
     created_at: str
     updated_at: str
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class CollectionListResponse(BaseModel):

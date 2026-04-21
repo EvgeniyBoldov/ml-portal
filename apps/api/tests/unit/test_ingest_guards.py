@@ -7,7 +7,7 @@ Validates:
 - Blocks ingest for archived documents
 """
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 from types import SimpleNamespace
 
@@ -41,6 +41,7 @@ def status_manager(mock_session, mock_repo_factory):
     mgr.status_repo.get_embedding_nodes = AsyncMock(return_value=[])
     mgr.status_repo.get_index_nodes = AsyncMock(return_value=[])
     mgr.status_repo.get_node = AsyncMock(return_value=None)
+    mgr.target_models.get_target_models = AsyncMock(return_value=[])
     return mgr
 
 

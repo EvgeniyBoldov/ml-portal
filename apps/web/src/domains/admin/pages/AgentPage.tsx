@@ -593,7 +593,7 @@ export function AgentPage() {
 
         {!isNew && (
           <Tab
-            title="Доступные данные"
+            title="Допустимые коллекции"
             layout="full"
             id="available-data"
             badge={dataBindingRows.length}
@@ -615,6 +615,11 @@ export function AgentPage() {
               </Button>,
             ]}
           >
+            <div style={{ marginBottom: 12, color: 'var(--text-secondary)', fontSize: 13 }}>
+              Пустой список означает, что агент может работать с любыми коллекциями,
+              разрешёнными через `permission_set`. Итоговый набор всегда вычисляется как
+              пересечение прав пользователя и списка агента.
+            </div>
             <DataTable
               columns={dataBindingColumns}
               data={dataBindingRows}

@@ -43,6 +43,7 @@ from .execution_memory import ExecutionMemory
 from .chat_turn import ChatTurn
 from .sandbox import SandboxSession, SandboxOverride, SandboxRun, SandboxRunStep
 from .discovered_tool import DiscoveredTool
+from .memory import Fact, FactScope, FactSource, DialogueSummary
 
 __all__ = [
     "Base",
@@ -112,4 +113,8 @@ __all__ = [
     "SandboxRun",
     "SandboxRunStep",
     "DiscoveredTool",
+    "Fact",
+    "FactScope",
+    "FactSource",
+    "DialogueSummary",
 ]

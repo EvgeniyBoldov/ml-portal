@@ -4,7 +4,7 @@ Pydantic schemas for Limit API.
 from typing import List, Optional, Literal, Dict, Any
 from datetime import datetime
 from uuid import UUID
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 
 LimitStatusType = Literal["draft", "active", "deprecated"]
@@ -34,8 +34,7 @@ class LimitContainerResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -79,8 +78,7 @@ class LimitVersionResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class LimitVersionInfo(BaseModel):
@@ -95,8 +93,7 @@ class LimitVersionInfo(BaseModel):
     notes: Optional[str] = None
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -114,8 +111,7 @@ class LimitListItem(BaseModel):
     active_version: Optional[int] = None
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class LimitDetailResponse(BaseModel):

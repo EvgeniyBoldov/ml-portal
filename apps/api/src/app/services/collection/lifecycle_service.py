@@ -6,11 +6,26 @@ from typing import List, Optional
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import InvalidSchemaError
+from app.core.exceptions import ConflictError, InvalidSchemaError
 from app.models.collection import Collection, CollectionStatus, CollectionType, FieldType
 from app.models.tool_instance import ToolInstance
-from app.services.collection.type_profiles import get_collection_type_profile
-from app.services.rbac_service import RbacService
+
+
+def _expected_data_connector_subtype(collection_type: str) -> Optional[str]:
+    normalized = str(collection_type or "").strip().lower()
+    if normalized == CollectionType.SQL.value:
+        return "sql"
+    if normalized == CollectionType.API.value:
+        return "api"
+    return None
+
+
+def _ensure_type_specific_fields(contract, fields: List[dict], collection_type: str) -> List[dict]:
+    expected_subtype = _expected_data_connector_subtype(collection_type)
+    if expected_subtype == "sql":
+        return contract.ensure_sql_preset_fields(fields)
+    # API/table no longer auto-inject specific fields; document keeps admin-defined preset path.
+    return list(fields or [])
 
 
 class CollectionLifecycleService:
@@ -42,8 +57,17 @@ class CollectionLifecycleService:
         if existing:
             raise self.host.CollectionExistsError(f"Collection '{slug}' already exists")
 
-        profile = get_collection_type_profile(collection_type)
-        is_remote = profile.expected_data_connector_subtype() is not None and data_instance_id is not None
+        if data_instance_id is None:
+            raise InvalidSchemaError("data_instance_id is required")
+
+        data_instance = await self._resolve_and_validate_data_instance(
+            tenant_id=tenant_id,
+            data_instance_id=data_instance_id,
+            collection_type=collection_type,
+        )
+
+        expected_subtype = _expected_data_connector_subtype(collection_type)
+        is_remote = expected_subtype is not None
         if is_remote:
             return await self.create_remote_collection(
                 tenant_id=tenant_id,
@@ -54,6 +78,7 @@ class CollectionLifecycleService:
                 source_contract=source_contract,
                 collection_type=collection_type,
                 data_instance_id=data_instance_id,
+                data_instance=data_instance,
                 table_name=table_name,
                 table_schema=table_schema,
             )
@@ -67,6 +92,7 @@ class CollectionLifecycleService:
             source_contract=source_contract,
             vector_config=vector_config,
             collection_type=collection_type,
+            data_instance_id=data_instance_id,
         )
 
     async def create_local_collection(
@@ -80,10 +106,12 @@ class CollectionLifecycleService:
         source_contract: Optional[dict] = None,
         vector_config: Optional[dict] = None,
         collection_type: str = CollectionType.TABLE.value,
+        data_instance_id: Optional[uuid.UUID] = None,
     ) -> Collection:
+        if data_instance_id is None:
+            raise InvalidSchemaError("data_instance_id is required")
         self.contract.validate_admin_defined_fields(fields, collection_type)
-        profile = get_collection_type_profile(collection_type)
-        fields = profile.ensure_specific_fields(self.contract, fields)
+        fields = _ensure_type_specific_fields(self.contract, fields, collection_type)
 
         if collection_type == CollectionType.DOCUMENT.value:
             if not vector_config:
@@ -129,6 +157,7 @@ class CollectionLifecycleService:
             table_name=table_name,
             vector_config=vector_config,
             qdrant_collection_name=qdrant_collection_name,
+            data_instance_id=data_instance_id,
             total_rows=0,
             vectorized_rows=0,
             total_chunks=0,
@@ -172,15 +201,6 @@ class CollectionLifecycleService:
             collection.current_version_id = initial_version.id
             await self.session.flush()
 
-            tool_instance = await self.host._create_tool_instance_for_collection(collection)
-            if tool_instance:
-                collection.data_instance_id = tool_instance.id
-                await self.session.flush()
-
-            if tool_instance and tool_instance.connector_type == "data":
-                rbac = RbacService(self.session)
-                await rbac.ensure_platform_deny("instance", tool_instance.id)
-
             await self.host.sync_collection_status(collection, persist=False)
             return collection
         except Exception:
@@ -201,30 +221,21 @@ class CollectionLifecycleService:
         source_contract: Optional[dict] = None,
         collection_type: str = CollectionType.SQL.value,
         data_instance_id: Optional[uuid.UUID] = None,
+        data_instance: Optional[ToolInstance] = None,
         table_name: Optional[str] = None,
         table_schema: Optional[dict] = None,
     ) -> Collection:
+        if data_instance_id is None:
+            raise InvalidSchemaError("data_instance_id is required")
         self.contract.validate_admin_defined_fields(fields, collection_type)
-        profile = get_collection_type_profile(collection_type)
-        fields = profile.ensure_specific_fields(self.contract, fields)
+        fields = _ensure_type_specific_fields(self.contract, fields, collection_type)
         self.contract.validate_fields(fields, collection_type)
-
-        if data_instance_id:
-            result = await self.session.execute(
-                select(ToolInstance).where(ToolInstance.id == data_instance_id)
+        if data_instance is None:
+            await self._resolve_and_validate_data_instance(
+                tenant_id=tenant_id,
+                data_instance_id=data_instance_id,
+                collection_type=collection_type,
             )
-            instance = result.scalar_one_or_none()
-            if not instance:
-                raise InvalidSchemaError(f"Data instance {data_instance_id} not found")
-            if not instance.is_active:
-                raise InvalidSchemaError(f"Data instance {data_instance_id} is not active")
-            if instance.connector_type != "data":
-                raise InvalidSchemaError(f"Connector {data_instance_id} is not a data connector")
-            expected_subtype = profile.expected_data_connector_subtype()
-            if expected_subtype and str(instance.connector_subtype or "").strip().lower() != expected_subtype:
-                raise InvalidSchemaError(
-                    f"Connector {data_instance_id} is not {expected_subtype} subtype"
-                )
 
         initial_status = (
             CollectionStatus.DISCOVERED.value
@@ -259,6 +270,37 @@ class CollectionLifecycleService:
 
         return collection
 
+    async def _resolve_and_validate_data_instance(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        data_instance_id: uuid.UUID,
+        collection_type: str,
+    ) -> ToolInstance:
+        result = await self.session.execute(
+            select(ToolInstance).where(ToolInstance.id == data_instance_id)
+        )
+        instance = result.scalar_one_or_none()
+        if not instance:
+            raise InvalidSchemaError(f"Data instance {data_instance_id} not found")
+        if not instance.is_active:
+            raise InvalidSchemaError(f"Data instance {data_instance_id} is not active")
+        if not instance.is_data:
+            raise InvalidSchemaError(f"Connector {data_instance_id} is not a data connector")
+
+        # ToolInstance currently has no explicit tenant_id column in schema.
+        # Enforce tenant affinity when legacy tenant_id is present in config.
+        cfg_tenant_id = str((instance.config or {}).get("tenant_id") or "").strip()
+        if cfg_tenant_id and cfg_tenant_id != str(tenant_id):
+            raise ConflictError("data instance belongs to another tenant")
+
+        expected_subtype = _expected_data_connector_subtype(collection_type)
+        if expected_subtype and str(instance.connector_subtype or "").strip().lower() != expected_subtype:
+            raise InvalidSchemaError(
+                f"Connector {data_instance_id} is not {expected_subtype} subtype"
+            )
+        return instance
+
     async def delete_collection(
         self, tenant_id: uuid.UUID, slug: str, *, drop_table: bool = True
     ) -> bool:
@@ -266,15 +308,11 @@ class CollectionLifecycleService:
         if not collection:
             return False
 
-        data_instance_id = getattr(collection, "data_instance_id", None) or getattr(collection, "tool_instance_id", None)
         table_name = getattr(collection, "table_name", None)
         qdrant_collection_name = getattr(collection, "qdrant_collection_name", None)
 
         await self.session.delete(collection)
         await self.session.flush()
-
-        if data_instance_id:
-            await self.host._delete_tool_instance_for_collection(data_instance_id)
 
         if drop_table and table_name:
             await self.session.execute(text(f"DROP TABLE IF EXISTS {table_name} CASCADE"))

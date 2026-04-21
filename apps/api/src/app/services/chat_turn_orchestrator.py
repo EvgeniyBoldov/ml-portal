@@ -45,6 +45,7 @@ class ChatTurnOrchestrator:
         user_id: str,
         content: str,
         attachment_ids: list[str],
+        confirmation_tokens: Optional[list[str]] = None,
         attachment_meta: list[dict[str, Any]],
         attachment_prompt_context: str,
         idempotency_key: Optional[str],
@@ -121,7 +122,10 @@ class ChatTurnOrchestrator:
             user_id=user_id,
             chat_id=chat_id,
             request_id=idempotency_key or str(uuid.uuid4()),
-            extra={"continuation_meta": continuation_meta or {}},
+            extra={
+                "continuation_meta": continuation_meta or {},
+                "confirmation_tokens": list(confirmation_tokens or []),
+            },
         )
 
         turn.transition(TurnPhase.EXECUTION_STARTED)

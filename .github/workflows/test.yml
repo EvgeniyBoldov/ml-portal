@@ -59,6 +59,7 @@ jobs:
     - name: Run backend tests
       run: |
         cd apps/api
+        pytest tests/unit -q --tb=short --cov=app.runtime --cov-fail-under=70 --cov-report=term-missing --cov-report=xml:coverage-runtime.xml
         pytest tests/ -v --cov=app --cov-report=xml --cov-report=html --cov-report=term-missing
       env:
         DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
@@ -214,6 +215,7 @@ jobs:
     - name: Run E2E tests
       run: |
         cd apps/web
+        npx playwright test e2e-tests/runtime-smoke.spec.ts --project=chromium --reporter=line
         npm run test:e2e
       env:
         API_BASE_URL: http://localhost:8000/api

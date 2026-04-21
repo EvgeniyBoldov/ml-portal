@@ -23,42 +23,35 @@ logger = get_logger(__name__)
 
 @dataclass
 class EffectivePermissions:
-    """Result of permission resolution for user/tenant context"""
+    """Result of permission resolution for user/tenant context.
+
+    Tool-level RBAC is intentionally absent: runtime access to operations is
+    derived from collection access (agent → allowed_collections → data_instance
+    → mcp → discovered tools). See architectural note in docs.
+    """
     # instance_slug -> is_allowed
     instance_permissions: Dict[str, bool] = field(default_factory=dict)
     # agent_slug -> is_allowed
     agent_permissions: Dict[str, bool] = field(default_factory=dict)
-    # tool_slug -> is_allowed (resolved from RBAC rules)
-    tool_permissions: Dict[str, bool] = field(default_factory=dict)
     # collection_slug -> is_allowed
     collection_permissions: Dict[str, bool] = field(default_factory=dict)
     # RBAC denied reasons: resource -> reason
     denied_reasons: Dict[str, str] = field(default_factory=dict)
-    # default fallback behavior for unresolved tool/collection permissions
-    default_tool_allow: bool = False
+    # default fallback behavior for unresolved collection permissions
     default_collection_allow: bool = False
-    
+
     def is_instance_allowed(self, instance_slug: str) -> bool:
         """Check if instance is allowed. Default is denied."""
         return self.instance_permissions.get(instance_slug, False)
-    
+
     def is_agent_allowed(self, agent_slug: str) -> bool:
         """Check if agent is allowed. Default is denied."""
         return self.agent_permissions.get(agent_slug, False)
-    
-    def is_tool_allowed(self, tool_slug: str) -> bool:
-        """Check if tool is allowed."""
-        return self.tool_permissions.get(tool_slug, self.default_tool_allow)
-    
+
     def is_collection_allowed(self, collection_slug: str) -> bool:
         """Check if collection is allowed."""
         return self.collection_permissions.get(collection_slug, self.default_collection_allow)
-    
-    @property
-    def allowed_tools(self) -> List[str]:
-        """Get list of explicitly allowed tool slugs"""
-        return [slug for slug, allowed in self.tool_permissions.items() if allowed]
-    
+
     @property
     def allowed_collections(self) -> List[str]:
         """Get list of explicitly allowed collection slugs"""
@@ -93,7 +86,6 @@ class EffectivePermissions:
 
 _RESOURCE_SLUG_MODELS = {
     "agent": ("app.models.agent", "Agent"),
-    "tool": ("app.models.tool", "Tool"),
     "instance": ("app.models.tool_instance", "ToolInstance"),
     "collection": ("app.models.collection", "Collection"),
 }
@@ -159,29 +151,15 @@ class PermissionService:
         self,
         permission_sets: List[object],
         *,
-        default_tool_allow: bool,
         default_collection_allow: bool,
     ) -> EffectivePermissions:
         effective = EffectivePermissions(
-            default_tool_allow=default_tool_allow,
             default_collection_allow=default_collection_allow,
         )
 
         default_set = next((p for p in permission_sets if getattr(p, "scope", "") == "default"), None)
         tenant_set = next((p for p in permission_sets if getattr(p, "scope", "") == "tenant"), None)
         user_set = next((p for p in permission_sets if getattr(p, "scope", "") == "user"), None)
-
-        default_tools = dict(getattr(default_set, "tool_permissions", {}) or {})
-        tenant_tools = dict(getattr(tenant_set, "tool_permissions", {}) or {})
-        user_tools = dict(getattr(user_set, "tool_permissions", {}) or {})
-        all_tool_slugs = set(default_tools.keys()) | set(tenant_tools.keys()) | set(user_tools.keys())
-        for tool_slug in all_tool_slugs:
-            effective.tool_permissions[tool_slug] = self._resolve_tri_state(
-                user_tools.get(tool_slug),
-                tenant_tools.get(tool_slug),
-                default_tools.get(tool_slug),
-                fallback_allow=default_tool_allow,
-            )
 
         default_collections = dict(getattr(default_set, "collection_permissions", {}) or {})
         tenant_collections = dict(getattr(tenant_set, "collection_permissions", {}) or {})
@@ -206,16 +184,18 @@ class PermissionService:
         user_id: Optional[UUID] = None,
         tenant_id: Optional[UUID] = None,
         *,
-        default_tool_allow: bool = False,
         default_collection_allow: bool = False,
+        **_legacy_kwargs,
     ) -> EffectivePermissions:
         """
         Resolve effective permissions from RbacRule.
 
         Priority: user > tenant > platform > default deny.
+
+        Tool-level RBAC was removed; any `default_tool_allow` kwarg is accepted
+        and ignored for backward compatibility.
         """
         effective = EffectivePermissions(
-            default_tool_allow=default_tool_allow,
             default_collection_allow=default_collection_allow,
         )
 
@@ -228,7 +208,6 @@ class PermissionService:
                     await self._apply_rbac_rules(effective, user_id=user_id, tenant_id=tenant_id)
                 return await self._resolve_from_legacy_permission_sets(
                     list(permission_sets),
-                    default_tool_allow=default_tool_allow,
                     default_collection_allow=default_collection_allow,
                 )
 
@@ -280,8 +259,6 @@ class PermissionService:
                 effective.instance_permissions[slug] = is_allowed
             elif rtype == "agent":
                 effective.agent_permissions[slug] = is_allowed
-            elif rtype == "tool":
-                effective.tool_permissions[slug] = is_allowed
             elif rtype == "collection":
                 effective.collection_permissions[slug] = is_allowed
 
@@ -296,7 +273,7 @@ class PermissionService:
             f"denied={len(effective.get_denied_instances())}; "
             f"agents: allowed={len(effective.get_allowed_agents())}, "
             f"denied={len(effective.get_denied_agents())}; "
-            f"tools: {len(effective.tool_permissions)} rules"
+            f"collections: {len(effective.collection_permissions)} rules"
         )
 
         return effective

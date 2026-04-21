@@ -98,7 +98,18 @@ def map_service_event_to_sse(event: Dict[str, Any]) -> Optional[str]:
     if et == "confirmation_required":
         return format_chat_sse(
             ChatSSEEventType.CONFIRMATION_REQUIRED,
-            ConfirmationRequiredPayload(reason=event.get("reason"), action=event.get("action")),
+            ConfirmationRequiredPayload(
+                message=event.get("message"),
+                operation_fingerprint=event.get("operation_fingerprint"),
+                tool_slug=event.get("tool_slug"),
+                operation=event.get("operation"),
+                risk_level=event.get("risk_level"),
+                args_preview=event.get("args_preview"),
+                summary=event.get("summary"),
+                run_id=event.get("run_id"),
+                orchestration_envelope=event.get("orchestration_envelope"),
+                orchestration_state=event.get("orchestration_state"),
+            ),
         )
     if et == "waiting_input":
         return format_chat_sse(

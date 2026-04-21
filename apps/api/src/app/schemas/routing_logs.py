@@ -4,7 +4,7 @@ Pydantic schemas for Routing Logs API.
 from typing import Optional, Dict, Any, List
 from uuid import UUID
 from datetime import datetime
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class RoutingLogResponse(BaseModel):
@@ -30,5 +30,4 @@ class RoutingLogResponse(BaseModel):
     status: str
     error_message: Optional[str]
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

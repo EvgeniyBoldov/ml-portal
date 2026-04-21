@@ -4,7 +4,7 @@ RAG schemas and models
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 from uuid import UUID
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 from app.schemas.common import DocumentStatus, Step, IngestRunStatus, ChunkProfile, EmbeddingModel
 
@@ -97,8 +97,7 @@ class EmbeddingMeta(BaseModel):
     dimensions: int
     created_at: datetime
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True, protected_namespaces=())
 
 
 class IngestRunBase(BaseModel):
@@ -112,6 +111,8 @@ class IngestRunBase(BaseModel):
     error_message: Optional[str] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
+    model_config = ConfigDict(protected_namespaces=())
+
 
 class IngestRunCreate(IngestRunBase):
     """Ingest run creation schema"""
@@ -124,8 +125,7 @@ class IngestRun(IngestRunBase):
     started_at: datetime
     completed_at: Optional[datetime] = None
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True, protected_namespaces=())
 
 
 class IngestProgress(BaseModel):

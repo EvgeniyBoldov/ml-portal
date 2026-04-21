@@ -158,9 +158,11 @@ class Collection(Base):
     query_timeout_seconds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=10)
     
     # Source-of-truth runtime binding: collection -> data instance.
-    # Runtime cache may duplicate binding in ToolInstance.config.collection_binding.
-    data_instance_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("tool_instances.id", ondelete="SET NULL"), nullable=True
+    data_instance_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tool_instances.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
     )
     
     # SQL collection fields
@@ -200,6 +202,11 @@ class Collection(Base):
         foreign_keys=[current_version_id],
         post_update=True,
         uselist=False,
+    )
+    data_instance: Mapped["ToolInstance"] = relationship(
+        "ToolInstance",
+        foreign_keys=[data_instance_id],
+        lazy="joined",
     )
 
     def __init__(self, **kwargs):
@@ -477,10 +484,8 @@ class CollectionVersion(Base):
         server_default=CollectionVersionStatus.DRAFT.value,
         index=True,
     )
-    semantic_profile: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     retrieval_params: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     prompt_context_params: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-    policy_hints: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

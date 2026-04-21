@@ -42,9 +42,7 @@ class OperationBuilder:
         load_discovered_capabilities: Callable[..., Awaitable[List[DiscoveredTool]]],
         resolve_execution_credentials: Callable[..., Awaitable[Optional[OperationCredentialContext]]],
     ) -> List[tuple[ResolvedOperation, Optional[OperationCredentialContext]]]:
-        publication_overrides = (sandbox_overrides or {}).get("tool_publication", {})
-        discovered_tool_overrides = (sandbox_overrides or {}).get("discovered_tool_overrides", {})
-        discovered_tool_release_ids = (sandbox_overrides or {}).get("discovered_tool_release_ids", {})
+        _ = sandbox_overrides  # semantic tool overrides removed; kept for signature parity
         discovered_tools = await load_discovered_capabilities(
             instance=instance,
             provider=provider,
@@ -60,9 +58,6 @@ class OperationBuilder:
                 has_credentials=has_credentials,
                 runtime_domain=runtime_domain,
                 context_domains=context_domains,
-                publication_overrides=publication_overrides,
-                discovered_tool_overrides=discovered_tool_overrides,
-                discovered_tool_release_ids=discovered_tool_release_ids,
                 effective_permissions=effective_permissions,
                 user_id=user_id,
                 tenant_id=tenant_id,
@@ -82,9 +77,6 @@ class OperationBuilder:
         has_credentials: Optional[bool],
         runtime_domain: str,
         context_domains: Optional[List[str]],
-        publication_overrides: Dict[str, Any],
-        discovered_tool_overrides: Dict[str, Any],
-        discovered_tool_release_ids: Dict[str, Any],
         effective_permissions: Optional[EffectivePermissions],
         user_id: Optional[UUID],
         tenant_id: Optional[UUID],
@@ -94,34 +86,16 @@ class OperationBuilder:
         raw_operation_name = discovered_tool.slug
         if not raw_operation_name.strip():
             return None
-        if not self.runtime_rbac_resolver.is_tool_allowed(
-            effective_permissions=effective_permissions,
-            tool_slug=raw_operation_name,
-        ):
-            return None
 
-        discovered_tool_id = getattr(discovered_tool, "id", None)
-        discovered_tool_key = str(discovered_tool_id) if discovered_tool_id is not None else raw_operation_name
-        override_value = publication_overrides.get(discovered_tool_key)
-        selected_release_id = discovered_tool_release_ids.get(discovered_tool_key)
         resolution: Optional[ResolvedTool] = await self.tool_resolver.resolve(
             discovered_tool=discovered_tool,
             instance=instance,
             provider=provider,
             runtime_domain=runtime_domain,
             context_domains=context_domains,
-            publication_override=override_value,
-            resolved_release_id=(
-                selected_release_id
-                if isinstance(selected_release_id, str) and selected_release_id.strip()
-                else None
-            ),
-            runtime_override=discovered_tool_overrides.get(discovered_tool_key),
-            sandbox_mode=bool(publication_overrides or discovered_tool_overrides or discovered_tool_release_ids),
         )
         if resolution is None:
             return None
-        semantics = resolution.semantics
         publication = resolution.publication
         if publication is None:
             operation_name = resolution.operation_name
@@ -162,14 +136,24 @@ class OperationBuilder:
                     credential_instance,
                     user_id=user_id,
                     tenant_id=tenant_id,
-                    credential_scope=semantics.credential_scope,
+                    tool_slug=operation_slug,
+                    operation=operation_name,
+                    credential_scope=resolution.credential_scope,
+                    risk_level=resolution.risk_level,
+                    side_effects=resolution.side_effects,
+                    requires_confirmation=resolution.requires_confirmation,
                 )
                 if credential_context is None and provider_type == "mcp":
                     credential_context = await resolve_execution_credentials(
                         provider_for_target,
                         user_id=user_id,
                         tenant_id=tenant_id,
-                        credential_scope=semantics.credential_scope,
+                        tool_slug=operation_slug,
+                        operation=operation_name,
+                        credential_scope=resolution.credential_scope,
+                        risk_level=resolution.risk_level,
+                        side_effects=resolution.side_effects,
+                        requires_confirmation=resolution.requires_confirmation,
                     )
             resolved_has_credentials = credential_context is not None or provider_for_target.is_local
             if not credential_context:
@@ -179,7 +163,7 @@ class OperationBuilder:
                         "instance_slug": instance.slug,
                         "raw_slug": raw_operation_name,
                         "canonical_operation": operation_name,
-                        "credential_scope": semantics.credential_scope,
+                        "credential_scope": resolution.credential_scope,
                     },
                 )
         elif has_credentials is not None:
@@ -201,8 +185,8 @@ class OperationBuilder:
         operation = ResolvedOperation(
             operation_slug=operation_slug,
             operation=operation_name,
-            name=semantics.title,
-            description=semantics.description,
+            name=resolution.title,
+            description=resolution.description,
             input_schema=resolution.input_schema,
             output_schema=resolution.output_schema,
             data_instance_id=str(instance.id),
@@ -210,16 +194,14 @@ class OperationBuilder:
             provider_instance_id=str(provider_for_target.id),
             provider_instance_slug=provider_for_target.slug,
             source=provider_type,
-            risk_level=semantics.risk_level,
-            side_effects=semantics.side_effects,
-            idempotent=semantics.idempotent,
-            requires_confirmation=semantics.requires_confirmation,
-            credential_scope=semantics.credential_scope,
+            risk_level=resolution.risk_level,
+            side_effects=resolution.side_effects,
+            idempotent=resolution.idempotent,
+            requires_confirmation=resolution.requires_confirmation,
+            credential_scope=resolution.credential_scope,
             resource=None,
             systems=[],
-            risk_flags=semantics.risk_flags,
-            semantic_quality=semantics.quality,
-            examples=semantics.examples,
+            risk_flags=list(resolution.risk_flags),
             target=target,
         )
         return operation, credential_context

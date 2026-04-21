@@ -18,8 +18,13 @@ interface Message {
 }
 
 interface PendingConfirmation {
-  reason: string;
-  action: Record<string, unknown>;
+  operationFingerprint: string;
+  toolSlug: string;
+  operation: string;
+  riskLevel: string;
+  argsPreview: string;
+  summary: string;
+  runId?: string | null;
 }
 
 interface PendingInput {
@@ -61,7 +66,8 @@ interface ChatState {
   isLoading: boolean;
   currentChatId: string | null;
   streamStatus: string | null;
-  pendingConfirmation: PendingConfirmation | null;
+  pendingConfirmations: PendingConfirmation[];
+  pendingConfirmationTokens: string[];
   pendingInput: PendingInput | null;
   stopReason: string | null;
   pausedRunId: string | null;
@@ -83,7 +89,8 @@ interface ChatContextValue {
     onError: (error: string) => void,
     agentSlug?: string,
     attachmentIds?: string[],
-    attachmentMeta?: unknown[]
+    attachmentMeta?: unknown[],
+    confirmationTokens?: string[]
   ) => Promise<void>;
 }
 
@@ -108,7 +115,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [currentChatId, setCurrentChatId] = useState<string | null>(null);
-  const [pendingConfirmation, setPendingConfirmation] = useState<PendingConfirmation | null>(null);
+  const [pendingConfirmations, setPendingConfirmations] = useState<PendingConfirmation[]>([]);
+  const [pendingConfirmationTokens, setPendingConfirmationTokens] = useState<string[]>([]);
   const [pendingInput, setPendingInput] = useState<PendingInput | null>(null);
   const [stopReason, setStopReason] = useState<string | null>(null);
   const [pausedRunId, setPausedRunId] = useState<string | null>(null);
@@ -155,7 +163,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const clearPendingState = useCallback(() => {
-    setPendingConfirmation(null);
+    setPendingConfirmations([]);
+    setPendingConfirmationTokens([]);
     setPendingInput(null);
     setStopReason(null);
     setPausedRunId(null);
@@ -175,16 +184,21 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     setPausedRunId(runId || null);
 
     if (reason === 'waiting_confirmation') {
-      setPendingConfirmation({
-        reason: message || question || 'Требуется подтверждение',
-        action,
-      });
+      setPendingConfirmations([{
+        operationFingerprint: String(action.operation_fingerprint || ''),
+        toolSlug: String(action.tool_slug || ''),
+        operation: String(action.operation || ''),
+        riskLevel: String(action.risk_level || 'write'),
+        argsPreview: String(action.args_preview || ''),
+        summary: message || question || 'Требуется подтверждение',
+        runId: runId || null,
+      }]);
       setPendingInput(null);
       setStreamStatus('Ожидание подтверждения...');
       return;
     }
 
-    setPendingConfirmation(null);
+    setPendingConfirmations([]);
     setPendingInput({
       question: question || message || undefined,
       reason,
@@ -200,17 +214,24 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     onError: (error: string) => void,
     agentSlug?: string,
     attachmentIds?: string[],
-    attachmentMeta?: unknown[]
+    attachmentMeta?: unknown[],
+    confirmationTokens?: string[]
   ) => {
     try {
       setError(null);
       setStreamStatus(null);
-      setPendingConfirmation(null);
+      setPendingConfirmations([]);
       setPendingInput(null);
       setStopReason(null);
       setPausedRunId(null);
       setOrchestrationEnvelope(null);
       setOrchestrationState(null);
+      if (confirmationTokens?.length) {
+        setPendingConfirmationTokens((prev) => {
+          const merged = [...prev, ...confirmationTokens];
+          return Array.from(new Set(merged.filter(Boolean)));
+        });
+      }
 
       // 1. Optimistically add user message to local state
       const tempUserId = `temp-user-${Date.now()}`;
@@ -279,6 +300,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           use_rag: useRag,
           agent_slug: agentSlug,
           attachment_ids: attachmentIds ?? [],
+          confirmation_tokens: confirmationTokens ?? [],
         }),
       });
 
@@ -613,10 +635,18 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           else if (eventType === 'confirmation_required') {
             try {
               const parsed = JSON.parse(data);
-              setPendingConfirmation({
-                reason: parsed.reason || 'Требуется подтверждение',
-                action: parsed.action || {},
-              });
+              setPendingConfirmations((prev) => [
+                ...prev,
+                {
+                  operationFingerprint: String(parsed.operation_fingerprint || ''),
+                  toolSlug: String(parsed.tool_slug || ''),
+                  operation: String(parsed.operation || ''),
+                  riskLevel: String(parsed.risk_level || 'write'),
+                  argsPreview: String(parsed.args_preview || ''),
+                  summary: String(parsed.summary || parsed.message || 'Требуется подтверждение'),
+                  runId: typeof parsed.run_id === 'string' ? parsed.run_id : null,
+                },
+              ]);
               setStreamStatus('Ожидание подтверждения...');
             } catch (e) {
               console.error('Failed to parse confirmation_required event', e);
@@ -682,6 +712,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
       // Clear stream status after completion
       setStreamStatus(null);
+      setPendingConfirmationTokens([]);
       setOrchestrationEnvelope(null);
       setOrchestrationState(null);
       if (flushTimer) {
@@ -708,7 +739,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       isLoading,
       currentChatId,
       streamStatus,
-      pendingConfirmation,
+      pendingConfirmations,
+      pendingConfirmationTokens,
       pendingInput,
       stopReason,
       pausedRunId,

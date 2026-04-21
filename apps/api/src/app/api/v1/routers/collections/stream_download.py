@@ -24,7 +24,7 @@ router = APIRouter()
 async def download_collection_doc(
     collection_id: uuid.UUID,
     doc_id: str,
-    kind: str = Query("original", regex="^(original|canonical)$"),
+    kind: str = Query("original", pattern="^(original|canonical)$"),
     session: AsyncSession = Depends(db_uow),
     user: UserCtx = Depends(get_current_user),
 ):

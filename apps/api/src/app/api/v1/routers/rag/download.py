@@ -26,7 +26,7 @@ router = APIRouter()
 @router.get("/{doc_id}/download")
 async def download_rag_file(
     doc_id: str,
-    kind: str = Query("original", regex="^(original|canonical)$"),
+    kind: str = Query("original", pattern="^(original|canonical)$"),
     session: AsyncSession = Depends(db_uow),
     user: UserCtx = Depends(get_current_user),
     repo_factory: AsyncRepositoryFactory = Depends(get_async_repository_factory)

@@ -181,24 +181,6 @@ SANDBOX_BLUEPRINTS: List[Dict[str, Any]] = [
                 ],
             ),
             _section(
-                "Семантика",
-                [
-                    _field("summary", "Summary", "semantic_profile.summary", field_type="text"),
-                    _field("when_to_use", "When to use", "semantic_profile.when_to_use", field_type="text"),
-                    _field("limitations", "Limitations", "semantic_profile.limitations", field_type="text"),
-                    _field("examples", "Examples", "semantic_profile.examples", field_type="tags"),
-                ],
-            ),
-            _section(
-                "Policy Hints",
-                [
-                    _field("dos", "What is allowed", "policy_hints.dos", field_type="tags"),
-                    _field("donts", "What is forbidden", "policy_hints.donts", field_type="tags"),
-                    _field("guardrails", "Guardrails", "policy_hints.guardrails", field_type="tags"),
-                    _field("sensitive_inputs", "Sensitive inputs", "policy_hints.sensitive_inputs", field_type="tags"),
-                ],
-            ),
-            _section(
                 "Схемы",
                 [
                     _field("input_schema", "Input schema", "backend_release.input_schema", field_type="json", editable=False, source_key="backend_release.input_schema"),
@@ -227,11 +209,11 @@ SANDBOX_BLUEPRINTS: List[Dict[str, Any]] = [
                 "Семантика",
                 [
                     _field("description", "Description", "description", field_type="text"),
-                    _field("side_effects", "Side effects", "side_effects", field_type="select", options=["none", "write", "destructive"]),
-                    _field("risk_level", "Risk level", "risk_level", field_type="select", options=["low", "medium", "high"]),
+                    _field("side_effects", "Side effects", "side_effects", field_type="boolean"),
+                    _field("risk_level", "Risk level", "risk_level", field_type="select", options=["safe", "write", "destructive"]),
                     _field("idempotent", "Idempotent", "idempotent", field_type="boolean"),
                     _field("requires_confirmation", "Requires confirmation", "requires_confirmation", field_type="boolean"),
-                    _field("credential_scope", "Credential scope", "credential_scope", field_type="select", options=["any", "user_only", "tenant_only", "platform_only", "any_non_user"]),
+                    _field("credential_scope", "Credential scope", "credential_scope", field_type="select", options=["auto", "user", "platform"]),
                     _field("examples", "Examples", "examples", field_type="json"),
                     _field("input_schema", "Input schema", "input_schema", field_type="json", editable=False),
                     _field("output_schema", "Output schema", "output_schema", field_type="json", editable=False),
@@ -323,4 +305,3 @@ SANDBOX_BLUEPRINTS: List[Dict[str, Any]] = [
         ],
     ),
 ]
-

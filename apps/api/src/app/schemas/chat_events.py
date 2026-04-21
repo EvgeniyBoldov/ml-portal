@@ -102,8 +102,16 @@ class DeltaPayload(BaseModel):
 
 
 class ConfirmationRequiredPayload(BaseModel):
-    reason: Optional[str] = None
-    action: Optional[str] = None
+    message: Optional[str] = None
+    operation_fingerprint: Optional[str] = None
+    tool_slug: Optional[str] = None
+    operation: Optional[str] = None
+    risk_level: Optional[str] = None
+    args_preview: Optional[str] = None
+    summary: Optional[str] = None
+    run_id: Optional[str] = None
+    orchestration_envelope: Optional[Dict[str, Any]] = None
+    orchestration_state: Optional[Dict[str, Any]] = None
 
 
 class WaitingInputPayload(BaseModel):

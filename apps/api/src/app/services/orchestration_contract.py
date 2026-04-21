@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pydantic import BaseModel, Field
 
 from app.agents.contracts import ActionType, RuntimeTriageDecision
-from app.agents.runtime.events import RuntimeEvent
+from app.runtime.events import RuntimeEvent
 
 
 class IntentType(str, Enum):

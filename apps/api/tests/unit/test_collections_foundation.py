@@ -18,12 +18,14 @@ from app.services.document_artifacts import (
     upsert_document_artifact,
 )
 from app.services.collection_service import CollectionService, InvalidSchemaError, RowValidationError
+from app.services.collection.row_service import CollectionRowService
 from app.workers.tasks_collection_vectorize import _build_point_id
 
 
 def _table_collection() -> Collection:
     return Collection(
         id=uuid4(),
+        data_instance_id=uuid4(),
         tenant_id=uuid4(),
         collection_type=CollectionType.TABLE.value,
         slug="tickets",
@@ -77,7 +79,6 @@ def _table_collection() -> Collection:
             },
         ],
         status="ready",
-        row_count=0,
         total_rows=0,
         vectorized_rows=0,
         total_chunks=0,
@@ -287,6 +288,7 @@ def test_collection_text_search_skips_stale_vector_hits_without_rows():
 def test_collection_field_layers_hide_system_and_limit_business_fields():
     collection = Collection(
         id=uuid4(),
+        data_instance_id=uuid4(),
         tenant_id=uuid4(),
         collection_type=CollectionType.DOCUMENT.value,
         slug="docs",
@@ -329,7 +331,6 @@ def test_collection_field_layers_hide_system_and_limit_business_fields():
             },
         ],
         status="ready",
-        row_count=0,
         total_rows=0,
         vectorized_rows=0,
         total_chunks=0,
@@ -342,8 +343,8 @@ def test_collection_field_layers_hide_system_and_limit_business_fields():
 
     assert [field["name"] for field in collection.get_system_fields()] == ["id", "_created_at", "_updated_at"]
     assert [field["name"] for field in collection.get_specific_fields()] == ["file", "file_name"]
-    assert [field["name"] for field in collection.get_business_fields()] == ["title"]
-    assert [field["name"] for field in collection.get_row_writable_fields()] == ["title"]
+    assert [field["name"] for field in collection.get_business_fields()] == ["file", "file_name", "title"]
+    assert [field["name"] for field in collection.get_row_writable_fields()] == ["file", "file_name", "title"]
 
 
 def test_document_collection_presets_include_immutable_specific_fields():
@@ -367,10 +368,8 @@ def test_document_collection_presets_include_immutable_specific_fields():
 
     field_map = {field["name"]: field for field in preset_fields}
     assert field_map["file"]["category"] == FieldCategory.SPECIFIC.value
-    assert field_map["file_name"]["category"] == FieldCategory.SPECIFIC.value
-    assert field_map["file_content_type"]["category"] == FieldCategory.SPECIFIC.value
-    assert field_map["file_size_bytes"]["category"] == FieldCategory.SPECIFIC.value
-    assert field_map["title"]["category"] == FieldCategory.USER.value
+    assert field_map["title"]["category"] == FieldCategory.SPECIFIC.value
+    assert field_map["source"]["category"] == FieldCategory.SPECIFIC.value
     assert field_map["vendor"]["category"] == FieldCategory.USER.value
 
 
@@ -381,7 +380,7 @@ def test_document_collection_rejects_admin_defined_specific_fields():
         service._validate_admin_defined_fields(  # noqa: SLF001
             [
                 {
-                    "name": "file_size_bytes",
+                    "name": "title",
                     "category": FieldCategory.USER.value,
                     "data_type": FieldType.INTEGER.value,
                 }
@@ -454,7 +453,6 @@ async def test_table_collection_status_snapshot_created_and_ready():
 
     ready_collection = _table_collection()
     ready_collection.total_rows = 2
-    ready_collection.row_count = 2
     ready_snapshot = await service.get_status_snapshot(ready_collection)
     assert ready_snapshot["status"] == "ready"
     assert ready_snapshot["details"]["status_reason"] == "rows_available_no_vector_required"
@@ -465,7 +463,6 @@ async def test_table_vector_collection_status_snapshot_ingesting_and_error():
 
     ingesting_collection = _table_collection()
     ingesting_collection.total_rows = 3
-    ingesting_collection.row_count = 3
     ingesting_collection.vectorized_rows = 1
     ingesting_collection.failed_rows = 0
     ingesting_collection.qdrant_collection_name = "coll_test_tickets"
@@ -475,7 +472,6 @@ async def test_table_vector_collection_status_snapshot_ingesting_and_error():
 
     error_collection = _table_collection()
     error_collection.total_rows = 2
-    error_collection.row_count = 2
     error_collection.vectorized_rows = 0
     error_collection.failed_rows = 2
     error_collection.qdrant_collection_name = "coll_test_tickets"
@@ -497,6 +493,7 @@ async def test_document_collection_status_snapshot_uses_document_lifecycle_reaso
 
     collection = Collection(
         id=uuid4(),
+        data_instance_id=uuid4(),
         tenant_id=uuid4(),
         collection_type=CollectionType.DOCUMENT.value,
         slug="docs",
@@ -505,7 +502,6 @@ async def test_document_collection_status_snapshot_uses_document_lifecycle_reaso
         table_name="coll_test_docs",
         fields=[],
         status="created",
-        row_count=0,
         total_rows=0,
         vectorized_rows=0,
         total_chunks=0,
@@ -562,7 +558,7 @@ def test_collection_public_row_serialization_hides_operational_fields():
         "_vector_error": None,
     }
 
-    serialized = CollectionService._serialize_row_for_public_api(collection, row)
+    serialized = CollectionRowService._serialize_row(collection, row)
 
     assert serialized["id"] == row["id"]
     assert serialized["title"] == "Incident 1"
@@ -585,7 +581,7 @@ def test_row_payload_validation_enforces_required_and_known_fields():
             partial=False,
         )
     except RowValidationError as exc:
-        assert "Missing required fields" in str(exc)
+        assert "Required field 'title' is missing" in str(exc)
     else:
         raise AssertionError("Expected RowValidationError for missing required field")
 
@@ -596,7 +592,7 @@ def test_row_payload_validation_enforces_required_and_known_fields():
             partial=False,
         )
     except RowValidationError as exc:
-        assert "Unknown or non-writable fields" in str(exc)
+        assert "Unknown fields: unknown" in str(exc)
     else:
         raise AssertionError("Expected RowValidationError for unknown field")
 
@@ -605,6 +601,7 @@ def test_row_payload_validation_coerces_supported_types():
     service = CollectionService(session=None)
     collection = Collection(
         id=uuid4(),
+        data_instance_id=uuid4(),
         tenant_id=uuid4(),
         collection_type=CollectionType.TABLE.value,
         slug="typed_rows",
@@ -691,7 +688,6 @@ def test_row_payload_validation_coerces_supported_types():
             },
         ],
         status="ready",
-        row_count=0,
         total_rows=0,
         vectorized_rows=0,
         total_chunks=0,

@@ -4,7 +4,7 @@ SystemLLMRole schemas for API.
 from typing import Optional, List, Dict, Any, Union
 from datetime import datetime
 from uuid import UUID
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 from app.models.system_llm_role import SystemLLMRoleType, RetryBackoffType
 from app.agents.contracts import ExecutionModeType
@@ -68,8 +68,7 @@ class SystemLLMRoleResponse(SystemLLMRoleBase):
     created_at: datetime
     updated_at: datetime
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # TriageRoleUpdate, PlannerRoleUpdate, SummaryRoleUpdate, MemoryRoleUpdate removed.

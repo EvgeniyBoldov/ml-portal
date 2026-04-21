@@ -58,77 +58,6 @@ export const TOOL_BACKEND_RELEASE_META_FIELDS: FieldConfig[] = [
   { key: 'synced_at', type: 'date', label: 'Синхронизировано', editable: false },
 ];
 
-export const TOOL_VERSION_PROFILE_FIELDS: FieldConfig[] = [
-  {
-    key: 'summary',
-    type: 'textarea',
-    label: 'Краткое описание',
-    description: 'Что это за инструмент и зачем он нужен.',
-    required: true,
-    placeholder: 'Поиск устройств и получение их состояния.',
-    rows: 4,
-  },
-  {
-    key: 'when_to_use',
-    type: 'textarea',
-    label: 'Когда использовать',
-    description: 'Какие задачи и запросы должны приводить к этому инструменту.',
-    placeholder: 'Когда нужно найти устройство по имени, IP или серийному номеру.',
-    rows: 4,
-  },
-  {
-    key: 'limitations',
-    type: 'textarea',
-    label: 'Ограничения',
-    description: 'Где инструмент плохо подходит или может дать неполный ответ.',
-    placeholder: 'Не подходит для массовых изменений и сложных join-запросов.',
-    rows: 4,
-  },
-  {
-    key: 'examples',
-    type: 'textarea',
-    label: 'Примеры',
-    description: 'По одному примеру на строку.',
-    placeholder: 'Покажи все активные устройства в сегменте...\nНайди IP-адрес для устройства core-sw-01...',
-    rows: 5,
-  },
-];
-
-export const TOOL_VERSION_POLICY_FIELDS: FieldConfig[] = [
-  {
-    key: 'policy_dos',
-    type: 'textarea',
-    label: 'Что делать можно',
-    description: 'Разрешённые и предпочтительные сценарии использования.',
-    placeholder: 'Используй инструмент для чтения данных.\nПроверяй результат по нескольким полям.',
-    rows: 4,
-  },
-  {
-    key: 'policy_donts',
-    type: 'textarea',
-    label: 'Что делать нельзя',
-    description: 'Запреты и явные анти-паттерны.',
-    placeholder: 'Не делай массовые изменения без подтверждения.\nНе полагайся на этот инструмент для удаления.',
-    rows: 4,
-  },
-  {
-    key: 'policy_guardrails',
-    type: 'textarea',
-    label: 'Границы и стоп-факторы',
-    description: 'Что должно остановить использование инструмента.',
-    placeholder: 'Останавливайся, если не хватает прав доступа.\nЗапрашивай подтверждение перед write-операциями.',
-    rows: 4,
-  },
-  {
-    key: 'policy_sensitive_inputs',
-    type: 'textarea',
-    label: 'Чувствительные входы',
-    description: 'Какие поля особенно опасны или требуют аккуратности.',
-    placeholder: 'password\ntoken\nsecret',
-    rows: 3,
-  },
-];
-
 export const TOOL_BACKEND_COLUMNS: DataTableColumn<ToolBackendReleaseListItem>[] = [
   { key: 'version', label: 'ВЕРСИЯ', render: (row) => <strong>{row.version}</strong> },
   { key: 'description', label: 'ОПИСАНИЕ', render: (row) => row.description || '—' },
@@ -140,63 +69,19 @@ export const TOOL_BACKEND_COLUMNS: DataTableColumn<ToolBackendReleaseListItem>[]
   },
 ];
 
-function toText(value: unknown): string {
-  return typeof value === 'string' ? value.trim() : '';
-}
-
-function toLines(value: unknown): string[] {
-  if (Array.isArray(value)) {
-    return value.map((item) => toText(item)).filter((item) => item.length > 0);
-  }
-  if (typeof value === 'string') {
-    return value.split(/\r?\n/).map((item) => item.trim()).filter((item) => item.length > 0);
-  }
-  return [];
-}
-
-function toMultiline(value: unknown): string {
-  return toLines(value).join('\n');
-}
-
 export function buildToolReleaseVersionData(version: ToolReleaseResponse | null | undefined) {
   if (!version) return null;
-
-  const semanticExamples = version.semantic_profile?.examples ?? [];
-  const policyDos = version.policy_hints?.dos ?? [];
-  const policyDonts = version.policy_hints?.donts ?? [];
-  const policyGuardrails = version.policy_hints?.guardrails ?? [];
-  const policySensitiveInputs = version.policy_hints?.sensitive_inputs ?? [];
-
   return {
     backend_release_id: version.backend_release_id ?? null,
-    summary: toText(version.semantic_profile?.summary)
-      || toText(version.backend_release?.description)
-      || '',
-    when_to_use: toText(version.semantic_profile?.when_to_use),
-    limitations: toText(version.semantic_profile?.limitations),
-    examples: toMultiline(semanticExamples),
-    policy_dos: toMultiline(policyDos),
-    policy_donts: toMultiline(policyDonts),
-    policy_guardrails: toMultiline(policyGuardrails),
-    policy_sensitive_inputs: toMultiline(policySensitiveInputs),
   };
 }
 
 export function buildToolReleasePayload(formData: Record<string, unknown>) {
+  const backendReleaseId = typeof formData.backend_release_id === 'string'
+    ? formData.backend_release_id.trim()
+    : '';
   return {
-    backend_release_id: toText(formData.backend_release_id) || undefined,
-    semantic_profile: {
-      summary: toText(formData.summary),
-      when_to_use: toText(formData.when_to_use),
-      limitations: toText(formData.limitations),
-      examples: toLines(formData.examples),
-    },
-    policy_hints: {
-      dos: toLines(formData.policy_dos),
-      donts: toLines(formData.policy_donts),
-      guardrails: toLines(formData.policy_guardrails),
-      sensitive_inputs: toLines(formData.policy_sensitive_inputs),
-    },
+    backend_release_id: backendReleaseId || undefined,
   };
 }
 

@@ -122,13 +122,11 @@ async def readiness_check_endpoint(session: AsyncSession = Depends(db_session)):
             logger.warning(f"Tool registry health check failed: {e}")
             app_services["tool_registry"] = "not_ready"
         
-        # Agent runtime bootstrap
+        # Agent runtime bootstrap — v3 RuntimePipeline readiness probe
         try:
-            from app.agents import AgentRuntime
             from app.core.di import get_llm_client
-            from app.services.run_store import RunStore
-            agent_runtime = AgentRuntime(get_llm_client(), run_store=RunStore())
-            app_services["agent_runtime"] = "ready" if agent_runtime is not None else "not_ready"
+            llm = get_llm_client()
+            app_services["agent_runtime"] = "ready" if llm is not None else "not_ready"
         except Exception as e:
             logger.warning(f"Agent runtime health check failed: {e}")
             app_services["agent_runtime"] = "not_ready"

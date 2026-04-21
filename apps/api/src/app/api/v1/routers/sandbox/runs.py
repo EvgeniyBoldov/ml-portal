@@ -9,11 +9,11 @@ from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import db_session, get_current_user_sse, require_admin
-from app.agents import AgentRuntime, ToolContext, RuntimeEventType
+from app.agents import ToolContext
 from app.agents.runtime_sandbox_resolver import RuntimeSandboxResolver
 from app.agents.runtime_trace_logger import RuntimeTraceLogger
-from app.agents.runtime.pipeline import RuntimePipeline
 from app.core.db import get_session_factory
+from app.runtime import PipelineRequest, RuntimeEventType, RuntimePipeline
 from app.core.di import get_llm_client
 from app.core.http.clients import LLMClientProtocol
 from app.core.logging import get_logger
@@ -297,23 +297,27 @@ async def run_sandbox(
                 request_id=str(uuid.uuid4()),
             ))
 
-            runtime = AgentRuntime(
-                llm_client=llm_client,
-                run_store=RunStore(session_factory=session_factory),
-            )
             pipeline = RuntimePipeline(
                 session=stream_db,
                 llm_client=llm_client,
-                runtime=runtime,
-                sandbox_overrides=sandbox_overrides,
-                trace_logger=runtime_trace,
-                sandbox_resolver=runtime_sandbox_resolver,
+                run_store=RunStore(session_factory=session_factory),
             )
 
             messages = []
             if attachment_prompt_context:
                 messages.append({"role": "system", "content": attachment_prompt_context})
             messages.append({"role": "user", "content": data.request_text})
+
+            pipeline_request = PipelineRequest(
+                request_text=data.request_text,
+                chat_id=None,  # sandbox runs are not bound to a persistent chat
+                user_id=str(u_uuid),
+                tenant_id=str(t_uuid),
+                messages=messages,
+                agent_slug=agent_slug,
+                agent_version_id=str(agent_version_id) if agent_version_id else None,
+                sandbox_overrides=sandbox_overrides,
+            )
             step_num = 0
             final_status = "completed"
             final_error: Optional[str] = None
@@ -347,15 +351,7 @@ async def run_sandbox(
                     logger.warning(f"[Sandbox] Failed to persist step: {step_err}")
 
             try:
-                async for event in pipeline.execute(
-                    request_text=data.request_text,
-                    user_id=u_uuid,
-                    tenant_id=t_uuid,
-                    messages=messages,
-                    ctx=tool_ctx,
-                    agent_slug=agent_slug,
-                    agent_version_id=agent_version_id,
-                ):
+                async for event in pipeline.execute(pipeline_request, tool_ctx):
                     if event.type == RuntimeEventType.ERROR:
                         final_status = "failed"
                         final_error = str(event.data.get("error") or "runtime_error")

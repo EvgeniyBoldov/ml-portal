@@ -4,7 +4,7 @@ Schemas for Tool Releases API
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 from uuid import UUID
-from pydantic import BaseModel, Field, ConfigDict, model_validator
+from pydantic import BaseModel, Field, ConfigDict
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -27,8 +27,7 @@ class ToolBackendReleaseResponse(BaseModel):
     last_seen_at: Optional[datetime] = None
     synced_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ToolBackendReleaseListItem(BaseModel):
@@ -42,93 +41,22 @@ class ToolBackendReleaseListItem(BaseModel):
     last_seen_at: Optional[datetime] = None
     synced_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # TOOL RELEASE (CRUD, for agents)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _normalize_text(value: Any) -> str:
-    return str(value or "").strip()
-
-
-def _normalize_str_list(value: Any) -> list[str]:
-    if isinstance(value, list):
-        raw_items = value
-    elif isinstance(value, str):
-        raw_items = value.splitlines()
-    else:
-        raw_items = []
-
-    result: list[str] = []
-    for item in raw_items:
-        normalized = _normalize_text(item)
-        if normalized and normalized not in result:
-            result.append(normalized)
-    return result
-
-
-class ToolSemanticProfileSchema(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    summary: str = ""
-    when_to_use: str = ""
-    limitations: str = ""
-    examples: list[str] = Field(default_factory=list)
-
-    @model_validator(mode="before")
-    @classmethod
-    def normalize(cls, value: Any) -> Any:
-        payload = value if isinstance(value, dict) else {}
-        return {
-            "summary": _normalize_text(payload.get("summary") or payload.get("description")),
-            "when_to_use": _normalize_text(payload.get("when_to_use")),
-            "limitations": _normalize_text(payload.get("limitations")),
-            "examples": _normalize_str_list(payload.get("examples")),
-        }
-
-
-class ToolPolicyHintsSchema(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    dos: list[str] = Field(default_factory=list)
-    donts: list[str] = Field(default_factory=list)
-    guardrails: list[str] = Field(default_factory=list)
-    sensitive_inputs: list[str] = Field(default_factory=list)
-
-    @model_validator(mode="before")
-    @classmethod
-    def normalize(cls, value: Any) -> Any:
-        payload = value if isinstance(value, dict) else {}
-        return {
-            "dos": _normalize_str_list(payload.get("dos")),
-            "donts": _normalize_str_list(payload.get("donts")),
-            "guardrails": _normalize_str_list(payload.get("guardrails")),
-            "sensitive_inputs": _normalize_str_list(payload.get("sensitive_inputs")),
-        }
-
-
 class ToolReleaseCreate(BaseModel):
     """Create tool release request"""
     backend_release_id: Optional[UUID] = Field(None, description="Backend release to use (optional for draft)")
     from_release_id: Optional[UUID] = Field(None, description="Parent release to inherit meta-fields from")
-    semantic_profile: Optional[ToolSemanticProfileSchema] = Field(
-        default=None,
-        description="Human-readable profile for LLM usage",
-    )
-    policy_hints: Optional[ToolPolicyHintsSchema] = Field(
-        default=None,
-        description="Safety and usage hints",
-    )
 
 
 class ToolReleaseUpdate(BaseModel):
     """Update tool release request (only draft)"""
     backend_release_id: Optional[UUID] = Field(None, description="Backend release to use")
-    semantic_profile: Optional[ToolSemanticProfileSchema] = None
-    policy_hints: Optional[ToolPolicyHintsSchema] = None
 
 
 class ToolReleaseResponse(BaseModel):
@@ -138,8 +66,6 @@ class ToolReleaseResponse(BaseModel):
     version: int
     backend_release_id: Optional[UUID] = None
     status: str
-    semantic_profile: dict[str, Any] = Field(default_factory=dict)
-    policy_hints: dict[str, Any] = Field(default_factory=dict)
     # Meta
     meta_hash: Optional[str] = None
     expected_schema_hash: Optional[str] = None
@@ -150,8 +76,7 @@ class ToolReleaseResponse(BaseModel):
     # Nested backend release info (full, with schemas)
     backend_release: Optional["ToolBackendReleaseResponse"] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ToolReleaseListItem(BaseModel):
@@ -165,8 +90,7 @@ class ToolReleaseListItem(BaseModel):
     parent_release_id: Optional[UUID] = None
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

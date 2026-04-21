@@ -55,6 +55,7 @@ class ChatMessageStreamRequest(BaseModel):
     model: Optional[str] = Field(default=None)
     agent_slug: Optional[str] = Field(default=None)
     attachment_ids: Optional[List[str]] = Field(default=None, description="Uploaded chat attachment IDs")
+    confirmation_tokens: Optional[List[str]] = Field(default=None, description="Confirmation tokens for gated operations")
 
 
 class ChatAttachmentUploadResponse(BaseModel):

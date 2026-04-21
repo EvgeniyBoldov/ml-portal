@@ -42,9 +42,11 @@ class TestChatPersistenceService:
         result = await service.create_assistant_message("chat-1", "answer", rag_sources=[{"id": "src-1"}])
 
         assert result.message_id == "msg-2"
-        messages_repo.create_message.assert_awaited_once_with(
-            chat_id="chat-1",
-            role="assistant",
-            content={"text": "answer"},
-            meta={"rag_sources": [{"id": "src-1"}]},
-        )
+        call = messages_repo.create_message.await_args.kwargs
+        assert call["chat_id"] == "chat-1"
+        assert call["role"] == "assistant"
+        assert call["content"] == {"text": "answer"}
+        assert call["meta"]["rag_sources"] == [{"id": "src-1"}]
+        assert call["meta"]["answer_contract"] == "answer_blocks.v1"
+        assert isinstance(call["meta"]["answer_blocks"], list)
+        assert call["meta"]["grounding"]["citations_count"] == 1

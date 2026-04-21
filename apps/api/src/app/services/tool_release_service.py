@@ -166,11 +166,6 @@ class ToolReleaseService:
         tool = await self.get_tool(tool_slug)
         return await self._create_release_for_tool(tool, data, from_release_id)
 
-    _RELEASE_PROFILE_FIELDS = [
-        "semantic_profile",
-        "policy_hints",
-    ]
-
     async def _create_release_for_tool(
         self,
         tool: Tool,
@@ -178,7 +173,7 @@ class ToolReleaseService:
         from_release_id: Optional[UUID] = None,
     ) -> ToolRelease:
         """Internal: create release for a given tool object"""
-        
+
         # Validate backend release if provided
         backend_release = None
         if data.backend_release_id:
@@ -191,24 +186,12 @@ class ToolReleaseService:
         next_version = await self.release_repo.get_next_version(tool.id)
 
         parent_release = None
-        inherited: Dict[str, Any] = {}
         if from_release_id:
             parent_release = await self.release_repo.get_by_id(from_release_id)
             if not parent_release or parent_release.tool_id != tool.id:
                 raise ReleaseNotFoundError(
                     f"Parent release not found for tool '{tool.id}'"
                 )
-            for f in self._RELEASE_PROFILE_FIELDS:
-                val = getattr(parent_release, f, None)
-                if val is not None:
-                    inherited[f] = val
-
-        # Explicit data overrides inherited
-        release_data = {**inherited}
-        data_dict = data.model_dump(exclude_unset=True, exclude={"backend_release_id", "from_release_id"})
-        for f in self._RELEASE_PROFILE_FIELDS:
-            if f in data_dict and data_dict[f] is not None:
-                release_data[f] = data_dict[f]
 
         release = ToolRelease(
             tool_id=tool.id,
@@ -216,7 +199,6 @@ class ToolReleaseService:
             backend_release_id=data.backend_release_id,
             status=ToolReleaseStatus.DRAFT.value,
             parent_release_id=from_release_id,
-            **release_data,
         )
 
         await self.release_repo.create(release)

@@ -4,7 +4,7 @@ Pydantic schemas for RBAC rules API.
 from typing import Optional, List
 from uuid import UUID
 from datetime import datetime
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 
 class RbacRuleCreate(BaseModel):
@@ -33,8 +33,7 @@ class RbacRuleResponse(BaseModel):
     created_at: datetime
     created_by_user_id: Optional[UUID]
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class CheckAccessRequest(BaseModel):

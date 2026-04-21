@@ -76,6 +76,7 @@ export interface ChatMessageCreateRequest {
   use_rag?: boolean;
   response_stream?: boolean;
   attachment_ids?: string[];
+  confirmation_tokens?: string[];
 }
 
 export interface ChatMessageResponse {

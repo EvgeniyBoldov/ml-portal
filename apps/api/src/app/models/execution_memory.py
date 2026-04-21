@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from uuid import UUID, uuid4
 
+import sqlalchemy as sa
 from sqlalchemy import DateTime, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PGUUID
 from sqlalchemy.ext.mutable import MutableDict
@@ -85,6 +86,24 @@ class ExecutionMemory(Base):
     finished_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
+    )
+
+    # Runtime v3 columns (migration 0006)
+    intent: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    used_tool_calls: Mapped[int] = mapped_column(
+        sa.Integer(),
+        nullable=False,
+        default=0,
+    )
+    used_wall_time_ms: Mapped[int] = mapped_column(
+        sa.Integer(),
+        nullable=False,
+        default=0,
+    )
+    recent_messages: Mapped[List[Dict[str, Any]]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=list,
     )
 
     created_at: Mapped[datetime] = mapped_column(

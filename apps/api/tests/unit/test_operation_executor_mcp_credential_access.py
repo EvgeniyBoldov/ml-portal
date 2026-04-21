@@ -38,7 +38,7 @@ def test_merge_mcp_args_injects_credential_access_context_when_broker_enabled():
             provider_instance_id=str(uuid4()),
             provider_instance_slug="netbox-mcp",
             has_credentials=True,
-            credential_scope="any",
+            credential_scope="auto",
             config={"base_path": "/api/dcim"},
             provider_config={},
             domain="netbox",
