@@ -103,10 +103,12 @@ pytest -m "not slow"
 
 ### Тесты падают с 401 Unauthorized
 
-Проверьте, что админ-пользователь существует и пароль правильный:
+Проверьте, что миграции применены и API стартовал: дефолтный админ создаётся автоматически
+через `0002_seed_defaults` + startup `ensure_default_admin`.
 
 ```bash
-docker-compose exec api python -m app.scripts.create_default_admin
+docker compose exec api alembic current
+docker compose logs --tail=100 api
 ```
 
 ### Тесты RAG падают с timeout

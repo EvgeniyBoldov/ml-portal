@@ -4,10 +4,10 @@
 
 ```bash
 # 1. Запустить сервисы
-docker-compose up -d
+docker compose up -d
 
-# 2. Создать админа
-docker-compose exec api python -m app.scripts.create_default_admin
+# 2. Применить миграции (дефолтный админ создаётся автоматически)
+docker compose exec api alembic upgrade head
 
 # 3. Запустить тесты
 cd tests/e2e

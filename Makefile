@@ -18,8 +18,7 @@ COMPOSE_TEST   = docker-compose.test.yml
         test test-backend test-frontend test-unit \
         test-integration test-integration-up test-integration-run test-integration-down \
         test-e2e test-e2e-ui \
-        clean clean-images clean-base clean-all \
-        download-models
+        clean clean-images clean-base clean-all
 
 # =============================================================================
 # Help
@@ -61,9 +60,6 @@ help:
 	@echo "    make clean-images      Remove service images (keep base)"
 	@echo "    make clean-base        Remove base images"
 	@echo "    make clean-all         Full docker system prune"
-	@echo ""
-	@echo "  Utilities:"
-	@echo "    make download-models   Download models from HuggingFace"
 	@echo ""
 
 # =============================================================================
@@ -200,16 +196,3 @@ clean-all: clean-images clean-base
 	@echo "→ Full docker system prune..."
 	docker system prune -f --volumes
 	@echo "✓ Done"
-
-# =============================================================================
-# Utilities
-# =============================================================================
-
-download-models:
-	@echo "→ Downloading models from HuggingFace..."
-	@if [ ! -d "venv" ]; then \
-		python3 -m venv venv; \
-	fi
-	. venv/bin/activate && pip install -q -r infra/scripts/requirements-models.txt
-	. venv/bin/activate && python infra/scripts/download_models.py
-	@echo "✓ Models downloaded to ./models_llm/"
