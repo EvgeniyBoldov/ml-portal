@@ -17,7 +17,6 @@ const routeLabels: Record<string, string> = {
   '/admin/platform': 'Настройки платформы',
   '/admin/platform/models/new': 'Новая модель',
   '/admin/tools': 'Инструменты',
-  '/admin/tools/new': 'Новый инструмент',
   '/admin/agents': 'Агенты',
   '/admin/agents/new': 'Новый агент',
   '/admin/audit': 'Аудит',

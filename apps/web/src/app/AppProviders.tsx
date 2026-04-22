@@ -5,7 +5,6 @@ import { ToastProvider } from '@/shared/ui/Toast';
 import { GlobalConfirmDialog } from './providers/GlobalConfirmDialog';
 import { AuthProvider } from './providers/AuthProvider';
 import ErrorBoundary from '@/shared/ui/ErrorBoundary';
-import { SSEProvider } from './providers/SSEProvider';
 import { ThemeProvider } from './providers/ThemeProvider';
 
 interface AppProvidersProps {
@@ -19,9 +18,8 @@ interface AppProvidersProps {
  * 2. ThemeProvider (theme context, must be early for CSS vars)
  * 3. QueryClientProvider (server state)
  * 4. AuthProvider (hydrates user session)
- * 5. SSEProvider (real-time updates for RAG documents)
- * 6. ToastProvider (notifications)
- * 7. GlobalConfirmDialog (global modals)
+ * 5. ToastProvider (notifications)
+ * 6. GlobalConfirmDialog (global modals)
  */
 export function AppProviders({ children }: AppProvidersProps) {
   return (
@@ -29,12 +27,10 @@ export function AppProviders({ children }: AppProvidersProps) {
       <ThemeProvider>
         <QueryClientProvider client={queryClient}>
           <AuthProvider>
-            <SSEProvider>
-              <ToastProvider>
-                <GlobalConfirmDialog />
-                {children}
-              </ToastProvider>
-            </SSEProvider>
+            <ToastProvider>
+              <GlobalConfirmDialog />
+              {children}
+            </ToastProvider>
           </AuthProvider>
         </QueryClientProvider>
       </ThemeProvider>

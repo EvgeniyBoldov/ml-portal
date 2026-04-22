@@ -26,8 +26,6 @@ const ModelPage = lazy(() => import('@/domains/admin/pages/ModelPage').then(m =>
 const AuditPage = lazy(() => import('@/domains/admin/pages/AuditPage'));
 const DiscoveredToolsPage = lazy(() => import('@/domains/admin/pages/DiscoveredToolsPage').then(m => ({ default: m.DiscoveredToolsPage })));
 const DiscoveredToolViewPage = lazy(() => import('@/domains/admin/pages/DiscoveredToolViewPage').then(m => ({ default: m.DiscoveredToolViewPage })));
-const ToolPage = lazy(() => import('@/domains/admin/pages/ToolPage').then(m => ({ default: m.ToolPage })));
-const ToolVersionPage = lazy(() => import('@/domains/admin/pages/ToolVersionPage').then(m => ({ default: m.ToolVersionPage })));
 const AgentListPage = lazy(() => import('@/domains/admin/pages/AgentListPage').then(m => ({ default: m.AgentListPage })));
 const AgentPage = lazy(() => import('@/domains/admin/pages/AgentPage').then(m => ({ default: m.AgentPage })));
 const AgentVersionPage = lazy(() => import('@/domains/admin/pages/AgentVersionPage').then(m => ({ default: m.AgentVersionPage })));
@@ -103,9 +101,6 @@ const router = createBrowserRouter([
       { path: 'audit', element: withSuspense(<AuditPage />) },
       { path: 'tools', element: withSuspense(<DiscoveredToolsPage />) },
       { path: 'tools/discovered/:id', element: withSuspense(<DiscoveredToolViewPage />) },
-      { path: 'tools/:id', element: withSuspense(<ToolPage />) },
-      { path: 'tools/:id/versions/new', element: withSuspense(<ToolVersionPage />) },
-      { path: 'tools/:id/versions/:version', element: withSuspense(<ToolVersionPage />) },
       { path: 'agents', element: withSuspense(<AgentListPage />) },
       { path: 'agents/new', element: withSuspense(<AgentPage />) },
       { path: 'agents/:id', element: withSuspense(<AgentPage />) },
