@@ -21,7 +21,11 @@ class AgentCreate(BaseModel):
     description: Optional[str] = None
     tags: Optional[List[str]] = Field(default=None, description="Agent tags for catalog filtering")
     logging_level: str = Field(default="brief", description="none, brief, full")
-    model: Optional[str] = Field(default=None, description="LLM model override")
+    model: Optional[str] = Field(default=None, description="LLM model alias")
+    temperature: Optional[float] = Field(default=None, description="LLM temperature (orchestration default if None)")
+    max_tokens: Optional[int] = Field(default=None, description="Max output tokens (orchestration default if None)")
+    requires_confirmation_for_write: Optional[bool] = Field(default=None, description="Require confirmation for write ops")
+    risk_level: Optional[str] = Field(default=None, description="low, medium, high")
     allowed_collection_ids: Optional[List[UUID]] = Field(default=None, description="Whitelist of Collection IDs bound to agent. NULL = all collections.")
 
 
@@ -30,7 +34,11 @@ class AgentUpdate(BaseModel):
     description: Optional[str] = None
     tags: Optional[List[str]] = None
     logging_level: Optional[str] = Field(default=None, description="none, brief, full")
-    model: Optional[str] = Field(default=None, description="LLM model override")
+    model: Optional[str] = Field(default=None, description="LLM model alias")
+    temperature: Optional[float] = None
+    max_tokens: Optional[int] = None
+    requires_confirmation_for_write: Optional[bool] = None
+    risk_level: Optional[str] = None
     allowed_collection_ids: Optional[List[UUID]] = None
 
 
@@ -43,6 +51,10 @@ class AgentResponse(BaseModel):
     current_version_id: Optional[UUID] = None
     logging_level: str = Field(default="brief", description="none, brief, full")
     model: Optional[str] = None
+    temperature: Optional[float] = None
+    max_tokens: Optional[int] = None
+    requires_confirmation_for_write: Optional[bool] = None
+    risk_level: Optional[str] = None
     allowed_collection_ids: Optional[List[UUID]] = None
     created_at: datetime
     updated_at: datetime
@@ -60,6 +72,10 @@ class AgentListItem(BaseModel):
     current_version_id: Optional[UUID] = None
     logging_level: str = "brief"
     model: Optional[str] = None
+    temperature: Optional[float] = None
+    max_tokens: Optional[int] = None
+    requires_confirmation_for_write: Optional[bool] = None
+    risk_level: Optional[str] = None
     allowed_collection_ids: Optional[List[UUID]] = None
     versions_count: int = 0
     created_at: datetime
@@ -81,16 +97,7 @@ class AgentVersionCreate(BaseModel):
     tool_use_rules: Optional[str] = Field(default=None, description="How/when to call tools")
     output_format: Optional[str] = Field(default=None, description="Response structure/JSON schema")
     examples: Optional[str] = Field(default=None, description="Few-shot examples")
-    # Execution config
-    model: Optional[str] = Field(default=None, description="LLM model override")
-    timeout_s: Optional[int] = Field(default=None, description="Timeout in seconds")
-    max_steps: Optional[int] = Field(default=None, description="Max tool-call loop steps")
-    max_retries: Optional[int] = Field(default=None, description="Max retries on failure")
-    max_tokens: Optional[int] = Field(default=None, description="Max output tokens")
-    temperature: Optional[float] = Field(default=None, description="LLM temperature")
-    # Safety knobs
-    requires_confirmation_for_write: Optional[bool] = Field(default=None, description="Require confirmation for write ops")
-    risk_level: Optional[str] = Field(default=None, description="low, medium, high")
+    # Safety prompt constraints
     never_do: Optional[str] = Field(default=None, description="Explicit prohibitions")
     allowed_ops: Optional[str] = Field(default=None, description="Allowed operations")
     # Routing
@@ -113,16 +120,7 @@ class AgentVersionUpdate(BaseModel):
     tool_use_rules: Optional[str] = None
     output_format: Optional[str] = None
     examples: Optional[str] = None
-    # Execution config
-    model: Optional[str] = None
-    timeout_s: Optional[int] = None
-    max_steps: Optional[int] = None
-    max_retries: Optional[int] = None
-    max_tokens: Optional[int] = None
-    temperature: Optional[float] = None
-    # Safety knobs
-    requires_confirmation_for_write: Optional[bool] = None
-    risk_level: Optional[str] = None
+    # Safety prompt constraints
     never_do: Optional[str] = None
     allowed_ops: Optional[str] = None
     # Routing
@@ -148,16 +146,7 @@ class AgentVersionResponse(BaseModel):
     tool_use_rules: Optional[str] = None
     output_format: Optional[str] = None
     examples: Optional[str] = None
-    # Execution config
-    model: Optional[str] = None
-    timeout_s: Optional[int] = None
-    max_steps: Optional[int] = None
-    max_retries: Optional[int] = None
-    max_tokens: Optional[int] = None
-    temperature: Optional[float] = None
-    # Safety knobs
-    requires_confirmation_for_write: Optional[bool] = None
-    risk_level: Optional[str] = None
+    # Safety prompt constraints
     never_do: Optional[str] = None
     allowed_ops: Optional[str] = None
     # Routing

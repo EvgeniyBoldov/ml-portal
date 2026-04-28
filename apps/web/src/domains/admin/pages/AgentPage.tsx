@@ -102,74 +102,45 @@ const OUTPUT_FIELDS: FieldConfig[] = [
   },
 ];
 
-// Execution config
-const EXEC_FIELDS: FieldConfig[] = [
+// Agent-level execution config (editable on Overview tab)
+const AGENT_EXEC_FIELDS: FieldConfig[] = [
   {
-    key: 'timeout_s',
-    type: 'number',
-    label: 'Таймаут (сек)',
-    placeholder: '120',
-  },
-  {
-    key: 'max_steps',
-    type: 'number',
-    label: 'Макс. шагов',
-    placeholder: '10',
-  },
-  {
-    key: 'max_retries',
-    type: 'number',
-    label: 'Макс. ретраев',
-    placeholder: '3',
-  },
-  {
-    key: 'max_tokens',
-    type: 'number',
-    label: 'Макс. токенов',
-    placeholder: '4096',
+    key: 'model',
+    type: 'select',
+    label: 'Модель',
+    description: 'LLM модель (override глобальной)',
+    options: [],
   },
   {
     key: 'temperature',
     type: 'number',
     label: 'Temperature',
-    placeholder: '0.2',
+    description: 'Температура генерации (0.0–1.0)',
+    placeholder: '0.7',
   },
-];
-
-// Safety knobs
-const SAFETY_FIELDS: FieldConfig[] = [
+  {
+    key: 'max_tokens',
+    type: 'number',
+    label: 'Макс. токенов',
+    description: 'Лимит токенов в ответе',
+    placeholder: '4096',
+  },
   {
     key: 'requires_confirmation_for_write',
     type: 'boolean',
-    label: 'Write',
-    description: 'Требует подтверждения для write-операций',
+    label: 'Подтверждение write-операций',
+    description: 'Требует подтверждения перед изменением данных',
   },
   {
     key: 'risk_level',
     type: 'select',
-    label: 'Risk Level',
-    description: 'Уровень риска',
+    label: 'Уровень риска',
+    description: 'Риск агента',
     options: [
       { value: 'low', label: 'Low' },
       { value: 'medium', label: 'Medium' },
       { value: 'high', label: 'High' },
     ],
-  },
-  {
-    key: 'never_do',
-    type: 'textarea',
-    label: 'Never Do',
-    description: 'Что нельзя делать',
-    placeholder: 'Никогда не удаляй данные без бэкапа...',
-    rows: 3,
-  },
-  {
-    key: 'allowed_ops',
-    type: 'textarea',
-    label: 'Allowed Ops',
-    description: 'Что можно делать',
-    placeholder: 'read, search, create_ticket...',
-    rows: 3,
   },
 ];
 
@@ -228,13 +199,6 @@ const INFO_FIELDS: FieldConfig[] = [
     placeholder: 'network-assistant',
   },
   {
-    key: 'model',
-    type: 'select',
-    label: 'Модель',
-    description: 'LLM модель для агента (override глобальной)',
-    options: [],
-  },
-  {
     key: 'description',
     type: 'textarea',
     label: 'Описание',
@@ -282,13 +246,18 @@ export function AgentPage() {
       .map(m => ({ value: m.alias, label: `${m.name} (${m.alias})` })),
   ];
 
-  // Update INFO_FIELDS with dynamic model options
+  // Update INFO_FIELDS: slug editable only on create
   const infoFieldsWithModels = INFO_FIELDS.map((field) => {
-    if (field.key === 'model') {
-      return { ...field, options: modelOptions };
-    }
     if (field.key === 'slug') {
       return { ...field, editable: mode === 'create' };
+    }
+    return field;
+  });
+
+  // Update AGENT_EXEC_FIELDS with dynamic model options
+  const execFieldsWithModels = AGENT_EXEC_FIELDS.map((field) => {
+    if (field.key === 'model') {
+      return { ...field, options: modelOptions };
     }
     return field;
   });
@@ -318,11 +287,18 @@ export function AgentPage() {
     slug: agent?.slug || '',
     name: agent?.name || '',
     description: agent?.description || '',
-    model: agent?.model || '',
     tags: agent?.tags || [],
   };
 
-  // Version data (read-only from current version)
+  const execData = mode === 'edit' || mode === 'create' ? formData : {
+    model: agent?.model || '',
+    temperature: agent?.temperature ?? null,
+    max_tokens: agent?.max_tokens ?? null,
+    requires_confirmation_for_write: agent?.requires_confirmation_for_write ?? false,
+    risk_level: agent?.risk_level || '',
+  };
+
+  // Version data (read-only from current version — prompt + routing only)
   const versionData = currentVersion ? {
     // Prompt parts
     identity: currentVersion.identity ?? '',
@@ -332,16 +308,7 @@ export function AgentPage() {
     tool_use_rules: currentVersion.tool_use_rules ?? '',
     output_format: currentVersion.output_format ?? '',
     examples: currentVersion.examples ?? '',
-    // Execution config
-    model: currentVersion.model ?? '',
-    timeout_s: currentVersion.timeout_s ?? null,
-    max_steps: currentVersion.max_steps ?? null,
-    max_retries: currentVersion.max_retries ?? null,
-    max_tokens: currentVersion.max_tokens ?? null,
-    temperature: currentVersion.temperature ?? null,
-    // Safety knobs
-    requires_confirmation_for_write: currentVersion.requires_confirmation_for_write ?? false,
-    risk_level: currentVersion.risk_level ?? '',
+    // Safety prompt constraints
     never_do: currentVersion.never_do ?? '',
     allowed_ops: currentVersion.allowed_ops ?? '',
     // Routing
@@ -352,12 +319,9 @@ export function AgentPage() {
     routing_negative_keywords: currentVersion.routing_negative_keywords ?? [],
     notes: currentVersion.notes ?? '',
   } : {
-    // Default empty data when loading
-    identity: '', mission: '', scope: '', rules: '', tool_use_rules: '', 
-    output_format: '', examples: '', model: '', timeout_s: null, max_steps: null, 
-    max_retries: null, max_tokens: null, temperature: null, 
-    requires_confirmation_for_write: false, risk_level: '', never_do: '', 
-    allowed_ops: '', short_info: '', tags: [], is_routable: false, 
+    identity: '', mission: '', scope: '', rules: '', tool_use_rules: '',
+    output_format: '', examples: '', never_do: '', allowed_ops: '',
+    short_info: '', tags: [], is_routable: false,
     routing_keywords: [], routing_negative_keywords: [], notes: ''
   };
 
@@ -499,7 +463,7 @@ export function AgentPage() {
             onChange={handleFieldChange}
           />
 
-          {/* Row 2: Stats (1/2) + Empty (1/2) */}
+          {/* Row 1 right: Stats */}
           <Block
             title="Статистика"
             icon="chart"
@@ -507,6 +471,18 @@ export function AgentPage() {
             width="1/2"
             fields={STATS_FIELDS}
             data={statsData}
+          />
+
+          {/* Row 2: Execution config (editable, agent-level) */}
+          <Block
+            title="Конфигурация исполнения"
+            icon="settings"
+            iconVariant="primary"
+            width="full"
+            fields={execFieldsWithModels}
+            data={execData}
+            editable={mode === 'edit' || mode === 'create'}
+            onChange={handleFieldChange}
           />
         </Tab>
 
@@ -543,24 +519,18 @@ export function AgentPage() {
           </Tab>
         )}
 
-        {/* ── Tab 3: Выполнение (только для просмотра) ── */}
+        {/* ── Tab 3: Выполнение — только safety prompt constraints ── */}
         {!isNew && currentVersionInfo && (
           <Tab title="Выполнение" layout="grid" id="execution" actions={undefined}>
             <Block
-              title="Execution Config"
-              icon="settings"
-              iconVariant="primary"
-              width="1/2"
-              fields={EXEC_FIELDS}
-              data={versionData}
-              editable={false}
-            />
-            <Block
-              title="Safety Knobs"
+              title="Safety Constraints"
               icon="shield"
               iconVariant="info"
-              width="1/2"
-              fields={SAFETY_FIELDS}
+              width="full"
+              fields={[
+                { key: 'never_do', type: 'textarea', label: 'Never Do', description: 'Что нельзя делать', rows: 4 },
+                { key: 'allowed_ops', type: 'textarea', label: 'Allowed Ops', description: 'Что можно делать', rows: 4 },
+              ]}
               data={versionData}
               editable={false}
             />

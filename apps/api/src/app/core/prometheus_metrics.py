@@ -3,14 +3,33 @@ Prometheus metrics for RAG ingest pipeline
 """
 from __future__ import annotations
 from typing import Optional
-from prometheus_client import Counter, Histogram, Gauge, generate_latest
-from prometheus_client.registry import CollectorRegistry, REGISTRY
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
-# Create a separate registry for our metrics
-_registry = REGISTRY
+try:
+    from prometheus_client import Counter, Histogram, Gauge, generate_latest
+    from prometheus_client.registry import REGISTRY
+    _registry = REGISTRY
+    _prometheus_available = True
+except ImportError:
+    logger.warning("prometheus_client not installed — metrics disabled (no-op stubs active)")
+    _prometheus_available = False
+
+    class _NoOpMetric:
+        def labels(self, **kwargs): return self
+        def observe(self, v): pass
+        def inc(self, v=1): pass
+        def dec(self, v=1): pass
+        def set(self, v): pass
+
+    def Counter(name, doc, labelnames=(), registry=None): return _NoOpMetric()
+    def Histogram(name, doc, labelnames=(), registry=None, buckets=None): return _NoOpMetric()
+    def Gauge(name, doc, labelnames=(), registry=None): return _NoOpMetric()
+    def generate_latest(registry=None): return b""
+
+    class _NoOpRegistry: pass
+    _registry = _NoOpRegistry()
 
 # Task duration metrics
 ingest_task_duration_seconds = Histogram(
@@ -56,6 +75,14 @@ sse_delivery_lag_seconds = Histogram(
     'rag_sse_delivery_lag_seconds',
     'Time lag between event creation and SSE delivery',
     ['event_type'],
+    registry=_registry
+)
+
+# Memory writer failures
+memory_writer_finalize_failures_total = Counter(
+    'memory_writer_finalize_failures_total',
+    'Total number of failed MemoryWriter.finalize calls',
+    ['stop_reason'],
     registry=_registry
 )
 

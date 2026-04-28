@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
+from app.runtime.operation_errors import RuntimeErrorCode
 
 class OrchestrationPhase(str, Enum):
     """Which phase of the pipeline produced the event."""
@@ -76,12 +77,34 @@ class RuntimeEvent:
 
     @classmethod
     def operation_result(
-        cls, *, operation: str, call_id: str, success: bool, data: Any,
+        cls,
+        *,
+        operation: str,
+        call_id: str,
+        success: bool,
+        data: Any,
+        error_code: Optional[RuntimeErrorCode | str] = None,
+        retryable: Optional[bool] = None,
+        safe_message: Optional[str] = None,
+        envelope: Optional[Dict[str, Any]] = None,
     ) -> "RuntimeEvent":
-        return cls(
-            RuntimeEventType.OPERATION_RESULT,
-            {"operation": operation, "call_id": call_id, "success": success, "data": data},
-        )
+        payload: Dict[str, Any] = {
+            "operation": operation,
+            "call_id": call_id,
+            "success": success,
+            "data": data,
+        }
+        if error_code is not None:
+            payload["error_code"] = (
+                error_code.value if isinstance(error_code, RuntimeErrorCode) else str(error_code)
+            )
+        if retryable is not None:
+            payload["retryable"] = bool(retryable)
+        if safe_message is not None:
+            payload["safe_message"] = safe_message
+        if envelope is not None:
+            payload["result"] = dict(envelope)
+        return cls(RuntimeEventType.OPERATION_RESULT, payload)
 
     @classmethod
     def delta(cls, content: str) -> "RuntimeEvent":
@@ -157,8 +180,22 @@ class RuntimeEvent:
         return cls(RuntimeEventType.STOP, data)
 
     @classmethod
-    def error(cls, message: str, *, recoverable: bool = False) -> "RuntimeEvent":
-        return cls(RuntimeEventType.ERROR, {"error": message, "recoverable": recoverable})
+    def error(
+        cls,
+        message: str,
+        *,
+        recoverable: bool = False,
+        error_code: Optional[RuntimeErrorCode | str] = None,
+        retryable: Optional[bool] = None,
+    ) -> "RuntimeEvent":
+        payload: Dict[str, Any] = {"error": message, "recoverable": recoverable}
+        if error_code is not None:
+            payload["error_code"] = (
+                error_code.value if isinstance(error_code, RuntimeErrorCode) else str(error_code)
+            )
+        if retryable is not None:
+            payload["retryable"] = bool(retryable)
+        return cls(RuntimeEventType.ERROR, payload)
 
     # -------- envelope --------
 

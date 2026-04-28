@@ -21,6 +21,7 @@ from app.core.observability import span_id_var, tenant_id_var, trace_id_var, use
 from app.models.routing_log import RoutingLog
 from app.models.system_llm_trace import SystemLLMTrace
 from app.repositories.routing_log_repository import RoutingLogRepository
+from app.runtime.redactor import RuntimeRedactor
 from app.services.run_store import RunStore
 from app.services.system_llm_trace_service import SystemLLMTraceService
 
@@ -97,7 +98,7 @@ class ExecutionTraceLogger:
         trace_context = cls._trace_context()
         if trace_context:
             merged.setdefault("trace_context", {}).update(trace_context)
-        return merged
+        return RuntimeRedactor().redact(merged)
 
     @staticmethod
     def _step_type(component: Optional[str], event: Optional[str], fallback: Optional[str] = None) -> str:

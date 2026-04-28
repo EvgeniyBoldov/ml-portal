@@ -1,21 +1,18 @@
 """
-Runtime v3 — agentic pipeline with memory, triage, and next-step planner.
+Runtime v3 — agentic pipeline with componentized memory and next-step planner.
 
 Public surface:
     from app.runtime import RuntimePipeline, PipelineRequest, RuntimeEvent, RuntimeEventType
 
 Design goals:
-    * Single Working Memory model persisted in `execution_memories` table
-    * Two-stage decision making: Triage (fast, answer/clarify/plan/resume),
-      then Planner (step-by-step: agent_call / ask_user / final / abort)
+    * Componentized memory: MemoryBundle assembled per-turn from MemoryComponents
+    * Single decision engine: Planner (step-by-step: agent_call / ask_user / final / abort)
     * Flat pipeline: no thin-wrapper orchestrators, one class owns the flow
-    * Clean contracts: NextStep, TriageDecision, WorkingMemory
+    * Clean contracts: NextStep, RuntimeTurnState, MemoryBundle
 """
 from app.runtime.events import RuntimeEvent, RuntimeEventType, OrchestrationPhase
 from app.runtime.contracts import (
     PipelineRequest,
-    TriageDecision,
-    TriageIntent,
     NextStep,
     NextStepKind,
     PipelineStopReason,
@@ -40,8 +37,6 @@ __all__ = [
     "RuntimeEvent",
     "RuntimeEventType",
     "OrchestrationPhase",
-    "TriageDecision",
-    "TriageIntent",
     "NextStep",
     "NextStepKind",
     "PipelineStopReason",

@@ -7,6 +7,7 @@ from uuid import uuid4
 import pytest
 
 from app.runtime.memory.working_memory import WorkingMemory
+from app.runtime.state_bridge import ensure_runtime_turn_state
 from app.runtime.synthesizer import Synthesizer
 
 
@@ -58,6 +59,7 @@ async def test_synthesizer_loads_db_prompt_and_passes_role_params_to_llm():
     ):
         events = [event async for event in synth.stream(
             memory=memory,
+            runtime_state=ensure_runtime_turn_state(memory),
             run_id=memory.run_id,
             planner_hint="force full synthesis path",
         )]
@@ -84,6 +86,7 @@ async def test_synthesizer_falls_back_when_db_role_load_fails():
     ):
         events = [event async for event in synth.stream(
             memory=memory,
+            runtime_state=ensure_runtime_turn_state(memory),
             run_id=memory.run_id,
             planner_hint="force full synthesis path",
         )]

@@ -32,6 +32,7 @@ from sqlalchemy.orm import selectinload
 
 from app.core.logging import get_logger
 from app.models.agent_run import AgentRun, AgentRunStep
+from app.runtime.redactor import RuntimeRedactor
 from app.services.runtime_terminal_status import normalize_run_status_for_storage
 
 logger = get_logger(__name__)
@@ -98,6 +99,7 @@ class RunStore:
         self._run_start_times: Dict[uuid.UUID, float] = {}
         self._logging_levels: Dict[uuid.UUID, str] = {}
         self._state_lock = asyncio.Lock()
+        self._redactor = RuntimeRedactor()
 
     # ── session management ──────────────────────────────────
 
@@ -231,7 +233,7 @@ class RunStore:
             chat_id=self._to_uuid(chat_id),
             message_id=self._to_uuid(message_id),
             status="running",
-            context_snapshot=context_snapshot,
+            context_snapshot=self._redactor.redact(context_snapshot or {}),
             started_at=datetime.now(timezone.utc),
         )
         async with self._write_session() as s:
@@ -265,34 +267,36 @@ class RunStore:
             step_number = self._step_counters.get(run_id, 0)
             self._step_counters[run_id] = step_number + 1
         
+        safe_data = self._redactor.redact(data)
+
         # Apply level-aware data stripping
         if self._is_full(run_id):
             # Truncate very large values but keep everything
-            stored_data = {k: _truncate(v) for k, v in data.items()}
+            stored_data = {k: _truncate(v) for k, v in safe_data.items()}
         else:
-            stored_data = self._strip_for_brief(step_type, data)
+            stored_data = self._strip_for_brief(step_type, safe_data)
 
         # Normalize input/output aliases for downstream UI
         if self._is_full(run_id):
             if step_type in {"tool_call", "operation_call"}:
                 if "input" not in stored_data:
-                    if "arguments" in data:
-                        stored_data["input"] = _truncate(data["arguments"])
-                    elif "parameters" in data:
-                        stored_data["input"] = _truncate(data["parameters"])
+                    if "arguments" in safe_data:
+                        stored_data["input"] = _truncate(safe_data["arguments"])
+                    elif "parameters" in safe_data:
+                        stored_data["input"] = _truncate(safe_data["parameters"])
             if step_type in {"tool_result", "operation_result"}:
                 if "output" not in stored_data:
-                    if "result" in data:
-                        stored_data["output"] = _truncate(data["result"])
-                    elif "data" in data:
-                        stored_data["output"] = _truncate(data["data"])
+                    if "result" in safe_data:
+                        stored_data["output"] = _truncate(safe_data["result"])
+                    elif "data" in safe_data:
+                        stored_data["output"] = _truncate(safe_data["data"])
                 if "result" not in stored_data and "output" in stored_data:
                     stored_data["result"] = stored_data["output"]
         
         # Add human-readable previews
-        if step_type in {"tool_call", "operation_call"} and "arguments" in data:
+        if step_type in {"tool_call", "operation_call"} and "arguments" in safe_data:
             try:
-                args = data["arguments"]
+                args = safe_data["arguments"]
                 if isinstance(args, str):
                     stored_data["arguments_preview"] = args[:100] + ("…" if len(args) > 100 else "")
                 elif isinstance(args, dict):
@@ -302,9 +306,9 @@ class RunStore:
             except Exception:
                 pass
                 
-        if step_type in {"tool_result", "operation_result"} and "result" in data:
+        if step_type in {"tool_result", "operation_result"} and "result" in safe_data:
             try:
-                res = data["result"]
+                res = safe_data["result"]
                 if isinstance(res, str):
                     stored_data["result_preview"] = res[:100] + ("…" if len(res) > 100 else "")
                 elif isinstance(res, dict):

@@ -77,7 +77,10 @@ async def test_runtime_credential_resolver_uses_explicit_scope_with_broker():
                 credential_id=cred_id,
                 owner_type="platform",
             )
-        )
+        ),
+        get_decrypted_credentials=AsyncMock(
+            return_value=SimpleNamespace(payload={"username": "demo", "password": "secret"})
+        ),
     )
     resolver = RuntimeCredentialResolver(service, mcp_credential_broker_enabled=True)
 
@@ -89,9 +92,10 @@ async def test_runtime_credential_resolver_uses_explicit_scope_with_broker():
     )
 
     assert context is not None
-    assert context.payload == {}
+    assert context.payload == {"username": "demo", "password": "secret"}
     assert context.owner_type == "platform"
     service.resolve_credential_reference.assert_awaited_once()
+    service.get_decrypted_credentials.assert_awaited_once_with(cred_id)
     call = service.resolve_credential_reference.await_args
     assert call.kwargs["strategy"] == "PLATFORM_ONLY"
 

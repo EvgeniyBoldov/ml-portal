@@ -30,6 +30,9 @@ export const SQL_PRESET_FIELDS: CollectionField[] = [
 ];
 
 export const SQL_SPECIFIC_FIELD_NAMES = new Set(SQL_PRESET_FIELDS.map((field) => field.name));
+export const DOCUMENT_REQUIRED_FIELD_NAMES = new Set(
+  DOCUMENT_PRESET_FIELDS.filter((field) => field.required).map((field) => field.name),
+);
 
 export function ensureSqlPresetFields(fields: CollectionField[]): CollectionField[] {
   const byName = new Map(fields.map((field) => [field.name, field]));

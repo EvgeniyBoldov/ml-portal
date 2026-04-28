@@ -145,6 +145,18 @@ class Settings(BaseSettings):
         default=False,
         description="Enable short-lived MCP credential access token flow instead of raw credential payload injection",
     )
+    MCP_CREDENTIAL_BROKER_REQUIRED: bool = Field(
+        default=False,
+        description="Require broker-issued credential_access for MCP calls in production-like environments",
+    )
+    MCP_ALLOW_RAW_CREDENTIAL_FALLBACK: bool = Field(
+        default=False,
+        description="Allow legacy raw credentials payload injection for MCP instance_context",
+    )
+    MCP_SESSION_TTL_S: int = Field(
+        default=300,
+        description="TTL for cached MCP session IDs in seconds",
+    )
     MCP_CREDENTIAL_TOKEN_TTL_SECONDS: int = Field(
         default=90,
         description="TTL for MCP credential access tokens in seconds",
@@ -170,6 +182,10 @@ class Settings(BaseSettings):
     RUNTIME_RBAC_ALLOW_UNDEFINED: bool = Field(
         default=False,
         description="Test mode: allow undefined tools/collections by default",
+    )
+    COLLECTION_SCHEMA_STALE_HOURS: int = Field(
+        default=24,
+        description="How old discovered collection schema can be before runtime marks it stale",
     )
     
     model_config = ConfigDict(

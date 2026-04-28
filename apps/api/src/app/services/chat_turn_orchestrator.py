@@ -96,7 +96,10 @@ class ChatTurnOrchestrator:
 
         turn.transition(TurnPhase.CONTEXT_LOADED)
         yield {"type": "status", "stage": "loading_context"}
-        context = await self.context_service.load_chat_context_with_summary(chat_id, recent_limit=12)
+        # RuntimePipeline already builds its own cross-turn memory from the
+        # new Fact/Summary stores. Injecting legacy chat summary here duplicates
+        # context and inflates token usage.
+        context = await self.context_service.load_chat_context(chat_id, limit=12)
         llm_messages = context + [{"role": "system", "content": FILE_GENERATION_INSTRUCTION}]
         if attachment_prompt_context:
             llm_messages.append({"role": "system", "content": attachment_prompt_context})

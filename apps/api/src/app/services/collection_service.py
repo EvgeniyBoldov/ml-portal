@@ -413,20 +413,32 @@ class CollectionService:
         self,
         collection_id: uuid.UUID,
         *,
+        data_description: Optional[str] = None,
+        usage_purpose: Optional[str] = None,
         notes: Optional[str] = None,
     ) -> CollectionVersion:
-        return await self.versions.create_version(collection_id, notes=notes)
+        return await self.versions.create_version(
+            collection_id,
+            data_description=data_description,
+            usage_purpose=usage_purpose,
+            notes=notes,
+        )
 
     async def update_version(
         self,
         collection_id: uuid.UUID,
         version: int,
         *,
+        data_description: Any = _UNSET,
+        usage_purpose: Any = _UNSET,
         notes: Any = _UNSET,
     ) -> CollectionVersion:
         return await self.versions.update_version(
-            collection_id, version,
-            notes=notes if notes is not _UNSET else None,
+            collection_id,
+            version,
+            data_description=data_description if data_description is not _UNSET else _UNSET,
+            usage_purpose=usage_purpose if usage_purpose is not _UNSET else _UNSET,
+            notes=notes if notes is not _UNSET else _UNSET,
             _UNSET=_UNSET,
         )
 

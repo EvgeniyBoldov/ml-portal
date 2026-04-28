@@ -1,0 +1,25 @@
+[
+  {
+    "key": "direct_answer_no_tool",
+    "title": "Direct answer without tool call",
+    "required_operations": [],
+    "forbidden_operations": ["sql.execute_sql"],
+    "expected_terminal_event": "final",
+    "answer_assertions": ["ok"]
+  },
+  {
+    "key": "document_retrieval_case",
+    "title": "Document retrieval with grounding",
+    "required_operations": ["collection.document.search"],
+    "expected_terminal_event": "final",
+    "grounding_requirements": ["document"]
+  },
+  {
+    "key": "clarify_missing_input",
+    "title": "Clarification required flow",
+    "expected_terminal_event": "waiting_input",
+    "must_emit_final": false,
+    "must_emit_waiting_input": true,
+    "allow_error_events": true
+  }
+]

@@ -15,10 +15,14 @@ interface UseSqlCollectionCatalogResult {
   sqlDiscoveryItems: SqlDiscoveryItem[];
   sqlDiscoverySelected: Set<string>;
   sqlDiscoverySaving: boolean;
+  sqlSelectedRowIds: Set<string>;
+  sqlDeleting: boolean;
   existingSqlTableNames: Set<string>;
+  setSqlSelectedRowIds: (ids: Set<string>) => void;
   openSqlDiscoveryModal: () => Promise<void>;
   handleSqlDiscoveryToggle: (key: string, checked: boolean) => void;
   addDiscoveredSqlTables: () => Promise<void>;
+  deleteSelectedSqlTables: () => Promise<void>;
 }
 
 export function useSqlCollectionCatalog(
@@ -33,6 +37,8 @@ export function useSqlCollectionCatalog(
   const [sqlDiscoveryItems, setSqlDiscoveryItems] = useState<SqlDiscoveryItem[]>([]);
   const [sqlDiscoverySelected, setSqlDiscoverySelected] = useState<Set<string>>(new Set());
   const [sqlDiscoverySaving, setSqlDiscoverySaving] = useState(false);
+  const [sqlSelectedRowIds, setSqlSelectedRowIds] = useState<Set<string>>(new Set());
+  const [sqlDeleting, setSqlDeleting] = useState(false);
 
   const isSqlCollection = collection?.collection_type === 'sql';
 
@@ -64,6 +70,14 @@ export function useSqlCollectionCatalog(
         key: `${item.schema_name}.${item.table_name}`,
       }));
       setSqlDiscoveryItems(items);
+      const preselected = new Set<string>();
+      for (const item of items) {
+        const fullName = `${item.schema_name}.${item.table_name}`.trim().toLowerCase();
+        if (!existingSqlTableNames.has(fullName)) {
+          preselected.add(item.key);
+        }
+      }
+      setSqlDiscoverySelected(preselected);
     } catch (error) {
       showError(error instanceof Error ? error.message : 'Не удалось выполнить SQL discovery');
     } finally {
@@ -87,7 +101,13 @@ export function useSqlCollectionCatalog(
 
   const addDiscoveredSqlTables = async () => {
     if (!collection?.slug) return;
-    const selectedItems = sqlDiscoveryItems.filter((item) => sqlDiscoverySelected.has(item.key));
+    let selectedItems = sqlDiscoveryItems.filter((item) => sqlDiscoverySelected.has(item.key));
+    if (!selectedItems.length) {
+      selectedItems = sqlDiscoveryItems.filter((item) => {
+        const fullName = `${item.schema_name}.${item.table_name}`.trim().toLowerCase();
+        return !existingSqlTableNames.has(fullName);
+      });
+    }
     const uniqueByTable = new Map<string, SqlDiscoveryItem>();
     for (const item of selectedItems) {
       const fullName = `${item.schema_name}.${item.table_name}`.trim();
@@ -129,6 +149,22 @@ export function useSqlCollectionCatalog(
     }
   };
 
+  const deleteSelectedSqlTables = async () => {
+    if (!collection?.slug || !sqlSelectedRowIds.size) return;
+    setSqlDeleting(true);
+    try {
+      const ids = Array.from(sqlSelectedRowIds);
+      await collectionsApi.deleteRows(collection.slug, ids, collection.tenant_id || undefined);
+      await refetchSqlCollectionData();
+      setSqlSelectedRowIds(new Set());
+      showSuccess(`Удалено таблиц: ${ids.length}`);
+    } catch (error) {
+      showError(error instanceof Error ? error.message : 'Не удалось удалить выбранные таблицы');
+    } finally {
+      setSqlDeleting(false);
+    }
+  };
+
   return {
     isSqlCollection,
     sqlCollectionData,
@@ -139,9 +175,13 @@ export function useSqlCollectionCatalog(
     sqlDiscoveryItems,
     sqlDiscoverySelected,
     sqlDiscoverySaving,
+    sqlSelectedRowIds,
+    sqlDeleting,
     existingSqlTableNames,
+    setSqlSelectedRowIds,
     openSqlDiscoveryModal,
     handleSqlDiscoveryToggle,
     addDiscoveredSqlTables,
+    deleteSelectedSqlTables,
   };
 }

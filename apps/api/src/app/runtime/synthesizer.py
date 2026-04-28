@@ -1,9 +1,9 @@
 """
-Synthesizer — streams the final answer to the user from WorkingMemory.
+Synthesizer — streams the final answer to the user from RuntimeTurnState.
 
 When Planner emits a FINAL step, Pipeline calls Synthesizer to produce the
 user-visible answer. Inputs:
-    * goal (from WorkingMemory)
+    * goal (from RuntimeTurnState)
     * facts (trimmed, deduped)
     * agent_results (summaries)
     * optional planner-suggested final_answer (used as a hint only)
@@ -28,11 +28,15 @@ from app.core.http.clients import LLMClientProtocol
 from app.core.logging import get_logger
 from app.models.system_llm_role import SystemLLMRoleType
 from app.runtime.events import RuntimeEvent
-from app.runtime.memory.working_memory import WorkingMemory
+from app.runtime.input_builders import SynthesizerInputBuilder
+from app.runtime.turn_state import RuntimeTurnState
 from app.services.system_llm_role_service import SystemLLMRoleService
 
 logger = get_logger(__name__)
 
+# Default chunk size for fallback synthesis streaming.
+# Can be overridden via platform_config.runtime.synth_chunk_size if needed.
+DEFAULT_SYNTH_CHUNK_SIZE = 20
 
 # Last-resort prompt used only if the DB role cannot be loaded (schema drift,
 # migration not run, etc.). Admins should edit the SYNTHESIZER row in
@@ -55,27 +59,34 @@ class Synthesizer:
     ) -> None:
         self.session = session
         self.llm_client = llm_client
+        self._input_builder = SynthesizerInputBuilder()
 
     async def stream(
         self,
         *,
-        memory: WorkingMemory,
+        runtime_state: RuntimeTurnState,
         run_id: UUID,
         model: Optional[str] = None,
         planner_hint: Optional[str] = None,
-        chunk_size: int = 20,
+        chunk_size: int = DEFAULT_SYNTH_CHUNK_SIZE,
     ) -> AsyncGenerator[RuntimeEvent, None]:
-        sources = list(memory.memory_state.get("sources") or [])
-        sources = sources[:20]
+        # Sources from memory_bundle if available
+        sources: List[str] = []
+        if runtime_state.memory_bundle and runtime_state.memory_bundle.sections:
+            for section in runtime_state.memory_bundle.sections:
+                if section.name == "sources":
+                    sources = [item.text for item in section.items[:20] if item.text]
+                    break
 
         # Short-circuit: single successful agent_result with non-trivial text.
-        short_answer = self._short_circuit_answer(memory)
-        if short_answer and not planner_hint:
+        short_answer = self._short_circuit_answer(runtime_state=runtime_state)
+        is_informative_hint = planner_hint and "to be synthesized" not in planner_hint.lower()
+        if short_answer and not is_informative_hint:
             logger.info("Synthesizer short-circuit for run=%s", run_id)
             yield RuntimeEvent.status("synthesizing", short_circuit=True)
             for i in range(0, len(short_answer), chunk_size):
                 yield RuntimeEvent.delta(short_answer[i : i + chunk_size])
-            memory.final_answer = short_answer
+            runtime_state.final_answer = short_answer
             yield RuntimeEvent.final(short_answer, sources=sources, run_id=str(run_id))
             return
 
@@ -92,8 +103,8 @@ class Synthesizer:
             params["max_tokens"] = role_cfg["max_tokens"]
 
         yield RuntimeEvent.status("synthesizing")
-        messages = self._build_messages(
-            memory,
+        messages = self._input_builder.build(
+            runtime_state=runtime_state,
             planner_hint=planner_hint,
             system_prompt=system_prompt,
         )
@@ -112,27 +123,36 @@ class Synthesizer:
             logger.error("Synthesizer LLM stream failed: %s", exc, exc_info=True)
             if not buffer:
                 yield RuntimeEvent.error(f"Failed to synthesize answer: {exc}", recoverable=True)
-                memory.final_error = str(exc)
+                runtime_state.final_error = str(exc)
                 return
 
         full = "".join(buffer).strip()
         if not full:
             # Fallback: stitched summaries.
-            full = self._stitched_fallback(memory)
+            full = self._stitched_fallback(runtime_state=runtime_state)
             for i in range(0, len(full), chunk_size):
                 yield RuntimeEvent.delta(full[i : i + chunk_size])
 
-        memory.final_answer = full
+        runtime_state.final_answer = full
         yield RuntimeEvent.final(full, sources=sources, run_id=str(run_id))
 
     # ---------------------------------------------------------------- helpers --
 
     @staticmethod
-    def _short_circuit_answer(memory: WorkingMemory) -> Optional[str]:
-        successful = [r for r in memory.agent_results if r.success]
+    def _short_circuit_answer(
+        *,
+        runtime_state: RuntimeTurnState,
+    ) -> Optional[str]:
+        successful: List[str] = []
+        for item in runtime_state.agent_results:
+            if not bool(item.get("success", True)):
+                continue
+            text = str(item.get("summary") or "").strip()
+            if text:
+                successful.append(text)
         if len(successful) != 1:
             return None
-        text = (successful[0].summary or "").strip()
+        text = successful[0]
         if len(text) < 40:
             return None
         return text
@@ -155,43 +175,14 @@ class Synthesizer:
             }
 
     @staticmethod
-    def _build_messages(
-        memory: WorkingMemory,
+    def _stitched_fallback(
         *,
-        planner_hint: Optional[str],
-        system_prompt: str,
-    ) -> List[Dict[str, str]]:
+        runtime_state: RuntimeTurnState,
+    ) -> str:
         parts: List[str] = []
-        parts.append(f"Цель: {memory.goal or '(не указана)'}")
-        if memory.dialogue_summary:
-            parts.append(f"Контекст диалога:\n{memory.dialogue_summary[:1500]}")
-
-        if memory.agent_results:
-            parts.append("Результаты агентов:")
-            for r in memory.agent_results[-8:]:
-                status = "OK" if r.success else "FAIL"
-                parts.append(f"- [{r.agent_slug}] ({status}) {r.summary[:400]}")
-
-        if memory.facts:
-            parts.append("Факты:")
-            for f in memory.facts[-20:]:
-                parts.append(f"- {f.text[:200]}")
-
-        if planner_hint:
-            parts.append(f"Подсказка планировщика: {planner_hint[:400]}")
-
-        user = "\n\n".join(parts)
-        return [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user},
-        ]
-
-    @staticmethod
-    def _stitched_fallback(memory: WorkingMemory) -> str:
-        parts: List[str] = []
-        for r in memory.agent_results:
-            if r.success and r.summary:
-                parts.append(r.summary)
-        if not parts and memory.facts:
-            parts = [f.text for f in memory.facts[-10:]]
+        for item in runtime_state.agent_results:
+            if bool(item.get("success", True)) and str(item.get("summary") or "").strip():
+                parts.append(str(item.get("summary") or "").strip())
+        if not parts and runtime_state.runtime_facts:
+            parts = [item.text for item in runtime_state.runtime_facts[-10:]]
         return "\n\n".join(parts) or "Не удалось собрать ответ."

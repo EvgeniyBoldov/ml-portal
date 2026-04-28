@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 from uuid import UUID
 
 from app.agents.contracts import OperationCredentialContext, ResolvedOperation
@@ -31,24 +31,29 @@ class RuntimeOperationResolver:
         *,
         instance: ToolInstance,
         provider: ToolInstance,
+        runtime_domain: Optional[str] = None,
         has_credentials: Optional[bool] = None,
         effective_permissions: Optional[EffectivePermissions] = None,
         user_id: Optional[UUID] = None,
         tenant_id: Optional[UUID] = None,
-        sandbox_overrides: Optional[Dict[str, Any]] = None,
     ) -> List[tuple[ResolvedOperation, Optional[OperationCredentialContext]]]:
-        runtime_domain = str(instance.domain or "").strip()
-        context_domains = [runtime_domain] if runtime_domain.startswith("collection.") else None
+        resolved_runtime_domain = str(
+            runtime_domain if runtime_domain is not None else (instance.domain or "")
+        ).strip()
+        context_domains = (
+            [resolved_runtime_domain]
+            if resolved_runtime_domain.startswith("collection.")
+            else None
+        )
         return await self.operation_builder.build_operations_for_instance(
             instance=instance,
             provider=provider,
-            runtime_domain=runtime_domain,
+            runtime_domain=resolved_runtime_domain,
             context_domains=context_domains,
             has_credentials=has_credentials,
             effective_permissions=effective_permissions,
             user_id=user_id,
             tenant_id=tenant_id,
-            sandbox_overrides=sandbox_overrides,
             load_discovered_capabilities=self._load_discovered_capabilities,
             resolve_execution_credentials=self._resolve_execution_credentials,
         )
@@ -83,10 +88,8 @@ class RuntimeOperationResolver:
         *,
         instance: ToolInstance,
         provider: ToolInstance,
-        include_unpublished: bool = False,
     ) -> List[DiscoveredTool]:
         return await self.collection_tool_resolver.load_discovered_tools(
             instance=instance,
             provider=provider,
-            include_unpublished=include_unpublished,
         )

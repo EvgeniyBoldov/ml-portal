@@ -38,6 +38,17 @@ interface ApiTokenCreated extends ApiToken {
   token: string;
 }
 
+interface UserFact {
+  id: string;
+  scope: string;
+  subject: string;
+  value: string;
+  confidence: number;
+  source: string;
+  observed_at: string;
+  created_at: string;
+}
+
 
 const formatDate = (dateString: string | null) => {
   if (!dateString) return '—';
@@ -97,6 +108,7 @@ export default function ProfilePage() {
   const [createdToken, setCreatedToken] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [tokenToDelete, setTokenToDelete] = useState<ApiToken | null>(null);
+  const [selectedFactIds, setSelectedFactIds] = useState<string[]>([]);
 
   // Fetch profile
   const { data: profile, isLoading: profileLoading } = useQuery({
@@ -110,6 +122,11 @@ export default function ProfilePage() {
     queryFn: () => apiRequest<ApiToken[]>('/profile/tokens'),
   });
 
+  // Fetch user facts
+  const { data: facts = [], isLoading: factsLoading } = useQuery({
+    queryKey: ['profile', 'facts'],
+    queryFn: () => apiRequest<UserFact[]>('/profile/facts'),
+  });
 
   // Create token mutation
   const createToken = useMutation({
@@ -150,6 +167,24 @@ export default function ProfilePage() {
     },
   });
 
+  // Delete facts mutation
+  const deleteFacts = useMutation({
+    mutationFn: (ids: string[]) =>
+      apiRequest<{ deleted: number }>('/profile/facts', {
+        method: 'DELETE',
+        body: { ids },
+      }),
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ['profile', 'facts'] });
+      setSelectedFactIds([]);
+      const count = result?.deleted ?? 0;
+      showSuccess(count > 0 ? `Удалено фактов: ${count}` : 'Факты удалены');
+    },
+    onError: (error: any) => {
+      showError(error?.detail || 'Не удалось удалить факты');
+    },
+  });
+
 
   const handleCreateToken = () => {
     if (!newTokenName.trim()) return;
@@ -176,6 +211,26 @@ export default function ProfilePage() {
     setNewTokenName('');
     setExpiresDays('');
     setCopied(false);
+  };
+
+  const allFactsSelected = facts.length > 0 && selectedFactIds.length === facts.length;
+
+  const toggleFactSelection = (factId: string, checked: boolean) => {
+    setSelectedFactIds(prev => {
+      if (checked) {
+        return prev.includes(factId) ? prev : [...prev, factId];
+      }
+      return prev.filter(id => id !== factId);
+    });
+  };
+
+  const toggleSelectAllFacts = (checked: boolean) => {
+    setSelectedFactIds(checked ? facts.map(f => f.id) : []);
+  };
+
+  const handleDeleteSelectedFacts = () => {
+    if (selectedFactIds.length === 0) return;
+    deleteFacts.mutate(selectedFactIds);
   };
 
 
@@ -324,6 +379,79 @@ export default function ProfilePage() {
           userId={profile?.id}
           tenantId={profile?.tenants?.[0]}
         />
+      </section>
+
+      {/* Facts Section */}
+      <section className={styles.section}>
+        <div className={styles.sectionHeader}>
+          <h2 className={styles.sectionTitle}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M9 11l3 3L22 4" />
+              <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
+            </svg>
+            Факты памяти
+          </h2>
+          <Button
+            variant="danger"
+            disabled={selectedFactIds.length === 0 || deleteFacts.isPending}
+            onClick={handleDeleteSelectedFacts}
+          >
+            {deleteFacts.isPending ? 'Удаление...' : `Удалить выбранные (${selectedFactIds.length})`}
+          </Button>
+        </div>
+
+        <p className={styles.sectionDescription}>
+          Пользовательские факты, сохраненные системой памяти. Выберите строки и удалите лишние.
+        </p>
+
+        {factsLoading ? (
+          <div className={styles.loading}>Загрузка фактов...</div>
+        ) : facts.length === 0 ? (
+          <div className={styles.emptyState}>
+            <p>Факты пока отсутствуют</p>
+          </div>
+        ) : (
+          <div className={styles.factsTableWrap}>
+            <table className={styles.factsTable}>
+              <thead>
+                <tr>
+                  <th className={styles.checkboxCell}>
+                    <input
+                      type="checkbox"
+                      checked={allFactsSelected}
+                      onChange={(e) => toggleSelectAllFacts(e.target.checked)}
+                      aria-label="Выбрать все факты"
+                    />
+                  </th>
+                  <th>Subject</th>
+                  <th>Значение</th>
+                  <th>Scope</th>
+                  <th>Источник</th>
+                  <th>Обновлено</th>
+                </tr>
+              </thead>
+              <tbody>
+                {facts.map((fact) => (
+                  <tr key={fact.id}>
+                    <td className={styles.checkboxCell}>
+                      <input
+                        type="checkbox"
+                        checked={selectedFactIds.includes(fact.id)}
+                        onChange={(e) => toggleFactSelection(fact.id, e.target.checked)}
+                        aria-label={`Выбрать факт ${fact.subject}`}
+                      />
+                    </td>
+                    <td className={styles.subjectCell}>{fact.subject}</td>
+                    <td className={styles.valueCell}>{fact.value}</td>
+                    <td>{fact.scope}</td>
+                    <td>{fact.source}</td>
+                    <td>{formatDate(fact.observed_at)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </section>
 
       {/* Delete Token Confirmation */}

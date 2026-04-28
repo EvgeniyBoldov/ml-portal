@@ -1,64 +1,23 @@
 # =============================================================================
-# ML Portal API - Production Multi-Stage Dockerfile
+# ML Portal API - Production Dockerfile
 # =============================================================================
 
-# =============================================================================
-# Stage 1: Base Builder
-# =============================================================================
-FROM python:3.11-slim AS base
+ARG BASE_IMAGE=ml-portal-base-ml:v1
+
+FROM ${BASE_IMAGE} AS dependencies
+
+USER root
 
 WORKDIR /app
-
-# Install system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    libpq-dev \
-    postgresql-client \
-    curl \
-    libmagic1 \
-    libmagic-dev \
-    && rm -rf /var/lib/apt/lists/* \
-    && apt-get clean
-
-# =============================================================================
-# Stage 2: Dependencies Builder
-# =============================================================================
-FROM base AS dependencies
-
-# Copy requirements files
-COPY infra/docker/base/requirements.api.txt /tmp/requirements.base.txt
 COPY infra/docker/api/requirements.txt /tmp/requirements.api.txt
+RUN python -m pip install --no-cache-dir -r /tmp/requirements.api.txt
 
-# Install Python dependencies
-RUN python -m pip install --upgrade pip && \
-    pip install --no-cache-dir -r /tmp/requirements.base.txt && \
-    pip install --no-cache-dir -r /tmp/requirements.api.txt
+FROM ${BASE_IMAGE} AS production
 
-# =============================================================================
-# Stage 3: Production Runtime
-# =============================================================================
-FROM python:3.11-slim AS production
-
+USER root
 WORKDIR /app
-
-# Install only runtime dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libpq5 \
-    postgresql-client \
-    curl \
-    libmagic1 \
-    && rm -rf /var/lib/apt/lists/* \
-    && apt-get clean
-
-# Copy Python packages from dependencies stage
 COPY --from=dependencies /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
 COPY --from=dependencies /usr/local/bin /usr/local/bin
-
-# Create non-root user
-RUN groupadd -r appuser && useradd -r -g appuser -u 1000 appuser && \
-    chown -R appuser:appuser /app
-
-# Copy application code
 COPY --chown=appuser:appuser apps/api/src/app/ ./app/
 COPY --chown=appuser:appuser apps/api/alembic.ini ./
 
@@ -80,4 +39,5 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
     CMD curl -f http://localhost:8000/api/v1/healthz || exit 1
 
 # Start command
+USER appuser
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]

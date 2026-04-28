@@ -160,7 +160,15 @@ def _fallback_ask_user() -> NextAction:
 
 
 class Planner:
-    """Mini-LLM planner that produces strict NextAction JSON."""
+    """Mini-LLM planner that produces strict NextAction JSON.
+
+    DEPRECATED: This class is no longer used by the production runtime.
+    The active planner is `app.runtime.planner.planner.Planner` which loads
+    its system prompt from the DB (SystemLLMRoleType.PLANNER) and supports
+    structured output + retry. Do not instantiate this class for new code.
+
+    `validate_next_action` below is still actively used by policy_engine.
+    """
 
     def __init__(
         self,

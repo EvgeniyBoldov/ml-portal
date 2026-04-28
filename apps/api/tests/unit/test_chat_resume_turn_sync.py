@@ -282,7 +282,7 @@ class TestChatResumeTurnSync:
         turn_service_phase1.pause_turn = AsyncMock()
         turn_service_phase1.build_request_hash = lambda payload: "h1"
         context_service = AsyncMock()
-        context_service.load_chat_context_with_summary = AsyncMock(return_value=[])
+        context_service.load_chat_context = AsyncMock(return_value=[])
         persistence_service = AsyncMock()
         persistence_service.create_user_message = AsyncMock(
             return_value=SimpleNamespace(message_id="user-msg-1", created_at="2026-01-01T12:00:00Z")

@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.system_llm_trace import SystemLLMTrace, SystemLLMTraceType
 from app.repositories.system_llm_trace_repository import SystemLLMTraceRepository
 from app.core.logging import get_logger
+from app.runtime.redactor import RuntimeRedactor
 
 logger = get_logger(__name__)
 
@@ -25,6 +26,7 @@ class SystemLLMTraceService:
     def __init__(self, session: AsyncSession):
         self.session = session
         self.repo = SystemLLMTraceRepository(session)
+        self.redactor = RuntimeRedactor()
     
     async def create_trace(
         self,
@@ -56,26 +58,33 @@ class SystemLLMTraceService:
     ) -> SystemLLMTrace:
         """Create a new system LLM trace."""
         
+        redacted_structured_input = self.redactor.redact(structured_input or {})
+        redacted_messages = self.redactor.redact(messages_sent or [])
+        redacted_raw_response = self.redactor.redact(raw_response or "")
+        redacted_parsed_response = self.redactor.redact(parsed_response or {})
+        redacted_fallback_details = self.redactor.redact(fallback_details or {})
+        redacted_error = self.redactor.redact(error or "") if error else None
+
         # Extract context variables from structured input
         context_variables = {}
         if trace_type == SystemLLMTraceType.TRIAGE:
             context_variables = {
-                "available_agents": structured_input.get("available_agents", []),
-                "policies": structured_input.get("policies", ""),
-                "active_run": structured_input.get("active_run"),
+                "available_agents": redacted_structured_input.get("available_agents", []),
+                "policies": redacted_structured_input.get("policies", ""),
+                "active_run": redacted_structured_input.get("active_run"),
             }
         elif trace_type == SystemLLMTraceType.PLANNER:
             context_variables = {
-                "available_agents": structured_input.get("available_agents", []),
-                "available_operations": structured_input.get(
+                "available_agents": redacted_structured_input.get("available_agents", []),
+                "available_operations": redacted_structured_input.get(
                     "available_operations",
-                    structured_input.get("available_tools", []),
+                    redacted_structured_input.get("available_tools", []),
                 ),
-                "policies": structured_input.get("policies", ""),
+                "policies": redacted_structured_input.get("policies", ""),
             }
         elif trace_type == SystemLLMTraceType.SUMMARY:
             context_variables = {
-                "session_state": structured_input.get("session_state", {}),
+                "session_state": redacted_structured_input.get("session_state", {}),
             }
         
         # Create role snapshot
@@ -111,18 +120,18 @@ class SystemLLMTraceService:
             role_snapshot=role_snapshot,
             compiled_prompt=compiled_prompt,
             compiled_prompt_hash=compiled_prompt_hash,
-            structured_input=structured_input,
+            structured_input=redacted_structured_input,
             context_variables=context_variables,
             model=model or role_config.get("model") or "unknown",
             temperature=temperature,
             max_tokens=max_tokens,
-            messages_sent=messages_sent,
-            raw_response=raw_response,
-            parsed_response=parsed_response,
+            messages_sent=redacted_messages,
+            raw_response=redacted_raw_response,
+            parsed_response=redacted_parsed_response,
             validation_status=validation_status,
             validation_error=validation_error,
             fallback_applied=fallback_applied,
-            fallback_details=fallback_details,
+            fallback_details=redacted_fallback_details,
             attempt_number=attempt_number,
             total_attempts=total_attempts,
             duration_ms=duration_ms,
@@ -130,7 +139,7 @@ class SystemLLMTraceService:
             tokens_out=tokens_out,
             result_type=result_type,
             result_summary=result_summary,
-            error=error
+            error=redacted_error
         )
         
         try:

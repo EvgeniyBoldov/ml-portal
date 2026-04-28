@@ -4,6 +4,7 @@ Supports: OpenAI, Groq, Azure OpenAI, LocalAI, vLLM, Ollama, etc.
 """
 from __future__ import annotations
 from typing import Any, AsyncIterator, Mapping, Optional
+import os
 from app.core.logging import get_logger
 from openai import AsyncOpenAI
 from app.core.config import get_settings
@@ -27,18 +28,142 @@ class OpenAICompatibleLLM:
     
     def __init__(self):
         self.settings = get_settings()
-        
-        # Use generic LLM_* variables
-        self.client = AsyncOpenAI(
-            base_url=self.settings.LLM_BASE_URL,
-            api_key=self.settings.LLM_API_KEY,
-            timeout=self.settings.LLM_TIMEOUT or 30.0
+        self._default_base_url = self.settings.LLM_BASE_URL
+        self._default_api_key = self.settings.LLM_API_KEY
+        self._client_cache: dict[tuple[str, Optional[str]], AsyncOpenAI] = {}
+        self.client = self._get_or_create_client(
+            base_url=self._default_base_url,
+            api_key=self._default_api_key,
         )
         
         self.default_model = self.settings.LLM_DEFAULT_MODEL
         self.provider = self.settings.LLM_PROVIDER
         
         logger.info(f"Initialized LLM client: provider={self.provider}, base_url={self.settings.LLM_BASE_URL}")
+
+    def _get_or_create_client(self, *, base_url: str, api_key: Optional[str]) -> AsyncOpenAI:
+        cache_key = (base_url.rstrip("/"), api_key)
+        client = self._client_cache.get(cache_key)
+        if client is not None:
+            return client
+
+        client = AsyncOpenAI(
+            base_url=base_url,
+            api_key=api_key,
+            timeout=self.settings.LLM_TIMEOUT or 30.0,
+        )
+        self._client_cache[cache_key] = client
+        return client
+
+    @staticmethod
+    def _extract_secret(payload: dict, auth_type: str) -> Optional[str]:
+        if auth_type == "api_key":
+            return payload.get("api_key")
+        if auth_type == "token":
+            return payload.get("token")
+        if auth_type == "basic":
+            return payload.get("password")
+        return None
+
+    @staticmethod
+    def _is_auth_error(exc: Exception) -> bool:
+        text = str(exc).lower()
+        auth_markers = (
+            "invalid_api_key",
+            "invalid api key",
+            "error code: 401",
+            "401 unauthorized",
+            "unauthorized",
+            "authenticationerror",
+        )
+        return any(marker in text for marker in auth_markers)
+
+    def _should_retry_with_default_connection(
+        self,
+        *,
+        runtime_base_url: str,
+        runtime_api_key: Optional[str],
+        exc: Exception,
+    ) -> bool:
+        if not self._is_auth_error(exc):
+            return False
+        return (
+            runtime_base_url.rstrip("/") != str(self._default_base_url or "").rstrip("/")
+            or runtime_api_key != self._default_api_key
+        )
+
+    async def _resolve_model_connection(self, model_name: Optional[str]) -> tuple[str, Optional[str]]:
+        base_url = self._default_base_url
+        api_key = self._default_api_key
+
+        if not model_name:
+            return base_url, api_key
+
+        try:
+            from sqlalchemy import or_, select
+            from app.core.db import get_session_factory
+            from app.models.model_registry import Model, ModelType
+            from app.services.credential_service import CredentialService
+
+            session_factory = get_session_factory()
+            async with session_factory() as session:
+                result = await session.execute(
+                    select(Model)
+                    .where(
+                        Model.type == ModelType.LLM_CHAT,
+                        Model.deleted_at.is_(None),
+                        Model.enabled == True,  # noqa: E712
+                        or_(
+                            Model.alias == model_name,
+                            Model.provider_model_name == model_name,
+                        ),
+                    )
+                    .order_by(Model.default_for_type.desc(), Model.updated_at.desc())
+                    .limit(1)
+                )
+                model = result.scalar_one_or_none()
+
+                if model is None:
+                    return base_url, api_key
+
+                resolved_base_url = (
+                    model.base_url
+                    or (model.instance.url if model.instance else None)
+                    or ((model.extra_config or {}).get("base_url"))
+                    or base_url
+                )
+
+                resolved_api_key: Optional[str] = None
+                if model.instance_id:
+                    decrypted = await CredentialService(session).resolve_credentials(
+                        instance_id=model.instance_id,
+                        strategy="PLATFORM_FIRST",
+                    )
+                    if decrypted:
+                        resolved_api_key = self._extract_secret(
+                            decrypted.payload or {},
+                            decrypted.auth_type,
+                        )
+
+                if (
+                    not resolved_api_key
+                    and model.instance
+                    and isinstance(model.instance.config, dict)
+                ):
+                    resolved_api_key = model.instance.config.get("api_key")
+                    if not resolved_api_key:
+                        api_key_ref = model.instance.config.get("api_key_ref")
+                        if api_key_ref:
+                            resolved_api_key = os.getenv(api_key_ref)
+
+                return resolved_base_url, resolved_api_key or api_key
+        except Exception as exc:
+            logger.warning(
+                "Failed to resolve runtime LLM connection for model '%s': %s",
+                model_name,
+                exc,
+            )
+            return base_url, api_key
     
     async def chat(
         self, 
@@ -62,9 +187,34 @@ class OpenAICompatibleLLM:
                 request_params.update(params)
             
             logger.info(f"Sending chat request: provider={self.provider}, model={request_params['model']}")
-            
+
+            runtime_base_url, runtime_api_key = await self._resolve_model_connection(
+                request_params.get("model")
+            )
+            client = self._get_or_create_client(
+                base_url=runtime_base_url,
+                api_key=runtime_api_key,
+            )
+
             # Make the request
-            response = await self.client.chat.completions.create(**request_params)
+            try:
+                response = await client.chat.completions.create(**request_params)
+            except Exception as exc:
+                if not self._should_retry_with_default_connection(
+                    runtime_base_url=runtime_base_url,
+                    runtime_api_key=runtime_api_key,
+                    exc=exc,
+                ):
+                    raise
+                logger.warning(
+                    "Runtime model credentials failed auth; retrying with default LLM connection (model=%s)",
+                    request_params.get("model"),
+                )
+                fallback_client = self._get_or_create_client(
+                    base_url=self._default_base_url,
+                    api_key=self._default_api_key,
+                )
+                response = await fallback_client.chat.completions.create(**request_params)
             
             # Extract the response
             content = response.choices[0].message.content
@@ -106,9 +256,34 @@ class OpenAICompatibleLLM:
                 request_params.update(params)
             
             logger.info(f"Sending streaming chat request: provider={self.provider}, model={request_params['model']}")
-            
+
+            runtime_base_url, runtime_api_key = await self._resolve_model_connection(
+                request_params.get("model")
+            )
+            client = self._get_or_create_client(
+                base_url=runtime_base_url,
+                api_key=runtime_api_key,
+            )
+
             # Make the streaming request
-            stream = await self.client.chat.completions.create(**request_params)
+            try:
+                stream = await client.chat.completions.create(**request_params)
+            except Exception as exc:
+                if not self._should_retry_with_default_connection(
+                    runtime_base_url=runtime_base_url,
+                    runtime_api_key=runtime_api_key,
+                    exc=exc,
+                ):
+                    raise
+                logger.warning(
+                    "Runtime model credentials failed auth for stream; retrying with default LLM connection (model=%s)",
+                    request_params.get("model"),
+                )
+                fallback_client = self._get_or_create_client(
+                    base_url=self._default_base_url,
+                    api_key=self._default_api_key,
+                )
+                stream = await fallback_client.chat.completions.create(**request_params)
             
             async for chunk in stream:
                 if chunk.choices and chunk.choices[0].delta.content:
@@ -209,3 +384,8 @@ class OpenAICompatibleLLM:
                 "base_url": self.settings.LLM_BASE_URL,
                 "error": str(e)
             }
+
+    async def aclose(self) -> None:
+        for client in self._client_cache.values():
+            await client.close()
+        self._client_cache.clear()

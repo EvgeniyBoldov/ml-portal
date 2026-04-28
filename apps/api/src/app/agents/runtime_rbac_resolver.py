@@ -17,11 +17,19 @@ class RuntimeRbacResolver:
     - optionally resolves DB-backed RBAC rules
     """
 
+    _STRICT_ENVS = frozenset({"prod", "production", "staging"})
+
     def __init__(self, permission_service: PermissionService) -> None:
         self.permission_service = permission_service
         settings = get_settings()
         self.enforce_rules = bool(getattr(settings, "RUNTIME_RBAC_ENFORCE_RULES", False))
         self.allow_undefined = bool(getattr(settings, "RUNTIME_RBAC_ALLOW_UNDEFINED", False))
+        env = str(getattr(settings, "ENV", "local") or "local").strip().lower()
+        if self.allow_undefined and env in self._STRICT_ENVS:
+            raise ValueError(
+                f"RUNTIME_RBAC_ALLOW_UNDEFINED=true is not allowed in {env!r} environment. "
+                "This setting is for local/test only and would bypass RBAC in production."
+            )
 
     async def resolve_effective_permissions(
         self,

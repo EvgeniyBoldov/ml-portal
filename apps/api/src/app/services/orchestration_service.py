@@ -81,17 +81,6 @@ class OrchestrationSettingsProvider:
             "planner_fail_open_message": settings.get("planner_fail_open_message"),
         }
 
-        # Override with AgentVersion
-        if agent_version:
-            if agent_version.model:
-                config["executor_model"] = agent_version.model
-            if agent_version.temperature is not None:
-                config["executor_temperature"] = agent_version.temperature
-            if agent_version.timeout_s is not None:
-                config["executor_timeout_s"] = agent_version.timeout_s
-            if agent_version.max_steps is not None:
-                config["executor_max_steps"] = agent_version.max_steps
-
         # Override with Limit if provided
         if limit:
             if limit.max_steps is not None:

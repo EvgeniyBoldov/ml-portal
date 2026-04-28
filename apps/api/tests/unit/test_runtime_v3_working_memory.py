@@ -60,3 +60,31 @@ def test_working_memory_can_finalize_respects_must_do_phases():
     assert memory.can_finalize() is False
     memory.mark_phase_completed("collect")
     assert memory.can_finalize() is True
+
+
+def test_working_memory_tool_ledger_records_calls_and_results():
+    memory = _memory()
+
+    memory.record_operation_call(
+        operation="collection.sql.execute",
+        call_id="call-1",
+        arguments={"query": "select 1"},
+        agent_slug="mon.net",
+        phase_id="discover",
+    )
+    assert memory.used_tool_calls == 1
+    assert len(memory.tool_ledger.entries) == 1
+    assert memory.tool_ledger.entries[0].status == "called"
+
+    memory.record_operation_result(
+        call_id="call-1",
+        success=True,
+        data={"rows": [{"v": 1}]},
+    )
+    assert memory.tool_ledger.entries[0].status == "succeeded"
+    assert memory.tool_ledger.entries[0].success is True
+
+    snap = memory.planner_snapshot()
+    assert "recent_tool_calls" in snap
+    assert len(snap["recent_tool_calls"]) == 1
+    assert snap["recent_tool_calls"][0]["operation"] == "collection.sql.execute"

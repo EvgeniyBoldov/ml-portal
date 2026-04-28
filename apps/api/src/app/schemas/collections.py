@@ -139,6 +139,7 @@ class CollectionResponse(BaseModel):
     source_contract: Optional[dict] = None
     status: str
     status_details: Optional[dict] = None
+    runtime_readiness: Optional[dict] = None
     table_name: Optional[str] = None
     table_schema: Optional[dict] = None
     
@@ -255,10 +256,26 @@ def _normalize_str_list(value: Any) -> list[str]:
 
 
 class CollectionVersionCreate(BaseModel):
+    data_description: Optional[str] = Field(
+        default=None,
+        description="Что это за данные в коллекции (человеко-читаемо, без JSON-схем).",
+    )
+    usage_purpose: Optional[str] = Field(
+        default=None,
+        description="Зачем эти данные нужны в рантайме и какие задачи покрывают.",
+    )
     notes: Optional[str] = None
 
 
 class CollectionVersionUpdate(BaseModel):
+    data_description: Optional[str] = Field(
+        default=None,
+        description="Что это за данные в коллекции (человеко-читаемо, без JSON-схем).",
+    )
+    usage_purpose: Optional[str] = Field(
+        default=None,
+        description="Зачем эти данные нужны в рантайме и какие задачи покрывают.",
+    )
     notes: Optional[str] = None
 
 
@@ -267,6 +284,8 @@ class CollectionVersionResponse(BaseModel):
     collection_id: uuid.UUID
     version: int
     status: str = CollectionVersionStatus.DRAFT.value
+    data_description: Optional[str] = None
+    usage_purpose: Optional[str] = None
     notes: Optional[str] = None
     created_at: str
     updated_at: str

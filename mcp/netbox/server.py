@@ -4,6 +4,7 @@ import json
 import os
 import uuid
 from typing import Any, Dict, Optional
+from urllib.parse import urlparse, urlunparse
 
 import httpx
 from fastapi import FastAPI, Header, HTTPException, Request, Response
@@ -31,7 +32,34 @@ def _jsonrpc_err(rpc_id: Any, code: int, message: str) -> dict[str, Any]:
 
 
 def _normalize_base_url(url: str) -> str:
-    return (url or "").strip().rstrip("/")
+    raw = (url or "").strip()
+    if not raw:
+        return ""
+
+    parsed = urlparse(raw)
+    # Handle full URLs and plain host/path values uniformly.
+    if parsed.scheme and parsed.netloc:
+        path = (parsed.path or "").rstrip("/")
+        # Operators often store NetBox URL as ".../api/".
+        # Tool paths below already include "/api/...", so trim the suffix here.
+        if path.endswith("/api"):
+            path = path[:-4]
+        normalized = urlunparse(
+            (
+                parsed.scheme,
+                parsed.netloc,
+                path.rstrip("/"),
+                "",  # params
+                parsed.query,
+                "",  # fragment
+            )
+        )
+        return normalized.rstrip("/")
+
+    plain = raw.rstrip("/")
+    if plain.endswith("/api"):
+        plain = plain[:-4]
+    return plain.rstrip("/")
 
 
 def _extract_token(payload: Dict[str, Any]) -> str:

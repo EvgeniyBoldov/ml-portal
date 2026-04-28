@@ -1,6 +1,6 @@
 import { Badge, Button, Checkbox, Input, Select } from '@/shared/ui';
 import type { CollectionField, CollectionType, SearchMode } from '@/shared/api';
-import { SQL_SPECIFIC_FIELD_NAMES } from './collectionFieldPresets';
+import { DOCUMENT_REQUIRED_FIELD_NAMES, SQL_SPECIFIC_FIELD_NAMES } from './collectionFieldPresets';
 
 const FIELD_TYPES = ['text', 'integer', 'float', 'boolean', 'datetime', 'date', 'file'] as const;
 const SEARCH_MODES: SearchMode[] = ['exact', 'like', 'range', 'vector'];
@@ -21,7 +21,8 @@ interface FieldsEditorProps {
 
 export function FieldsEditor({ fields, onChange, collectionType }: FieldsEditorProps) {
   const isLockedSpecificField = (field: CollectionField) =>
-    collectionType === 'sql' && SQL_SPECIFIC_FIELD_NAMES.has(field.name);
+    (collectionType === 'sql' && SQL_SPECIFIC_FIELD_NAMES.has(field.name))
+    || (collectionType === 'document' && DOCUMENT_REQUIRED_FIELD_NAMES.has(field.name));
 
   const add = () => onChange([...fields, emptyField()]);
 
@@ -47,11 +48,6 @@ export function FieldsEditor({ fields, onChange, collectionType }: FieldsEditorP
     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
       {fields.map((f, i) => (
         <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 140px 80px 1fr auto', gap: '0.5rem', alignItems: 'center', padding: '0.75rem', background: 'var(--bg-secondary)', borderRadius: '6px', border: '1px solid var(--border-color)' }}>
-          {isLockedSpecificField(f) && (
-            <div style={{ gridColumn: '1 / -1', marginBottom: '0.25rem' }}>
-              <Badge tone="info">Обязательное системное поле SQL (только чтение)</Badge>
-            </div>
-          )}
           <Input
             placeholder="название поля"
             value={f.name}

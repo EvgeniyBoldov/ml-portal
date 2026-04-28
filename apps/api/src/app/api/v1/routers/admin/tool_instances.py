@@ -19,6 +19,10 @@ from app.api.deps import db_session, require_admin
 from app.core.security import UserCtx
 from app.models.discovered_tool import DiscoveredTool
 from app.models.tool_instance import ToolInstance
+from app.services.collection_linking import (
+    resolve_bound_collection_by_instance_id,
+    runtime_domain_for_collection,
+)
 from app.services.instance_capabilities import is_mcp_service_instance
 from app.services.collection_tool_resolver import CollectionToolResolver
 from app.services.tool_discovery_service import ToolDiscoveryService
@@ -53,11 +57,18 @@ def _materialize_runtime_operations(
     instance: ToolInstance,
     provider: ToolInstance,
     discovered_tools: List[DiscoveredTool],
+    runtime_domain: Optional[str] = None,
 ) -> List[RuntimeOperationListItem]:
     items: List[RuntimeOperationListItem] = []
     seen: set[str] = set()
-    runtime_domain = str(instance.domain or "").strip()
-    context_domains = [runtime_domain] if runtime_domain.startswith("collection.") else None
+    resolved_runtime_domain = str(
+        runtime_domain if runtime_domain is not None else (instance.domain or "")
+    ).strip()
+    context_domains = (
+        [resolved_runtime_domain]
+        if resolved_runtime_domain.startswith("collection.")
+        else None
+    )
     for discovered_tool in discovered_tools:
         publication = resolve_publication(
             raw_slug=discovered_tool.slug,
@@ -131,10 +142,22 @@ async def _runtime_tool_summary(
         return 0, 0, []
 
     discovered_tools = await _load_discovered_tools_for_instance(db, instance, provider)
+    runtime_domain = str(instance.domain or "").strip()
+    instance_id = getattr(instance, "id", None)
+    if instance_id:
+        bound_collection = await resolve_bound_collection_by_instance_id(
+            db,
+            data_instance_id=instance_id,
+        )
+        runtime_domain = runtime_domain_for_collection(
+            collection=bound_collection,
+            fallback_domain=runtime_domain,
+        )
     runtime_operations = _materialize_runtime_operations(
         instance=instance,
         provider=provider,
         discovered_tools=discovered_tools,
+        runtime_domain=runtime_domain,
     )
     return len(discovered_tools), len(runtime_operations), runtime_operations
 

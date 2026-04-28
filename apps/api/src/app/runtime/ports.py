@@ -11,10 +11,11 @@ adapters. Concrete adapters live next to them:
 Keeping these as Protocols (structural typing) means we do not force existing
 adapters to inherit — they already match by method shape.
 
-Post-M6: MemoryPort / TriageServicePort / SummaryPort are all gone.
+Post-M6: MemoryPort / TriageServicePort / SummaryPort / WorkingMemory are all gone.
 Cross-turn memory is owned by FactStore + SummaryStore via
 MemoryBuilder/MemoryWriter; triage was subsumed by the planner; rolling
-summary is done by SummaryCompactor inside MemoryWriter.
+summary is done by SummaryCompactor inside MemoryWriter; RuntimeTurnState
+is the single source of truth for runtime state.
 """
 from __future__ import annotations
 
@@ -32,7 +33,7 @@ from uuid import UUID
 from app.agents.context import ToolContext
 from app.runtime.contracts import NextStep
 from app.runtime.events import RuntimeEvent
-from app.runtime.memory.working_memory import WorkingMemory
+from app.runtime.turn_state import RuntimeTurnState
 
 
 # --------------------------------------------------------------------------- #
@@ -52,7 +53,7 @@ class PlannerServicePort(Protocol):
     async def next_step(
         self,
         *,
-        memory: WorkingMemory,
+        runtime_state: RuntimeTurnState,
         available_agents: List[Dict[str, Any]],
         outline: Any,
         platform_config: Dict[str, Any],
@@ -71,19 +72,18 @@ class PlannerServicePort(Protocol):
 @runtime_checkable
 class AgentExecutionPort(Protocol):
     """Executes a single sub-agent step chosen by the planner. Streams
-    RuntimeEvents and mutates `memory` (appends AgentResult, facts)."""
+    RuntimeEvents and mutates `runtime_state` (appends AgentResult, facts)."""
 
     def execute(
         self,
         *,
         step: NextStep,
-        memory: WorkingMemory,
+        runtime_state: RuntimeTurnState,
         messages: List[Dict[str, Any]],
         ctx: ToolContext,
         user_id: UUID,
         tenant_id: UUID,
         platform_config: Dict[str, Any],
-        sandbox_overrides: Optional[Dict[str, Any]] = None,
         model: Optional[str] = None,
     ) -> AsyncIterator[RuntimeEvent]: ...
 
@@ -95,12 +95,12 @@ class AgentExecutionPort(Protocol):
 
 @runtime_checkable
 class SynthesizerPort(Protocol):
-    """Renders the final answer stream from WorkingMemory."""
+    """Renders the final answer stream from RuntimeTurnState."""
 
     def stream(
         self,
         *,
-        memory: WorkingMemory,
+        runtime_state: RuntimeTurnState,
         run_id: UUID,
         model: Optional[str] = None,
         planner_hint: Optional[str] = None,

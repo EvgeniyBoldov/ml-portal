@@ -2,8 +2,8 @@
 AgentVersion model - versioned agent configuration.
 
 Architecture (v2):
-- Agent (container) - holds human-readable metadata (name, slug, description, tags)
-- AgentVersion - holds prompt parts, execution config, safety knobs, and routing fields
+- Agent (container) - holds metadata, model, generation params, safety config
+- AgentVersion - holds prompt parts and routing fields only
 Version statuses:
 - draft: can be edited, can be published
 - published: used in runtime (only one per agent)
@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional, List
 
-from sqlalchemy import String, DateTime, Text, Integer, Float, Boolean, ForeignKey, UniqueConstraint
+from sqlalchemy import String, DateTime, Text, Integer, Boolean, ForeignKey, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID, ARRAY
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -67,17 +67,7 @@ class AgentVersion(Base):
     output_format: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     examples: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
-    # ── Execution config ────────────────────────────────────────────────
-    model: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    timeout_s: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    max_steps: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    max_retries: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    max_tokens: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    temperature: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-
-    # ── Safety knobs ────────────────────────────────────────────────────
-    requires_confirmation_for_write: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
-    risk_level: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    # ── Safety prompt constraints (version-specific text, not config) ────────────────
     never_do: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     allowed_ops: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 

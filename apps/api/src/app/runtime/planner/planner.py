@@ -3,7 +3,7 @@ Planner — decides the next step of the run.
 
 Key properties:
     * Planner talks only to **agents**, never to operations/tools directly.
-    * Stateless: each call reads WorkingMemory and produces one NextStep.
+    * Stateless: each call reads RuntimeTurnState and produces one NextStep.
     * Output is strictly validated; invalid decisions trigger a single retry
       with an explicit error message prepended to the payload.
 
@@ -12,22 +12,23 @@ in `output_requirements`. The model field names in the prompt must match.
 """
 from __future__ import annotations
 
+import json
 from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.http.clients import LLMClientProtocol
 from app.core.logging import get_logger
 from app.models.system_llm_role import SystemLLMRoleType
 from app.runtime.contracts import NextStep, NextStepKind
+from app.runtime.input_builders import PlannerInputBuilder
 from app.runtime.llm.structured import StructuredLLMCall, StructuredCallError
-from app.runtime.memory.working_memory import WorkingMemory
 from app.runtime.planner.validator import validate_next_step
+from app.runtime.turn_state import RuntimeTurnState
 
 logger = get_logger(__name__)
-
 
 class PlannerLLMOutput(BaseModel):
     """Schema the planner LLM is required to produce."""
@@ -50,6 +51,32 @@ class PlannerLLMOutput(BaseModel):
     risk: Literal["low", "medium", "high"] = "low"
     requires_confirmation: bool = False
 
+    @field_validator("agent_input", mode="before")
+    @classmethod
+    def _coerce_agent_input(cls, value: Any) -> Dict[str, Any]:
+        """Be tolerant to planner outputs that stringify JSON objects.
+
+        Example from logs:
+            "agent_input": "{\"query\":\"...\"}"
+        """
+        if value is None:
+            return {}
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return {}
+            try:
+                parsed = json.loads(text)
+            except json.JSONDecodeError:
+                return {"query": text}
+            if isinstance(parsed, dict):
+                return parsed
+            return {"query": text}
+        # Defensive fallback for unexpected structured values.
+        return {"query": str(value)}
+
 
 class Planner:
     """One-LLM-call next-step planner."""
@@ -61,11 +88,12 @@ class Planner:
         llm_client: LLMClientProtocol,
     ) -> None:
         self.llm = StructuredLLMCall(session=session, llm_client=llm_client)
+        self._input_builder = PlannerInputBuilder()
 
     async def next_step(
         self,
         *,
-        memory: WorkingMemory,
+        runtime_state: RuntimeTurnState,
         available_agents: List[Dict[str, Any]],
         outline: Optional[Dict[str, Any]] = None,
         platform_config: Optional[Dict[str, Any]] = None,
@@ -75,18 +103,12 @@ class Planner:
         agent_run_id: Optional[UUID] = None,
     ) -> NextStep:
         allowed_slugs = [a.get("slug") for a in available_agents if a.get("slug")]
-        payload_base = {
-            "goal": memory.goal,
-            "conversation_summary": memory.dialogue_summary or "",
-            "available_agents": [
-                {"slug": a.get("slug"), "description": a.get("description", "")}
-                for a in available_agents
-                if a.get("slug")
-            ],
-            "execution_outline": outline,
-            "memory": memory.planner_snapshot(),
-            "policies": (platform_config or {}).get("policies_text") or "default",
-        }
+        payload_base = self._input_builder.build(
+            runtime_state=runtime_state,
+            available_agents=available_agents,
+            outline=outline,
+            platform_config=platform_config,
+        )
 
         # First attempt — normal payload. On structural or validator failure, retry
         # once with an explicit error appended so the model can correct itself.
@@ -117,7 +139,7 @@ class Planner:
             err = validate_next_step(
                 candidate,
                 allowed_agents=allowed_slugs,
-                memory=memory,
+                runtime_state=runtime_state,
             )
             if err is None:
                 return candidate
@@ -126,7 +148,7 @@ class Planner:
             last_error = err
 
         # Two attempts failed → safe forced finalize if we have facts, else abort.
-        return self._safe_fallback(memory, last_error)
+        return self._safe_fallback(runtime_state, last_error)
 
     # --------------------------------------------------------------- helpers --
 
@@ -154,13 +176,17 @@ class Planner:
         )
 
     @staticmethod
-    def _safe_fallback(memory: WorkingMemory, reason: Optional[str]) -> NextStep:
-        if memory.facts:
+    def _safe_fallback(
+        runtime_state: Optional[RuntimeTurnState],
+        reason: Optional[str],
+    ) -> NextStep:
+        has_facts = bool(runtime_state and runtime_state.runtime_facts)
+        if has_facts:
             return NextStep(
                 kind=NextStepKind.FINAL,
                 rationale=f"forced_finalize_after_planner_failure: {reason or 'unknown'}",
                 final_answer="(to be synthesized from collected facts)",
-                phase_id=memory.current_phase_id,
+                phase_id=runtime_state.current_phase_id if runtime_state else "main",
             )
         return NextStep(
             kind=NextStepKind.ABORT,

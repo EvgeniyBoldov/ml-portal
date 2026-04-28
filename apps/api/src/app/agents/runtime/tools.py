@@ -7,6 +7,13 @@ import asyncio
 import json
 from typing import Any, Dict, List, Optional, Tuple
 
+try:
+    import jsonschema as _jsonschema
+    _JSONSCHEMA_AVAILABLE = True
+except ImportError:
+    _jsonschema = None  # type: ignore[assignment]
+    _JSONSCHEMA_AVAILABLE = False
+
 from app.agents.context import OperationCall, ToolContext, ToolResult
 from app.agents.contracts import ResolvedOperation
 from app.agents.runtime.confirmation import (
@@ -14,7 +21,13 @@ from app.agents.runtime.confirmation import (
     build_operation_fingerprint,
     get_confirmation_service,
 )
+from app.agents.runtime.tool_reuse_policy import ToolCallReusePolicy
 from app.core.logging import get_logger
+from app.runtime.operation_errors import (
+    OperationExecutionError,
+    OperationValidationError,
+    RuntimeErrorCode,
+)
 
 logger = get_logger(__name__)
 
@@ -25,10 +38,15 @@ class ConfirmationRequiredError(RuntimeError):
         self.payload = payload
 
 
-class OperationExecutor:
+class OperationExecutionFacade:
     """Execute operation calls with validation, timeouts, and source extraction."""
-    def __init__(self, confirmation_service: Optional[ConfirmationService] = None) -> None:
+    def __init__(
+        self,
+        confirmation_service: Optional[ConfirmationService] = None,
+        reuse_policy: Optional[ToolCallReusePolicy] = None,
+    ) -> None:
         self._confirmation_service = confirmation_service or get_confirmation_service()
+        self._reuse_policy = reuse_policy or ToolCallReusePolicy()
 
     async def execute(
         self,
@@ -52,9 +70,18 @@ class OperationExecutor:
 
         if not operation:
             logger.error(f"Operation not found: {operation_call.operation_slug}")
-            return ToolResult.fail(
-                resolved_slug_error or f"Operation '{operation_call.operation_slug}' not found"
-            ), []
+            message = resolved_slug_error or f"Operation '{operation_call.operation_slug}' not found"
+            code = (
+                RuntimeErrorCode.OPERATION_AMBIGUOUS
+                if resolved_slug_error and "ambiguous" in resolved_slug_error.lower()
+                else RuntimeErrorCode.OPERATION_UNAVAILABLE
+            )
+            err = OperationExecutionError(
+                code=code,
+                message=message,
+                retryable=False,
+            )
+            return ToolResult.fail(message, **err.to_metadata()), []
 
         if operation.operation_slug != operation_call.operation_slug:
             logger.info(
@@ -70,8 +97,15 @@ class OperationExecutor:
 
         validation_error = self._validate_args(operation, operation_call.arguments)
         if validation_error:
-            logger.warning(f"Operation args validation failed: {validation_error}")
-            return ToolResult.fail(validation_error), []
+            logger.warning(
+                "Operation args validation failed: %s (%s)",
+                validation_error.message,
+                validation_error.field_path or "root",
+            )
+            return ToolResult.fail(
+                validation_error.to_user_message(),
+                **validation_error.to_metadata(),
+            ), []
 
         self._ensure_confirmation_if_required(
             operation=operation,
@@ -79,11 +113,29 @@ class OperationExecutor:
             ctx=ctx,
         )
 
+        reused = self._reuse_policy.maybe_reuse(
+            operation_slug=operation_call.operation_slug,
+            arguments=operation_call.arguments,
+            ctx=ctx,
+        )
+        if reused is not None:
+            result, sources = reused
+            logger.info(
+                "Reused tool result for operation '%s' from in-turn ledger",
+                operation_call.operation_slug,
+            )
+            return result, sources
+
         try:
             logger.info(f"Executing operation: {operation_call.operation_slug}")
             executor = ctx.get_runtime_deps().operation_executor
             if not executor:
-                return ToolResult.fail("Operation executor is not configured"), []
+                err = OperationExecutionError(
+                    code=RuntimeErrorCode.OPERATION_EXECUTION_FAILED,
+                    message="Operation executor is not configured",
+                    retryable=False,
+                )
+                return ToolResult.fail(err.message, **err.to_metadata()), []
 
             if timeout_s is not None:
                 result = await asyncio.wait_for(
@@ -113,16 +165,24 @@ class OperationExecutor:
             logger.error(
                 f"Operation {operation_call.operation_slug} timed out after {timeout_s}s",
             )
-            return ToolResult.fail(
-                f"Execution timed out after {timeout_s} seconds",
-            ), []
+            err = OperationExecutionError(
+                code=RuntimeErrorCode.OPERATION_TIMEOUT,
+                message=f"Execution timed out after {timeout_s} seconds",
+                retryable=True,
+            )
+            return ToolResult.fail(err.message, **err.to_metadata()), []
 
         except Exception as e:
             logger.error(
                 f"Operation {operation_call.operation_slug} execution failed: {e}",
                 exc_info=True,
             )
-            return ToolResult.fail(str(e)), []
+            err = OperationExecutionError(
+                code=RuntimeErrorCode.OPERATION_EXECUTION_FAILED,
+                message=str(e),
+                retryable=True,
+            )
+            return ToolResult.fail(err.message, **err.to_metadata()), []
 
     def _ensure_confirmation_if_required(
         self,
@@ -212,33 +272,66 @@ class OperationExecutor:
         return None, None
 
     @staticmethod
-    def _validate_args(operation: ResolvedOperation, arguments: Dict[str, Any]) -> Optional[str]:
+    def _validate_args(
+        operation: ResolvedOperation,
+        arguments: Dict[str, Any],
+    ) -> Optional[OperationValidationError]:
         schema = operation.input_schema or {}
-        required = schema.get("required", [])
-        properties = schema.get("properties", {})
-        for field in required:
-            if field not in arguments:
-                return f"Missing required field: {field}"
-            field_schema = properties.get(field, {})
-            expected_type = field_schema.get("type")
-            if expected_type and not OperationExecutor._check_type(arguments[field], expected_type):
-                return f"Invalid type for field '{field}': expected {expected_type}"
-        return None
+        if not schema:
+            return None
+
+        if _JSONSCHEMA_AVAILABLE:
+            return OperationExecutionFacade._validate_args_jsonschema(arguments, schema)
+        return OperationExecutionFacade._validate_args_builtin(arguments, schema)
 
     @staticmethod
-    def _check_type(value: Any, expected_type: str) -> bool:
-        type_map = {
-            "string": str,
-            "integer": int,
-            "number": (int, float),
-            "boolean": bool,
-            "array": list,
-            "object": dict,
-        }
-        expected = type_map.get(expected_type)
-        if expected is None:
-            return True
-        return isinstance(value, expected)
+    def _validate_args_jsonschema(
+        arguments: Dict[str, Any],
+        schema: Dict[str, Any],
+    ) -> Optional[OperationValidationError]:
+        validator = _jsonschema.Draft202012Validator(schema)
+        error = next(iter(validator.iter_errors(arguments)), None)
+        if error is None:
+            return None
+        field_path = "$" + "".join(
+            f"[{p!r}]" if isinstance(p, str) else f"[{p}]"
+            for p in error.absolute_path
+        ) if error.absolute_path else "$"
+        return OperationValidationError(
+            code=RuntimeErrorCode.OPERATION_INVALID_ARGS,
+            message=error.message,
+            field_path=field_path,
+            retryable=True,
+        )
+
+    @staticmethod
+    def _validate_args_builtin(
+        arguments: Dict[str, Any],
+        schema: Dict[str, Any],
+    ) -> Optional[OperationValidationError]:
+        """Minimal fallback validator used when jsonschema is not installed."""
+        required = schema.get("required", [])
+        properties = schema.get("properties", {})
+        if isinstance(required, list):
+            for field in required:
+                if field not in arguments:
+                    return OperationValidationError(
+                        code=RuntimeErrorCode.OPERATION_INVALID_ARGS,
+                        message=f"Missing required field: {field}",
+                        field_path=f"$.{field}",
+                        retryable=True,
+                    )
+        additional_allowed = schema.get("additionalProperties", True)
+        if additional_allowed is False and isinstance(properties, dict):
+            extra_keys = [k for k in arguments if k not in properties]
+            if extra_keys:
+                return OperationValidationError(
+                    code=RuntimeErrorCode.OPERATION_INVALID_ARGS,
+                    message=f"Unexpected field(s): {', '.join(extra_keys)}",
+                    field_path="$",
+                    retryable=True,
+                )
+        return None
 
     @staticmethod
     def format_result_for_context(result: ToolResult) -> str:
@@ -298,5 +391,6 @@ class OperationExecutor:
         return ". ".join(parts)
 
 
-# Backward-compatible alias.
-ToolExecutor = OperationExecutor
+# Backward-compatible aliases.
+OperationExecutor = OperationExecutionFacade
+ToolExecutor = OperationExecutionFacade

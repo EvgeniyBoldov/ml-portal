@@ -15,6 +15,8 @@ async def build_collection_response(service: CollectionService, collection) -> C
             collection_id=collection.current_version.collection_id,
             version=collection.current_version.version,
             status=collection.current_version.status,
+            data_description=collection.current_version.data_description,
+            usage_purpose=collection.current_version.usage_purpose,
             notes=collection.current_version.notes,
             created_at=collection.current_version.created_at.isoformat(),
             updated_at=collection.current_version.updated_at.isoformat(),

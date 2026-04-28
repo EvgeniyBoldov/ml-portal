@@ -24,7 +24,7 @@ from app.agents.runtime_logging_resolver import RuntimeLoggingResolver
 from app.agents.runtime_sandbox_resolver import RuntimeSandboxResolver
 from app.agents.runtime_trace_logger import RuntimeTraceLogger
 from app.agents.runtime.prompt_assembler import PromptAssembler
-from app.agents.runtime.tools import OperationExecutor
+from app.agents.runtime.tools import OperationExecutionFacade
 from app.core.logging import get_logger
 
 if TYPE_CHECKING:
@@ -53,7 +53,7 @@ class BaseRuntime(ABC):
         self.logging_resolver = RuntimeLoggingResolver()
         self.sandbox_resolver = RuntimeSandboxResolver()
         self.config_resolver = ExecutionConfigResolver()
-        self.tools = OperationExecutor()
+        self.tools = OperationExecutionFacade()
         self.prompts = AgentPromptRenderer()
         self.prompt_assembler = PromptAssembler(self.prompts)
         self.run_store = run_store

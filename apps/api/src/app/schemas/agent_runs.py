@@ -62,14 +62,21 @@ class AgentRunListResponse(BaseModel):
 
 class AgentRunTracePackResponse(BaseModel):
     """Deterministic trace pack for replay/debug."""
+    trace_pack_version: str = "runtime.trace_pack.v2"
     run_id: UUID
     agent_slug: str
     status: str
     logging_level: str
     context_snapshot: Optional[Dict[str, Any]] = None
+    runtime_config: Dict[str, Any] = {}
+    budget: Dict[str, Any] = {}
     operations: List[str] = []
+    planner_io: List[Dict[str, Any]] = []
+    policy_decisions: List[Dict[str, Any]] = []
+    llm_model_config: Dict[str, Any] = {}
     prompt_surfaces: List[Dict[str, Any]] = []
     tool_io: List[Dict[str, Any]] = []
+    memory_bundle: Dict[str, Any] = {}
     errors: List[Dict[str, Any]] = []
     timeline: List[Dict[str, Any]] = []
     total_steps: int = 0
@@ -140,3 +147,21 @@ class AgentRunFilter(BaseModel):
     status: Optional[str] = None
     from_date: Optional[datetime] = None
     to_date: Optional[datetime] = None
+
+
+class RuntimeEvalCaseSummaryResponse(BaseModel):
+    case_key: str
+    passed: bool
+    score: float
+    dimensions: Dict[str, float] = {}
+    notes: List[str] = []
+
+
+class RuntimeDiagnosticsSummaryResponse(BaseModel):
+    run_id: UUID
+    status: str
+    agent_slug: str
+    operations: List[str] = []
+    memory_sections: List[Dict[str, Any]] = []
+    blocked_or_confirmed_steps: List[Dict[str, Any]] = []
+    eval_summary: List[RuntimeEvalCaseSummaryResponse] = []

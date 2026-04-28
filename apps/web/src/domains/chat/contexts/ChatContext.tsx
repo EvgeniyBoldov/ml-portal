@@ -696,14 +696,28 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           else if (eventType === 'error') {
             try {
               const parsed = JSON.parse(data);
+              applyEnvelope(parsed as Record<string, unknown>);
+              applyOrchestrationState(parsed as Record<string, unknown>);
               const errorMessage = String(parsed?.error || data || 'Ошибка');
               const errorCode = String(parsed?.code || '').trim();
+              // Error must unblock chat input. Waiting states are valid only on explicit
+              // waiting_input / confirmation_required + stop events.
+              setPendingConfirmations([]);
+              setPendingInput(null);
+              setStopReason(null);
+              setPausedRunId(null);
+              setStreamStatus(null);
               if (errorCode) {
                 onError(`${errorCode}: ${errorMessage}`);
               } else {
                 onError(errorMessage);
               }
             } catch {
+              setPendingConfirmations([]);
+              setPendingInput(null);
+              setStopReason(null);
+              setPausedRunId(null);
+              setStreamStatus(null);
               onError(data);
             }
           }
@@ -723,6 +737,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       const errorMsg = err?.message || 'Ошибка отправки сообщения';
       setError(errorMsg);
       onError(errorMsg);
+      setPendingConfirmations([]);
+      setPendingInput(null);
+      setStopReason(null);
+      setPausedRunId(null);
       setStreamStatus(null);
       setOrchestrationEnvelope(null);
       setOrchestrationState(null);

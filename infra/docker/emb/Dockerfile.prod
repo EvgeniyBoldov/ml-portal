@@ -1,57 +1,23 @@
 # =============================================================================
-# ML Portal Embedding Service - Production Multi-Stage Dockerfile
+# ML Portal Embedding Service - Production Dockerfile
 # =============================================================================
 
-# =============================================================================
-# Stage 1: Base Builder
-# =============================================================================
-FROM python:3.11-slim AS base
+ARG BASE_IMAGE=ml-portal-base-ml:v1
+
+FROM ${BASE_IMAGE} AS dependencies
+
+USER root
 
 WORKDIR /app
-
-# Install system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    curl \
-    && rm -rf /var/lib/apt/lists/* \
-    && apt-get clean
-
-# =============================================================================
-# Stage 2: Dependencies Builder
-# =============================================================================
-FROM base AS dependencies
-
-# Copy requirements
-COPY infra/docker/base/requirements.ml.txt /tmp/requirements.base.txt
 COPY infra/docker/emb/requirements.txt /tmp/requirements.emb.txt
+RUN python -m pip install --no-cache-dir -r /tmp/requirements.emb.txt
 
-# Install Python dependencies
-RUN python -m pip install --upgrade pip && \
-    pip install --no-cache-dir -r /tmp/requirements.base.txt && \
-    pip install --no-cache-dir -r /tmp/requirements.emb.txt
+FROM ${BASE_IMAGE} AS production
 
-# =============================================================================
-# Stage 3: Production Runtime
-# =============================================================================
-FROM python:3.11-slim AS production
-
+USER root
 WORKDIR /app
-
-# Install only runtime dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
-    && rm -rf /var/lib/apt/lists/* \
-    && apt-get clean
-
-# Copy Python packages from dependencies stage
 COPY --from=dependencies /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
 COPY --from=dependencies /usr/local/bin /usr/local/bin
-
-# Create non-root user
-RUN groupadd -r appuser && useradd -r -g appuser -u 1000 appuser && \
-    chown -R appuser:appuser /app
-
-# Copy application code
 COPY --chown=appuser:appuser apps/emb/src/app/ /app/
 
 # Set environment variables

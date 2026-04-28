@@ -3,7 +3,7 @@ PlanningStage — the planner loop.
 
 For each iteration:
     1. Ask Planner for the next NextStep.
-    2. Record it into WorkingMemory + emit a PLANNER_STEP event.
+    2. Record step into RuntimeTurnState + emit a PLANNER_STEP event.
     3. Dispatch on kind:
          CALL_AGENT → AgentExecutionPort.execute(...) → stream events
          ASK_USER   → terminal (waiting_input)
@@ -18,13 +18,13 @@ FinalizationStage handles synthesizer + rolling summary + terminal persist.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, AsyncIterator, Dict, List, Optional
 from uuid import UUID
 
 from app.agents.context import ToolContext
 from app.core.logging import get_logger
+from app.runtime.budget import RuntimeBudgetTracker
 from app.runtime.contracts import (
     NextStepKind,
     PipelineRequest,
@@ -32,14 +32,12 @@ from app.runtime.contracts import (
 )
 from app.runtime.envelope import PhasedEvent
 from app.runtime.events import OrchestrationPhase, RuntimeEvent, RuntimeEventType
-from app.runtime.memory.working_memory import (
-    PlannerStepRecord,
-    WorkingMemory,
-)
+from app.runtime.operation_errors import RuntimeErrorCode
 from app.runtime.ports import (
     AgentExecutionPort,
     PlannerServicePort,
 )
+from app.runtime.turn_state import RuntimeTurnState
 
 logger = get_logger(__name__)
 
@@ -69,18 +67,18 @@ class PlanningStage:
         planner: PlannerServicePort,
         agent_executor: AgentExecutionPort,
         max_iterations: int,
-        max_wall_time_ms: int,
+        budget_tracker: Optional[RuntimeBudgetTracker] = None,
     ) -> None:
         self._planner = planner
         self._agent = agent_executor
         self._max_iterations = max_iterations
-        self._max_wall_time_ms = max_wall_time_ms  # reserved for deadline checks
+        self._budget_tracker = budget_tracker
         self.outcome: Optional[PlanningOutcome] = None
 
     async def run(
         self,
         *,
-        memory: WorkingMemory,
+        runtime_state: RuntimeTurnState,
         request: PipelineRequest,
         ctx: ToolContext,
         user_id: UUID,
@@ -88,23 +86,35 @@ class PlanningStage:
         available_agents: List[Dict[str, Any]],
         platform_config: Dict[str, Any],
     ) -> AsyncIterator[PhasedEvent]:
-        run_id = memory.run_id
-        chat_id = memory.chat_id
-        memory.goal = memory.goal or request.request_text
+        run_id = runtime_state.run_id
+        chat_id = runtime_state.chat_id
+        runtime_state.goal = runtime_state.goal or request.request_text
+        runtime_state.current_user_query = request.request_text
+        planner_agents: List[Dict[str, Any]] = list(available_agents or [])
 
-        while memory.iter_count < self._max_iterations:
+        while runtime_state.iter_count < self._max_iterations:
+            if self._budget_tracker is not None and not self._budget_tracker.can_run_planner_iteration():
+                break
+            if self._budget_tracker is not None:
+                self._budget_tracker.record_planner_iteration()
             yield PhasedEvent(
                 RuntimeEvent.status(
-                    "planner_thinking", iteration=memory.iter_count + 1
+                    "planner_thinking",
+                    iteration=runtime_state.iter_count + 1,
+                    budget=(
+                        self._budget_tracker.snapshot()
+                        if self._budget_tracker is not None
+                        else None
+                    ),
                 ),
                 OrchestrationPhase.PLANNER,
             )
 
             try:
                 step = await self._planner.next_step(
-                    memory=memory,
-                    available_agents=available_agents,
-                    outline=memory.outline,
+                    runtime_state=runtime_state,
+                    available_agents=planner_agents,
+                    outline=runtime_state.outline,
                     platform_config=platform_config,
                     chat_id=chat_id,
                     tenant_id=tenant_id,
@@ -113,11 +123,10 @@ class PlanningStage:
                 )
             except Exception as exc:
                 logger.error(
-                    "Planner failure on iter=%s: %s", memory.iter_count, exc, exc_info=True
+                    "Planner failure on iter=%s: %s", runtime_state.iter_count, exc, exc_info=True
                 )
-                memory.status = PipelineStopReason.FAILED.value
-                memory.final_error = f"planner_exception: {exc}"
-                memory.finished_at = datetime.now(timezone.utc)
+                runtime_state.status = PipelineStopReason.FAILED.value
+                runtime_state.final_error = f"planner_exception: {exc}"
                 yield PhasedEvent(
                     RuntimeEvent.error(f"Planner failed: {exc}", recoverable=False),
                     OrchestrationPhase.PLANNER,
@@ -129,18 +138,18 @@ class PlanningStage:
                 )
                 return
 
-            step_record = PlannerStepRecord(
-                iteration=memory.iter_count + 1,
-                kind=step.kind.value,
-                agent_slug=step.agent_slug,
-                phase_id=step.phase_id,
-                rationale=step.rationale,
-            )
-            memory.add_planner_step(step_record)
+            step_record = {
+                "iteration": runtime_state.iter_count + 1,
+                "kind": step.kind.value,
+                "agent_slug": step.agent_slug,
+                "phase_id": step.phase_id,
+                "rationale": step.rationale,
+            }
+            runtime_state.add_planner_step(step_record)
 
             yield PhasedEvent(
                 RuntimeEvent.planner_step(
-                    iteration=step_record.iteration,
+                    iteration=runtime_state.iter_count,
                     kind=step.kind.value,
                     payload={
                         "agent_slug": step.agent_slug,
@@ -161,8 +170,8 @@ class PlanningStage:
                 # chitchat, purely-knowledge reply). Stream its text verbatim
                 # as a single delta + final; no synthesizer roundtrip.
                 answer = (step.final_answer or "").strip()
-                memory.final_answer = answer
-                memory.status = PipelineStopReason.COMPLETED.value
+                runtime_state.final_answer = answer
+                runtime_state.status = PipelineStopReason.COMPLETED.value
                 if answer:
                     yield PhasedEvent(
                         RuntimeEvent.delta(answer),
@@ -182,6 +191,7 @@ class PlanningStage:
                 return
 
             if step.kind == NextStepKind.FINAL:
+                runtime_state.status = PipelineStopReason.COMPLETED.value
                 self.outcome = PlanningOutcome(
                     kind=PlanningOutcomeKind.NEEDS_FINAL,
                     stop_reason=PipelineStopReason.COMPLETED,
@@ -191,8 +201,9 @@ class PlanningStage:
 
             if step.kind in (NextStepKind.ASK_USER, NextStepKind.CLARIFY):
                 question = step.question or "Нужны дополнительные данные для продолжения."
-                memory.add_open_question(question)
-                memory.status = PipelineStopReason.WAITING_INPUT.value
+                if question not in runtime_state.open_questions:
+                    runtime_state.open_questions.append(question)
+                runtime_state.status = PipelineStopReason.WAITING_INPUT.value
                 yield PhasedEvent(
                     RuntimeEvent.waiting_input(question, run_id=str(run_id)),
                     OrchestrationPhase.PLANNER,
@@ -212,9 +223,8 @@ class PlanningStage:
                 return
 
             if step.kind == NextStepKind.ABORT:
-                memory.status = PipelineStopReason.ABORTED.value
-                memory.final_error = step.rationale
-                memory.finished_at = datetime.now(timezone.utc)
+                runtime_state.status = PipelineStopReason.ABORTED.value
+                runtime_state.final_error = step.rationale
                 yield PhasedEvent(
                     RuntimeEvent.error(f"Aborted: {step.rationale}", recoverable=False),
                     OrchestrationPhase.PLANNER,
@@ -229,18 +239,17 @@ class PlanningStage:
             # kind == CALL_AGENT
             async for event in self._agent.execute(
                 step=step,
-                memory=memory,
+                runtime_state=runtime_state,
                 messages=request.messages,
                 ctx=ctx,
                 user_id=user_id,
                 tenant_id=tenant_id,
                 platform_config=platform_config,
-                sandbox_overrides=request.sandbox_overrides,
                 model=request.model,
             ):
                 yield PhasedEvent(event, OrchestrationPhase.AGENT)
                 if event.type == RuntimeEventType.CONFIRMATION_REQUIRED:
-                    memory.status = PipelineStopReason.WAITING_CONFIRMATION.value
+                    runtime_state.status = PipelineStopReason.WAITING_CONFIRMATION.value
                     message = str(event.data.get("summary") or event.data.get("message") or "").strip() or None
                     yield PhasedEvent(
                         RuntimeEvent.stop(
@@ -256,9 +265,42 @@ class PlanningStage:
                     )
                     return
 
+            # Early degrade path: sub-agent failed with a known hard
+            # token/payload limit error. Additional planner iterations usually
+            # repeat the same failing call and add overhead.
+            if self._last_agent_unavailable(runtime_state, step.agent_slug):
+                removed = self._remove_agent(planner_agents, step.agent_slug)
+                if removed:
+                    yield PhasedEvent(
+                        RuntimeEvent.status(
+                            "planner_agent_removed_unavailable",
+                            agent=step.agent_slug,
+                            remaining_agents=len(planner_agents),
+                        ),
+                        OrchestrationPhase.PLANNER,
+                    )
+            if self._has_non_retryable_agent_failure(runtime_state, step.agent_slug):
+                runtime_state.add_runtime_fact(
+                    "Agent failed with non-retryable runtime error; finalizing from collected facts.",
+                    source="pipeline",
+                )
+                yield PhasedEvent(
+                    RuntimeEvent.status("agent_non_retryable_failure_finalize"),
+                    OrchestrationPhase.PLANNER,
+                )
+                self.outcome = PlanningOutcome(
+                    kind=PlanningOutcomeKind.NEEDS_FINAL,
+                    stop_reason=PipelineStopReason.FAILED,
+                    planner_hint=None,
+                )
+                return
 
-            if memory.detect_loop():
-                memory.add_fact(
+            loop_threshold = (
+                self._budget_tracker.budget.loop_threshold
+                if self._budget_tracker else 3
+            )
+            if runtime_state.detect_loop(threshold=loop_threshold):
+                runtime_state.add_runtime_fact(
                     "Loop detected by runtime; synthesizing from facts.",
                     source="pipeline",
                 )
@@ -275,11 +317,94 @@ class PlanningStage:
 
         # Max iterations reached → synthesize whatever we have.
         yield PhasedEvent(
-            RuntimeEvent.status("max_iters_reached", iterations=memory.iter_count),
+            RuntimeEvent.status(
+                "max_iters_reached",
+                iterations=runtime_state.iter_count,
+                budget=(
+                    self._budget_tracker.snapshot()
+                    if self._budget_tracker is not None
+                    else None
+                ),
+            ),
             OrchestrationPhase.PLANNER,
         )
+        runtime_state.status = PipelineStopReason.MAX_ITERS.value
         self.outcome = PlanningOutcome(
             kind=PlanningOutcomeKind.NEEDS_FINAL,
             stop_reason=PipelineStopReason.MAX_ITERS,
             planner_hint=None,
         )
+
+    @staticmethod
+    def _has_non_retryable_agent_failure(memory_or_state, agent_slug: Optional[str]) -> bool:
+        results = list(getattr(memory_or_state, "agent_results", []) or [])
+        if not results:
+            return False
+        last = results[-1]
+        if isinstance(last, dict):
+            last_slug = str(last.get("agent_slug") or last.get("agent") or "")
+            success = bool(last.get("success", True))
+            retryable = last.get("retryable")
+            error_code = str(last.get("error_code") or "")
+        else:
+            last_slug = str(getattr(last, "agent_slug", "") or "")
+            success = bool(getattr(last, "success", True))
+            retryable = getattr(last, "retryable", None)
+            error_code = str(getattr(last, "error_code", "") or "")
+        if agent_slug and last_slug != agent_slug:
+            return False
+        if success:
+            return False
+        if retryable is False:
+            return True
+        non_retryable_codes = {
+            RuntimeErrorCode.OPERATION_UNAVAILABLE.value,
+            RuntimeErrorCode.OPERATION_AMBIGUOUS.value,
+            RuntimeErrorCode.AGENT_NON_RETRYABLE_OPERATION_FAILURE.value,
+            RuntimeErrorCode.AGENT_REQUIRED_OPERATION_CALL_MISSING.value,
+            RuntimeErrorCode.AGENT_MAX_TOOL_CALLS_EXCEEDED.value,
+            RuntimeErrorCode.AGENT_WALL_TIME_EXCEEDED.value,
+            RuntimeErrorCode.AGENT_PRECHECK_FAILED.value,
+            RuntimeErrorCode.AGENT_UNAVAILABLE.value,
+            RuntimeErrorCode.AGENT_NO_OPERATIONS.value,
+        }
+        return error_code in non_retryable_codes
+
+    @staticmethod
+    def _last_agent_unavailable(memory_or_state, agent_slug: Optional[str]) -> bool:
+        results = list(getattr(memory_or_state, "agent_results", []) or [])
+        if not results:
+            return False
+        last = results[-1]
+        if isinstance(last, dict):
+            last_slug = str(last.get("agent_slug") or last.get("agent") or "")
+            success = bool(last.get("success", True))
+            error_code = str(last.get("error_code") or "")
+        else:
+            last_slug = str(getattr(last, "agent_slug", "") or "")
+            success = bool(getattr(last, "success", True))
+            error_code = str(getattr(last, "error_code", "") or "")
+        if agent_slug and last_slug != agent_slug:
+            return False
+        if success:
+            return False
+        return error_code in {
+            RuntimeErrorCode.AGENT_PRECHECK_FAILED.value,
+            RuntimeErrorCode.AGENT_UNAVAILABLE.value,
+            RuntimeErrorCode.AGENT_NO_OPERATIONS.value,
+        }
+
+    @staticmethod
+    def _remove_agent(
+        available_agents: List[Dict[str, Any]],
+        agent_slug: Optional[str],
+    ) -> bool:
+        if not agent_slug or not available_agents:
+            return False
+        before = len(available_agents)
+        available_agents[:] = [
+            item
+            for item in available_agents
+            if str((item or {}).get("slug") or "").strip() != agent_slug
+        ]
+        return len(available_agents) != before

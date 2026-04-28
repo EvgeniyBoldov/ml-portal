@@ -32,7 +32,7 @@ class TestChatTurnOrchestrator:
         orchestrator.turn_service.complete_turn = AsyncMock()
         orchestrator.persistence_service.create_user_message = AsyncMock(return_value=SimpleNamespace(message_id="user-1", created_at="2026-01-01T12:00:00Z"))
         orchestrator.persistence_service.create_assistant_message = AsyncMock(return_value=SimpleNamespace(message_id="assistant-1", created_at="2026-01-01T12:00:01Z"))
-        orchestrator.context_service.load_chat_context_with_summary = AsyncMock(return_value=[])
+        orchestrator.context_service.load_chat_context = AsyncMock(return_value=[])
         orchestrator.title_service.generate_chat_title = AsyncMock(return_value=None)
 
         async def fake_run_with_router(**kwargs):
@@ -79,7 +79,7 @@ class TestChatTurnOrchestrator:
         orchestrator.turn_service.attach_user_message = AsyncMock()
         orchestrator.turn_service.fail_turn = AsyncMock()
         orchestrator.persistence_service.create_user_message = AsyncMock(return_value=SimpleNamespace(message_id="user-1", created_at="2026-01-01T12:00:00Z"))
-        orchestrator.context_service.load_chat_context_with_summary = AsyncMock(return_value=[{"role": "user", "content": "prev"}])
+        orchestrator.context_service.load_chat_context = AsyncMock(return_value=[{"role": "user", "content": "prev"}])
 
         async def fake_run_with_router(**kwargs):
             if False:
@@ -122,7 +122,7 @@ class TestChatTurnOrchestrator:
         orchestrator.turn_service.attach_user_message = AsyncMock()
         orchestrator.turn_service.pause_turn = AsyncMock()
         orchestrator.persistence_service.create_user_message = AsyncMock(return_value=SimpleNamespace(message_id="user-1", created_at="2026-01-01T12:00:00Z"))
-        orchestrator.context_service.load_chat_context_with_summary = AsyncMock(return_value=[])
+        orchestrator.context_service.load_chat_context = AsyncMock(return_value=[])
         orchestrator.title_service.generate_chat_title = AsyncMock(return_value=None)
 
         async def fake_run_with_router(**kwargs):

@@ -7,7 +7,8 @@
 1. Только `async` реализация.
 2. Полная типизация (`type hints`) в публичных сигнатурах.
 3. Никаких хардкодов secret/ключей/endpoint credentials.
-4. Никакого обхода tenant isolation.
+4. Никакого обхода effective access policy. Tenant — отдел/рабочая область
+   локальной компании, а не hard SaaS boundary.
 
 ## 2) Где и как создавать tool
 
@@ -31,7 +32,7 @@
 ## 4) Контракты и валидация
 
 1. `input_schema` должен описывать required поля.
-2. Все аргументы валидируются до выполнения тяжелой логики.
+2. Все аргументы валидируются до выполнения тяжелой логики (JSON Schema, typed errors).
 3. `output_schema` должен соответствовать реально возвращаемой структуре.
 4. Breaking changes — только новой версией инструмента.
 
@@ -44,10 +45,12 @@
 
 ## 6) Доступы, tenant, data safety
 
-1. Всегда учитывать `ctx.tenant_id` при data access.
+1. Всегда учитывать effective access policy при data access; `ctx.tenant_id`
+   сам по себе не запрещает разрешенный sharing между отделами.
 2. Если нужны user-bound ограничения — учитывать `ctx.user_id`/scopes.
 3. Нельзя возвращать или логировать креды/секреты.
 4. Любые внешние вызовы должны идти через существующие сервисы/адаптеры.
+5. Для MCP-integration: broker-first credential flow является default; raw credential fallback допускается только explicit local/dev режимом.
 
 ## 7) Логирование (обязательно)
 
@@ -59,6 +62,10 @@
 - latency/объем результата (без секретов).
 
 Формат — structured entries через `ToolLogger`.
+
+Дополнительно:
+- Любой trace/log/admin payload должен проходить через runtime redaction policy
+  (`token/password/api_key/access_token/authorization/cookie/db_dsn/database_url`).
 
 ## 8) Тесты (обязательно)
 

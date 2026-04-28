@@ -44,6 +44,9 @@ class ConfirmationToken:
     nonce: str
 
 
+MAX_FALLBACK_NONCE_STORE_SIZE = 2_000  # Safety cap when Redis is unavailable
+
+
 class ConfirmationService:
     _fallback_nonce_store: dict[str, float] = {}
     _fallback_nonce_lock = threading.Lock()
@@ -136,6 +139,12 @@ class ConfirmationService:
             stale = [k for k, ts in self._fallback_nonce_store.items() if ts <= now]
             for key in stale:
                 self._fallback_nonce_store.pop(key, None)
+            # Enforce size cap: evict oldest entries (lowest expiry) to stay within bound.
+            overflow = len(self._fallback_nonce_store) - MAX_FALLBACK_NONCE_STORE_SIZE + 1
+            if overflow > 0:
+                oldest = sorted(self._fallback_nonce_store, key=lambda k: self._fallback_nonce_store[k])
+                for key in oldest[:overflow]:
+                    self._fallback_nonce_store.pop(key, None)
             if token_key in self._fallback_nonce_store:
                 return False
             self._fallback_nonce_store[token_key] = expire_at

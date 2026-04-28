@@ -130,7 +130,6 @@ class ExecutionPreflight:
         allow_partial: bool = False,
         agent_version_id: Optional[UUID] = None,
         platform_config: Optional[Dict[str, Any]] = None,
-        sandbox_overrides: Optional[Dict[str, Any]] = None,
         include_routable_agents: bool = True,
         routable_agents_override: Optional[List[Any]] = None,
         effective_permissions_override: Optional[EffectivePermissions] = None,
@@ -170,24 +169,13 @@ class ExecutionPreflight:
             default_collection_allow = bool(
                 (platform_config or {}).get("default_collection_allow", True)
             )
-            operation_result = await self.operation_router.resolve(
+            operation_result = await self._resolve_operations(
                 user_id=user_id,
                 tenant_id=tenant_id,
-                effective_permissions=effective_permissions_override,
-                default_collection_allow=default_collection_allow,
-                sandbox_overrides=sandbox_overrides,
-            )
-            if not self.runtime_rbac_resolver.is_agent_allowed(
-                effective_permissions=operation_result.effective_permissions,
                 agent_slug=agent_slug,
-                default_allow=True,
-            ):
-                raise AgentUnavailableError(
-                    f"Access denied for agent '{agent_slug}' by RBAC policy",
-                    missing=MissingRequirements(),
-                    reason_code="rbac_agent_invoke_denied",
-                    details={"agent_slug": agent_slug},
-                )
+                effective_permissions_override=effective_permissions_override,
+                default_collection_allow=default_collection_allow,
+            )
             routing_reasons.append(
                 f"Permissions resolved: "
                 f"{len(operation_result.resolved_operations)} operations, "
@@ -195,49 +183,13 @@ class ExecutionPreflight:
             )
 
             # 2b. Apply unified collection access filter.
-            #
-            # Two layers compose into an intersection (option B):
-            #   - Agent capability: `agent.allowed_collection_ids` declares which
-            #     collections this agent is allowed to work with (None/empty → any).
-            #   - User/tenant RBAC: `effective_permissions.is_collection_allowed(slug)`
-            #     decides whether the caller is permitted to see the collection
-            #     (honours `default_collection_allow` for unresolved slugs).
-            capability_ids: Optional[set[str]] = None
-            if agent_result.agent and agent_result.agent.allowed_collection_ids:
-                capability_ids = {str(cid) for cid in agent_result.agent.allowed_collection_ids}
-
-            def _collection_passes(collection_id, collection_slug: Optional[str]) -> bool:
-                cid_str = str(collection_id) if collection_id else ""
-                if capability_ids is not None and cid_str not in capability_ids:
-                    return False
-                if collection_slug and operation_result.effective_permissions is not None:
-                    if not operation_result.effective_permissions.is_collection_allowed(collection_slug):
-                        return False
-                return True
-
-            before_count = len(operation_result.resolved_data_instances)
-            filtered_instances = [
-                inst for inst in operation_result.resolved_data_instances
-                if _collection_passes(inst.collection_id, inst.collection_slug)
-            ]
-            if len(filtered_instances) != before_count:
-                operation_result.resolved_data_instances = filtered_instances
-                allowed_instance_slugs = {inst.slug for inst in filtered_instances}
-                allowed_op_slugs = {
-                    op.operation_slug
-                    for op in operation_result.resolved_operations
-                    if op.data_instance_slug in allowed_instance_slugs
-                }
-                operation_result.resolved_operations = [
-                    op for op in operation_result.resolved_operations
-                    if op.operation_slug in allowed_op_slugs
-                ]
-                operation_result.execution_graph.filter_by_operation_slugs(allowed_op_slugs)
-                routing_reasons.append(
-                    f"Collection access filter: {before_count} → {len(filtered_instances)} instances "
-                    f"(capability={'set' if capability_ids is not None else 'any'}, "
-                    f"rbac_default_allow={default_collection_allow})"
-                )
+            collection_filter_reason = self._apply_collection_filter(
+                operation_result=operation_result,
+                agent=agent_result.agent,
+                default_collection_allow=default_collection_allow,
+            )
+            if collection_filter_reason:
+                routing_reasons.append(collection_filter_reason)
 
             # 2c. Apply platform operation policy filter before planner snapshot.
             filtered_out = apply_operation_policy_filter(
@@ -251,34 +203,13 @@ class ExecutionPreflight:
                 )
 
             # 3. Build available_actions from resolved operations
-            if include_routable_agents:
-                if routable_agents_override is not None:
-                    routable_agents = list(routable_agents_override)
-                    routing_reasons.append(
-                        f"Routable agents source: snapshot ({len(routable_agents)})"
-                    )
-                else:
-                    routable_agents = await self.agent_resolver.agent_service.list_routable_agents()
-            else:
-                routable_agents = []
-            if routable_agents:
-                routable_agents, denied_agent_slugs = self.runtime_rbac_resolver.filter_agents_by_slug(
-                    routable_agents,
-                    effective_permissions=operation_result.effective_permissions,
-                    slug_getter=lambda item: getattr(item, "slug", None),
-                    default_allow=True,
-                )
-                if denied_agent_slugs:
-                    routing_reasons.append(
-                        "RBAC filtered routable agents: "
-                        + ", ".join(sorted(denied_agent_slugs))
-                    )
-            agent_result_with_actions = await self.agent_resolver.available_actions_builder.build(
-                agent=agent_result.agent,
-                agent_version=agent_result.agent_version,
-                resolved_operations=operation_result.resolved_operations,
-                routable_agents=routable_agents,
+            agent_result_with_actions, agent_reasons = await self._build_available_actions(
+                agent_result=agent_result,
+                operation_result=operation_result,
+                include_routable_agents=include_routable_agents,
+                routable_agents_override=routable_agents_override,
             )
+            routing_reasons.extend(agent_reasons)
 
             # 4. Determine execution mode
             mode = self._determine_execution_mode(
@@ -367,6 +298,119 @@ class ExecutionPreflight:
             )
             raise PreflightError(f"Preflight failed: {e}") from e
 
+    async def _resolve_operations(
+        self,
+        *,
+        user_id: UUID,
+        tenant_id: UUID,
+        agent_slug: str,
+        effective_permissions_override: Optional[EffectivePermissions],
+        default_collection_allow: bool,
+    ) -> Any:
+        """Step 2: resolve permissions + data instances + operations, enforce RBAC."""
+        operation_result = await self.operation_router.resolve(
+            user_id=user_id,
+            tenant_id=tenant_id,
+            effective_permissions=effective_permissions_override,
+            default_collection_allow=default_collection_allow,
+        )
+        if not self.runtime_rbac_resolver.is_agent_allowed(
+            effective_permissions=operation_result.effective_permissions,
+            agent_slug=agent_slug,
+            default_allow=True,
+        ):
+            raise AgentUnavailableError(
+                f"Access denied for agent '{agent_slug}' by RBAC policy",
+                missing=MissingRequirements(),
+                reason_code="rbac_agent_invoke_denied",
+                details={"agent_slug": agent_slug},
+            )
+        return operation_result
+
+    def _apply_collection_filter(
+        self,
+        *,
+        operation_result: Any,
+        agent: Any,
+        default_collection_allow: bool,
+    ) -> Optional[str]:
+        """Step 2b: filter data instances/operations by agent capability + RBAC. Returns a log reason or None."""
+        capability_ids: Optional[set] = None
+        if agent and getattr(agent, "allowed_collection_ids", None):
+            capability_ids = {str(cid) for cid in agent.allowed_collection_ids}
+
+        def _passes(collection_id: Any, collection_slug: Optional[str]) -> bool:
+            cid_str = str(collection_id) if collection_id else ""
+            if capability_ids is not None and cid_str not in capability_ids:
+                return False
+            if collection_slug and operation_result.effective_permissions is not None:
+                if not operation_result.effective_permissions.is_collection_allowed(collection_slug):
+                    return False
+            return True
+
+        before_count = len(operation_result.resolved_data_instances)
+        filtered_instances = [
+            inst for inst in operation_result.resolved_data_instances
+            if _passes(inst.collection_id, inst.collection_slug)
+        ]
+        if len(filtered_instances) == before_count:
+            return None
+
+        operation_result.resolved_data_instances = filtered_instances
+        allowed_instance_slugs = {inst.slug for inst in filtered_instances}
+        allowed_op_slugs = {
+            op.operation_slug
+            for op in operation_result.resolved_operations
+            if op.data_instance_slug in allowed_instance_slugs
+        }
+        operation_result.resolved_operations = [
+            op for op in operation_result.resolved_operations
+            if op.operation_slug in allowed_op_slugs
+        ]
+        operation_result.execution_graph.filter_by_operation_slugs(allowed_op_slugs)
+        return (
+            f"Collection access filter: {before_count} → {len(filtered_instances)} instances "
+            f"(capability={'set' if capability_ids is not None else 'any'}, "
+            f"rbac_default_allow={default_collection_allow})"
+        )
+
+    async def _build_available_actions(
+        self,
+        *,
+        agent_result: Any,
+        operation_result: Any,
+        include_routable_agents: bool,
+        routable_agents_override: Optional[List[Any]],
+    ) -> tuple:
+        """Step 3: build AvailableActions with RBAC-filtered routable agents. Returns (actions, reasons)."""
+        reasons: List[str] = []
+        if include_routable_agents:
+            if routable_agents_override is not None:
+                routable_agents = list(routable_agents_override)
+                reasons.append(f"Routable agents source: snapshot ({len(routable_agents)})")
+            else:
+                routable_agents = await self.agent_resolver.agent_service.list_routable_agents()
+        else:
+            routable_agents = []
+
+        if routable_agents:
+            routable_agents, denied_slugs = self.runtime_rbac_resolver.filter_agents_by_slug(
+                routable_agents,
+                effective_permissions=operation_result.effective_permissions,
+                slug_getter=lambda item: getattr(item, "slug", None),
+                default_allow=True,
+            )
+            if denied_slugs:
+                reasons.append("RBAC filtered routable agents: " + ", ".join(sorted(denied_slugs)))
+
+        actions = await self.agent_resolver.available_actions_builder.build(
+            agent=agent_result.agent,
+            agent_version=agent_result.agent_version,
+            resolved_operations=operation_result.resolved_operations,
+            routable_agents=routable_agents,
+        )
+        return actions, reasons
+
     @staticmethod
     def _determine_execution_mode(
         missing: MissingRequirements,
@@ -377,9 +421,7 @@ class ExecutionPreflight:
         if not missing.has_missing:
             return ExecutionMode.FULL
         if available_operations_count > 0:
-            return ExecutionMode.PARTIAL
-        if allow_partial:
-            return ExecutionMode.PARTIAL
+            return ExecutionMode.PARTIAL if allow_partial else ExecutionMode.UNAVAILABLE
         return ExecutionMode.UNAVAILABLE
 
     @staticmethod

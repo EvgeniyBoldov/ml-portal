@@ -55,6 +55,8 @@ class CollectionVersionService:
         self,
         collection_id: UUID,
         *,
+        data_description: str | None = None,
+        usage_purpose: str | None = None,
         notes: str | None = None,
     ) -> CollectionVersion:
         """Create a new draft version."""
@@ -69,6 +71,8 @@ class CollectionVersionService:
             collection_id=collection_id,
             version=next_version,
             status=CollectionVersionStatus.DRAFT.value,
+            data_description=data_description,
+            usage_purpose=usage_purpose,
             notes=notes,
         )
         self.session.add(version)
@@ -80,6 +84,8 @@ class CollectionVersionService:
         collection_id: UUID,
         version: int,
         *,
+        data_description: object = None,
+        usage_purpose: object = None,
         notes: object = None,
         _UNSET: object = None,
     ) -> CollectionVersion:
@@ -88,7 +94,11 @@ class CollectionVersionService:
         if version_obj.status != CollectionVersionStatus.DRAFT.value:
             raise InvalidSchemaError("Only draft collection versions can be updated")
 
-        if notes is not _UNSET and notes is not None:
+        if data_description is not _UNSET:
+            version_obj.data_description = data_description
+        if usage_purpose is not _UNSET:
+            version_obj.usage_purpose = usage_purpose
+        if notes is not _UNSET:
             version_obj.notes = notes
 
         self.session.add(version_obj)
@@ -185,6 +195,8 @@ class CollectionVersionService:
             status=CollectionVersionStatus.PUBLISHED.value,
             retrieval_params={},
             prompt_context_params={},
+            data_description=collection.description,
+            usage_purpose="Initial version",
             notes="Initial version",
         )
 

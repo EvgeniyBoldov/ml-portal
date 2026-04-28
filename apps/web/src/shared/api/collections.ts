@@ -47,6 +47,8 @@ export interface CollectionVersion {
   collection_id: string;
   version: number;
   status: string;
+  data_description?: string | null;
+  usage_purpose?: string | null;
   notes?: string | null;
   created_at: string;
   updated_at: string;
@@ -59,10 +61,14 @@ export interface DataInstanceShort {
 }
 
 export interface CollectionVersionCreate {
+  data_description?: string | null;
+  usage_purpose?: string | null;
   notes?: string | null;
 }
 
 export interface CollectionVersionUpdate {
+  data_description?: string | null;
+  usage_purpose?: string | null;
   notes?: string | null;
 }
 

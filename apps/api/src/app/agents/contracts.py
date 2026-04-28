@@ -153,6 +153,35 @@ class MissingRequirements:
         return "; ".join(parts)
 
 
+class CollectionRuntimeStatus(str, Enum):
+    READY = "ready"
+    DEGRADED_MISSING_CREDENTIALS = "degraded_missing_credentials"
+    DEGRADED_PROVIDER_UNHEALTHY = "degraded_provider_unhealthy"
+    SCHEMA_STALE = "schema_stale"
+    NO_OPERATIONS = "no_operations"
+
+
+class CollectionRuntimeReadiness(BaseModel):
+    collection_id: Optional[str] = None
+    collection_slug: Optional[str] = None
+    collection_type: Optional[str] = None
+    current_version_id: Optional[str] = None
+    current_version: Optional[int] = None
+    current_version_status: Optional[str] = None
+    schema_status: Optional[str] = None
+    schema_freshness: Optional[str] = None
+    data_instance_id: Optional[str] = None
+    data_instance_slug: Optional[str] = None
+    provider_instance_id: Optional[str] = None
+    provider_instance_slug: Optional[str] = None
+    provider_health: Optional[str] = None
+    credential_status: Optional[str] = None
+    available_operations: List[str] = Field(default_factory=list)
+    missing_requirements: List[str] = Field(default_factory=list)
+    status: CollectionRuntimeStatus = CollectionRuntimeStatus.READY
+    last_sync_at: Optional[str] = None
+
+
 class ResolvedDataInstance(BaseModel):
     instance_id: str = Field(..., min_length=1)
     slug: str = Field(..., min_length=1)
@@ -168,6 +197,11 @@ class ResolvedDataInstance(BaseModel):
     # Source of truth: Collection.description on the bound collection (nullable).
     description: Optional[str] = None
     entity_type: Optional[str] = None
+    collection_type: Optional[str] = None
+    data_description: Optional[str] = None
+    usage_purpose: Optional[str] = None
+    remote_tables: List[str] = Field(default_factory=list)
+    readiness: Optional[CollectionRuntimeReadiness] = None
 
 
 class ProviderExecutionTarget(BaseModel):

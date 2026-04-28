@@ -3,12 +3,12 @@ Runtime v3 contracts.
 
 Key primitives:
     * PipelineRequest — incoming turn from chat/sandbox
-    * TriageDecision  — decision #1: answer | clarify | plan | resume
-    * NextStep        — decision #N: call_agent | ask_user | final | abort
+    * NextStep        — planner decision: call_agent | ask_user | final | abort
     * PipelineStopReason — terminal reasons (waiting_*, completed, failed...)
+    * RuntimeTurnState — canonical turn state (replaces legacy WorkingMemory)
 
 All shapes are Pydantic models. No dataclasses here — we want JSON round-trip
-for persistence into WorkingMemory.memory_state and traces.
+for persistence into traces and cross-turn memory.
 """
 from __future__ import annotations
 
@@ -49,31 +49,6 @@ class PipelineRequest(BaseModel):
     sandbox_overrides: Dict[str, Any] = Field(default_factory=dict)
     continuation_meta: Dict[str, Any] = Field(default_factory=dict)
     confirmation_tokens: List[str] = Field(default_factory=list)
-
-
-# --------------------------------------------------------------------------- #
-# Triage                                                                      #
-# --------------------------------------------------------------------------- #
-
-
-class TriageIntent(str, Enum):
-    FINAL = "final"             # answer directly from triage
-    CLARIFY = "clarify"         # ask user for more info before planning
-    ORCHESTRATE = "orchestrate" # hand off to planner
-    RESUME = "resume"           # continue a paused run (user answered open_question)
-
-
-class TriageDecision(BaseModel):
-    """Output of the Triage stage. Strictly validated."""
-
-    intent: TriageIntent
-    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
-    goal: Optional[str] = None                  # normalized objective (set for orchestrate/resume)
-    answer: Optional[str] = None                # filled when intent=final
-    clarify_prompt: Optional[str] = None        # filled when intent=clarify
-    resume_run_id: Optional[UUID] = None        # filled when intent=resume
-    agent_hint: Optional[str] = None            # optional preferred agent slug
-    reason: Optional[str] = None                # human-readable rationale (for trace)
 
 
 # --------------------------------------------------------------------------- #

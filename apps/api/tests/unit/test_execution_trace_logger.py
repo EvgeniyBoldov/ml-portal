@@ -105,6 +105,25 @@ async def test_log_step_delegates_to_run_store(logger, run_store):
 
 
 @pytest.mark.asyncio
+async def test_start_run_redacts_context_snapshot(logger, run_store):
+    await logger.start_run(
+        tenant_id=str(uuid4()),
+        agent_slug="assistant",
+        logging_level="brief",
+        context_snapshot={
+            "db_dsn": "postgresql://user:secret@localhost:5432/app",
+            "token": "abc123",
+        },
+    )
+
+    run_store.start_run.assert_awaited_once()
+    kwargs = run_store.start_run.call_args.kwargs
+    snapshot = kwargs["context_snapshot"]
+    assert snapshot["db_dsn"] == "***"
+    assert snapshot["token"] == "***"
+
+
+@pytest.mark.asyncio
 async def test_log_routing_decision_persists_and_mirrors_run_step(logger, run_store, routing_repo):
     run_id = uuid4()
     missing = MissingRequirements(

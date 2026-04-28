@@ -64,6 +64,57 @@ async def mcp_initialize(
         return session_id
 
 
+async def mcp_list_tools(
+    *,
+    provider_url: str,
+    timeout_s: int = 30,
+) -> list[Dict[str, Any]]:
+    """Initialize an MCP session and return the full tools list."""
+    async with httpx.AsyncClient(timeout=timeout_s) as client:
+        init_response = await client.post(
+            provider_url,
+            headers={
+                "Content-Type": "application/json",
+                "Accept": MCP_ACCEPT_HEADER,
+            },
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": MCP_PROTOCOL_VERSION,
+                    "capabilities": {},
+                    "clientInfo": {"name": "ml-portal", "version": "1.0"},
+                },
+            },
+        )
+        init_response.raise_for_status()
+        session_id = init_response.headers.get("mcp-session-id")
+        if not session_id:
+            raise ValueError(f"MCP initialize missing session id for {provider_url}")
+
+        tools_response = await client.post(
+            provider_url,
+            headers={
+                "Content-Type": "application/json",
+                "Accept": MCP_ACCEPT_HEADER,
+                "mcp-session-id": session_id,
+            },
+            json={
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/list",
+                "params": {},
+            },
+        )
+        tools_response.raise_for_status()
+        payload = parse_mcp_response(tools_response.text)
+        tools = payload.get("result", {}).get("tools", [])
+        if not isinstance(tools, list):
+            raise ValueError("MCP tools/list response does not contain a tools array")
+        return tools
+
+
 async def mcp_call_tool(
     *,
     provider_url: str,

@@ -54,7 +54,7 @@ class AvailableActionsBuilder:
                 agent_slug=agent.slug,
                 description=agent.description,
                 tags=agent.tags or [],
-                risk_level=agent_version.risk_level if agent_version else None,
+                risk_level=getattr(agent, "risk_level", None),
             )
         ]
         if routable_agents:

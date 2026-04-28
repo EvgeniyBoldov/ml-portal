@@ -25,6 +25,7 @@ from uuid import UUID
 
 from app.runtime.memory.dto import FactDTO, SummaryDTO
 from app.runtime.memory.fact_extractor import AgentResultSnippet
+from app.runtime.memory.components import MemoryBundle
 
 
 @dataclass
@@ -41,12 +42,14 @@ class TurnMemory:
     goal: str
     summary: SummaryDTO
     retrieved_facts: List[FactDTO] = field(default_factory=list)
+    memory_bundle: MemoryBundle = field(default_factory=MemoryBundle)
 
     # --- mutated during the turn by the pipeline --------------------------
     agent_results: List[AgentResultSnippet] = field(default_factory=list)
     planner_steps: List[Dict[str, Any]] = field(default_factory=list)
     final_answer: Optional[str] = None
     final_error: Optional[str] = None
+    memory_diagnostics: Dict[str, Any] = field(default_factory=dict)
 
     # --- convenience ------------------------------------------------------
     def iter_known_subjects(self):

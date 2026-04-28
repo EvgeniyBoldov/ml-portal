@@ -185,11 +185,6 @@ class AgentRuntimeError(AppError):
     code = "RUNTIME_ERROR"
 
 
-class ToolRouterError(AgentRuntimeError):
-    """No suitable tool release found."""
-    code = "TOOL_ROUTER_ERROR"
-
-
 class SystemLLMExecutorError(AgentRuntimeError):
     """System LLM executor failure."""
     code = "LLM_EXECUTOR_ERROR"

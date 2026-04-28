@@ -49,6 +49,7 @@ class ExecutionConfigResolver:
             settings_provider = OrchestrationSettingsProvider.get_instance()
             platform_provider = PlatformSettingsProvider.get_instance()
             async with session_factory() as session:
+                base_settings = await settings_provider.get_config(session)
                 config = await settings_provider.get_effective_config(
                     session,
                     agent_version=exec_request.agent_version,
@@ -72,30 +73,33 @@ class ExecutionConfigResolver:
                 policy.max_steps = config.get("executor_max_steps", policy.max_steps)
                 timeout_s = config.get("executor_timeout_s")
                 policy.max_wall_time_ms = ((timeout_s if timeout_s is not None else 600) * 1000)
-                if exec_request.agent_version:
-                    av = exec_request.agent_version
-                    if av.max_retries is not None:
-                        policy.max_retries = av.max_retries
+                agent = exec_request.agent
 
-                if exec_request.agent_version and exec_request.agent_version.temperature is not None:
-                    gen.temperature = exec_request.agent_version.temperature
+                # temperature: Agent -> orchestration default
+                agent_temperature = getattr(agent, "temperature", None) if agent else None
+                if agent_temperature is not None:
+                    gen.temperature = agent_temperature
                 else:
                     gen.temperature = config.get("executor_temperature", gen.temperature)
 
-                if exec_request.agent_version and exec_request.agent_version.max_tokens is not None:
-                    gen.max_tokens = exec_request.agent_version.max_tokens
+                # max_tokens: Agent only
+                agent_max_tokens = getattr(agent, "max_tokens", None) if agent else None
+                if agent_max_tokens is not None:
+                    gen.max_tokens = agent_max_tokens
 
                 self._apply_platform_caps(policy, platform_config)
 
-                # Fallback chain: runtime override -> AgentVersion.model -> Agent.model -> orchestration default.
+                # model: runtime override -> Agent.model -> orchestration default
                 resolved_model = model
-                if resolved_model is None and exec_request.agent_version:
-                    resolved_model = exec_request.agent_version.model
-                if resolved_model is None and exec_request.agent:
-                    resolved_model = getattr(exec_request.agent, "model", None)
+                if resolved_model is None and agent:
+                    resolved_model = getattr(agent, "model", None)
                 if resolved_model is None:
                     resolved_model = config.get("executor_model")
-                gen.model = await self._resolve_model_alias(session, resolved_model)
+                gen.model = await self._resolve_model_alias(
+                    session,
+                    resolved_model,
+                    default_alias=base_settings.get("executor_model"),
+                )
         else:
             gen.model = model
 
@@ -122,6 +126,7 @@ class ExecutionConfigResolver:
         if session_factory:
             settings_provider = OrchestrationSettingsProvider.get_instance()
             async with session_factory() as session:
+                base_settings = await settings_provider.get_config(session)
                 config = await settings_provider.get_effective_config(
                     session,
                     agent_version=exec_request.agent_version,
@@ -139,10 +144,14 @@ class ExecutionConfigResolver:
                     gen.model = config.get("executor_model")
                 if temperature is None:
                     gen.temperature = config.get("executor_temperature", 0.7)
-                if gen.max_tokens is None and exec_request.agent_version:
-                    gen.max_tokens = exec_request.agent_version.max_tokens
+                if gen.max_tokens is None and exec_request.agent:
+                    gen.max_tokens = getattr(exec_request.agent, "max_tokens", None)
 
-                gen.model = await self._resolve_model_alias(session, gen.model)
+                gen.model = await self._resolve_model_alias(
+                    session,
+                    gen.model,
+                    default_alias=base_settings.get("executor_model"),
+                )
 
         return gen
 
@@ -162,8 +171,25 @@ class ExecutionConfigResolver:
     async def _resolve_model_alias(
         session: AsyncSession,
         alias: Optional[str],
+        default_alias: Optional[str] = None,
     ) -> Optional[str]:
         from app.services.model_resolver import ModelResolver
 
         resolver = ModelResolver(session)
-        return await resolver.resolve(alias)
+        resolved = await resolver.resolve(alias)
+        if (
+            alias
+            and resolved == alias
+            and alias.startswith("llm.")
+            and default_alias
+            and default_alias != alias
+        ):
+            fallback = await resolver.resolve(default_alias)
+            if fallback:
+                logger.warning(
+                    "Execution model alias '%s' unresolved; fallback to executor_model '%s'",
+                    alias,
+                    default_alias,
+                )
+                return fallback
+        return resolved

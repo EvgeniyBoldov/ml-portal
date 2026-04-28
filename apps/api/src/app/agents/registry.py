@@ -2,6 +2,7 @@
 Tool Registry - реестр всех доступных tool handlers
 """
 from __future__ import annotations
+import threading
 from typing import Any, Dict, List, Optional, Type
 from app.core.logging import get_logger
 
@@ -36,25 +37,69 @@ class _VersionedToolWrapper(ToolHandler):
 
 class ToolRegistry:
     """
-    Singleton реестр tool handlers.
-    
-    Все builtin tools регистрируются при импорте модуля builtins.
-    Custom tools могут регистрироваться динамически.
-    
-    Использование:
-        # Регистрация
-        ToolRegistry.register(MyToolHandler())
-        
-        # Получение
-        handler = ToolRegistry.get("my.tool")
-        
-        # Получение tools для агента
-        handlers = ToolRegistry.get_for_agent(["collection.document.search", "collection.table.search"])
+    Реестр tool handlers.
+
+    Поддерживает два режима:
+    - Class-level singleton (обратная совместимость): `ToolRegistry.get(slug)`.
+    - Instance API (DI / тесты): `registry = ToolRegistry(); registry.get(slug)`.
+
+    Для инжекции через assembler используйте `ToolRegistry.get_instance()`.
+    Для изолированных тестов создавайте `ToolRegistry()` напрямую.
     """
-    
+
     _handlers: Dict[str, ToolHandler] = {}
     _initialized: bool = False
-    
+    _init_lock: threading.Lock = threading.Lock()
+
+    _global_instance: "Optional[ToolRegistry]" = None
+
+    def __init__(self, *, _use_class_store: bool = False) -> None:
+        if _use_class_store:
+            self._instance_handlers = None  # uses class-level dict
+        else:
+            self._instance_handlers: Optional[Dict[str, ToolHandler]] = {}
+
+    @classmethod
+    def get_instance(cls) -> "ToolRegistry":
+        """Return the shared singleton instance (DI-friendly). Creates it on first call."""
+        if cls._global_instance is None:
+            cls._global_instance = cls(_use_class_store=True)
+        return cls._global_instance
+
+    # ------------------------------------------------------------------
+    # Instance-level API (DI / test isolation)
+    # ------------------------------------------------------------------
+
+    def _store(self) -> Dict[str, ToolHandler]:
+        """Return the handler store for this instance."""
+        if self._instance_handlers is not None:
+            return self._instance_handlers
+        self.__class__._ensure_initialized()
+        return self.__class__._handlers
+
+    def register_handler(self, handler: ToolHandler) -> None:
+        """Register a handler on this instance (does not affect the class-level singleton)."""
+        slug = handler.slug
+        store = self._store()
+        if slug in store:
+            logger.warning(f"Tool '{slug}' already registered on instance, overwriting")
+        store[slug] = handler
+
+    def get_handler(self, slug: str) -> Optional[ToolHandler]:
+        """Get a handler by slug from this instance's store."""
+        return self._store().get(slug)
+
+    def list_handlers(self) -> List[ToolHandler]:
+        """List all handlers registered on this instance."""
+        return list(self._store().values())
+
+    def clear_handlers(self) -> None:
+        """Clear all handlers on this instance (safe for test teardown)."""
+        store = self._store()
+        store.clear()
+        if self._instance_handlers is None:
+            self.__class__._initialized = False
+
     @classmethod
     def register(cls, handler: ToolHandler) -> None:
         """
@@ -150,18 +195,20 @@ class ToolRegistry:
         """
         if cls._initialized:
             return
-        
-        try:
-            from app.agents.builtins import register_builtins
-            register_builtins()
-            
-            # Bridge: wrap VersionedTool instances as ToolHandler-compatible
-            cls._bridge_versioned_tools()
-            
-            cls._initialized = True
-        except ImportError as e:
-            logger.error(f"Failed to import builtins: {e}")
-            cls._initialized = True
+        with cls._init_lock:
+            if cls._initialized:
+                return
+            try:
+                from app.agents.builtins import register_builtins
+                register_builtins()
+                
+                # Bridge: wrap VersionedTool instances as ToolHandler-compatible
+                cls._bridge_versioned_tools()
+                
+                cls._initialized = True
+            except ImportError as e:
+                logger.error(f"Failed to import builtins: {e}")
+                cls._initialized = True
     
     @classmethod
     def _bridge_versioned_tools(cls) -> None:
@@ -176,8 +223,17 @@ class ToolRegistry:
                 if vt.tool_slug in cls._handlers:
                     continue  # Already registered as ToolHandler
                 
-                latest = vt.get_latest_version()
+                all_versions = vt.get_versions()
+                latest = next(
+                    (v for v in all_versions if not v.deprecated),
+                    all_versions[0] if all_versions else None,
+                )
                 if not latest:
+                    continue
+                if latest.deprecated:
+                    logger.warning(
+                        f"All versions of VersionedTool '{vt.tool_slug}' are deprecated; skipping bridge"
+                    )
                     continue
                 
                 # Create a lightweight ToolHandler wrapper

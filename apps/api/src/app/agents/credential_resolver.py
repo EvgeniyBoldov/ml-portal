@@ -90,9 +90,18 @@ class RuntimeCredentialResolver:
                     operation=operation,
                 )
                 return None
+            payload = {}
+            get_decrypted = getattr(self.credential_service, "get_decrypted_credentials", None)
+            if callable(get_decrypted):
+                try:
+                    decrypted = await get_decrypted(reference.credential_id)
+                    payload = dict(getattr(decrypted, "payload", {}) or {})
+                except Exception:
+                    # Keep broker flow available even if payload backfill fails.
+                    payload = {}
             return OperationCredentialContext(
                 auth_type=reference.auth_type,
-                payload={},
+                payload=payload,
                 credential_id=str(reference.credential_id),
                 owner_type=reference.owner_type,
             )

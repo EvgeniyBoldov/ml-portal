@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from typing import Awaitable, Callable, List, Optional
 from uuid import UUID
 
 from app.agents.contracts import OperationCredentialContext, ProviderExecutionTarget, ResolvedOperation
@@ -38,15 +38,12 @@ class OperationBuilder:
         effective_permissions: Optional[EffectivePermissions] = None,
         user_id: Optional[UUID] = None,
         tenant_id: Optional[UUID] = None,
-        sandbox_overrides: Optional[Dict[str, Any]] = None,
-        load_discovered_capabilities: Callable[..., Awaitable[List[DiscoveredTool]]],
+        load_discovered_capabilities: Callable[..., Awaitable[List[DiscoveredTool]]],  # (instance, provider) -> List[DiscoveredTool]
         resolve_execution_credentials: Callable[..., Awaitable[Optional[OperationCredentialContext]]],
     ) -> List[tuple[ResolvedOperation, Optional[OperationCredentialContext]]]:
-        _ = sandbox_overrides  # semantic tool overrides removed; kept for signature parity
         discovered_tools = await load_discovered_capabilities(
             instance=instance,
             provider=provider,
-            include_unpublished=True,
         )
         operations: List[tuple[ResolvedOperation, Optional[OperationCredentialContext]]] = []
         seen_operation_slugs: set[str] = set()
@@ -143,6 +140,7 @@ class OperationBuilder:
                     side_effects=resolution.side_effects,
                     requires_confirmation=resolution.requires_confirmation,
                 )
+                _credentials_source = "data" if credential_context is not None else None
                 if credential_context is None and provider_type == "mcp":
                     credential_context = await resolve_execution_credentials(
                         provider_for_target,
@@ -154,6 +152,18 @@ class OperationBuilder:
                         risk_level=resolution.risk_level,
                         side_effects=resolution.side_effects,
                         requires_confirmation=resolution.requires_confirmation,
+                    )
+                    if credential_context is not None:
+                        _credentials_source = "provider"
+                if _credentials_source:
+                    logger.info(
+                        "credentials_resolution_source",
+                        extra={
+                            "operation_slug": operation_slug,
+                            "source": _credentials_source,
+                            "instance_slug": instance.slug,
+                            "provider_slug": provider_for_target.slug,
+                        },
                     )
             resolved_has_credentials = credential_context is not None or provider_for_target.is_local
             if not credential_context:

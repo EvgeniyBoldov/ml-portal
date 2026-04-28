@@ -24,6 +24,7 @@ from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field
+from app.runtime.memory.tool_ledger import ToolLedger
 
 
 MAX_FACTS = 40
@@ -109,6 +110,7 @@ class WorkingMemory(BaseModel):
     planner_steps: List[PlannerStepRecord] = Field(default_factory=list)
     recent_action_signatures: List[str] = Field(default_factory=list)
     open_questions: List[str] = Field(default_factory=list)
+    tool_ledger: ToolLedger = Field(default_factory=ToolLedger)
 
     # budgets
     iter_count: int = 0
@@ -202,6 +204,38 @@ class WorkingMemory(BaseModel):
     def set_recent_messages(self, refs: List[ChatMessageRef]) -> None:
         self.recent_messages = refs[-MAX_RECENT_MESSAGES:]
 
+    def record_operation_call(
+        self,
+        *,
+        operation: str,
+        call_id: str,
+        arguments: Dict[str, Any],
+        agent_slug: Optional[str],
+        phase_id: Optional[str],
+    ) -> None:
+        self.tool_ledger.register_call(
+            operation=operation,
+            call_id=call_id,
+            arguments=arguments,
+            iteration=self.iter_count,
+            agent_slug=agent_slug,
+            phase_id=phase_id,
+        )
+        self.used_tool_calls += 1
+
+    def record_operation_result(
+        self,
+        *,
+        call_id: str,
+        success: bool,
+        data: Any,
+    ) -> None:
+        self.tool_ledger.register_result(
+            call_id=call_id,
+            success=success,
+            data=data,
+        )
+
     # ------------------------------------------------------------------ #
     # Views for planner/triage prompts                                   #
     # ------------------------------------------------------------------ #
@@ -226,6 +260,7 @@ class WorkingMemory(BaseModel):
             "open_questions": list(self.open_questions[-max_items:]),
             "completed_phase_ids": list(self.completed_phase_ids),
             "recent_actions": list(self.recent_action_signatures[-max_items:]),
+            "recent_tool_calls": self.tool_ledger.compact_view(max_items=max_items),
         }
 
     def triage_snapshot(self, max_items: int = 5) -> Dict[str, Any]:

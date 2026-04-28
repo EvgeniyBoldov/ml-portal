@@ -128,6 +128,13 @@ class StructuredLLMCall:
             except Exception as exc:  # network / upstream failure
                 last_error = f"llm_error: {exc}"
                 logger.warning("StructuredLLMCall error role=%s attempt=%s: %s", role, attempt + 1, exc)
+                if self._is_non_retryable_llm_error(exc):
+                    logger.warning(
+                        "StructuredLLMCall fail-fast role=%s attempt=%s due to non-retryable upstream error",
+                        role,
+                        attempt + 1,
+                    )
+                    break
                 continue
 
             raw_response = self._extract_text(response)
@@ -231,3 +238,23 @@ class StructuredLLMCall:
                 return None
         return None
 
+    @staticmethod
+    def _is_non_retryable_llm_error(exc: Exception) -> bool:
+        """Detect upstream failures where immediate retry is wasteful.
+
+        Focus on payload/token-limit failures:
+        - HTTP 413 request too large / context too long
+        - explicit provider token rate-limit exceeded for current request size
+        """
+        text = str(exc or "").lower()
+        if not text:
+            return False
+        patterns = (
+            "error code: 413",
+            "request too large",
+            "context_length_exceeded",
+            "maximum context length",
+            "rate_limit_exceeded",
+            "tokens per minute",
+        )
+        return any(p in text for p in patterns)

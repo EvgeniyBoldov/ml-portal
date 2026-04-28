@@ -15,6 +15,10 @@ export interface Agent {
   tags?: string[] | null;
   current_version_id?: string | null;
   model?: string | null;
+  temperature?: number | null;
+  max_tokens?: number | null;
+  requires_confirmation_for_write?: boolean | null;
+  risk_level?: string | null;
   logging_level?: string;
   allowed_collection_ids?: string[] | null;
   versions_count?: number;
@@ -34,16 +38,7 @@ export interface AgentVersionInfo {
   tool_use_rules?: string | null;
   output_format?: string | null;
   examples?: string | null;
-  // Execution config
-  model?: string | null;
-  timeout_s?: number | null;
-  max_steps?: number | null;
-  max_retries?: number | null;
-  max_tokens?: number | null;
-  temperature?: number | null;
-  // Safety knobs
-  requires_confirmation_for_write?: boolean | null;
-  risk_level?: string | null;
+  // Safety prompt constraints
   never_do?: string | null;
   allowed_ops?: string | null;
   // Routing
@@ -76,16 +71,7 @@ export interface AgentVersion {
   tool_use_rules?: string | null;
   output_format?: string | null;
   examples?: string | null;
-  // Execution config
-  model?: string | null;
-  timeout_s?: number | null;
-  max_steps?: number | null;
-  max_retries?: number | null;
-  max_tokens?: number | null;
-  temperature?: number | null;
-  // Safety knobs
-  requires_confirmation_for_write?: boolean | null;
-  risk_level?: string | null;
+  // Safety prompt constraints
   never_do?: string | null;
   allowed_ops?: string | null;
   // Routing
@@ -106,6 +92,10 @@ export interface AgentCreate {
   name: string;
   description?: string;
   model?: string | null;
+  temperature?: number | null;
+  max_tokens?: number | null;
+  requires_confirmation_for_write?: boolean | null;
+  risk_level?: string | null;
   tags?: string[];
   logging_level?: string;
   allowed_collection_ids?: string[] | null;
@@ -115,6 +105,10 @@ export interface AgentUpdate {
   name?: string;
   description?: string;
   model?: string | null;
+  temperature?: number | null;
+  max_tokens?: number | null;
+  requires_confirmation_for_write?: boolean | null;
+  risk_level?: string | null;
   tags?: string[];
   logging_level?: string;
   allowed_collection_ids?: string[] | null;

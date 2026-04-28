@@ -22,12 +22,12 @@ def test_trace_pack_collects_operations_prompts_and_tool_io():
         agent_slug="test-agent",
         status="completed",
         logging_level="full",
-        context_snapshot={"mode": "pipeline"},
+        context_snapshot={"mode": "pipeline", "db_dsn": "postgresql://user:secret@localhost:5432/app"},
         error=None,
         steps=[
             _step(0, "budget_policy", {"max_steps": 10, "max_tool_calls_total": 50}),
-            _step(0, "llm_request", {"model": "gpt-test", "system_prompt": "You are...", "messages": [{"role": "user"}]}),
-            _step(1, "operation_call", {"operation_slug": "collection.document.search", "input": {"query": "vpn"}}),
+            _step(0, "llm_request", {"model": "gpt-test", "system_prompt": "You are...", "messages": [{"role": "user", "content": "token=abc"}]}),
+            _step(1, "operation_call", {"operation_slug": "collection.document.search", "input": {"query": "vpn", "api_key": "secret"}}),
             _step(2, "operation_result", {"operation_slug": "collection.document.search", "output": {"hits": 3}}),
             _step(3, "final_response", {"content": "done"}),
         ],
@@ -35,7 +35,10 @@ def test_trace_pack_collects_operations_prompts_and_tool_io():
 
     pack = RuntimeTracePackService().build_trace_pack(run)
 
+    assert pack["trace_pack_version"] == "runtime.trace_pack.v2"
     assert pack["agent_slug"] == "test-agent"
+    assert pack["context_snapshot"]["db_dsn"] == "***"
+    assert pack["tool_io"][0]["input"]["api_key"] == "***"
     assert "collection.document.search" in pack["operations"]
     assert len(pack["prompt_surfaces"]) == 1
     assert len(pack["tool_io"]) == 2
@@ -59,6 +62,7 @@ def test_trace_pack_collects_run_and_step_errors():
 
     pack = RuntimeTracePackService().build_trace_pack(run)
 
+    assert pack["trace_pack_version"] == "runtime.trace_pack.v2"
     assert len(pack["errors"]) == 2
     assert any(item["scope"] == "run" for item in pack["errors"])
     assert any(item["scope"] == "step" for item in pack["errors"])

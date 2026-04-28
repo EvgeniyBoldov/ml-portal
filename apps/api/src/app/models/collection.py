@@ -486,6 +486,8 @@ class CollectionVersion(Base):
     )
     retrieval_params: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     prompt_context_params: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    data_description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    usage_purpose: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

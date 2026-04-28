@@ -9,13 +9,11 @@ ToolDiscoveryService — сканирование и кеширование ин
 """
 from __future__ import annotations
 
-import json
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 from uuid import UUID
 
-import httpx
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import func, or_, select, text as sa_text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import selectinload
@@ -28,11 +26,30 @@ from app.models.collection import Collection
 from app.models.tool_instance import ToolInstance
 from app.services.collection_linking import context_domain_for_collection
 from app.services.instance_capabilities import is_mcp_service_instance
+from app.services.mcp_jsonrpc_client import mcp_list_tools
+
+
+class LocalProviderKind:
+    """Known provider_kind values for local (platform-managed) MCP instances."""
+    DOCUMENTS = "local_documents"
+    TABLES = "local_tables"
+
+    _DOMAIN_MAP: Dict[str, str] = {
+        DOCUMENTS: "collection.document",
+        TABLES: "collection.table",
+    }
+
+    @classmethod
+    def to_domain(cls, kind: str) -> Optional[str]:
+        return cls._DOMAIN_MAP.get(kind)
+
+    @classmethod
+    def known_kinds(cls) -> frozenset[str]:
+        return frozenset(cls._DOMAIN_MAP)
 
 logger = get_logger(__name__)
 
-MCP_ACCEPT_HEADER = "application/json, text/event-stream"
-MCP_PROTOCOL_VERSION = "2024-11-05"
+_RESCAN_ADVISORY_LOCK_KEY: int = 0x746F6F6C5F7363616E  # "tool_scan" as int64
 
 
 class ToolDiscoveryService:
@@ -59,7 +76,24 @@ class ToolDiscoveryService:
         - include_local=True -> local registry scan
         - provider_instance_id=<uuid> -> scan only one MCP provider
         - provider_instance_id=None -> scan all active MCP providers
+
+        Uses pg_try_advisory_lock to prevent concurrent rescans from racing
+        against each other and against runtime tool resolution.
         """
+        lock_result = await self.session.execute(
+            sa_text("SELECT pg_try_advisory_xact_lock(:key)"),
+            {"key": _RESCAN_ADVISORY_LOCK_KEY},
+        )
+        lock_acquired = bool(lock_result.scalar())
+        if not lock_acquired:
+            logger.info("tool_discovery_rescan_skipped_lock_held")
+            return {
+                "scope": "provider" if provider_instance_id else "all",
+                "provider_instance_id": str(provider_instance_id) if provider_instance_id else None,
+                "skipped": True,
+                "reason": "concurrent_rescan_in_progress",
+            }
+
         now = datetime.now(timezone.utc)
         local_count = 0
         if include_local:
@@ -243,17 +277,13 @@ class ToolDiscoveryService:
         mapping: Dict[str, ToolInstance] = {}
         for provider in providers:
             provider_kind = str((provider.config or {}).get("provider_kind") or "").strip().lower()
-            if provider_kind in {"local_documents", "local_tables"}:
+            if provider_kind in LocalProviderKind.known_kinds():
                 mapping[provider_kind] = provider
         return mapping
 
     @staticmethod
     def _provider_kind_to_domain(provider_kind: str) -> Optional[str]:
-        if provider_kind == "local_documents":
-            return "collection.document"
-        if provider_kind == "local_tables":
-            return "collection.table"
-        return None
+        return LocalProviderKind.to_domain(provider_kind)
 
     # ── MCP scan ───────────────────────────────────────────────────────────
 
@@ -308,10 +338,7 @@ class ToolDiscoveryService:
                 select(ToolInstance)
                 .where(
                     ToolInstance.is_active == True,
-                    or_(
-                        ToolInstance.connector_type == "mcp",
-                        ToolInstance.instance_kind == "service",
-                    ),
+                    ToolInstance.connector_type == "mcp",
                 )
             )
             result = await self.session.execute(stmt)
@@ -376,7 +403,14 @@ class ToolDiscoveryService:
         if linked_domains:
             return linked_domains
 
-        # No linked data yet: keep discovered tools domain-agnostic until explicit mapping appears.
+        logger.warning(
+            "mcp_provider_no_linked_data_domains",
+            extra={
+                "provider_slug": provider.slug,
+                "provider_id": str(provider.id),
+                "hint": "Link a data instance to this provider via access_via_instance_id, then rescan.",
+            },
+        )
         return []
 
     @staticmethod
@@ -400,73 +434,9 @@ class ToolDiscoveryService:
 
     # ── MCP protocol ───────────────────────────────────────────────────────
 
-    async def _fetch_mcp_tools(self, provider_url: str) -> List[Dict[str, Any]]:
-        timeout = 30
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            init_response = await client.post(
-                provider_url,
-                headers={
-                    "Content-Type": "application/json",
-                    "Accept": MCP_ACCEPT_HEADER,
-                },
-                json={
-                    "jsonrpc": "2.0",
-                    "id": 1,
-                    "method": "initialize",
-                    "params": {
-                        "protocolVersion": MCP_PROTOCOL_VERSION,
-                        "capabilities": {},
-                        "clientInfo": {"name": "ml-portal", "version": "1.0"},
-                    },
-                },
-            )
-            init_response.raise_for_status()
-            session_id = init_response.headers.get("mcp-session-id")
-            if not session_id:
-                raise ValueError(f"MCP initialize missing session id for {provider_url}")
-
-            tools_response = await client.post(
-                provider_url,
-                headers={
-                    "Content-Type": "application/json",
-                    "Accept": MCP_ACCEPT_HEADER,
-                    "mcp-session-id": session_id,
-                },
-                json={
-                    "jsonrpc": "2.0",
-                    "id": 2,
-                    "method": "tools/list",
-                    "params": {},
-                },
-            )
-            tools_response.raise_for_status()
-            payload = self._parse_mcp_response(tools_response.text)
-            tools = payload.get("result", {}).get("tools", [])
-            if not isinstance(tools, list):
-                raise ValueError("MCP tools/list response does not contain a tools array")
-            return tools
-
     @staticmethod
-    def _parse_mcp_response(body: str) -> Dict[str, Any]:
-        body = (body or "").strip()
-        if not body:
-            raise ValueError("Unable to parse MCP response body")
-        try:
-            return json.loads(body)
-        except json.JSONDecodeError:
-            pass
-        data_lines: List[str] = []
-        for line in body.splitlines():
-            if line.startswith("data:"):
-                data_lines.append(line[len("data:"):].strip())
-        if data_lines:
-            joined = "\n".join(data_lines).strip()
-            if joined:
-                return json.loads(joined)
-        start = body.find("{")
-        if start >= 0:
-            return json.loads(body[start:])
-        raise ValueError("Unable to parse MCP response body")
+    async def _fetch_mcp_tools(provider_url: str) -> List[Dict[str, Any]]:
+        return await mcp_list_tools(provider_url=provider_url, timeout_s=30)
 
     # ── Upsert / lifecycle ─────────────────────────────────────────────────
 

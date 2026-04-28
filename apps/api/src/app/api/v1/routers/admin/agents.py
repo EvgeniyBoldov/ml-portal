@@ -146,6 +146,10 @@ async def update_agent(
         tags=data.tags,
         logging_level=data.logging_level,
         model=data.model,
+        temperature=data.temperature,
+        max_tokens=data.max_tokens,
+        requires_confirmation_for_write=data.requires_confirmation_for_write,
+        risk_level=data.risk_level,
         allowed_collection_ids=data.allowed_collection_ids,
     )
     await db.commit()

@@ -52,10 +52,17 @@ class MCPHandlers:
     Each method returns either a result dict or raises an error.
     """
     
-    def __init__(self, session: AsyncSession, tenant_id: str, user_id: str):
+    def __init__(
+        self,
+        session: AsyncSession,
+        tenant_id: str,
+        user_id: str,
+        tool_registry: Optional[ToolRegistry] = None,
+    ):
         self.session = session
         self.tenant_id = tenant_id
         self.user_id = user_id
+        self._tool_registry = tool_registry or ToolRegistry.get_instance()
         self._initialized = False
     
     async def handle_initialize(self, params: Dict[str, Any]) -> InitializeResult:
@@ -103,7 +110,7 @@ class MCPHandlers:
         Returns all registered tools from ToolRegistry.
         """
         tools = []
-        for descriptor in ToolRegistry.list_mcp_descriptors():
+        for descriptor in [h.to_mcp_descriptor() for h in self._tool_registry.list_handlers()]:
             tool = MCPTool(
                 name=descriptor["name"],
                 description=descriptor.get("description"),
@@ -130,7 +137,7 @@ class MCPHandlers:
         except Exception as e:
             raise MCPError(MCPErrorCode.INVALID_PARAMS, f"Invalid params: {e}")
         
-        handler = ToolRegistry.get(call_params.name)
+        handler = self._tool_registry.get_handler(call_params.name)
         if not handler:
             raise MCPError(
                 MCPErrorCode.TOOL_NOT_FOUND,

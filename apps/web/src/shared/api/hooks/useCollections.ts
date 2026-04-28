@@ -40,9 +40,13 @@ export function useCollectionVersionEditor(collectionId: string, versionParam: s
       deleteVersion: collectionsApi.deleteVersion,
     },
     getInitialFormData: (version) => ({
+      data_description: version?.data_description ?? '',
+      usage_purpose: version?.usage_purpose ?? '',
       notes: version?.notes ?? '',
     }),
     buildCreatePayload: (formData) => ({
+      data_description: toNullableString(formData.data_description),
+      usage_purpose: toNullableString(formData.usage_purpose),
       notes: toNullableString(formData.notes),
     }),
     basePath: '/admin/collections',

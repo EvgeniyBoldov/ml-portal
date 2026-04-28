@@ -15,6 +15,24 @@ import { useCollectionVersionEditor } from '@/shared/api/hooks';
 
 const DETAILS_FIELDS: FieldConfig[] = [
   {
+    key: 'data_description',
+    type: 'textarea',
+    label: 'Что это за данные',
+    description: 'Кратко опишите состав и смысл данных коллекции простым текстом.',
+    placeholder:
+      'Например: Справочник активов инфраструктуры: устройства, площадки, стойки, статусы и связи между ними.',
+    rows: 4,
+  },
+  {
+    key: 'usage_purpose',
+    type: 'textarea',
+    label: 'Зачем эти данные',
+    description: 'Для каких сценариев в системе используется эта коллекция.',
+    placeholder:
+      'Например: Используется агентом поддержки для ответов по инвентарю, проверок доступности и эскалации инцидентов.',
+    rows: 4,
+  },
+  {
     key: 'notes',
     type: 'textarea',
     label: 'Заметки к версии',

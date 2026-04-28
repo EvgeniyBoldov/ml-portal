@@ -1,7 +1,7 @@
 # =============================================================================
 # ML Portal API - Service Dockerfile
 # =============================================================================
-FROM ml-portal-base-ml
+FROM ml-portal-base-ml:latest
 
 # Install service-specific dependencies
 USER root

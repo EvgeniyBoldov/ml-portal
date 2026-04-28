@@ -23,8 +23,10 @@ from app.schemas.agent_runs import (
     AgentRunStepResponse,
     AgentRunTracePackResponse,
     RuntimeCapabilityGraphResponse,
+    RuntimeDiagnosticsSummaryResponse,
     RuntimeHitlPolicyContractResponse,
 )
+from app.services.runtime_diagnostics_service import RuntimeDiagnosticsService
 from app.services.platform_settings_service import PlatformSettingsProvider
 from app.services.runtime_capability_graph_service import (
     CollectionGraphInfo,
@@ -215,6 +217,21 @@ async def get_agent_run_trace_pack(
 
     trace_pack = RuntimeTracePackService().build_trace_pack(run)
     return AgentRunTracePackResponse(**trace_pack)
+
+
+@router.get("/{run_id}/diagnostics-summary", response_model=RuntimeDiagnosticsSummaryResponse)
+async def get_agent_run_diagnostics_summary(
+    run_id: UUID,
+    session: AsyncSession = Depends(db_session),
+    current_user: Users = Depends(require_admin),
+):
+    """Aggregated run diagnostics: memory explain, policy highlights, eval summary."""
+    store = RunStore()
+    run = await store.get_run_with_steps(run_id, session=session)
+    if not run:
+        raise HTTPException(status_code=404, detail="Agent run not found")
+    summary = RuntimeDiagnosticsService().build_summary(run)
+    return RuntimeDiagnosticsSummaryResponse(**summary)
 
 
 @router.delete("/{run_id}")

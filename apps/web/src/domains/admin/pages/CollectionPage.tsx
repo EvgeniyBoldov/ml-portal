@@ -3,7 +3,7 @@
  *
  * Использует useEntityEditor для стандартной CRUD логики.
  */
-import { useMemo, useRef, useState as useReactState } from 'react';
+import { useEffect, useMemo, useRef, useState as useReactState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
@@ -19,9 +19,10 @@ import {
 import { qk } from '@/shared/api/keys';
 import { useEntityEditor } from '@/shared/hooks/useEntityEditor';
 import { EntityPageV2, Tab } from '@/shared/ui';
-import { Block } from '@/shared/ui/GridLayout';
+import { Block, type FieldConfig } from '@/shared/ui/GridLayout';
 import { VersionsBlock } from '@/shared/ui/VersionsBlock';
 import { Button, ConfirmDialog } from '@/shared/ui';
+import { Select } from '@/shared/ui/Select';
 import DataTable, { type DataTableColumn } from '@/shared/ui/DataTable/DataTable';
 import { SqlCatalogDataTable } from './collection/SqlCatalogDataTable';
 import { SqlDiscoveryModal } from './collection/SqlDiscoveryModal';
@@ -33,7 +34,6 @@ import {
   META_FIELDS,
   STATS_FIELDS,
   VECTOR_STATS_FIELDS,
-  STATUS_FIELDS,
 } from './collection/fields/blockConfigs';
 import {
   ensureSqlPresetFields,
@@ -46,6 +46,40 @@ import { collectionFieldColumns } from './collection/fields/fieldColumns';
 
 type RuntimeOperationRow = NonNullable<ToolInstanceDetail['runtime_operations']>[number];
 
+const ACTIVE_VERSION_CONTENT_FIELDS: FieldConfig[] = [
+  {
+    key: 'data_description',
+    type: 'textarea',
+    label: 'Что это за данные',
+    description: 'Человеко-читаемое описание состава и смысла данных.',
+    rows: 5,
+    editable: false,
+  },
+  {
+    key: 'usage_purpose',
+    type: 'textarea',
+    label: 'Зачем эти данные',
+    description: 'Какие сценарии и задачи в рантайме покрывает коллекция.',
+    rows: 5,
+    editable: false,
+  },
+  {
+    key: 'notes',
+    type: 'textarea',
+    label: 'Заметки версии',
+    description: 'Технические заметки по изменениям в версии.',
+    rows: 5,
+    editable: false,
+  },
+];
+
+const ACTIVE_VERSION_META_FIELDS: FieldConfig[] = [
+  { key: 'version', type: 'code', label: 'Версия', editable: false },
+  { key: 'status', type: 'badge', label: 'Статус', badgeTone: 'neutral', editable: false },
+  { key: 'created_at', type: 'date', label: 'Создана', editable: false },
+  { key: 'updated_at', type: 'date', label: 'Обновлена', editable: false },
+];
+
 const TOOL_COLUMNS: DataTableColumn<RuntimeOperationRow>[] = [
   { key: 'operation_slug', label: 'Operation slug', render: (row) => <code>{row.operation_slug}</code> },
   { key: 'operation', label: 'Operation', render: (row) => row.operation || '—' },
@@ -55,10 +89,40 @@ const TOOL_COLUMNS: DataTableColumn<RuntimeOperationRow>[] = [
   { key: 'provider_instance_slug', label: 'Provider', render: (row) => row.provider_instance_slug || '—' },
 ];
 
+function resolveLocalDataInstanceIdForType(
+  connectors: Array<{ id: string; connector_type: string; connector_subtype?: string | null; placement?: string }>,
+  collectionType: CollectionType,
+): string {
+  const local = connectors.find(
+    (connector) =>
+      connector.connector_type === 'data'
+      && connector.placement === 'local'
+      && (
+        collectionType === 'table'
+        || collectionType === 'document'
+        || collectionType === 'api'
+        || String(connector.connector_subtype || '').toLowerCase() === collectionType
+      ),
+  );
+  return local?.id ?? '';
+}
+
 /* ─── Component ─── */
 
 export function CollectionPage() {
   const navigate = useNavigate();
+  const { data: tenantsData } = useQuery({
+    queryKey: qk.admin.tenants.list(),
+    queryFn: () => adminApi.getTenants(),
+    staleTime: 60_000,
+  });
+  const tenantOptions = (tenantsData?.items ?? []).map((t) => ({ value: t.id, label: t.name }));
+
+  const { data: dataConnectors = [] } = useQuery({
+    queryKey: ['connectors', 'data-list'],
+    queryFn: () => toolInstancesApi.list({ connector_type: 'data' }),
+    staleTime: 60_000,
+  });
 
   const {
     mode,
@@ -116,7 +180,14 @@ export function CollectionPage() {
       if (!data.slug?.trim() || !data.name?.trim() || !data.tenant_id) {
         return 'Заполните slug, название и тенант';
       }
-      if (!data.data_instance_id) {
+      const createType = (data.collection_type ?? 'table') as CollectionType;
+      const effectiveDataInstanceId = String(
+        data.data_instance_id
+        || (createType === 'table' || createType === 'document'
+          ? resolveLocalDataInstanceIdForType(dataConnectors, createType)
+          : ''),
+      );
+      if (!effectiveDataInstanceId) {
         return 'Нужно выбрать data instance';
       }
       return null;
@@ -134,6 +205,13 @@ export function CollectionPage() {
       ) as CollectionField[];
       const hasVectorFields = fields.some((f: CollectionField) => f.search_modes?.includes('vector'));
       const needsVectorConfig = data.has_vector_search || isDocument || hasVectorFields;
+      const createType = (data.collection_type ?? 'table') as CollectionType;
+      const effectiveDataInstanceId = String(
+        data.data_instance_id
+        || (createType === 'table' || createType === 'document'
+          ? resolveLocalDataInstanceIdForType(dataConnectors, createType)
+          : ''),
+      );
 
       return {
         tenant_id: data.tenant_id,
@@ -142,7 +220,7 @@ export function CollectionPage() {
         name: data.name,
         description: data.description,
         fields,
-        data_instance_id: String(data.data_instance_id || ''),
+        data_instance_id: effectiveDataInstanceId,
         vector_config: needsVectorConfig ? {
           chunk_strategy: data.chunk_strategy ?? 'by_paragraphs',
           chunk_size: data.chunk_size ?? 512,
@@ -155,20 +233,6 @@ export function CollectionPage() {
       update: 'Коллекция обновлена',
       delete: 'Коллекция удалена',
     },
-  });
-
-  // ─── Тенанты и коннекторы для select ───
-  const { data: tenantsData } = useQuery({
-    queryKey: qk.admin.tenants.list(),
-    queryFn: () => adminApi.getTenants(),
-    staleTime: 60_000,
-  });
-  const tenantOptions = (tenantsData?.items ?? []).map((t) => ({ value: t.id, label: t.name }));
-
-  const { data: dataConnectors = [] } = useQuery({
-    queryKey: ['connectors', 'data-list'],
-    queryFn: () => toolInstancesApi.list({ connector_type: 'data' }),
-    staleTime: 60_000,
   });
 
   const { data: versions = [] } = useQuery({
@@ -211,9 +275,6 @@ export function CollectionPage() {
     id: collection?.id ?? '',
     created_at: collection?.created_at ?? '',
     updated_at: collection?.updated_at ?? '',
-    data_instance_name: collection?.data_instance?.name ?? dataConnector?.name ?? '—',
-    data_instance_slug: collection?.data_instance?.slug ?? dataConnector?.slug ?? '—',
-    data_instance_link: collection?.data_instance?.id ?? collection?.data_instance_id ?? '',
   };
 
   const blockData = isEditable ? formData : viewData;
@@ -270,19 +331,85 @@ export function CollectionPage() {
   const configFieldsCreate = buildConfigFieldsByType(
     (formData.collection_type ?? 'table') as CollectionType,
     { editableCollectionType: true, editableDataInstance: true, connectorOptions },
-  );
+  ).filter((field) => {
+    const createType = (formData.collection_type ?? 'table') as CollectionType;
+    if ((createType === 'table' || createType === 'document') && field.key === 'data_instance_id') {
+      return false;
+    }
+    return true;
+  });
   const configFieldsViewEdit = buildConfigFieldsByType(
     activeCollectionType,
-    { editableCollectionType: false, editableDataInstance: false, connectorOptions },
-  );
+    { editableCollectionType: false, editableDataInstance: true, connectorOptions },
+  ).map((field) => {
+    if (field.key !== 'data_instance_id') return field;
+    return {
+      ...field,
+      type: 'custom' as const,
+      render: (value: string, editable: boolean, onChange: (v: string) => void) => {
+        if (editable) {
+          return (
+            <Select
+              value={value ?? ''}
+              onChange={(val) => onChange(String(val))}
+              placeholder="Выберите..."
+              options={connectorOptions}
+              disabled={false}
+            />
+          );
+        }
+
+        const connectorId = String(value || collection?.data_instance_id || '');
+        const connectorName = collection?.data_instance?.name ?? dataConnector?.name ?? '—';
+        if (!connectorId || connectorName === '—') return <span>—</span>;
+
+        return (
+          <a
+            href={`/admin/instances/${connectorId}`}
+            onClick={(e) => {
+              e.preventDefault();
+              navigate(`/admin/instances/${connectorId}`);
+            }}
+          >
+            {connectorName}
+          </a>
+        );
+      },
+    };
+  });
 
   const runtimeOperations = dataConnector?.runtime_operations ?? [];
+  const activeVersion =
+    collection?.current_version
+    ?? versions.find((v) => v.status === 'published')
+    ?? versions[0]
+    ?? null;
+  const activeVersionData = {
+    version: activeVersion?.version ? `v${activeVersion.version}` : '—',
+    status: activeVersion?.status ?? '—',
+    created_at: activeVersion?.created_at ?? '',
+    updated_at: activeVersion?.updated_at ?? '',
+    data_description: activeVersion?.data_description ?? '—',
+    usage_purpose: activeVersion?.usage_purpose ?? '—',
+    notes: activeVersion?.notes ?? '—',
+  };
 
   const statsData = {
     row_count: collection?.row_count ?? 0,
     vectorization_progress: collection?.vectorization_progress ?? 0,
     fields_count: collection?.fields?.length ?? 0,
   };
+
+  useEffect(() => {
+    if (!isNew) return;
+    const createType = (formData.collection_type ?? 'table') as CollectionType;
+    if (createType !== 'table' && createType !== 'document') return;
+    if (String(formData.data_instance_id || '').trim()) return;
+    const localId = resolveLocalDataInstanceIdForType(dataConnectors, createType);
+    if (localId) {
+      handleFieldChange('data_instance_id', localId);
+    }
+  }, [dataConnectors, formData.collection_type, formData.data_instance_id, handleFieldChange, isNew]);
 
   // Auto-preset: switch fields when collection_type changes
   const handleFieldChangeWrapped = (key: string, value: unknown) => {
@@ -318,10 +445,14 @@ export function CollectionPage() {
     sqlDiscoveryItems,
     sqlDiscoverySelected,
     sqlDiscoverySaving,
+    sqlSelectedRowIds,
+    sqlDeleting,
     existingSqlTableNames,
+    setSqlSelectedRowIds,
     openSqlDiscoveryModal,
     handleSqlDiscoveryToggle,
     addDiscoveredSqlTables,
+    deleteSelectedSqlTables,
   } = useSqlCollectionCatalog(collection, isNew);
 
   // ─── Upload for document collections (hooks must be before conditional returns) ───
@@ -468,33 +599,6 @@ export function CollectionPage() {
             onChange={handleFieldChangeWrapped}
           />
           <Block
-            title="Data connector"
-            icon="link"
-            iconVariant="info"
-            width="1/2"
-            fields={[
-              { key: 'data_instance_name', type: 'text', label: 'Название', editable: false },
-              { key: 'data_instance_slug', type: 'code', label: 'Slug', editable: false },
-              {
-                key: 'data_instance_link',
-                type: 'custom',
-                label: 'Карточка',
-                editable: false,
-                render: (value: string) => value
-                  ? (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => navigate(`/admin/instances/${value}`)}
-                    >
-                      Открыть инстанс
-                    </Button>
-                  ) : '—',
-              },
-            ]}
-            data={viewData}
-          />
-          <Block
             title="Конфигурация"
             icon="settings"
             iconVariant="primary"
@@ -537,15 +641,6 @@ export function CollectionPage() {
             />
           )}
           <Block
-            title="Операционный статус"
-            icon="activity"
-            iconVariant="warn"
-            width="full"
-            fields={STATUS_FIELDS}
-            data={viewData}
-            editable={false}
-          />
-          <Block
             title="Метаданные"
             icon="code"
             iconVariant="info"
@@ -555,6 +650,33 @@ export function CollectionPage() {
             editable={false}
           />
         </Tab>
+
+        {!isNew && (
+          <Tab
+            title="Описание данных"
+            layout="grid"
+            id="active-version"
+          >
+            <Block
+              title="Описание версии"
+              icon="file-text"
+              iconVariant="info"
+              width="2/3"
+              fields={ACTIVE_VERSION_CONTENT_FIELDS}
+              data={activeVersionData}
+              editable={false}
+            />
+            <Block
+              title="Метаданные версии"
+              icon="info"
+              iconVariant="neutral"
+              width="1/3"
+              fields={ACTIVE_VERSION_META_FIELDS}
+              data={activeVersionData}
+              editable={false}
+            />
+          </Tab>
+        )}
 
         <Tab
           title="Поля"
@@ -579,13 +701,25 @@ export function CollectionPage() {
           badge={sqlCollectionData?.total ?? 0}
           actions={
             mode === 'view'
-              ? [<Button key="sql-discover" onClick={openSqlDiscoveryModal}>Добавить</Button>]
+              ? [
+                  <Button key="sql-discover" onClick={openSqlDiscoveryModal}>Добавить</Button>,
+                  <Button
+                    key="sql-delete-selected"
+                    variant="danger"
+                    onClick={deleteSelectedSqlTables}
+                    disabled={sqlDeleting || sqlSelectedRowIds.size === 0}
+                  >
+                    {sqlDeleting ? 'Удаление...' : `Удалить (${sqlSelectedRowIds.size})`}
+                  </Button>,
+                ]
               : []
           }
         >
           <SqlCatalogDataTable
             data={sqlCollectionData?.items ?? []}
             loading={sqlCollectionDataLoading}
+            selectedRowIds={sqlSelectedRowIds}
+            onSelectionChange={setSqlSelectedRowIds}
           />
         </Tab>
 

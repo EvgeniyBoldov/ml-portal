@@ -7,6 +7,8 @@ import re
 import uuid
 from typing import Any, ClassVar, Dict, List
 
+from sqlalchemy import text
+
 from app.agents.context import ToolContext, ToolResult
 from app.agents.handlers.versioned_tool import VersionedTool, register_tool, tool_version
 from app.core.logging import get_logger
@@ -75,7 +77,6 @@ class CollectionCatalogTool(VersionedTool):
         description="Collection schema/data-shape inspection for table/document/sql collections",
     )
     async def v1_0_0(self, ctx: ToolContext, args: Dict[str, Any]) -> ToolResult:
-        from sqlalchemy import text
         from app.core.db import get_session_factory
         from app.services.collection_service import CollectionService
 

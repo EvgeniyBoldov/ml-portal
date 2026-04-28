@@ -6,9 +6,12 @@ from __future__ import annotations
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.api.deps import db_uow, require_admin
+from app.models.collection import Collection
 from app.schemas.collections import (
     CollectionResponse,
     CollectionVersionCreate,
@@ -28,6 +31,8 @@ def _serialize_version(entity) -> CollectionVersionResponse:
         collection_id=entity.collection_id,
         version=entity.version,
         status=entity.status,
+        data_description=entity.data_description,
+        usage_purpose=entity.usage_purpose,
         notes=entity.notes,
         created_at=entity.created_at.isoformat(),
         updated_at=entity.updated_at.isoformat(),
@@ -69,6 +74,8 @@ async def create_collection_version(
     service = CollectionService(session)
     created_version = await service.create_version(
         collection_id,
+        data_description=body.data_description,
+        usage_purpose=body.usage_purpose,
         notes=body.notes,
     )
     await session.commit()
@@ -88,6 +95,12 @@ async def update_collection_version(
     await service.update_version(
         collection_id,
         version,
+        data_description=(
+            body.data_description if "data_description" in body.model_fields_set else _UNSET
+        ),
+        usage_purpose=(
+            body.usage_purpose if "usage_purpose" in body.model_fields_set else _UNSET
+        ),
         notes=body.notes if "notes" in body.model_fields_set else _UNSET,
     )
     await session.commit()
@@ -131,7 +144,18 @@ async def set_current_collection_version(
     admin_user=Depends(require_admin),
 ):
     service = CollectionService(session)
-    collection = await service.set_current_version(collection_id, version_id)
+    await service.set_current_version(collection_id, version_id)
     await session.commit()
-    await session.refresh(collection)
+    result = await session.execute(
+        select(Collection)
+        .where(Collection.id == collection_id)
+        .options(
+            selectinload(Collection.schema),
+            selectinload(Collection.current_version),
+            selectinload(Collection.data_instance),
+        )
+    )
+    collection = result.scalar_one_or_none()
+    if not collection:
+        raise HTTPException(status_code=404, detail="Collection not found")
     return await build_collection_response(service, collection)

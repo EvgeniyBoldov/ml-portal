@@ -3,6 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, Literal, Optional
 
+try:
+    import jsonschema
+    _JSONSCHEMA_AVAILABLE = True
+except ImportError:
+    _JSONSCHEMA_AVAILABLE = False
+
 
 RuntimeRiskLevel = Literal["safe", "write", "destructive"]
 RuntimeCredentialScope = Literal["platform", "user", "auto"]
@@ -29,6 +35,18 @@ class DiscoveredOperation:
     credential_scope: RuntimeCredentialScope
 
 
+def _validate_json_schema_structure(tool_name: str, schema: Dict[str, Any]) -> None:
+    """Raise MCPDiscoveryValidationError if schema is not a valid JSON Schema."""
+    if not _JSONSCHEMA_AVAILABLE:
+        return
+    try:
+        jsonschema.Draft202012Validator.check_schema(schema)
+    except jsonschema.exceptions.SchemaError as exc:
+        raise MCPDiscoveryValidationError(
+            f"MCP discovery error for tool '{tool_name}': invalid inputSchema — {exc.message}"
+        ) from exc
+
+
 def parse_discovered_operation(
     *,
     tool_name: str,
@@ -37,6 +55,7 @@ def parse_discovered_operation(
     output_schema: Optional[Dict[str, Any]],
 ) -> DiscoveredOperation:
     normalized_input_schema = dict(input_schema or {})
+    _validate_json_schema_structure(tool_name, normalized_input_schema)
     runtime_flags = _parse_runtime_flags(
         tool_name=tool_name,
         runtime_payload=normalized_input_schema.get("x-runtime"),

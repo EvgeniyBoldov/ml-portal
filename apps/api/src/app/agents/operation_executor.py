@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
@@ -14,6 +13,7 @@ from app.agents.registry import ToolRegistry
 from app.agents.runtime_graph import OperationExecutionBinding, RuntimeExecutionGraph
 from app.core.config import get_settings
 from app.services.mcp_credential_broker_service import MCPCredentialBrokerService
+from app.services.mcp_jsonrpc_client import parse_mcp_response as _parse_mcp_response_body
 
 
 @dataclass(slots=True)
@@ -26,7 +26,8 @@ class _UnifiedToolCall:
 
 
 class DirectOperationExecutor:
-    def __init__(self) -> None:
+    def __init__(self, *, tool_registry: Optional["ToolRegistry"] = None) -> None:
+        self._tool_registry = tool_registry or ToolRegistry.get_instance()
         self._clients: Dict[str, httpx.AsyncClient] = {}
         self._mcp_sessions: Dict[str, tuple[str, float]] = {}
         self._client_lock = asyncio.Lock()
@@ -34,8 +35,17 @@ class DirectOperationExecutor:
         settings = get_settings()
         self._http_max_retries = max(0, int(getattr(settings, "HTTP_MAX_RETRIES", 0) or 0))
         self._retry_base_delay_ms = 200
+        self._mcp_session_ttl_s: int = max(30, int(getattr(settings, "MCP_SESSION_TTL_S", 300) or 300))
         self._mcp_credential_broker_enabled = bool(
             getattr(settings, "MCP_CREDENTIAL_BROKER_ENABLED", False)
+        )
+        env_name = str(getattr(settings, "ENV", "local") or "local").strip().lower()
+        self._mcp_credential_broker_required = bool(
+            getattr(settings, "MCP_CREDENTIAL_BROKER_REQUIRED", False)
+            or env_name not in {"local", "development", "dev"}
+        )
+        self._mcp_allow_raw_credential_fallback = bool(
+            getattr(settings, "MCP_ALLOW_RAW_CREDENTIAL_FALLBACK", False)
         )
 
     async def execute(self, operation_call: OperationCall, ctx: ToolContext) -> ToolResult:
@@ -58,7 +68,10 @@ class DirectOperationExecutor:
             return await self._execute_unified_call(call, ctx)
 
         if target.provider_type == "mcp":
-            merged_args = self._merge_mcp_args(target, operation_call.arguments, ctx, binding=binding)
+            try:
+                merged_args = self._merge_mcp_args(target, operation_call.arguments, ctx, binding=binding)
+            except ValueError as exc:
+                return ToolResult.fail(str(exc))
             call = _UnifiedToolCall(
                 name=target.mcp_tool_name or "",
                 arguments=merged_args,
@@ -93,9 +106,8 @@ class DirectOperationExecutor:
             return await self._invoke_remote_mcp(call)
         raise ValueError(f"Unsupported provider type '{target.provider_type}'")
 
-    @staticmethod
-    async def _invoke_local_as_mcp(call: _UnifiedToolCall, ctx: ToolContext) -> Dict[str, Any]:
-        handler = ToolRegistry.get(call.name)
+    async def _invoke_local_as_mcp(self, call: _UnifiedToolCall, ctx: ToolContext) -> Dict[str, Any]:
+        handler = self._tool_registry.get_handler(call.name)
         if not handler:
             raise ValueError(f"Local handler '{call.name}' not found")
         result = await handler.execute(ctx, call.arguments)
@@ -128,13 +140,13 @@ class DirectOperationExecutor:
                 "arguments": call.arguments,
             },
         }
+        timeout = target.timeout_s or 30
+        client = await self._get_client(provider_url, timeout)
         headers = {
             "Content-Type": "application/json",
             "Accept": "application/json, text/event-stream",
             "mcp-session-id": session_id,
         }
-        timeout = target.timeout_s or 30
-        client = await self._get_client(provider_url, timeout)
         response, attempts = await self._post_with_retry(
             client=client,
             provider_url=provider_url,
@@ -142,6 +154,19 @@ class DirectOperationExecutor:
             payload=payload,
             timeout_s=timeout,
         )
+        if response.status_code in {400, 401, 403, 410}:
+            self._mcp_sessions.pop(provider_url, None)
+            session_id = await self._mcp_initialize_fresh(provider_url, timeout_s=target.timeout_s)
+            async with self._mcp_session_lock:
+                self._mcp_sessions[provider_url] = (session_id, time.monotonic() + self._mcp_session_ttl_s)
+            headers["mcp-session-id"] = session_id
+            response, attempts = await self._post_with_retry(
+                client=client,
+                provider_url=provider_url,
+                headers=headers,
+                payload=payload,
+                timeout_s=timeout,
+            )
         if response.status_code >= 400:
             raise ValueError(
                 f"MCP tool call failed with HTTP {response.status_code} after {attempts} attempts"
@@ -228,6 +253,11 @@ class DirectOperationExecutor:
                 if access_ctx:
                     merged_args["instance_context"]["credential_access"] = access_ctx
                 elif credential_context.payload:
+                    if self._mcp_credential_broker_required and not self._mcp_allow_raw_credential_fallback:
+                        raise ValueError(
+                            "MCP credential broker is required for this runtime; "
+                            "raw credential fallback is disabled"
+                        )
                     # Backward-compatible fallback for legacy MCP servers.
                     merged_args["instance_context"]["credentials"] = credential_context.payload
 
@@ -305,7 +335,7 @@ class DirectOperationExecutor:
                 return cached[0]
 
             session_id = await self._mcp_initialize_fresh(provider_url, timeout_s)
-            self._mcp_sessions[provider_url] = (session_id, time.monotonic() + 300)
+            self._mcp_sessions[provider_url] = (session_id, time.monotonic() + self._mcp_session_ttl_s)
             return session_id
 
     async def _mcp_initialize_fresh(self, provider_url: str, timeout_s: Optional[int]) -> str:
@@ -405,30 +435,6 @@ class DirectOperationExecutor:
                 httpx.PoolTimeout,
             ),
         )
-
-
-def _parse_mcp_response_body(body: str) -> Dict[str, Any]:
-    body = (body or "").strip()
-    if not body:
-        raise ValueError("Empty MCP response body")
-    try:
-        return json.loads(body)
-    except json.JSONDecodeError:
-        pass
-
-    data_lines: List[str] = []
-    for line in body.splitlines():
-        if line.startswith("data:"):
-            data_lines.append(line[len("data:"):].strip())
-    if data_lines:
-        joined = "\n".join(data_lines).strip()
-        if joined:
-            return json.loads(joined)
-
-    start = body.find("{")
-    if start >= 0:
-        return json.loads(body[start:])
-    raise ValueError("Unable to parse MCP response body")
 
 
 def _extract_mcp_text_content(content: List[Dict[str, Any]]) -> str:

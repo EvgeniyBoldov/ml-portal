@@ -32,14 +32,27 @@ const SQL_DATA_COLUMNS: DataTableColumn<Record<string, unknown>>[] = [
 interface SqlCatalogDataTableProps {
   data: Record<string, unknown>[];
   loading?: boolean;
+  selectedRowIds?: Set<string>;
+  onSelectionChange?: (ids: Set<string>) => void;
 }
 
-export function SqlCatalogDataTable({ data, loading = false }: SqlCatalogDataTableProps) {
+export function SqlCatalogDataTable({
+  data,
+  loading = false,
+  selectedRowIds,
+  onSelectionChange,
+}: SqlCatalogDataTableProps) {
   return (
     <DataTable<Record<string, unknown>>
       columns={SQL_DATA_COLUMNS}
       data={data}
       keyField="id"
+      selectable
+      selectedKeys={selectedRowIds as Set<string | number> | undefined}
+      onSelectionChange={(keys) => {
+        const normalized = new Set<string>(Array.from(keys).map((key) => String(key)));
+        onSelectionChange?.(normalized);
+      }}
       loading={loading}
       emptyText="Нет данных. Добавьте таблицы через discovery."
     />

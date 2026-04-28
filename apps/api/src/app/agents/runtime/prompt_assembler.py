@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, Sequence, TYPE_CHECKING
 
 from app.agents.protocol import build_operations_prompt
 from app.agents.runtime.agent_prompt_renderer import AgentPromptRenderer
+from app.agents.runtime.capability_card_builder import CapabilityCardBuilder
 from app.agents.runtime.policy import PolicyLimits
 
 if TYPE_CHECKING:
@@ -17,6 +18,7 @@ if TYPE_CHECKING:
 @dataclass(slots=True)
 class PromptAssembly:
     base_prompt: str
+    capability_prompt: str = ""
     collection_prompt: str = ""
     operations_prompt: str = ""
     system_prompt: str = ""
@@ -45,6 +47,8 @@ class CollectionPromptRenderer:
 
 
 class OperationPromptRenderer:
+    MAX_DESCRIPTION_CHARS = 220
+
     @staticmethod
     def render_schema(op: "ResolvedOperation") -> Dict[str, Any]:
         description_parts: List[str] = []
@@ -58,12 +62,15 @@ class OperationPromptRenderer:
             description_parts.append(f"Systems: {', '.join(op.systems)}")
         if getattr(op, "return_summary", None):
             description_parts.append(f"Returns: {op.return_summary}")
+        description = " | ".join(description_parts) if description_parts else op.operation_slug
+        if len(description) > OperationPromptRenderer.MAX_DESCRIPTION_CHARS:
+            description = description[:OperationPromptRenderer.MAX_DESCRIPTION_CHARS].rstrip()
         return {
             "type": "function",
             "function": {
                 "name": op.operation_slug,
-                "description": " | ".join(description_parts) if description_parts else op.operation_slug,
-                "parameters": op.input_schema or {},
+                "description": description,
+                "parameters": _compact_json_schema(op.input_schema or {}),
             },
         }
 
@@ -74,10 +81,12 @@ class PromptAssembler:
         agent_renderer: Optional[AgentPromptRenderer] = None,
         collection_renderer: Optional[CollectionPromptRenderer] = None,
         operation_renderer: Optional[OperationPromptRenderer] = None,
+        capability_card_builder: Optional[CapabilityCardBuilder] = None,
     ) -> None:
         self.agent_renderer = agent_renderer or AgentPromptRenderer()
         self.collection_renderer = collection_renderer or CollectionPromptRenderer()
         self.operation_renderer = operation_renderer or OperationPromptRenderer()
+        self.capability_card_builder = capability_card_builder or CapabilityCardBuilder()
 
     def assemble(
         self,
@@ -99,6 +108,12 @@ class PromptAssembler:
             system_prompt_override=system_prompt_override,
             sandbox_overrides=sandbox_overrides,
         )
+        capability_prompt = ""
+        if resolved_operations is not None:
+            capability_prompt = self.capability_card_builder.build(
+                exec_request=exec_request,
+                resolved_operations=resolved_operations,
+            ).combined
         collection_prompt = self.assemble_collection_prompt(exec_request.resolved_data_instances)
         constraints_prompt = self.assemble_constraints_prompt(
             exec_request=exec_request,
@@ -110,11 +125,19 @@ class PromptAssembler:
             operation_schemas = self.assemble_operation_schemas(resolved_operations)
         operations_prompt = build_operations_prompt(operation_schemas) if operation_schemas else ""
         sections = [
-            section for section in [base_prompt, collection_prompt, constraints_prompt, operations_prompt]
+            section
+            for section in [
+                base_prompt,
+                capability_prompt,
+                collection_prompt if not capability_prompt else "",
+                constraints_prompt,
+                operations_prompt,
+            ]
             if section
         ]
         return PromptAssembly(
             base_prompt=base_prompt,
+            capability_prompt=capability_prompt,
             collection_prompt=collection_prompt,
             operations_prompt=operations_prompt,
             system_prompt="\n\n".join(sections),
@@ -216,3 +239,45 @@ def _compact_json(value: Any) -> str:
         return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
     except TypeError:
         return _text(value)
+
+
+def _compact_json_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
+    """Keep only prompt-relevant JSON schema parts to reduce token overhead."""
+    if not isinstance(schema, dict) or not schema:
+        return {}
+
+    compact: Dict[str, Any] = {}
+    root_type = schema.get("type")
+    if isinstance(root_type, str):
+        compact["type"] = root_type
+    elif "properties" in schema:
+        compact["type"] = "object"
+
+    properties = schema.get("properties")
+    if isinstance(properties, dict) and properties:
+        compact_props: Dict[str, Any] = {}
+        for idx, (name, field) in enumerate(properties.items()):
+            if idx >= 12:
+                break
+            if not isinstance(field, dict):
+                continue
+            prop: Dict[str, Any] = {}
+            field_type = field.get("type")
+            if isinstance(field_type, str):
+                prop["type"] = field_type
+            if "enum" in field and isinstance(field.get("enum"), list):
+                prop["enum"] = list(field.get("enum")[:8])
+            if "items" in field and isinstance(field.get("items"), dict):
+                items_type = field["items"].get("type")
+                if isinstance(items_type, str):
+                    prop["items"] = {"type": items_type}
+            if prop:
+                compact_props[name] = prop
+        if compact_props:
+            compact["properties"] = compact_props
+
+    required = schema.get("required")
+    if isinstance(required, list) and required:
+        compact["required"] = [str(x) for x in required[:12] if str(x).strip()]
+
+    return compact or {"type": "object"}

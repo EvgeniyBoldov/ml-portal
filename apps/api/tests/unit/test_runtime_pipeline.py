@@ -69,8 +69,10 @@ class _StubPlanningStage:
     def __init__(self, outcome: PlanningOutcome, extra_final_answer: str = ""):
         self.outcome = outcome
         self._extra = extra_final_answer
+        self.seen_memory = None
 
     async def run(self, *, memory, **_) -> AsyncIterator[PhasedEvent]:
+        self.seen_memory = memory
         yield PhasedEvent(
             RuntimeEvent.status("planner_thinking", iteration=1),
             OrchestrationPhase.PLANNER,
@@ -131,9 +133,8 @@ async def test_pipeline_direct_answer_path_calls_memory_writer_and_skips_finaliz
         stop_reason=PipelineStopReason.COMPLETED,
         planner_hint="Привет!",
     )
-    pipeline._assembler.build_planning_stage = MagicMock(
-        return_value=_StubPlanningStage(direct_outcome, extra_final_answer="Привет!")
-    )
+    planning_stub = _StubPlanningStage(direct_outcome, extra_final_answer="Привет!")
+    pipeline._assembler.build_planning_stage = MagicMock(return_value=planning_stub)
     # Finalization should NEVER be built on the DIRECT path.
     finalization_builder = MagicMock()
     pipeline._assembler.build_finalization_stage = finalization_builder
@@ -160,6 +161,7 @@ async def test_pipeline_direct_answer_path_calls_memory_writer_and_skips_finaliz
     sequences = [e.data["_envelope"]["sequence"] for e in events]
     assert sequences == sorted(sequences)
     assert sequences[0] == 1
+    assert "runtime_turn_state" in planning_stub.seen_memory.memory_state
 
     finalization_builder.assert_not_called()
     pipeline._assembler.memory_writer.finalize.assert_awaited_once()

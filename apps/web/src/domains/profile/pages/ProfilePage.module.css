@@ -2,6 +2,8 @@
   max-width: 800px;
   margin: 0 auto;
   padding: 24px;
+  max-height: 100vh;
+  overflow-y: auto;
 }
 
 .header {
@@ -257,6 +259,59 @@
   font-weight: 600;
   color: var(--text);
   margin: 0 0 12px 0;
+}
+
+.factsTableWrap {
+  max-height: 420px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+}
+
+.factsTable {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 760px;
+}
+
+.factsTable thead th {
+  position: sticky;
+  top: 0;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  z-index: 1;
+}
+
+.factsTable tbody td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  color: var(--text);
+  vertical-align: top;
+}
+
+.factsTable tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.checkboxCell {
+  width: 44px;
+}
+
+.subjectCell {
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+
+.valueCell {
+  max-width: 360px;
+  word-break: break-word;
 }
 
 .usageCode {

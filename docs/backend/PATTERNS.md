@@ -93,17 +93,20 @@ class ValidationError(DomainError):
 - В API маппим в `HTTPException`/общий exception handler.
 - Ошибки логируем с контекстом (entity, tenant, user, operation).
 
-## 6) Tenant isolation pattern
+## 6) Scoped access pattern
 
 ```python
-async def get_entity_for_tenant(entity_id: UUID, tenant_id: UUID) -> Entity:
+async def get_entity_for_scope(entity_id: UUID, tenant_id: UUID, user_id: UUID) -> Entity:
     entity = await repo.get_by_id(entity_id)
-    if not entity or entity.tenant_id != tenant_id:
+    if not entity or not await access_policy.can_read(entity, tenant_id=tenant_id, user_id=user_id):
         raise NotFoundError()
     return entity
 ```
 
-Принцип: при нарушении tenant-границы всегда возвращаем not found/forbidden по контракту эндпойнта.
+Принцип: tenant — это отдел/рабочая область одной компании. Не сравниваем
+`entity.tenant_id == tenant_id` как универсальное security-правило; вместо
+этого используем effective access policy, которая может разрешать sharing
+между отделами.
 
 ## 7) Logging pattern
 
@@ -147,5 +150,5 @@ logger.info(
 
 - API -> Service -> Repository
 - транзакции
-- tenant isolation
+- effective scoped access
 - scope resolution

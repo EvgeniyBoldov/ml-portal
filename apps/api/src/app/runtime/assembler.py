@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.http.clients import LLMClientProtocol
 from app.runtime.agent_executor import AgentExecutor
+from app.runtime.budget import RuntimeBudgetTracker
 from app.runtime.memory.builder import MemoryBuilder
 from app.runtime.memory.writer import MemoryWriter
 from app.runtime.planner import Planner
@@ -90,13 +91,13 @@ class PipelineAssembler:
         self,
         *,
         max_iterations: int,
-        max_wall_time_ms: int,
+        budget_tracker: Optional[RuntimeBudgetTracker] = None,
     ) -> PlanningStage:
         return PlanningStage(
             planner=self.planner,
             agent_executor=self.agent_executor,
             max_iterations=max_iterations,
-            max_wall_time_ms=max_wall_time_ms,
+            budget_tracker=budget_tracker,
         )
 
     def build_finalization_stage(self) -> FinalizationStage:

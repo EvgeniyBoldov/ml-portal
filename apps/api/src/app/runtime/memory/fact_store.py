@@ -69,6 +69,8 @@ class FactStore:
         tenant_id: Optional[UUID] = None,
         chat_id: Optional[UUID] = None,
         subject_prefix: Optional[str] = None,
+        sources: Optional[Sequence[FactSource]] = None,
+        source_ref_contains: Optional[str] = None,
         limit: int = 20,
     ) -> List[FactDTO]:
         """Return up to `limit` active facts matching the ownership filters,
@@ -100,17 +102,28 @@ class FactStore:
                 (Fact.scope == FactScope.USER.value)
                 & (Fact.user_id == user_id)
             )
-        if FactScope.TENANT in scopes and tenant_id is not None:
-            ownership_clauses.append(
-                (Fact.scope == FactScope.TENANT.value)
-                & (Fact.tenant_id == tenant_id)
-            )
-        if ownership_clauses:
-            from sqlalchemy import or_
-            stmt = stmt.where(or_(*ownership_clauses))
+        if FactScope.TENANT in scopes:
+            if tenant_id is None:
+                ownership_clauses.append(
+                    (Fact.scope == FactScope.TENANT.value)
+                    & (Fact.tenant_id.is_(None))
+                )
+            else:
+                ownership_clauses.append(
+                    (Fact.scope == FactScope.TENANT.value)
+                    & (Fact.tenant_id == tenant_id)
+                )
+        if not ownership_clauses:
+            return []
+        from sqlalchemy import or_
+        stmt = stmt.where(or_(*ownership_clauses))
 
         if subject_prefix:
             stmt = stmt.where(Fact.subject.like(f"{subject_prefix}%"))
+        if sources:
+            stmt = stmt.where(Fact.source.in_([source.value for source in sources]))
+        if source_ref_contains:
+            stmt = stmt.where(Fact.source_ref.like(f"%{source_ref_contains}%"))
 
         stmt = stmt.order_by(Fact.observed_at.desc()).limit(limit)
         result = await self._session.execute(stmt)

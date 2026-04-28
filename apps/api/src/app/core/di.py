@@ -22,11 +22,12 @@ def get_llm_client() -> LLMClientProtocol:
     global _llm_client
     if _llm_client is None:
         s = get_settings()
-        # Use OpenAI-compatible client if API key is provided
-        if s.LLM_API_KEY:
+        # OpenAI-compatible client can now resolve per-model credentials from DB
+        # via model.instance_id -> CredentialService (PLATFORM_FIRST strategy).
+        # Keep HTTP fallback only for explicit legacy token-only flows.
+        if s.LLM_BASE_URL:
             inner: LLMClientProtocol = OpenAICompatibleLLM()
         else:
-            # Fallback to HTTP client for custom implementations
             breaker_config = CircuitBreakerConfig(
                 failures_threshold=s.CB_LLM_FAILURES_THRESHOLD,
                 open_timeout_seconds=s.CB_LLM_OPEN_TIMEOUT_SECONDS,

@@ -18,7 +18,8 @@ from app.models.api_token import ApiToken
 from app.models.credential_set import Credential
 from app.models.tool_instance import ToolInstance
 from app.models.tool import Tool
-from sqlalchemy import select
+from app.models.memory import Fact
+from sqlalchemy import select, update
 from sqlalchemy.orm import selectinload
 
 router = APIRouter(prefix="/profile", tags=["profile"])
@@ -67,6 +68,25 @@ class CredentialResponse(BaseModel):
     auth_type: str
     is_active: bool
     created_at: datetime
+
+
+class UserFactResponse(BaseModel):
+    id: str
+    scope: str
+    subject: str
+    value: str
+    confidence: float
+    source: str
+    observed_at: datetime
+    created_at: datetime
+
+
+class FactsDeleteRequest(BaseModel):
+    ids: List[UUID]
+
+
+class FactsDeleteResponse(BaseModel):
+    deleted: int
 
 
 async def get_user_from_db(user_ctx: UserCtx) -> Users:
@@ -190,6 +210,75 @@ async def delete_token(
         
         await session.delete(token)
         await session.commit()
+
+
+@router.get("/facts", response_model=List[UserFactResponse])
+async def list_user_facts(
+    current_user: UserCtx = Depends(get_current_user),
+    limit: int = 200,
+    offset: int = 0,
+):
+    """List active user-visible facts for current user."""
+    safe_limit = max(1, min(limit, 500))
+    safe_offset = max(0, offset)
+    user_id = UUID(current_user.id)
+
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        result = await session.execute(
+            select(Fact)
+            .where(
+                Fact.user_id == user_id,
+                Fact.user_visible.is_(True),
+                Fact.superseded_by.is_(None),
+            )
+            .order_by(Fact.observed_at.desc())
+            .offset(safe_offset)
+            .limit(safe_limit)
+        )
+        rows = result.scalars().all()
+
+    return [
+        UserFactResponse(
+            id=str(row.id),
+            scope=row.scope,
+            subject=row.subject,
+            value=row.value,
+            confidence=row.confidence,
+            source=row.source,
+            observed_at=row.observed_at,
+            created_at=row.created_at,
+        )
+        for row in rows
+    ]
+
+
+@router.delete("/facts", response_model=FactsDeleteResponse)
+async def delete_user_facts(
+    payload: FactsDeleteRequest,
+    current_user: UserCtx = Depends(get_current_user),
+):
+    """Soft-delete selected user facts by tombstoning active rows."""
+    if not payload.ids:
+        return FactsDeleteResponse(deleted=0)
+
+    user_id = UUID(current_user.id)
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        stmt = (
+            update(Fact)
+            .where(
+                Fact.id.in_(payload.ids),
+                Fact.user_id == user_id,
+                Fact.user_visible.is_(True),
+                Fact.superseded_by.is_(None),
+            )
+            .values(superseded_by=Fact.id)
+        )
+        result = await session.execute(stmt)
+        await session.commit()
+
+    return FactsDeleteResponse(deleted=result.rowcount or 0)
 
 
 async def verify_api_token(token: str) -> Optional[tuple[Users, ApiToken]]:

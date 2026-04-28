@@ -140,16 +140,7 @@ class AgentService:
                 "tool_use_rules": version.tool_use_rules,
                 "output_format": version.output_format,
                 "examples": version.examples,
-                # Execution config
-                "model": version.model,
-                "timeout_s": version.timeout_s,
-                "max_steps": version.max_steps,
-                "max_retries": version.max_retries,
-                "max_tokens": version.max_tokens,
-                "temperature": version.temperature,
-                # Safety knobs
-                "requires_confirmation_for_write": version.requires_confirmation_for_write,
-                "risk_level": version.risk_level,
+                # Safety prompt constraints
                 "never_do": version.never_do,
                 "allowed_ops": version.allowed_ops,
                 # Routing
@@ -174,6 +165,10 @@ class AgentService:
             "current_version_id": agent.current_version_id,
             "logging_level": agent.logging_level,
             "model": agent.model,
+            "temperature": agent.temperature,
+            "max_tokens": agent.max_tokens,
+            "requires_confirmation_for_write": agent.requires_confirmation_for_write,
+            "risk_level": agent.risk_level,
             "allowed_collection_ids": agent.allowed_collection_ids,
             "created_at": agent.created_at,
             "updated_at": agent.updated_at,
@@ -188,6 +183,10 @@ class AgentService:
         tags: Optional[List[str]] = None,
         logging_level: Optional[str] = None,
         model: Optional[str] = None,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        requires_confirmation_for_write: Optional[bool] = None,
+        risk_level: Optional[str] = None,
         allowed_collection_ids: Optional[List[UUID]] = None,
     ) -> Agent:
         agent = await self.get_agent(agent_id)
@@ -202,6 +201,14 @@ class AgentService:
             update_data['logging_level'] = logging_level
         if model is not None:
             update_data['model'] = model
+        if temperature is not None:
+            update_data['temperature'] = temperature
+        if max_tokens is not None:
+            update_data['max_tokens'] = max_tokens
+        if requires_confirmation_for_write is not None:
+            update_data['requires_confirmation_for_write'] = requires_confirmation_for_write
+        if risk_level is not None:
+            update_data['risk_level'] = risk_level
         if allowed_collection_ids is not None:
             update_data['allowed_collection_ids'] = allowed_collection_ids
         if update_data:

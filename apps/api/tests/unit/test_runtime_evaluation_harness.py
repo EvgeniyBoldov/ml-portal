@@ -25,6 +25,7 @@ def test_runtime_eval_passes_document_retrieval_case():
 
     assert result.passed is True
     assert result.score == 1.0
+    assert result.dimensions.tool_choice_score == 1.0
     assert "collection.document.search" in result.seen_operations
 
 
@@ -50,6 +51,7 @@ def test_runtime_eval_waiting_input_expectation():
     case = RuntimeEvaluationCase(
         key="clarify_case",
         title="Clarify path",
+        expected_terminal_event="waiting_input",
         must_emit_final=False,
         must_emit_waiting_input=True,
     )
@@ -68,4 +70,4 @@ def test_default_cases_are_evaluable():
         {"type": "final", "data": {"message": "ok"}},
     ]
     results = evaluate_runtime_cases(default_runtime_eval_cases(), events)
-    assert len(results) == 3
+    assert len(results) >= 7

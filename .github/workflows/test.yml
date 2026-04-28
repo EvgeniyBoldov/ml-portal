@@ -48,6 +48,14 @@ jobs:
         pip install -r requirements.txt
         pip install -r requirements-test.txt
     
+    - name: Check migration state
+      run: |
+        cd apps/api
+        python -m alembic current
+      env:
+        DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
+        REDIS_URL: redis://localhost:6379/0
+
     - name: Run migrations
       run: |
         cd apps/api
@@ -56,17 +64,43 @@ jobs:
         DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
         REDIS_URL: redis://localhost:6379/0
     
-    - name: Run backend tests
+    - name: Run backend runtime core tests
       run: |
         cd apps/api
-        pytest tests/unit -q --tb=short \
+        pytest tests/unit -q --tb=short --maxfail=10 \
           --cov=app.runtime \
+          --cov=app.agents.contracts \
+          --cov=app.agents.credential_resolver \
+          --cov=app.agents.execution_preflight \
+          --cov=app.agents.operation_router \
+          --cov=app.agents.runtime_rbac_resolver \
           --cov-fail-under=70 \
           --cov-report=term-missing \
           --cov-report=xml:coverage-runtime.xml \
-          --junitxml=unit-results.xml
+          --junitxml=api-unit-results.xml
       env:
         DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
+        ASYNC_DB_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
+        REDIS_URL: redis://localhost:6379/0
+        ENV: test
+
+    - name: Run backend runtime integration tests
+      run: |
+        cd apps/api
+        pytest tests/integration -q --tb=short --maxfail=5 -k "runtime or mcp or credential or collection or confirmation"
+      env:
+        DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
+        ASYNC_DB_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
+        REDIS_URL: redis://localhost:6379/0
+        ENV: test
+
+    - name: Run backend runtime eval tests
+      run: |
+        cd apps/api
+        pytest tests/eval -q --tb=short
+      env:
+        DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
+        ASYNC_DB_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
         REDIS_URL: redis://localhost:6379/0
         ENV: test
     
@@ -84,7 +118,7 @@ jobs:
         name: backend-test-results
         path: |
           apps/api/coverage-runtime.xml
-          apps/api/unit-results.xml
+          apps/api/api-unit-results.xml
 
   frontend-tests:
     runs-on: ubuntu-latest
@@ -215,10 +249,10 @@ jobs:
         cd apps/web
         npx playwright install --with-deps
     
-    - name: Run Runtime Smoke Gate
+    - name: Run Runtime E2E Gates
       run: |
         cd apps/web
-        npx playwright test e2e-tests/runtime-smoke.spec.ts --project=chromium --reporter=line
+        npx playwright test e2e-tests/runtime-smoke.spec.ts e2e-tests/runtime-confirmation.spec.ts --project=chromium --reporter=line
       env:
         API_BASE_URL: http://localhost:8000/api
     

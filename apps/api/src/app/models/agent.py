@@ -2,8 +2,8 @@
 Agent model v2 - versioned agent container.
 
 Architecture:
-- Agent (container) - holds metadata + model selection + collection bindings
-- AgentVersion - holds prompt parts, execution config, safety knobs, and routing fields
+- Agent (container) - holds metadata, model + generation params, safety config, collection bindings
+- AgentVersion - holds prompt parts and routing fields only
 - Runtime routing is resolved by operation metadata and bindings.
 """
 import uuid
@@ -12,7 +12,7 @@ from typing import Optional, List
 
 import enum
 
-from sqlalchemy import String, DateTime, Text, ForeignKey, Boolean
+from sqlalchemy import String, DateTime, Text, ForeignKey, Boolean, Integer, Float
 from sqlalchemy.dialects.postgresql import UUID, ARRAY
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -68,10 +68,28 @@ class Agent(Base):
         server_default="brief",
     )
 
-    # ── Model selection (extracted from AgentVersion) ──────────────────
+    # ── Execution config (single source of truth, was split across Agent + AgentVersion) ──
     model: Mapped[Optional[str]] = mapped_column(
         String(100), nullable=True,
-        comment="Default model fallback for this agent container (AgentVersion.model -> Agent.model -> orchestration default)"
+        comment="LLM model alias for this agent (-> orchestration default if None)"
+    )
+    temperature: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True,
+        comment="LLM temperature override (orchestration default if None)"
+    )
+    max_tokens: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True,
+        comment="Max output tokens override (orchestration default if None)"
+    )
+
+    # ── Safety config ───────────────────────────────────────────────────
+    requires_confirmation_for_write: Mapped[Optional[bool]] = mapped_column(
+        Boolean, nullable=True,
+        comment="Require user confirmation before write operations"
+    )
+    risk_level: Mapped[Optional[str]] = mapped_column(
+        String(20), nullable=True,
+        comment="Risk level: low, medium, high"
     )
 
     created_at: Mapped[datetime] = mapped_column(
