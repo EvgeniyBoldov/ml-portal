@@ -94,6 +94,7 @@ class OperationRouter:
 
         result = OperationResolveResult(effective_permissions=effective_permissions)
         graph_builder = RuntimeExecutionGraphBuilder()
+        seen_operation_slugs: set[str] = set()
         for allowed in instances:
             instance = allowed.instance
             collection = allowed.collection
@@ -157,6 +158,11 @@ class OperationRouter:
                 continue
 
             for operation, credential_context in operations:
+                if operation.operation_slug in seen_operation_slugs:
+                    continue
+                seen_operation_slugs.add(operation.operation_slug)
+                if operation.collection_slug is None and collection_slug:
+                    operation.collection_slug = collection_slug
                 result.resolved_operations.append(operation)
                 context_payload = self._build_operation_context(
                     instance=instance,

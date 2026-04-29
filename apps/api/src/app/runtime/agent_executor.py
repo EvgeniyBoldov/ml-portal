@@ -86,6 +86,7 @@ class AgentExecutor:
         tenant_id: UUID,
         platform_config: Optional[Dict[str, Any]] = None,
         model: Optional[str] = None,
+        agent_version_id: Optional[UUID] = None,
     ) -> AsyncGenerator[RuntimeEvent, None]:
         agent_slug = step.agent_slug
         if not agent_slug:
@@ -103,6 +104,7 @@ class AgentExecutor:
                 allow_partial=True,
                 platform_config=platform_config,
                 include_routable_agents=False,
+                agent_version_id=agent_version_id,
             )
         except Exception as exc:
             logger.warning("Sub-agent preflight failed for %s: %s", agent_slug, exc)

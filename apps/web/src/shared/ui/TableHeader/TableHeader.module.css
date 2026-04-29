@@ -14,7 +14,7 @@
 
 .inner {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: var(--sp-2);
   width: 100%;

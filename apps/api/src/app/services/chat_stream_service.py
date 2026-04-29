@@ -325,6 +325,7 @@ class ChatStreamService:
                         "type": "final_content",
                         "content": final_content,
                         "sources": final_sources,
+                        "stop_reason": event.data.get("stop_reason"),
                     }
                     # Rolling dialogue summary is produced by the pipeline's
                     # TurnSummarizer (see app.runtime.summarizer_turn) right
@@ -333,17 +334,22 @@ class ChatStreamService:
                 elif event.type == RuntimeEventType.STOP:
                     stop_payload = dict(event.data or {})
                     reason = stop_payload.get("reason")
+                    # Build paused_action preserving all confirmation details
+                    # (operation_fingerprint, tool_slug, etc.) for resume token issuance.
+                    paused_action_payload: dict = {
+                        "type": "resume",
+                        "reason": reason,
+                        "question": stop_payload.get("question"),
+                        "message": stop_payload.get("message"),
+                    }
+                    for _k in ("operation_fingerprint", "tool_slug", "operation", "risk_level", "args_preview", "summary"):
+                        if stop_payload.get(_k) is not None:
+                            paused_action_payload[_k] = stop_payload[_k]
                     yield {
                         "type": "run_paused",
                         "reason": reason,
                         "run_id": stop_payload.get("run_id"),
-                        # Preserve structured pause state for resume endpoint.
-                        "action": {
-                            "type": "resume",
-                            "reason": reason,
-                            "question": stop_payload.get("question"),
-                            "message": stop_payload.get("message"),
-                        },
+                        "action": paused_action_payload,
                         "context": stop_payload,
                     }
 

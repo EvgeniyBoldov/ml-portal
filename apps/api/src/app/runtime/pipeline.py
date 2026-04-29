@@ -33,8 +33,8 @@ from app.core.logging import get_logger
 from app.runtime.assembler import PipelineAssembler
 from app.runtime.budget import RuntimeBudget, RuntimeBudgetTracker
 from app.runtime.contracts import PipelineRequest, PipelineStopReason
-from app.runtime.envelope import EventEnvelopeStamper
-from app.runtime.events import OrchestrationPhase, RuntimeEvent
+from app.runtime.envelope import EventEnvelopeStamper, PhasedEvent
+from app.runtime.events import OrchestrationPhase, RuntimeEvent, RuntimeEventType
 from app.runtime.memory.fact_extractor import AgentResultSnippet
 from app.runtime.memory.transport import TurnMemory
 from app.runtime.platform_config import PlatformConfigLoader
@@ -60,6 +60,7 @@ class RuntimePipeline:
         run_store: Optional[RunStore] = None,
     ) -> None:
         self._session = session
+        self._run_store = run_store
         self._assembler = PipelineAssembler(
             session=session, llm_client=llm_client, run_store=run_store,
         )
@@ -114,6 +115,21 @@ class RuntimePipeline:
 
         # Initialize RuntimeTurnState as the single source of truth
         run_id = uuid4()
+
+        # --- Create top-level AgentRun so pause/resume can find it by run_id
+        if self._run_store is not None:
+            try:
+                await self._run_store.start_run(
+                    tenant_id=str(tenant_id),
+                    agent_slug=request.agent_slug or "planner",
+                    logging_level="brief",
+                    user_id=str(user_id),
+                    chat_id=str(chat_id) if chat_id else None,
+                    run_id_override=run_id,
+                )
+            except Exception as _e:  # noqa: BLE001
+                logger.warning("Failed to create top-level AgentRun: %s", _e)
+
         runtime_state = RuntimeTurnState.from_seed(
             run_id=run_id,
             chat_id=chat_id,
@@ -156,6 +172,29 @@ class RuntimePipeline:
             PlanningOutcomeKind.ABORTED,
             PlanningOutcomeKind.FAILED,
         ):
+            # Persist pause state so resume endpoint can find run by run_id.
+            if planning_outcome.kind == PlanningOutcomeKind.PAUSED and self._run_store is not None:
+                try:
+                    pause_status = planning_outcome.stop_reason.value if planning_outcome.stop_reason else "paused"
+                    # paused_action/context are stored by ChatTurnOrchestrator via
+                    # turn_service.pause_turn; here we only mark the AgentRun as paused
+                    # so the resume endpoint can look it up by run_id.
+                    await self._run_store.pause_run(
+                        run_id=run_id,
+                        status=pause_status,
+                        paused_action={},
+                        paused_context={},
+                    )
+                except Exception as _e:  # noqa: BLE001
+                    logger.warning("Failed to pause top-level AgentRun: %s", _e)
+            elif self._run_store is not None:
+                try:
+                    await self._run_store.finish_run(
+                        run_id=run_id,
+                        status=planning_outcome.stop_reason.value if planning_outcome.stop_reason else "failed",
+                    )
+                except Exception as _e:  # noqa: BLE001
+                    logger.warning("Failed to finish top-level AgentRun: %s", _e)
             # Memory write-back still runs for paused/aborted turns so
             # next turn sees the open_questions / error context.
             await self._finalize_memory(
@@ -208,6 +247,17 @@ class RuntimePipeline:
             model=model,
             run_synthesizer=True,
         ):
+            ev = phased.event
+            # Tag FINAL events with stop_reason so downstream can distinguish
+            # a failed-but-synthesized turn from a genuinely completed one.
+            if ev.type == RuntimeEventType.FINAL and stop_reason != PipelineStopReason.COMPLETED:
+                ev = RuntimeEvent.final(
+                    ev.data.get("content", ""),
+                    sources=ev.data.get("sources"),
+                    run_id=ev.data.get("run_id"),
+                    stop_reason=stop_reason.value,
+                )
+                phased = PhasedEvent(ev, phased.phase)
             yield envelope.stamp_phased(phased, run_id=str(runtime_state.run_id))
 
     async def _finalize_memory(
@@ -276,10 +326,14 @@ class RuntimePipeline:
                 )
             except Exception:
                 logger.warning(
-                    "Explicit agent slug '%s' is not runtime-resolvable; falling back to routable list",
+                    "Explicit agent slug '%s' is not runtime-resolvable",
                     explicit_slug,
                 )
-                candidates = list(platform.routable_agents)
+                from app.core.exceptions import AgentUnavailableError
+                raise AgentUnavailableError(
+                    f"Agent '{explicit_slug}' is not available or has no published version",
+                    reason_code="agent_not_found",
+                )
 
         default_collection_allow = bool(
             (platform.config or {}).get("default_collection_allow", True),

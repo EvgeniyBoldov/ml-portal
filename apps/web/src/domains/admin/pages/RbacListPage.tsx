@@ -78,8 +78,8 @@ export function RbacListPage() {
   });
 
   const { data: localDataInstances = [] } = useQuery({
-    queryKey: qk.toolInstances.list({ connector_type: 'data', placement: 'remote', limit: 1000 }),
-    queryFn: () => toolInstancesApi.list({ connector_type: 'data', placement: 'remote', limit: 1000 }),
+    queryKey: qk.toolInstances.list({ connector_type: 'data', limit: 1000 }),
+    queryFn: () => toolInstancesApi.list({ connector_type: 'data', limit: 1000 }),
     enabled: isComposerOpen,
     staleTime: 60_000,
   });
@@ -104,8 +104,7 @@ export function RbacListPage() {
 
   const resourceTypeOptions = [
     { value: 'agent', label: 'Агенты' },
-    { value: 'tool', label: 'Локальные инструменты' },
-    { value: 'instance', label: 'Коннекторы' },
+    { value: 'instance', label: 'Данные (коллекции)' },
   ];
 
   const levelOptions = [
@@ -150,10 +149,14 @@ export function RbacListPage() {
           label: tool.name?.trim() || tool.slug?.trim() || tool.tool_id!,
         }));
     }
-    return localDataInstances.map((instance) => ({
-      value: instance.id,
-      label: instance.name?.trim() || instance.slug?.trim() || instance.id,
-    }));
+    return localDataInstances.map((instance) => {
+      const name = instance.name?.trim() || instance.slug?.trim() || instance.id;
+      const slug = instance.slug?.trim();
+      return {
+        value: instance.id,
+        label: slug && slug !== name ? `${name} (${slug})` : name,
+      };
+    });
   }, [draftResourceType, agents, localTools, localDataInstances]);
 
   useEffect(() => {
@@ -279,44 +282,52 @@ export function RbacListPage() {
         submitLabel="Добавить"
         size="xl"
       >
-        <div
-          style={{
-            display: 'grid',
-            gap: 12,
-            gridTemplateColumns: '140px 1fr 180px 180px 140px',
-            alignItems: 'end',
-          }}
-        >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
           <div>
-            <div style={{ color: 'var(--text-tertiary)', fontSize: 12, marginBottom: 4 }}>Уровень</div>
-            <Select value={draftLevel} onChange={(value) => setDraftLevel(value as typeof draftLevel)} options={levelOptions} />
+            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 10 }}>
+              На кого действует
+            </div>
+            <div style={{ display: 'grid', gap: 12, gridTemplateColumns: '160px 1fr', alignItems: 'end' }}>
+              <div>
+                <div style={{ color: 'var(--text-tertiary)', fontSize: 12, marginBottom: 4 }}>Уровень</div>
+                <Select value={draftLevel} onChange={(value) => setDraftLevel(value as typeof draftLevel)} options={levelOptions} />
+              </div>
+              <div>
+                <div style={{ color: 'var(--text-tertiary)', fontSize: 12, marginBottom: 4 }}>Владелец</div>
+                <Select
+                  value={draftOwnerId}
+                  onChange={setDraftOwnerId}
+                  options={ownerOptions}
+                  placeholder={draftLevel === 'platform' ? 'Платформа (все)' : 'Выберите владельца'}
+                  disabled={draftLevel === 'platform'}
+                />
+              </div>
+            </div>
           </div>
-          <div>
-            <div style={{ color: 'var(--text-tertiary)', fontSize: 12, marginBottom: 4 }}>Владелец</div>
-            <Select
-              value={draftOwnerId}
-              onChange={setDraftOwnerId}
-              options={ownerOptions}
-              placeholder={draftLevel === 'platform' ? 'Платформа' : 'Выберите владельца'}
-              disabled={draftLevel === 'platform'}
-            />
-          </div>
-          <div>
-            <div style={{ color: 'var(--text-tertiary)', fontSize: 12, marginBottom: 4 }}>Ресурс</div>
-            <Select value={draftResourceType} onChange={(value) => setDraftResourceType(value as ResourceType)} options={resourceTypeOptions} />
-          </div>
-          <div>
-            <div style={{ color: 'var(--text-tertiary)', fontSize: 12, marginBottom: 4 }}>Значение</div>
-            <Select
-              value={draftResourceId}
-              onChange={setDraftResourceId}
-              options={resourceOptions}
-              placeholder="Выберите ресурс"
-            />
-          </div>
-          <div>
-            <div style={{ color: 'var(--text-tertiary)', fontSize: 12, marginBottom: 4 }}>Эффект</div>
-            <Select value={draftEffect} onChange={(value) => setDraftEffect(value as RbacEffect)} options={effectOptions} />
+
+          <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: 20 }}>
+            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 10 }}>
+              Что разрешает / запрещает
+            </div>
+            <div style={{ display: 'grid', gap: 12, gridTemplateColumns: '180px 1fr 160px', alignItems: 'end' }}>
+              <div>
+                <div style={{ color: 'var(--text-tertiary)', fontSize: 12, marginBottom: 4 }}>Тип ресурса</div>
+                <Select value={draftResourceType} onChange={(value) => setDraftResourceType(value as ResourceType)} options={resourceTypeOptions} />
+              </div>
+              <div>
+                <div style={{ color: 'var(--text-tertiary)', fontSize: 12, marginBottom: 4 }}>Ресурс</div>
+                <Select
+                  value={draftResourceId}
+                  onChange={setDraftResourceId}
+                  options={resourceOptions}
+                  placeholder="Выберите ресурс"
+                />
+              </div>
+              <div>
+                <div style={{ color: 'var(--text-tertiary)', fontSize: 12, marginBottom: 4 }}>Эффект</div>
+                <Select value={draftEffect} onChange={(value) => setDraftEffect(value as RbacEffect)} options={effectOptions} />
+              </div>
+            </div>
           </div>
         </div>
       </FormModal>

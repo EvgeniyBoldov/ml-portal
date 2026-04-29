@@ -205,6 +205,7 @@
   transform: scale(1.05);
 }
 
+
 .uploadError {
   font-size: 12px;
   color: var(--danger, #ef4444);

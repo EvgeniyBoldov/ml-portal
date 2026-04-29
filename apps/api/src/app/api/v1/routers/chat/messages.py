@@ -296,6 +296,23 @@ async def resume_run(
         paused_context=paused_context if isinstance(paused_context, dict) else None,
     )
 
+    # P0-4: For confirm action, issue a confirmation token so the resumed pipeline
+    # can pass the HITL gate without looping back to another confirmation_required.
+    confirmation_tokens: list[str] = []
+    if action == "confirm" and isinstance(paused_action, dict):
+        fingerprint = str(paused_action.get("operation_fingerprint") or "").strip()
+        if fingerprint and run.chat_id:
+            try:
+                conf_svc = get_confirmation_service()
+                token, _ = conf_svc.issue_token(
+                    fingerprint=fingerprint,
+                    user_id=uuid.UUID(str(current_user.id)),
+                    chat_id=uuid.UUID(str(run.chat_id)),
+                )
+                confirmation_tokens = [token]
+            except Exception as _ce:
+                logger.warning("Failed to issue confirmation token on resume: %s", _ce)
+
     tenant_uuid_val = uuid.UUID(str(run.tenant_id))
     user_uuid_val = uuid.UUID(str(current_user.id))
     chats_repo = AsyncChatsRepository(session, tenant_uuid_val, user_uuid_val)
@@ -322,4 +339,5 @@ async def resume_run(
         paused_action=paused_action if isinstance(paused_action, dict) else None,
         paused_context=paused_context if isinstance(paused_context, dict) else None,
         user_input=user_input or None,
+        confirmation_tokens=confirmation_tokens,
     )

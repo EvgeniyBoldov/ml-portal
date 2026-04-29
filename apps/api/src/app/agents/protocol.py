@@ -187,10 +187,10 @@ def build_operations_prompt(operation_schemas: List[dict]) -> str:
 ## Available Operations
 
 MANDATORY RULES — follow these without exception:
-1. You MUST call at least one operation before giving any answer.
-2. Never answer from prior knowledge or make assumptions about data — collect it first via operations.
-3. Only after you receive operation results may you compose and deliver the final answer.
-4. If the user asks what data sources / operations are available — call catalog_inspect or a similar discovery operation; do not list them from memory.
+1. If the user asks for REAL DATA (records, values, counts, status, config) — you MUST call an operation first. Never answer from prior knowledge about actual data.
+2. EXCEPTION: if the user asks only about what data sources, collections, or operations are available (meta-question about capabilities) — you MAY answer directly using the capability card above without calling any operation.
+3. Only after you receive operation results may you compose and deliver the final answer for data questions.
+4. Never make up or assume actual data values — collect them via operations.
 
 To call an operation, respond with an operation_call block:
 

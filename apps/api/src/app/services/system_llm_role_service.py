@@ -139,13 +139,11 @@ class SystemLLMRoleService:
         """Ensure default roles exist and return them."""
         default_roles = {}
         
+        default_configs = self._get_default_configs()
         for role_type in SystemLLMRoleType:
             role = await self.repo.get_active_role(role_type)
+            config = default_configs.get(role_type, {})
             if not role:
-                # Create default role
-                default_configs = self._get_default_configs()
-                config = default_configs.get(role_type, {})
-                
                 role = SystemLLMRole(
                     role_type=role_type,
                     is_active=True,
@@ -153,7 +151,18 @@ class SystemLLMRoleService:
                 )
                 role = await self.repo.create(role)
                 logger.info(f"Created default {role_type.value} role")
-            
+            else:
+                # Sync prompt-related fields so changes in v3_role_defaults propagate.
+                updated = False
+                for field in ("identity", "mission", "rules", "safety", "output_requirements"):
+                    new_val = config.get(field)
+                    if new_val is not None and getattr(role, field, None) != new_val:
+                        setattr(role, field, new_val)
+                        updated = True
+                if updated:
+                    role = await self.repo.update(role)
+                    logger.info(f"Updated prompt fields for {role_type.value} role")
+
             default_roles[role_type] = role
         
         return default_roles

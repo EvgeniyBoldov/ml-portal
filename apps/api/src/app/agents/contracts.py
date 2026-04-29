@@ -235,6 +235,7 @@ class ResolvedOperation(BaseModel):
     output_schema: Optional[Dict[str, Any]] = None
     data_instance_id: str = Field(..., min_length=1)
     data_instance_slug: str = Field(..., min_length=1)
+    collection_slug: Optional[str] = None
     provider_instance_id: Optional[str] = None
     provider_instance_slug: Optional[str] = None
     source: Literal["local", "mcp"]

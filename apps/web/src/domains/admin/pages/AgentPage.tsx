@@ -24,8 +24,7 @@ import {
 import { qk } from '@/shared/api/keys';
 import { useAgentDetail } from '@/shared/api/hooks/useAgents';
 import type { QueryKey } from '@tanstack/react-query';
-import Badge from '@/shared/ui/Badge';
-import { EntityPageV2, Tab, type EntityPageMode, type BreadcrumbItem } from '@/shared/ui';
+import { EntityPageV2, Tab, type BreadcrumbItem } from '@/shared/ui';
 import { Block, type FieldConfig } from '@/shared/ui/GridLayout';
 import { VersionsBlock } from '@/shared/ui/VersionsBlock';
 import DataTable, { type DataTableColumn } from '@/shared/ui/DataTable';
@@ -207,10 +206,6 @@ const INFO_FIELDS: FieldConfig[] = [
   },
 ];
 
-const STATS_FIELDS: FieldConfig[] = [
-  { key: 'versions_count', type: 'badge', label: 'Всего версий', badgeTone: 'neutral', editable: false },
-  { key: 'primary_version', type: 'badge', label: 'Основная версия', badgeTone: 'success', editable: false },
-];
 
 /* ─── Component ─── */
 
@@ -323,11 +318,6 @@ export function AgentPage() {
     output_format: '', examples: '', never_do: '', allowed_ops: '',
     short_info: '', tags: [], is_routable: false,
     routing_keywords: [], routing_negative_keywords: [], notes: ''
-  };
-
-  const statsData = {
-    versions_count: `${versions.length}`,
-    primary_version: primaryVersion ? `v${primaryVersion.version}` : 'Нет',
   };
 
   const allowedCollectionIds = useMemo(
@@ -463,22 +453,12 @@ export function AgentPage() {
             onChange={handleFieldChange}
           />
 
-          {/* Row 1 right: Stats */}
-          <Block
-            title="Статистика"
-            icon="chart"
-            iconVariant="success"
-            width="1/2"
-            fields={STATS_FIELDS}
-            data={statsData}
-          />
-
-          {/* Row 2: Execution config (editable, agent-level) */}
+          {/* Row 1 right: Execution config */}
           <Block
             title="Конфигурация исполнения"
             icon="settings"
             iconVariant="primary"
-            width="full"
+            width="1/2"
             fields={execFieldsWithModels}
             data={execData}
             editable={mode === 'edit' || mode === 'create'}

@@ -214,6 +214,7 @@ class RunStore:
         chat_id=None,
         message_id=None,
         context_snapshot: Optional[Dict[str, Any]] = None,
+        run_id_override: Optional[uuid.UUID] = None,
     ) -> uuid.UUID:
         """
         Start a new agent run and return its ID.
@@ -222,8 +223,9 @@ class RunStore:
             tenant_id: UUID or str — tenant identifier
             logging_level: "none" | "brief" | "full" — copied from Agent at run start
             context_snapshot: Frozen versions/config for reproducibility
+            run_id_override: Use a pre-generated UUID instead of creating a new one.
         """
-        run_id = uuid.uuid4()
+        run_id = run_id_override if run_id_override is not None else uuid.uuid4()
         run = AgentRun(
             id=run_id,
             tenant_id=self._to_uuid(tenant_id),

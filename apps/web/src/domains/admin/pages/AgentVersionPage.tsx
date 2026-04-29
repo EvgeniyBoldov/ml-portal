@@ -3,16 +3,10 @@
  *
  * Tabs:
  * 1. Промпт — prompt parts (identity, mission, scope, rules, tool_use_rules, output_format, examples)
- * 2. Выполнение — execution config + safety knobs
+ * 2. Выполнение — safety knobs + заметки
  * 3. Роутинг — routing config
  */
 import { useParams } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
-import {
-  adminApi,
-  type Model,
-} from '@/shared/api';
-import { qk } from '@/shared/api/keys';
 import {
   EntityPageV2,
   Tab,
@@ -93,49 +87,6 @@ const OUTPUT_FIELDS: FieldConfig[] = [
   },
 ];
 
-// Dynamic model options will be generated in component
-
-const EXEC_FIELDS: FieldConfig[] = [
-  {
-    key: 'model',
-    type: 'select',
-    label: 'Модель',
-    options: [], // Will be set dynamically
-  },
-  {
-    key: 'timeout_s',
-    type: 'number',
-    label: 'Таймаут (сек)',
-    placeholder: '120',
-  },
-  {
-    key: 'max_steps',
-    type: 'number',
-    label: 'Макс. шагов',
-    placeholder: '10',
-  },
-  {
-    key: 'max_retries',
-    type: 'number',
-    label: 'Макс. ретраев',
-    placeholder: '3',
-  },
-  {
-    key: 'max_tokens',
-    type: 'number',
-    label: 'Макс. токенов',
-    placeholder: '4096',
-  },
-  {
-    key: 'temperature',
-    type: 'number',
-    label: 'Temperature',
-    placeholder: '0.2',
-    step: 0.1,
-    min: 0,
-    max: 2,
-  },
-];
 
 const SAFETY_FIELDS: FieldConfig[] = [
   {
@@ -234,26 +185,6 @@ const META_FIELDS: FieldConfig[] = [
 export function AgentVersionPage() {
   const { id, version: versionParam } = useParams<{ id: string; version: string }>();
 
-  // Load LLM models for dropdown
-  const { data: modelsData, isLoading: modelsLoading } = useQuery({
-    queryKey: qk.admin.models.list({}),
-    queryFn: () => adminApi.getModels({ type: 'llm_chat', enabled_only: true }),
-  });
-  const models: Model[] = modelsData?.items ?? [];
-  
-  // Filter only LLM models and create options
-  const modelOptions = [
-    { value: '', label: '— по умолчанию —' },
-    ...models
-      .filter(m => m.type === 'llm_chat' && m.enabled)
-      .map(m => ({ value: m.alias, label: `${m.name} (${m.alias})` })),
-  ];
-
-  // Update EXEC_FIELDS with dynamic options
-  const execFieldsWithModels = EXEC_FIELDS.map(field =>
-    field.key === 'model' ? { ...field, options: modelOptions } : field
-  );
-
   const {
     mode, isCreate, versionNumber, saving, isLoading,
     parent: agent, existingVersion,
@@ -270,6 +201,7 @@ export function AgentVersionPage() {
   const isDraft = existingVersion?.status === 'draft';
   const canEdit = isCreate || isDraft;
   const isEditable = (mode === 'edit' || mode === 'create') && canEdit;
+  const showDraftBadge = isEditable && isDraft;
 
   // ─── AI Generation ───
   const availableFields = [
@@ -302,12 +234,6 @@ export function AgentVersionPage() {
     tool_use_rules: existingVersion?.tool_use_rules ?? '',
     output_format: existingVersion?.output_format ?? '',
     examples: existingVersion?.examples ?? '',
-    model: existingVersion?.model ?? '',
-    timeout_s: existingVersion?.timeout_s ?? null,
-    max_steps: existingVersion?.max_steps ?? null,
-    max_retries: existingVersion?.max_retries ?? null,
-    max_tokens: existingVersion?.max_tokens ?? null,
-    temperature: existingVersion?.temperature ?? null,
     requires_confirmation_for_write: existingVersion?.requires_confirmation_for_write ?? false,
     risk_level: existingVersion?.risk_level ?? '',
     never_do: existingVersion?.never_do ?? '',
@@ -364,6 +290,21 @@ export function AgentVersionPage() {
       onSave={isEditable ? handleSave : undefined}
       onCancel={isEditable ? handleCancel : undefined}
       actionButtons={isEditable ? undefined : actionButtons}
+      headerActions={
+        showDraftBadge ? (
+          <span style={{
+            fontSize: 12,
+            fontWeight: 600,
+            padding: '3px 10px',
+            borderRadius: 6,
+            background: 'var(--warning-muted, #fef3c7)',
+            color: 'var(--warning, #d97706)',
+            border: '1px solid var(--warning-border, #fde68a)',
+          }}>
+            Редактирование черновика
+          </span>
+        ) : undefined
+      }
     >
       {/* ── Tab 1: Промпт ── */}
       <Tab title="Промпт" layout="grid" id="prompt">
@@ -418,17 +359,6 @@ export function AgentVersionPage() {
       {/* ── Tab 2: Выполнение ── */}
       <Tab title="Выполнение" layout="grid" id="execution">
         <Block
-          title="Execution Config"
-          icon="settings"
-          iconVariant="primary"
-          width="1/2"
-          fields={execFieldsWithModels}
-          data={viewData}
-          editable={isEditable}
-          onChange={handleFieldChange}
-        />
-
-        <Block
           title="Safety Knobs"
           icon="shield"
           iconVariant="warn"
@@ -443,7 +373,7 @@ export function AgentVersionPage() {
           title="Заметки & Метаданные"
           icon="database"
           iconVariant="neutral"
-          width="full"
+          width="1/2"
           fields={[...NOTES_FIELDS, ...META_FIELDS]}
           data={{ ...viewData, ...metaData }}
           editable={isEditable}

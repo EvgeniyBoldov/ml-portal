@@ -25,7 +25,19 @@ export const RBAC_EFFECT_TONES: Record<RbacEffect, 'success' | 'danger'> = {
 export const RBAC_RESOURCE_TYPE_LABELS: Record<ResourceType, string> = {
   agent: 'Агент',
   tool: 'Инструмент',
-  instance: 'Коннектор',
+  instance: 'Данные',
+};
+
+export const RBAC_RESOURCE_TYPE_DISPLAY_LABELS: Record<ResourceType, string> = {
+  agent: 'Агент',
+  tool: 'Инструмент',
+  instance: 'Данные',
+};
+
+export const RBAC_RESOURCE_TYPE_TONES: Record<ResourceType, 'info' | 'neutral' | 'warn'> = {
+  agent: 'info',
+  tool: 'neutral',
+  instance: 'warn',
 };
 
 export const RBAC_RESOURCE_TYPE_ORDER: Record<ResourceType, number> = {

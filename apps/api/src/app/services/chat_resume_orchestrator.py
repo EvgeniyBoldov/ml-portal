@@ -28,6 +28,7 @@ class ChatResumeOrchestrator:
         paused_action: Optional[Dict[str, Any]],
         paused_context: Optional[Dict[str, Any]],
         user_input: Optional[str] = None,
+        confirmation_tokens: Optional[list] = None,
     ) -> Dict[str, Any]:
         status = ContinuationTerminalStatus.COMPLETED
         continuation_error: Optional[str] = None
@@ -49,6 +50,7 @@ class ChatResumeOrchestrator:
                 "resume_checkpoint": checkpoint,
                 "resumed_from_run_id": run_id,
             },
+            confirmation_tokens=list(confirmation_tokens or []),
         ):
             terminal = continuation_terminal_from_event(event)
             if terminal:

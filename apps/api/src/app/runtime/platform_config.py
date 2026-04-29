@@ -102,7 +102,12 @@ class PlatformConfigLoader:
     def _derive_policy(config: Dict[str, Any]) -> PolicyLimits:
         policy = config.get("policy") if isinstance(config, dict) else None
         policy = policy or {}
-        return PolicyLimits(
-            max_steps=int(policy.get("max_steps") or MAX_PLANNER_ITERATIONS_DEFAULT),
-            max_wall_time_ms=int(policy.get("max_wall_time_ms") or MAX_WALL_TIME_MS_DEFAULT),
-        )
+        try:
+            max_steps = int(policy.get("max_steps") or MAX_PLANNER_ITERATIONS_DEFAULT)
+        except (TypeError, ValueError):
+            max_steps = MAX_PLANNER_ITERATIONS_DEFAULT
+        try:
+            max_wall_time_ms = int(policy.get("max_wall_time_ms") or MAX_WALL_TIME_MS_DEFAULT)
+        except (TypeError, ValueError):
+            max_wall_time_ms = MAX_WALL_TIME_MS_DEFAULT
+        return PolicyLimits(max_steps=max_steps, max_wall_time_ms=max_wall_time_ms)

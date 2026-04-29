@@ -136,11 +136,11 @@ class CapabilityCardBuilder:
             if shown >= MAX_OPERATIONS_IN_CARD:
                 break
             shown += 1
-            data_slug = self._text(op.data_instance_slug)
+            coll_slug = self._text(getattr(op, "collection_slug", None) or op.data_instance_slug)
             line = f"- `{op.operation_slug}`"
             details: List[str] = []
-            if data_slug:
-                details.append(f"collection: {data_slug}")
+            if coll_slug:
+                details.append(f"collection: {coll_slug}")
             if details:
                 line += " - " + "; ".join(details)
             lines.append(line)

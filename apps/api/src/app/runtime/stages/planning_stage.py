@@ -144,6 +144,7 @@ class PlanningStage:
                 "agent_slug": step.agent_slug,
                 "phase_id": step.phase_id,
                 "rationale": step.rationale,
+                "agent_input": step.agent_input or {},
             }
             runtime_state.add_planner_step(step_record)
 
@@ -237,6 +238,12 @@ class PlanningStage:
                 return
 
             # kind == CALL_AGENT
+            _agent_version_id = None
+            if request.agent_version_id:
+                try:
+                    _agent_version_id = UUID(str(request.agent_version_id))
+                except (ValueError, AttributeError):
+                    pass
             async for event in self._agent.execute(
                 step=step,
                 runtime_state=runtime_state,
@@ -246,17 +253,26 @@ class PlanningStage:
                 tenant_id=tenant_id,
                 platform_config=platform_config,
                 model=request.model,
+                agent_version_id=_agent_version_id,
             ):
                 yield PhasedEvent(event, OrchestrationPhase.AGENT)
                 if event.type == RuntimeEventType.CONFIRMATION_REQUIRED:
                     runtime_state.status = PipelineStopReason.WAITING_CONFIRMATION.value
                     message = str(event.data.get("summary") or event.data.get("message") or "").strip() or None
+                    # Include confirmation details in STOP so paused_action has
+                    # operation_fingerprint available for resume token issuance (P0-5).
+                    stop_event_data: Dict[str, Any] = {
+                        "reason": PipelineStopReason.WAITING_CONFIRMATION.value,
+                        "run_id": str(run_id),
+                    }
+                    if message:
+                        stop_event_data["message"] = message
+                    for _key in ("operation_fingerprint", "tool_slug", "operation", "risk_level", "args_preview", "summary"):
+                        _val = event.data.get(_key)
+                        if _val is not None:
+                            stop_event_data[_key] = _val
                     yield PhasedEvent(
-                        RuntimeEvent.stop(
-                            PipelineStopReason.WAITING_CONFIRMATION.value,
-                            run_id=str(run_id),
-                            message=message,
-                        ),
+                        RuntimeEvent(RuntimeEventType.STOP, stop_event_data),
                         OrchestrationPhase.PLANNER,
                     )
                     self.outcome = PlanningOutcome(

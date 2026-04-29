@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useCallback, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useCallback, useRef, ReactNode } from 'react';
 import { useChats } from '@shared/api/hooks/useChats';
 import { useQueryClient } from '@tanstack/react-query';
 import type { Chat, ChatMessage } from '@shared/api/types';
@@ -73,6 +73,7 @@ interface ChatState {
   pausedRunId: string | null;
   orchestrationEnvelope: OrchestrationEnvelope | null;
   orchestrationState: OrchestrationState | null;
+  isStreaming: boolean;
 }
 
 interface ChatContextValue {
@@ -81,6 +82,7 @@ interface ChatContextValue {
   setCurrentChat: (chatId: string) => void;
   clearPendingState: () => void;
   applyPausedState: (state: ResumePausedState) => void;
+  abortStream: () => void;
   sendMessageStream: (
     chatId: string,
     message: string,
@@ -122,6 +124,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const [pausedRunId, setPausedRunId] = useState<string | null>(null);
   const [orchestrationEnvelope, setOrchestrationEnvelope] = useState<OrchestrationEnvelope | null>(null);
   const [orchestrationState, setOrchestrationState] = useState<OrchestrationState | null>(null);
+  const [isStreaming, setIsStreaming] = useState(false);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   const { data: chats } = useChats();
   const queryClient = useQueryClient();
@@ -171,6 +175,14 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     setOrchestrationEnvelope(null);
     setOrchestrationState(null);
     setStreamStatus(null);
+  }, []);
+
+  const abortStream = useCallback(() => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    setIsStreaming(false);
   }, []);
 
   const applyPausedState = useCallback((resumeState: ResumePausedState) => {
@@ -290,11 +302,16 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       if (token) {
         headers['Authorization'] = `Bearer ${token}`;
       }
+
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
+      setIsStreaming(true);
       
       const response = await fetch(url, {
         method: 'POST',
         headers,
         credentials: 'include',
+        signal: controller.signal,
         body: JSON.stringify({
           content: message,
           use_rag: useRag,
@@ -734,17 +751,26 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       }
       
     } catch (err: any) {
-      const errorMsg = err?.message || 'Ошибка отправки сообщения';
-      setError(errorMsg);
-      onError(errorMsg);
-      setPendingConfirmations([]);
-      setPendingInput(null);
-      setStopReason(null);
-      setPausedRunId(null);
-      setStreamStatus(null);
-      setOrchestrationEnvelope(null);
-      setOrchestrationState(null);
+      if (err?.name === 'AbortError') {
+        // User stopped generation — not an error
+        setStreamStatus(null);
+        setPendingConfirmations([]);
+        setPendingInput(null);
+      } else {
+        const errorMsg = err?.message || 'Ошибка отправки сообщения';
+        setError(errorMsg);
+        onError(errorMsg);
+        setPendingConfirmations([]);
+        setPendingInput(null);
+        setStopReason(null);
+        setPausedRunId(null);
+        setStreamStatus(null);
+        setOrchestrationEnvelope(null);
+        setOrchestrationState(null);
+      }
     } finally {
+      setIsStreaming(false);
+      abortControllerRef.current = null;
     }
   }, []);
 
@@ -764,11 +790,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       pausedRunId,
       orchestrationEnvelope,
       orchestrationState,
+      isStreaming,
     },
     loadMessages,
     setCurrentChat,
     clearPendingState,
     applyPausedState,
+    abortStream,
     sendMessageStream,
   };
 

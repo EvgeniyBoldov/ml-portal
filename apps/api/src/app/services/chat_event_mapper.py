@@ -53,14 +53,19 @@ class ChatEventMapper:
             }
 
         if event.type == RuntimeEventType.PLANNER_STEP:
+            kind = event.data.get("kind")
+            rationale = event.data.get("rationale")
             return {
                 "type": "planner_action",
                 "iteration": event.data.get("iteration"),
-                "kind": event.data.get("kind"),
+                "kind": kind,
+                "action_type": kind,
+                "step_type": kind,
                 "agent_slug": event.data.get("agent_slug"),
                 "phase_id": event.data.get("phase_id"),
                 "phase_title": event.data.get("phase_title"),
-                "rationale": event.data.get("rationale"),
+                "rationale": rationale,
+                "why": rationale,
                 "risk": event.data.get("risk"),
                 "orchestration_envelope": env,
             }

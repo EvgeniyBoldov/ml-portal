@@ -6,6 +6,7 @@ import {
   RBAC_LEVEL_LABELS,
   RBAC_LEVEL_TONES,
   RBAC_RESOURCE_TYPE_LABELS,
+  RBAC_RESOURCE_TYPE_TONES,
 } from './rbacLabels';
 import type { Agent } from '@/shared/api/agents';
 import type { ToolInstance } from '@/shared/api/toolInstances';
@@ -76,7 +77,7 @@ export function buildRbacRuleColumns({
   if (showOwner) {
     columns.push({
       key: 'target',
-      label: 'Владелец',
+      label: 'На кого действует',
       width: 240,
       sortable: true,
       sortValue: (row) => row.owner.level,
@@ -84,18 +85,23 @@ export function buildRbacRuleColumns({
         kind: 'select',
         placeholder: 'Все уровни',
         options: [
-          { value: 'platform', label: 'Платформа' },
+          { value: 'platform', label: 'Все (платформа)' },
           { value: 'tenant', label: 'Тенант' },
           { value: 'user', label: 'Пользователь' },
         ],
         getValue: (row) => row.owner.level,
       },
-      render: (row) => (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <span style={{ fontWeight: 500 }}>{resolveRbacOwnerLabel(row)}</span>
-          <Badge tone={RBAC_LEVEL_TONES[row.owner.level]}>{RBAC_LEVEL_LABELS[row.owner.level]}</Badge>
-        </div>
-      ),
+      render: (row) => {
+        const levelLabel = RBAC_LEVEL_LABELS[row.owner.level];
+        const name = row.owner.level === 'platform'
+          ? 'Все'
+          : (row.owner.name?.trim() || '—');
+        return (
+          <Badge tone={RBAC_LEVEL_TONES[row.owner.level]}>
+            {levelLabel}: {name}
+          </Badge>
+        );
+      },
     });
   }
 
@@ -111,17 +117,20 @@ export function buildRbacRuleColumns({
         placeholder: 'Все ресурсы',
         options: [
           { value: 'agent', label: 'Агенты' },
-          { value: 'tool', label: 'Инструменты' },
-          { value: 'instance', label: 'Коннекторы' },
+          { value: 'instance', label: 'Данные' },
         ],
         getValue: (row) => row.resource.type,
       },
-      render: (row) => (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <span style={{ fontWeight: 500 }}>{resolveRbacResourceLabel(row, agentById, instanceById)}</span>
-          <Badge tone="neutral">{RBAC_RESOURCE_TYPE_LABELS[row.resource.type as ResourceType]}</Badge>
-        </div>
-      ),
+      render: (row) => {
+        const type = row.resource.type as ResourceType;
+        const name = resolveRbacResourceLabel(row, agentById, instanceById);
+        const tone = RBAC_RESOURCE_TYPE_TONES[type] ?? 'neutral';
+        return (
+          <Badge tone={tone}>
+            {RBAC_RESOURCE_TYPE_LABELS[type]}: {name}
+          </Badge>
+        );
+      },
     },
     {
       key: 'effect',

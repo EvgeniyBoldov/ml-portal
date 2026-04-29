@@ -44,7 +44,7 @@ function asAnswerBlocks(value: unknown): Array<Record<string, unknown>> | undefi
 export default function Chat() {
   const { chatId } = useParams();
   const nav = useNavigate();
-  const { state, loadMessages, setCurrentChat, clearPendingState, applyPausedState, sendMessageStream } = useChat();
+  const { state, loadMessages, setCurrentChat, clearPendingState, applyPausedState, sendMessageStream, abortStream } = useChat();
   const historyRef = useRef<HTMLDivElement>(null);
   const [busy, setBusy] = React.useState(false);
   const [streamError, setStreamError] = React.useState<string | null>(null);
@@ -386,7 +386,12 @@ export default function Chat() {
       {!isWaitingInput && (
         <ChatComposer
           onSend={handleSend}
-          disabled={busy}
+          disabled={busy && !state.isStreaming}
+          isStreaming={state.isStreaming}
+          onStop={() => {
+            abortStream();
+            setBusy(false);
+          }}
           placeholder="Напишите сообщение..."
         />
       )}

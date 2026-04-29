@@ -161,6 +161,9 @@ class ChatTurnOrchestrator:
                 elif event_data.get("type") == "final_content":
                     assistant_content = event_data.get("content", assistant_content)
                     rag_sources = event_data.get("sources", [])
+                    _final_stop_reason = event_data.get("stop_reason")
+                    if _final_stop_reason in ("failed", "loop_detected", "budget_exceeded", "aborted"):
+                        llm_error = f"Agent run ended with status: {_final_stop_reason}"
                 elif event_data.get("type") == "run_paused":
                     run_paused = True
                     paused_run_id = event_data.get("run_id")
@@ -181,7 +184,7 @@ class ChatTurnOrchestrator:
             await self.turn_service.fail_turn(turn_id, error_message=llm_error)
             yield {"type": "error", "error": llm_error}
 
-        if assistant_content:
+        if assistant_content and not llm_error:
             generated_attachment_ids: list[str] = []
             generated_attachment_meta: list[dict[str, Any]] = []
             generated = await process_generated_files(

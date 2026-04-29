@@ -10,11 +10,13 @@ interface Attachment {
 
 interface ChatComposerProps {
   onSend: (message: string, options: { agentSlug?: string; attachments?: File[] }) => void;
+  onStop?: () => void;
+  isStreaming?: boolean;
   disabled?: boolean;
   placeholder?: string;
 }
 
-export function ChatComposer({ onSend, disabled, placeholder }: ChatComposerProps) {
+export function ChatComposer({ onSend, onStop, isStreaming, disabled, placeholder }: ChatComposerProps) {
   const [text, setText] = useState('');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -134,7 +136,8 @@ export function ChatComposer({ onSend, disabled, placeholder }: ChatComposerProp
     });
   };
 
-  const canSend = (text.trim().length > 0 || attachments.length > 0) && !disabled;
+  const canStop = isStreaming && !!onStop;
+  const canSend = (text.trim().length > 0 || attachments.length > 0) && !disabled && !isStreaming;
   const acceptValue = useMemo(() => {
     const list = uploadPolicy?.allowed_extensions ?? ['txt', 'md', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'csv'];
     return list.map((ext) => (ext.startsWith('.') ? ext : `.${ext}`)).join(',');
@@ -215,15 +218,26 @@ export function ChatComposer({ onSend, disabled, placeholder }: ChatComposerProp
             accept={acceptValue}
           />
 
-          <button
-            className={`${styles.sendButton} ${canSend ? styles.active : ''}`}
-            onClick={handleSubmit}
-            disabled={!canSend}
-            type="button"
-            title="Отправить (Enter)"
-          >
-            <Icon name="send" size={20} />
-          </button>
+          {canStop ? (
+            <button
+              className={`${styles.sendButton} ${styles.active}`}
+              onClick={onStop}
+              type="button"
+              title="Остановить генерацию"
+            >
+              <Icon name="square" size={16} />
+            </button>
+          ) : (
+            <button
+              className={`${styles.sendButton} ${canSend ? styles.active : ''}`}
+              onClick={handleSubmit}
+              disabled={!canSend}
+              type="button"
+              title="Отправить (Enter)"
+            >
+              <Icon name="send" size={20} />
+            </button>
+          )}
         </div>
       </div>
       {uploadError && <div className={styles.uploadError}>{uploadError}</div>}

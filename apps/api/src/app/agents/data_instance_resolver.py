@@ -22,7 +22,11 @@ class AllowedDataInstance:
 
 
 class RuntimeDataInstanceResolver:
-    """Resolve runtime-ready data instances with providers and bound collections."""
+    """Resolve runtime-ready data instances with providers and bound collections.
+
+    Each (instance, collection) pair is emitted as a separate AllowedDataInstance
+    so that one data instance with N collections produces N resolvable entries.
+    """
 
     def __init__(
         self,
@@ -46,9 +50,9 @@ class RuntimeDataInstanceResolver:
             is_ready, readiness_reason, _ = await self.instance_service.evaluate_instance_readiness(
                 instance
             )
-            collection = await self._load_bound_collection(instance)
-            runtime_domain = self._resolve_runtime_domain(collection, instance)
+
             if not is_ready:
+                runtime_domain = self._resolve_runtime_domain(None, instance)
                 resolved.append(
                     AllowedDataInstance(
                         instance=instance,
@@ -65,6 +69,7 @@ class RuntimeDataInstanceResolver:
             if provider is not None:
                 provider_ready, provider_reason = await self._is_provider_runtime_ready(provider)
                 if not provider_ready:
+                    runtime_domain = self._resolve_runtime_domain(None, instance)
                     resolved.append(
                         AllowedDataInstance(
                             instance=instance,
@@ -76,23 +81,38 @@ class RuntimeDataInstanceResolver:
                     )
                     continue
 
-            resolved.append(
-                AllowedDataInstance(
-                    instance=instance,
-                    provider=provider,
-                    collection=collection,
-                    readiness_reason=readiness_reason,
-                    runtime_domain=runtime_domain,
+            collections = await self._load_bound_collections(instance)
+            if collections:
+                for collection in collections:
+                    runtime_domain = self._resolve_runtime_domain(collection, instance)
+                    resolved.append(
+                        AllowedDataInstance(
+                            instance=instance,
+                            provider=provider,
+                            collection=collection,
+                            readiness_reason=readiness_reason,
+                            runtime_domain=runtime_domain,
+                        )
+                    )
+            else:
+                runtime_domain = self._resolve_runtime_domain(None, instance)
+                resolved.append(
+                    AllowedDataInstance(
+                        instance=instance,
+                        provider=provider,
+                        collection=None,
+                        readiness_reason=readiness_reason,
+                        runtime_domain=runtime_domain,
+                    )
                 )
-            )
         return resolved
 
-    async def _load_bound_collection(
+    async def _load_bound_collections(
         self,
         instance: ToolInstance,
-    ) -> Optional[Collection]:
+    ) -> List[Collection]:
         if not instance.is_data:
-            return None
+            return []
         result = await self.session.execute(
             select(Collection)
             .options(
@@ -100,10 +120,9 @@ class RuntimeDataInstanceResolver:
                 selectinload(Collection.current_version),
             )
             .where(Collection.data_instance_id == instance.id)
-            .order_by(Collection.created_at.desc())
-            .limit(1)
+            .order_by(Collection.created_at.asc())
         )
-        return result.scalar_one_or_none()
+        return list(result.scalars().all())
 
     @staticmethod
     def _resolve_runtime_domain(collection: Optional[Collection], instance: ToolInstance) -> str:
