@@ -3,39 +3,40 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import db_session, get_current_user, get_llm_client
 from app.core.http.clients import LLMClientProtocol
 from app.core.security import UserCtx
+from app.models.model_registry import Model, ModelType
 
 router = APIRouter()
 
 
 @router.get("/models")
-async def list_llm_models():
-    """Get list of available LLM models"""
-    from app.core.config import get_settings
-    settings = get_settings()
-
-    models = []
-    if settings.LLM_PROVIDER == "groq":
-        models = [
-            {"id": "llama-3.1-8b-instant", "name": "Llama 3.1 8B", "provider": "groq"},
-            {"id": "llama-3.1-70b-versatile", "name": "Llama 3.1 70B", "provider": "groq"},
-            {"id": "mixtral-8x7b-32768", "name": "Mixtral 8x7B", "provider": "groq"},
-            {"id": "compound-beta", "name": "Compound Beta", "provider": "groq"},
-        ]
-    elif settings.LLM_PROVIDER == "openai":
-        models = [
-            {"id": "gpt-4-turbo-preview", "name": "GPT-4 Turbo", "provider": "openai"},
-            {"id": "gpt-3.5-turbo", "name": "GPT-3.5 Turbo", "provider": "openai"},
-        ]
-    else:
-        models = [
-            {"id": "default", "name": "Default Model", "provider": settings.LLM_PROVIDER},
-        ]
-
+async def list_llm_models(
+    session: AsyncSession = Depends(db_session),
+):
+    """Get LLM models from registry (connector-driven, no env provider switch)."""
+    result = await session.execute(
+        select(Model)
+        .where(
+            Model.type == ModelType.LLM_CHAT,
+            Model.enabled == True,  # noqa: E712
+            Model.deleted_at.is_(None),
+        )
+        .order_by(Model.default_for_type.desc(), Model.updated_at.desc())
+    )
+    rows = result.scalars().all()
+    models = [
+        {
+            "id": model.alias,
+            "name": model.name,
+            "provider": model.provider,
+        }
+        for model in rows
+    ]
     return {"models": models}
 
 

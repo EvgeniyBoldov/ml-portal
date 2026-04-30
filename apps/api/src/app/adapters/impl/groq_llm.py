@@ -138,7 +138,7 @@ class LLMClient:
             
             return {
                 "status": "healthy",
-                "provider": self.settings.LLM_PROVIDER,
+                "provider": "connector",
                 "model": response.get("model", "unknown")
             }
             
@@ -146,6 +146,6 @@ class LLMClient:
             logger.error(f"LLM health check failed: {str(e)}")
             return {
                 "status": "unhealthy",
-                "provider": self.settings.LLM_PROVIDER,
+                "provider": "connector",
                 "error": str(e)
             }

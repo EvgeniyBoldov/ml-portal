@@ -240,9 +240,11 @@ class RuntimeTurnState(BaseModel):
         kind = str((step or {}).get("kind") or "-")
         agent_slug = str((step or {}).get("agent_slug") or "-")
         phase_id = str((step or {}).get("phase_id") or "-")
-        # Include agent_input query to distinguish different calls to same agent
+        # Include a stable hash of the full query to distinguish different calls
+        # to the same agent while keeping signature length fixed.
         agent_input = (step or {}).get("agent_input") or {}
-        query = str(agent_input.get("query") or "")[:100]  # short hash of query
-        payload = f"{kind}|{agent_slug}|{phase_id}|{query}"
+        query = " ".join(str(agent_input.get("query") or "").split())
+        query_hash = hashlib.md5(query.encode("utf-8")).hexdigest()[:12] if query else "-"
+        payload = f"{kind}|{agent_slug}|{phase_id}|{query_hash}"
         return hashlib.md5(payload.encode("utf-8")).hexdigest()[:12]
     model_config = ConfigDict(arbitrary_types_allowed=True)

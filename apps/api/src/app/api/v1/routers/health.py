@@ -2,6 +2,7 @@
 Health and status endpoints for the API
 """
 from __future__ import annotations
+import asyncio
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -105,10 +106,24 @@ async def readiness_check_endpoint(session: AsyncSession = Depends(db_session)):
         
         # Embedding service
         try:
-            from app.core.di import get_emb_client
-            emb = get_emb_client()
-            test_emb = await emb.embed_texts(["health check"])
-            app_services["embedding"] = "ready" if test_emb else "not_ready"
+            from sqlalchemy import text
+            from app.adapters.embeddings import EmbeddingServiceFactory
+
+            result = await session.execute(
+                text(
+                    "SELECT alias FROM models "
+                    "WHERE type = 'EMBEDDING' AND enabled = true AND status = 'AVAILABLE' "
+                    "ORDER BY is_default DESC, alias ASC LIMIT 1"
+                )
+            )
+            model_alias = result.scalar_one_or_none()
+            if not model_alias:
+                app_services["embedding"] = "not_ready"
+            else:
+                await EmbeddingServiceFactory.ensure_model_registered_async(session, model_alias)
+                emb_service = EmbeddingServiceFactory.get_service(model_alias)
+                test_emb = await asyncio.to_thread(emb_service.embed_texts, ["health check"])
+                app_services["embedding"] = "ready" if test_emb else "not_ready"
         except Exception as e:
             logger.warning(f"Embedding health check failed: {e}")
             app_services["embedding"] = "not_ready"
@@ -143,7 +158,6 @@ async def readiness_check_endpoint(session: AsyncSession = Depends(db_session)):
         # Celery worker
         try:
             from app.celery_app import app as celery_app
-            import asyncio
             loop = asyncio.get_event_loop()
             inspect_result = await loop.run_in_executor(
                 None, lambda: celery_app.control.ping(timeout=2.0)

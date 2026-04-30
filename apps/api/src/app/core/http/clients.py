@@ -1,7 +1,6 @@
 from __future__ import annotations
 from typing import Protocol, AsyncIterator, Mapping, Any, Optional
 import httpx
-from ..config import get_settings
 from ..circuit_breaker import CircuitBreaker, CircuitBreakerConfig
 
 class LLMClientProtocol(Protocol):
@@ -57,8 +56,7 @@ class HTTPEmbClient:
         self._client = httpx.AsyncClient(base_url=base_url, timeout=timeout)
         self._retries = max_retries
         self._breaker = breaker
-        settings = get_settings()
-        self._default_model = settings.EMB_MODEL_ALIAS or "all-MiniLM-L6-v2"
+        self._default_model = "all-MiniLM-L6-v2"
 
     async def embed_texts(self, texts: list[str], model: str = "default") -> list[list[float]]:
         resolved_model = self._default_model if not model or model == "default" else model

@@ -163,10 +163,10 @@ async def test_log_routing_decision_persists_and_mirrors_run_step(logger, run_st
 async def test_log_system_llm_trace_mirrors_summary(logger, run_store, trace_service):
     run_id = uuid4()
     trace = await logger.log_system_llm_trace(
-        trace_type="triage",
+        trace_type="planner",
         role_config={
             "id": str(uuid4()),
-            "role_type": "triage",
+            "role_type": "planner",
             "model": "gpt-4.1",
             "temperature": 0.1,
             "max_tokens": 128,

@@ -34,6 +34,11 @@ def test_planner_terminal_from_event_maps_stop_and_error():
     assert status == RunTerminalStatus.FAILED
     assert err == "boom"
 
+    failed_final = RuntimeEvent(RuntimeEventType.FINAL, {"content": "partial", "stop_reason": "failed"})
+    status, err = planner_terminal_from_event(failed_final) or (None, None)
+    assert status == RunTerminalStatus.FAILED
+    assert err is None
+
 
 def test_continuation_terminal_and_api_status_mapping():
     paused, paused_err = continuation_terminal_from_event({"type": "run_paused", "reason": "waiting_input"}) or (None, None)

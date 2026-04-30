@@ -4,6 +4,7 @@ LLM client implementation using OpenAI API (supports Groq and other OpenAI-compa
 from __future__ import annotations
 from typing import Any, AsyncIterator, Mapping, Optional
 import asyncio
+import os
 from app.core.logging import get_logger
 from openai import AsyncOpenAI
 from app.core.config import get_settings
@@ -22,9 +23,11 @@ class LLMClient:
     
     def __init__(self):
         self.settings = get_settings()
+        base_url = os.getenv("OPENAI_BASE_URL") or "http://localhost:11434/v1"
+        api_key = os.getenv("OPENAI_API_KEY") or "dev-placeholder"
         self.client = AsyncOpenAI(
-            base_url=self.settings.LLM_BASE_URL,
-            api_key=self.settings.LLM_API_KEY or self.settings.LLM_TOKEN,
+            base_url=base_url,
+            api_key=api_key,
             timeout=30.0
         )
         self.default_model = "llama-3.1-8b-instant"  # Default model
@@ -149,7 +152,7 @@ class LLMClient:
             
             return {
                 "status": "healthy",
-                "provider": self.settings.LLM_PROVIDER,
+                "provider": "connector",
                 "model": response.get("model", "unknown")
             }
             
@@ -157,6 +160,6 @@ class LLMClient:
             logger.error(f"LLM health check failed: {str(e)}")
             return {
                 "status": "unhealthy",
-                "provider": self.settings.LLM_PROVIDER,
+                "provider": "connector",
                 "error": str(e)
             }

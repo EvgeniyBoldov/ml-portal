@@ -37,24 +37,13 @@ class Settings(BaseSettings):
     PASSWORD_REQUIRE_SPECIAL: bool = Field(default=False)
     PASSWORD_PEPPER: str | None = Field(default=None)
 
-    # LLM - Universal configuration for any OpenAI-compatible provider
-    # Supported providers: openai, groq, azure, local, vllm, ollama, etc.
-    LLM_PROVIDER: str = Field(default="groq", description="LLM provider name (for logging/monitoring)")
-    LLM_BASE_URL: str = Field(default="https://api.groq.com/openai/v1", description="OpenAI-compatible API base URL")
-    LLM_API_KEY: str | None = Field(default=None, description="API key for LLM provider", validate_default=True)
-    LLM_DEFAULT_MODEL: str = Field(default="llama-3.1-8b-instant", description="Default model to use")
+    # LLM runtime connection is resolved from model registry + connector credentials.
     LLM_TIMEOUT: int = Field(default=30, description="Request timeout in seconds")
     
-    # Embedding (deprecated - moved to models table)
-    # These are kept for backward compatibility during migration
-    EMB_BASE_URL: str = Field(default="http://localhost:8001")
-    EMB_MODELS: str = Field(default="all-MiniLM-L6-v2")  # Comma-separated list
-    EMB_MODEL_ALIAS: str = Field(default="all-MiniLM-L6-v2")
+    # Embedding runtime behavior flags.
     EMB_USE_MOCK: bool = Field(default=False)
     EMB_OFFLINE: bool = Field(default=True, description="Disallow network downloads for embedding models")
     EMB_CACHE_DIR: str = Field(default="/tmp/sentence_transformers")
-    EMB_BATCH_SIZE: int = Field(default=128)
-    EMB_MAX_WAIT_MS: int = Field(default=8)
     
     # Reranker (local service, not in models table)
     RERANK_SERVICE_URL: str = Field(default="http://rerank:8002", description="Reranker service URL")
@@ -202,18 +191,6 @@ class Settings(BaseSettings):
             raise ValueError("JWT_SECRET must be set in non-local environments")
         return v
 
-    @field_validator("LLM_API_KEY")
-    @classmethod
-    def validate_llm_api_key(cls, v: str | None, info: ValidationInfo) -> str:
-        """Ensure LLM API key is set (except in local/dev)"""
-        env = os.getenv("ENV", info.data.get("ENV", "local"))
-        
-        # Allow empty in local/dev, require in production
-        if not v and env not in ["local", "development"]:
-            raise ValueError("LLM_API_KEY must be set in production")
-        
-        return v or "dev-key-placeholder"
-
     @field_validator("S3_SECRET_KEY")
     @classmethod
     def validate_s3_secret(cls, v: str, info: ValidationInfo) -> str:
@@ -237,15 +214,6 @@ class Settings(BaseSettings):
 @lru_cache()
 def get_settings() -> Settings:
     return Settings()
-
-
-def get_embedding_models() -> list[str]:
-    """Get embedding model aliases from env (single-model preferred)."""
-    settings = get_settings()
-    single = (settings.EMB_MODEL_ALIAS or "").strip()
-    if single:
-        return [single]
-    return [model.strip() for model in settings.EMB_MODELS.split(',') if model.strip()]
 
 
 def get_model_path(model_alias: str) -> str | None:

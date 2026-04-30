@@ -9,7 +9,7 @@ from app.services.runtime_evaluation_harness import (
 def _events_for_case(case_key: str):
     if case_key == "direct_answer_no_tool":
         return [
-            {"type": "status", "data": {"stage": "triage"}},
+            {"type": "status", "data": {"stage": "planner"}},
             {"type": "final", "data": {"content": "ok"}},
         ]
     if case_key == "document_retrieval_case":

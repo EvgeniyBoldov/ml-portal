@@ -327,6 +327,14 @@ export interface HealthCheckAllResponse {
   }>;
 }
 
+export interface ModelProbeInfoResponse {
+  provider_model_name: string;
+  model_version: string;
+  model_type?: 'llm_chat' | 'embedding' | 'reranker';
+  health_status?: 'healthy' | 'degraded' | 'unavailable';
+  raw?: Record<string, unknown>;
+}
+
 export interface TenantListResponse {
   items: Tenant[];
   total: number;
@@ -515,6 +523,19 @@ export const adminApi = {
 
   async healthCheckAllModels(): Promise<HealthCheckAllResponse> {
     return apiRequest('/admin/models/health-check-all', {
+      method: 'POST',
+    });
+  },
+
+  async probeModelInfo(base_url: string): Promise<ModelProbeInfoResponse> {
+    return apiRequest('/admin/models/probe-info', {
+      method: 'POST',
+      body: JSON.stringify({ base_url }),
+    });
+  },
+
+  async verifyModel(id: string): Promise<Model & { manifest?: Record<string, unknown>; resolved_type_from_manifest?: string | null }> {
+    return apiRequest(`/admin/models/${id}/verify`, {
       method: 'POST',
     });
   },

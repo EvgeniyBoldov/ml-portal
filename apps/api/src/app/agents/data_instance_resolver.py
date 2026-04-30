@@ -22,10 +22,12 @@ class AllowedDataInstance:
 
 
 class RuntimeDataInstanceResolver:
-    """Resolve runtime-ready data instances with providers and bound collections.
+    """Resolve runtime-ready collection bindings for local and remote chains.
 
-    Each (instance, collection) pair is emitted as a separate AllowedDataInstance
-    so that one data instance with N collections produces N resolvable entries.
+    Source of truth is Collection.data_instance_id. For each active collection,
+    we resolve its bound instance and then provider:
+    - remote data: data instance -> access_via provider
+    - local/service-backed data: collection may bind directly to service instance
     """
 
     def __init__(
@@ -38,91 +40,70 @@ class RuntimeDataInstanceResolver:
         self.instance_service = instance_service
 
     async def resolve(self) -> List[AllowedDataInstance]:
-        stmt = select(ToolInstance).where(
-            ToolInstance.connector_type == "data",
-            ToolInstance.is_active.is_(True),
-        )
-        result = await self.session.execute(stmt)
-        instances = result.scalars().all()
-
         resolved: List[AllowedDataInstance] = []
-        for instance in instances:
+        bindings = await self._load_active_collection_bindings()
+        for collection, instance in bindings:
             is_ready, readiness_reason, _ = await self.instance_service.evaluate_instance_readiness(
                 instance
             )
+            runtime_domain = self._resolve_runtime_domain(collection, instance)
 
             if not is_ready:
-                runtime_domain = self._resolve_runtime_domain(None, instance)
                 resolved.append(
                     AllowedDataInstance(
                         instance=instance,
                         provider=None,
-                        collection=None,
+                        collection=collection,
                         readiness_reason=readiness_reason,
                         runtime_domain=runtime_domain,
                     )
                 )
                 continue
 
-            provider = await self._load_provider_instance(instance)
+            provider = await self._resolve_provider_instance(instance)
 
             if provider is not None:
                 provider_ready, provider_reason = await self._is_provider_runtime_ready(provider)
                 if not provider_ready:
-                    runtime_domain = self._resolve_runtime_domain(None, instance)
                     resolved.append(
                         AllowedDataInstance(
                             instance=instance,
                             provider=None,
-                            collection=None,
+                            collection=collection,
                             readiness_reason=f"provider_{provider_reason}",
                             runtime_domain=runtime_domain,
                         )
                     )
                     continue
 
-            collections = await self._load_bound_collections(instance)
-            if collections:
-                for collection in collections:
-                    runtime_domain = self._resolve_runtime_domain(collection, instance)
-                    resolved.append(
-                        AllowedDataInstance(
-                            instance=instance,
-                            provider=provider,
-                            collection=collection,
-                            readiness_reason=readiness_reason,
-                            runtime_domain=runtime_domain,
-                        )
-                    )
-            else:
-                runtime_domain = self._resolve_runtime_domain(None, instance)
-                resolved.append(
-                    AllowedDataInstance(
-                        instance=instance,
-                        provider=provider,
-                        collection=None,
-                        readiness_reason=readiness_reason,
-                        runtime_domain=runtime_domain,
-                    )
+            resolved.append(
+                AllowedDataInstance(
+                    instance=instance,
+                    provider=provider,
+                    collection=collection,
+                    readiness_reason=readiness_reason,
+                    runtime_domain=runtime_domain,
                 )
+            )
         return resolved
 
-    async def _load_bound_collections(
+    async def _load_active_collection_bindings(
         self,
-        instance: ToolInstance,
-    ) -> List[Collection]:
-        if not instance.is_data:
-            return []
+    ) -> List[tuple[Collection, ToolInstance]]:
         result = await self.session.execute(
-            select(Collection)
+            select(Collection, ToolInstance)
+            .join(ToolInstance, ToolInstance.id == Collection.data_instance_id)
             .options(
                 selectinload(Collection.schema),
                 selectinload(Collection.current_version),
             )
-            .where(Collection.data_instance_id == instance.id)
+            .where(
+                Collection.is_active.is_(True),
+                ToolInstance.is_active.is_(True),
+            )
             .order_by(Collection.created_at.asc())
         )
-        return list(result.scalars().all())
+        return list(result.all())
 
     @staticmethod
     def _resolve_runtime_domain(collection: Optional[Collection], instance: ToolInstance) -> str:
@@ -139,12 +120,15 @@ class RuntimeDataInstanceResolver:
             return "collection.api"
         return str(instance.domain or "").strip()
 
-    async def _load_provider_instance(
+    async def _resolve_provider_instance(
         self,
         instance: ToolInstance,
     ) -> Optional[ToolInstance]:
+        # Standard remote chain: data instance references provider via access_via.
         if not instance.access_via_instance_id:
-            return None
+            # Local/service-backed collections may bind directly to provider-like
+            # service instances; keep the same instance as execution provider.
+            return instance if not instance.is_data else None
         result = await self.session.execute(
             select(ToolInstance).where(ToolInstance.id == instance.access_via_instance_id)
         )

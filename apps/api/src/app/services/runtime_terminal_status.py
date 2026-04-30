@@ -55,6 +55,10 @@ def normalize_run_status_for_storage(status: Optional[str]) -> str:
 
 def planner_terminal_from_event(event: RuntimeEvent) -> Optional[Tuple[RunTerminalStatus, Optional[str]]]:
     if event.type == RuntimeEventType.FINAL:
+        stop_reason = str(event.data.get("stop_reason") or "").strip()
+        normalized = normalize_run_terminal_status(stop_reason)
+        if normalized not in (RunTerminalStatus.STOPPED, RunTerminalStatus.COMPLETED):
+            return normalized, None
         return RunTerminalStatus.COMPLETED, None
     if event.type == RuntimeEventType.ERROR:
         return RunTerminalStatus.FAILED, str(event.data.get("error") or "runtime_error")

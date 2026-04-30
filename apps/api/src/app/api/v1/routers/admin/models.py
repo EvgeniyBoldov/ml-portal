@@ -6,14 +6,15 @@ No file system scanning - models are added manually.
 from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import inspect
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import db_uow, get_current_user, require_admin
 from app.core.security import UserCtx
 from app.services.model_service import ModelService
-from app.models.model_registry import Model
+from app.models.model_registry import Model, HealthStatus
 from app.schemas.model_registry import (
     Model as ModelSchema,
     ModelCreate,
@@ -28,6 +29,45 @@ from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 router = APIRouter(tags=["models"])
+
+
+def _map_modality_to_model_type(modality: str | None) -> Optional[str]:
+    raw = str(modality or "").strip().lower()
+    if not raw:
+        return None
+    if "embed" in raw or raw == "text":
+        return "embedding"
+    if "rerank" in raw:
+        return "reranker"
+    if "chat" in raw or "llm" in raw or "text" in raw:
+        return "llm_chat"
+    return None
+
+
+async def _probe_manifest(base_url: str) -> Tuple[Dict[str, Any], str]:
+    normalized = base_url.rstrip("/")
+    health_status = "unavailable"
+    health_payload: Dict[str, Any] = {}
+    async with httpx.AsyncClient(timeout=8.0) as client:
+        try:
+            health = await client.get(f"{normalized}/health")
+            if health.status_code == 200:
+                health_status = "healthy"
+                if health.headers.get("content-type", "").startswith("application/json"):
+                    health_payload = health.json()
+        except Exception:
+            health_status = "unavailable"
+
+        resp = await client.get(f"{normalized}/models")
+        resp.raise_for_status()
+        data = resp.json()
+        if not isinstance(data, list) or not data:
+            raise ValueError("models_manifest_empty")
+        first = data[0] or {}
+        if not isinstance(first, dict):
+            raise ValueError("models_manifest_invalid")
+        first["_health"] = health_payload
+        return first, health_status
 
 
 def _resolve_connector(model: Model) -> str:
@@ -97,6 +137,93 @@ def serialize_model(model: Model) -> Dict[str, Any]:
         "updated_at": model.updated_at,
         "deleted_at": model.deleted_at,
     }
+
+
+@router.post("/probe-info")
+async def probe_model_info(
+    payload: Dict[str, Any],
+    session: AsyncSession = Depends(db_uow),
+    user: UserCtx = Depends(get_current_user),
+    admin_user = Depends(require_admin),
+):
+    base_url = str(payload.get("base_url") or "").strip()
+    if not base_url:
+        raise HTTPException(status_code=400, detail="base_url is required")
+
+    try:
+        first, health_status = await _probe_manifest(base_url)
+        return {
+            "provider_model_name": str(first.get("alias") or first.get("name") or ""),
+            "model_version": str(first.get("version") or ""),
+            "model_type": _map_modality_to_model_type(str(first.get("modality") or "")),
+            "health_status": health_status,
+            "raw": first,
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Probe failed: {exc}")
+
+
+@router.post("/{model_id}/verify")
+async def verify_model(
+    model_id: str,
+    session: AsyncSession = Depends(db_uow),
+    user: UserCtx = Depends(get_current_user),
+    admin_user = Depends(require_admin),
+):
+    try:
+        service = ModelService(session)
+        model = await service.get_by_id(uuid.UUID(model_id))
+        if not model:
+            raise HTTPException(status_code=404, detail="Model not found")
+
+        base_url = _resolve_base_url(model)
+        if not base_url:
+            raise HTTPException(status_code=400, detail="Model has no base_url/instance URL")
+
+        manifest, health_status = await _probe_manifest(base_url)
+        model_type = _map_modality_to_model_type(str(manifest.get("modality") or ""))
+        update_data: Dict[str, Any] = {
+            "provider_model_name": str(manifest.get("alias") or manifest.get("name") or model.provider_model_name),
+            "model_version": str(manifest.get("version") or model.model_version or ""),
+        }
+        if model_type:
+            update_data["type"] = model_type
+
+        extra = dict(model.extra_config or {})
+        if manifest.get("dimensions") is not None:
+            try:
+                extra["vector_dim"] = int(manifest.get("dimensions"))
+            except Exception:
+                pass
+        if manifest.get("max_tokens") is not None:
+            try:
+                extra["max_tokens"] = int(manifest.get("max_tokens"))
+            except Exception:
+                pass
+        extra["manifest"] = manifest
+        update_data["extra_config"] = extra
+
+        updated = await service.update_model(model.id, update_data)
+        if not updated:
+            raise HTTPException(status_code=404, detail="Model not found")
+
+        hs = HealthStatus.HEALTHY if health_status == "healthy" else HealthStatus.UNAVAILABLE
+        await service.update_health_status(updated.id, hs, latency_ms=None, error=None if health_status == "healthy" else "verify_failed")
+        if health_status == "healthy":
+            await service.update_model(updated.id, {"status": "available"})
+        else:
+            await service.update_model(updated.id, {"status": "unavailable"})
+
+        refreshed = await service.get_by_id(updated.id)
+        payload = serialize_model(refreshed)
+        payload["manifest"] = manifest
+        payload["resolved_type_from_manifest"] = model_type
+        return payload
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Failed to verify model: {exc}", exc_info=True)
+        raise HTTPException(status_code=400, detail=f"Verify failed: {exc}")
 
 
 @router.get("", response_model=ModelListResponse)

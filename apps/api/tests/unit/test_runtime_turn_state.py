@@ -32,6 +32,36 @@ def test_runtime_turn_state_loop_detection_and_snapshot():
     assert state.detect_loop() is True
 
 
+def test_runtime_turn_state_loop_detection_distinguishes_agent_query():
+    state = _state()
+    state.add_planner_step(
+        {
+            "kind": "call_agent",
+            "agent_slug": "a",
+            "phase_id": "p1",
+            "agent_input": {"query": "find incidents in dc-1"},
+        }
+    )
+    state.add_planner_step(
+        {
+            "kind": "call_agent",
+            "agent_slug": "a",
+            "phase_id": "p1",
+            "agent_input": {"query": "find incidents in dc-2"},
+        }
+    )
+    state.add_planner_step(
+        {
+            "kind": "call_agent",
+            "agent_slug": "a",
+            "phase_id": "p1",
+            "agent_input": {"query": "find incidents in dc-3"},
+        }
+    )
+
+    assert state.detect_loop() is False
+
+
 def test_runtime_turn_state_compact_view_is_serializable():
     state = _state()
     state.status = "completed"

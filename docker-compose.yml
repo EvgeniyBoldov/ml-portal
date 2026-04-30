@@ -203,15 +203,10 @@ services:
     ports:
       - "8001:8001"
     environment:
-      - EMB_MODEL_ALIAS=${EMB_MODEL_ALIAS}
-      - EMB_MODEL_PATH=${EMB_MODEL_PATH}
-      - EMB_MODEL_DIMENSIONS=${EMB_MODEL_DIMENSIONS}
-      - EMB_MODEL_MAX_TOKENS=${EMB_MODEL_MAX_TOKENS}
-      - EMB_MODEL_VERSION=${EMB_MODEL_VERSION}
-      - EMB_BATCH_SIZE=${EMB_BATCH_SIZE}
-      - EMB_MAX_WAIT_MS=${EMB_MAX_WAIT_MS}
-      - EMB_MODEL_PARALLELISM=${EMB_MODEL_PARALLELISM}
-      - EMB_OFFLINE=${EMB_OFFLINE}
+      - EMB_MODEL_PATH=/models_llm/sentence-transformers--all-MiniLM-L6-v2
+      - EMB_BATCH_SIZE=32
+      - EMB_MAX_WAIT_MS=15
+      - EMB_MODEL_PARALLELISM=2
     volumes:
       - ./models_llm:/models_llm:ro
     healthcheck:
@@ -233,15 +228,10 @@ services:
   #   ports:
   #     - "8003:8001"
   #   environment:
-  #     - EMB_MODEL_ALIAS=multilingual-e5-large
   #     - EMB_MODEL_PATH=/models_llm/intfloat--multilingual-e5-large
-  #     - EMB_MODEL_DIMENSIONS=1024
-  #     - EMB_MODEL_MAX_TOKENS=512
-  #     - EMB_MODEL_VERSION=1.0
   #     - EMB_BATCH_SIZE=32
   #     - EMB_MAX_WAIT_MS=15
   #     - EMB_MODEL_PARALLELISM=1
-  #     - EMB_OFFLINE=true
   #   volumes:
   #     - ./models_llm:/models_llm:ro
   #   healthcheck:
@@ -261,6 +251,8 @@ services:
       dockerfile: infra/docker/rerank/Dockerfile
     ports:
       - "8002:8002"
+    environment:
+      - RERANK_MODEL_PATH=/models_llm/cross-encoder--ms-marco-MiniLM-L-6-v2
     volumes:
       - ./models_llm:/models_llm:ro
     healthcheck:

@@ -20,6 +20,13 @@ from app.runtime.redactor import RuntimeRedactor
 logger = get_logger(__name__)
 
 
+def _normalize_trace_type(trace_type: str) -> str:
+    normalized = str(trace_type or "").strip().lower()
+    if normalized == "triage":
+        return SystemLLMTraceType.PLANNER.value
+    return normalized
+
+
 class SystemLLMTraceService:
     """Service for managing system LLM traces."""
     
@@ -65,15 +72,11 @@ class SystemLLMTraceService:
         redacted_fallback_details = self.redactor.redact(fallback_details or {})
         redacted_error = self.redactor.redact(error or "") if error else None
 
+        trace_type = _normalize_trace_type(trace_type)
+
         # Extract context variables from structured input
         context_variables = {}
-        if trace_type == SystemLLMTraceType.TRIAGE:
-            context_variables = {
-                "available_agents": redacted_structured_input.get("available_agents", []),
-                "policies": redacted_structured_input.get("policies", ""),
-                "active_run": redacted_structured_input.get("active_run"),
-            }
-        elif trace_type == SystemLLMTraceType.PLANNER:
+        if trace_type == SystemLLMTraceType.PLANNER.value:
             context_variables = {
                 "available_agents": redacted_structured_input.get("available_agents", []),
                 "available_operations": redacted_structured_input.get(
@@ -81,8 +84,9 @@ class SystemLLMTraceService:
                     redacted_structured_input.get("available_tools", []),
                 ),
                 "policies": redacted_structured_input.get("policies", ""),
+                "active_run": redacted_structured_input.get("active_run"),
             }
-        elif trace_type == SystemLLMTraceType.SUMMARY:
+        elif trace_type == SystemLLMTraceType.SUMMARY.value:
             context_variables = {
                 "session_state": redacted_structured_input.get("session_state", {}),
             }

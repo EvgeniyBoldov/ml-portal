@@ -9,7 +9,7 @@ from uuid import UUID
 
 class SystemLLMTraceBase(BaseModel):
     """Base schema for SystemLLMTrace."""
-    trace_type: str = Field(..., description="Type of trace: triage, planner, or summary")
+    trace_type: str = Field(..., description="Type of trace: planner or summary")
     role_config_id: UUID = Field(..., description="ID of the role configuration used")
     model: Optional[str] = Field(None, description="LLM model used")
     temperature: Optional[float] = Field(None, description="Temperature parameter used")

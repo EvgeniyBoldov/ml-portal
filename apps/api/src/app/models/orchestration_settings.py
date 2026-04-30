@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import String, DateTime, Integer, Float, Boolean, Text
+from sqlalchemy import String, DateTime, Integer, Float
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -34,15 +34,9 @@ class OrchestrationSettings(Base):
     executor_temperature: Mapped[Optional[float]] = mapped_column(Float, nullable=True, default=0.7)
     executor_timeout_s: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, comment="Default timeout for executor in seconds")
     executor_max_steps: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, comment="Default max planner loop iterations")
-    triage_fail_open: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True, default=True)
-    preflight_fail_open: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True, default=False)
-    planner_fail_open: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True, default=False)
-    preflight_fail_open_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    planner_fail_open_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
-    # === Dead columns (kept in DB for backward compat, removed from active model) ===
-    # router_*, planner_*, executor_max_retries, executor_max_concurrency, utility_model
-    # — migrated out, see migration 0092
+    # Legacy DB columns may still exist physically (historical migrations),
+    # but they are intentionally not mapped/used by runtime anymore.
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False

@@ -125,7 +125,6 @@ class CollectionVectorLifecycleService:
 
     async def resolve_primary_vector_model(self, tenant_id: uuid.UUID) -> Optional[str]:
         try:
-            from app.core.config import get_embedding_models
             from app.repositories.factory import AsyncRepositoryFactory
             from app.services.rag_status_manager import RAGStatusManager
 
@@ -134,10 +133,6 @@ class CollectionVectorLifecycleService:
             target_models = await status_manager.get_target_models_for_tenant(tenant_id)
             if target_models:
                 return target_models[0]
-
-            fallback_models = get_embedding_models()
-            if fallback_models:
-                return fallback_models[0]
         except Exception as e:
             logger.warning(
                 "Failed to resolve primary embedding model for vector collection provisioning",

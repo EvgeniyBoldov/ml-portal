@@ -16,7 +16,7 @@ def test_runtime_eval_passes_document_retrieval_case():
         allow_error_events=False,
     )
     events = [
-        {"type": "status", "data": {"stage": "triage"}},
+        {"type": "status", "data": {"stage": "planner"}},
         {"type": "status", "data": {"operation_slug": "collection.document.search"}},
         {"type": "final", "data": {"message": "ok"}},
     ]
@@ -66,7 +66,7 @@ def test_runtime_eval_waiting_input_expectation():
 
 def test_default_cases_are_evaluable():
     events = [
-        {"type": "status", "data": {"stage": "triage"}},
+        {"type": "status", "data": {"stage": "planner"}},
         {"type": "final", "data": {"message": "ok"}},
     ]
     results = evaluate_runtime_cases(default_runtime_eval_cases(), events)

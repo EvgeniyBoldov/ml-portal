@@ -32,7 +32,8 @@ class TestHealthReadiness:
              patch.object(health_module, "get_qdrant_adapter", AsyncMock()) as get_qdrant_adapter, \
              patch("app.celery_app.app") as celery_app, \
              patch("app.core.di.get_llm_client") as get_llm_client, \
-             patch("app.core.di.get_emb_client") as get_emb_client, \
+             patch("app.adapters.embeddings.EmbeddingServiceFactory.ensure_model_registered_async", new=AsyncMock()), \
+             patch("app.adapters.embeddings.EmbeddingServiceFactory.get_service") as get_emb_service, \
              patch("app.services.run_store.RunStore"), \
              patch.dict(sys.modules, {
                  "app.agents.registry": registry_module,
@@ -50,9 +51,13 @@ class TestHealthReadiness:
             llm.chat = AsyncMock(side_effect=RuntimeError("llm down"))
             get_llm_client.return_value = llm
 
-            emb = MagicMock()
-            emb.embed = AsyncMock(return_value=[[0.1, 0.2]])
-            get_emb_client.return_value = emb
+            emb_service = MagicMock()
+            emb_service.embed_texts = MagicMock(return_value=[[0.1, 0.2]])
+            get_emb_service.return_value = emb_service
+
+            result = MagicMock()
+            result.scalar_one_or_none.return_value = "all-MiniLM-L6-v2"
+            mock_session.execute = AsyncMock(return_value=result)
 
             celery_app.control.ping.return_value = [{"worker@api": {"ok": "pong"}}]
 
@@ -84,7 +89,8 @@ class TestHealthReadiness:
              patch.object(health_module, "get_s3_client") as get_s3_client, \
              patch.object(health_module, "get_qdrant_adapter", AsyncMock(side_effect=RuntimeError("qdrant down"))), \
              patch("app.core.di.get_llm_client") as get_llm_client, \
-             patch("app.core.di.get_emb_client") as get_emb_client, \
+             patch("app.adapters.embeddings.EmbeddingServiceFactory.ensure_model_registered_async", new=AsyncMock()), \
+             patch("app.adapters.embeddings.EmbeddingServiceFactory.get_service") as get_emb_service, \
              patch("app.services.run_store.RunStore"), \
              patch("app.celery_app.app") as celery_app, \
              patch.dict(sys.modules, {
@@ -99,9 +105,13 @@ class TestHealthReadiness:
             llm.chat = AsyncMock(return_value={"content": "pong"})
             get_llm_client.return_value = llm
 
-            emb = MagicMock()
-            emb.embed = AsyncMock(return_value=[[0.1]])
-            get_emb_client.return_value = emb
+            emb_service = MagicMock()
+            emb_service.embed_texts = MagicMock(return_value=[[0.1]])
+            get_emb_service.return_value = emb_service
+
+            result = MagicMock()
+            result.scalar_one_or_none.return_value = "all-MiniLM-L6-v2"
+            mock_session.execute = AsyncMock(return_value=result)
 
             celery_app.control.ping.return_value = []
 

@@ -6,6 +6,7 @@ import asyncio
 import logging
 import time
 import os
+import json
 from typing import List, Dict, Any, Optional, Union
 from datetime import datetime, timezone
 from dataclasses import dataclass
@@ -19,7 +20,7 @@ import torch
 import numpy as np
 
 logger = logging.getLogger(__name__)
-DEFAULT_MODEL_ALIAS = os.getenv("EMB_MODEL_ALIAS", "all-MiniLM-L6-v2")
+DEFAULT_MODEL_ALIAS = "default"
 
 app = FastAPI(
     title="Embedding Gateway",
@@ -78,6 +79,8 @@ class ModelInfo(BaseModel):
     dimensions: int
     max_tokens: int
     version: str
+    modality: str
+    description: str
 
 
 class HealthResponse(BaseModel):
@@ -98,6 +101,7 @@ class ModelConfig:
     max_wait_ms: int
     parallelism: int
     path: str
+    manifest: Dict[str, Any]
 
 
 class EmbeddingEngine:
@@ -218,24 +222,57 @@ class EmbeddingGateway:
         if single_alias:
             model_aliases = [single_alias]
         else:
-            models_str = os.getenv("EMB_MODELS", "all-MiniLM-L6-v2")
-            model_aliases = [m.strip() for m in models_str.split(",") if m.strip()]
+            models_str = os.getenv("EMB_MODELS", "").strip()
+            if models_str:
+                model_aliases = [m.strip() for m in models_str.split(",") if m.strip()]
+            else:
+                model_aliases = ["__from_manifest__"]
 
         for alias in model_aliases:
             env_alias = alias.upper().replace('-', '_')
+            path = os.getenv("EMB_MODEL_PATH", os.getenv(f"EMB_MODEL_{env_alias}_PATH", f"/models/{alias}"))
+            manifest_data: Dict[str, Any] = {}
+            manifest_path = os.path.join(path, "manifest.json")
+            try:
+                if os.path.exists(manifest_path):
+                    with open(manifest_path, "r", encoding="utf-8") as f:
+                        manifest_data = json.load(f) or {}
+            except Exception as e:
+                logger.warning(f"Failed to read manifest for {alias}: {e}")
+
+            resolved_alias = alias
+            if resolved_alias == "__from_manifest__":
+                resolved_alias = str(
+                    manifest_data.get("model")
+                    or os.path.basename(path.rstrip("/"))
+                    or "embedding-model"
+                )
+
             config = ModelConfig(
-                alias=alias,
+                alias=resolved_alias,
                 dimensions=int(os.getenv("EMB_MODEL_DIMENSIONS", os.getenv(f"EMB_MODEL_{env_alias}_DIMENSIONS", "384"))),
                 max_tokens=int(os.getenv("EMB_MODEL_MAX_TOKENS", os.getenv(f"EMB_MODEL_{env_alias}_MAX_TOKENS", "512"))),
                 version=os.getenv("EMB_MODEL_VERSION", os.getenv(f"EMB_MODEL_{env_alias}_VERSION", "1.0")),
                 batch_size=int(os.getenv("EMB_BATCH_SIZE", "128")),
                 max_wait_ms=int(os.getenv("EMB_MAX_WAIT_MS", "8")),
                 parallelism=int(os.getenv("EMB_MODEL_PARALLELISM", os.getenv(f"EMB_PARALLELISM_{env_alias}", "2"))),
-                path=os.getenv("EMB_MODEL_PATH", os.getenv(f"EMB_MODEL_{env_alias}_PATH", f"/models/{alias}"))
+                path=path,
+                manifest=manifest_data,
             )
+            manifest_path = os.path.join(config.path, "manifest.json")
+            try:
+                if os.path.exists(manifest_path):
+                    with open(manifest_path, "r", encoding="utf-8") as f:
+                        config.manifest = json.load(f) or {}
+                    if config.manifest.get("version"):
+                        config.version = str(config.manifest["version"])
+                    if config.manifest.get("vector_dim") is not None:
+                        config.dimensions = int(config.manifest["vector_dim"])
+            except Exception as e:
+                logger.warning(f"Failed to read manifest for {alias}: {e}")
             
-            self.models[alias] = EmbeddingEngine(config)
-            logger.info(f"Loaded model: {alias} with {config.dimensions} dimensions")
+            self.models[resolved_alias] = EmbeddingEngine(config)
+            logger.info(f"Loaded model: {resolved_alias} with {config.dimensions} dimensions")
     
     def get_model(self, alias: str) -> EmbeddingEngine:
         """Get model by alias"""
@@ -247,11 +284,13 @@ class EmbeddingGateway:
         """List available models"""
         return [
             ModelInfo(
-                name=engine.config.alias,
+                name=str(engine.config.manifest.get("model") or engine.config.alias),
                 alias=engine.config.alias,
                 dimensions=engine.config.dimensions,
                 max_tokens=engine.config.max_tokens,
-                version=engine.config.version
+                version=engine.config.version,
+                modality=str(engine.config.manifest.get("modality") or "embedding"),
+                description=str(engine.config.manifest.get("description") or f"Embedding model {engine.config.alias}"),
             )
             for engine in self.models.values()
         ]
@@ -297,6 +336,8 @@ async def embed_texts(request: BatchEmbedRequest):
 
 async def _embed_texts(texts: List[str], model_name: str, priority: Priority) -> EmbedResponse:
     """Common function for embedding texts"""
+    if model_name in ("", "default"):
+        model_name = next(iter(gateway.models.keys()))
     # Get model
     model = gateway.get_model(model_name)
     

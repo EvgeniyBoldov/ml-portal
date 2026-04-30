@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db
-from app.core.di import get_llm_client, get_emb_client
+from app.core.di import get_llm_client
 from app.core.redis import get_redis
 from app.core.security import UserCtx
 from app.models.chat import Chats

@@ -4,7 +4,7 @@
  * Использует useEntityEditor для стандартной CRUD логики.
  * vectorDim — отдельный стейт, т.к. хранится в extra_config.
  */
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   adminApi,
@@ -18,9 +18,9 @@ import {
 import { toolInstancesApi } from '@/shared/api/toolInstances';
 import { qk } from '@/shared/api/keys';
 import { useEntityEditor } from '@/shared/hooks/useEntityEditor';
-import { EntityPageV2, Tab, type BreadcrumbItem } from '@/shared/ui/EntityPage';
+import { EntityPageV2, Tab } from '@/shared/ui/EntityPage';
 import { Block, type FieldConfig } from '@/shared/ui/GridLayout';
-import { Badge, ConfirmDialog } from '@/shared/ui';
+import { Badge, Button, ConfirmDialog, useToast } from '@/shared/ui';
 
 /* ─── Constants ─── */
 
@@ -37,12 +37,9 @@ const MODEL_STATUSES: { value: ModelStatus; label: string }[] = [
   { value: 'maintenance', label: 'Обслуживание' },
 ];
 
-const CONNECTORS: { value: ModelConnector; label: string }[] = [
+const PROTOCOLS: { value: ModelConnector; label: string }[] = [
   { value: 'openai_http', label: 'OpenAI HTTP' },
   { value: 'azure_openai_http', label: 'Azure OpenAI' },
-  { value: 'local_emb_http', label: 'Local Embedding (HTTP)' },
-  { value: 'local_rerank_http', label: 'Local Reranker (HTTP)' },
-  { value: 'local_llm_http', label: 'Local LLM (HTTP)' },
   { value: 'grpc', label: 'gRPC' },
 ];
 
@@ -65,19 +62,17 @@ const INFO_FIELDS_VIEW: FieldConfig[] = [
     placeholder: 'GPT-4 Turbo',
   },
   {
-    key: 'type',
-    type: 'select',
-    label: 'Тип модели',
-    description: 'LLM Chat или Embedding',
-    editable: false,
-    options: MODEL_TYPES.map(t => ({ value: t.value, label: t.label })),
-  },
-  {
     key: 'description',
     type: 'textarea',
     label: 'Описание',
     placeholder: 'Описание модели...',
     rows: 3,
+  },
+  {
+    key: 'default_for_type',
+    type: 'boolean',
+    label: 'По умолчанию для типа',
+    description: 'Используется по умолчанию для данного типа моделей',
   },
 ];
 
@@ -98,73 +93,11 @@ const INFO_FIELDS_CREATE: FieldConfig[] = [
     placeholder: 'GPT-4 Turbo',
   },
   {
-    key: 'type',
-    type: 'select',
-    label: 'Тип модели',
-    description: 'LLM Chat или Embedding',
-    required: true,
-    options: MODEL_TYPES.map(t => ({ value: t.value, label: t.label })),
-  },
-  {
     key: 'description',
     type: 'textarea',
     label: 'Описание',
     placeholder: 'Описание модели...',
     rows: 3,
-  },
-];
-
-const CONNECTOR_FIELDS: FieldConfig[] = [
-  {
-    key: 'connector',
-    type: 'select',
-    label: 'Коннектор',
-    required: true,
-    description: 'Тип подключения к модели',
-    options: CONNECTORS.map(c => ({ value: c.value, label: c.label })),
-  },
-  {
-    key: 'provider_model_name',
-    type: 'text',
-    label: 'Имя модели / сервиса',
-    required: true,
-    placeholder: 'gpt-4-turbo-preview или all-MiniLM-L6-v2',
-  },
-  {
-    key: 'base_url',
-    type: 'text',
-    label: 'Base URL',
-    placeholder: 'http://emb:8001',
-    description: 'Прямой URL для локальных или standalone моделей',
-  },
-  {
-    key: 'instance_id',
-    type: 'select',
-    label: 'Коннектор (провайдер)',
-    description: 'Подключение к провайдеру (URL + креды). Для local_* рекомендуется указывать именно коннектор.',
-  },
-  {
-    key: 'model_version',
-    type: 'text',
-    label: 'Версия модели',
-    placeholder: 'v1.0.0',
-    description: 'Версия для отслеживания изменений',
-  },
-];
-
-const STATUS_FIELDS: FieldConfig[] = [
-  {
-    key: 'status',
-    type: 'select',
-    label: 'Статус',
-    description: 'Доступность модели',
-    options: MODEL_STATUSES.map(s => ({ value: s.value, label: s.label })),
-  },
-  {
-    key: 'enabled',
-    type: 'boolean',
-    label: 'Включена',
-    description: 'Модель доступна для использования',
   },
   {
     key: 'default_for_type',
@@ -174,15 +107,69 @@ const STATUS_FIELDS: FieldConfig[] = [
   },
 ];
 
-const EMBEDDING_FIELDS: FieldConfig[] = [
+const CONNECTOR_FIELDS: FieldConfig[] = [
+  {
+    key: 'connector',
+    type: 'select',
+    label: 'Протокол',
+    required: true,
+    description: 'Транспорт/протокол обращения к модели',
+    options: PROTOCOLS.map(c => ({ value: c.value, label: c.label })),
+  },
+  {
+    key: 'instance_id',
+    type: 'select',
+    label: 'Коннектор',
+    description: 'Источник подключения: local или удаленный model-коннектор',
+  },
+  {
+    key: 'base_url',
+    type: 'text',
+    label: 'URL',
+    placeholder: 'http://emb:8001',
+    description: 'Прямой URL локального сервиса (используется для local)',
+  },
+];
+
+const PARAMS_FIELDS: FieldConfig[] = [
+  {
+    key: 'provider_model_name',
+    type: 'text',
+    label: 'Название модели',
+    required: true,
+    placeholder: 'text-embedding-3-small / all-MiniLM-L6-v2',
+  },
+  {
+    key: 'model_version',
+    type: 'text',
+    label: 'Версия',
+    placeholder: '1.0',
+  },
+  {
+    key: 'type',
+    type: 'select',
+    label: 'Тип',
+    editable: true,
+    options: MODEL_TYPES.map(t => ({ value: t.value, label: t.label })),
+  },
+  {
+    key: 'max_tokens',
+    type: 'number',
+    label: 'Макс. токенов',
+    placeholder: '512',
+  },
   {
     key: 'vector_dim',
     type: 'number',
-    label: 'Размерность вектора',
-    required: true,
+    label: 'Размерность вектора (embedding)',
     placeholder: '1536',
-    description: 'Размерность векторного представления',
   },
+];
+
+const OTHER_PARAMS_FIELDS: FieldConfig[] = [
+  { key: 'modality', type: 'text', label: 'Modality', editable: false },
+  { key: 'description', type: 'text', label: 'Description', editable: false },
+  { key: 'dimensions', type: 'text', label: 'Dimensions', editable: false },
 ];
 
 const HEALTH_FIELDS: FieldConfig[] = [
@@ -225,6 +212,19 @@ const META_FIELDS: FieldConfig[] = [
 
 export function ModelPage() {
   const [vectorDim, setVectorDim] = useState<string>('');
+  const [maxTokens, setMaxTokens] = useState<string>('');
+  const [probingInfo, setProbingInfo] = useState(false);
+  const [manifestRaw, setManifestRaw] = useState<Record<string, unknown>>({});
+  const [healthBadge, setHealthBadge] = useState<string>('unknown');
+  const LOCAL_CONNECTOR_SENTINEL = '__local__';
+  const { showToast } = useToast();
+
+  const resolveBackendConnector = (type: ModelType, instanceId: string, protocol: ModelConnector): ModelConnector => {
+    if (instanceId !== LOCAL_CONNECTOR_SENTINEL) return protocol;
+    if (type === 'embedding') return 'local_emb_http';
+    if (type === 'reranker') return 'local_rerank_http';
+    return 'local_llm_http';
+  };
 
   const {
     mode,
@@ -259,19 +259,51 @@ export function ModelPage() {
       list: qk.admin.models.list({}),
       detail: (id) => qk.admin.models.detail(id),
     },
+    validateCreate: (data) => {
+      if (!String(data.provider_model_name || '').trim()) return 'Название модели обязательно';
+      if (!String(data.model_version || '').trim()) return 'Версия модели обязательна';
+      if (!String(data.type || '').trim()) return 'Тип модели обязателен';
+      if (manifestRaw.max_tokens != null && maxTokens) {
+        const limit = Number(manifestRaw.max_tokens);
+        const current = Number(maxTokens);
+        if (Number.isFinite(limit) && Number.isFinite(current) && current > limit) {
+          return `Макс. токенов не должен превышать ${limit}`;
+        }
+      }
+      return null;
+    },
+    validateUpdate: (data) => {
+      if (!String(data.provider_model_name || '').trim()) return 'Название модели обязательно';
+      if (!String(data.model_version || '').trim()) return 'Версия модели обязательна';
+      if (!String(data.type || '').trim()) return 'Тип модели обязателен';
+      if (manifestRaw.max_tokens != null && maxTokens) {
+        const limit = Number(manifestRaw.max_tokens);
+        const current = Number(maxTokens);
+        if (Number.isFinite(limit) && Number.isFinite(current) && current > limit) {
+          return `Макс. токенов не должен превышать ${limit}`;
+        }
+      }
+      return null;
+    },
     getInitialFormData: (m) => {
       if (m?.extra_config?.vector_dim) {
         setVectorDim(String(m.extra_config.vector_dim));
       }
+      if (m?.extra_config?.max_tokens) {
+        setMaxTokens(String(m.extra_config.max_tokens));
+      }
+      const connectorRaw = m?.connector ?? 'openai_http';
+      const isLocalBackendConnector = String(connectorRaw).startsWith('local_');
+      const uiProtocol: ModelConnector = isLocalBackendConnector ? 'openai_http' : connectorRaw;
       return {
         alias: m?.alias ?? '',
         name: m?.name ?? '',
         type: m?.type ?? 'llm_chat',
-        connector: m?.connector ?? 'openai_http',
+        connector: uiProtocol,
         provider: m?.provider ?? '',
         provider_model_name: m?.provider_model_name ?? '',
         base_url: m?.base_url ?? '',
-        instance_id: m?.instance_id ?? '',
+        instance_id: m?.instance_id ?? (isLocalBackendConnector ? LOCAL_CONNECTOR_SENTINEL : ''),
         status: m?.status ?? 'available',
         enabled: m?.enabled ?? true,
         default_for_type: m?.default_for_type ?? false,
@@ -281,30 +313,43 @@ export function ModelPage() {
       };
     },
     transformCreate: (data) => {
+      const resolvedConnector = resolveBackendConnector(
+        data.type,
+        String(data.instance_id || ''),
+        data.connector,
+      );
       const extra_config: Record<string, unknown> = { ...(data.extra_config ?? {}) };
       if (data.type === 'embedding' && vectorDim) {
         extra_config.vector_dim = parseInt(vectorDim, 10);
       }
+      if (maxTokens) extra_config.max_tokens = parseInt(maxTokens, 10);
       return {
         ...data,
-        base_url: data.base_url || undefined,
-        instance_id: data.instance_id || undefined,
+        connector: resolvedConnector,
+        base_url: String(data.instance_id || '') === LOCAL_CONNECTOR_SENTINEL ? (data.base_url || undefined) : undefined,
+        instance_id: String(data.instance_id || '') === LOCAL_CONNECTOR_SENTINEL ? undefined : (data.instance_id || undefined),
         model_version: data.model_version || undefined,
         description: data.description || undefined,
         extra_config: Object.keys(extra_config).length > 0 ? extra_config : undefined,
       } as ModelCreate;
     },
     transformUpdate: (data) => {
+      const resolvedConnector = resolveBackendConnector(
+        data.type,
+        String(data.instance_id || ''),
+        data.connector,
+      );
       const extra_config: Record<string, unknown> = { ...(data.extra_config ?? {}) };
       if (data.type === 'embedding' && vectorDim) {
         extra_config.vector_dim = parseInt(vectorDim, 10);
       }
+      if (maxTokens) extra_config.max_tokens = parseInt(maxTokens, 10);
       return {
         name: data.name,
-        connector: data.connector,
+        connector: resolvedConnector,
         provider_model_name: data.provider_model_name,
-        base_url: data.base_url || undefined,
-        instance_id: data.instance_id || undefined,
+        base_url: String(data.instance_id || '') === LOCAL_CONNECTOR_SENTINEL ? (data.base_url || undefined) : undefined,
+        instance_id: String(data.instance_id || '') === LOCAL_CONNECTOR_SENTINEL ? undefined : (data.instance_id || undefined),
         status: data.status,
         enabled: data.enabled,
         default_for_type: data.default_for_type,
@@ -322,14 +367,14 @@ export function ModelPage() {
 
   // ─── Коннекторы для select ───
   const { data: instances = [] } = useQuery({
-    queryKey: qk.toolInstances.list({ connector_type: 'model', placement: 'remote' }),
-    queryFn: () => toolInstancesApi.list({ connector_type: 'model', placement: 'remote' }),
+    queryKey: qk.toolInstances.list({ connector_type: 'model' }),
+    queryFn: () => toolInstancesApi.list({ connector_type: 'model' }),
     staleTime: 60_000,
   });
 
   // ─── Derived ───
   const instanceOptions = [
-    { value: '', label: '— Не выбран —' },
+    { value: LOCAL_CONNECTOR_SENTINEL, label: 'local' },
     ...instances.map((inst) => ({ value: inst.id, label: `${inst.name} (${inst.slug})` })),
   ];
 
@@ -338,13 +383,12 @@ export function ModelPage() {
     name: model?.name ?? '',
     type: model?.type ?? 'llm_chat',
     description: model?.description ?? '',
-    connector: model?.connector ?? 'openai_http',
+    connector: String(model?.connector || '').startsWith('local_') ? 'openai_http' : (model?.connector ?? 'openai_http'),
     provider_model_name: model?.provider_model_name ?? '',
     base_url: model?.base_url ?? '',
-    instance_id: model?.instance_id ?? '',
+    instance_id: model?.instance_id ?? (String(model?.connector || '').startsWith('local_') ? LOCAL_CONNECTOR_SENTINEL : ''),
     model_version: model?.model_version ?? '',
     status: model?.status ?? 'available',
-    enabled: model?.enabled ?? false,
     default_for_type: model?.default_for_type ?? false,
     id: model?.id ?? '',
     instance_name: model?.instance_name ?? '—',
@@ -354,7 +398,18 @@ export function ModelPage() {
   };
 
   const blockData = isEditable ? formData : viewData;
-  const embeddingData = { vector_dim: vectorDim };
+  const paramsData = {
+    provider_model_name: blockData.provider_model_name,
+    model_version: blockData.model_version,
+    type: blockData.type,
+    max_tokens: maxTokens,
+    vector_dim: vectorDim,
+  };
+  const otherParamsData = {
+    modality: String(manifestRaw.modality || '—'),
+    description: String(manifestRaw.description || '—'),
+    dimensions: String(manifestRaw.dimensions ?? '—'),
+  };
   const isEmbedding = (isEditable ? formData.type : model?.type) === 'embedding';
 
   const healthData = {
@@ -364,8 +419,21 @@ export function ModelPage() {
     last_health_check_at: model?.last_health_check_at ?? '',
   };
 
+  useEffect(() => {
+    setHealthBadge(String(model?.health_status || 'unknown'));
+    const manifest = (model?.extra_config && typeof model.extra_config === 'object')
+      ? (model.extra_config as Record<string, unknown>).manifest
+      : undefined;
+    if (manifest && typeof manifest === 'object') {
+      setManifestRaw(manifest as Record<string, unknown>);
+    } else {
+      setManifestRaw({});
+    }
+  }, [model?.id, model?.health_status]);
+
+  const currentInstanceId = String(isEditable ? formData.instance_id : (model?.instance_id || ''));
   const currentConnector = String(isEditable ? formData.connector : model?.connector || '');
-  const isLocalConnector = currentConnector.startsWith('local_');
+  const isLocalConnector = currentInstanceId === LOCAL_CONNECTOR_SENTINEL || currentConnector.startsWith('local_');
 
   const connectorFieldsWithOptions = CONNECTOR_FIELDS
     .filter((f) => {
@@ -376,31 +444,80 @@ export function ModelPage() {
       if (f.key === 'instance_id') {
         return { ...f, options: instanceOptions };
       }
-      if (f.key === 'provider_model_name' && currentConnector === 'local_emb_http') {
-        return {
-          ...f,
-          label: 'Алиас embedding модели',
-          placeholder: 'all-MiniLM-L6-v2',
-          description: 'Алиас модели в emb-gateway (должен быть в EMB_MODELS).',
-        };
+      if (f.key === 'provider_model_name' && isLocalConnector) {
+        return { ...f, editable: false };
       }
-      if (f.key === 'base_url' && currentConnector === 'local_emb_http') {
+      if (f.key === 'base_url' && isLocalConnector) {
         return {
           ...f,
-          label: 'URL emb-gateway',
-          placeholder: 'http://emb:8001',
-          description: 'Базовый URL emb-сервиса (эндпоинты /embed, /embed/query, /health).',
-        };
-      }
-      if (f.key === 'base_url' && currentConnector === 'local_rerank_http') {
-        return {
-          ...f,
-          label: 'URL rerank-сервиса',
-          placeholder: 'http://rerank:8002',
+          label: 'URL local-сервиса',
+          placeholder: 'http://emb:8001 или http://rerank:8002',
+          description: 'Базовый URL локального сервиса модели',
         };
       }
       return f;
     });
+
+  const hasManifestMaxTokens = manifestRaw.max_tokens != null || !!maxTokens;
+  const currentModelType = String(isEditable ? formData.type : (model?.type || viewData.type || ''));
+  const paramsFields = PARAMS_FIELDS
+    .filter((f) => {
+      if (f.key === 'max_tokens') return hasManifestMaxTokens && currentModelType !== 'reranker';
+      if (f.key === 'vector_dim') return isEmbedding;
+      return true;
+    })
+    .map((f) => {
+    if ((f.key === 'provider_model_name' || f.key === 'model_version') && isLocalConnector) {
+      return { ...f, editable: false, description: 'Заполняется через кнопку "Проверить"' };
+    }
+    if (f.key === 'type' && isLocalConnector) {
+      return { ...f, editable: false, description: 'Определяется автоматически из modality манифеста' };
+    }
+    if (f.key === 'max_tokens' && manifestRaw.max_tokens != null) {
+      return { ...f, description: `Лимит по манифесту: ${String(manifestRaw.max_tokens)}` };
+    }
+    return f;
+  });
+
+  const handleProbeModelInfo = async () => {
+    setProbingInfo(true);
+    try {
+      let info: { provider_model_name?: string; model_version?: string; model_type?: string; health_status?: string; raw?: Record<string, unknown> };
+      if (!isNew && model?.id) {
+        const verified = await adminApi.verifyModel(model.id);
+        info = {
+          provider_model_name: verified.provider_model_name,
+          model_version: verified.model_version || '',
+          model_type: (verified.resolved_type_from_manifest as string) || verified.type,
+          health_status: verified.health_status || undefined,
+          raw: (verified.manifest || {}) as Record<string, unknown>,
+        };
+      } else {
+        const current = String((isEditable ? formData.base_url : viewData.base_url) || '').trim();
+        if (!current) {
+          showToast('Укажите URL local-сервиса', 'warning');
+          return;
+        }
+        info = await adminApi.probeModelInfo(current);
+      }
+
+      if (info.provider_model_name) handleFieldChange('provider_model_name', info.provider_model_name);
+      if (info.model_version) handleFieldChange('model_version', info.model_version);
+      if (info.model_type) handleFieldChange('type', info.model_type);
+      if (info.health_status) setHealthBadge(info.health_status);
+      const raw = (info.raw || {}) as Record<string, unknown>;
+      setManifestRaw(raw);
+      const vector = raw.dimensions;
+      const maxTok = raw.max_tokens;
+      if (typeof vector === 'number' && Number.isFinite(vector)) setVectorDim(String(vector));
+      if (typeof maxTok === 'number' && Number.isFinite(maxTok)) setMaxTokens(String(maxTok));
+      showToast('Проверка выполнена', 'success');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Не удалось выполнить проверку', 'error');
+    } finally {
+      setProbingInfo(false);
+    }
+  };
 
   // ─── Create mode ───
   if (isNew) {
@@ -409,6 +526,11 @@ export function ModelPage() {
         title="Новая модель"
         mode="create"
         saving={saving}
+        headerActions={(
+          <Button variant="outline" onClick={handleProbeModelInfo} disabled={probingInfo}>
+            {probingInfo ? 'Проверяем...' : 'Проверить'}
+          </Button>
+        )}
         breadcrumbs={[
           { label: 'Платформа', href: '/admin/platform' },
           { label: 'Новая модель' },
@@ -440,27 +562,27 @@ export function ModelPage() {
             onChange={handleFieldChange}
           />
           <Block
-            title="Статус и флаги"
+            title="Параметры модели"
             icon="settings"
             iconVariant="warning"
             width="1/2"
-            fields={STATUS_FIELDS}
-            data={formData}
+            fields={paramsFields}
+            data={paramsData}
             editable
-            onChange={handleFieldChange}
+            onChange={(key, value) => {
+              if (key === 'max_tokens') setMaxTokens(String(value ?? ''));
+              else if (key === 'vector_dim') setVectorDim(String(value ?? ''));
+              else handleFieldChange(key, value);
+            }}
           />
-          {isEmbedding && (
-            <Block
-              title="Настройки эмбеддинга"
-              icon="brain"
-              iconVariant="info"
-              width="1/2"
-              fields={EMBEDDING_FIELDS}
-              data={embeddingData}
-              editable
-              onChange={(_key, value) => setVectorDim(String(value))}
-            />
-          )}
+          <Block
+            title="Остальные параметры"
+            icon="database"
+            iconVariant="info"
+            width="1/2"
+            fields={OTHER_PARAMS_FIELDS}
+            data={otherParamsData}
+          />
         </Tab>
       </EntityPageV2>
     );
@@ -474,6 +596,11 @@ export function ModelPage() {
         mode={mode}
         loading={isLoading}
         saving={saving}
+        headerActions={isEditable ? (
+          <Button variant="outline" onClick={handleProbeModelInfo} disabled={probingInfo}>
+            {probingInfo ? 'Проверяем...' : 'Проверить'}
+          </Button>
+        ) : undefined}
         breadcrumbs={[
           { label: 'Платформа', href: '/admin/platform' },
           { label: model?.name || 'Модель' },
@@ -495,9 +622,9 @@ export function ModelPage() {
             editable={isEditable}
             onChange={handleFieldChange}
             headerActions={
-              model?.health_status ? (
-                <Badge tone={model.health_status === 'healthy' ? 'success' : model.health_status === 'degraded' ? 'warn' : 'danger'}>
-                  {model.health_status}
+              healthBadge && healthBadge !== 'unknown' ? (
+                <Badge tone={healthBadge === 'healthy' ? 'success' : healthBadge === 'degraded' ? 'warn' : 'danger'}>
+                  {healthBadge}
                 </Badge>
               ) : undefined
             }
@@ -514,27 +641,27 @@ export function ModelPage() {
             onChange={handleFieldChange}
           />
           <Block
-            title="Статус и флаги"
+            title="Параметры модели"
             icon="settings"
             iconVariant="warning"
             width="1/2"
-            fields={STATUS_FIELDS}
-            data={blockData}
+            fields={paramsFields}
+            data={paramsData}
             editable={isEditable}
-            onChange={handleFieldChange}
+            onChange={(key, value) => {
+              if (key === 'max_tokens') setMaxTokens(String(value ?? ''));
+              else if (key === 'vector_dim') setVectorDim(String(value ?? ''));
+              else handleFieldChange(key, value);
+            }}
           />
-          {isEmbedding && (
-            <Block
-              title="Настройки эмбеддинга"
-              icon="brain"
-              iconVariant="info"
-              width="1/2"
-              fields={EMBEDDING_FIELDS}
-              data={embeddingData}
-              editable={isEditable}
-              onChange={(_key, value) => setVectorDim(String(value))}
-            />
-          )}
+          <Block
+            title="Остальные параметры"
+            icon="database"
+            iconVariant="info"
+            width="1/2"
+            fields={OTHER_PARAMS_FIELDS}
+            data={otherParamsData}
+          />
           <Block
             title="Метаданные"
             icon="database"

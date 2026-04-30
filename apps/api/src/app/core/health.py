@@ -160,38 +160,55 @@ class HealthChecker:
             raise Exception(f"Redis check failed: {e}")
     
     async def _check_llm_service(self) -> Dict[str, Any]:
-        """Check LLM service"""
+        """Check LLM connector path."""
         start_time = time.time()
         
         try:
-            import httpx
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.get(f"{self.settings.LLM_BASE_URL}/health")
-                response.raise_for_status()
+            from app.core.di import get_llm_client
+            client = get_llm_client()
+            health = await client.health_check()
+            if health.get("status") != "healthy":
+                raise RuntimeError(health.get("error") or "llm_connector_unhealthy")
             
             response_time = (time.time() - start_time) * 1000
             return {
                 "response_time_ms": response_time,
-                "details": {"status_code": response.status_code}
+                "details": {"provider": health.get("provider"), "model": health.get("model")}
             }
             
         except Exception as e:
             raise Exception(f"LLM service check failed: {e}")
     
     async def _check_emb_service(self) -> Dict[str, Any]:
-        """Check embedding service"""
+        """Check embedding service via active model registry."""
         start_time = time.time()
         
         try:
-            import httpx
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.get(f"{self.settings.EMB_BASE_URL}/health")
-                response.raise_for_status()
+            from sqlalchemy import text
+            from app.core.db import get_session_factory
+            from app.adapters.embeddings import EmbeddingServiceFactory
+
+            session_factory = get_session_factory()
+            async with session_factory() as session:
+                result = await session.execute(
+                    text(
+                        "SELECT alias FROM models "
+                        "WHERE type = 'EMBEDDING' AND enabled = true AND status = 'AVAILABLE' "
+                        "ORDER BY is_default DESC, alias ASC LIMIT 1"
+                    )
+                )
+                model_alias = result.scalar_one_or_none()
+                if not model_alias:
+                    raise RuntimeError("no_available_embedding_models")
+                await EmbeddingServiceFactory.ensure_model_registered_async(session, model_alias)
+
+            service = EmbeddingServiceFactory.get_service(model_alias)
+            vectors = await asyncio.to_thread(service.embed_texts, ["health check"])
             
             response_time = (time.time() - start_time) * 1000
             return {
                 "response_time_ms": response_time,
-                "details": {"status_code": response.status_code}
+                "details": {"model": model_alias, "vectors": len(vectors)}
             }
             
         except Exception as e:

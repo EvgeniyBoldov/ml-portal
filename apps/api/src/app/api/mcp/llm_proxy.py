@@ -11,11 +11,13 @@ from typing import Any, Dict, List, Optional, AsyncGenerator
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import db_session, get_current_user, get_llm_client
 from app.core.security import UserCtx
 from app.core.http.clients import LLMClientProtocol
+from app.models.model_registry import Model, ModelType
 
 logger = get_logger(__name__)
 
@@ -213,6 +215,7 @@ async def _stream_response(
 
 @router.get("/models")
 async def list_models(
+    session: AsyncSession = Depends(db_session),
     current_user: UserCtx = Depends(get_current_user),
 ) -> JSONResponse:
     """
@@ -220,26 +223,23 @@ async def list_models(
     
     Returns OpenAI-compatible model list.
     """
-    from app.core.config import get_settings
-    settings = get_settings()
-    
-    # Return models based on provider
-    models = []
-    if settings.LLM_PROVIDER == "groq":
-        models = [
-            {"id": "llama-3.1-8b-instant", "object": "model", "owned_by": "groq"},
-            {"id": "llama-3.1-70b-versatile", "object": "model", "owned_by": "groq"},
-            {"id": "mixtral-8x7b-32768", "object": "model", "owned_by": "groq"},
-            {"id": "compound-beta", "object": "model", "owned_by": "groq"},
-        ]
-    elif settings.LLM_PROVIDER == "openai":
-        models = [
-            {"id": "gpt-4-turbo-preview", "object": "model", "owned_by": "openai"},
-            {"id": "gpt-3.5-turbo", "object": "model", "owned_by": "openai"},
-        ]
-    else:
-        models = [
-            {"id": "default", "object": "model", "owned_by": settings.LLM_PROVIDER},
-        ]
-    
+    result = await session.execute(
+        select(Model)
+        .where(
+            Model.type == ModelType.LLM_CHAT,
+            Model.enabled == True,  # noqa: E712
+            Model.deleted_at.is_(None),
+        )
+        .order_by(Model.default_for_type.desc(), Model.updated_at.desc())
+    )
+    rows = result.scalars().all()
+    models = [
+        {
+            "id": model.alias,
+            "object": "model",
+            "owned_by": model.provider or "registry",
+        }
+        for model in rows
+    ]
+
     return JSONResponse(content={"object": "list", "data": models})

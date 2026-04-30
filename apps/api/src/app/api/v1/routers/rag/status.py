@@ -195,8 +195,15 @@ async def get_rag_document_models(
                     "status": node.status
                 })
         
-        from app.core.config import get_embedding_models
-        available_models = get_embedding_models()
+        from sqlalchemy import text
+        models_result = await session.execute(
+            text(
+                "SELECT alias FROM models "
+                "WHERE type = 'EMBEDDING' AND enabled = true AND status = 'AVAILABLE' "
+                "ORDER BY is_default DESC, alias ASC"
+            )
+        )
+        available_models = [row[0] for row in models_result.all()]
         
         return {
             "id": doc_id,

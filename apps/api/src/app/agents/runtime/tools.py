@@ -9,10 +9,10 @@ from typing import Any, Dict, List, Optional, Tuple
 
 try:
     import jsonschema as _jsonschema
-    _JSONSCHEMA_AVAILABLE = True
 except ImportError:
     _jsonschema = None  # type: ignore[assignment]
-    _JSONSCHEMA_AVAILABLE = False
+
+_JSONSCHEMA_AVAILABLE = _jsonschema is not None
 
 from app.agents.context import OperationCall, ToolContext, ToolResult
 from app.agents.contracts import ResolvedOperation
@@ -299,8 +299,7 @@ class OperationExecutionFacade:
         schema = operation.input_schema or {}
         if not schema:
             return None
-
-        if _JSONSCHEMA_AVAILABLE:
+        if _jsonschema is not None:
             return OperationExecutionFacade._validate_args_jsonschema(arguments, schema)
         return OperationExecutionFacade._validate_args_builtin(arguments, schema)
 
@@ -329,29 +328,92 @@ class OperationExecutionFacade:
         arguments: Dict[str, Any],
         schema: Dict[str, Any],
     ) -> Optional[OperationValidationError]:
-        """Minimal fallback validator used when jsonschema is not installed."""
-        required = schema.get("required", [])
-        properties = schema.get("properties", {})
-        if isinstance(required, list):
-            for field in required:
-                if field not in arguments:
-                    return OperationValidationError(
-                        code=RuntimeErrorCode.OPERATION_INVALID_ARGS,
-                        message=f"Missing required field: {field}",
-                        field_path=f"$.{field}",
-                        retryable=True,
-                    )
-        additional_allowed = schema.get("additionalProperties", True)
-        if additional_allowed is False and isinstance(properties, dict):
-            extra_keys = [k for k in arguments if k not in properties]
-            if extra_keys:
+        def _type_ok(value: Any, expected: str) -> bool:
+            if expected == "object":
+                return isinstance(value, dict)
+            if expected == "array":
+                return isinstance(value, list)
+            if expected == "string":
+                return isinstance(value, str)
+            if expected == "integer":
+                return isinstance(value, int) and not isinstance(value, bool)
+            if expected == "number":
+                return isinstance(value, (int, float)) and not isinstance(value, bool)
+            if expected == "boolean":
+                return isinstance(value, bool)
+            if expected == "null":
+                return value is None
+            return True
+
+        def _validate(value: Any, node: Dict[str, Any], path: str) -> Optional[OperationValidationError]:
+            expected_type = node.get("type")
+            if isinstance(expected_type, str) and not _type_ok(value, expected_type):
                 return OperationValidationError(
                     code=RuntimeErrorCode.OPERATION_INVALID_ARGS,
-                    message=f"Unexpected field(s): {', '.join(extra_keys)}",
-                    field_path="$",
+                    message=f"{path} must be {expected_type}",
+                    field_path=path,
                     retryable=True,
                 )
-        return None
+
+            if "enum" in node and isinstance(node["enum"], list) and value not in node["enum"]:
+                return OperationValidationError(
+                    code=RuntimeErrorCode.OPERATION_INVALID_ARGS,
+                    message=f"{path} must be one of: {', '.join(map(str, node['enum']))}",
+                    field_path=path,
+                    retryable=True,
+                )
+
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                minimum = node.get("minimum")
+                if minimum is not None and value < minimum:
+                    return OperationValidationError(
+                        code=RuntimeErrorCode.OPERATION_INVALID_ARGS,
+                        message=f"{path} must be >= {minimum}",
+                        field_path=path,
+                        retryable=True,
+                    )
+
+            if isinstance(value, dict):
+                required = node.get("required", [])
+                if isinstance(required, list):
+                    for field in required:
+                        if field not in value:
+                            return OperationValidationError(
+                                code=RuntimeErrorCode.OPERATION_INVALID_ARGS,
+                                message=f"Missing required field: {field}",
+                                field_path=f"{path}.{field}" if path != "$" else f"$.{field}",
+                                retryable=True,
+                            )
+                properties = node.get("properties", {})
+                additional_allowed = node.get("additionalProperties", True)
+                if additional_allowed is False and isinstance(properties, dict):
+                    for key in value:
+                        if key not in properties:
+                            return OperationValidationError(
+                                code=RuntimeErrorCode.OPERATION_INVALID_ARGS,
+                                message=f"Unexpected field(s): {key}",
+                                field_path=path,
+                                retryable=True,
+                            )
+                if isinstance(properties, dict):
+                    for key, child_schema in properties.items():
+                        if key in value and isinstance(child_schema, dict):
+                            child_path = f"{path}.{key}" if path != "$" else f"$.{key}"
+                            err = _validate(value[key], child_schema, child_path)
+                            if err:
+                                return err
+
+            if isinstance(value, list):
+                items_schema = node.get("items")
+                if isinstance(items_schema, dict):
+                    for idx, item in enumerate(value):
+                        child_path = f"{path}[{idx}]"
+                        err = _validate(item, items_schema, child_path)
+                        if err:
+                            return err
+            return None
+
+        return _validate(arguments, schema, "$")
 
     @staticmethod
     def format_result_for_context(result: ToolResult) -> str:

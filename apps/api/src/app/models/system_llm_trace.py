@@ -23,7 +23,6 @@ if TYPE_CHECKING:
 
 class SystemLLMTraceType(str, Enum):
     """Types of system LLM traces."""
-    TRIAGE = "triage"
     PLANNER = "planner"
     SUMMARY = "summary"
 
