@@ -51,4 +51,25 @@ class TestChatEventMapper:
         assert result["type"] == "planner_action"
         assert result["agent_slug"] == "netbox"
         assert result["kind"] == "call_agent"
+        assert result["action_type"] == "agent_call"
+        assert result["step_type"] == "call_agent"
         assert result["rationale"] == "Нужны данные из NetBox"
+        assert result["why"] == "Нужны данные из NetBox"
+        assert result["contract_version"] == 1
+
+    def test_maps_error_event_with_code_and_details(self):
+        mapper = ChatEventMapper()
+        event = SimpleNamespace(
+            type=RuntimeEventType.ERROR,
+            data={
+                "error": "failed",
+                "error_code": "operation_unavailable",
+                "retryable": False,
+            },
+        )
+        result = mapper.map_runtime_event(event)
+        assert result is not None
+        assert result["type"] == "error"
+        assert result["code"] == "operation_unavailable"
+        assert result["recoverable"] is False
+        assert result["details"]["retryable"] is False

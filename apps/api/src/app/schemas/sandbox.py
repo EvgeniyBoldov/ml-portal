@@ -143,6 +143,7 @@ class SandboxRunCreate(BaseModel):
     branch_id: Optional[UUID] = None
     parent_run_id: Optional[UUID] = None
     attachment_ids: Optional[list[UUID]] = None
+    confirmed_fingerprints: Optional[list[str]] = None
 
 
 class SandboxRunListItem(BaseModel):

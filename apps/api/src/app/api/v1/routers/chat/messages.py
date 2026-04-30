@@ -29,6 +29,7 @@ from app.schemas.chats import ChatMessageStreamRequest
 from app.schemas.confirmations import ConfirmationIssueRequest, ConfirmationIssueResponse
 from app.services.chat_router_event_mapper import build_resume_content, map_service_event_to_sse
 from app.services.chat_resume_orchestrator import ChatResumeOrchestrator
+from app.services.runtime_hitl_protocol_service import RuntimeHitlProtocolService
 from app.services.chat_stream_service import ChatStreamService
 from app.services.runtime_resume_checkpoint_service import RuntimeResumeCheckpointService
 from app.services.runtime_terminal_status import normalize_run_status_for_storage
@@ -300,11 +301,14 @@ async def resume_run(
     # can pass the HITL gate without looping back to another confirmation_required.
     confirmation_tokens: list[str] = []
     if action == "confirm" and isinstance(paused_action, dict):
-        fingerprint = str(paused_action.get("operation_fingerprint") or "").strip()
+        fingerprint = RuntimeHitlProtocolService.extract_operation_fingerprint(
+            paused_action if isinstance(paused_action, dict) else None,
+            paused_context if isinstance(paused_context, dict) else None,
+        )
         if fingerprint and run.chat_id:
             try:
                 conf_svc = get_confirmation_service()
-                token, _ = conf_svc.issue_token(
+                token, _ = conf_svc.issue(
                     fingerprint=fingerprint,
                     user_id=uuid.UUID(str(current_user.id)),
                     chat_id=uuid.UUID(str(run.chat_id)),

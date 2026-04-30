@@ -16,7 +16,8 @@ from app.models.system_llm_role import SystemLLMRole, SystemLLMRoleType
 from app.repositories.system_llm_role_repository import SystemLLMRoleRepository
 from app.schemas.system_llm_roles import (
     SystemLLMRoleCreate, SystemLLMRoleUpdate,
-    TriageRoleUpdate, PlannerRoleUpdate, SummaryRoleUpdate, MemoryRoleUpdate
+    TriageRoleUpdate, PlannerRoleUpdate, SummaryRoleUpdate, MemoryRoleUpdate,
+    SynthesizerRoleUpdate, FactExtractorRoleUpdate, SummaryCompactorRoleUpdate,
 )
 
 logger = logging.getLogger(__name__)
@@ -102,7 +103,19 @@ class SystemLLMRoleService:
     async def update_memory_role(self, data: MemoryRoleUpdate) -> Optional[SystemLLMRole]:
         """Update the active Memory role."""
         return await self._update_role_by_type(SystemLLMRoleType.MEMORY, data)
-    
+
+    async def update_synthesizer_role(self, data: SynthesizerRoleUpdate) -> Optional[SystemLLMRole]:
+        """Update the active Synthesizer role."""
+        return await self._update_role_by_type(SystemLLMRoleType.SYNTHESIZER, data)
+
+    async def update_fact_extractor_role(self, data: FactExtractorRoleUpdate) -> Optional[SystemLLMRole]:
+        """Update the active Fact Extractor role."""
+        return await self._update_role_by_type(SystemLLMRoleType.FACT_EXTRACTOR, data)
+
+    async def update_summary_compactor_role(self, data: SummaryCompactorRoleUpdate) -> Optional[SystemLLMRole]:
+        """Update the active Summary Compactor role."""
+        return await self._update_role_by_type(SystemLLMRoleType.SUMMARY_COMPACTOR, data)
+
     async def delete_role(self, role_id: UUID) -> bool:
         """Delete a role."""
         return await self.repo.delete(role_id)

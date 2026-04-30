@@ -370,11 +370,13 @@ class SandboxService:
     async def pause_run(
         self,
         run_id: UUID,
+        status: str,
         paused_action: Dict[str, Any],
         paused_context: Dict[str, Any],
     ) -> Optional[SandboxRun]:
         return await self.run_manager.pause_run(
             run_id=run_id,
+            status=status,
             paused_action=paused_action,
             paused_context=paused_context,
         )

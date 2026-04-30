@@ -36,7 +36,7 @@ class TestChatResumeTurnSync:
             user_id=user_id,
             tenant_id=tenant_id,
             status="waiting_confirmation",
-            paused_action={"kind": "confirm"},
+            paused_action={"kind": "confirm", "operation_fingerprint": "fp-1"},
             paused_context={"x": 1},
             error=None,
             finished_at=None,
@@ -50,14 +50,22 @@ class TestChatResumeTurnSync:
         turn_service = AsyncMock()
         turn_service.get_by_agent_run_id = AsyncMock(return_value=turn)
         turn_service.cancel_turn = AsyncMock()
-        chat_service = AsyncMock()
-        chat_service.send_message_stream = lambda **_: self._stream({"type": "final", "message_id": str(uuid4())})
+        captured_kwargs = {}
+
+        def _send_message_stream(**kwargs):
+            captured_kwargs.update(kwargs)
+            return self._stream({"type": "final", "message_id": str(uuid4())})
+
+        chat_service = SimpleNamespace(send_message_stream=_send_message_stream)
+        confirmation_service = SimpleNamespace(issue=AsyncMock())
+        confirmation_service.issue = lambda **_: ("tok-confirm", None)
 
         with (
             patch("app.services.chat_turn_service.ChatTurnService", return_value=turn_service),
             patch("app.api.v1.routers.chat.ChatStreamService", return_value=chat_service),
             patch("app.api.v1.routers.chat.get_redis", return_value=AsyncMock()),
             patch("app.api.v1.routers.chat.get_llm_client", return_value=AsyncMock()),
+            patch("app.api.v1.routers.chat.messages.get_confirmation_service", return_value=confirmation_service),
         ):
             result = await resume_run(run_id=run_id, body={"action": "confirm"}, session=mock_session, current_user=current_user)
 
@@ -71,7 +79,54 @@ class TestChatResumeTurnSync:
             error_message="Turn resumed via continuation flow",
             agent_run_id=UUID(run_id),
         )
+        assert captured_kwargs.get("confirmation_tokens") == ["tok-confirm"]
         mock_session.commit.assert_awaited()
+
+    @pytest.mark.asyncio
+    async def test_resume_confirm_issues_token_when_fingerprint_only_in_paused_context(self, mock_session):
+        run_id = str(uuid4())
+        user_id = str(uuid4())
+        tenant_id = str(uuid4())
+        current_user = SimpleNamespace(id=user_id, tenant_ids=[tenant_id])
+        paused_run = SimpleNamespace(
+            id=uuid4(),
+            user_id=user_id,
+            tenant_id=tenant_id,
+            status="waiting_confirmation",
+            paused_action={"kind": "confirm"},
+            paused_context={"operation_fingerprint": "fp-from-context"},
+            error=None,
+            finished_at=None,
+            chat_id=uuid4(),
+            agent_slug="agent-x",
+            context_snapshot={},
+        )
+        turn = SimpleNamespace(id=uuid4())
+        self._mock_execute_with_run(mock_session, paused_run)
+
+        turn_service = AsyncMock()
+        turn_service.get_by_agent_run_id = AsyncMock(return_value=turn)
+        turn_service.cancel_turn = AsyncMock()
+        captured_kwargs = {}
+
+        def _send_message_stream(**kwargs):
+            captured_kwargs.update(kwargs)
+            return self._stream({"type": "final", "message_id": str(uuid4())})
+
+        chat_service = SimpleNamespace(send_message_stream=_send_message_stream)
+        confirmation_service = SimpleNamespace(issue=lambda **_: ("tok-confirm-ctx", None))
+
+        with (
+            patch("app.services.chat_turn_service.ChatTurnService", return_value=turn_service),
+            patch("app.api.v1.routers.chat.ChatStreamService", return_value=chat_service),
+            patch("app.api.v1.routers.chat.get_redis", return_value=AsyncMock()),
+            patch("app.api.v1.routers.chat.get_llm_client", return_value=AsyncMock()),
+            patch("app.api.v1.routers.chat.messages.get_confirmation_service", return_value=confirmation_service),
+        ):
+            result = await resume_run(run_id=run_id, body={"action": "confirm"}, session=mock_session, current_user=current_user)
+
+        assert result["status"] == "resumed_completed"
+        assert captured_kwargs.get("confirmation_tokens") == ["tok-confirm-ctx"]
 
     @pytest.mark.asyncio
     async def test_resume_cancel_fails_turn_and_finishes_run(self, mock_session):

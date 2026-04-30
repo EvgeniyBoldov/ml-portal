@@ -35,7 +35,6 @@ def test_planner_input_builder_prefers_runtime_turn_state_snapshot():
     memory.memory_state["runtime_turn_state"] = state.model_dump(mode="json")
 
     payload = PlannerInputBuilder().build(
-        memory=memory,
         runtime_state=state,
         available_agents=[{"slug": "a", "description": "agent"}],
         outline=None,
@@ -59,7 +58,6 @@ def test_synthesizer_input_builder_includes_memory_sections_hint():
     memory.memory_state["runtime_turn_state"] = state.model_dump(mode="json")
 
     messages = SynthesizerInputBuilder().build(
-        memory=memory,
         runtime_state=state,
         planner_hint="hint",
         system_prompt="sys",

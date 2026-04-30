@@ -114,6 +114,7 @@ class SandboxRunManager:
         self,
         *,
         run_id: UUID,
+        status: str = "waiting_confirmation",
         paused_action: Dict[str, Any],
         paused_context: Dict[str, Any],
     ) -> Optional[SandboxRun]:
@@ -123,7 +124,7 @@ class SandboxRunManager:
         return await self.host.runs.update(
             obj,
             {
-                "status": "waiting_confirmation",
+                "status": status,
                 "paused_action": paused_action,
                 "paused_context": paused_context,
             },
@@ -178,4 +179,3 @@ class SandboxRunManager:
 
     async def fail_stale_runs(self, session_id: UUID, stale_threshold_minutes: int = 5) -> int:
         return await self.host.runs.fail_stale_runs(session_id, stale_threshold_minutes)
-

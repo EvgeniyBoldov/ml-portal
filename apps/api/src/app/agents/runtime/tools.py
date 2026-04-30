@@ -193,13 +193,33 @@ class OperationExecutionFacade:
     ) -> None:
         if not bool(operation.requires_confirmation):
             return
-        if ctx.chat_id is None:
-            return
         fingerprint = build_operation_fingerprint(
             tool_slug=operation.operation_slug,
             operation=operation.operation,
             args=operation_call.arguments or {},
         )
+        if ctx.chat_id is None:
+            # Sandbox/non-chat execution must provide an explicit pre-approval
+            # list from the caller; otherwise confirmation is required.
+            approved = ctx.extra.get("sandbox_confirmed_fingerprints")
+            approved_list = approved if isinstance(approved, list) else []
+            if fingerprint in approved_list:
+                return
+            args_preview = json.dumps(
+                operation_call.arguments or {},
+                ensure_ascii=False,
+                default=str,
+            )[:600]
+            raise ConfirmationRequiredError(
+                payload={
+                    "operation_fingerprint": fingerprint,
+                    "tool_slug": operation.operation_slug,
+                    "operation": operation.operation,
+                    "risk_level": operation.risk_level,
+                    "args_preview": args_preview,
+                    "summary": operation.description or "Operation requires explicit confirmation",
+                }
+            )
         raw_tokens = ctx.extra.get("confirmation_tokens")
         tokens = raw_tokens if isinstance(raw_tokens, list) else []
 

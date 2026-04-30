@@ -45,11 +45,6 @@ class OrchestrationSettingsProvider:
             "executor_temperature": settings.executor_temperature,
             "executor_timeout_s": settings.executor_timeout_s,
             "executor_max_steps": settings.executor_max_steps,
-            "triage_fail_open": settings.triage_fail_open,
-            "preflight_fail_open": settings.preflight_fail_open,
-            "planner_fail_open": settings.planner_fail_open,
-            "preflight_fail_open_message": settings.preflight_fail_open_message,
-            "planner_fail_open_message": settings.planner_fail_open_message,
         }
         return self._settings_cache
 
@@ -74,11 +69,6 @@ class OrchestrationSettingsProvider:
             "executor_temperature": settings.get("executor_temperature") if settings.get("executor_temperature") is not None else 0.7,
             "executor_timeout_s": settings.get("executor_timeout_s") if settings.get("executor_timeout_s") is not None else 60,
             "executor_max_steps": settings.get("executor_max_steps") if settings.get("executor_max_steps") is not None else 10,
-            "triage_fail_open": settings.get("triage_fail_open") if settings.get("triage_fail_open") is not None else True,
-            "preflight_fail_open": settings.get("preflight_fail_open") if settings.get("preflight_fail_open") is not None else False,
-            "planner_fail_open": settings.get("planner_fail_open") if settings.get("planner_fail_open") is not None else False,
-            "preflight_fail_open_message": settings.get("preflight_fail_open_message"),
-            "planner_fail_open_message": settings.get("planner_fail_open_message"),
         }
 
         # Override with Limit if provided

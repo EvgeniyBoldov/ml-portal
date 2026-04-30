@@ -84,6 +84,12 @@ class ToolResultPayload(BaseModel):
 
 class PlannerActionPayload(BaseModel):
     iteration: Optional[int] = None
+    # Canonical fields
+    kind: Optional[str] = None
+    rationale: Optional[str] = None
+    risk: Optional[str] = None
+    contract_version: int = 1
+    # Legacy/compat fields
     action_type: Optional[str] = None
     step_type: Optional[str] = None
     agent_slug: Optional[str] = None
@@ -117,6 +123,7 @@ class ConfirmationRequiredPayload(BaseModel):
 class WaitingInputPayload(BaseModel):
     question: Optional[str] = None
     reason: Optional[str] = None
+    run_id: Optional[str] = None
     orchestration_envelope: Optional[Dict[str, Any]] = None
     orchestration_state: Optional[Dict[str, Any]] = None
 
@@ -144,6 +151,7 @@ class CachedPayload(BaseModel):
 class ErrorPayload(BaseModel):
     error: str
     code: Optional[str] = None
+    recoverable: Optional[bool] = None
     details: Optional[Dict[str, Any]] = None
 
 

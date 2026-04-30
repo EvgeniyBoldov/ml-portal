@@ -31,6 +31,7 @@ from app.services.chat_turn_orchestrator import ChatTurnOrchestrator
 from app.services.chat_turn_service import ChatTurnService
 from app.services.chat_attachment_service import ChatAttachmentService, ChatAttachmentNotFoundError
 from app.services.chat_generated_file_service import ChatGeneratedFileService
+from app.services.runtime_hitl_protocol_service import RuntimeHitlProtocolService
 from app.core.db import get_session_factory
 
 logger = get_logger(__name__)
@@ -333,24 +334,14 @@ class ChatStreamService:
 
                 elif event.type == RuntimeEventType.STOP:
                     stop_payload = dict(event.data or {})
-                    reason = stop_payload.get("reason")
-                    # Build paused_action preserving all confirmation details
-                    # (operation_fingerprint, tool_slug, etc.) for resume token issuance.
-                    paused_action_payload: dict = {
-                        "type": "resume",
-                        "reason": reason,
-                        "question": stop_payload.get("question"),
-                        "message": stop_payload.get("message"),
-                    }
-                    for _k in ("operation_fingerprint", "tool_slug", "operation", "risk_level", "args_preview", "summary"):
-                        if stop_payload.get(_k) is not None:
-                            paused_action_payload[_k] = stop_payload[_k]
+                    paused_payload = RuntimeHitlProtocolService.build_paused_from_stop(stop_payload)
                     yield {
                         "type": "run_paused",
-                        "reason": reason,
-                        "run_id": stop_payload.get("run_id"),
-                        "action": paused_action_payload,
-                        "context": stop_payload,
+                        "reason": paused_payload["reason"],
+                        "run_id": paused_payload["run_id"],
+                        "action": paused_payload["action"],
+                        "context": paused_payload["context"],
+                        "contract_version": paused_payload["contract_version"],
                     }
 
                 else:

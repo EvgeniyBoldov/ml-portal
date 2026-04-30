@@ -8,55 +8,24 @@ from app.services.runtime_config_service import RuntimeConfigService
 
 
 @pytest.mark.asyncio
-async def test_runtime_config_service_merges_orchestration_fail_policy(mock_session):
+async def test_runtime_config_service_returns_platform_config(mock_session):
     platform_provider = type("PlatformProvider", (), {})()
     platform_provider.get_config = AsyncMock(
         return_value={
             "policies_text": "policy",
-            "preflight_fail_open": False,
-        }
-    )
-    orchestration_provider = type("OrchestrationProvider", (), {})()
-    orchestration_provider.get_config = AsyncMock(
-        return_value={
-            "preflight_fail_open": True,
-            "planner_fail_open_message": "planner fallback",
+            "require_confirmation_for_write": True,
         }
     )
 
     with patch(
         "app.services.runtime_config_service.PlatformSettingsProvider.get_instance",
         return_value=platform_provider,
-    ), patch(
-        "app.services.runtime_config_service.OrchestrationSettingsProvider.get_instance",
-        return_value=orchestration_provider,
     ):
         service = RuntimeConfigService(mock_session)
         config = await service.get_pipeline_config()
 
     assert config["policies_text"] == "policy"
-    assert config["preflight_fail_open"] is True
-    assert config["planner_fail_open_message"] == "planner fallback"
-
-
-@pytest.mark.asyncio
-async def test_runtime_config_service_ignores_orchestration_merge_error(mock_session):
-    platform_provider = type("PlatformProvider", (), {})()
-    platform_provider.get_config = AsyncMock(return_value={"policies_text": "policy"})
-    orchestration_provider = type("OrchestrationProvider", (), {})()
-    orchestration_provider.get_config = AsyncMock(side_effect=RuntimeError("boom"))
-
-    with patch(
-        "app.services.runtime_config_service.PlatformSettingsProvider.get_instance",
-        return_value=platform_provider,
-    ), patch(
-        "app.services.runtime_config_service.OrchestrationSettingsProvider.get_instance",
-        return_value=orchestration_provider,
-    ):
-        service = RuntimeConfigService(mock_session)
-        config = await service.get_pipeline_config()
-
-    assert config == {"policies_text": "policy"}
+    assert config["require_confirmation_for_write"] is True
 
 
 @pytest.mark.asyncio

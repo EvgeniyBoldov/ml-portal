@@ -104,6 +104,6 @@ async def test_load_discovered_tools_adds_catalog_for_bound_local_collection():
     resolver._load_local_collection_catalog_tools = AsyncMock(return_value=[catalog_tool])
     resolver._load_provider_tools = AsyncMock(return_value=[])
 
-    tools = await resolver.load_discovered_tools(instance=instance, provider=provider, include_unpublished=False)
+    tools = await resolver.load_discovered_tools(instance=instance, provider=provider)
 
     assert [tool.slug for tool in tools] == ["collection.search", "collection.catalog"]

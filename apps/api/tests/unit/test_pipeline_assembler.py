@@ -37,16 +37,15 @@ def test_pipeline_assembler_stage_factories_return_fresh_instances():
     assembler = _assembler()
 
     planning_stage_1 = assembler.build_planning_stage(
-        max_iterations=3, max_wall_time_ms=1000,
+        max_iterations=3,
     )
     planning_stage_2 = assembler.build_planning_stage(
-        max_iterations=3, max_wall_time_ms=1000,
+        max_iterations=3,
     )
     assert planning_stage_1 is not planning_stage_2
     assert planning_stage_1._planner is assembler.planner
     assert planning_stage_1._agent is assembler.agent_executor
     assert planning_stage_1._max_iterations == 3
-    assert planning_stage_1._max_wall_time_ms == 1000
 
     final_stage_1 = assembler.build_finalization_stage()
     final_stage_2 = assembler.build_finalization_stage()

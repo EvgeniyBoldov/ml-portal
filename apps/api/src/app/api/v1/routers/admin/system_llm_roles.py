@@ -15,7 +15,8 @@ from app.services.system_llm_role_service import (
 )
 from app.schemas.system_llm_roles import (
     SystemLLMRoleCreate, SystemLLMRoleUpdate, SystemLLMRoleResponse,
-    TriageRoleUpdate, PlannerRoleUpdate, SummaryRoleUpdate, MemoryRoleUpdate
+    TriageRoleUpdate, PlannerRoleUpdate, SummaryRoleUpdate, MemoryRoleUpdate,
+    SynthesizerRoleUpdate, FactExtractorRoleUpdate, SummaryCompactorRoleUpdate,
 )
 
 router = APIRouter(prefix="/system-llm-roles", tags=["system-llm-roles"])
@@ -171,6 +172,45 @@ async def update_memory_role(
     """Update the active Memory role configuration."""
     service = SystemLLMRoleService(session)
     role = await service.update_memory_role(data)
+    await session.commit()
+    return role
+
+
+@router.patch("/synthesizer", response_model=SystemLLMRoleResponse)
+async def update_synthesizer_role(
+    data: SynthesizerRoleUpdate,
+    session: AsyncSession = Depends(db_session),
+    _: UserCtx = Depends(require_admin)
+):
+    """Update the active Synthesizer role configuration."""
+    service = SystemLLMRoleService(session)
+    role = await service.update_synthesizer_role(data)
+    await session.commit()
+    return role
+
+
+@router.patch("/fact-extractor", response_model=SystemLLMRoleResponse)
+async def update_fact_extractor_role(
+    data: FactExtractorRoleUpdate,
+    session: AsyncSession = Depends(db_session),
+    _: UserCtx = Depends(require_admin)
+):
+    """Update the active Fact Extractor role configuration."""
+    service = SystemLLMRoleService(session)
+    role = await service.update_fact_extractor_role(data)
+    await session.commit()
+    return role
+
+
+@router.patch("/summary-compactor", response_model=SystemLLMRoleResponse)
+async def update_summary_compactor_role(
+    data: SummaryCompactorRoleUpdate,
+    session: AsyncSession = Depends(db_session),
+    _: UserCtx = Depends(require_admin)
+):
+    """Update the active Summary Compactor role configuration."""
+    service = SystemLLMRoleService(session)
+    role = await service.update_summary_compactor_role(data)
     await session.commit()
     return role
 

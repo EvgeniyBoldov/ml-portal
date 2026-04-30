@@ -38,6 +38,7 @@ from app.services.chat_attachment_service import ChatAttachmentService
 from app.services.sandbox_service import SandboxService
 from app.services.sandbox_step_enrichment_service import SandboxStepEnrichmentService
 from app.services.run_store import RunStore
+from app.services.runtime_hitl_protocol_service import RuntimeHitlProtocolService
 
 from .helpers import check_session_owner, tenant_uuid, user_uuid
 
@@ -193,6 +194,15 @@ async def run_sandbox(
     if not branch or branch.session_id != session_id:
         raise HTTPException(status_code=404, detail="Branch not found")
 
+    sandbox_confirmed_fingerprints = list(data.confirmed_fingerprints or [])
+    if data.parent_run_id and not sandbox_confirmed_fingerprints:
+        parent_run = await svc.get_run(data.parent_run_id)
+        if parent_run and parent_run.session_id == session_id:
+            sandbox_confirmed_fingerprints = RuntimeHitlProtocolService.extract_confirmed_fingerprints(
+                parent_run.paused_action if isinstance(parent_run.paused_action, dict) else None,
+                parent_run.paused_context if isinstance(parent_run.paused_context, dict) else None,
+            )
+
     # Create snapshot + run record through one sandbox service contract
     run_prep = await svc.prepare_run(
         session_id=session_id,
@@ -295,6 +305,7 @@ async def run_sandbox(
                 user_id=u_uuid,
                 chat_id=None,
                 request_id=str(uuid.uuid4()),
+                extra={"sandbox_confirmed_fingerprints": sandbox_confirmed_fingerprints},
             ))
 
             pipeline = RuntimePipeline(
@@ -363,6 +374,15 @@ async def run_sandbox(
                             or event.data.get("question")
                             or ""
                         ) or None
+                        paused_payload = RuntimeHitlProtocolService.build_paused_from_stop(dict(event.data or {}))
+                        svc_pause = SandboxService(stream_db)
+                        await svc_pause.pause_run(
+                            run_id=run_id,
+                            status=paused_payload["reason"],
+                            paused_action=paused_payload["action"],
+                            paused_context=paused_payload["context"],
+                        )
+                        await stream_db.commit()
                     elif event.type == RuntimeEventType.FINAL:
                         final_status = "completed"
                         final_error = None
@@ -374,9 +394,10 @@ async def run_sandbox(
                     yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
                     await _persist_step(event.type.value, event.data)
 
-                svc_final = SandboxService(stream_db)
-                await svc_final.finish_run(run_id, final_status, final_error)
-                await stream_db.commit()
+                if not str(final_status).startswith("waiting_"):
+                    svc_final = SandboxService(stream_db)
+                    await svc_final.finish_run(run_id, final_status, final_error)
+                    await stream_db.commit()
 
             except Exception as e:
                 await runtime_trace.log_error(
@@ -465,9 +486,20 @@ async def confirm_run_action(
         raise HTTPException(status_code=400, detail="Run is not waiting for confirmation")
 
     if data.confirmed:
-        await svc.resume_run(run_id)
+        confirmed_fingerprints = RuntimeHitlProtocolService.extract_confirmed_fingerprints(
+            run.paused_action if isinstance(run.paused_action, dict) else None,
+            run.paused_context if isinstance(run.paused_context, dict) else None,
+        )
+        await svc.finish_run(run_id, "confirmed", None)
         await db.commit()
-        return {"status": "resumed", "run_id": str(run_id)}
+        return {
+            "status": "confirmed",
+            "run_id": str(run_id),
+            "resume": {
+                "parent_run_id": str(run_id),
+                "confirmed_fingerprints": confirmed_fingerprints,
+            },
+        }
     else:
         await svc.finish_run(run_id, "completed", "Write action rejected by user")
         await db.commit()

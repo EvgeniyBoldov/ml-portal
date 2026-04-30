@@ -71,8 +71,8 @@ class _StubPlanningStage:
         self._extra = extra_final_answer
         self.seen_memory = None
 
-    async def run(self, *, memory, **_) -> AsyncIterator[PhasedEvent]:
-        self.seen_memory = memory
+    async def run(self, *, runtime_state, **_) -> AsyncIterator[PhasedEvent]:
+        self.seen_memory = runtime_state
         yield PhasedEvent(
             RuntimeEvent.status("planner_thinking", iteration=1),
             OrchestrationPhase.PLANNER,
@@ -80,21 +80,43 @@ class _StubPlanningStage:
         if self._extra:
             # DIRECT_ANSWER path writes the final answer onto memory before
             # returning, so pipeline's _finalize_memory sees it.
-            memory.final_answer = self._extra
+            runtime_state.final_answer = self._extra
             yield PhasedEvent(
-                RuntimeEvent.final(self._extra, sources=[], run_id=str(memory.run_id)),
+                RuntimeEvent.final(self._extra, sources=[], run_id=str(runtime_state.run_id)),
                 OrchestrationPhase.SYNTHESIS,
             )
 
 
 class _StubFinalizationStage:
-    async def run(self, *, memory, **_) -> AsyncIterator[PhasedEvent]:
-        memory.final_answer = memory.final_answer or "synthesized answer"
+    async def run(self, *, runtime_state, **_) -> AsyncIterator[PhasedEvent]:
+        runtime_state.final_answer = runtime_state.final_answer or "synthesized answer"
         yield PhasedEvent(
             RuntimeEvent.final(
-                memory.final_answer, sources=[], run_id=str(memory.run_id),
+                runtime_state.final_answer, sources=[], run_id=str(runtime_state.run_id),
             ),
             OrchestrationPhase.SYNTHESIS,
+        )
+
+
+class _StubPlanningStagePausedWithStop:
+    def __init__(self):
+        self.outcome = PlanningOutcome(
+            kind=PlanningOutcomeKind.PAUSED,
+            stop_reason=PipelineStopReason.WAITING_INPUT,
+        )
+
+    async def run(self, *, runtime_state, **_) -> AsyncIterator[PhasedEvent]:
+        yield PhasedEvent(
+            RuntimeEvent.waiting_input("need input", run_id=str(runtime_state.run_id)),
+            OrchestrationPhase.PLANNER,
+        )
+        yield PhasedEvent(
+            RuntimeEvent.stop(
+                PipelineStopReason.WAITING_INPUT.value,
+                run_id=str(runtime_state.run_id),
+                question="need input",
+            ),
+            OrchestrationPhase.PLANNER,
         )
 
 
@@ -161,7 +183,7 @@ async def test_pipeline_direct_answer_path_calls_memory_writer_and_skips_finaliz
     sequences = [e.data["_envelope"]["sequence"] for e in events]
     assert sequences == sorted(sequences)
     assert sequences[0] == 1
-    assert "runtime_turn_state" in planning_stub.seen_memory.memory_state
+    assert planning_stub.seen_memory is not None
 
     finalization_builder.assert_not_called()
     pipeline._assembler.memory_writer.finalize.assert_awaited_once()
@@ -258,3 +280,39 @@ async def test_pipeline_paused_path_skips_finalization_but_writes_memory():
 
     finalization_builder.assert_not_called()
     pipeline._assembler.memory_writer.finalize.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_pipeline_paused_path_uses_same_run_id_for_stop_and_run_store_pause():
+    chat_id, user_id, tenant_id = uuid4(), uuid4(), uuid4()
+    run_store = AsyncMock()
+    pipeline = RuntimePipeline(session=AsyncMock(), llm_client=AsyncMock(), run_store=run_store)
+    pipeline._assembler.memory_builder.build = AsyncMock(
+        return_value=_canned_turn_memory(chat_id, user_id, tenant_id)
+    )
+    pipeline._assembler.memory_writer.finalize = AsyncMock()
+    pipeline._assembler.build_planning_stage = MagicMock(
+        return_value=_StubPlanningStagePausedWithStop()
+    )
+    pipeline._assembler.build_finalization_stage = MagicMock()
+
+    with patch("app.runtime.pipeline.PlatformConfigLoader") as platform_cls:
+        platform_cls.return_value.load = AsyncMock(return_value=_canned_platform())
+        events = await _collect(
+            pipeline.execute(
+                request=_request(chat_id, user_id, tenant_id, text="need input"),
+                ctx=MagicMock(),
+            )
+        )
+
+    stop_events = [e for e in events if e.type.value == "stop"]
+    assert stop_events
+    stop_run_id = stop_events[-1].data.get("run_id")
+    assert stop_run_id
+
+    assert run_store.start_run.await_count == 1
+    assert run_store.pause_run.await_count == 1
+    start_kwargs = run_store.start_run.await_args.kwargs
+    pause_kwargs = run_store.pause_run.await_args.kwargs
+    assert str(start_kwargs["run_id_override"]) == stop_run_id
+    assert str(pause_kwargs["run_id"]) == stop_run_id

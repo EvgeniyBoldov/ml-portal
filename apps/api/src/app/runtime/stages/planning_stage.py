@@ -238,12 +238,7 @@ class PlanningStage:
                 return
 
             # kind == CALL_AGENT
-            _agent_version_id = None
-            if request.agent_version_id:
-                try:
-                    _agent_version_id = UUID(str(request.agent_version_id))
-                except (ValueError, AttributeError):
-                    pass
+            _agent_version_id = self._resolve_agent_version_override(request)
             async for event in self._agent.execute(
                 step=step,
                 runtime_state=runtime_state,
@@ -350,6 +345,19 @@ class PlanningStage:
             stop_reason=PipelineStopReason.MAX_ITERS,
             planner_hint=None,
         )
+
+    @staticmethod
+    def _resolve_agent_version_override(request: PipelineRequest) -> Optional[UUID]:
+        # Contract: explicit version pinning is allowed only for sandbox/non-chat
+        # execution. Regular chat runtime should use the published/main agent version.
+        if request.chat_id is not None:
+            return None
+        if not request.agent_version_id:
+            return None
+        try:
+            return UUID(str(request.agent_version_id))
+        except (ValueError, AttributeError):
+            return None
 
     @staticmethod
     def _has_non_retryable_agent_failure(memory_or_state, agent_slug: Optional[str]) -> bool:

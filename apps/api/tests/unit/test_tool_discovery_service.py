@@ -12,7 +12,9 @@ from app.services.tool_discovery_service import ToolDiscoveryService
 
 @pytest.mark.asyncio
 async def test_rescan_scoped_provider_skips_local_and_marks_scoped_stale():
-    service = ToolDiscoveryService(session=MagicMock())
+    session = MagicMock()
+    session.execute = AsyncMock(return_value=SimpleNamespace(scalar=lambda: True))
+    service = ToolDiscoveryService(session=session)
     provider_id = uuid4()
     service._scan_local_tools = AsyncMock(return_value=9)
     service._scan_mcp_providers = AsyncMock(return_value=(3, [provider_id]))
@@ -38,7 +40,9 @@ async def test_rescan_scoped_provider_skips_local_and_marks_scoped_stale():
 
 @pytest.mark.asyncio
 async def test_rescan_all_marks_full_mcp_scope():
-    service = ToolDiscoveryService(session=MagicMock())
+    session = MagicMock()
+    session.execute = AsyncMock(return_value=SimpleNamespace(scalar=lambda: True))
+    service = ToolDiscoveryService(session=session)
     service._scan_local_tools = AsyncMock(return_value=4)
     service._scan_mcp_providers = AsyncMock(return_value=(7, [uuid4()]))
     service._mark_stale = AsyncMock(return_value=1)
@@ -190,9 +194,17 @@ async def test_scan_mcp_providers_does_not_mark_failed_provider_as_scanned():
     service._upsert.assert_not_called()
 
 
-def test_parse_mcp_response_raises_on_empty_payload():
+@pytest.mark.asyncio
+async def test_fetch_mcp_tools_propagates_client_error(monkeypatch):
+    async def _boom(**_kwargs):
+        raise ValueError("Unable to parse MCP response body")
+
+    monkeypatch.setattr(
+        "app.services.tool_discovery_service.mcp_list_tools",
+        _boom,
+    )
     with pytest.raises(ValueError, match="Unable to parse MCP response body"):
-        ToolDiscoveryService._parse_mcp_response("")
+        await ToolDiscoveryService._fetch_mcp_tools("http://mcp")
 
 
 @pytest.mark.asyncio

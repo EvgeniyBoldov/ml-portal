@@ -12,6 +12,19 @@ def _envelope(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 class ChatEventMapper:
     """Map runtime v3 events into chat service SSE payloads."""
 
+    @staticmethod
+    def _planner_action_type(kind: Any) -> Optional[str]:
+        text = str(kind or "").strip()
+        if not text:
+            return None
+        if text == "call_agent":
+            return "agent_call"
+        if text == "final":
+            return "finalize"
+        if text in {"ask_user", "clarify"}:
+            return "ask_user"
+        return text
+
     def map_runtime_event(self, event: RuntimeEvent) -> Optional[Dict[str, Any]]:
         env = _envelope(event.data)
 
@@ -45,28 +58,40 @@ class ChatEventMapper:
             return {"type": "delta", "content": event.data.get("content")}
 
         if event.type == RuntimeEventType.ERROR:
+            error_code = event.data.get("error_code")
+            retryable = event.data.get("retryable")
+            recoverable = event.data.get("recoverable", retryable if retryable is not None else False)
             return {
                 "type": "error",
                 "error": event.data.get("error"),
-                "recoverable": event.data.get("recoverable", False),
+                "recoverable": recoverable,
+                "code": error_code,
+                "details": {
+                    "retryable": retryable,
+                    "recoverable": recoverable,
+                    "runtime_error_code": error_code,
+                },
                 "orchestration_envelope": env,
             }
 
         if event.type == RuntimeEventType.PLANNER_STEP:
             kind = event.data.get("kind")
             rationale = event.data.get("rationale")
+            action_type = self._planner_action_type(kind)
             return {
                 "type": "planner_action",
                 "iteration": event.data.get("iteration"),
                 "kind": kind,
-                "action_type": kind,
+                "rationale": rationale,
+                "risk": event.data.get("risk"),
+                "contract_version": 1,
+                # legacy aliases
+                "action_type": action_type,
                 "step_type": kind,
                 "agent_slug": event.data.get("agent_slug"),
                 "phase_id": event.data.get("phase_id"),
                 "phase_title": event.data.get("phase_title"),
-                "rationale": rationale,
                 "why": rationale,
-                "risk": event.data.get("risk"),
                 "orchestration_envelope": env,
             }
 
@@ -88,6 +113,7 @@ class ChatEventMapper:
             return {
                 "type": "waiting_input",
                 "question": event.data.get("question"),
+                "reason": event.data.get("reason") or "waiting_input",
                 "run_id": event.data.get("run_id"),
                 "orchestration_envelope": env,
             }

@@ -57,7 +57,9 @@ export const qk = {
       settings: () => ['admin', 'orchestration', 'settings'] as const,
     },
     systemLlmRoles: {
-      active: (role: 'triage' | 'planner' | 'summary' | 'memory') => ['admin', 'system-llm-roles', 'active', role] as const,
+      all: () => ['admin', 'system-llm-roles'] as const,
+      active: (role: 'planner' | 'synthesizer' | 'fact_extractor' | 'summary_compactor') =>
+        ['admin', 'system-llm-roles', 'active', role] as const,
     },
     audit: (params?: {
       page?: number;

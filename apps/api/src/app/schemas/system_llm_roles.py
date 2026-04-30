@@ -79,6 +79,9 @@ TriageRoleUpdate = SystemLLMRoleUpdate
 PlannerRoleUpdate = SystemLLMRoleUpdate
 SummaryRoleUpdate = SystemLLMRoleUpdate
 MemoryRoleUpdate = SystemLLMRoleUpdate
+SynthesizerRoleUpdate = SystemLLMRoleUpdate
+FactExtractorRoleUpdate = SystemLLMRoleUpdate
+SummaryCompactorRoleUpdate = SystemLLMRoleUpdate
 
 
 # === Contract Schemas ===

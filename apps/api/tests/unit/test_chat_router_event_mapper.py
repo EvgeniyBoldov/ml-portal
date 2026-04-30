@@ -15,12 +15,12 @@ def test_planner_action_payload_contains_modern_and_legacy_fields():
         {
             "type": "planner_action",
             "iteration": 2,
-            "action_type": "agent_call",
-            "step_type": "call_agent",
+            "kind": "call_agent",
+            "rationale": "Нужно получить устройства",
+            "risk": "low",
             "agent_slug": "netbox",
             "phase_id": "collect",
             "phase_title": "Сбор данных",
-            "why": "Нужно получить устройства",
         }
     )
     assert frame is not None
@@ -29,10 +29,14 @@ def test_planner_action_payload_contains_modern_and_legacy_fields():
 
     assert payload["iteration"] == 2
     assert payload["action_type"] == "agent_call"
+    assert payload["kind"] == "call_agent"
+    assert payload["rationale"] == "Нужно получить устройства"
+    assert payload["risk"] == "low"
+    assert payload["contract_version"] == 1
     assert payload["step_type"] == "call_agent"
     assert payload["agent_slug"] == "netbox"
     assert payload["phase_id"] == "collect"
     assert payload["phase_title"] == "Сбор данных"
+    assert payload["why"] == "Нужно получить устройства"
     assert payload["tool_slug"] == "netbox"
     assert payload["op"] == "call_agent"
-

@@ -109,3 +109,30 @@ def test_verify_consume_blocks_replay():
         fingerprint=fingerprint,
         consume=True,
     )
+
+
+def test_verify_consume_rejects_redis_nx_miss_without_fallback():
+    service = ConfirmationService()
+    user_id = uuid4()
+    chat_id = uuid4()
+    fingerprint = "abc123fingerprint"
+    token, _ = service.issue(
+        user_id=user_id,
+        chat_id=chat_id,
+        fingerprint=fingerprint,
+    )
+
+    class _RedisNxMiss:
+        def set(self, *args, **kwargs):
+            return None
+
+    service._redis = _RedisNxMiss()
+    service._fallback_nonce_store.clear()
+
+    assert not service.verify(
+        token=token,
+        user_id=user_id,
+        chat_id=chat_id,
+        fingerprint=fingerprint,
+        consume=True,
+    )

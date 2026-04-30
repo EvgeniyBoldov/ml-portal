@@ -22,11 +22,6 @@ export interface OrchestrationSettings {
   executor_temperature?: number | null;
   executor_timeout_s?: number | null;
   executor_max_steps?: number | null;
-  triage_fail_open?: boolean | null;
-  preflight_fail_open?: boolean | null;
-  planner_fail_open?: boolean | null;
-  preflight_fail_open_message?: string | null;
-  planner_fail_open_message?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -37,16 +32,15 @@ export type ExecutorSettingsUpdate = Partial<Pick<
   | 'executor_temperature'
   | 'executor_timeout_s'
   | 'executor_max_steps'
-  | 'triage_fail_open'
-  | 'preflight_fail_open'
-  | 'planner_fail_open'
-  | 'preflight_fail_open_message'
-  | 'planner_fail_open_message'
 >>;
 
 // === SystemLLMRole Types ===
 
-export type SystemLLMRoleType = 'triage' | 'planner' | 'summary' | 'memory';
+export type SystemLLMRoleType =
+  | 'planner'
+  | 'synthesizer'
+  | 'fact_extractor'
+  | 'summary_compactor';
 export type RetryBackoffType = 'none' | 'linear' | 'exp';
 
 export interface SystemLLMRole {
@@ -101,10 +95,10 @@ export interface SystemLLMRoleUpdate {
 
 // Role-specific update types — all use same schema as SystemLLMRoleUpdate
 // Fields: identity, mission, rules, safety, output_requirements, model, temperature, etc.
-export type TriageRoleUpdate = SystemLLMRoleUpdate;
 export type PlannerRoleUpdate = SystemLLMRoleUpdate;
-export type SummaryRoleUpdate = SystemLLMRoleUpdate;
-export type MemoryRoleUpdate = SystemLLMRoleUpdate;
+export type SynthesizerRoleUpdate = SystemLLMRoleUpdate;
+export type FactExtractorRoleUpdate = SystemLLMRoleUpdate;
+export type SummaryCompactorRoleUpdate = SystemLLMRoleUpdate;
 
 export interface UserCreate {
   login: string;
@@ -717,26 +711,26 @@ export const systemLLMRolesApi = {
     }),
 
   // Role-specific update methods
-  updateTriage: (data: TriageRoleUpdate): Promise<SystemLLMRole> =>
-    apiRequest('/admin/system-llm-roles/triage', {
-      method: 'PATCH',
-      body: JSON.stringify(data),
-    }),
-
   updatePlanner: (data: PlannerRoleUpdate): Promise<SystemLLMRole> =>
     apiRequest('/admin/system-llm-roles/planner', {
       method: 'PATCH',
       body: JSON.stringify(data),
     }),
 
-  updateSummary: (data: SummaryRoleUpdate): Promise<SystemLLMRole> =>
-    apiRequest('/admin/system-llm-roles/summary', {
+  updateSynthesizer: (data: SynthesizerRoleUpdate): Promise<SystemLLMRole> =>
+    apiRequest('/admin/system-llm-roles/synthesizer', {
       method: 'PATCH',
       body: JSON.stringify(data),
     }),
 
-  updateMemory: (data: MemoryRoleUpdate): Promise<SystemLLMRole> =>
-    apiRequest('/admin/system-llm-roles/memory', {
+  updateFactExtractor: (data: FactExtractorRoleUpdate): Promise<SystemLLMRole> =>
+    apiRequest('/admin/system-llm-roles/fact-extractor', {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+
+  updateSummaryCompactor: (data: SummaryCompactorRoleUpdate): Promise<SystemLLMRole> =>
+    apiRequest('/admin/system-llm-roles/summary-compactor', {
       method: 'PATCH',
       body: JSON.stringify(data),
     }),

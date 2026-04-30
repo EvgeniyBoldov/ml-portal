@@ -10,9 +10,10 @@ const ORCHESTRATOR_META: Array<{
   name: string;
   description: string;
 }> = [
-  { id: 'triage', name: 'Триадж', description: 'Первичный разбор запроса' },
   { id: 'planner', name: 'Планер', description: 'Планирование шагов выполнения' },
-  { id: 'summary', name: 'Саммари', description: 'Сборка итогового ответа' },
+  { id: 'synthesizer', name: 'Synthesizer', description: 'Сборка итогового ответа' },
+  { id: 'fact_extractor', name: 'Fact Extractor', description: 'Извлечение фактов для памяти' },
+  { id: 'summary_compactor', name: 'Summary Compactor', description: 'Компрессия rolling summary' },
 ];
 
 export function useSandboxCatalog(sessionId: string | undefined) {
@@ -37,32 +38,39 @@ export function useCatalogData(sessionId: string | undefined) {
   const orchestratorQueries = useQueries({
     queries: [
       {
-        queryKey: qk.admin.systemLlmRoles.active('triage'),
-        queryFn: () => systemLLMRolesApi.getActive('triage'),
-        staleTime: 30_000,
-      },
-      {
         queryKey: qk.admin.systemLlmRoles.active('planner'),
         queryFn: () => systemLLMRolesApi.getActive('planner'),
         staleTime: 30_000,
       },
       {
-        queryKey: qk.admin.systemLlmRoles.active('summary'),
-        queryFn: () => systemLLMRolesApi.getActive('summary'),
+        queryKey: qk.admin.systemLlmRoles.active('synthesizer'),
+        queryFn: () => systemLLMRolesApi.getActive('synthesizer'),
+        staleTime: 30_000,
+      },
+      {
+        queryKey: qk.admin.systemLlmRoles.active('fact_extractor'),
+        queryFn: () => systemLLMRolesApi.getActive('fact_extractor'),
+        staleTime: 30_000,
+      },
+      {
+        queryKey: qk.admin.systemLlmRoles.active('summary_compactor'),
+        queryFn: () => systemLLMRolesApi.getActive('summary_compactor'),
         staleTime: 30_000,
       },
     ],
   });
 
   const orchestrators = useMemo(() => {
-    const triageConfig = orchestratorQueries[0]?.data as Record<string, unknown> | undefined;
-    const plannerConfig = orchestratorQueries[1]?.data as Record<string, unknown> | undefined;
-    const summaryConfig = orchestratorQueries[2]?.data as Record<string, unknown> | undefined;
+    const plannerConfig = orchestratorQueries[0]?.data as Record<string, unknown> | undefined;
+    const synthesizerConfig = orchestratorQueries[1]?.data as Record<string, unknown> | undefined;
+    const factExtractorConfig = orchestratorQueries[2]?.data as Record<string, unknown> | undefined;
+    const summaryCompactorConfig = orchestratorQueries[3]?.data as Record<string, unknown> | undefined;
 
     const configById: Record<string, Record<string, unknown>> = {
-      triage: triageConfig ?? {},
       planner: plannerConfig ?? {},
-      summary: summaryConfig ?? {},
+      synthesizer: synthesizerConfig ?? {},
+      fact_extractor: factExtractorConfig ?? {},
+      summary_compactor: summaryCompactorConfig ?? {},
     };
 
     return ORCHESTRATOR_META.map((item) => ({

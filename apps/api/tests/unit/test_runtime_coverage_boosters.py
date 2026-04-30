@@ -192,25 +192,24 @@ async def test_agent_executor_fast_fallback_when_no_operations():
     from app.agents.context import ToolContext
 
     ctx = ToolContext(tenant_id=tenant_id, user_id=user_id, chat_id=chat_id)
+    state = ensure_runtime_turn_state(mem)
     events = [
         e
         async for e in executor.execute(
             step=step,
-            memory=mem,
-            runtime_state=ensure_runtime_turn_state(mem),
+            runtime_state=state,
             messages=[{"role": "user", "content": "hello"}],
             ctx=ctx,
             user_id=user_id,
             tenant_id=tenant_id,
             platform_config={},
-            sandbox_overrides={},
             model=None,
         )
     ]
 
     assert any(e.type == RuntimeEventType.STATUS and e.data.get("stage") == "sub_agent_no_operations" for e in events)
-    assert mem.agent_results
-    assert mem.agent_results[-1].error == "sub_agent_no_operations"
+    assert state.agent_results
+    assert state.agent_results[-1].get("error") == "sub_agent_no_operations"
     deps = ctx.get_runtime_deps()
     assert deps.operation_executor is not None
     assert deps.execution_graph == {}
@@ -373,7 +372,6 @@ async def test_planner_retry_and_fallback_paths():
 
     mem_retry = _memory()
     step = await planner.next_step(
-        memory=mem_retry,
         runtime_state=ensure_runtime_turn_state(mem_retry),
         available_agents=[{"slug": "analyst", "description": "A"}],
     )
@@ -383,7 +381,6 @@ async def test_planner_retry_and_fallback_paths():
     planner.llm.invoke = AsyncMock(side_effect=StructuredCallError("llm down"))
     mem_fallback = _memory()
     fallback = await planner.next_step(
-        memory=mem_fallback,
         runtime_state=ensure_runtime_turn_state(mem_fallback),
         available_agents=[],
     )
@@ -406,7 +403,6 @@ async def test_planner_emits_direct_answer_kind_when_llm_returns_one():
 
     mem_direct = _memory()
     step = await planner.next_step(
-        memory=mem_direct,
         runtime_state=ensure_runtime_turn_state(mem_direct),
         available_agents=[],
     )
@@ -446,8 +442,9 @@ async def test_agent_tool_runtime_fail_fast_on_invalid_operation_call(monkeypatc
 
     exec_request = SimpleNamespace(
         agent=SimpleNamespace(slug="ops", logging_level=None),
-        resolved_operations=[SimpleNamespace(operation_slug="docs.search")],
+        resolved_operations=[SimpleNamespace(operation_slug="docs.search", operation="docs.search")],
         run_id=uuid4(),
+        partial_mode_warning=None,
     )
     ctx = ToolContext(tenant_id=uuid4(), user_id=uuid4(), chat_id=uuid4())
     events = [
@@ -506,6 +503,7 @@ async def test_agent_tool_runtime_early_stop_when_skipping_required_operation_ca
         agent=SimpleNamespace(slug="ops", logging_level=None),
         resolved_operations=[SimpleNamespace(operation_slug="docs.search")],
         run_id=uuid4(),
+        partial_mode_warning=None,
     )
     ctx = ToolContext(tenant_id=uuid4(), user_id=uuid4(), chat_id=uuid4())
     events = [
@@ -563,13 +561,14 @@ async def test_agent_tool_runtime_respects_shared_budget_tool_call_limit(monkeyp
         agent=SimpleNamespace(slug="ops", logging_level=None),
         resolved_operations=[SimpleNamespace(operation_slug="docs.search", operation="docs.search")],
         run_id=uuid4(),
+        partial_mode_warning=None,
     )
     ctx = ToolContext(tenant_id=uuid4(), user_id=uuid4(), chat_id=uuid4())
     ctx.extra["runtime_budget_tracker"] = RuntimeBudgetTracker(
         budget=RuntimeBudget(
             max_planner_iterations=10,
             max_agent_steps=10,
-            max_tool_calls_total=1,
+            max_tool_calls_total=2,
             max_wall_time_ms=120_000,
             per_tool_timeout_ms=30_000,
             max_steps_without_success=2,
@@ -649,6 +648,7 @@ async def test_agent_tool_runtime_reused_call_does_not_consume_shared_budget(mon
         agent=SimpleNamespace(slug="ops", logging_level=None),
         resolved_operations=[SimpleNamespace(operation_slug="docs.search", operation="docs.search")],
         run_id=uuid4(),
+        partial_mode_warning=None,
     )
     ctx = ToolContext(tenant_id=uuid4(), user_id=uuid4(), chat_id=uuid4())
     ctx.extra["runtime_tool_ledger"] = _FakeLedger()
@@ -657,7 +657,7 @@ async def test_agent_tool_runtime_reused_call_does_not_consume_shared_budget(mon
         budget=RuntimeBudget(
             max_planner_iterations=10,
             max_agent_steps=10,
-            max_tool_calls_total=1,
+            max_tool_calls_total=2,
             max_wall_time_ms=120_000,
             per_tool_timeout_ms=30_000,
             max_steps_without_success=2,
@@ -727,6 +727,7 @@ async def test_agent_tool_runtime_emits_operation_result_envelope(monkeypatch):
         agent=SimpleNamespace(slug="ops", logging_level=None),
         resolved_operations=[SimpleNamespace(operation_slug="docs.search")],
         run_id=uuid4(),
+        partial_mode_warning=None,
     )
     ctx = ToolContext(tenant_id=uuid4(), user_id=uuid4(), chat_id=uuid4())
     events = [

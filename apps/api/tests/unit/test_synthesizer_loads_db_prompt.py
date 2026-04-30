@@ -57,9 +57,9 @@ async def test_synthesizer_loads_db_prompt_and_passes_role_params_to_llm():
             }
         ),
     ):
+        state = ensure_runtime_turn_state(memory)
         events = [event async for event in synth.stream(
-            memory=memory,
-            runtime_state=ensure_runtime_turn_state(memory),
+            runtime_state=state,
             run_id=memory.run_id,
             planner_hint="force full synthesis path",
         )]
@@ -71,7 +71,7 @@ async def test_synthesizer_loads_db_prompt_and_passes_role_params_to_llm():
     assert call["messages"][0]["content"] == "SYNTH-PROMPT"
     assert events[0].type.value == "status"
     assert events[-1].type.value == "final"
-    assert memory.final_answer == "hello world"
+    assert state.final_answer == "hello world"
 
 
 @pytest.mark.asyncio
@@ -85,7 +85,6 @@ async def test_synthesizer_falls_back_when_db_role_load_fails():
         new=AsyncMock(side_effect=RuntimeError("db unavailable")),
     ):
         events = [event async for event in synth.stream(
-            memory=memory,
             runtime_state=ensure_runtime_turn_state(memory),
             run_id=memory.run_id,
             planner_hint="force full synthesis path",

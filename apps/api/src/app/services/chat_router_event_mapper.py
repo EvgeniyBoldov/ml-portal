@@ -21,6 +21,20 @@ from app.schemas.chat_events import (
     format_chat_sse,
 )
 
+def _legacy_action_type(kind: Any, explicit: Any) -> Optional[str]:
+    if explicit:
+        return str(explicit)
+    text = str(kind or "").strip()
+    if not text:
+        return None
+    if text == "call_agent":
+        return "agent_call"
+    if text == "final":
+        return "finalize"
+    if text in {"ask_user", "clarify"}:
+        return "ask_user"
+    return text
+
 
 def map_service_event_to_sse(event: Dict[str, Any]) -> Optional[str]:
     """Map ChatStreamService dict event to typed SSE frame."""
@@ -73,19 +87,25 @@ def map_service_event_to_sse(event: Dict[str, Any]) -> Optional[str]:
         )
     if et == "planner_action":
         agent_slug = event.get("agent_slug")
-        step_type = event.get("step_type")
+        kind = event.get("kind")
+        step_type = event.get("step_type") or kind
+        rationale = event.get("rationale")
         return format_chat_sse(
             ChatSSEEventType.PLANNER_ACTION,
             PlannerActionPayload(
                 iteration=event.get("iteration"),
-                action_type=event.get("action_type"),
+                kind=kind,
+                rationale=rationale,
+                risk=event.get("risk"),
+                contract_version=int(event.get("contract_version") or 1),
+                action_type=_legacy_action_type(kind, event.get("action_type")),
                 step_type=step_type,
                 agent_slug=agent_slug,
                 phase_id=event.get("phase_id"),
                 phase_title=event.get("phase_title"),
-                why=event.get("why"),
+                why=event.get("why") or rationale,
                 tool_slug=event.get("tool_slug") or agent_slug,
-                op=event.get("op") or step_type or event.get("action_type"),
+                op=event.get("op") or step_type or event.get("action_type") or kind,
                 orchestration_envelope=event.get("orchestration_envelope"),
                 orchestration_state=event.get("orchestration_state"),
             ),
@@ -117,6 +137,7 @@ def map_service_event_to_sse(event: Dict[str, Any]) -> Optional[str]:
             WaitingInputPayload(
                 question=event.get("question"),
                 reason=event.get("reason"),
+                run_id=event.get("run_id"),
                 orchestration_envelope=event.get("orchestration_envelope"),
                 orchestration_state=event.get("orchestration_state"),
             ),
@@ -156,6 +177,7 @@ def map_service_event_to_sse(event: Dict[str, Any]) -> Optional[str]:
             ErrorPayload(
                 error=event.get("error", "Unknown error"),
                 code=event.get("code"),
+                recoverable=event.get("recoverable"),
                 details=event.get("details"),
             ),
         )

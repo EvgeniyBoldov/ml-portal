@@ -128,8 +128,12 @@ class ConfirmationService:
         if self._redis is not None:
             try:
                 created = self._redis.set(token_key, "1", ex=ttl, nx=True)
-                if created is not None:
-                    return bool(created)
+                # Redis answered authoritatively:
+                # True  -> nonce stored first time
+                # False/None -> nonce already exists (replay) or not created.
+                # In all non-True cases we must reject and NOT fall back to
+                # process-local cache, otherwise cross-process replay is possible.
+                return bool(created)
             except Exception as exc:
                 logger.warning("Failed to write confirmation nonce to Redis: %s", exc)
 

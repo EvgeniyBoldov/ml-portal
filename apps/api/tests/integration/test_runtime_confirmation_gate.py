@@ -52,6 +52,19 @@ def _context(*, confirmation_tokens: list[str]):
     return ctx, runtime_executor
 
 
+def _sandbox_context(*, confirmed_fingerprints: list[str]):
+    ctx = ToolContext(
+        tenant_id=uuid4(),
+        user_id=uuid4(),
+        chat_id=None,
+        extra={"sandbox_confirmed_fingerprints": confirmed_fingerprints},
+    )
+    runtime_executor = AsyncMock(return_value=ToolResult.ok({"ok": True}))
+    deps = RuntimeDependencies(operation_executor=SimpleNamespace(execute=runtime_executor))
+    ctx.set_runtime_deps(deps)
+    return ctx, runtime_executor
+
+
 @pytest.mark.asyncio
 async def test_confirmation_gate_blocks_without_token_and_allows_with_token_then_rejects_foreign():
     executor = OperationExecutor()
@@ -91,3 +104,28 @@ async def test_confirmation_gate_blocks_without_token_and_allows_with_token_then
     with pytest.raises(ConfirmationRequiredError):
         await executor.execute(call, ctx_foreign, [operation])
     runtime_executor_foreign.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_confirmation_gate_blocks_in_sandbox_without_preapproval_and_allows_with_fingerprint():
+    executor = OperationExecutor()
+    operation = _operation()
+    args = {"id": "dev-2"}
+    call = OperationCall(id="call-2", operation_slug=operation.operation_slug, arguments=args)
+    fingerprint = build_operation_fingerprint(
+        tool_slug=operation.operation_slug,
+        operation=operation.operation,
+        args=args,
+    )
+
+    ctx_blocked, runtime_executor_blocked = _sandbox_context(confirmed_fingerprints=[])
+    with pytest.raises(ConfirmationRequiredError):
+        await executor.execute(call, ctx_blocked, [operation])
+    runtime_executor_blocked.assert_not_awaited()
+
+    ctx_allowed, runtime_executor_allowed = _sandbox_context(
+        confirmed_fingerprints=[fingerprint]
+    )
+    result, _ = await executor.execute(call, ctx_allowed, [operation])
+    assert result.success is True
+    runtime_executor_allowed.assert_awaited_once()
