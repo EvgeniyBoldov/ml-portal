@@ -15,8 +15,6 @@ export function AdminLayout() {
         brandName="Почемучка"
         variant="default"
         userLabel={user?.email || user?.role || ''}
-        showSandboxButton
-        onSandboxClick={() => navigate('/sandbox')}
         showBackToApp
         onBackToAppClick={() => navigate('/gpt/chat')}
         onLogout={logout}

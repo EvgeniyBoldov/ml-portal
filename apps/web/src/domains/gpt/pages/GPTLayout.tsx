@@ -45,8 +45,6 @@ export default function GPTLayout() {
         variant="default"
         userLabel={user?.role || ''}
         centerContent={centerNav}
-        showSandboxButton={isAdmin}
-        onSandboxClick={() => nav('/sandbox')}
         showAdminButton={isAdmin}
         onAdminClick={() => nav('/admin')}
         showProfileButton
