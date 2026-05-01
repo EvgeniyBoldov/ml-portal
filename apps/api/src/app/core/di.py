@@ -15,7 +15,6 @@ def get_llm_client() -> LLMClientProtocol:
     """
     global _llm_client
     if _llm_client is None:
-        s = get_settings()
         # Single runtime path: model connector resolution from DB.
         inner: LLMClientProtocol = OpenAICompatibleLLM()
         # Single choke-point: resolve slug → provider_model_name on every call.
