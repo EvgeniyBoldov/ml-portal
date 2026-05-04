@@ -9,6 +9,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import Button from '@shared/ui/Button';
 import Input from '@shared/ui/Input';
+import Checkbox from '@shared/ui/Checkbox';
 import Badge from '@shared/ui/Badge';
 import Modal from '@shared/ui/Modal';
 import { Skeleton } from '@shared/ui/Skeleton';
@@ -420,7 +421,7 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
   const [statusModalDocId, setStatusModalDocId] = useState<string | null>(null);
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
   const [uploadFiles, setUploadFiles] = useState<File[]>([]);
-  const [uploadTags, setUploadTags] = useState('');
+  const [uploadMetaFields, setUploadMetaFields] = useState<Record<string, string>>({});
   const [uploading, setUploading] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -481,11 +482,19 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
     return valid;
   }, [showToast, uploadPolicy]);
 
-  // Metadata fields from collection schema (non-file fields)
+  // Extra fields defined by user at collection creation (non-system, non-file)
+  const userDefinedFields = useMemo(() => {
+    if (!collection.fields) return [];
+    return collection.fields.filter(
+      f => f.category === 'user' && f.data_type !== 'file' && f.name !== 'title' && f.name !== 'source' && f.name !== 'scope' && f.name !== 'tags',
+    );
+  }, [collection.fields]);
+
+  // Metadata fields for table columns (non-file)
   const metaFields = useMemo(() => {
     if (!collection.fields) return [];
     return collection.fields
-      .filter(f => f.type !== 'file')
+      .filter(f => f.data_type !== 'file' && f.category === 'user')
       .map(f => ({ name: f.name, label: f.description || f.name }));
   }, [collection.fields]);
 
@@ -687,13 +696,12 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
   const handleUpload = async () => {
     if (uploadFiles.length === 0) return;
     setUploading(true);
-    const tags = uploadTags.split(',').map(t => t.trim()).filter(Boolean);
     try {
       const results = await Promise.allSettled(
         uploadFiles.map(file =>
           collectionsApi.uploadDocument(collectionId, {
             file,
-            tags,
+            meta_fields: Object.keys(uploadMetaFields).length > 0 ? uploadMetaFields : undefined,
             auto_ingest: true,
           })
         )
@@ -704,7 +712,7 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
       if (failed > 0) showToast(`Ошибка загрузки: ${failed} файлов`, 'error');
       setUploadModalOpen(false);
       setUploadFiles([]);
-      setUploadTags('');
+      setUploadMetaFields({});
       setUploadError(null);
       invalidateDocs();
     } catch {
@@ -1024,7 +1032,7 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
       {/* Upload modal */}
       <Modal
         open={uploadModalOpen}
-        onClose={() => { setUploadModalOpen(false); setUploadFiles([]); setUploadTags(''); setUploadError(null); }}
+        onClose={() => { setUploadModalOpen(false); setUploadFiles([]); setUploadMetaFields({}); setUploadError(null); }}
         title="Загрузка документов"
         footer={
           <>
@@ -1078,14 +1086,92 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
               ))}
             </div>
           )}
-          <div className={styles.formGroup}>
-            <label>Теги (через запятую)</label>
-            <Input
-              placeholder="документация, api, важное..."
-              value={uploadTags}
-              onChange={e => setUploadTags(e.target.value)}
-            />
-          </div>
+          {userDefinedFields.length > 0 && (
+            <div className={styles.metaFieldsGroup}>
+              {userDefinedFields.map(f => {
+                const dt = f.data_type;
+                const label = (
+                  <label>{f.description || f.name}{f.required && <span className={styles.required}> *</span>}</label>
+                );
+                if (dt === 'boolean') {
+                  return (
+                    <div key={f.name} className={styles.formGroup}>
+                      <Checkbox
+                        checked={uploadMetaFields[f.name] === 'true'}
+                        onChange={checked =>
+                          setUploadMetaFields(prev => ({ ...prev, [f.name]: String(checked) }))
+                        }
+                        label={f.description || f.name}
+                      />
+                    </div>
+                  );
+                }
+                if (dt === 'integer') {
+                  return (
+                    <div key={f.name} className={styles.formGroup}>
+                      {label}
+                      <Input
+                        type="number"
+                        step={1}
+                        placeholder="0"
+                        value={uploadMetaFields[f.name] ?? ''}
+                        onChange={e => setUploadMetaFields(prev => ({ ...prev, [f.name]: e.target.value }))}
+                      />
+                    </div>
+                  );
+                }
+                if (dt === 'float') {
+                  return (
+                    <div key={f.name} className={styles.formGroup}>
+                      {label}
+                      <Input
+                        type="number"
+                        step="any"
+                        placeholder="0.0"
+                        value={uploadMetaFields[f.name] ?? ''}
+                        onChange={e => setUploadMetaFields(prev => ({ ...prev, [f.name]: e.target.value }))}
+                      />
+                    </div>
+                  );
+                }
+                if (dt === 'date') {
+                  return (
+                    <div key={f.name} className={styles.formGroup}>
+                      {label}
+                      <Input
+                        type="date"
+                        value={uploadMetaFields[f.name] ?? ''}
+                        onChange={e => setUploadMetaFields(prev => ({ ...prev, [f.name]: e.target.value }))}
+                      />
+                    </div>
+                  );
+                }
+                if (dt === 'datetime') {
+                  return (
+                    <div key={f.name} className={styles.formGroup}>
+                      {label}
+                      <Input
+                        type="datetime-local"
+                        value={uploadMetaFields[f.name] ?? ''}
+                        onChange={e => setUploadMetaFields(prev => ({ ...prev, [f.name]: e.target.value }))}
+                      />
+                    </div>
+                  );
+                }
+                return (
+                  <div key={f.name} className={styles.formGroup}>
+                    {label}
+                    <Input
+                      type="text"
+                      placeholder={f.description || f.name}
+                      value={uploadMetaFields[f.name] ?? ''}
+                      onChange={e => setUploadMetaFields(prev => ({ ...prev, [f.name]: e.target.value }))}
+                    />
+                  </div>
+                );
+              })}
+            </div>
+          )}
           {uploadError && (
             <div className={styles.error}>{uploadError}</div>
           )}

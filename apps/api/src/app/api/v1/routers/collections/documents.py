@@ -51,6 +51,7 @@ async def upload_collection_document(
     source: str | None = Form(None),
     scope: str | None = Form(None),
     tags: str | None = Form(None),
+    meta_fields: str | None = Form(None),
     auto_ingest: bool = Form(True),
     session: AsyncSession = Depends(db_uow),
     user: UserCtx = Depends(get_current_user),
@@ -67,6 +68,13 @@ async def upload_collection_document(
             doc_tags = json.loads(tags)
         except json.JSONDecodeError:
             doc_tags = [t.strip() for t in tags.split(",") if t.strip()]
+
+    extra_meta: dict = {}
+    if meta_fields:
+        try:
+            extra_meta = json.loads(meta_fields)
+        except json.JSONDecodeError:
+            extra_meta = {}
 
     redis = get_redis_client()
     event_publisher = RAGEventPublisher(redis) if redis else None
@@ -88,6 +96,7 @@ async def upload_collection_document(
         source=source,
         scope=scope,
         tags=doc_tags,
+        meta_fields=extra_meta,
     )
 
     if auto_ingest:

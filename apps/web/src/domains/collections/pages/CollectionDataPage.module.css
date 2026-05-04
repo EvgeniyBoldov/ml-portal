@@ -778,6 +778,17 @@
   color: var(--danger);
 }
 
+.metaFieldsGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 4px;
+}
+
+.required {
+  color: var(--danger);
+}
+
 .docToolbar {
   display: flex;
   justify-content: space-between;

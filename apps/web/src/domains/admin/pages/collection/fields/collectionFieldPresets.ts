@@ -1,11 +1,9 @@
 import type { CollectionField, CollectionType } from '@/shared/api';
 
 export const DOCUMENT_PRESET_FIELDS: CollectionField[] = [
-  { name: 'file', type: 'file', required: true, search_modes: ['vector'], description: 'Файл документа' },
-  { name: 'title', type: 'text', required: false, search_modes: ['exact', 'like'], description: 'Название документа' },
-  { name: 'source', type: 'text', required: false, search_modes: ['exact'], description: 'Источник документа' },
-  { name: 'scope', type: 'text', required: false, search_modes: ['exact'], description: 'Область (department, team)' },
-  { name: 'tags', type: 'text', required: false, search_modes: ['like'], description: 'Теги через запятую' },
+  { name: 'file', type: 'file', required: true, search_modes: [], description: 'Файл документа', category: 'specific', data_type: 'file' },
+  { name: 'title', type: 'text', required: true, search_modes: [], description: 'Название документа', category: 'specific', data_type: 'text' },
+  { name: 'source', type: 'text', required: true, search_modes: [], description: 'Источник документа', category: 'specific', data_type: 'string' },
 ];
 
 export const SQL_PRESET_FIELDS: CollectionField[] = [
@@ -30,9 +28,8 @@ export const SQL_PRESET_FIELDS: CollectionField[] = [
 ];
 
 export const SQL_SPECIFIC_FIELD_NAMES = new Set(SQL_PRESET_FIELDS.map((field) => field.name));
-export const DOCUMENT_REQUIRED_FIELD_NAMES = new Set(
-  DOCUMENT_PRESET_FIELDS.filter((field) => field.required).map((field) => field.name),
-);
+export const DOCUMENT_SPECIFIC_FIELD_NAMES = new Set(DOCUMENT_PRESET_FIELDS.map((field) => field.name));
+export const DOCUMENT_FULLY_LOCKED_FIELD_NAMES = new Set(DOCUMENT_PRESET_FIELDS.map((field) => field.name));
 
 export function ensureSqlPresetFields(fields: CollectionField[]): CollectionField[] {
   const byName = new Map(fields.map((field) => [field.name, field]));
@@ -44,7 +41,7 @@ export function ensureSqlPresetFields(fields: CollectionField[]): CollectionFiel
   }
 
   for (const field of fields) {
-    if (!SQL_SPECIFIC_FIELD_NAMES.has(field.name)) {
+    if (!SQL_SPECIFIC_FIELD_NAMES.has(field.name) && !DOCUMENT_SPECIFIC_FIELD_NAMES.has(field.name)) {
       result.push(field);
     }
   }

@@ -200,6 +200,7 @@ export interface UploadDocumentRequest {
   source?: string;
   scope?: string;
   tags?: string[];
+  meta_fields?: Record<string, string>;
   auto_ingest?: boolean;
 }
 
@@ -292,16 +293,13 @@ function inferSearchModes(field: BackendCollectionField): SearchMode[] {
 function toBackendField(field: CollectionField): BackendCollectionField {
   const searchModes = field.search_modes ?? [];
   const dataType = field.data_type ?? field.type ?? 'text';
-
   return {
     name: field.name,
     category: field.category ?? 'user',
     data_type: dataType,
     required: field.required,
     description: field.description,
-    filterable:
-      field.filterable ??
-      (searchModes.includes('exact') || searchModes.includes('like')),
+    filterable: field.filterable ?? (searchModes.includes('exact') || searchModes.includes('like')),
     sortable: field.sortable ?? searchModes.includes('range'),
     used_in_retrieval: field.used_in_retrieval ?? searchModes.includes('vector'),
     used_in_prompt_context: field.used_in_prompt_context ?? false,
@@ -493,6 +491,7 @@ export const collectionsApi = {
     if (data.source) formData.append('source', data.source);
     if (data.scope) formData.append('scope', data.scope);
     if (data.tags?.length) formData.append('tags', JSON.stringify(data.tags));
+    if (data.meta_fields && Object.keys(data.meta_fields).length > 0) formData.append('meta_fields', JSON.stringify(data.meta_fields));
     if (data.auto_ingest !== undefined) formData.append('auto_ingest', String(data.auto_ingest));
 
     return apiRequest<UploadDocumentResponse>(

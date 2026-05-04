@@ -1,6 +1,6 @@
 import { Badge, Button, Checkbox, Input, Select } from '@/shared/ui';
 import type { CollectionField, CollectionType, SearchMode } from '@/shared/api';
-import { DOCUMENT_REQUIRED_FIELD_NAMES, SQL_SPECIFIC_FIELD_NAMES } from './collectionFieldPresets';
+import { DOCUMENT_FULLY_LOCKED_FIELD_NAMES, SQL_SPECIFIC_FIELD_NAMES } from './collectionFieldPresets';
 
 const FIELD_TYPES = ['text', 'integer', 'float', 'boolean', 'datetime', 'date', 'file'] as const;
 const SEARCH_MODES: SearchMode[] = ['exact', 'like', 'range', 'vector'];
@@ -20,26 +20,26 @@ interface FieldsEditorProps {
 }
 
 export function FieldsEditor({ fields, onChange, collectionType }: FieldsEditorProps) {
-  const isLockedSpecificField = (field: CollectionField) =>
+  const isLocked = (field: CollectionField) =>
     (collectionType === 'sql' && SQL_SPECIFIC_FIELD_NAMES.has(field.name))
-    || (collectionType === 'document' && DOCUMENT_REQUIRED_FIELD_NAMES.has(field.name));
+    || (collectionType === 'document' && DOCUMENT_FULLY_LOCKED_FIELD_NAMES.has(field.name));
 
   const add = () => onChange([...fields, emptyField()]);
 
   const remove = (i: number) => {
-    if (isLockedSpecificField(fields[i])) return;
+    if (isLocked(fields[i])) return;
     onChange(fields.filter((_, idx) => idx !== i));
   };
 
   const update = (i: number, patch: Partial<CollectionField>) =>
     onChange(fields.map((f, idx) => {
       if (idx !== i) return f;
-      if (isLockedSpecificField(f)) return f;
+      if (isLocked(f)) return f;
       return { ...f, ...patch };
     }));
 
   const toggleMode = (i: number, mode: SearchMode) => {
-    if (isLockedSpecificField(fields[i])) return;
+    if (isLocked(fields[i])) return;
     const modes = fields[i].search_modes;
     update(i, { search_modes: modes.includes(mode) ? modes.filter((m) => m !== mode) : [...modes, mode] });
   };
@@ -52,19 +52,19 @@ export function FieldsEditor({ fields, onChange, collectionType }: FieldsEditorP
             placeholder="название поля"
             value={f.name}
             onChange={(e) => update(i, { name: e.target.value })}
-            disabled={isLockedSpecificField(f)}
+            disabled={isLocked(f)}
           />
           <Select
             value={f.type}
             onChange={(value) => update(i, { type: value as CollectionField['type'] })}
             options={FIELD_TYPES.map((t) => ({ value: t, label: t }))}
-            disabled={isLockedSpecificField(f)}
+            disabled={isLocked(f)}
           />
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
             <Checkbox
               checked={f.required}
               onChange={(checked) => update(i, { required: checked })}
-              disabled={isLockedSpecificField(f)}
+              disabled={isLocked(f)}
             />
             <span style={{ fontSize: '0.875rem' }}>Обяз.</span>
           </div>
@@ -74,13 +74,13 @@ export function FieldsEditor({ fields, onChange, collectionType }: FieldsEditorP
                 <Checkbox
                   checked={f.search_modes.includes(m)}
                   onChange={() => toggleMode(i, m)}
-                  disabled={isLockedSpecificField(f)}
+                  disabled={isLocked(f)}
                 />
                 <Badge tone="info">{m}</Badge>
               </div>
             ))}
           </div>
-          <Button variant="danger" size="sm" onClick={() => remove(i)} disabled={isLockedSpecificField(f)}>×</Button>
+          <Button variant="danger" size="sm" onClick={() => remove(i)} disabled={isLocked(f)}>×</Button>
         </div>
       ))}
       <div>

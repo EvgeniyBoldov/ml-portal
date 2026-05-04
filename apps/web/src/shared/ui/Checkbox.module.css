@@ -9,6 +9,7 @@
 .container.disabled {
   opacity: 0.5;
   cursor: not-allowed;
+  pointer-events: none;
 }
 
 .input {
@@ -40,7 +41,7 @@
   transition: all var(--transition-fast);
 }
 
-.container:hover .checkmark {
+.container:hover:not(.disabled) .checkmark {
   border-color: var(--primary);
 }
 

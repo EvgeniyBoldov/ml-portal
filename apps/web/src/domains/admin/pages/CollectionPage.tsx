@@ -201,7 +201,9 @@ export function CollectionPage() {
           ? []
           : isSql
             ? ensureSqlPresetFields((data.fields ?? []) as CollectionField[])
-            : (data.fields ?? [])
+            : isDocument
+              ? (data.fields ?? []).filter((f) => (f as CollectionField).category !== 'specific')
+              : (data.fields ?? [])
       ) as CollectionField[];
       const hasVectorFields = fields.some((f: CollectionField) => f.search_modes?.includes('vector'));
       const needsVectorConfig = data.has_vector_search || isDocument || hasVectorFields;

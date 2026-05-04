@@ -67,6 +67,7 @@ class CollectionDocumentUploadService:
         source: Optional[str] = None,
         scope: Optional[str] = None,
         tags: Optional[List[str]] = None,
+        meta_fields: Optional[dict] = None,
     ) -> dict:
         """Upload a file into a document collection and persist RAG bookkeeping."""
         collection = await self._get_document_collection(collection_id)
@@ -101,6 +102,7 @@ class CollectionDocumentUploadService:
                 source_val=source,
                 scope=scope,
                 tags=",".join(tags) if tags else None,
+                meta_fields=meta_fields or {},
             )
 
             rag_doc = RAGDocument(
@@ -240,11 +242,13 @@ class CollectionDocumentUploadService:
         source_val: Optional[str],
         scope: Optional[str],
         tags: Optional[str],
+        meta_fields: Optional[dict] = None,
     ) -> uuid.UUID:
         import json
 
         row_id = uuid.uuid4()
         values = {"id": row_id}
+        extra = meta_fields or {}
 
         for field_def in collection.fields:
             fname = field_def["name"]
@@ -266,6 +270,8 @@ class CollectionDocumentUploadService:
                 values[fname] = scope
             elif fname == "tags":
                 values[fname] = tags
+            elif fname in extra:
+                values[fname] = extra[fname]
             else:
                 values[fname] = None
 
