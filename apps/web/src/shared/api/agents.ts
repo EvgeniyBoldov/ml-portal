@@ -71,7 +71,16 @@ export interface AgentVersion {
   tool_use_rules?: string | null;
   output_format?: string | null;
   examples?: string | null;
-  // Safety prompt constraints
+  // Execution config
+  model?: string | null;
+  timeout_s?: number | null;
+  max_steps?: number | null;
+  max_retries?: number | null;
+  max_tokens?: number | null;
+  temperature?: number | null;
+  // Safety knobs
+  requires_confirmation_for_write?: boolean | null;
+  risk_level?: string | null;
   never_do?: string | null;
   allowed_ops?: string | null;
   // Routing

@@ -202,7 +202,7 @@ export function CollectionPage() {
           : isSql
             ? ensureSqlPresetFields((data.fields ?? []) as CollectionField[])
             : isDocument
-              ? (data.fields ?? []).filter((f) => (f as CollectionField).category !== 'specific')
+              ? (data.fields ?? []).filter((f: CollectionField) => f.category !== 'specific')
               : (data.fields ?? [])
       ) as CollectionField[];
       const hasVectorFields = fields.some((f: CollectionField) => f.search_modes?.includes('vector'));
@@ -397,7 +397,7 @@ export function CollectionPage() {
   };
 
   const statsData = {
-    row_count: collection?.row_count ?? 0,
+    row_count: collection?.total_rows ?? 0,
     vectorization_progress: collection?.vectorization_progress ?? 0,
     fields_count: collection?.fields?.length ?? 0,
   };

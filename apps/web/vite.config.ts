@@ -37,7 +37,7 @@ export default defineConfig(({ command, mode }) => {
     },
     build: {
       sourcemap: env.VITE_SOURCEMAP === 'true',
-      minify: 'terser',
+      minify: 'esbuild',
       rollupOptions: {
         output: {
           manualChunks: {

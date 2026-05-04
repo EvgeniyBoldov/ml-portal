@@ -37,6 +37,7 @@ _reg_prefix = $(if $(REGISTRY),$(REGISTRY)/,)
         build-base build-base-ml \
         up down restart logs ps \
         build build-dev build-prod push-prod pull-prod prod-up prod-down prod-migrate build-no-cache \
+        push-base pull-base \
         migrate \
         test test-api test-backend test-frontend test-unit test-integration test-runtime-core test-runtime-integration test-runtime-eval test-backend-10-10-gate \
         test-e2e test-e2e-ui \
@@ -69,6 +70,8 @@ help:
 	@echo ""
 	@echo "  Prod images:"
 	@echo "    make build-base        Build base image  (BASE_IMAGE_TAG=$(BASE_IMAGE_TAG))"
+	@echo "    make push-base         Push base image to REGISTRY"
+	@echo "    make pull-base         Pull base image from REGISTRY"
 	@echo "    make build-prod        Build service images (IMAGE_TAG=$(IMAGE_TAG))"
 	@echo "                           Uses BASE_IMAGE_TAG=$(BASE_IMAGE_TAG) as base"
 	@echo "                           REGISTRY=$(if $(REGISTRY),$(REGISTRY),(local))"
@@ -125,6 +128,20 @@ build-base:
 		-t $(BASE_IMAGE_PROD) \
 		-f infra/docker/base/Dockerfile.ml .
 	@echo "✓ Base image tags ready: $(BASE_IMAGE_DEV), $(BASE_IMAGE_PROD)"
+
+push-base:
+	@[ -n "$(REGISTRY)" ] || (echo "❌ REGISTRY is not set. Example: REGISTRY=registry.example.com/ml-portal make push-base"; exit 1)
+	@echo "→ Pushing base image to $(REGISTRY) (BASE_IMAGE_TAG=$(BASE_IMAGE_TAG))..."
+	docker tag $(BASE_IMAGE_PROD) $(REGISTRY)/base-ml:$(BASE_IMAGE_TAG)
+	docker push $(REGISTRY)/base-ml:$(BASE_IMAGE_TAG)
+	@echo "✓ Base image pushed: $(REGISTRY)/base-ml:$(BASE_IMAGE_TAG)"
+
+pull-base:
+	@[ -n "$(REGISTRY)" ] || (echo "❌ REGISTRY is not set. Example: REGISTRY=registry.example.com/ml-portal make pull-base"; exit 1)
+	@echo "→ Pulling base image from $(REGISTRY) (BASE_IMAGE_TAG=$(BASE_IMAGE_TAG))..."
+	docker pull $(REGISTRY)/base-ml:$(BASE_IMAGE_TAG)
+	docker tag $(REGISTRY)/base-ml:$(BASE_IMAGE_TAG) $(BASE_IMAGE_PROD)
+	@echo "✓ Base image pulled and tagged locally as $(BASE_IMAGE_PROD)"
 
 # =============================================================================
 # Dev Stack
