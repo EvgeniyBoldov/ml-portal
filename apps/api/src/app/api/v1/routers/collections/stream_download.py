@@ -15,7 +15,7 @@ from app.adapters.s3_client import s3_manager, PresignOptions
 from app.services.document_artifacts import get_document_artifact_key
 from app.services.file_delivery_service import FileDeliveryService
 
-from .stream_shared import _resolve_collection_and_doc
+from .stream_shared import _resolve_collection_and_doc_with_membership
 
 router = APIRouter()
 
@@ -28,7 +28,7 @@ async def download_collection_doc(
     session: AsyncSession = Depends(db_uow),
     user: UserCtx = Depends(get_current_user),
 ):
-    collection, document, doc_uuid, repo_factory = await _resolve_collection_and_doc(
+    collection, document, doc_uuid, repo_factory, membership = await _resolve_collection_and_doc_with_membership(
         collection_id, doc_id, session, user
     )
 
@@ -38,19 +38,7 @@ async def download_collection_doc(
     else:
         s3_key = document.s3_key_processed
         if not s3_key:
-            from app.models.rag_ingest import Source
-            from sqlalchemy import select, or_
-
-            source_meta_result = await session.execute(
-                select(Source.meta).where(
-                    Source.source_id == doc_uuid,
-                    or_(
-                        Source.meta["collection"]["id"].astext == str(collection_id),
-                        Source.meta["collection_id"].astext == str(collection_id),
-                    ),
-                )
-            )
-            source_meta = source_meta_result.scalar_one_or_none()
+            source_meta = (membership.source.meta if membership.source else None)
             s3_key = get_document_artifact_key(source_meta, "canonical")
         if not s3_key:
             prefix = f"{document.tenant_id}/{doc_id}/canonical/"

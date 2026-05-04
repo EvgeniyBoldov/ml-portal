@@ -129,17 +129,35 @@ def index_model(self: Task, embed_result: Dict[str, Any], tenant_id: str) -> Dic
             model_info = embedding_service.get_model_info()
 
             # Resolve Qdrant collection name: use collection's own name if available
-            source_repo = AsyncSourceRepository(ctx.session, ctx.tenant_id)
-            source = await source_repo.get_by_id(ctx.source_id)
-            source_meta = normalize_document_source_meta((source.meta or {}) if source else {})
-            collection_meta = source_meta.get("collection", {})
+            from sqlalchemy import select
+            from app.models.collection import Collection
+            from app.models.rag_ingest import DocumentCollectionMembership
 
-            coll_qdrant_name = collection_meta.get("qdrant_collection_name")
+            membership_row = (
+                await ctx.session.execute(
+                    select(
+                        DocumentCollectionMembership.collection_id,
+                        DocumentCollectionMembership.collection_row_id,
+                        Collection.qdrant_collection_name,
+                    )
+                    .join(
+                        Collection,
+                        Collection.id == DocumentCollectionMembership.collection_id,
+                    )
+                    .where(
+                        DocumentCollectionMembership.source_id == ctx.source_id,
+                        DocumentCollectionMembership.tenant_id == ctx.tenant_id,
+                    )
+                    .limit(1)
+                )
+            ).first()
+
+            coll_qdrant_name = membership_row.qdrant_collection_name if membership_row else None
             collection_name = coll_qdrant_name or f"{ctx.tenant_id_str}__{model_alias}"
 
             # Collection context for payload enrichment
-            coll_collection_id = collection_meta.get("id")
-            coll_row_id = collection_meta.get("row_id")
+            coll_collection_id = str(membership_row.collection_id) if membership_row else None
+            coll_row_id = str(membership_row.collection_row_id) if membership_row and membership_row.collection_row_id else None
 
             # 6. Download embeddings to temp file and batch upsert
             fd, tmp_path = tempfile.mkstemp()

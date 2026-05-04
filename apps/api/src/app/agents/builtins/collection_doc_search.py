@@ -35,6 +35,11 @@ _INPUT_SCHEMA_V1 = {
             "minimum": 1,
             "maximum": 20,
         },
+        "filters": {
+            "type": "object",
+            "description": "Optional collection field filters (eq semantics, list means IN).",
+            "additionalProperties": True,
+        },
     },
     "required": ["collection_slug", "query"],
 }
@@ -57,6 +62,7 @@ _OUTPUT_SCHEMA_V1 = {
         },
         "total": {"type": "integer"},
         "collection": {"type": "string"},
+        "applied_filters": {"type": "object"},
     },
 }
 
@@ -110,6 +116,7 @@ class CollectionDocSearchTool(VersionedTool):
             k = min(int(args.get("k", 5)), 20)
         except (TypeError, ValueError):
             k = 5
+        filters = args.get("filters", {}) or {}
 
         log.info(
             "Starting document collection search",
@@ -148,6 +155,9 @@ class CollectionDocSearchTool(VersionedTool):
                         f"Collection '{collection_slug}' has no Qdrant collection configured.",
                         logs=log.entries_dict(),
                     )
+                validation_error = self._validate_filters(collection, filters)
+                if validation_error:
+                    return ToolResult.fail(validation_error, logs=log.entries_dict())
 
                 # 2. Check Qdrant collection exists
                 vector_store = QdrantVectorStore()
@@ -155,7 +165,12 @@ class CollectionDocSearchTool(VersionedTool):
                 if not exists:
                     log.warning("Qdrant collection does not exist yet")
                     return ToolResult.ok(
-                        data={"hits": [], "total": 0, "collection": collection.name},
+                        data={
+                            "hits": [],
+                            "total": 0,
+                            "collection": collection.name,
+                            "applied_filters": filters or {},
+                        },
                         message="Collection exists but has not been indexed yet.",
                         logs=log.entries_dict(),
                     )
@@ -179,17 +194,32 @@ class CollectionDocSearchTool(VersionedTool):
                 )
                 query_embedding = query_embedding[0]
 
+                row_ids: list[str] | None = None
+                if filters:
+                    row_ids = await self._resolve_filtered_row_ids(session, collection, filters)
+                    if not row_ids:
+                        return ToolResult.ok(
+                            data={"hits": [], "total": 0, "collection": collection.name, "applied_filters": filters},
+                            logs=log.entries_dict(),
+                        )
+                    if len(row_ids) > 2000:
+                        return ToolResult.fail(
+                            "Filters are too broad. Please narrow filters to 2000 rows or fewer.",
+                            logs=log.entries_dict(),
+                        )
+
                 # 5. Search in dedicated Qdrant collection (no collection_id filter needed)
                 results = await vector_store.search(
                     collection=collection.qdrant_collection_name,
                     query=query_embedding,
                     top_k=k * 2,
+                    filter={"row_id": row_ids} if row_ids is not None else None,
                 )
 
                 if not results:
                     log.info("No results found")
                     return ToolResult.ok(
-                        data={"hits": [], "total": 0, "collection": collection.name},
+                        data={"hits": [], "total": 0, "collection": collection.name, "applied_filters": filters or {}},
                         logs=log.entries_dict(),
                     )
 
@@ -281,6 +311,7 @@ class CollectionDocSearchTool(VersionedTool):
                         "hits": hits,
                         "total": len(hits),
                         "collection": collection.name,
+                        "applied_filters": filters or {},
                     },
                     sources=sources,
                     logs=log.entries_dict(),
@@ -392,3 +423,51 @@ class CollectionDocSearchTool(VersionedTool):
                     meta[fname] = str(val) if not isinstance(val, str) else val
             result[rid] = meta
         return result
+
+    def _validate_filters(self, collection: Any, filters: Dict[str, Any]) -> Optional[str]:
+        if not filters:
+            return None
+        field_map = {
+            f.get("name"): f
+            for f in (collection.fields or [])
+            if isinstance(f, dict)
+        }
+        for key in filters.keys():
+            field = field_map.get(key)
+            if not field or not field.get("filterable", False):
+                return f"Unknown or non-filterable field '{key}' in filters"
+        for key, value in filters.items():
+            values = value if isinstance(value, list) else [value]
+            for item in values:
+                if isinstance(item, (dict, list, tuple, set)):
+                    return f"Unsupported filter value for '{key}'"
+        return None
+
+    async def _resolve_filtered_row_ids(self, session: Any, collection: Any, filters: Dict[str, Any]) -> list[str]:
+        if not collection.table_name:
+            return []
+        from sqlalchemy import text as sa_text
+
+        where_parts: list[str] = []
+        params: Dict[str, Any] = {}
+        idx = 0
+        for field, value in filters.items():
+            if isinstance(value, list):
+                if not value:
+                    return []
+                placeholders = []
+                for item in value:
+                    p = f"p{idx}"
+                    idx += 1
+                    params[p] = item
+                    placeholders.append(f":{p}")
+                where_parts.append(f"{field} IN ({', '.join(placeholders)})")
+            else:
+                p = f"p{idx}"
+                idx += 1
+                params[p] = value
+                where_parts.append(f"{field} = :{p}")
+        where_sql = " AND ".join(where_parts) if where_parts else "TRUE"
+        q = sa_text(f"SELECT id::text FROM {collection.table_name} WHERE {where_sql} LIMIT 2001")
+        rows = (await session.execute(q, params)).all()
+        return [str(row[0]) for row in rows if row and row[0]]

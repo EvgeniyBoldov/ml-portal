@@ -143,3 +143,59 @@ class TestPresignOptions:
         assert opts.method == "PUT"
         assert opts.content_type == "application/pdf"
         assert opts.response_headers["Content-Disposition"] == "attachment; filename=doc.pdf"
+
+
+class TestS3DeleteFolder:
+    @pytest.fixture
+    def mock_settings(self):
+        settings = MagicMock()
+        settings.S3_ENDPOINT = "http://minio:9000"
+        settings.S3_PUBLIC_ENDPOINT = None
+        settings.S3_ACCESS_KEY = "minioadmin"
+        settings.S3_SECRET_KEY = "minioadmin123"
+        settings.S3_SECURE = False
+        return settings
+
+    @pytest.mark.asyncio
+    async def test_delete_folder_paginates_until_complete(self, mock_settings):
+        with patch("app.adapters.s3_client.get_settings", return_value=mock_settings):
+            client = S3Client()
+            client._settings = mock_settings
+
+            mock_boto_client = MagicMock()
+            mock_boto_client.list_objects_v2 = MagicMock(side_effect=[
+                {
+                    "Contents": [{"Key": "p/1"}, {"Key": "p/2"}],
+                    "IsTruncated": True,
+                    "NextContinuationToken": "token-1",
+                },
+                {
+                    "Contents": [{"Key": "p/3"}],
+                    "IsTruncated": False,
+                },
+            ])
+            mock_boto_client.delete_objects = MagicMock(return_value={})
+            client.client = mock_boto_client
+
+            ok = await client.delete_folder(bucket="rag", prefix="p/")
+
+            assert ok is True
+            assert mock_boto_client.list_objects_v2.call_count == 2
+            assert mock_boto_client.delete_objects.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_delete_folder_returns_true_when_empty(self, mock_settings):
+        with patch("app.adapters.s3_client.get_settings", return_value=mock_settings):
+            client = S3Client()
+            client._settings = mock_settings
+
+            mock_boto_client = MagicMock()
+            mock_boto_client.list_objects_v2 = MagicMock(return_value={"Contents": [], "IsTruncated": False})
+            mock_boto_client.delete_objects = MagicMock(return_value={})
+            client.client = mock_boto_client
+
+            ok = await client.delete_folder(bucket="rag", prefix="empty/")
+
+            assert ok is True
+            assert mock_boto_client.list_objects_v2.call_count == 1
+            assert mock_boto_client.delete_objects.call_count == 0

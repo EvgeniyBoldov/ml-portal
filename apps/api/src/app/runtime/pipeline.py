@@ -74,6 +74,7 @@ class RuntimePipeline:
         request: PipelineRequest,
         ctx: ToolContext,
     ) -> AsyncGenerator[RuntimeEvent, None]:
+        self._apply_sandbox_overrides(request, ctx)
         if request.confirmation_tokens:
             ctx.extra["confirmation_tokens"] = list(request.confirmation_tokens)
         chat_id: Optional[UUID] = UUID(request.chat_id) if request.chat_id else None
@@ -225,6 +226,29 @@ class RuntimePipeline:
             request=request,
             stop_reason=planning_outcome.stop_reason,
         )
+
+    @staticmethod
+    def _apply_sandbox_overrides(request: PipelineRequest, ctx: ToolContext) -> None:
+        """Apply sandbox overrides from request into ToolContext as the canonical path."""
+        request_overrides = dict(request.sandbox_overrides or {})
+        if not request_overrides:
+            return
+
+        if hasattr(ctx, "get_runtime_deps") and hasattr(ctx, "set_runtime_deps"):
+            deps = ctx.get_runtime_deps()
+            merged: dict = {}
+            if isinstance(getattr(deps, "sandbox_overrides", None), dict):
+                merged.update(deps.sandbox_overrides)
+            merged.update(request_overrides)
+            deps.sandbox_overrides = merged
+            ctx.set_runtime_deps(deps)
+            return
+
+        current = dict((getattr(ctx, "extra", {}) or {}).get("sandbox_overrides") or {})
+        current.update(request_overrides)
+        if not hasattr(ctx, "extra") or ctx.extra is None:
+            ctx.extra = {}
+        ctx.extra["sandbox_overrides"] = current
 
     # ------------------------------------------------------------------ #
     # Internal helpers                                                   #

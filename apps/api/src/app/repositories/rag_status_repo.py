@@ -75,8 +75,11 @@ class AsyncRAGStatusRepository(AsyncRepository):
             existing.status = status
             if celery_task_id is not None:
                 existing.celery_task_id = celery_task_id
-            existing.model_version = model_version
-            existing.modality = modality
+            # Preserve version/modality unless explicitly provided.
+            if model_version is not None:
+                existing.model_version = model_version
+            if modality is not None:
+                existing.modality = modality
             existing.error_short = error_short
             existing.metrics_json = metrics_json
             if started_at:

@@ -20,6 +20,23 @@ class ModelService:
     
     def __init__(self, session: AsyncSession):
         self.session = session
+
+    @staticmethod
+    def _enqueue_embedding_status_reconcile(
+        model_alias: Optional[str] = None,
+        tenant_id: Optional[str] = None,
+    ) -> None:
+        try:
+            from app.workers.tasks_rag_model_reconcile import (
+                reconcile_rag_statuses_for_embedding_model,
+            )
+
+            reconcile_rag_statuses_for_embedding_model.delay(model_alias, tenant_id)
+        except Exception as exc:
+            logger.warning(
+                "failed_to_enqueue_embedding_status_reconcile",
+                extra={"model_alias": model_alias, "tenant_id": tenant_id, "error": str(exc)},
+            )
     
     def _normalize_payload(self, data: Dict[str, Any]) -> Dict[str, Any]:
         payload = dict(data)
@@ -92,6 +109,9 @@ class ModelService:
         await self.session.flush()
         
         logger.info(f"Created model: {model.alias} (type={model.type}, provider={model.provider})")
+        if model.type == ModelType.EMBEDDING:
+            # New embedding model can impact status semantics globally.
+            self._enqueue_embedding_status_reconcile()
         return model
     
     async def get_by_id(self, model_id: uuid.UUID) -> Optional[Model]:
@@ -159,6 +179,7 @@ class ModelService:
         model = await self.get_by_id(model_id)
         if not model:
             return None
+        old_default_for_type = bool(model.default_for_type)
         
         data = self._normalize_payload({
             "type": model.type,
@@ -199,6 +220,12 @@ class ModelService:
         ModelResolver.invalidate_cache(model.alias)
         
         logger.info(f"Updated model: {model.alias}")
+        if model.type == ModelType.EMBEDDING:
+            # Default/availability changes affect effective status across documents.
+            if old_default_for_type != bool(model.default_for_type):
+                self._enqueue_embedding_status_reconcile()
+            else:
+                self._enqueue_embedding_status_reconcile(model.alias)
         return model
     
     async def delete_model(self, model_id: uuid.UUID) -> bool:
@@ -222,8 +249,10 @@ class ModelService:
         model.deleted_at = datetime.now(timezone.utc)
         model.enabled = False
         await self.session.flush()
-        
+
         logger.info(f"Deleted model: {model.alias}")
+        if model.type == ModelType.EMBEDDING:
+            self._enqueue_embedding_status_reconcile()
         return True
     
     async def get_default_model(self, type: ModelType) -> Optional[Model]:
@@ -260,6 +289,8 @@ class ModelService:
         if not model:
             return False
         
+        old_health = model.health_status
+        old_status = model.status
         model.health_status = status
         model.health_latency_ms = latency_ms
         model.health_error = error
@@ -274,6 +305,11 @@ class ModelService:
         await self.session.flush()
         
         logger.info(f"Health check for {model.alias}: {status} ({latency_ms}ms)")
+        if (
+            model.type == ModelType.EMBEDDING
+            and (old_health != model.health_status or old_status != model.status)
+        ):
+            self._enqueue_embedding_status_reconcile(model.alias)
         return True
     
     async def _unset_default_for_type(self, type: ModelType):

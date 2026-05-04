@@ -1,0 +1,74 @@
+.headerActions {
+  display: flex;
+  gap: 8px;
+}
+
+.tableWrap {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.table th,
+.table td {
+  border-bottom: 1px solid var(--color-border, #e5e7eb);
+  padding: 10px 8px;
+  text-align: left;
+  vertical-align: middle;
+}
+
+.slug {
+  color: var(--color-text-muted, #6b7280);
+}
+
+.emptyCell {
+  color: var(--color-text-muted, #6b7280);
+}
+
+.counterCell {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+.counterTotal {
+  color: var(--color-text, #111827);
+  font-weight: 600;
+}
+
+.counterVectorized {
+  color: #15803d;
+  font-weight: 600;
+}
+
+.counterNotVectorized {
+  color: #b91c1c;
+  font-weight: 600;
+}
+
+.counterSep {
+  color: var(--color-text-muted, #6b7280);
+}
+
+.modalBody {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.modalHint {
+  color: var(--color-text-muted, #6b7280);
+  font-size: 13px;
+}
+
+.modalFooter {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}

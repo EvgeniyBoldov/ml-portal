@@ -203,6 +203,21 @@ class VectorCollectionAuditResponse(BaseModel):
     cleaned_orphan_count: int = 0
 
 
+class MembershipAuditEntry(BaseModel):
+    source_id: Optional[uuid.UUID] = None
+    collection_id: Optional[uuid.UUID] = None
+    tenant_id: Optional[uuid.UUID] = None
+    detail: str
+
+
+class MembershipAuditResponse(BaseModel):
+    membership_count: int
+    source_with_meta_collection_count: int
+    missing_memberships: List[MembershipAuditEntry] = Field(default_factory=list)
+    tenant_mismatches: List[MembershipAuditEntry] = Field(default_factory=list)
+    repaired_missing_count: int = 0
+
+
 class CollectionTypePresetResponse(BaseModel):
     collection_type: str
     fields: List[dict] = Field(default_factory=list)

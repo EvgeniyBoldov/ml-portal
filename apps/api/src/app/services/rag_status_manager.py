@@ -24,6 +24,8 @@ from app.services.rag_status_policy import (
     split_stage_name,
 )
 from app.models.rag import RAGDocument
+from app.models.tenant import Tenants
+from app.models.model_registry import ModelRegistry, ModelType, ModelStatus, HealthStatus
 from sqlalchemy import select, update
 
 logger = get_logger(__name__)
@@ -393,6 +395,46 @@ class RAGStatusManager:
         
         # Возвращаем task_id для отмены в Celery
         return task_id
+
+    async def stop_ingest(self, doc_id: UUID) -> Dict[str, Any]:
+        """
+        Stop all active ingest stages (queued/processing) for a document.
+
+        Returns:
+            {
+                "stopped_stages": list[str],
+                "task_ids": list[str],  # Celery task ids to revoke
+            }
+        """
+        nodes = await self.status_repo.get_nodes_by_doc_id(doc_id)
+        stopped_stages: list[str] = []
+        task_ids: list[str] = []
+
+        active_statuses = {
+            StageStatus.QUEUED.value,
+            StageStatus.PROCESSING.value,
+            "running",  # legacy
+        }
+
+        for node in nodes:
+            stage = self._format_stage_name(node.node_type, node.node_key)
+            if node.status not in active_statuses:
+                continue
+
+            if getattr(node, "celery_task_id", None):
+                task_ids.append(str(node.celery_task_id))
+
+            await self.transition_stage(
+                doc_id=doc_id,
+                stage=stage,
+                new_status=StageStatus.CANCELLED,
+            )
+            stopped_stages.append(stage)
+
+        return {
+            "stopped_stages": stopped_stages,
+            "task_ids": task_ids,
+        }
     
     async def retry_stage(self, doc_id: UUID, stage: str) -> None:
         """
@@ -427,6 +469,7 @@ class RAGStatusManager:
 
     async def dispatch_stage_retry(self, doc_id: UUID, tenant_id: UUID, stage: str) -> None:
         """Enqueue concrete retry execution for a supported stage."""
+        from celery import chain
         from app.workers.tasks_rag_ingest import embed_chunks_model, index_model
 
         if stage == "extract":
@@ -435,7 +478,10 @@ class RAGStatusManager:
 
         if stage.startswith("embed."):
             model_alias = stage.split(".", 1)[1]
-            embed_chunks_model.delay({"source_id": str(doc_id)}, str(tenant_id), model_alias)
+            chain(
+                embed_chunks_model.s({"source_id": str(doc_id)}, str(tenant_id), model_alias),
+                index_model.s(str(tenant_id)),
+            ).apply_async()
             return
 
         if stage.startswith("index."):
@@ -565,8 +611,10 @@ class RAGStatusManager:
         pipeline_nodes = await self.status_repo.get_pipeline_nodes(doc_id)
         embedding_nodes = await self.status_repo.get_embedding_nodes(doc_id)
         index_nodes = await self.status_repo.get_index_nodes(doc_id)
+        archive_node = await self.status_repo.get_node(doc_id, "archive", "archive")
 
         target_models = await self._get_target_models(doc_id)
+        default_alias, secondary_alias, model_availability = await self._resolve_status_model_context(doc_id)
 
         agg_status, agg_details = calculate_aggregate_status(
             doc_id=doc_id,
@@ -574,13 +622,26 @@ class RAGStatusManager:
             embedding_nodes=embedding_nodes,
             target_models=target_models,
             index_nodes=index_nodes,
+            archived=archive_node is not None,
+            default_model_alias=default_alias,
+            tenant_secondary_model_alias=secondary_alias,
+            model_availability=model_availability,
         )
+        current_versions = await self._get_current_model_versions(target_models)
+        self._annotate_stale_models(agg_details, index_nodes, current_versions, target_models)
 
-        # Получаем tenant_id для публикации события
-        result = await self.session.execute(
-            select(RAGDocument.tenant_id).where(RAGDocument.id == doc_id)
+        # Читаем текущий статус для дедупликации
+        prev_result = await self.session.execute(
+            select(RAGDocument.tenant_id, RAGDocument.agg_status, RAGDocument.agg_details_json)
+            .where(RAGDocument.id == doc_id)
         )
-        tenant_id = result.scalar_one_or_none()
+        prev_row = prev_result.one_or_none()
+        tenant_id = prev_row[0] if prev_row else None
+        prev_agg_status = prev_row[1] if prev_row else None
+        prev_effective = (prev_row[2] or {}).get("effective_status") if prev_row else None
+
+        new_effective = agg_details.get("effective_status")
+        status_changed = (agg_status != prev_agg_status) or (new_effective != prev_effective)
 
         await self.session.execute(
             update(RAGDocument)
@@ -591,8 +652,8 @@ class RAGStatusManager:
             )
         )
 
-        # Публикуем событие с agg_status для обновления UI
-        if self.event_publisher and tenant_id:
+        # Публикуем только если пользователь-видимый статус изменился
+        if self.event_publisher and tenant_id and status_changed:
             await self.event_publisher.publish_aggregate_status(
                 doc_id=doc_id,
                 tenant_id=tenant_id,
@@ -604,6 +665,101 @@ class RAGStatusManager:
 
         logger.debug(f"Updated aggregate status for {doc_id}: {agg_status}")
 
+    async def _resolve_status_model_context(
+        self, doc_id: UUID
+    ) -> tuple[Optional[str], Optional[str], Dict[str, bool]]:
+        """Resolve default/secondary embedding aliases and serving availability map."""
+        tenant_id = None
+        tenant_row = await self.session.execute(
+            select(RAGDocument.tenant_id).where(RAGDocument.id == doc_id)
+        )
+        tenant_id = tenant_row.scalar_one_or_none()
+
+        default_q = await self.session.execute(
+            select(ModelRegistry.alias)
+            .where(
+                (ModelRegistry.type == ModelType.EMBEDDING)
+                & (ModelRegistry.default_for_type == True)
+                & (ModelRegistry.enabled == True)
+                & (ModelRegistry.status == ModelStatus.AVAILABLE)
+                & (ModelRegistry.deleted_at.is_(None))
+            )
+            .limit(1)
+        )
+        default_alias = default_q.scalar_one_or_none()
+
+        secondary_alias: Optional[str] = None
+        if tenant_id:
+            tenant_q = await self.session.execute(
+                select(Tenants.embedding_model_alias).where(Tenants.id == tenant_id)
+            )
+            secondary_alias = tenant_q.scalar_one_or_none()
+
+        aliases = {a for a in [default_alias, secondary_alias] if a}
+        model_availability: Dict[str, bool] = {}
+        if aliases:
+            rows = await self.session.execute(
+                select(
+                    ModelRegistry.alias,
+                    ModelRegistry.enabled,
+                    ModelRegistry.status,
+                    ModelRegistry.health_status,
+                    ModelRegistry.deleted_at,
+                ).where(ModelRegistry.alias.in_(list(aliases)))
+            )
+            for alias, enabled, status, health_status, deleted_at in rows.all():
+                available = bool(
+                    alias
+                    and enabled
+                    and deleted_at is None
+                    and status == ModelStatus.AVAILABLE
+                    and health_status == HealthStatus.HEALTHY
+                )
+                model_availability[str(alias)] = available
+
+        return default_alias, secondary_alias, model_availability
+
+    @staticmethod
+    def _annotate_stale_models(
+        agg_details: Dict[str, Any],
+        index_nodes: List[Any],
+        current_versions: Dict[str, str],
+        target_models: List[str],
+    ) -> None:
+        stale_models: List[str] = []
+        for node in index_nodes:
+            alias = str(getattr(node, "node_key", "") or "")
+            if not alias or alias not in target_models:
+                continue
+            indexed_version = getattr(node, "model_version", None)
+            current_version = current_versions.get(alias)
+            if indexed_version and current_version and indexed_version != current_version:
+                stale_models.append(alias)
+
+        stale_models = sorted(set(stale_models))
+        agg_details["stale_models"] = stale_models
+        counters = agg_details.setdefault("counters", {})
+        counters["stale_models"] = len(stale_models)
+        if stale_models and agg_details.get("policy") == "all_index_ready":
+            agg_details["policy"] = "index_ready_but_stale"
+
+    async def _get_current_model_versions(self, model_aliases: List[str]) -> Dict[str, str]:
+        aliases = [a for a in model_aliases if a]
+        if not aliases:
+            return {}
+        from app.models.model_registry import ModelRegistry
+
+        result = await self.session.execute(
+            select(ModelRegistry.alias, ModelRegistry.model_version).where(
+                ModelRegistry.alias.in_(aliases)
+            )
+        )
+        return {
+            str(row[0]): str(row[1])
+            for row in result.all()
+            if row[0] and row[1]
+        }
+
     async def _refresh_collection_statuses_for_document(self, doc_id: UUID) -> None:
         """Refresh document collection readiness for collections that contain the document."""
         from sqlalchemy import text
@@ -611,11 +767,9 @@ class RAGStatusManager:
 
         result = await self.session.execute(
             text(
-                "SELECT c.id "
-                "FROM collections c "
-                "JOIN sources src "
-                "ON ((src.meta #>> '{collection,id}') = c.id::text OR (src.meta ->> 'collection_id') = c.id::text) "
-                "WHERE src.source_id = :doc_id"
+                "SELECT dcm.collection_id AS id "
+                "FROM document_collection_memberships dcm "
+                "WHERE dcm.source_id = :doc_id"
             ),
             {"doc_id": doc_id},
         )

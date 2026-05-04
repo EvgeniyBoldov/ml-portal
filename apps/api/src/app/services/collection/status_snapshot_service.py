@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from sqlalchemy import text
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.collection import Collection, CollectionStatus, CollectionType
@@ -118,16 +119,32 @@ class CollectionStatusSnapshotService:
         }
 
     async def get_document_status_snapshot(self, collection: Collection) -> dict[str, Any]:
-        result = await self.session.execute(
-            text(
-                "SELECT rd.agg_status, rd.status "
-                "FROM ragdocuments rd "
-                "JOIN sources src ON src.source_id = rd.id "
-                "WHERE "
-                "((src.meta #>> '{collection,id}') = :collection_id OR (src.meta ->> 'collection_id') = :collection_id)"
-            ),
-            {"collection_id": str(collection.id)},
-        )
+        query_params = {"collection_id": str(collection.id)}
+        try:
+            result = await self.session.execute(
+                text(
+                    "SELECT rd.agg_status, rd.status "
+                    "FROM ragdocuments rd "
+                    "JOIN document_collection_memberships dcm ON dcm.source_id = rd.id "
+                    "WHERE dcm.collection_id = CAST(:collection_id AS uuid)"
+                ),
+                query_params,
+            )
+        except ProgrammingError as exc:
+            # Backward compatibility for environments where membership table
+            # migration is not applied yet.
+            message = str(getattr(exc, "orig", exc)).lower()
+            if "document_collection_memberships" not in message or "does not exist" not in message:
+                raise
+            result = await self.session.execute(
+                text(
+                    "SELECT rd.agg_status, rd.status "
+                    "FROM ragdocuments rd "
+                    "JOIN sources s ON s.source_id = rd.id "
+                    "WHERE COALESCE(s.meta #>> '{collection,id}', s.meta ->> 'collection_id')::uuid = CAST(:collection_id AS uuid)"
+                ),
+                query_params,
+            )
         statuses = [
             str(row.agg_status or row.status or "").lower()
             for row in result.all()

@@ -26,11 +26,39 @@ class Source(Base):
     # Связи
     chunks = relationship("Chunk", back_populates="source", cascade="all, delete-orphan")
     emb_statuses = relationship("EmbStatus", back_populates="source", cascade="all, delete-orphan")
+    collection_memberships = relationship(
+        "DocumentCollectionMembership",
+        back_populates="source",
+        cascade="all, delete-orphan",
+    )
     
     # Ограничения
     __table_args__ = (
         Index('ix_sources_updated_at', 'updated_at'),
         Index('ix_sources_tenant_id', 'tenant_id'),
+    )
+
+
+class DocumentCollectionMembership(Base):
+    """Explicit document-to-collection membership contract."""
+
+    __tablename__ = "document_collection_memberships"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
+    source_id = Column(UUID(as_uuid=True), ForeignKey("sources.source_id", ondelete="CASCADE"), nullable=False)
+    collection_id = Column(UUID(as_uuid=True), ForeignKey("collections.id", ondelete="CASCADE"), nullable=False)
+    collection_row_id = Column(UUID(as_uuid=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+    source = relationship("Source", back_populates="collection_memberships")
+
+    __table_args__ = (
+        UniqueConstraint("source_id", "collection_id", name="uq_doc_collection_membership"),
+        Index("ix_doc_coll_memberships_tenant", "tenant_id"),
+        Index("ix_doc_coll_memberships_collection", "collection_id"),
+        Index("ix_doc_coll_memberships_source", "source_id"),
     )
 
 class Chunk(Base):
@@ -103,5 +131,4 @@ class RAGStatus(Base):
         Index('ix_rag_statuses_node_type', 'node_type'),
         Index('ix_rag_statuses_updated_at', 'updated_at'),
     )
-
 

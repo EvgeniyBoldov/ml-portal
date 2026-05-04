@@ -68,9 +68,10 @@ def cleanup_document_artifacts(self: Task, tenant_id: str, source_id: str) -> Di
             try:
                 from app.adapters.impl.qdrant import QdrantVectorStore
                 from app.repositories.rag_status_repo import AsyncRAGStatusRepository
-                from app.repositories.rag_ingest_repos import AsyncSourceRepository
                 from app.schemas.common import EmbeddingModel
-                from app.services.document_artifacts import normalize_document_source_meta
+                from sqlalchemy import select
+                from app.models.collection import Collection
+                from app.models.rag_ingest import DocumentCollectionMembership
                 
                 # Determine which models were used for this document
                 # by querying the RAGStatus table
@@ -80,12 +81,23 @@ def cleanup_document_artifacts(self: Task, tenant_id: str, source_id: str) -> Di
                 try:
                     async with get_worker_session() as session:
                         status_repo = AsyncRAGStatusRepository(session, tenant_id=uuid.UUID(tenant_id))
-                        source_repo = AsyncSourceRepository(session, tenant_id=uuid.UUID(tenant_id))
                         embedding_nodes = await status_repo.get_embedding_nodes(uuid.UUID(source_id))
                         used_models = [node.node_key for node in embedding_nodes]
-                        source = await source_repo.get_by_id(uuid.UUID(source_id))
-                        source_meta = normalize_document_source_meta((source.meta or {}) if source else {})
-                        collection_qdrant_name = source_meta.get("collection", {}).get("qdrant_collection_name")
+                        membership_row = (
+                            await session.execute(
+                                select(Collection.qdrant_collection_name)
+                                .join(
+                                    DocumentCollectionMembership,
+                                    DocumentCollectionMembership.collection_id == Collection.id,
+                                )
+                                .where(
+                                    DocumentCollectionMembership.source_id == uuid.UUID(source_id),
+                                    DocumentCollectionMembership.tenant_id == uuid.UUID(tenant_id),
+                                )
+                                .limit(1)
+                            )
+                        ).first()
+                        collection_qdrant_name = membership_row.qdrant_collection_name if membership_row else None
                 except Exception as db_err:
                     logger.warning(f"Could not fetch used models from DB: {db_err}. Falling back to all known models.")
                 

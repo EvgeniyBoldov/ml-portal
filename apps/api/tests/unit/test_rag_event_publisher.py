@@ -22,23 +22,24 @@ def publisher(redis_client: AsyncMock) -> RAGEventPublisher:
 
 
 @pytest.mark.asyncio
-async def test_publish_status_update_broadcasts_to_all_channels(
+async def test_publish_status_update_broadcasts_to_doc_channel_only(
     publisher: RAGEventPublisher, redis_client: AsyncMock
 ):
+    doc_id = uuid4()
     tenant_id = uuid4()
     await publisher.publish_status_update(
-        doc_id=uuid4(),
+        doc_id=doc_id,
         tenant_id=tenant_id,
         stage="extract",
         status="processing",
         metrics={"word_count": 10},
     )
 
-    assert redis_client.publish.await_count == 3
+    assert redis_client.publish.await_count == 1
     channels = [call.args[0] for call in redis_client.publish.await_args_list]
-    assert RAGEventPublisher.CHANNEL_ADMIN in channels
-    assert RAGEventPublisher.CHANNEL_LEGACY in channels
-    assert RAGEventPublisher.CHANNEL_TENANT_FMT.format(tenant_id=str(tenant_id)) in channels
+    assert RAGEventPublisher.CHANNEL_DOC_FMT.format(doc_id=str(doc_id)) in channels
+    assert RAGEventPublisher.CHANNEL_LEGACY not in channels
+    assert RAGEventPublisher.CHANNEL_ADMIN not in channels
 
 
 @pytest.mark.asyncio

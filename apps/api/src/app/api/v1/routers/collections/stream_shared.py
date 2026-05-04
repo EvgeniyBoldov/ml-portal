@@ -6,13 +6,45 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 import uuid
+from dataclasses import dataclass
 
 from fastapi import HTTPException
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import UserCtx
-from app.models.rag_ingest import Source
+from app.models.rag_ingest import Source, DocumentCollectionMembership
+
+
+@dataclass
+class DocumentMembership:
+    source: Source | None
+    in_tenant: bool
+    in_collection: bool
+
+
+async def _safe_revoke(task_id: str) -> None:
+    from app.celery_app import app as celery_app
+
+    try:
+        await asyncio.wait_for(
+            asyncio.to_thread(
+                celery_app.control.revoke,
+                task_id,
+                terminate=True,
+                signal="SIGTERM",
+            ),
+            timeout=1.5,
+        )
+    except Exception:
+        pass
+
+
+async def _stop_pipeline_and_revoke(status_manager: Any, doc_id: uuid.UUID) -> dict[str, Any]:
+    stop_result = await status_manager.stop_ingest(doc_id)
+    for task_id in stop_result.get("task_ids", []):
+        await _safe_revoke(task_id)
+    return stop_result
 
 
 def _problem(status_code: int, error: str, reason: str, **extra: Any) -> HTTPException:
@@ -28,6 +60,22 @@ async def _ensure_worker_ready() -> None:
     result = await loop.run_in_executor(None, lambda: celery_app.control.ping(timeout=2.0))
     if not result:
         raise _problem(503, "Worker is not available", "worker_unavailable")
+
+    # Document ingest currently depends on Qdrant for index stage.
+    # Fail fast instead of queuing a pipeline that will stall/fail later.
+    try:
+        from app.adapters.impl.qdrant import QdrantVectorStore
+
+        store = QdrantVectorStore()
+        await store._client.get_collections()  # noqa: SLF001
+    except Exception as exc:
+        raise _problem(
+            503,
+            "Vector index backend is not available",
+            "index_backend_unavailable",
+            backend="qdrant",
+            details=str(exc),
+        ) from exc
 
 
 async def _resolve_document_collection(
@@ -52,21 +100,36 @@ async def _resolve_document_collection(
     return collection
 
 
-async def _document_belongs_to_collection(
+async def _resolve_document_membership(
     session: AsyncSession,
+    tenant_id: uuid.UUID,
     collection_id: uuid.UUID,
     doc_id: uuid.UUID,
-) -> bool:
-    result = await session.execute(
-        select(Source.source_id).where(
-            Source.source_id == doc_id,
-            or_(
-                Source.meta["collection"]["id"].astext == str(collection_id),
-                Source.meta["collection_id"].astext == str(collection_id),
-            ),
+) -> DocumentMembership:
+    explicit_membership = (
+        await session.execute(
+            select(DocumentCollectionMembership).where(
+                DocumentCollectionMembership.source_id == doc_id,
+                DocumentCollectionMembership.tenant_id == tenant_id,
+                DocumentCollectionMembership.collection_id == collection_id,
+            )
         )
-    )
-    return result.scalar_one_or_none() is not None
+    ).scalar_one_or_none()
+    source = (
+        await session.execute(
+            select(Source).where(
+                Source.source_id == doc_id,
+                Source.tenant_id == tenant_id,
+            )
+        )
+    ).scalar_one_or_none()
+
+    if explicit_membership is not None:
+        return DocumentMembership(source=source, in_tenant=True, in_collection=True)
+
+    if source is None:
+        return DocumentMembership(source=None, in_tenant=False, in_collection=False)
+    return DocumentMembership(source=source, in_tenant=True, in_collection=False)
 
 
 async def _resolve_collection_and_doc(
@@ -77,8 +140,13 @@ async def _resolve_collection_and_doc(
 ):
     collection = await _resolve_document_collection(collection_id, session, user)
     doc_uuid = uuid.UUID(doc_id)
-    belongs = await _document_belongs_to_collection(session, collection_id, doc_uuid)
-    if not belongs:
+    membership = await _resolve_document_membership(
+        session=session,
+        tenant_id=collection.tenant_id,
+        collection_id=collection_id,
+        doc_id=doc_uuid,
+    )
+    if not membership.in_collection:
         raise HTTPException(status_code=404, detail="Document not found in collection")
 
     from app.repositories.factory import AsyncRepositoryFactory
@@ -89,3 +157,30 @@ async def _resolve_collection_and_doc(
         raise HTTPException(status_code=404, detail="Document not found")
 
     return collection, document, doc_uuid, repo_factory
+
+
+async def _resolve_collection_and_doc_with_membership(
+    collection_id: uuid.UUID,
+    doc_id: str,
+    session: AsyncSession,
+    user: UserCtx,
+):
+    collection = await _resolve_document_collection(collection_id, session, user)
+    doc_uuid = uuid.UUID(doc_id)
+    membership = await _resolve_document_membership(
+        session=session,
+        tenant_id=collection.tenant_id,
+        collection_id=collection_id,
+        doc_id=doc_uuid,
+    )
+    if not membership.in_collection:
+        raise HTTPException(status_code=404, detail="Document not found in collection")
+
+    from app.repositories.factory import AsyncRepositoryFactory
+
+    repo_factory = AsyncRepositoryFactory(session, collection.tenant_id, user.id)
+    document = await repo_factory.get_rag_document_by_id(doc_uuid)
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    return collection, document, doc_uuid, repo_factory, membership

@@ -39,6 +39,7 @@ from app.services.sandbox_service import SandboxService
 from app.services.sandbox_step_enrichment_service import SandboxStepEnrichmentService
 from app.services.run_store import RunStore
 from app.services.runtime_hitl_protocol_service import RuntimeHitlProtocolService
+from app.services.runtime_terminal_status import planner_terminal_from_event
 
 from .helpers import check_session_owner, tenant_uuid, user_uuid
 
@@ -296,7 +297,6 @@ async def run_sandbox(
                 session=stream_db,
                 session_factory=session_factory,
                 run_store=RunStore(session_factory=session_factory),
-                sandbox_overrides=sandbox_overrides,
             )
             logger.info("[Sandbox] Runtime logging level forced to full")
 
@@ -344,6 +344,10 @@ async def run_sandbox(
                         "snapshot_id": str(snapshot_id),
                         "branch_id": str(branch_id),
                     }
+                    step_payload = stream_enricher.sanitize_step_payload(
+                        step_type=evt_type,
+                        step_data=step_payload,
+                    )
                     step_payload = await stream_enricher.enrich(
                         step_payload,
                         branch_name=branch.name,
@@ -363,17 +367,12 @@ async def run_sandbox(
 
             try:
                 async for event in pipeline.execute(pipeline_request, tool_ctx):
-                    if event.type == RuntimeEventType.ERROR:
-                        final_status = "failed"
-                        final_error = str(event.data.get("error") or "runtime_error")
-                    elif event.type == RuntimeEventType.STOP:
-                        reason = str(event.data.get("reason") or "").strip()
-                        final_status = reason or "stopped"
-                        final_error = str(
-                            event.data.get("message")
-                            or event.data.get("question")
-                            or ""
-                        ) or None
+                    terminal = planner_terminal_from_event(event)
+                    if terminal is not None:
+                        final_status = terminal[0].value
+                        final_error = terminal[1]
+
+                    if event.type == RuntimeEventType.STOP:
                         paused_payload = RuntimeHitlProtocolService.build_paused_from_stop(dict(event.data or {}))
                         svc_pause = SandboxService(stream_db)
                         await svc_pause.pause_run(
@@ -383,6 +382,16 @@ async def run_sandbox(
                             paused_context=paused_payload["context"],
                         )
                         await stream_db.commit()
+                        pause_event = {
+                            "type": "run_paused",
+                            "reason": paused_payload["reason"],
+                            "action": paused_payload["action"],
+                            "context": paused_payload["context"],
+                            "contract_version": paused_payload["contract_version"],
+                            "run_id": str(run_id),
+                        }
+                        yield f"data: {json.dumps(pause_event, ensure_ascii=False)}\n\n"
+                        await _persist_step("run_paused", pause_event)
                     elif event.type == RuntimeEventType.FINAL:
                         final_status = "completed"
                         final_error = None

@@ -24,7 +24,7 @@ from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.models.collection import Collection, CollectionType, FieldType
 from app.models.rag import RAGDocument
-from app.models.rag_ingest import Source
+from app.models.rag_ingest import Source, DocumentCollectionMembership
 from app.repositories.factory import AsyncRepositoryFactory
 from app.services.collection_service import CollectionService
 from app.core.exceptions import CollectionNotFoundError, CollectionDocumentUploadError, NotDocumentCollectionError
@@ -140,6 +140,14 @@ class CollectionDocumentUploadService:
                 meta=source_meta,
             )
             self.session.add(src)
+
+            membership = DocumentCollectionMembership(
+                tenant_id=self._tenant_id,
+                source_id=doc_id,
+                collection_id=collection_id,
+                collection_row_id=row_id,
+            )
+            self.session.add(membership)
             await self.session.flush()
 
             if self.event_publisher:

@@ -163,8 +163,10 @@ async def get_current_user_sse(request: Request) -> UserCtx:
     DO NOT use query params for tokens - they leak in logs and browser history.
     """
     from app.core.security import decode_jwt
+    from app.core.config import get_settings
 
     token = None
+    settings = get_settings()
 
     # 1) Authorization header
     auth_header = request.headers.get("Authorization")
@@ -174,6 +176,11 @@ async def get_current_user_sse(request: Request) -> UserCtx:
     # 2) httpOnly cookie (preferred for SSE)
     if not token:
         token = request.cookies.get("access_token")
+
+    # 3) query param fallback for dev/local SSE clients
+    # In production keep strict header/cookie-only auth.
+    if not token and settings.ENV != "production":
+        token = request.query_params.get("token")
 
     if not token:
         raise HTTPException(

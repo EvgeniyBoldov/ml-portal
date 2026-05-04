@@ -20,6 +20,18 @@ class AsyncTenantsService:
         self.session = session
         self.repo = AsyncTenantsRepository(session)
         self.model_repo = AsyncModelRegistryRepository(session)
+
+    @staticmethod
+    def _enqueue_tenant_reconcile(tenant_id: str) -> None:
+        try:
+            from app.workers.tasks_rag_model_reconcile import reconcile_rag_statuses_for_embedding_model
+
+            reconcile_rag_statuses_for_embedding_model.delay(None, tenant_id)
+        except Exception as exc:
+            logger.warning(
+                "failed_to_enqueue_tenant_reconcile",
+                extra={"tenant_id": tenant_id, "error": str(exc)},
+            )
     
     async def get_tenant(self, tenant_id: str) -> Optional[Dict[str, Any]]:
         """Get tenant by ID"""
@@ -52,10 +64,14 @@ class AsyncTenantsService:
             await self.validate_tenant_models(tenant_data.get("embedding_model_alias"))
         
         tenant = await self.repo.create(**tenant_data)
+        self._enqueue_tenant_reconcile(str(tenant.id))
         return await self._build_tenant_response(tenant)
     
     async def update_tenant(self, tenant_id: str, update_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Update tenant"""
+        existing = await self.repo.get_by_id(uuid.UUID(tenant_id))
+        prev_alias = getattr(existing, "embedding_model_alias", None) if existing else None
+
         # Map extra_embed_model to embedding_model_alias for backward compatibility
         if "extra_embed_model" in update_data:
             update_data["embedding_model_alias"] = update_data.pop("extra_embed_model")
@@ -67,6 +83,10 @@ class AsyncTenantsService:
         tenant = await self.repo.update(uuid.UUID(tenant_id), **update_data)
         if not tenant:
             return None
+
+        new_alias = getattr(tenant, "embedding_model_alias", None)
+        if prev_alias != new_alias:
+            self._enqueue_tenant_reconcile(str(tenant.id))
 
         return await self._build_tenant_response(tenant)
     

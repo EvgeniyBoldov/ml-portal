@@ -213,3 +213,31 @@ async def test_collection_filter_intersects_agent_allowlist_and_rbac():
     assert [inst.slug for inst in result.resolved_data_instances] == ["alpha"]
     assert [op.data_instance_slug for op in result.resolved_operations] == ["alpha"]
     assert set(result.execution_graph.bindings.keys()) == {"instance.alpha.search"}
+
+
+@pytest.mark.asyncio
+async def test_preflight_passes_agent_version_id_to_agent_resolver():
+    collection_id = str(uuid4())
+    preflight = _build_preflight(
+        allowed_collection_ids=None,
+        rbac_allow_fn=lambda _slug: True,
+        instances=[
+            _resolved_instance(
+                slug="alpha",
+                collection_id=collection_id,
+                collection_slug="collection.alpha",
+            ),
+        ],
+    )
+    version_id = uuid4()
+
+    await preflight.prepare(
+        agent_slug="agent-a",
+        user_id=uuid4(),
+        tenant_id=uuid4(),
+        include_routable_agents=False,
+        agent_version_id=version_id,
+    )
+
+    preflight.agent_resolver.resolve.assert_awaited_once()
+    assert preflight.agent_resolver.resolve.await_args.kwargs["agent_version_id"] == version_id

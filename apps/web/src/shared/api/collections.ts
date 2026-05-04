@@ -696,10 +696,11 @@ export const collectionsApi = {
     return apiRequest(`/collections/${collectionId}/docs/${docId}/download?kind=${kind}`);
   },
 
-  getStatusEventsUrl: (collectionId: string, docId?: string): string => {
-    const base = `/api/v1/collections/${collectionId}/status/events`;
-    return docId ? `${base}?document_id=${encodeURIComponent(docId)}` : base;
-  },
+  getStatusEventsUrl: (collectionId: string): string =>
+    `/api/v1/collections/${collectionId}/status/events`,
+
+  getDocumentStatusEventsUrl: (collectionId: string, docId: string): string =>
+    `/api/v1/collections/${collectionId}/docs/${encodeURIComponent(docId)}/status/events`,
 };
 
 export default collectionsApi;

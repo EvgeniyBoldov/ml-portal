@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 from typing import Optional, Dict, Any, Tuple
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import text
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy import inspect
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import db_uow, get_current_user, require_admin
@@ -139,6 +141,94 @@ def serialize_model(model: Model) -> Dict[str, Any]:
     }
 
 
+async def _load_embedding_usage_rows(session: AsyncSession, model_alias: str) -> list[dict[str, Any]]:
+    params = {"model_alias": model_alias}
+    membership_sql = text(
+        """
+        SELECT
+          c.id AS collection_id,
+          c.name AS collection_name,
+          c.slug AS collection_slug,
+          c.tenant_id AS tenant_id,
+          t.name AS tenant_name,
+          t.is_active AS tenant_active,
+          COUNT(DISTINCT rd.id) AS total_docs,
+          COUNT(DISTINCT CASE WHEN rs.status = 'completed' THEN rd.id END) AS vectorized_docs
+        FROM collections c
+        JOIN tenants t ON t.id = c.tenant_id
+        LEFT JOIN document_collection_memberships dcm ON dcm.collection_id = c.id
+        LEFT JOIN ragdocuments rd ON rd.id = dcm.source_id
+        LEFT JOIN rag_statuses rs
+          ON rs.doc_id = rd.id
+         AND rs.node_type = 'embedding'
+         AND rs.node_key = :model_alias
+         AND rs.status = 'completed'
+        WHERE c.collection_type = 'document'
+        GROUP BY c.id, c.name, c.slug, c.tenant_id, t.name, t.is_active
+        ORDER BY t.name, c.name
+        """
+    )
+    fallback_sql = text(
+        """
+        WITH source_docs AS (
+          SELECT
+            rd.id AS doc_id,
+            s.tenant_id AS tenant_id,
+            COALESCE(s.meta #>> '{collection,id}', s.meta ->> 'collection_id') AS collection_id_text
+          FROM ragdocuments rd
+          JOIN sources s ON s.source_id = rd.id
+        )
+        SELECT
+          c.id AS collection_id,
+          c.name AS collection_name,
+          c.slug AS collection_slug,
+          c.tenant_id AS tenant_id,
+          t.name AS tenant_name,
+          t.is_active AS tenant_active,
+          COUNT(DISTINCT sd.doc_id) AS total_docs,
+          COUNT(DISTINCT CASE WHEN rs.status = 'completed' THEN sd.doc_id END) AS vectorized_docs
+        FROM collections c
+        JOIN tenants t ON t.id = c.tenant_id
+        LEFT JOIN source_docs sd
+          ON sd.collection_id_text = c.id::text
+        LEFT JOIN rag_statuses rs
+          ON rs.doc_id = sd.doc_id
+         AND rs.node_type = 'embedding'
+         AND rs.node_key = :model_alias
+         AND rs.status = 'completed'
+        WHERE c.collection_type = 'document'
+        GROUP BY c.id, c.name, c.slug, c.tenant_id, t.name, t.is_active
+        ORDER BY t.name, c.name
+        """
+    )
+    try:
+        result = await session.execute(membership_sql, params)
+    except ProgrammingError as exc:
+        message = str(getattr(exc, "orig", exc)).lower()
+        if "document_collection_memberships" not in message or "does not exist" not in message:
+            raise
+        result = await session.execute(fallback_sql, params)
+
+    rows: list[dict[str, Any]] = []
+    for row in result.mappings().all():
+        total = int(row.get("total_docs") or 0)
+        vectorized = int(row.get("vectorized_docs") or 0)
+        rows.append(
+            {
+                "collection_id": str(row["collection_id"]),
+                "collection_name": str(row["collection_name"] or ""),
+                "collection_slug": str(row["collection_slug"] or ""),
+                "tenant_id": str(row["tenant_id"]),
+                "tenant_name": str(row["tenant_name"] or ""),
+                "tenant_active": bool(row["tenant_active"]),
+                "total_docs": total,
+                "vectorized_docs": vectorized,
+                "not_vectorized_docs": max(total - vectorized, 0),
+            }
+        )
+    return rows
+
+
 @router.post("/probe-info")
 async def probe_model_info(
     payload: Dict[str, Any],
@@ -224,6 +314,72 @@ async def verify_model(
     except Exception as exc:
         logger.error(f"Failed to verify model: {exc}", exc_info=True)
         raise HTTPException(status_code=400, detail=f"Verify failed: {exc}")
+
+
+@router.get("/{model_id}/embedding-usage")
+async def get_embedding_usage(
+    model_id: str,
+    session: AsyncSession = Depends(db_uow),
+    user: UserCtx = Depends(get_current_user),
+    admin_user=Depends(require_admin),
+):
+    try:
+        service = ModelService(session)
+        model = await service.get_by_id(uuid.UUID(model_id))
+        if not model:
+            raise HTTPException(status_code=404, detail="Model not found")
+        model_type = model.type.value if hasattr(model.type, "value") else str(model.type)
+        if model_type != "embedding":
+            raise HTTPException(status_code=400, detail="Embedding usage is available only for embedding models")
+
+        rows = await _load_embedding_usage_rows(session, model.alias)
+
+        tenants_map: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            tid = row["tenant_id"]
+            entry = tenants_map.setdefault(
+                tid,
+                {
+                    "tenant_id": tid,
+                    "tenant_name": row["tenant_name"],
+                    "tenant_active": row["tenant_active"],
+                    "collection_count": 0,
+                    "total_docs": 0,
+                    "vectorized_docs": 0,
+                    "not_vectorized_docs": 0,
+                },
+            )
+            entry["collection_count"] += 1
+            entry["total_docs"] += row["total_docs"]
+            entry["vectorized_docs"] += row["vectorized_docs"]
+            entry["not_vectorized_docs"] += row["not_vectorized_docs"]
+
+        tenants = sorted(tenants_map.values(), key=lambda x: str(x["tenant_name"]).lower())
+        collections = [
+            {
+                "collection_id": row["collection_id"],
+                "collection_name": row["collection_name"],
+                "collection_slug": row["collection_slug"],
+                "tenant_id": row["tenant_id"],
+                "tenant_name": row["tenant_name"],
+                "total_docs": row["total_docs"],
+                "vectorized_docs": row["vectorized_docs"],
+                "not_vectorized_docs": row["not_vectorized_docs"],
+            }
+            for row in rows
+        ]
+
+        return {
+            "model_id": str(model.id),
+            "model_alias": model.alias,
+            "tenants": tenants,
+            "collections": collections,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Failed to load embedding usage: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to load embedding usage: {exc}")
 
 
 @router.get("", response_model=ModelListResponse)

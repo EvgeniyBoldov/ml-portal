@@ -22,6 +22,7 @@ their own focused tests); it verifies the coordinator's own contract:
 from __future__ import annotations
 
 from typing import AsyncIterator, List
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
@@ -128,6 +129,25 @@ def _request(chat_id, user_id, tenant_id, *, text="hi") -> PipelineRequest:
         tenant_id=str(tenant_id),
         messages=[],
     )
+
+
+def test_pipeline_applies_request_sandbox_overrides_into_context():
+    ctx = SimpleNamespace(extra={"sandbox_overrides": {"legacy": {"a": 1}}})
+    request = PipelineRequest(
+        request_text="hi",
+        chat_id=str(uuid4()),
+        user_id=str(uuid4()),
+        tenant_id=str(uuid4()),
+        messages=[],
+        sandbox_overrides={"platform": {"x": 2}},
+    )
+
+    RuntimePipeline._apply_sandbox_overrides(request, ctx)  # noqa: SLF001
+
+    assert ctx.extra["sandbox_overrides"] == {
+        "legacy": {"a": 1},
+        "platform": {"x": 2},
+    }
 
 
 async def _collect(gen) -> List[RuntimeEvent]:

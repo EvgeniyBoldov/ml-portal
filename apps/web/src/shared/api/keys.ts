@@ -51,6 +51,7 @@ export const qk = {
       all: () => ['admin', 'models'] as const,
       list: (params?: { page?: number; size?: number; type?: string; enabled_only?: boolean; status?: string; search?: string }) => ['admin', 'models', 'list', params] as const,
       detail: (id: string) => ['admin', 'models', id] as const,
+      embeddingUsage: (id: string) => ['admin', 'models', id, 'embedding-usage'] as const,
     },
     orchestration: {
       all: () => ['admin', 'orchestration'] as const,

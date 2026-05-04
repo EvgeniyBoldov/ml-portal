@@ -20,10 +20,12 @@ import {
   collectionsApi,
   type Collection,
   type CollectionDocument,
+  type CollectionDocumentsResponse,
 } from '@shared/api/collections';
 import { ApiError } from '@shared/api/errors';
 import { StatusModalNew } from '@/domains/rag/components/StatusModalNew';
 import { qk } from '@shared/api/keys';
+import { SSEClient, type SSEMessage } from '@shared/lib/sse';
 import styles from './CollectionDataPage.module.css';
 
 const PAGE_SIZES = [25, 50, 100];
@@ -405,6 +407,10 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
   const queryClient = useQueryClient();
   const { showToast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const collectionSseRef = useRef<SSEClient | null>(null);
+  const invalidateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const openModalDocIdRef = useRef<string | null>(null);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<DocStatusFilter>('all');
@@ -488,6 +494,18 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
     queryFn: () => collectionsApi.listDocuments(collectionId, { page: 1, size: 500 }),
     enabled: !!collectionId,
   });
+
+  const invalidateDocs = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: ['collections', 'documents', collectionId] });
+  }, [queryClient, collectionId]);
+
+  const debouncedInvalidateDocs = useCallback(() => {
+    if (invalidateTimerRef.current) return;
+    invalidateTimerRef.current = setTimeout(() => {
+      invalidateTimerRef.current = null;
+      void queryClient.invalidateQueries({ queryKey: ['collections', 'documents', collectionId] });
+    }, 500);
+  }, [queryClient, collectionId]);
 
   const documents = docsData?.items ?? [];
   const totalDocs = docsData?.total ?? 0;
@@ -581,11 +599,73 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
   );
   const canBulkDelete = selectedDocs.length > 0;
 
-  // Invalidate docs list
-  const invalidateDocs = useCallback(() => {
-    queryClient.invalidateQueries({ queryKey: ['collections', 'documents'] });
-    queryClient.invalidateQueries({ queryKey: ['collections', 'detail'] });
-  }, [queryClient]);
+  useEffect(() => {
+    if (!collectionId) return;
+    const client = new SSEClient({
+      url: collectionsApi.getStatusEventsUrl(collectionId),
+      onMessage: (events: SSEMessage[]) => {
+        let needsInvalidate = false;
+
+        for (const event of events) {
+          const payload = event.data as Record<string, unknown> | null;
+
+          // Snapshot: patch React Query cache with current server state
+          if (event.type === 'rag.snapshot') {
+            const items = (payload?.items as Array<Record<string, unknown>>) ?? [];
+            if (items.length > 0) {
+              queryClient.setQueriesData<CollectionDocumentsResponse>(
+                { queryKey: ['collections', 'documents', collectionId] },
+                (old) => {
+                  if (!old) return old;
+                  const updated = old.items.map((doc) => {
+                    const snap = items.find((i) => i.document_id === doc.id);
+                    if (!snap) return doc;
+                    return {
+                      ...doc,
+                      agg_status: (snap.agg_status as string) ?? doc.agg_status,
+                    };
+                  });
+                  return { ...old, items: updated };
+                },
+              );
+            }
+            continue;
+          }
+
+          const eventType = String(payload?.event_type ?? '');
+          if (
+            eventType === 'aggregate_update' ||
+            eventType === 'document_archived' ||
+            eventType === 'document_unarchived' ||
+            eventType === 'document_added' ||
+            eventType === 'document_deleted' ||
+            event.type === 'rag.deleted' ||
+            event.type === 'rag.document_added' ||
+            event.type === 'rag.document_deleted'
+          ) {
+            needsInvalidate = true;
+          }
+        }
+
+        if (needsInvalidate) {
+          debouncedInvalidateDocs();
+          if (openModalDocIdRef.current) {
+            void queryClient.invalidateQueries({ queryKey: ['collections', 'doc-status', openModalDocIdRef.current] });
+          }
+        }
+      },
+    });
+    collectionSseRef.current = client;
+    void client.connect();
+    return () => {
+      client.disconnect();
+      collectionSseRef.current = null;
+      if (invalidateTimerRef.current) {
+        clearTimeout(invalidateTimerRef.current);
+        invalidateTimerRef.current = null;
+      }
+    };
+  }, [collectionId, queryClient, debouncedInvalidateDocs]);
 
   // Drag & drop
   const handleDragOver = useCallback((e: React.DragEvent) => {
@@ -891,7 +971,7 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
                     <td className={styles.nameCell}>
                       <button
                         className={styles.nameButton}
-                        onClick={() => setStatusModalDocId(doc.id)}
+                        onClick={() => { openModalDocIdRef.current = doc.id; setStatusModalDocId(doc.id); }}
                       >
                         {doc.name || 'Без имени'}
                       </button>
@@ -899,7 +979,7 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
                     <td>
                       <button
                         className={styles.statusButton}
-                        onClick={() => setStatusModalDocId(doc.id)}
+                        onClick={() => { openModalDocIdRef.current = doc.id; setStatusModalDocId(doc.id); }}
                       >
                         {getStatusBadge(doc.agg_status || 'uploaded')}
                       </button>
@@ -1017,8 +1097,8 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
         <StatusModalNew
           docId={statusModalDocId}
           docName={documents.find(d => d.id === statusModalDocId)?.name}
-          onClose={() => setStatusModalDocId(null)}
-          sseUrl={collectionsApi.getStatusEventsUrl(collectionId)}
+          onClose={() => { setStatusModalDocId(null); openModalDocIdRef.current = null; }}
+          sseUrl={collectionsApi.getDocumentStatusEventsUrl(collectionId, statusModalDocId)}
           statusGraphUrl={`/collections/${collectionId}/docs/${statusModalDocId}/status-graph`}
           retryUrlPrefix={`/collections/${collectionId}/docs/${statusModalDocId}/ingest/retry`}
           stopUrlPrefix={`/collections/${collectionId}/docs/${statusModalDocId}/ingest/stop`}

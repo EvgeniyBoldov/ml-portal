@@ -85,8 +85,7 @@ class SSEStream:
             headers={
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
-                "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Headers": "Cache-Control"
+                "X-Accel-Buffering": "no",
             }
         )
     
@@ -169,8 +168,7 @@ def wrap_sse_stream(generator: AsyncGenerator[SSEMessage, None], heartbeat_inter
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Headers": "Cache-Control"
+            "X-Accel-Buffering": "no",
         }
     )
 

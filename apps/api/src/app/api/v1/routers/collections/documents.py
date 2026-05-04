@@ -7,7 +7,7 @@ import json
 import uuid
 
 from fastapi import APIRouter, HTTPException, UploadFile, File, Depends, Form, Query
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import db_uow, get_current_user, get_redis_client
@@ -24,10 +24,23 @@ from app.services.status_aggregator import calculate_aggregate_status
 from app.adapters.s3_client import s3_manager
 
 from .upload_shared import _resolve_collection
+from .stream_shared import _resolve_document_membership, _stop_pipeline_and_revoke
 
 logger = get_logger(__name__)
 
 router = APIRouter()
+
+
+async def _cleanup_document_vectors(collection_name: str | None, doc_id: uuid.UUID) -> None:
+    if not collection_name:
+        return
+    try:
+        from app.adapters.impl.qdrant import QdrantVectorStore
+
+        vector_store = QdrantVectorStore()
+        await vector_store.delete_by_filter(collection_name, {"source_id": str(doc_id)})
+    except Exception as exc:
+        logger.warning(f"Vector cleanup failed for {doc_id} in {collection_name}: {exc}")
 
 
 @router.post("/{collection_id}/upload-document")
@@ -97,7 +110,7 @@ async def list_collection_documents(
 ):
     from sqlalchemy import func as sa_func
     from app.models.rag import RAGDocument
-    from app.models.rag_ingest import Source
+    from app.models.rag_ingest import Source, DocumentCollectionMembership
 
     try:
         collection = await _resolve_collection(collection_id, session, user)
@@ -105,15 +118,16 @@ async def list_collection_documents(
         if collection.collection_type != "document":
             raise HTTPException(status_code=400, detail="Not a document collection")
 
-        cid_str = str(collection_id)
         base_q = (
             select(RAGDocument, Source.meta)
             .join(Source, RAGDocument.id == Source.source_id)
+            .join(
+                DocumentCollectionMembership,
+                DocumentCollectionMembership.source_id == Source.source_id,
+            )
             .where(
-                or_(
-                    Source.meta["collection"]["id"].astext == cid_str,
-                    Source.meta["collection_id"].astext == cid_str,
-                )
+                DocumentCollectionMembership.collection_id == collection_id,
+                DocumentCollectionMembership.tenant_id == collection.tenant_id,
             )
         )
         if status:
@@ -225,7 +239,7 @@ async def delete_collection_documents(
 ):
     from sqlalchemy import delete as sa_delete, text
     from app.models.rag import RAGDocument
-    from app.models.rag_ingest import RAGStatus, Source
+    from app.models.rag_ingest import RAGStatus, Source, DocumentCollectionMembership
 
     try:
         collection = await _resolve_collection(collection_id, session, user)
@@ -235,61 +249,118 @@ async def delete_collection_documents(
 
         settings = get_settings()
         deleted_count = 0
+        not_found_ids: list[str] = []
+        skipped_foreign_ids: list[str] = []
+        failed_ids: list[str] = []
 
         for did_str in doc_ids:
-            did = uuid.UUID(did_str)
-            source_q = select(Source).where(
-                Source.source_id == did,
-                or_(
-                    Source.meta["collection"]["id"].astext == str(collection_id),
-                    Source.meta["collection_id"].astext == str(collection_id),
-                ),
-            )
-            source = (await session.execute(source_q)).scalar_one_or_none()
-            if not source:
-                raise HTTPException(status_code=404, detail=f"Document {did} not found in collection")
-
-            meta = normalize_document_source_meta((source.meta or {}) if source else {})
-            original_key = meta.get("artifacts", {}).get("original", {}).get("key")
-            if original_key:
-                try:
-                    await s3_manager.delete_object(settings.S3_BUCKET_RAG, original_key)
-                except Exception as exc:
-                    logger.warning(f"S3 object delete failed for {original_key}: {exc}")
-
-            doc_prefix = f"{collection.tenant_id}/{did}"
             try:
-                await s3_manager.delete_folder(settings.S3_BUCKET_RAG, doc_prefix)
-            except Exception as exc:
-                logger.warning(f"S3 folder delete failed for {doc_prefix}: {exc}")
+                did = uuid.UUID(did_str)
+            except ValueError:
+                failed_ids.append(did_str)
+                continue
 
-            row_id = meta.get("collection", {}).get("row_id")
-            if row_id and collection.table_name:
-                try:
+            membership = await _resolve_document_membership(
+                session=session,
+                tenant_id=collection.tenant_id,
+                collection_id=collection_id,
+                doc_id=did,
+            )
+            source: Source | None = membership.source
+
+            if membership.in_tenant and not membership.in_collection:
+                skipped_foreign_ids.append(str(did))
+                continue
+
+            if membership.in_tenant:
+                source = membership.source
+            else:
+                # Orphan mode: Source row missing. We still allow delete if the document
+                # belongs to this tenant; cleanup will fallback to tenant/doc prefix.
+                doc_row = (
                     await session.execute(
-                        text(f"DELETE FROM {collection.table_name} WHERE id = :rid"),
-                        {"rid": row_id},
+                        select(RAGDocument).where(
+                            RAGDocument.id == did,
+                            RAGDocument.tenant_id == collection.tenant_id,
+                        )
                     )
+                ).scalar_one_or_none()
+                if not doc_row:
+                    not_found_ids.append(str(did))
+                    continue
+
+            # Stop active ingest/index tasks before physical deletion.
+            try:
+                repo_factory = AsyncRepositoryFactory(session, collection.tenant_id)
+                status_manager = RAGStatusManager(session, repo_factory, event_publisher=None)
+                await _stop_pipeline_and_revoke(status_manager, did)
+            except Exception as exc:
+                logger.warning(f"Failed to stop ingest before delete for {did}: {exc}")
+
+            try:
+                meta = normalize_document_source_meta((source.meta or {}) if source else {})
+                original_key = meta.get("artifacts", {}).get("original", {}).get("key")
+                if original_key:
+                    try:
+                        await s3_manager.delete_object(settings.S3_BUCKET_RAG, original_key)
+                    except Exception as exc:
+                        logger.warning(f"S3 object delete failed for {original_key}: {exc}")
+
+                doc_prefix = f"{collection.tenant_id}/{did}"
+                try:
+                    await s3_manager.delete_folder(settings.S3_BUCKET_RAG, doc_prefix)
                 except Exception as exc:
-                    logger.warning(f"Row delete failed for {row_id}: {exc}")
+                    logger.warning(f"S3 folder delete failed for {doc_prefix}: {exc}")
 
-            await session.execute(sa_delete(RAGStatus).where(RAGStatus.doc_id == did))
-            if source:
-                await session.delete(source)
+                await _cleanup_document_vectors(collection.qdrant_collection_name, did)
 
-            doc_q = select(RAGDocument).where(RAGDocument.id == did)
-            doc = (await session.execute(doc_q)).scalar_one_or_none()
-            if doc:
-                await session.delete(doc)
+                row_id = meta.get("collection", {}).get("row_id")
+                if row_id and collection.table_name:
+                    try:
+                        await session.execute(
+                            text(f"DELETE FROM {collection.table_name} WHERE id = :rid"),
+                            {"rid": row_id},
+                        )
+                    except Exception as exc:
+                        logger.warning(f"Row delete failed for {row_id}: {exc}")
 
-            deleted_count += 1
+                await session.execute(sa_delete(RAGStatus).where(RAGStatus.doc_id == did))
+                await session.execute(
+                    sa_delete(DocumentCollectionMembership).where(
+                        DocumentCollectionMembership.source_id == did,
+                        DocumentCollectionMembership.collection_id == collection_id,
+                    )
+                )
+                if source:
+                    await session.delete(source)
+
+                doc_q = select(RAGDocument).where(
+                    RAGDocument.id == did,
+                    RAGDocument.tenant_id == collection.tenant_id,
+                )
+                doc = (await session.execute(doc_q)).scalar_one_or_none()
+                if doc:
+                    await session.delete(doc)
+                    deleted_count += 1
+                else:
+                    not_found_ids.append(str(did))
+            except Exception as exc:
+                logger.error(f"Document delete failed for {did}: {exc}", exc_info=True)
+                failed_ids.append(str(did))
+                continue
 
         if deleted_count > 0:
             collection.total_rows = max(0, (collection.total_rows or 0) - deleted_count)
             await CollectionService(session).sync_collection_status(collection, persist=False)
 
         await session.commit()
-        return {"deleted": deleted_count, "collection_id": str(collection_id)}
+        return {
+            "deleted": deleted_count,
+            "collection_id": str(collection_id),
+            "not_found": not_found_ids,
+            "skipped_foreign": skipped_foreign_ids,
+            "failed": failed_ids,
+        }
     except HTTPException:
         raise
     except Exception as e:

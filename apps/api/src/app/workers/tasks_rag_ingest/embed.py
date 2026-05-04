@@ -151,7 +151,7 @@ def embed_chunks_model(self: Task, chunk_result: Dict[str, Any], tenant_id: str,
 
             embeddings_key = get_embeddings_path(
                 ctx.tenant_id, ctx.source_id, model_alias, embeddings_checksum, "v1", 0
-            ).replace(".npy", ".jsonl")
+            )
 
             await ctx.s3_put(
                 key=embeddings_key,

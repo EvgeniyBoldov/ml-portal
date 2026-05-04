@@ -8,6 +8,7 @@ import pytest
 
 from app.agents.context import OperationCall, RuntimeDependencies, ToolContext, ToolResult
 from app.agents.contracts import ProviderExecutionTarget, ResolvedOperation
+from app.agents.runtime import tools as runtime_tools
 from app.agents.runtime.tools import OperationExecutor
 from app.runtime.operation_errors import RuntimeErrorCode
 
@@ -120,3 +121,35 @@ async def test_operation_executor_marks_missing_operation_as_non_retryable():
     assert result.success is False
     assert result.metadata.get("error_code") == RuntimeErrorCode.OPERATION_UNAVAILABLE.value
     assert result.metadata.get("retryable") is False
+
+
+@pytest.mark.asyncio
+async def test_operation_executor_builtin_validation_contract_without_jsonschema(monkeypatch):
+    operation = _operation(
+        schema={
+            "type": "object",
+            "required": ["filters"],
+            "properties": {
+                "filters": {
+                    "type": "object",
+                    "required": ["limit"],
+                    "properties": {
+                        "limit": {"type": "integer", "minimum": 1},
+                    },
+                    "additionalProperties": False,
+                }
+            },
+            "additionalProperties": False,
+        }
+    )
+    call = OperationCall(
+        id="c-fallback",
+        operation_slug=operation.operation_slug,
+        arguments={"filters": {"limit": "10"}},
+    )
+    monkeypatch.setattr(runtime_tools, "_JSONSCHEMA_AVAILABLE", False, raising=True)
+    result, _ = await OperationExecutor().execute(call, _ctx(), [operation])
+
+    assert result.success is False
+    assert result.metadata.get("error_code") == RuntimeErrorCode.OPERATION_INVALID_ARGS.value
+    assert result.metadata.get("field_path") == "$.filters.limit"

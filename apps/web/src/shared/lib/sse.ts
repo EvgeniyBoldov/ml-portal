@@ -2,7 +2,10 @@ export type SSEMessageType =
   | 'rag.status'
   | 'rag.embed.progress'
   | 'rag.tags.updated'
-  | 'rag.deleted';
+  | 'rag.deleted'
+  | 'rag.snapshot'
+  | 'rag.document_added'
+  | 'rag.document_deleted';
 
 export interface SSEMessage {
   type: SSEMessageType;
@@ -15,7 +18,6 @@ export interface SSEClientOptions {
   url: string;
   onMessage: (events: SSEMessage[]) => void;
   batchInterval?: number;
-  getAccessToken?: () => Promise<string | null> | string | null;
   onError?: (event: Event) => void;
 }
 
@@ -37,7 +39,6 @@ export class SSEClient {
   private batchInterval: number = 100; // ms
   private intervalId: ReturnType<typeof globalThis.setInterval> | null = null;
   private onBatchCallback: ((events: SSEMessage[]) => void) | null = null;
-  private getAccessToken: (() => Promise<string | null> | string | null) | null = null;
   private onErrorCallback: ((event: Event) => void) | null = null;
   // Manual reconnect is disabled; rely on native EventSource auto-reconnect
   private lastErrorLogAt = 0;
@@ -59,7 +60,6 @@ export class SSEClient {
     this.url = urlOrOptions.url;
     this.onBatchCallback = urlOrOptions.onMessage;
     this.batchInterval = urlOrOptions.batchInterval ?? this.batchInterval;
-    this.getAccessToken = urlOrOptions.getAccessToken ?? null;
     this.onErrorCallback = urlOrOptions.onError ?? null;
   }
 
@@ -74,17 +74,8 @@ export class SSEClient {
       return;
     }
 
-    let connectionUrl = this.url;
-    if (this.getAccessToken) {
-      const token = await this.getAccessToken();
-      if (token) {
-        const delimiter = connectionUrl.includes('?') ? '&' : '?';
-        connectionUrl = `${connectionUrl}${delimiter}token=${encodeURIComponent(token)}`;
-      }
-    }
-
-    // EventSource with withCredentials: true automatically sends httpOnly cookies
-    this.eventSource = new EventSourceCtorLocal(connectionUrl, {
+    // Auth via httpOnly cookie — sent automatically with withCredentials: true
+    this.eventSource = new EventSourceCtorLocal(this.url, {
       withCredentials: true,
     }) as EventSourceInstance;
 
@@ -113,6 +104,7 @@ export class SSEClient {
           case 'status_update':
           case 'status_initialized':
           case 'ingest_started':
+          case 'aggregate_update':
             push('rag.status', parsed);
             break;
           case 'document_archived':
@@ -152,6 +144,13 @@ export class SSEClient {
           console.error('[SSE] Failed to parse ingest_started:', err);
         }
       },
+      aggregate_update: e => {
+        try {
+          push('rag.status', JSON.parse(e.data));
+        } catch (err) {
+          console.error('[SSE] Failed to parse aggregate_update:', err);
+        }
+      },
       document_archived: e => {
         try {
           push('rag.deleted', JSON.parse(e.data));
@@ -166,7 +165,28 @@ export class SSEClient {
           console.error('[SSE] Failed to parse document_unarchived:', err);
         }
       },
-      heartbeat: e => {
+      document_added: e => {
+        try {
+          push('rag.document_added', JSON.parse(e.data));
+        } catch (err) {
+          console.error('[SSE] Failed to parse document_added:', err);
+        }
+      },
+      document_deleted: e => {
+        try {
+          push('rag.document_deleted', JSON.parse(e.data));
+        } catch (err) {
+          console.error('[SSE] Failed to parse document_deleted:', err);
+        }
+      },
+      snapshot: e => {
+        try {
+          push('rag.snapshot', JSON.parse(e.data));
+        } catch (err) {
+          console.error('[SSE] Failed to parse snapshot:', err);
+        }
+      },
+      heartbeat: _e => {
         // ignore
       },
       error: e => {
@@ -230,7 +250,7 @@ export class SSEClient {
 
 export const openSSE = (
   url: string,
-  onBatch: (events: SSEMessage[]) => void
+  onBatch: (events: SSEMessage[]) => void,
 ): SSEClient => {
   const client = new SSEClient(url, onBatch);
   void client.connect();

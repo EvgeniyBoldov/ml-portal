@@ -109,6 +109,26 @@ class TestCreateModel(TestModelService):
         # Should have called execute twice: check alias + unset default
         assert mock_session.execute.call_count >= 2
 
+    @pytest.mark.asyncio
+    async def test_create_embedding_model_enqueues_reconcile(self, model_service, mock_session):
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = None
+        mock_session.execute.return_value = mock_result
+
+        with patch.object(ModelService, "_enqueue_embedding_status_reconcile") as enqueue:
+            await model_service.create_model(
+                {
+                    "alias": "emb-new",
+                    "name": "Emb",
+                    "type": ModelType.EMBEDDING,
+                    "provider": "local",
+                    "base_url": "http://emb:8001",
+                    "provider_model_name": "all-MiniLM-L6-v2",
+                }
+            )
+
+        enqueue.assert_called_once_with("emb-new")
+
 
 class TestGetModel(TestModelService):
     """Test getting models"""
@@ -270,6 +290,19 @@ class TestUpdateModel(TestModelService):
         # Should call execute multiple times (get + unset default)
         assert mock_session.execute.call_count >= 2
 
+    @pytest.mark.asyncio
+    async def test_update_embedding_model_enqueues_reconcile(self, model_service, mock_session, sample_model):
+        sample_model.type = ModelType.EMBEDDING
+        sample_model.alias = "emb-x"
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = sample_model
+        mock_session.execute.return_value = mock_result
+
+        with patch.object(ModelService, "_enqueue_embedding_status_reconcile") as enqueue:
+            await model_service.update_model(sample_model.id, {"enabled": False})
+
+        enqueue.assert_called_once_with("emb-x")
+
 
 class TestDeleteModel(TestModelService):
     """Test deleting models"""
@@ -286,6 +319,20 @@ class TestDeleteModel(TestModelService):
         assert result is True
         assert sample_model.deleted_at is not None
         assert sample_model.enabled is False
+
+    @pytest.mark.asyncio
+    async def test_delete_embedding_model_enqueues_reconcile(self, model_service, mock_session, sample_model):
+        sample_model.type = ModelType.EMBEDDING
+        sample_model.alias = "emb-del"
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = sample_model
+        mock_session.execute.return_value = mock_result
+
+        with patch.object(ModelService, "_enqueue_embedding_status_reconcile") as enqueue:
+            result = await model_service.delete_model(sample_model.id)
+
+        assert result is True
+        enqueue.assert_called_once_with("emb-del")
     
     @pytest.mark.asyncio
     async def test_delete_model_not_found(self, model_service, mock_session):

@@ -97,7 +97,7 @@ export interface SandboxRunListItem {
   snapshot_id: string | null;
   parent_run_id: string | null;
   request_text: string;
-  status: 'running' | 'completed' | 'failed' | 'waiting_confirmation';
+  status: 'running' | 'completed' | 'failed' | 'waiting_confirmation' | 'waiting_input';
   started_at: string;
   finished_at: string | null;
   steps_count: number;

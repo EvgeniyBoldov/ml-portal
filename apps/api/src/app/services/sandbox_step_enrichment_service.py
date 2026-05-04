@@ -7,12 +7,14 @@ and injects branch/snapshot context. Extracted from sandbox/runs.py router.
 from __future__ import annotations
 
 import uuid
+import json
 from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
+from app.runtime.redactor import RuntimeRedactor
 
 logger = get_logger(__name__)
 
@@ -28,6 +30,9 @@ _KNOWN_ENTITY_KEYS: frozenset[str] = frozenset({
     "data_instance_id",
     "access_via_instance_id",
 })
+
+_STEP_PAYLOAD_MAX_CHARS = 4000
+_HEAVY_RESULT_KEYS: frozenset[str] = frozenset({"result", "data", "output"})
 
 
 def _as_uuid(value: object) -> Optional[uuid.UUID]:
@@ -47,6 +52,46 @@ class SandboxStepEnrichmentService:
     def __init__(self, session: AsyncSession) -> None:
         self._db = session
         self._cache: dict[str, dict[str, str]] = {}
+        self._redactor = RuntimeRedactor()
+
+    def sanitize_step_payload(
+        self,
+        *,
+        step_type: str,
+        step_data: dict,
+        max_chars: int = _STEP_PAYLOAD_MAX_CHARS,
+    ) -> dict:
+        """Redact secrets and cap oversized sandbox step payloads before persistence."""
+        redacted = self._redactor.redact(dict(step_data or {}))
+        clipped = self._clip_value(redacted, max_chars=max_chars)
+
+        if step_type in {"operation_result", "tool_result"}:
+            for key in _HEAVY_RESULT_KEYS:
+                value = clipped.get(key)
+                if value is None:
+                    continue
+                if isinstance(value, (dict, list)):
+                    serialized = json.dumps(value, ensure_ascii=False, default=str)
+                    if len(serialized) > max_chars:
+                        clipped[key] = {
+                            "_truncated": True,
+                            "preview": serialized[:max_chars] + "... [truncated]",
+                            "total_length": len(serialized),
+                        }
+                elif isinstance(value, str) and len(value) > max_chars:
+                    clipped[key] = value[:max_chars] + "... [truncated]"
+        return clipped
+
+    def _clip_value(self, value: object, *, max_chars: int) -> object:
+        if isinstance(value, str):
+            return value if len(value) <= max_chars else value[:max_chars] + "... [truncated]"
+        if isinstance(value, dict):
+            return {str(k): self._clip_value(v, max_chars=max_chars) for k, v in value.items()}
+        if isinstance(value, list):
+            return [self._clip_value(item, max_chars=max_chars) for item in value]
+        if isinstance(value, tuple):
+            return [self._clip_value(item, max_chars=max_chars) for item in value]
+        return value
 
     async def enrich(
         self,

@@ -15,6 +15,11 @@ def calculate_aggregate_status(
     embedding_nodes: List[RAGStatus],
     target_models: List[str],
     index_nodes: Optional[List[RAGStatus]] = None,
+    *,
+    archived: bool = False,
+    default_model_alias: Optional[str] = None,
+    tenant_secondary_model_alias: Optional[str] = None,
+    model_availability: Optional[Dict[str, bool]] = None,
 ) -> Tuple[str, Dict[str, Any]]:
     """
     Calculate aggregate status based on pipeline and embedding nodes
@@ -50,32 +55,63 @@ def calculate_aggregate_status(
     
     # If any pipeline stage has failed → failed
     if any(status == 'failed' for status in pipeline_statuses.values()):
-        return 'failed', {
+        details = {
             'pipeline': pipeline_statuses,
             'embedding': {},
             'policy': 'pipeline_error',
             'last_error': _get_last_pipeline_error(pipeline_nodes),
             'updated_at': datetime.now(timezone.utc).isoformat()
         }
+        _annotate_effective_status(
+            agg_details=details,
+            archived=archived,
+            pipeline_nodes=pipeline_nodes,
+            index_nodes=index_nodes or [],
+            default_model_alias=default_model_alias,
+            tenant_secondary_model_alias=tenant_secondary_model_alias,
+            model_availability=model_availability or {},
+        )
+        return 'failed', details
     
     # Special case: uploaded (upload=completed, others=pending)
     if (pipeline_statuses.get('upload') == 'completed' and 
         all(status == 'pending' for key, status in pipeline_statuses.items() if key != 'upload')):
-        return 'uploaded', {
+        details = {
             'pipeline': pipeline_statuses,
             'embedding': {},
             'policy': 'uploaded',
             'updated_at': datetime.now(timezone.utc).isoformat()
         }
+        _annotate_effective_status(
+            agg_details=details,
+            archived=archived,
+            pipeline_nodes=pipeline_nodes,
+            index_nodes=index_nodes or [],
+            default_model_alias=default_model_alias,
+            tenant_secondary_model_alias=tenant_secondary_model_alias,
+            model_availability=model_availability or {},
+        )
+        return 'uploaded', details
     
     # If any pipeline stage is pending, queued or processing → processing
     if any(status in ['pending', 'queued', 'processing'] for status in pipeline_statuses.values()):
-        return 'processing', {
+        agg_status = 'processing'
+        agg_details = {
             'pipeline': pipeline_statuses,
             'embedding': {},
             'policy': 'pipeline_running',
-            'updated_at': datetime.now(timezone.utc).isoformat()
+            'updated_at': datetime.now(timezone.utc).isoformat(),
         }
+        _annotate_effective_status(
+            agg_details=agg_details,
+            archived=archived,
+            pipeline_nodes=pipeline_nodes,
+            index_nodes=index_nodes or [],
+            default_model_alias=default_model_alias,
+            tenant_secondary_model_alias=tenant_secondary_model_alias,
+            model_availability=model_availability or {},
+        )
+        return agg_status, agg_details
     
     # Pipeline is complete: анализируем индексные статусы (fallback к embedding только для деталей)
     embedding_statuses = {node.node_key: node.status for node in embedding_nodes}
@@ -164,7 +200,73 @@ def calculate_aggregate_status(
     elif last_embedding_error:
         agg_details['last_error'] = last_embedding_error
     
+    _annotate_effective_status(
+        agg_details=agg_details,
+        archived=archived,
+        pipeline_nodes=pipeline_nodes,
+        index_nodes=index_nodes or [],
+        default_model_alias=default_model_alias,
+        tenant_secondary_model_alias=tenant_secondary_model_alias,
+        model_availability=model_availability or {},
+    )
     return agg_status, agg_details
+
+
+def _annotate_effective_status(
+    *,
+    agg_details: Dict[str, Any],
+    archived: bool,
+    pipeline_nodes: List[RAGStatus],
+    index_nodes: List[RAGStatus],
+    default_model_alias: Optional[str],
+    tenant_secondary_model_alias: Optional[str],
+    model_availability: Dict[str, bool],
+) -> None:
+    """Compute user-facing availability status for document cards/search gates."""
+    # Priority 1: archive short-circuit
+    if archived:
+        agg_details["effective_status"] = "archived"
+        agg_details["effective_reason"] = "document_archived"
+        return
+
+    active_statuses = {"pending", "queued", "processing"}
+    if any((n.status or "").lower() in active_statuses for n in pipeline_nodes + index_nodes):
+        agg_details["effective_status"] = "processing"
+        agg_details["effective_reason"] = "active_ingest_stages"
+        return
+
+    idx = {str(n.node_key): (n.status or "").lower() for n in index_nodes}
+    has_any_index = any(v == "completed" for v in idx.values())
+
+    def _is_model_available(alias: Optional[str]) -> bool:
+        if not alias:
+            return False
+        return bool(model_availability.get(alias, False))
+
+    def _is_index_ready(alias: Optional[str]) -> bool:
+        if not alias:
+            return False
+        return idx.get(alias) == "completed"
+
+    default_ok = _is_index_ready(default_model_alias) and _is_model_available(default_model_alias)
+    secondary_ok = _is_index_ready(tenant_secondary_model_alias) and _is_model_available(tenant_secondary_model_alias)
+
+    if default_ok and secondary_ok:
+        agg_details["effective_status"] = "extended"
+        agg_details["effective_reason"] = "default_and_secondary_available"
+    elif default_ok:
+        agg_details["effective_status"] = "available"
+        agg_details["effective_reason"] = "default_available"
+    elif secondary_ok:
+        agg_details["effective_status"] = "limited"
+        agg_details["effective_reason"] = "secondary_only_available"
+    elif has_any_index:
+        # vectors exist but all relevant models unavailable for serving
+        agg_details["effective_status"] = "archived"
+        agg_details["effective_reason"] = "indexes_exist_models_unavailable"
+    else:
+        agg_details["effective_status"] = "unavailable"
+        agg_details["effective_reason"] = "no_indexes_no_active_tasks"
 
 
 def _get_last_pipeline_error(pipeline_nodes: List[RAGStatus]) -> Optional[str]:

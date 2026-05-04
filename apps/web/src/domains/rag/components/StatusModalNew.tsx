@@ -15,7 +15,7 @@ interface StatusModalNewProps {
   docId: string;
   docName?: string;
   onClose: () => void;
-  /** Override SSE events URL (default: config.ragEventsUrl) */
+  /** Override SSE events URL (default: config.ragEventsUrl). Ignored when statusGraphUrl is set — parent owns SSE. */
   sseUrl?: string;
   /** Override status-graph fetch URL (default: /rag/{docId}/status-graph) */
   statusGraphUrl?: string;
@@ -64,13 +64,24 @@ export function StatusModalNew({ docId, docName, onClose, sseUrl, statusGraphUrl
     }, delay);
   }, [queryClient, queryKey]);
 
-  // SSE subscription for real-time updates
+  // SSE subscription: open per-document stream for real-time status graph updates.
+  // When sseUrl is provided it already points to the dedicated document endpoint.
+  // Legacy fallback (config.ragEventsUrl) still appends ?document_id=.
   useEffect(() => {
-    const baseUrl = sseUrl || config.ragEventsUrl;
-    const url = `${baseUrl}?document_id=${encodeURIComponent(docId)}`;
-    const client = openSSE(url, (_events: SSEMessage[]) => {
-      // Refetch fresh StatusGraph with throttle to avoid request burst on dense event streams.
-      scheduleInvalidate();
+    const url = sseUrl
+      ? sseUrl
+      : `${config.ragEventsUrl}?document_id=${encodeURIComponent(docId)}`;
+    const client = openSSE(url, (events: SSEMessage[]) => {
+      for (const event of events) {
+        if (event.type === 'rag.snapshot') {
+          const graph = (event.data as Record<string, unknown>)?.graph;
+          if (graph) {
+            queryClient.setQueryData(queryKey, graph);
+          }
+          continue;
+        }
+        scheduleInvalidate();
+      }
     });
     sseRef.current = client;
     return () => {
@@ -83,7 +94,7 @@ export function StatusModalNew({ docId, docName, onClose, sseUrl, statusGraphUrl
         sseRef.current = null;
       }
     };
-  }, [docId, scheduleInvalidate, sseUrl]);
+  }, [docId, queryClient, queryKey, scheduleInvalidate, sseUrl]);
 
   // Keyboard navigation
   useEffect(() => {

@@ -26,6 +26,6 @@ export function useDocumentStatus(
     },
     select: (data: StatusGraph) => adaptStatusGraphToDocStatus(data),
     enabled: !!docId,
-    staleTime: 30000,
+    staleTime: 0,
   });
 }

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from typing import Any, Dict, List, Optional, Tuple
 
 try:
@@ -12,7 +13,13 @@ try:
 except ImportError:
     _jsonschema = None  # type: ignore[assignment]
 
-_JSONSCHEMA_AVAILABLE = _jsonschema is not None
+_JSONSCHEMA_FORCE_DISABLE = os.getenv("RUNTIME_DISABLE_JSONSCHEMA", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+_JSONSCHEMA_AVAILABLE = (_jsonschema is not None) and not _JSONSCHEMA_FORCE_DISABLE
 
 from app.agents.context import OperationCall, ToolContext, ToolResult
 from app.agents.contracts import ResolvedOperation
@@ -299,7 +306,7 @@ class OperationExecutionFacade:
         schema = operation.input_schema or {}
         if not schema:
             return None
-        if _jsonschema is not None:
+        if _JSONSCHEMA_AVAILABLE and _jsonschema is not None:
             return OperationExecutionFacade._validate_args_jsonschema(arguments, schema)
         return OperationExecutionFacade._validate_args_builtin(arguments, schema)
 

@@ -71,6 +71,10 @@ class QdrantVectorStore:
             if "already exists" not in str(e).lower():
                 raise
 
+    async def get_client(self) -> AsyncQdrantClient:
+        """Expose underlying async client for advanced operations."""
+        return self._client
+
     async def upsert(self, collection: str, vectors: Sequence[Sequence[float]], payloads: Sequence[Mapping[str, Any]], ids: Sequence[str] | None = None) -> None:
         points = []
         for i, vec in enumerate(vectors):

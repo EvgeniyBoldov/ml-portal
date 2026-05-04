@@ -22,6 +22,7 @@ export type RunStepType =
   | 'policy_decision'
   | 'confirmation_required'
   | 'waiting_input'
+  | 'run_paused'
   | 'stop'
   | 'done';
 
@@ -200,7 +201,29 @@ export function useSandboxRun(sessionId: string) {
                 continue;
               }
 
+              if (type === 'run_paused') {
+                const reason = String((data.reason as string) ?? '').trim();
+                setActiveRun((prev) => ({
+                  ...prev,
+                  status:
+                    reason === 'waiting_confirmation'
+                      ? 'waiting_confirmation'
+                      : reason === 'waiting_input'
+                        ? 'waiting_input'
+                        : prev.status,
+                }));
+                addStep(type as RunStepType, data);
+                continue;
+              }
+
               if (type === 'stop') {
+                const reason = String((data.reason as string) ?? '').trim();
+                if (reason === 'waiting_confirmation' || reason === 'waiting_input') {
+                  setActiveRun((prev) => ({
+                    ...prev,
+                    status: reason,
+                  }));
+                }
                 addStep(type as RunStepType, data);
                 continue;
               }

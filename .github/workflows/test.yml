@@ -84,6 +84,26 @@ jobs:
         REDIS_URL: redis://localhost:6379/0
         ENV: test
 
+    - name: Validate runtime args contract (jsonschema ON)
+      run: |
+        cd apps/api
+        pytest tests/unit/test_runtime_operation_validation.py -q --tb=short
+      env:
+        DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
+        ASYNC_DB_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
+        REDIS_URL: redis://localhost:6379/0
+        ENV: test
+
+    - name: Validate runtime args contract (jsonschema OFF fallback)
+      run: |
+        cd apps/api
+        RUNTIME_DISABLE_JSONSCHEMA=1 pytest tests/unit/test_runtime_operation_validation.py -q --tb=short
+      env:
+        DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
+        ASYNC_DB_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
+        REDIS_URL: redis://localhost:6379/0
+        ENV: test
+
     - name: Run backend runtime integration tests
       run: |
         cd apps/api

@@ -365,26 +365,47 @@ class S3Client:
         try:
             client = self._get_client()
             loop = asyncio.get_event_loop()
-            
-            # List all objects with prefix
-            objects = await self.list_objects(bucket, prefix, max_keys=1000)
-            
-            if not objects:
+
+            deleted_total = 0
+            continuation_token = None
+
+            while True:
+                def _list_page():
+                    kwargs = {
+                        "Bucket": bucket,
+                        "Prefix": prefix,
+                        "MaxKeys": 1000,
+                    }
+                    if continuation_token:
+                        kwargs["ContinuationToken"] = continuation_token
+                    return client.list_objects_v2(**kwargs)
+
+                response = await loop.run_in_executor(None, _list_page)
+                objects = response.get("Contents", []) or []
+
+                if objects:
+                    keys_to_delete = [{"Key": obj["Key"]} for obj in objects if obj.get("Key")]
+                    if keys_to_delete:
+                        await loop.run_in_executor(
+                            None,
+                            lambda: client.delete_objects(
+                                Bucket=bucket,
+                                Delete={"Objects": keys_to_delete},
+                            ),
+                        )
+                        deleted_total += len(keys_to_delete)
+
+                if not response.get("IsTruncated"):
+                    break
+                continuation_token = response.get("NextContinuationToken")
+                if not continuation_token:
+                    break
+
+            if deleted_total == 0:
                 logger.debug(f"No objects found in s3://{bucket}/{prefix}")
                 return True
-            
-            # Delete objects in batches of 1000 (S3 limit)
-            keys_to_delete = [{'Key': obj['Key']} for obj in objects]
-            
-            await loop.run_in_executor(
-                None,
-                lambda: client.delete_objects(
-                    Bucket=bucket,
-                    Delete={'Objects': keys_to_delete}
-                )
-            )
-            
-            logger.info(f"Deleted {len(keys_to_delete)} objects from s3://{bucket}/{prefix}")
+
+            logger.info(f"Deleted {deleted_total} objects from s3://{bucket}/{prefix}")
             return True
             
         except ClientError as e:

@@ -48,11 +48,7 @@ async def test_runtime_data_instance_resolver_uses_fk_collection_binding_only():
 
     session = MagicMock()
     session.execute = AsyncMock(
-        side_effect=[
-            SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: [instance])),
-            SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: [collection])),
-            SimpleNamespace(scalar_one_or_none=lambda: collection),
-        ]
+        return_value=SimpleNamespace(all=lambda: [(collection, instance)])
     )
 
     instance_service = ToolInstanceService(session)

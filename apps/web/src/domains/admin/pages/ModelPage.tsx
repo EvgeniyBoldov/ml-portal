@@ -20,7 +20,8 @@ import { qk } from '@/shared/api/keys';
 import { useEntityEditor } from '@/shared/hooks/useEntityEditor';
 import { EntityPageV2, Tab } from '@/shared/ui/EntityPage';
 import { Block, type FieldConfig } from '@/shared/ui/GridLayout';
-import { Badge, Button, ConfirmDialog, useToast } from '@/shared/ui';
+import { Badge, Button, ConfirmDialog, Modal, Select, useToast } from '@/shared/ui';
+import styles from './ModelPage.module.css';
 
 /* ─── Constants ─── */
 
@@ -216,6 +217,8 @@ export function ModelPage() {
   const [probingInfo, setProbingInfo] = useState(false);
   const [manifestRaw, setManifestRaw] = useState<Record<string, unknown>>({});
   const [healthBadge, setHealthBadge] = useState<string>('unknown');
+  const [showMigrationModal, setShowMigrationModal] = useState(false);
+  const [migrationTargetModelId, setMigrationTargetModelId] = useState<string>('');
   const LOCAL_CONNECTOR_SENTINEL = '__local__';
   const { showToast } = useToast();
 
@@ -371,6 +374,18 @@ export function ModelPage() {
     queryFn: () => toolInstancesApi.list({ connector_type: 'model' }),
     staleTime: 60_000,
   });
+  const { data: embeddingUsage } = useQuery({
+    queryKey: model?.id ? qk.admin.models.embeddingUsage(model.id) : ['admin', 'models', 'embedding-usage', 'none'],
+    queryFn: () => adminApi.getEmbeddingUsage(model!.id),
+    enabled: Boolean(model?.id) && (model?.type === 'embedding'),
+    staleTime: 30_000,
+  });
+  const { data: embeddingModelsData } = useQuery({
+    queryKey: qk.admin.models.list({ type: 'embedding', enabled_only: true, size: 200 }),
+    queryFn: () => adminApi.getModels({ type: 'embedding', enabled_only: true, size: 200 }),
+    enabled: Boolean(model?.id) && (model?.type === 'embedding'),
+    staleTime: 30_000,
+  });
 
   // ─── Derived ───
   const instanceOptions = [
@@ -411,6 +426,9 @@ export function ModelPage() {
     dimensions: String(manifestRaw.dimensions ?? '—'),
   };
   const isEmbedding = (isEditable ? formData.type : model?.type) === 'embedding';
+  const migrationModelOptions = (embeddingModelsData?.items || [])
+    .filter((m) => m.id !== model?.id)
+    .map((m) => ({ value: m.id, label: `${m.name} (${m.alias})` }));
 
   const healthData = {
     health_status: model?.health_status ?? 'unknown',
@@ -519,6 +537,16 @@ export function ModelPage() {
     }
   };
 
+  const renderDocCounters = (total: number, vectorized: number, notVectorized: number) => (
+    <span className={styles.counterCell}>
+      <span className={styles.counterTotal}>{total}</span>
+      <span className={styles.counterSep}>/</span>
+      <span className={styles.counterVectorized}>{vectorized}</span>
+      <span className={styles.counterSep}>/</span>
+      <span className={styles.counterNotVectorized}>{notVectorized}</span>
+    </span>
+  );
+
   // ─── Create mode ───
   if (isNew) {
     return (
@@ -596,11 +624,20 @@ export function ModelPage() {
         mode={mode}
         loading={isLoading}
         saving={saving}
-        headerActions={isEditable ? (
-          <Button variant="outline" onClick={handleProbeModelInfo} disabled={probingInfo}>
-            {probingInfo ? 'Проверяем...' : 'Проверить'}
-          </Button>
-        ) : undefined}
+        headerActions={(
+          <div className={styles.headerActions}>
+            {model?.type === 'embedding' && (
+              <Button variant="outline" onClick={() => setShowMigrationModal(true)}>
+                Миграции
+              </Button>
+            )}
+            {isEditable && (
+              <Button variant="outline" onClick={handleProbeModelInfo} disabled={probingInfo}>
+                {probingInfo ? 'Проверяем...' : 'Проверить'}
+              </Button>
+            )}
+          </div>
+        )}
         breadcrumbs={[
           { label: 'Платформа', href: '/admin/platform' },
           { label: model?.name || 'Модель' },
@@ -682,6 +719,78 @@ export function ModelPage() {
             data={healthData}
           />
         </Tab>
+        {model?.type === 'embedding' && (
+          <Tab title="Эмбендинги" layout="grid" id="embeddings">
+            <Block
+              title="Тенанты"
+              icon="users"
+              iconVariant="info"
+              width="1/2"
+            >
+              <div className={styles.tableWrap}>
+                <table className={styles.table}>
+                  <thead>
+                    <tr>
+                      <th>Тенант</th>
+                      <th>Статус</th>
+                      <th>Коллекции (doc)</th>
+                      <th>Документы (всего/вектор/не вектор)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(embeddingUsage?.tenants || []).map((row) => (
+                      <tr key={row.tenant_id}>
+                        <td>
+                          <a href={`/admin/tenants/${row.tenant_id}`}>{row.tenant_name}</a>
+                        </td>
+                        <td>{row.tenant_active ? 'active' : 'inactive'}</td>
+                        <td>{row.collection_count}</td>
+                        <td>{renderDocCounters(row.total_docs, row.vectorized_docs, row.not_vectorized_docs)}</td>
+                      </tr>
+                    ))}
+                    {(!embeddingUsage?.tenants || embeddingUsage.tenants.length === 0) && (
+                      <tr>
+                        <td colSpan={4} className={styles.emptyCell}>Нет данных</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </Block>
+            <Block
+              title="Коллекции"
+              icon="database"
+              iconVariant="primary"
+              width="full"
+            >
+              <div className={styles.tableWrap}>
+                <table className={styles.table}>
+                  <thead>
+                    <tr>
+                      <th>Коллекция</th>
+                      <th>Тенант</th>
+                      <th>Документы (всего/вектор/не вектор)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(embeddingUsage?.collections || []).map((row) => (
+                      <tr key={row.collection_id}>
+                        <td>{row.collection_name} <span className={styles.slug}>({row.collection_slug})</span></td>
+                        <td>{row.tenant_name}</td>
+                        <td>{renderDocCounters(row.total_docs, row.vectorized_docs, row.not_vectorized_docs)}</td>
+                      </tr>
+                    ))}
+                    {(!embeddingUsage?.collections || embeddingUsage.collections.length === 0) && (
+                      <tr>
+                        <td colSpan={3} className={styles.emptyCell}>Нет данных</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </Block>
+          </Tab>
+        )}
       </EntityPageV2>
 
       <ConfirmDialog
@@ -693,6 +802,33 @@ export function ModelPage() {
         onConfirm={handleDeleteConfirm}
         onCancel={() => setShowDeleteConfirm(false)}
       />
+      <Modal
+        open={showMigrationModal}
+        title="Миграция эмбендингов"
+        onClose={() => setShowMigrationModal(false)}
+        footer={(
+          <div className={styles.modalFooter}>
+            <Button variant="outline" onClick={() => setShowMigrationModal(false)}>Отмена</Button>
+            <Button
+              variant="primary"
+              onClick={() => showToast('Миграции будут подключены следующим шагом', 'info')}
+              disabled={!migrationTargetModelId}
+            >
+              Запустить
+            </Button>
+          </div>
+        )}
+      >
+        <div className={styles.modalBody}>
+          <div className={styles.modalHint}>Выберите целевую embedding-модель (без текущей).</div>
+          <Select
+            value={migrationTargetModelId}
+            options={migrationModelOptions}
+            onChange={(v) => setMigrationTargetModelId(String(v || ''))}
+            placeholder="Выберите модель"
+          />
+        </div>
+      </Modal>
     </>
   );
 }

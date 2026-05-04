@@ -43,7 +43,7 @@ def get_chunks_path(tenant_id: UUID, source_id: UUID, checksum: str, version: st
 
 def get_embeddings_path(tenant_id: UUID, source_id: UUID, model_alias: str, checksum: str, version: str = "v1", batch_num: int = 0) -> str:
     """Get embeddings file path with checksum"""
-    return f"{get_document_prefix(tenant_id, source_id)}/embeddings/{model_alias}/{checksum}_{version}/batch_{batch_num}.npy"
+    return f"{get_document_prefix(tenant_id, source_id)}/embeddings/{model_alias}/{checksum}_{version}/batch_{batch_num}.jsonl"
 
 
 def get_embeddings_manifest_path(tenant_id: UUID, source_id: UUID, model_alias: str, checksum: str, version: str = "v1") -> str:

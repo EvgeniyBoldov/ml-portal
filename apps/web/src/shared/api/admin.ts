@@ -335,6 +335,34 @@ export interface ModelProbeInfoResponse {
   raw?: Record<string, unknown>;
 }
 
+export interface EmbeddingUsageTenantRow {
+  tenant_id: string;
+  tenant_name: string;
+  tenant_active: boolean;
+  collection_count: number;
+  total_docs: number;
+  vectorized_docs: number;
+  not_vectorized_docs: number;
+}
+
+export interface EmbeddingUsageCollectionRow {
+  collection_id: string;
+  collection_name: string;
+  collection_slug: string;
+  tenant_id: string;
+  tenant_name: string;
+  total_docs: number;
+  vectorized_docs: number;
+  not_vectorized_docs: number;
+}
+
+export interface EmbeddingUsageResponse {
+  model_id: string;
+  model_alias: string;
+  tenants: EmbeddingUsageTenantRow[];
+  collections: EmbeddingUsageCollectionRow[];
+}
+
 export interface TenantListResponse {
   items: Tenant[];
   total: number;
@@ -538,6 +566,10 @@ export const adminApi = {
     return apiRequest(`/admin/models/${id}/verify`, {
       method: 'POST',
     });
+  },
+
+  async getEmbeddingUsage(id: string): Promise<EmbeddingUsageResponse> {
+    return apiRequest(`/admin/models/${id}/embedding-usage`);
   },
 
   // Tenants

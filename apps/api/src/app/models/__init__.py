@@ -6,7 +6,7 @@ from .tenant import Tenants, UserTenants
 from .chat import Chats, ChatMessages
 from .chat_attachment import ChatAttachment
 from .rag import RAGDocument, RAGChunk
-from .rag_ingest import Source, Chunk, EmbStatus, RAGStatus
+from .rag_ingest import Source, Chunk, EmbStatus, RAGStatus, DocumentCollectionMembership
 from .model_registry import ModelRegistry
 from .events import EventOutbox
 from .prompt import Prompt, PromptVersion, PromptStatus
@@ -60,6 +60,7 @@ __all__ = [
     "Chunk",
     "EmbStatus",
     "RAGStatus",
+    "DocumentCollectionMembership",
     "ModelRegistry",
     "EventOutbox",
     "Prompt",

@@ -17,6 +17,12 @@ app = Celery(
         "app.workers.tasks_rag_ingest",
         # Collection vectorization tasks
         "app.workers.tasks_collection_vectorize",
+        # Membership reconcile tasks
+        "app.workers.tasks_membership_reconcile",
+        # RAG model/status reconcile tasks
+        "app.workers.tasks_rag_model_reconcile",
+        # Periodic model health checks
+        "app.workers.tasks_health_check",
         # Cleanup tasks for retention policies
         "app.workers.tasks_cleanup",
     ],
@@ -69,6 +75,12 @@ app.conf.task_routes = {
     # Collection vectorization tasks
     "app.workers.tasks_collection_vectorize.vectorize_collection_rows": {"queue": "ingest.embed", "priority": 4},
     "app.workers.tasks_collection_vectorize.reconcile_collection_vectorization": {"queue": "maintenance.default", "priority": 1},
+    "app.workers.tasks_rag_model_reconcile.reconcile_rag_statuses_for_embedding_model": {
+        "queue": "maintenance.default",
+        "priority": 1,
+    },
+    "app.workers.tasks_health_check.health_check_all_models": {"queue": "maintenance.default", "priority": 1},
+    "app.workers.tasks_health_check.health_check_single_model": {"queue": "maintenance.default", "priority": 1},
 
     # Reindex tasks
     "app.workers.tasks_reindex.reindex_source": {"queue": "reindex.default", "priority": 2},
@@ -119,6 +131,10 @@ if settings.BEAT == 1:
         "collections-vectorization-reconcile": {
             "task": "app.workers.tasks_collection_vectorize.reconcile_collection_vectorization",
             "schedule": 120.0,  # 2 minutes
+        },
+        "document-membership-reconcile": {
+            "task": "app.workers.tasks_membership_reconcile.reconcile_document_collection_memberships",
+            "schedule": 600.0,  # 10 minutes
         },
     }
 

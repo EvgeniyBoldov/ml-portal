@@ -14,7 +14,13 @@ from app.services.rag_event_publisher import RAGEventPublisher
 from app.services.rag_ingest_service import RAGIngestService
 from app.services.rag_status_manager import RAGStatusManager, StageStatus as _Stage
 
-from .stream_shared import _problem, _ensure_worker_ready, _resolve_collection_and_doc
+from .stream_shared import (
+    _problem,
+    _ensure_worker_ready,
+    _resolve_collection_and_doc,
+    _safe_revoke,
+    _stop_pipeline_and_revoke,
+)
 
 router = APIRouter()
 
@@ -97,12 +103,15 @@ async def stop_collection_ingest(
 
     ingest_policy = await status_manager.get_ingest_policy(doc_uuid)
     if stage == "pipeline":
-        active_controls = [item for item in ingest_policy.get("controls", []) if item.get("can_stop")]
-        pipeline_control = next((item for item in active_controls if item.get("node_type") == "pipeline"), None)
-        selected = pipeline_control or (active_controls[0] if active_controls else None)
-        if not selected:
-            raise _problem(409, "Stage is not stoppable", "stage_not_stoppable", stage=stage)
-        stage = selected["stage"]
+        stop_result = await _stop_pipeline_and_revoke(status_manager, doc_uuid)
+        stopped = stop_result.get("stopped_stages", [])
+        return {
+            "status": "success",
+            "message": "Ingest stopped",
+            "document_id": doc_id,
+            "stage": "pipeline",
+            "stopped_stages": stopped,
+        }
 
     controls = {item["stage"]: item for item in ingest_policy.get("controls", [])}
     control = controls.get(stage)
@@ -113,12 +122,7 @@ async def stop_collection_ingest(
 
     celery_task_id = await status_manager.stop_stage(doc_uuid, stage)
     if celery_task_id:
-        from app.celery_app import app as celery_app
-
-        try:
-            celery_app.control.revoke(celery_task_id, terminate=True, signal="SIGTERM")
-        except Exception:
-            pass
+        await _safe_revoke(celery_task_id)
 
     return {"status": "success", "message": f"Stage {stage} stopped", "document_id": doc_id, "stage": stage}
 

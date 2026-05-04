@@ -5,6 +5,8 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
+from sqlalchemy.exc import ProgrammingError
+
 from app.agents.builtins.collection_aggregate import CollectionAggregateTool
 from app.agents.builtins.collection_doc_search import CollectionDocSearchTool
 from app.agents.builtins.collection_search import CollectionSearchTool
@@ -517,6 +519,57 @@ async def test_document_collection_status_snapshot_uses_document_lifecycle_reaso
     assert snapshot["status"] == "ready"
     assert snapshot["details"]["kind"] == "document"
     assert snapshot["details"]["status_reason"] == "all_documents_ready"
+    execute_sql = str(session.execute.await_args.args[0])
+    assert "CAST(:collection_id AS uuid)" in execute_sql
+    assert ":collection_id::uuid" not in execute_sql
+
+
+async def test_document_collection_status_snapshot_falls_back_without_membership_table():
+    class _MissingMembershipTable(Exception):
+        def __str__(self) -> str:
+            return 'relation "document_collection_memberships" does not exist'
+
+    execute_result = SimpleNamespace(
+        all=lambda: [SimpleNamespace(agg_status="ready", status="completed")]
+    )
+    session = AsyncMock()
+    session.execute = AsyncMock(
+        side_effect=[
+            ProgrammingError("select ...", {}, _MissingMembershipTable()),
+            execute_result,
+        ]
+    )
+    service = CollectionService(session=session)
+
+    collection = Collection(
+        id=uuid4(),
+        data_instance_id=uuid4(),
+        tenant_id=uuid4(),
+        collection_type=CollectionType.DOCUMENT.value,
+        slug="docs",
+        name="Docs",
+        description="Document collection",
+        table_name="coll_test_docs",
+        fields=[],
+        status="created",
+        total_rows=0,
+        vectorized_rows=0,
+        total_chunks=0,
+        failed_rows=0,
+        is_active=True,
+        allow_unfiltered_search=False,
+        max_limit=100,
+        query_timeout_seconds=10,
+    )
+
+    snapshot = await service.get_status_snapshot(collection)
+
+    assert snapshot["status"] == "ready"
+    assert session.execute.await_count == 2
+    first_sql = str(session.execute.await_args_list[0].args[0])
+    second_sql = str(session.execute.await_args_list[1].args[0])
+    assert "document_collection_memberships" in first_sql
+    assert "JOIN sources s ON s.source_id = rd.id" in second_sql
 
 
 def test_collection_doc_search_source_name_prefers_title_then_filename():
@@ -541,6 +594,54 @@ def test_collection_doc_search_source_name_prefers_title_then_filename():
 
     assert result[str(rows[0].id)] == "Document title"
     assert result[str(rows[1].id)] == "fallback.txt"
+
+
+def test_collection_doc_search_rejects_non_filterable_field():
+    tool = CollectionDocSearchTool()
+    collection = _table_collection()
+
+    error = tool._validate_filters(  # noqa: SLF001
+        collection,
+        {"meta": "x"},
+    )
+
+    assert error == "Unknown or non-filterable field 'meta' in filters"
+
+
+def test_collection_doc_search_rejects_nested_filter_value():
+    tool = CollectionDocSearchTool()
+    collection = _table_collection()
+
+    error = tool._validate_filters(  # noqa: SLF001
+        collection,
+        {"title": {"bad": "shape"}},
+    )
+
+    assert error == "Unsupported filter value for 'title'"
+
+
+async def test_collection_doc_search_filtered_row_ids_limits_scan():
+    tool = CollectionDocSearchTool()
+    collection = _table_collection()
+
+    rows = [(str(uuid4()),) for _ in range(2001)]
+
+    class _Result:
+        def all(self):
+            return rows
+
+    class _Session:
+        async def execute(self, query, params):  # noqa: ARG002
+            assert "LIMIT 2001" in str(query)
+            return _Result()
+
+    ids = await tool._resolve_filtered_row_ids(  # noqa: SLF001
+        _Session(),
+        collection,
+        {"priority": [1, 2]},
+    )
+
+    assert len(ids) == 2001
 
 
 def test_collection_public_row_serialization_hides_operational_fields():
