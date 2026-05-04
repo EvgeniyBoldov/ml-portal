@@ -7,19 +7,36 @@
 
 COMPOSE        = docker compose
 COMPOSE_FILE   = docker-compose.yml
+COMPOSE_BUILD  = docker-compose.build.yml
+COMPOSE_PROD   = docker-compose.prod.yml
 
 BASE_IMAGE_NAME ?= ml-portal-base-ml
-BASE_IMAGE_DEV ?= $(BASE_IMAGE_NAME):latest
-BASE_IMAGE_PROD ?= $(BASE_IMAGE_NAME):v1
+BASE_IMAGE_DEV  ?= $(BASE_IMAGE_NAME):latest
 
-PROD_IMAGE_PREFIX ?= ml-portal
-PROD_IMAGE_TAG ?= v1
+# Base image tag — versioned independently from services.
+# Rebuild base only when system deps / requirements.ml.txt change.
+# Example: BASE_IMAGE_TAG=base-1.2 make build-base
+BASE_IMAGE_TAG  ?= latest
+BASE_IMAGE_PROD  = $(BASE_IMAGE_NAME):$(BASE_IMAGE_TAG)
+
+# Docker registry prefix. Set to your registry, e.g.:
+#   REGISTRY=registry.example.com/ml-portal make build-prod
+#   REGISTRY=ghcr.io/myorg make push-prod
+# Leave empty to use local images only (no push/pull from remote).
+REGISTRY       ?=
+
+# Service image tag — one per release, independent from base.
+# Example: IMAGE_TAG=v1.2.3 make build-prod
+IMAGE_TAG      ?= latest
+
+# Internal helper: prefix image name with registry if set
+_reg_prefix = $(if $(REGISTRY),$(REGISTRY)/,)
 
 .PHONY: help \
         env \
         build-base build-base-ml \
         up down restart logs ps \
-        build build-dev build-prod build-no-cache \
+        build build-dev build-prod push-prod pull-prod prod-up prod-down prod-migrate build-no-cache \
         migrate \
         test test-api test-backend test-frontend test-unit test-integration test-runtime-core test-runtime-integration test-runtime-eval test-backend-10-10-gate \
         test-e2e test-e2e-ui \
@@ -50,9 +67,16 @@ help:
 	@echo "    make build-no-cache    Build service images without cache"
 	@echo "    make migrate           Run alembic migrations"
 	@echo ""
-	@echo "  Prod images (local build for push):"
-	@echo "    make build-prod        Build api/worker/emb/rerank/frontend/nginx prod images"
-	@echo "                           BASE_IMAGE_PROD=$(BASE_IMAGE_PROD) PROD_IMAGE_TAG=$(PROD_IMAGE_TAG)"
+	@echo "  Prod images:"
+	@echo "    make build-base        Build base image  (BASE_IMAGE_TAG=$(BASE_IMAGE_TAG))"
+	@echo "    make build-prod        Build service images (IMAGE_TAG=$(IMAGE_TAG))"
+	@echo "                           Uses BASE_IMAGE_TAG=$(BASE_IMAGE_TAG) as base"
+	@echo "                           REGISTRY=$(if $(REGISTRY),$(REGISTRY),(local))"
+	@echo "    make push-prod         Push service images to REGISTRY"
+	@echo "    make pull-prod         Pull service images from REGISTRY to this host"
+	@echo "    make prod-up           Start prod stack (docker-compose.prod.yml)"
+	@echo "    make prod-down         Stop prod stack"
+	@echo "    make prod-migrate      Run alembic migrations on prod stack"
 	@echo ""
 	@echo "  Tests:"
 	@echo "    make test              Run all tests"
@@ -95,7 +119,7 @@ build-base-ml:
 	@echo "✓ $(BASE_IMAGE_DEV) ready"
 
 build-base:
-	@echo "→ Building base image for dev/prod tags..."
+	@echo "→ Building base image (BASE_IMAGE_TAG=$(BASE_IMAGE_TAG))..."
 	docker build --no-cache \
 		-t $(BASE_IMAGE_DEV) \
 		-t $(BASE_IMAGE_PROD) \
@@ -134,24 +158,45 @@ build-no-cache:
 	$(COMPOSE) -f $(COMPOSE_FILE) build --no-cache
 
 build-prod:
-	@echo "→ Building production images with BASE_IMAGE=$(BASE_IMAGE_PROD)..."
-	docker build -f infra/docker/api/Dockerfile.prod \
-		--build-arg BASE_IMAGE=$(BASE_IMAGE_PROD) \
-		-t $(PROD_IMAGE_PREFIX)-api:$(PROD_IMAGE_TAG) .
-	docker build -f infra/docker/worker/Dockerfile.prod \
-		--build-arg BASE_IMAGE=$(BASE_IMAGE_PROD) \
-		-t $(PROD_IMAGE_PREFIX)-worker:$(PROD_IMAGE_TAG) .
-	docker build -f infra/docker/emb/Dockerfile.prod \
-		--build-arg BASE_IMAGE=$(BASE_IMAGE_PROD) \
-		-t $(PROD_IMAGE_PREFIX)-emb:$(PROD_IMAGE_TAG) .
-	docker build -f infra/docker/rerank/Dockerfile.prod \
-		--build-arg BASE_IMAGE=$(BASE_IMAGE_PROD) \
-		-t $(PROD_IMAGE_PREFIX)-rerank:$(PROD_IMAGE_TAG) .
-	docker build -f infra/docker/frontend/Dockerfile.prod \
-		-t $(PROD_IMAGE_PREFIX)-frontend:$(PROD_IMAGE_TAG) .
-	docker build -f infra/docker/nginx/Dockerfile.prod \
-		-t $(PROD_IMAGE_PREFIX)-nginx:$(PROD_IMAGE_TAG) infra/nginx
-	@echo "✓ Production images built with tag $(PROD_IMAGE_TAG)"
+	@echo "→ Building production images (IMAGE_TAG=$(IMAGE_TAG), BASE_IMAGE_TAG=$(BASE_IMAGE_TAG), REGISTRY=$(if $(REGISTRY),$(REGISTRY),(local)))..."
+	IMAGE_TAG=$(IMAGE_TAG) BASE_IMAGE=$(BASE_IMAGE_PROD) $(COMPOSE) -f $(COMPOSE_BUILD) build
+	@if [ -n "$(REGISTRY)" ]; then \
+		for svc in api worker emb rerank frontend mcp-netbox mcp-sql nginx; do \
+			docker tag ml-portal/$$svc:$(IMAGE_TAG) $(REGISTRY)/$$svc:$(IMAGE_TAG); \
+		done; \
+		echo "✓ Images tagged as $(REGISTRY)/<svc>:$(IMAGE_TAG)"; \
+	fi
+	@echo "✓ Production images built: ml-portal/<svc>:$(IMAGE_TAG)"
+
+push-prod:
+	@[ -n "$(REGISTRY)" ] || (echo "❌ REGISTRY is not set. Example: REGISTRY=registry.example.com/ml-portal make push-prod"; exit 1)
+	@echo "→ Pushing images to $(REGISTRY) (tag: $(IMAGE_TAG))..."
+	@for svc in api worker emb rerank frontend mcp-netbox mcp-sql nginx; do \
+		echo "  pushing $(REGISTRY)/$$svc:$(IMAGE_TAG)"; \
+		docker push $(REGISTRY)/$$svc:$(IMAGE_TAG); \
+	done
+	@echo "✓ All images pushed to $(REGISTRY)"
+
+pull-prod:
+	@[ -n "$(REGISTRY)" ] || (echo "❌ REGISTRY is not set. Example: REGISTRY=registry.example.com/ml-portal make pull-prod"; exit 1)
+	@echo "→ Pulling images from $(REGISTRY) (tag: $(IMAGE_TAG))..."
+	@for svc in api worker emb rerank frontend mcp-netbox mcp-sql nginx; do \
+		echo "  pulling $(REGISTRY)/$$svc:$(IMAGE_TAG)"; \
+		docker pull $(REGISTRY)/$$svc:$(IMAGE_TAG); \
+		docker tag $(REGISTRY)/$$svc:$(IMAGE_TAG) ml-portal/$$svc:$(IMAGE_TAG); \
+	done
+	@echo "✓ All images pulled and tagged locally as ml-portal/<svc>:$(IMAGE_TAG)"
+
+prod-up:
+	@[ -f .env ] || (echo "❌ .env not found — run: make env"; exit 1)
+	IMAGE_TAG=$(IMAGE_TAG) $(COMPOSE) -f $(COMPOSE_PROD) up -d
+	@echo "✓ Prod stack started (IMAGE_TAG=$(IMAGE_TAG))"
+
+prod-down:
+	IMAGE_TAG=$(IMAGE_TAG) $(COMPOSE) -f $(COMPOSE_PROD) down
+
+prod-migrate:
+	IMAGE_TAG=$(IMAGE_TAG) $(COMPOSE) -f $(COMPOSE_PROD) exec api alembic upgrade heads
 
 migrate:
 	$(COMPOSE) -f $(COMPOSE_FILE) exec api alembic upgrade heads

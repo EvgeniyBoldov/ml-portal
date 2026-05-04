@@ -1,0 +1,319 @@
+# =============================================================================
+# ML Portal — Production Compose
+#
+# Pure "run" file — NO build sections. All images must already exist in the
+# local Docker daemon or a configured registry.
+#
+# What lives on the prod server (bind mounts):
+#   - /srv/ml-portal/models_llm/   — ML model weights (heavy, never in image)
+#   - /srv/ml-portal/infra/nginx/  — nginx configs (env-specific)
+#   - /srv/ml-portal/infra/ssl/    — TLS certificates
+#   - /srv/ml-portal/.env          — secrets & env vars
+#
+# Usage:
+#   IMAGE_TAG=v1.2.3 docker compose -f docker-compose.prod.yml up -d
+#
+# Upgrade:
+#   IMAGE_TAG=v1.2.4 docker compose -f docker-compose.prod.yml pull
+#   IMAGE_TAG=v1.2.4 docker compose -f docker-compose.prod.yml up -d --no-build
+# =============================================================================
+
+x-restart: &restart
+  restart: unless-stopped
+
+x-api-image: &api-image ml-portal/api:${IMAGE_TAG:-latest}
+x-worker-image: &worker-image ml-portal/worker:${IMAGE_TAG:-latest}
+
+services:
+
+  # ===========================================================================
+  # DATABASE SERVICES
+  # ===========================================================================
+
+  postgres:
+    image: postgres:15-alpine
+    <<: *restart
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres-remote:
+    image: postgres:15-alpine
+    <<: *restart
+    environment:
+      POSTGRES_DB: ${REMOTE_POSTGRES_DB}
+      POSTGRES_USER: ${REMOTE_POSTGRES_USER}
+      POSTGRES_PASSWORD: ${REMOTE_POSTGRES_PASSWORD}
+    volumes:
+      - postgres_remote_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${REMOTE_POSTGRES_USER} -d ${REMOTE_POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    <<: *restart
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ===========================================================================
+  # VECTOR DATABASE
+  # ===========================================================================
+
+  qdrant:
+    image: qdrant/qdrant:v1.9.2
+    <<: *restart
+    volumes:
+      - qdrant_data:/qdrant/storage
+    environment:
+      QDRANT__SERVICE__HTTP_PORT: 6333
+
+  # ===========================================================================
+  # OBJECT STORAGE — MinIO
+  # ===========================================================================
+
+  minio:
+    image: minio/minio:latest
+    <<: *restart
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_DOMAIN: ${MINIO_DOMAIN:-files.localhost}
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ===========================================================================
+  # BACKEND API
+  # ===========================================================================
+
+  api:
+    image: *api-image
+    <<: *restart
+    volumes:
+      # Models are stored on the host, not baked into the image
+      - ${MODELS_ROOT:-/srv/ml-portal/models_llm}:/app/models_llm:ro
+    env_file: .env
+    environment:
+      - PYTHONPATH=/app
+      - MODELS_ROOT=/app/models_llm
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: >
+      sh -c "
+        alembic upgrade heads &&
+        uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
+      "
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # ===========================================================================
+  # FRONTEND (static, served by `serve`)
+  # ===========================================================================
+
+  frontend:
+    image: ml-portal/frontend:${IMAGE_TAG:-latest}
+    <<: *restart
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # ===========================================================================
+  # MCP SERVERS
+  # ===========================================================================
+
+  netbox-mcp-custom:
+    image: ml-portal/mcp-netbox:${IMAGE_TAG:-latest}
+    <<: *restart
+    environment:
+      - PORT=8080
+      - NETBOX_URL=${NETBOX_URL}
+      - VERIFY_SSL=false
+      - NETBOX_TIMEOUT_SECONDS=20
+      - MCP_SECRET_BROKER_TIMEOUT_SECONDS=10
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  dbhub-mcp:
+    image: ml-portal/mcp-sql:${IMAGE_TAG:-latest}
+    <<: *restart
+    environment:
+      - PORT=8080
+      - DB_DSN=postgres://${REMOTE_POSTGRES_USER}:${REMOTE_POSTGRES_PASSWORD}@${REMOTE_POSTGRES_HOST:-postgres-remote}:5432/${REMOTE_POSTGRES_DB}?sslmode=disable
+      - DB_READONLY=true
+      - DB_MAX_ROWS=200
+    depends_on:
+      postgres-remote:
+        condition: service_healthy
+
+  # ===========================================================================
+  # EMBEDDING SERVICE
+  # ===========================================================================
+
+  emb:
+    image: ml-portal/emb:${IMAGE_TAG:-latest}
+    <<: *restart
+    environment:
+      - EMB_MODEL_PATH=/models_llm/sentence-transformers--all-MiniLM-L6-v2
+      - EMB_BATCH_SIZE=32
+      - EMB_MAX_WAIT_MS=15
+      - EMB_MODEL_PARALLELISM=2
+    volumes:
+      - ${MODELS_ROOT:-/srv/ml-portal/models_llm}:/models_llm:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # ---------------------------------------------------------------------------
+  # Example: second embedding model. Uncomment and adjust when needed.
+  # ---------------------------------------------------------------------------
+  # emb-large:
+  #   image: ml-portal/emb:${IMAGE_TAG:-latest}
+  #   <<: *restart
+  #   environment:
+  #     - EMB_MODEL_PATH=/models_llm/intfloat--multilingual-e5-large
+  #     - EMB_BATCH_SIZE=32
+  #     - EMB_MAX_WAIT_MS=15
+  #     - EMB_MODEL_PARALLELISM=1
+  #   volumes:
+  #     - ${MODELS_ROOT:-/srv/ml-portal/models_llm}:/models_llm:ro
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 3
+  #     start_period: 120s
+
+  # ===========================================================================
+  # RERANKER SERVICE
+  # ===========================================================================
+
+  rerank:
+    image: ml-portal/rerank:${IMAGE_TAG:-latest}
+    <<: *restart
+    environment:
+      - RERANK_MODEL_PATH=/models_llm/cross-encoder--ms-marco-MiniLM-L-6-v2
+    volumes:
+      - ${MODELS_ROOT:-/srv/ml-portal/models_llm}:/models_llm:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # ===========================================================================
+  # CELERY WORKER
+  # ===========================================================================
+
+  worker:
+    image: *worker-image
+    <<: *restart
+    volumes:
+      - ${MODELS_ROOT:-/srv/ml-portal/models_llm}:/models_llm:ro
+    env_file: .env
+    environment:
+      - PYTHONPATH=/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    command: ["celery", "-A", "app.celery_app", "worker", "--loglevel=info", "--concurrency=4", "--max-tasks-per-child=100"]
+
+  # ===========================================================================
+  # FLOWER (Celery monitoring)
+  # ===========================================================================
+
+  flower:
+    image: mher/flower:2.0.1
+    <<: *restart
+    environment:
+      FLOWER_BASIC_AUTH: ${DEFAULT_ADMIN_LOGIN}:${DEFAULT_ADMIN_PASSWORD}
+      FLOWER_PORT: 5555
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND}
+    depends_on:
+      redis:
+        condition: service_healthy
+      worker:
+        condition: service_started
+
+  # ===========================================================================
+  # NGINX REVERSE PROXY
+  # Configs and certs are on the host — no need to bake them into the image.
+  # ===========================================================================
+
+  nginx:
+    image: nginx:1.25-alpine
+    <<: *restart
+    ports:
+      - "${NGINX_PORT_HTTP:-80}:80"
+      - "${NGINX_PORT_HTTPS:-443}:443"
+    volumes:
+      # Nginx configs — maintained on the server, not inside the image
+      - ${NGINX_CONF_DIR:-./infra/nginx}/prod.conf:/etc/nginx/nginx.conf:ro
+      - ${NGINX_CONF_DIR:-./infra/nginx}/files.conf:/etc/nginx/conf.d/files.conf:ro
+      # TLS certificates — managed externally (certbot, vault, etc.)
+      - ${SSL_CERT_DIR:-./infra/ssl}:/etc/ssl/certs:ro
+    depends_on:
+      api:
+        condition: service_healthy
+      frontend:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://api:8000/api/v1/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+# =============================================================================
+# NAMED VOLUMES
+# All persistent data. No source-code or test volumes here.
+# =============================================================================
+
+volumes:
+  postgres_data:
+  postgres_remote_data:
+  redis_data:
+  minio_data:
+  qdrant_data:

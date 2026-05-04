@@ -1,0 +1,112 @@
+# =============================================================================
+# ML Portal — Build Compose
+#
+# Builds all production images locally.
+# Run on CI or developer machine before pushing to registry / deploying to prod.
+#
+# Usage:
+#   docker compose -f docker-compose.build.yml build
+#   docker compose -f docker-compose.build.yml push   # if registry is configured
+#
+# Image naming convention: ml-portal/<service>:<tag>
+#
+# Two independent version axes:
+#   BASE_IMAGE  — base ML image (built separately via: make build-base BASE_IMAGE_TAG=base-1.x)
+#   IMAGE_TAG   — service images tag for this release
+#
+# Override both when needed:
+#   BASE_IMAGE=ml-portal-base-ml:base-1.2 IMAGE_TAG=v1.5.0 docker compose -f docker-compose.build.yml build
+# Or via Makefile (recommended):
+#   BASE_IMAGE_TAG=base-1.2 IMAGE_TAG=v1.5.0 make build-prod
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # BACKEND API
+  # ---------------------------------------------------------------------------
+  api:
+    build:
+      context: .
+      dockerfile: infra/docker/api/Dockerfile.prod
+      args:
+        BASE_IMAGE: ${BASE_IMAGE:-ml-portal-base-ml:latest}
+    image: ml-portal/api:${IMAGE_TAG:-latest}
+
+  # ---------------------------------------------------------------------------
+  # CELERY WORKER (same code as api, separate image)
+  # ---------------------------------------------------------------------------
+  worker:
+    build:
+      context: .
+      dockerfile: infra/docker/worker/Dockerfile.prod
+      args:
+        BASE_IMAGE: ${BASE_IMAGE:-ml-portal-base-ml:latest}
+    image: ml-portal/worker:${IMAGE_TAG:-latest}
+
+  # ---------------------------------------------------------------------------
+  # EMBEDDING SERVICE
+  # ---------------------------------------------------------------------------
+  emb:
+    build:
+      context: .
+      dockerfile: infra/docker/emb/Dockerfile.prod
+      args:
+        BASE_IMAGE: ${BASE_IMAGE:-ml-portal-base-ml:latest}
+    image: ml-portal/emb:${IMAGE_TAG:-latest}
+
+  # ---------------------------------------------------------------------------
+  # RERANKER SERVICE
+  # ---------------------------------------------------------------------------
+  rerank:
+    build:
+      context: .
+      dockerfile: infra/docker/rerank/Dockerfile.prod
+      args:
+        BASE_IMAGE: ${BASE_IMAGE:-ml-portal-base-ml:latest}
+    image: ml-portal/rerank:${IMAGE_TAG:-latest}
+
+  # ---------------------------------------------------------------------------
+  # FRONTEND (multi-stage: node build → serve)
+  # ---------------------------------------------------------------------------
+  frontend:
+    build:
+      context: .
+      dockerfile: infra/docker/frontend/Dockerfile.prod
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-/api}
+        VITE_APP_NAME: ${VITE_APP_NAME:-ML Portal}
+        NODE_ENV: production
+    image: ml-portal/frontend:${IMAGE_TAG:-latest}
+
+  # ---------------------------------------------------------------------------
+  # MCP — NetBox
+  # ---------------------------------------------------------------------------
+  netbox-mcp-custom:
+    build:
+      context: .
+      dockerfile: mcp/mcp_server.dockerfile
+      args:
+        MCP_SERVER_DIR: netbox
+    image: ml-portal/mcp-netbox:${IMAGE_TAG:-latest}
+
+  # ---------------------------------------------------------------------------
+  # MCP — SQL / dbhub
+  # ---------------------------------------------------------------------------
+  dbhub-mcp:
+    build:
+      context: .
+      dockerfile: mcp/mcp_server.dockerfile
+      args:
+        MCP_SERVER_DIR: sql
+    image: ml-portal/mcp-sql:${IMAGE_TAG:-latest}
+
+  # ---------------------------------------------------------------------------
+  # NGINX (optional — bakes in static config if desired)
+  # In prod we mount configs as volumes instead, so this is optional.
+  # ---------------------------------------------------------------------------
+  nginx:
+    build:
+      context: infra/nginx
+      dockerfile: ../docker/nginx/Dockerfile.prod
+    image: ml-portal/nginx:${IMAGE_TAG:-latest}
