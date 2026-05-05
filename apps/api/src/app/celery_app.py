@@ -21,8 +21,10 @@ app = Celery(
         "app.workers.tasks_membership_reconcile",
         # RAG model/status reconcile tasks
         "app.workers.tasks_rag_model_reconcile",
-        # Periodic model health checks
+        # Periodic model health checks (legacy)
         "app.workers.tasks_health_check",
+        # Health monitoring tasks (new)
+        "app.workers.tasks_health",
         # Cleanup tasks for retention policies
         "app.workers.tasks_cleanup",
     ],
@@ -47,6 +49,9 @@ app.conf.task_queues = (
     # Низкий приоритет - RAG индексация
     Queue('rag_low', routing_key='rag_low', priority=2),
     Queue('cleanup_low', routing_key='cleanup_low', priority=1),
+    
+    # Health monitoring queue
+    Queue('health', routing_key='health', priority=3),
     
     # RAG ingest pipeline queues
     Queue('ingest.extract', routing_key='ingest.extract', priority=7),
@@ -81,6 +86,13 @@ app.conf.task_routes = {
     },
     "app.workers.tasks_health_check.health_check_all_models": {"queue": "maintenance.default", "priority": 1},
     "app.workers.tasks_health_check.health_check_single_model": {"queue": "maintenance.default", "priority": 1},
+    
+    # Health monitoring tasks
+    "app.workers.tasks_health.probe_mcp_connectors": {"queue": "health", "priority": 3},
+    "app.workers.tasks_health.probe_embedding_models": {"queue": "health", "priority": 3},
+    "app.workers.tasks_health.probe_rerank_models": {"queue": "health", "priority": 3},
+    "app.workers.tasks_health.probe_llm_models": {"queue": "health", "priority": 3},
+    "app.workers.tasks_health.rescan_discovery": {"queue": "health", "priority": 3},
 
     # Reindex tasks
     "app.workers.tasks_reindex.reindex_source": {"queue": "reindex.default", "priority": 2},
@@ -124,10 +136,35 @@ app.conf.update(
 
 if settings.BEAT == 1:
     app.conf.beat_schedule = {
+        # Legacy health check (keep for compatibility)
         "models-health-check": {
             "task": "app.workers.tasks_health_check.health_check_all_models",
             "schedule": 300.0,  # 5 minutes
         },
+        
+        # New health monitoring tasks
+        "mcp-connectors-health-check": {
+            "task": "app.workers.tasks_health.probe_mcp_connectors",
+            "schedule": 60.0,  # 1 minute
+        },
+        "embedding-models-health-check": {
+            "task": "app.workers.tasks_health.probe_embedding_models",
+            "schedule": 60.0,  # 1 minute
+        },
+        "rerank-models-health-check": {
+            "task": "app.workers.tasks_health.probe_rerank_models",
+            "schedule": 60.0,  # 1 minute
+        },
+        "llm-models-health-check": {
+            "task": "app.workers.tasks_health.probe_llm_models",
+            "schedule": 600.0,  # 10 minutes
+        },
+        "discovery-rescan": {
+            "task": "app.workers.tasks_health.rescan_discovery",
+            "schedule": 600.0,  # 10 minutes
+        },
+        
+        # Existing maintenance tasks
         "collections-vectorization-reconcile": {
             "task": "app.workers.tasks_collection_vectorize.reconcile_collection_vectorization",
             "schedule": 120.0,  # 2 minutes

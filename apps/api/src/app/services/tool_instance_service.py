@@ -390,7 +390,10 @@ class ToolInstanceService:
             instance.url = url
         if config is not None or normalized_config != instance.config:
             instance.config = normalized_config
+        # Track is_active change for discovered tool invalidation
+        is_active_changed = False
         if is_active is not None:
+            is_active_changed = instance.is_active != is_active
             instance.is_active = is_active
 
         connector_type_changed = connector_type is not None
@@ -407,6 +410,11 @@ class ToolInstanceService:
 
         instance.updated_at = datetime.now(timezone.utc)
         await self.session.flush()
+        
+        # Invalidate discovered tools if MCP connector was deactivated
+        if is_active_changed and not instance.is_active and instance.connector_type == "mcp":
+            await self._invalidate_discovered_tools(instance.id)
+        
         return await self.repo.update(instance)
 
     async def delete_instance(self, instance_id: UUID) -> None:
@@ -417,6 +425,19 @@ class ToolInstanceService:
                 "System-managed instances are managed by platform internals and cannot be deleted manually"
             )
         await self.repo.delete(instance)
+    
+    async def _invalidate_discovered_tools(self, instance_id: UUID) -> None:
+        """Mark all discovered tools from an MCP provider as inactive."""
+        from sqlalchemy import update
+        from app.models.discovered_tool import DiscoveredTool
+        
+        stmt = (
+            update(DiscoveredTool)
+            .where(DiscoveredTool.provider_instance_id == str(instance_id))
+            .values(is_active=False)
+        )
+        await self.session.execute(stmt)
+        logger.info(f"Invalidated discovered tools for MCP provider {instance_id}")
 
     async def list_instances(
         self,

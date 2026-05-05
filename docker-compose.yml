@@ -287,6 +287,25 @@ services:
         condition: service_started
     command: ["celery", "-A", "app.celery_app", "worker", "--loglevel=info", "--concurrency=4"]
 
+  beat:
+    build:
+      context: .
+      dockerfile: infra/docker/worker/Dockerfile
+    volumes:
+      - ./apps/api/src/app:/app/app
+      - ./models_llm:/models_llm:ro
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    command: ["celery", "-A", "app.celery_app", "beat", "--loglevel=info", "--pidfile=/tmp/celerybeat.pid"]
+
   flower:
     image: mher/flower:2.0.1
     ports:

@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 from enum import Enum
 
-from sqlalchemy import String, Boolean, DateTime, Text, ForeignKey, UniqueConstraint, CheckConstraint
+from sqlalchemy import String, Boolean, DateTime, Text, ForeignKey, UniqueConstraint, CheckConstraint, Integer
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -127,6 +127,9 @@ class ToolInstance(Base):
 
     # ── Lifecycle ────────────────────────────────────────────────────────
     health_status: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    consecutive_failures: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    next_check_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(

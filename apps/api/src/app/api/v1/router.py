@@ -27,6 +27,7 @@ from app.api.v1.routers.files import router as files_router
 from app.api.v1.routers.internal_mcp_credentials import router as internal_mcp_credentials_router
 from app.api.mcp import router as mcp_router
 from app.api.v1.routers.sandbox import router as sandbox_router
+from app.api.v1.routers.monitoring import router as monitoring_router
 
 api_v1 = APIRouter()
 
@@ -71,3 +72,6 @@ api_v1.include_router(mcp_router, tags=["mcp"])
 
 # Sandbox (agent testing with config overrides)
 api_v1.include_router(sandbox_router)
+
+# Monitoring endpoints (metrics and health observability)
+api_v1.include_router(monitoring_router)
