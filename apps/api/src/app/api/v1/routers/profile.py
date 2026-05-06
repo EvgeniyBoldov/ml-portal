@@ -11,6 +11,7 @@ import hashlib
 
 from app.api.deps import get_current_user
 from app.core.db import get_session_factory
+from app.core.security import verify_password, hash_password
 from app.core.security import UserCtx
 from app.core.crypto import get_crypto_service
 from app.models.user import Users
@@ -87,6 +88,11 @@ class FactsDeleteRequest(BaseModel):
 
 class FactsDeleteResponse(BaseModel):
     deleted: int
+
+
+class ProfilePasswordChangeRequest(BaseModel):
+    current_password: str
+    new_password: str
 
 
 async def get_user_from_db(user_ctx: UserCtx) -> Users:
@@ -279,6 +285,44 @@ async def delete_user_facts(
         await session.commit()
 
     return FactsDeleteResponse(deleted=result.rowcount or 0)
+
+
+@router.post("/password")
+async def change_profile_password(
+    payload: ProfilePasswordChangeRequest,
+    current_user: UserCtx = Depends(get_current_user),
+):
+    """Change current user's password (local accounts only)."""
+    if not payload.new_password or len(payload.new_password) < 8:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="password_too_short",
+        )
+
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        result = await session.execute(select(Users).where(Users.id == UUID(current_user.id)))
+        user = result.scalar_one_or_none()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        auth_provider = getattr(user, "auth_provider", "local")
+        if auth_provider != "local":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="password_change_not_allowed_for_non_local_accounts",
+            )
+
+        if not user.password_hash or not verify_password(payload.current_password, user.password_hash):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="invalid_current_password",
+            )
+
+        user.password_hash = hash_password(payload.new_password)
+        await session.commit()
+
+    return {"ok": True}
 
 
 async def verify_api_token(token: str) -> Optional[tuple[Users, ApiToken]]:

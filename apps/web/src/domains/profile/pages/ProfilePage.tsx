@@ -109,6 +109,11 @@ export default function ProfilePage() {
   const [copied, setCopied] = useState(false);
   const [tokenToDelete, setTokenToDelete] = useState<ApiToken | null>(null);
   const [selectedFactIds, setSelectedFactIds] = useState<string[]>([]);
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [revealPassword, setRevealPassword] = useState(false);
 
   // Fetch profile
   const { data: profile, isLoading: profileLoading } = useQuery({
@@ -185,6 +190,35 @@ export default function ProfilePage() {
     },
   });
 
+  const changePassword = useMutation({
+    mutationFn: async (data: { current_password: string; new_password: string }) => {
+      return apiRequest<{ ok: boolean }>('/profile/password', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      });
+    },
+    onSuccess: () => {
+      showSuccess('Пароль обновлён');
+      setShowPasswordModal(false);
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+      setRevealPassword(false);
+    },
+    onError: (error: any) => {
+      const detail = error?.detail || '';
+      if (String(detail).includes('invalid_current_password')) {
+        showError('Текущий пароль указан неверно');
+        return;
+      }
+      if (String(detail).includes('password_too_short')) {
+        showError('Новый пароль должен быть не короче 8 символов');
+        return;
+      }
+      showError('Не удалось сменить пароль');
+    },
+  });
+
 
   const handleCreateToken = () => {
     if (!newTokenName.trim()) return;
@@ -233,6 +267,25 @@ export default function ProfilePage() {
     deleteFacts.mutate(selectedFactIds);
   };
 
+  const handleChangePassword = () => {
+    if (!currentPassword.trim()) {
+      showError('Введите текущий пароль');
+      return;
+    }
+    if (newPassword.length < 8) {
+      showError('Новый пароль должен быть не короче 8 символов');
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      showError('Новые пароли не совпадают');
+      return;
+    }
+    changePassword.mutate({
+      current_password: currentPassword,
+      new_password: newPassword,
+    });
+  };
+
 
   if (profileLoading) {
     return <div className={styles.loading}>Загрузка...</div>;
@@ -242,6 +295,9 @@ export default function ProfilePage() {
     <div className={styles.page}>
       <div className={styles.header}>
         <h1 className={styles.title}>Личный кабинет</h1>
+        <Button variant="outline" onClick={() => setShowPasswordModal(true)}>
+          Установить пароль
+        </Button>
       </div>
 
       {/* Profile Section */}
@@ -536,6 +592,59 @@ export default function ProfilePage() {
               </div>
             </div>
           )}
+      </Modal>
+
+      <Modal
+        open={showPasswordModal}
+        onClose={() => setShowPasswordModal(false)}
+        title="Сменить пароль"
+      >
+        <div className={styles.createForm}>
+          <div className={styles.formGroup}>
+            <label className={styles.formLabel}>Текущий пароль</label>
+            <Input
+              type={revealPassword ? 'text' : 'password'}
+              value={currentPassword}
+              onChange={e => setCurrentPassword(e.target.value)}
+              autoComplete="current-password"
+            />
+          </div>
+          <div className={styles.formGroup}>
+            <label className={styles.formLabel}>Новый пароль</label>
+            <Input
+              type={revealPassword ? 'text' : 'password'}
+              value={newPassword}
+              onChange={e => setNewPassword(e.target.value)}
+              autoComplete="new-password"
+            />
+          </div>
+          <div className={styles.formGroup}>
+            <label className={styles.formLabel}>Повторите новый пароль</label>
+            <Input
+              type={revealPassword ? 'text' : 'password'}
+              value={confirmPassword}
+              onChange={e => setConfirmPassword(e.target.value)}
+              autoComplete="new-password"
+            />
+          </div>
+          <div className={styles.modalActions} style={{ justifyContent: 'flex-start', borderTop: 'none', paddingTop: 0 }}>
+            <Button
+              variant="ghost"
+              onClick={() => setRevealPassword(v => !v)}
+              type="button"
+            >
+              {revealPassword ? 'Скрыть пароль' : 'Показать пароль'}
+            </Button>
+          </div>
+          <div className={styles.modalActions}>
+            <Button variant="outline" onClick={() => setShowPasswordModal(false)}>
+              Отмена
+            </Button>
+            <Button onClick={handleChangePassword} disabled={changePassword.isPending}>
+              {changePassword.isPending ? 'Сохранение...' : 'Сменить пароль'}
+            </Button>
+          </div>
+        </div>
       </Modal>
 
     </div>

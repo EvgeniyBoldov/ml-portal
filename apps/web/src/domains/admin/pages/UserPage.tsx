@@ -15,7 +15,7 @@ import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
 import { EntityPageV2, Tab, type BreadcrumbItem, type EntityPageMode } from '@/shared/ui/EntityPage';
 import { Block, type FieldConfig } from '@/shared/ui/GridLayout';
 import { Button, ConfirmDialog, Modal } from '@/shared/ui';
-import default as Input from '@/shared/ui/Input';
+import Input from '@/shared/ui/Input';
 import { RBACRulesTable } from '@/shared/ui/RBACRulesTable';
 import type { User, Tenant } from '@shared/api/admin';
 
