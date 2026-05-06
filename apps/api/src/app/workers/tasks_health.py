@@ -432,15 +432,19 @@ def rescan_discovery(self: Task) -> Dict[str, Any]:
                 
                 for instance in mcp_instances:
                     try:
-                        # Rescan tools for this MCP provider
-                        scan_result = await discovery_service.rescan_provider(instance.id)
-                        
+                        # Rescan tools for this MCP provider (local tools are excluded here)
+                        scan_result = await discovery_service.rescan(
+                            include_local=False,
+                            provider_instance_id=instance.id,
+                        )
+
                         rescan_results.append({
                             "instance_id": str(instance.id),
                             "slug": instance.slug,
-                            "tools_found": scan_result.get("tools_found", 0),
-                            "tools_updated": scan_result.get("tools_updated", 0),
-                            "tools_removed": scan_result.get("tools_removed", 0),
+                            "tools_found": scan_result.get("mcp_upserted", 0),
+                            "tools_updated": scan_result.get("mcp_upserted", 0),
+                            "tools_removed": scan_result.get("marked_inactive", 0),
+                            "scan_meta": scan_result,
                             "success": True
                         })
                         

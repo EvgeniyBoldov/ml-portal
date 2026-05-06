@@ -49,7 +49,9 @@ class LocalProviderKind:
 
 logger = get_logger(__name__)
 
-_RESCAN_ADVISORY_LOCK_KEY: int = 0x746F6F6C5F7363616E  # "tool_scan" as int64
+# PostgreSQL advisory lock expects signed int64.
+# Keep a stable 8-byte key within bigint range.
+_RESCAN_ADVISORY_LOCK_KEY: int = 0x746F6F6C7363616E  # "toolscan"
 
 
 class ToolDiscoveryService:
@@ -57,6 +59,7 @@ class ToolDiscoveryService:
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
+        self._last_mcp_scan_failures: List[Dict[str, str]] = []
 
     async def rescan_all(self) -> Dict[str, Any]:
         """
@@ -117,6 +120,8 @@ class ToolDiscoveryService:
             "provider_instance_id": str(provider_instance_id) if provider_instance_id else None,
             "local_upserted": local_count,
             "mcp_upserted": mcp_count,
+            "mcp_scanned_providers": [str(pid) for pid in scanned_provider_ids],
+            "mcp_failed_providers": list(self._last_mcp_scan_failures),
             "marked_inactive": stale,
         }
 
@@ -298,6 +303,7 @@ class ToolDiscoveryService:
 
         total = 0
         scanned_provider_ids: List[UUID] = []
+        failed_providers: List[Dict[str, str]] = []
         for provider in providers:
             if not provider.url:
                 continue
@@ -328,8 +334,16 @@ class ToolDiscoveryService:
                         now=now,
                     )
                     total += 1
-            except Exception:
+            except Exception as e:
                 logger.exception("MCP scan failed for provider %s (%s)", provider.slug, provider.url)
+                failed_providers.append(
+                    {
+                        "provider_instance_id": str(provider.id),
+                        "provider_slug": str(provider.slug),
+                        "error": str(e),
+                    }
+                )
+        self._last_mcp_scan_failures = failed_providers
         return total, scanned_provider_ids
 
     async def _load_mcp_providers(self, provider_instance_id: Optional[UUID]) -> Sequence[ToolInstance]:
@@ -343,7 +357,7 @@ class ToolDiscoveryService:
             )
             result = await self.session.execute(stmt)
             providers = list(result.scalars().all())
-            return [provider for provider in providers if is_mcp_service_instance(provider)]
+            return [provider for provider in providers if self._is_discovery_mcp_provider(provider)]
         provider = await self._get_mcp_provider(provider_instance_id)
         return [provider]
 
@@ -353,15 +367,37 @@ class ToolDiscoveryService:
         provider = result.scalar_one_or_none()
         if provider is None:
             raise ValueError(f"MCP provider instance '{provider_instance_id}' not found")
-        if not is_mcp_service_instance(provider):
+        if not self._is_discovery_mcp_provider(provider):
             raise ValueError(
-                f"Instance '{provider.slug}' is not MCP service (got {provider.instance_kind}.{provider.domain})"
+                f"Instance '{provider.slug}' is not MCP discovery provider "
+                f"(got {getattr(provider, 'connector_type', None)}/"
+                f"{getattr(provider, 'instance_kind', None)}/"
+                f"{getattr(provider, 'domain', None)})"
             )
         if not provider.is_active:
             raise ValueError(f"MCP provider instance '{provider.slug}' is inactive")
         if not provider.url:
             raise ValueError(f"MCP provider instance '{provider.slug}' has empty url")
         return provider
+
+    @staticmethod
+    def _is_discovery_mcp_provider(instance: ToolInstance) -> bool:
+        """Discovery should allow MCP remote providers even with non-`mcp` provider_kind."""
+        connector_type = str(getattr(instance, "connector_type", "") or "").strip().lower()
+        if connector_type and connector_type != "mcp":
+            return False
+        if not connector_type and str(getattr(instance, "instance_kind", "") or "").strip().lower() != "service":
+            return False
+
+        placement = str(getattr(instance, "placement", "") or "").strip().lower()
+        if placement == "local":
+            return is_mcp_service_instance(instance)
+
+        # Remote MCP providers (e.g. netbox/dbhub) are eligible for discovery by connector type.
+        if connector_type == "mcp":
+            return True
+        # Backward compatibility: legacy tests/fixtures identify MCP service by provider_kind=mcp.
+        return is_mcp_service_instance(instance)
 
     async def _resolve_mcp_domains(self, provider: ToolInstance) -> List[str]:
         """
