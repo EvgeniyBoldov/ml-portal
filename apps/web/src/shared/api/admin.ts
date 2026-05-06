@@ -22,6 +22,7 @@ export interface OrchestrationSettings {
   executor_temperature?: number | null;
   executor_timeout_s?: number | null;
   executor_max_steps?: number | null;
+  executor_max_retries?: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -32,6 +33,7 @@ export type ExecutorSettingsUpdate = Partial<Pick<
   | 'executor_temperature'
   | 'executor_timeout_s'
   | 'executor_max_steps'
+  | 'executor_max_retries'
 >>;
 
 // === SystemLLMRole Types ===

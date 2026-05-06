@@ -14,9 +14,15 @@ import { EntityPageV2, Tab } from '@/shared/ui';
 import { RBACRulesTable } from '@/shared/ui/RBACRulesTable';
 import { CredentialsPanel } from '@/shared/ui/CredentialsPanel';
 import { Block, type FieldConfig } from '@/shared/ui/GridLayout';
-import { usePlatformSettings, useUpdatePlatformSettings } from '@/shared/api/hooks/usePlatformSettings';
+import { usePlatformSettings, useUpdatePlatformSettings, useOrchestrationSettings, useUpdateOrchestrationSettings } from '@/shared/api/hooks/usePlatformSettings';
 import { useState } from 'react';
 import ConfirmDialog from '@/shared/ui/ConfirmDialog';
+import {
+  GLOBAL_CAPS_BLOCK_TITLE,
+  GLOBAL_CAPS_TOOLTIP,
+  EXEC_DEFAULTS_BLOCK_TITLE,
+  EXEC_DEFAULTS_TOOLTIP,
+} from './platformLimitsTooltips';
 
 /* ─── Field configs ─── */
 
@@ -66,56 +72,81 @@ const POLICY_GATES_FIELDS: FieldConfig[] = [
   },
 ];
 
-// Global Caps fields
+// Global Caps fields — hard platform ceiling, cannot be exceeded by any agent
 const GLOBAL_CAPS_FIELDS: FieldConfig[] = [
+  {
+    key: 'abs_max_steps',
+    type: 'number',
+    label: 'Макс. шагов агента',
+    description: 'Верхний предел шагов агентского цикла. Агент не может превысить это значение.',
+    placeholder: '50',
+  },
   {
     key: 'abs_max_timeout_s',
     type: 'number',
     label: 'Макс. таймаут (сек)',
-    description: 'Абсолютный максимум таймаута для всех операций',
+    description: 'Верхний предел времени одного запуска агента в секундах.',
     placeholder: '300',
   },
   {
     key: 'abs_max_retries',
     type: 'number',
     label: 'Макс. ретраев',
-    description: 'Абсолютный максимум попыток повтора',
-    placeholder: '3',
-  },
-  {
-    key: 'abs_max_steps',
-    type: 'number',
-    label: 'Макс. шагов агента',
-    description: 'Абсолютный максимум шагов для агента',
-    placeholder: '50',
+    description: 'Верхний предел повторных попыток при ошибке инструмента.',
+    placeholder: '10',
   },
   {
     key: 'abs_max_plan_steps',
     type: 'number',
     label: 'Макс. шагов планировщика',
-    description: 'Абсолютный максимум шагов для планировщика',
+    description: 'Верхний предел шагов внутри одного плана (planner loop).',
     placeholder: '20',
   },
   {
     key: 'abs_max_concurrency',
     type: 'number',
-    label: 'Макс. конкурентных операций',
-    description: 'Абсолютный максимум одновременных операций',
+    label: 'Макс. параллельных запусков',
+    description: 'Верхний предел одновременных запусков агента на один экземпляр.',
     placeholder: '10',
   },
   {
     key: 'abs_max_task_runtime_s',
     type: 'number',
     label: 'Макс. время задачи (сек)',
-    description: 'Абсолютный максимум времени выполнения задачи',
+    description: 'Верхний предел суммарного времени выполнения задачи целиком.',
     placeholder: '3600',
   },
   {
     key: 'abs_max_tool_calls_per_step',
     type: 'number',
-    label: 'Макс. вызовов инструментов на шаг',
-    description: 'Абсолютный максимум вызовов инструментов за один шаг',
+    label: 'Макс. вызовов инструментов за шаг',
+    description: 'Верхний предел количества вызовов инструментов в рамках одного шага.',
     placeholder: '5',
+  },
+];
+
+// Execution defaults — these apply when agent has no explicit override
+const EXEC_DEFAULTS_FIELDS: FieldConfig[] = [
+  {
+    key: 'executor_max_steps',
+    type: 'number',
+    label: 'Макс. шагов (по умолч.)',
+    description: 'Сколько итераций разрешено агенту, если он не задал свой лимит.',
+    placeholder: '10',
+  },
+  {
+    key: 'executor_timeout_s',
+    type: 'number',
+    label: 'Таймаут (сек, по умолч.)',
+    description: 'Лимит времени одного запуска агента, если агент не задал свой таймаут.',
+    placeholder: '60',
+  },
+  {
+    key: 'executor_max_retries',
+    type: 'number',
+    label: 'Макс. попыток (по умолч.)',
+    description: 'Сколько раз повторять вызов инструмента при ошибке, если агент не задал своё значение.',
+    placeholder: '3',
   },
 ];
 
@@ -216,6 +247,10 @@ export function PlatformSettingsPage() {
   const [mode, setMode] = useState<'view' | 'edit'>('view');
   const [formData, setFormData] = useState<Partial<PlatformSettings>>({});
 
+  // Limits tab — orchestration defaults (executor_max_steps/timeout_s/max_retries)
+  const [limitsMode, setLimitsMode] = useState<'view' | 'edit'>('view');
+  const [limitsForm, setLimitsForm] = useState<Record<string, unknown>>({});
+
   // ─── Queries ───────────────────────────────────────────────────────
 
   const { data: modelsData, isLoading: modelsLoading } = useQuery<ModelListResponse>({
@@ -227,6 +262,10 @@ export function PlatformSettingsPage() {
   // Platform settings
   const { data: platformSettings, isLoading: settingsLoading } = usePlatformSettings();
   const updateSettings = useUpdatePlatformSettings();
+
+  // Orchestration defaults (limits tab)
+  const { data: orchSettings } = useOrchestrationSettings();
+  const updateOrchSettings = useUpdateOrchestrationSettings();
 
   // Credentials query
   const { data: credentials = [] } = useQuery({
@@ -300,11 +339,11 @@ export function PlatformSettingsPage() {
         />
       </Tab>
 
-      {/* ── Tab 2: Ограничения ── */}
+      {/* ── Tab 2: Ограничения — политики, gates, файлы ── */}
       <Tab
         title="Ограничения"
         layout="grid"
-        id="limits"
+        id="restrictions"
         actions={
             mode === 'view' ? [
               <Button key="edit" onClick={handleEdit}>Редактировать</Button>,
@@ -341,17 +380,6 @@ export function PlatformSettingsPage() {
           editable={mode === 'edit'}
           onChange={mode === 'edit' ? handleFieldChange : undefined}
         />
-        
-        <Block
-          title="Global Caps"
-          icon="zap"
-          iconVariant="success"
-          width="1/2"
-          fields={GLOBAL_CAPS_FIELDS}
-          data={mode === 'edit' ? formData : (platformSettings || {})}
-          editable={mode === 'edit'}
-          onChange={mode === 'edit' ? handleFieldChange : undefined}
-        />
 
         <Block
           title="Файлы чата"
@@ -362,6 +390,59 @@ export function PlatformSettingsPage() {
           data={mode === 'edit' ? formData : (platformSettings || {})}
           editable={mode === 'edit'}
           onChange={mode === 'edit' ? handleFieldChange : undefined}
+        />
+      </Tab>
+
+      {/* ── Tab 3: Лимиты — caps + exec defaults ── */}
+      <Tab
+        title="Лимиты"
+        layout="grid"
+        id="limits"
+        actions={
+          limitsMode === 'view' ? [
+            <Button key="edit" onClick={() => { setLimitsForm({ ...(platformSettings || {}), ...(orchSettings || {}) }); setLimitsMode('edit'); }}>Редактировать</Button>,
+          ] : [
+            <Button
+              key="save"
+              onClick={() => {
+                const capsKeys = GLOBAL_CAPS_FIELDS.map(f => f.key);
+                const defaultsKeys = EXEC_DEFAULTS_FIELDS.map(f => f.key);
+                const capsUpdate = Object.fromEntries(capsKeys.map(k => [k, limitsForm[k]]));
+                const defaultsUpdate = Object.fromEntries(defaultsKeys.map(k => [k, limitsForm[k]]));
+                updateSettings.mutate(capsUpdate as PlatformSettingsUpdate);
+                updateOrchSettings.mutate(defaultsUpdate);
+                setLimitsMode('view');
+              }}
+              disabled={updateSettings.isPending || updateOrchSettings.isPending}
+            >
+              {(updateSettings.isPending || updateOrchSettings.isPending) ? 'Сохранение...' : 'Сохранить'}
+            </Button>,
+            <Button key="cancel" variant="outline" onClick={() => setLimitsMode('view')}>Отмена</Button>,
+          ]
+        }
+      >
+        <Block
+          title={GLOBAL_CAPS_BLOCK_TITLE}
+          icon="zap"
+          iconVariant="danger"
+          width="1/2"
+          tooltip={GLOBAL_CAPS_TOOLTIP}
+          fields={GLOBAL_CAPS_FIELDS}
+          data={limitsMode === 'edit' ? limitsForm : { ...(platformSettings || {}) }}
+          editable={limitsMode === 'edit'}
+          onChange={limitsMode === 'edit' ? (k, v) => setLimitsForm(prev => ({ ...prev, [k]: v })) : undefined}
+        />
+
+        <Block
+          title={EXEC_DEFAULTS_BLOCK_TITLE}
+          icon="settings"
+          iconVariant="info"
+          width="1/2"
+          tooltip={EXEC_DEFAULTS_TOOLTIP}
+          fields={EXEC_DEFAULTS_FIELDS}
+          data={limitsMode === 'edit' ? limitsForm : { ...(orchSettings || {}) }}
+          editable={limitsMode === 'edit'}
+          onChange={limitsMode === 'edit' ? (k, v) => setLimitsForm(prev => ({ ...prev, [k]: v })) : undefined}
         />
       </Tab>
 

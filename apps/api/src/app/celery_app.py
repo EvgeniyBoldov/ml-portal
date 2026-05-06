@@ -2,6 +2,7 @@ from __future__ import annotations
 from app.core.logging import get_logger
 from app.core.config import get_settings
 from celery import Celery
+from celery.schedules import crontab
 from kombu import Queue
 
 settings = get_settings()
@@ -27,6 +28,8 @@ app = Celery(
         "app.workers.tasks_health",
         # Cleanup tasks for retention policies
         "app.workers.tasks_cleanup",
+        # LDAP sync tasks
+        "app.workers.tasks_ldap_sync",
     ],
     autodiscover_tasks=False,  # Отключаем автообнаружение задач
 )
@@ -89,10 +92,14 @@ app.conf.task_routes = {
     
     # Health monitoring tasks
     "app.workers.tasks_health.probe_mcp_connectors": {"queue": "health", "priority": 3},
+    "app.workers.tasks_health.probe_data_connectors": {"queue": "health", "priority": 3},
     "app.workers.tasks_health.probe_embedding_models": {"queue": "health", "priority": 3},
     "app.workers.tasks_health.probe_rerank_models": {"queue": "health", "priority": 3},
     "app.workers.tasks_health.probe_llm_models": {"queue": "health", "priority": 3},
     "app.workers.tasks_health.rescan_discovery": {"queue": "health", "priority": 3},
+    # LDAP tasks
+    "app.workers.tasks_ldap_sync.sync_ldap_users": {"queue": "maintenance.default", "priority": 2},
+    "app.workers.tasks_ldap_sync.ldap_health_check": {"queue": "health", "priority": 3},
 
     # Reindex tasks
     "app.workers.tasks_reindex.reindex_source": {"queue": "reindex.default", "priority": 2},
@@ -147,6 +154,10 @@ if settings.BEAT == 1:
             "task": "app.workers.tasks_health.probe_mcp_connectors",
             "schedule": 60.0,  # 1 minute
         },
+        "data-connectors-health-check": {
+            "task": "app.workers.tasks_health.probe_data_connectors",
+            "schedule": 60.0,  # 1 minute
+        },
         "embedding-models-health-check": {
             "task": "app.workers.tasks_health.probe_embedding_models",
             "schedule": 60.0,  # 1 minute
@@ -172,6 +183,24 @@ if settings.BEAT == 1:
         "document-membership-reconcile": {
             "task": "app.workers.tasks_membership_reconcile.reconcile_document_collection_memberships",
             "schedule": 600.0,  # 10 minutes
+        },
+        
+        # LDAP sync (daily at 03:30 UTC by default, configurable via AUTH_LDAP_SYNC_CRON)
+        # Parse "30 3 * * *" -> minute=30, hour=3, day_of_week="*", day_of_month="*", month_of_year="*"
+        "ldap-users-sync": {
+            "task": "app.workers.tasks_ldap_sync.sync_ldap_users",
+            "schedule": crontab(
+                minute=settings.AUTH_LDAP_SYNC_CRON.split()[0],
+                hour=settings.AUTH_LDAP_SYNC_CRON.split()[1],
+                day_of_week=settings.AUTH_LDAP_SYNC_CRON.split()[4] if len(settings.AUTH_LDAP_SYNC_CRON.split()) > 4 else "*",
+                day_of_month=settings.AUTH_LDAP_SYNC_CRON.split()[2] if len(settings.AUTH_LDAP_SYNC_CRON.split()) > 2 else "*",
+                month_of_year=settings.AUTH_LDAP_SYNC_CRON.split()[3] if len(settings.AUTH_LDAP_SYNC_CRON.split()) > 3 else "*",
+            ),
+        },
+        # LDAP health check (every 5 minutes)
+        "ldap-health-check": {
+            "task": "app.workers.tasks_ldap_sync.ldap_health_check",
+            "schedule": 300.0,  # 5 minutes
         },
     }
 

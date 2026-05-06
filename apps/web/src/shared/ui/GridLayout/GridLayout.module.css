@@ -104,6 +104,22 @@
   margin-left: auto;
 }
 
+.card-tooltip-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-tertiary, #9ca3af);
+  cursor: default;
+  opacity: 0.6;
+  transition: opacity 0.15s;
+  flex-shrink: 0;
+}
+
+.card-tooltip-icon:hover {
+  opacity: 1;
+  color: var(--text-secondary, #6b7280);
+}
+
 .card-body {
   padding: var(--sp-5, 20px);
   background: var(--bg-primary, #ffffff);

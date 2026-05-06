@@ -37,6 +37,30 @@ class Settings(BaseSettings):
     PASSWORD_REQUIRE_SPECIAL: bool = Field(default=False)
     PASSWORD_PEPPER: str | None = Field(default=None)
 
+    # LDAP Authentication
+    AUTH_LDAP_ENABLED: bool = Field(default=False, description="Enable LDAP authentication")
+    AUTH_LDAP_SERVER_URI: str | None = Field(default=None, description="LDAP server URI, e.g. ldap://1.1.1.1:389")
+    AUTH_LDAP_BIND_DN: str | None = Field(default=None, description="Service account DN for LDAP bind")
+    AUTH_LDAP_BIND_PASSWORD: str | None = Field(default=None, description="Service account password")
+    AUTH_LDAP_USER_SEARCH_BASEDN: str | None = Field(default=None, description="Base DN for user search")
+    AUTH_LDAP_GROUP_SEARCH_BASEDN: str | None = Field(default=None, description="Base DN for group search")
+    AUTH_LDAP_USER_SEARCH_FILTER: str = Field(default="(&(objectClass=user)(sAMAccountName={login}))", description="Filter template for user search")
+    AUTH_LDAP_USER_LOGIN_ATTR: str = Field(default="sAMAccountName", description="Attribute used as login")
+    AUTH_LDAP_USER_EMAIL_ATTR: str = Field(default="mail", description="Attribute for email")
+    AUTH_LDAP_USER_DISPLAY_NAME_ATTR: str = Field(default="displayName", description="Attribute for full name")
+    AUTH_LDAP_GROUP_MEMBER_ATTR: str = Field(default="memberOf", description="Attribute containing user groups")
+    AUTH_LDAP_USE_TLS: bool = Field(default=False, description="Enable StartTLS (not ldaps://)")
+    AUTH_LDAP_TLS_CA_FILE: str | None = Field(default=None, description="CA certificate file for TLS")
+    AUTH_LDAP_TLS_VERIFY: bool = Field(default=True, description="Verify TLS certificate")
+    AUTH_LDAP_REFERRALS: bool = Field(default=False, description="Follow LDAP referrals (disable for AD)")
+    AUTH_LDAP_TIMEOUT_SECONDS: int = Field(default=5, description="LDAP connection timeout")
+    AUTH_LDAP_DEFAULT_TENANT_SLUG: str = Field(default="default", description="Default tenant for new LDAP users")
+    AUTH_LDAP_DEFAULT_ROLE: str = Field(default="reader", description="Default role for new LDAP users")
+    AUTH_LDAP_AUTO_CREATE_USERS: bool = Field(default=True, description="Auto-create users on first LDAP login")
+    AUTH_LDAP_UPDATE_PROFILE_ON_LOGIN: bool = Field(default=True, description="Update email/full_name/groups on each login")
+    AUTH_LDAP_SYNC_ENABLED: bool = Field(default=True, description="Enable daily LDAP sync task")
+    AUTH_LDAP_SYNC_CRON: str = Field(default="30 3 * * *", description="Cron schedule for LDAP sync (default 03:30 UTC)")
+
     # LLM runtime connection is resolved from model registry + connector credentials.
     LLM_TIMEOUT: int = Field(default=30, description="Request timeout in seconds")
     

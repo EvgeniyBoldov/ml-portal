@@ -110,11 +110,24 @@ def probe_mcp_connectors(self: Task) -> Dict[str, Any]:
                     BACKOFF_POLICY_1M
                 )
                 
+                # Snapshot health states BEFORE the engine overwrites them
+                from sqlalchemy import select
+                from app.models.tool_instance import ToolInstance
+                mcp_stmt = select(ToolInstance.id, ToolInstance.health_status).where(
+                    ToolInstance.is_active == True,
+                    ToolInstance.connector_type == "mcp",
+                )
+                mcp_rows = await session.execute(mcp_stmt)
+                previous_health_map: Dict[str, str] = {
+                    str(row.id): str(row.health_status or "unknown")
+                    for row in mcp_rows
+                }
+                
                 # Run health checks
                 results = await engine.check_tool_instances(connector_type="mcp", limit=50)
                 
-                # Process health transitions
-                await _process_mcp_health_transitions(session, results)
+                # Process health transitions using the pre-check snapshot
+                await _process_mcp_health_transitions(session, results, previous_health_map)
                 
                 await session.commit()
                 
@@ -136,6 +149,81 @@ def probe_mcp_connectors(self: Task) -> Dict[str, Any]:
         return asyncio.run(_probe())
     except Exception as e:
         logger.error(f"MCP connector health check failed: {e}", exc_info=True)
+        raise
+
+
+@celery_app.task(
+    queue="health",
+    bind=True,
+    acks_late=True,
+    max_retries=0,
+)
+def probe_data_connectors(self: Task) -> Dict[str, Any]:
+    """
+    Periodic health check for data connectors (e.g. SQL instances).
+
+    Runs every 1 minute. Uses ToolInstanceHealthService which correctly
+    routes connector_type=data/connector_subtype=sql through the MCP provider.
+    """
+    task_name = "probe_data_connectors"
+    lock_key = get_lock_key(task_name)
+
+    async def _probe():
+        from sqlalchemy import select
+        from app.models.tool_instance import ToolInstance
+        from app.services.tool_instance_service import ToolInstanceService
+
+        AsyncSessionLocal = get_async_session()
+        async with AsyncSessionLocal() as session:
+            if not await acquire_advisory_lock(session, lock_key):
+                logger.info(f"Another instance is already running {task_name}")
+                return {"status": "skipped", "reason": "locked"}
+
+            try:
+                stmt = select(ToolInstance).where(
+                    ToolInstance.is_active == True,
+                    ToolInstance.connector_type == "data",
+                )
+                result = await session.execute(stmt)
+                instances = result.scalars().all()
+
+                if not instances:
+                    return {"status": "completed", "checked": 0}
+
+                service = ToolInstanceService(session)
+                healthy = 0
+                unhealthy = 0
+
+                for instance in instances:
+                    try:
+                        check = await service.health_service.check_health(instance.id)
+                        if check.status == "healthy":
+                            healthy += 1
+                        else:
+                            unhealthy += 1
+                    except Exception as e:
+                        logger.error(f"Data connector health check failed for {instance.id}: {e}")
+                        unhealthy += 1
+
+                await session.commit()
+
+                summary = {
+                    "status": "completed",
+                    "checked": len(instances),
+                    "healthy": healthy,
+                    "unhealthy": unhealthy,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
+                logger.info(f"Data connector health check: {summary}")
+                return summary
+
+            finally:
+                await release_advisory_lock(session, lock_key)
+
+    try:
+        return asyncio.run(_probe())
+    except Exception as e:
+        logger.error(f"Data connector health check failed: {e}", exc_info=True)
         raise
 
 
@@ -396,7 +484,8 @@ def rescan_discovery(self: Task) -> Dict[str, Any]:
 
 async def _process_mcp_health_transitions(
     session: AsyncSession,
-    results: Dict[str, Any]
+    results: Dict[str, Any],
+    previous_health_map: Dict[str, str],
 ) -> None:
     """Process health transitions for MCP connectors with event hooks."""
     from sqlalchemy import select, update
@@ -405,7 +494,6 @@ async def _process_mcp_health_transitions(
     
     for instance_id, result in results.items():
         try:
-            # Get current instance state
             stmt = select(ToolInstance).where(ToolInstance.id == instance_id)
             instance_result = await session.execute(stmt)
             instance = instance_result.scalar_one_or_none()
@@ -413,8 +501,8 @@ async def _process_mcp_health_transitions(
             if not instance:
                 continue
             
-            # Check for health transition
-            previous_health = getattr(instance, 'health_status', 'unknown')
+            # Use pre-check snapshot — health_status is already updated by engine at this point
+            previous_health = previous_health_map.get(str(instance_id), "unknown")
             current_health = "healthy" if result.is_healthy() else "unhealthy"
             
             if previous_health != current_health:
@@ -439,7 +527,7 @@ async def _invalidate_discovered_tools(session: AsyncSession, instance_id: str) 
     
     stmt = (
         update(DiscoveredTool)
-        .where(DiscoveredTool.provider_instance_id == instance_id)
+        .where(DiscoveredTool.provider_instance_id == str(instance_id))
         .values(is_active=False)
     )
     await session.execute(stmt)

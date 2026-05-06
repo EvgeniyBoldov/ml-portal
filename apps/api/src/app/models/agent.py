@@ -82,6 +82,20 @@ class Agent(Base):
         comment="Max output tokens override (orchestration default if None)"
     )
 
+    # ── Execution limits (override orchestration defaults; NULL = use default) ──
+    max_steps: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True,
+        comment="Max agent loop steps override (-> orchestration executor_max_steps if None)"
+    )
+    timeout_s: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True,
+        comment="Per-run wall time limit in seconds override (-> orchestration executor_timeout_s if None)"
+    )
+    max_retries: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True,
+        comment="Max tool call retries override (-> orchestration default if None)"
+    )
+
     # ── Safety config ───────────────────────────────────────────────────
     requires_confirmation_for_write: Mapped[Optional[bool]] = mapped_column(
         Boolean, nullable=True,

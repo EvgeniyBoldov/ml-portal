@@ -1,14 +1,17 @@
 """Monitoring endpoints for health metrics and system observability."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from prometheus_client import CollectorRegistry, generate_latest, CONTENT_TYPE_LATEST
 from prometheus_client.core import GaugeMetricFamily, CounterMetricFamily
 from typing import Dict, Any
 
-from app.api.deps import db_session
+from app.api.deps import db_session, get_current_user
+from app.core.config import get_settings
+from app.core.ldap_client import LDAPClient
+from app.core.security import UserCtx
 from app.services.health.metrics import MetricsCollector
 
 router = APIRouter(prefix="/monitoring", tags=["monitoring"])
@@ -79,4 +82,47 @@ async def detailed_health_check(
                 "active_tools": collector.active_discovered_tools
             }
         }
+    }
+
+
+@router.get("/health/ldap")
+async def ldap_health_check(user: UserCtx = Depends(get_current_user)) -> Dict[str, Any]:
+    """
+    LDAP health check endpoint.
+    
+    Returns current LDAP server status and last sync metrics.
+    Requires authentication (admin or reader).
+    """
+    from app.workers.tasks_ldap_sync import get_ldap_metrics
+    
+    settings = get_settings()
+    
+    if not settings.AUTH_LDAP_ENABLED:
+        return {
+            "status": "disabled",
+            "enabled": False,
+            "server_uri": settings.AUTH_LDAP_SERVER_URI,
+        }
+    
+    # Run health check
+    ldap_client = LDAPClient(settings)
+    health = await ldap_client.health_check()
+
+    metrics = get_ldap_metrics()
+    
+    return {
+        "status": health.get("status", "unknown"),
+        "enabled": True,
+        "reachable": health.get("reachable", False),
+        "server_uri": settings.AUTH_LDAP_SERVER_URI,
+        "error": health.get("error"),
+        "metrics": {
+            "last_run_timestamp": metrics.get("last_run_timestamp"),
+            "last_success_timestamp": metrics.get("last_success_timestamp"),
+            "users_total": metrics.get("users_total"),
+            "users_deactivated": metrics.get("users_deactivated"),
+            "errors_total": metrics.get("errors_total"),
+            "ldap_up": metrics.get("ldap_up"),
+        },
+        "sync_cron": settings.AUTH_LDAP_SYNC_CRON,
     }

@@ -25,6 +25,7 @@ import { Select } from '../Select';
 import Badge from '../Badge';
 import { Tags } from '../Tags';
 import { JSONDisplaySimple } from '../JSONDisplay/JSONDisplaySimple';
+import { Tooltip } from '../Tooltip';
 import styles from './GridLayout.module.css';
 
 /* ─── Types ─── */
@@ -122,6 +123,8 @@ export interface BlockProps {
   children?: React.ReactNode;
   /** Additional CSS class on the outer wrapper */
   className?: string;
+  /** Tooltip text shown on info icon in block header */
+  tooltip?: string;
 }
 
 const WIDTH_CLASS: Record<BlockWidth, string> = {
@@ -152,6 +155,7 @@ export function Block({
   compact = false,
   children,
   className = '',
+  tooltip,
 }: BlockProps) {
   const widthCls = WIDTH_CLASS[width] || WIDTH_CLASS['full'];
   const heightCls = HEIGHT_CLASS[height] || HEIGHT_CLASS['auto'];
@@ -167,6 +171,13 @@ export function Block({
             </div>
           )}
           <h3 className={styles['card-title']}>{title}</h3>
+          {tooltip && (
+            <Tooltip content={tooltip} position="left" maxWidth={320}>
+              <div className={styles['card-tooltip-icon']}>
+                <Icon name="info" size={15} />
+              </div>
+            </Tooltip>
+          )}
           {headerActions && (
             <div className={styles['card-actions']}>
               {headerActions}

@@ -279,3 +279,72 @@ class AsyncUsersRepository:
             )
         )
         return result.rowcount > 0
+
+    # LDAP-related methods
+    async def get_by_external_id(self, auth_provider: str, external_id: str) -> Optional[Users]:
+        """Get user by auth_provider + external_id (LDAP DN)"""
+        result = await self.session.execute(
+            select(Users).where(
+                Users.auth_provider == auth_provider,
+                Users.external_id == external_id
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def update_ldap_profile(
+        self,
+        user_id: uuid.UUID,
+        email: str | None,
+        full_name: str | None,
+        ldap_groups: list[str] | None
+    ) -> None:
+        """Update LDAP-synced profile fields"""
+        from sqlalchemy import update
+        await self.session.execute(
+            update(Users)
+            .where(Users.id == user_id)
+            .values(
+                email=email,
+                full_name=full_name,
+                ldap_groups=ldap_groups,
+                updated_at=func.now()
+            )
+        )
+
+    async def update_last_login(self, user_id: uuid.UUID) -> None:
+        """Update last_login_at timestamp"""
+        from sqlalchemy import update
+        await self.session.execute(
+            update(Users)
+            .where(Users.id == user_id)
+            .values(
+                last_login_at=func.now(),
+                updated_at=func.now()
+            )
+        )
+
+    async def deactivate(
+        self,
+        user_id: uuid.UUID,
+        reason: str,
+        is_active: bool = False
+    ) -> None:
+        """Deactivate user with reason (used by LDAP sync)"""
+        from sqlalchemy import update
+        await self.session.execute(
+            update(Users)
+            .where(Users.id == user_id)
+            .values(
+                is_active=is_active,
+                deactivated_at=func.now() if not is_active else None,
+                deactivated_reason=reason if not is_active else None,
+                updated_at=func.now()
+            )
+        )
+
+    async def list_by_auth_provider(self, auth_provider: str) -> list[Users]:
+        """List all users by auth_provider (for LDAP sync)"""
+        result = await self.session.execute(
+            select(Users).where(Users.auth_provider == auth_provider)
+        )
+        return list(result.scalars().all())

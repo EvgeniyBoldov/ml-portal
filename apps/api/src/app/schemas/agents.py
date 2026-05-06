@@ -26,6 +26,9 @@ class AgentCreate(BaseModel):
     max_tokens: Optional[int] = Field(default=None, description="Max output tokens (orchestration default if None)")
     requires_confirmation_for_write: Optional[bool] = Field(default=None, description="Require confirmation for write ops")
     risk_level: Optional[str] = Field(default=None, description="low, medium, high")
+    max_steps: Optional[int] = Field(default=None, description="Max agent loop steps (orchestration default if None)")
+    timeout_s: Optional[int] = Field(default=None, description="Per-run timeout in seconds (orchestration default if None)")
+    max_retries: Optional[int] = Field(default=None, description="Max tool call retries (orchestration default if None)")
     allowed_collection_ids: Optional[List[UUID]] = Field(default=None, description="Whitelist of Collection IDs bound to agent. NULL = all collections.")
 
 
@@ -39,6 +42,9 @@ class AgentUpdate(BaseModel):
     max_tokens: Optional[int] = None
     requires_confirmation_for_write: Optional[bool] = None
     risk_level: Optional[str] = None
+    max_steps: Optional[int] = None
+    timeout_s: Optional[int] = None
+    max_retries: Optional[int] = None
     allowed_collection_ids: Optional[List[UUID]] = None
 
 
@@ -55,6 +61,9 @@ class AgentResponse(BaseModel):
     max_tokens: Optional[int] = None
     requires_confirmation_for_write: Optional[bool] = None
     risk_level: Optional[str] = None
+    max_steps: Optional[int] = None
+    timeout_s: Optional[int] = None
+    max_retries: Optional[int] = None
     allowed_collection_ids: Optional[List[UUID]] = None
     created_at: datetime
     updated_at: datetime
@@ -76,6 +85,9 @@ class AgentListItem(BaseModel):
     max_tokens: Optional[int] = None
     requires_confirmation_for_write: Optional[bool] = None
     risk_level: Optional[str] = None
+    max_steps: Optional[int] = None
+    timeout_s: Optional[int] = None
+    max_retries: Optional[int] = None
     allowed_collection_ids: Optional[List[UUID]] = None
     versions_count: int = 0
     created_at: datetime

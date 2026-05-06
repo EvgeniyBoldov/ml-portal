@@ -125,6 +125,27 @@ const AGENT_EXEC_FIELDS: FieldConfig[] = [
     placeholder: '4096',
   },
   {
+    key: 'max_steps',
+    type: 'number',
+    label: 'Макс. шагов',
+    description: 'Лимит шагов агента за один запуск (из оркестрации если пусто)',
+    placeholder: '10',
+  },
+  {
+    key: 'timeout_s',
+    type: 'number',
+    label: 'Таймаут (сек)',
+    description: 'Лимит времени выполнения в секундах (из оркестрации если пусто)',
+    placeholder: '60',
+  },
+  {
+    key: 'max_retries',
+    type: 'number',
+    label: 'Макс. попыток',
+    description: 'Количество ретраев при ошибке инструмента (из оркестрации если пусто)',
+    placeholder: '3',
+  },
+  {
     key: 'requires_confirmation_for_write',
     type: 'boolean',
     label: 'Подтверждение write-операций',
@@ -289,6 +310,9 @@ export function AgentPage() {
     model: agent?.model || '',
     temperature: agent?.temperature ?? null,
     max_tokens: agent?.max_tokens ?? null,
+    max_steps: agent?.max_steps ?? null,
+    timeout_s: agent?.timeout_s ?? null,
+    max_retries: agent?.max_retries ?? null,
     requires_confirmation_for_write: agent?.requires_confirmation_for_write ?? false,
     risk_level: agent?.risk_level || '',
   };

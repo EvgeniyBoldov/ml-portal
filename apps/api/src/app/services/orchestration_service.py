@@ -11,7 +11,6 @@ from sqlalchemy import select
 
 from app.models.orchestration_settings import OrchestrationSettings
 from app.models.agent_version import AgentVersion
-from app.models.limit import LimitVersion
 
 
 class OrchestrationSettingsProvider:
@@ -56,27 +55,20 @@ class OrchestrationSettingsProvider:
         self, 
         db: AsyncSession,
         agent_version: Optional[AgentVersion] = None,
-        limit: Optional[LimitVersion] = None,
     ) -> Dict[str, Any]:
         """
         Resolve effective executor configuration.
-        Priority: AgentVersion > Limit > OrchestrationSettings.
+        Priority: OrchestrationSettings (agent-level overrides applied in ExecutionConfigResolver).
         """
         settings = await self._ensure_cache(db)
 
-        config = {
+        return {
             "executor_model": settings.get("executor_model"),
             "executor_temperature": settings.get("executor_temperature") if settings.get("executor_temperature") is not None else 0.7,
             "executor_timeout_s": settings.get("executor_timeout_s") if settings.get("executor_timeout_s") is not None else 60,
             "executor_max_steps": settings.get("executor_max_steps") if settings.get("executor_max_steps") is not None else 10,
+            "executor_max_retries": settings.get("executor_max_retries") if settings.get("executor_max_retries") is not None else 3,
         }
-
-        # Override with Limit if provided
-        if limit:
-            if limit.max_steps is not None:
-                config["executor_max_steps"] = limit.max_steps
-
-        return config
 
 
 class OrchestrationService:

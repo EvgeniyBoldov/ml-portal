@@ -169,6 +169,9 @@ class AgentService:
             "max_tokens": agent.max_tokens,
             "requires_confirmation_for_write": agent.requires_confirmation_for_write,
             "risk_level": agent.risk_level,
+            "max_steps": agent.max_steps,
+            "timeout_s": agent.timeout_s,
+            "max_retries": agent.max_retries,
             "allowed_collection_ids": agent.allowed_collection_ids,
             "created_at": agent.created_at,
             "updated_at": agent.updated_at,
@@ -187,6 +190,9 @@ class AgentService:
         max_tokens: Optional[int] = None,
         requires_confirmation_for_write: Optional[bool] = None,
         risk_level: Optional[str] = None,
+        max_steps: Optional[int] = None,
+        timeout_s: Optional[int] = None,
+        max_retries: Optional[int] = None,
         allowed_collection_ids: Optional[List[UUID]] = None,
     ) -> Agent:
         agent = await self.get_agent(agent_id)
@@ -209,6 +215,12 @@ class AgentService:
             update_data['requires_confirmation_for_write'] = requires_confirmation_for_write
         if risk_level is not None:
             update_data['risk_level'] = risk_level
+        if max_steps is not None:
+            update_data['max_steps'] = max_steps
+        if timeout_s is not None:
+            update_data['timeout_s'] = timeout_s
+        if max_retries is not None:
+            update_data['max_retries'] = max_retries
         if allowed_collection_ids is not None:
             update_data['allowed_collection_ids'] = allowed_collection_ids
         if update_data:

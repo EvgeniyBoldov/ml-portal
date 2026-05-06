@@ -31,7 +31,6 @@ from .collection import (
 from .credential_set import Credential, AuthType
 from .routing_log import RoutingLog
 from .policy import Policy
-from .limit import Limit, LimitVersion, LimitStatus
 from .rbac import RbacRule, RbacLevel, ResourceType, RbacEffect
 from .platform_settings import PlatformSettings
 from .orchestration_settings import OrchestrationSettings
@@ -90,9 +89,6 @@ __all__ = [
     "AuthType",
     "RoutingLog",
     "Policy",
-    "Limit",
-    "LimitVersion",
-    "LimitStatus",
     "RbacRule",
     "RbacLevel",
     "ResourceType",

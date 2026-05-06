@@ -4,17 +4,19 @@
 }
 
 .tooltip {
-  position: absolute;
-  z-index: 1000;
-  padding: 6px 10px;
+  position: fixed;
+  z-index: 9999;
+  padding: 8px 12px;
   font-size: 12px;
-  line-height: 1.4;
-  color: var(--text-inverse, #fff);
-  background-color: var(--bg-tooltip, #1a1a2e);
-  border-radius: 6px;
-  white-space: nowrap;
+  line-height: 1.5;
+  color: var(--text-inverse, #f1f5f9);
+  background-color: var(--bg-tooltip, #1e1e2e);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  white-space: normal;
+  word-break: break-word;
   pointer-events: none;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
 }
 
 .arrow {

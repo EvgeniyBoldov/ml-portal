@@ -43,10 +43,8 @@ const DEFAULT_ROLE_FORM: RoleFormData = {
 };
 
 const executorFields = (modelOptions: Array<{ value: string; label: string }>): FieldConfig[] => [
-  { key: 'executor_model', label: 'Модель исполнителя', type: 'select', options: modelOptions, description: 'LLM-модель, которой выполняются шаги выполнения.' },
-  { key: 'executor_temperature', label: 'Temperature исполнителя', type: 'number', description: 'Степень вариативности ответа исполнителя.' },
-  { key: 'executor_timeout_s', label: 'Таймаут по умолчанию (сек)', type: 'number', description: 'Ограничение времени одного вызова исполнителя.' },
-  { key: 'executor_max_steps', label: 'Макс. шагов', type: 'number', description: 'Ограничение числа шагов планера на один запуск.' },
+  { key: 'executor_model', label: 'Модель исполнителя', type: 'select', options: modelOptions, description: 'LLM-модель, которой выполняются шаги агентского цикла.' },
+  { key: 'executor_temperature', label: 'Temperature исполнителя', type: 'number', description: 'Степень вариативности ответа. Ниже — точнее, выше — креативнее.' },
 ];
 
 const roleFields = (
@@ -172,7 +170,7 @@ export function OrchestrationPage() {
               ]}
         >
           <Block
-            title="Настройки исполнителя"
+            title="Модель исполнителя"
             fields={resolvedExecutorFields}
             data={executorMode === 'edit' ? executorForm : (orchestrationSettings || {})}
             editable={executorMode === 'edit'}

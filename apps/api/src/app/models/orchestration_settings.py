@@ -34,6 +34,7 @@ class OrchestrationSettings(Base):
     executor_temperature: Mapped[Optional[float]] = mapped_column(Float, nullable=True, default=0.7)
     executor_timeout_s: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, comment="Default timeout for executor in seconds")
     executor_max_steps: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, comment="Default max planner loop iterations")
+    executor_max_retries: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, comment="Default max tool call retries per step")
 
     # Legacy DB columns may still exist physically (historical migrations),
     # but they are intentionally not mapped/used by runtime anymore.

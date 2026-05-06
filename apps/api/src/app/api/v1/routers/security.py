@@ -5,8 +5,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import db_session, get_current_user, rate_limit_dependency
 from app.repositories.users_repo import AsyncUsersRepository
 from app.services.users_service import AsyncUsersService
+from app.services.ldap_user_service import LDAPUserService
 from app.core.security import create_access_token, create_refresh_token, decode_jwt, UserCtx
-from app.core.config import get_settings
+from app.core.config import get_settings, Settings
 
 router = APIRouter(tags=["security"])
 
@@ -36,8 +37,27 @@ async def login(
     session: AsyncSession = Depends(db_session),
     _rl: None = Depends(rate_limit_dependency(key_prefix="auth_login", rpm=30, rph=600)),
 ):
-    service = AsyncUsersService(AsyncUsersRepository(session))
-    user = await service.authenticate_user(payload.login, payload.password)
+    settings = get_settings()
+    users_repo = AsyncUsersRepository(session)
+    local_service = AsyncUsersService(users_repo)
+    
+    # Try local authentication first
+    user = await local_service.authenticate_user(payload.login, payload.password)
+    
+    # If local auth failed and LDAP is enabled, try LDAP
+    if not user and settings.AUTH_LDAP_ENABLED:
+        ldap_service = LDAPUserService(session, settings)
+        ldap_result = await ldap_service.authenticate_and_provision(payload.login, payload.password)
+        if ldap_result.success and ldap_result.user:
+            user = ldap_result.user
+            is_ldap_new = ldap_result.is_new
+        elif ldap_result.error and "Local user with this login already exists" in ldap_result.error:
+            # Conflict: local user exists, deny LDAP login
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid credentials (local user exists, LDAP login denied)"
+            )
+    
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
     
@@ -90,8 +110,8 @@ async def login(
             id=str(user.id),
             email=user.email,
             role=user.role or "reader",
-            login=user.email,
-            fio=getattr(user, "fio", None)
+            login=user.login,
+            fio=getattr(user, "full_name", None)
         )
     )
 

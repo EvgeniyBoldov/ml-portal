@@ -19,6 +19,9 @@ export interface Agent {
   max_tokens?: number | null;
   requires_confirmation_for_write?: boolean | null;
   risk_level?: string | null;
+  max_steps?: number | null;
+  timeout_s?: number | null;
+  max_retries?: number | null;
   logging_level?: string;
   allowed_collection_ids?: string[] | null;
   versions_count?: number;
@@ -105,6 +108,9 @@ export interface AgentCreate {
   max_tokens?: number | null;
   requires_confirmation_for_write?: boolean | null;
   risk_level?: string | null;
+  max_steps?: number | null;
+  timeout_s?: number | null;
+  max_retries?: number | null;
   tags?: string[];
   logging_level?: string;
   allowed_collection_ids?: string[] | null;
@@ -118,6 +124,9 @@ export interface AgentUpdate {
   max_tokens?: number | null;
   requires_confirmation_for_write?: boolean | null;
   risk_level?: string | null;
+  max_steps?: number | null;
+  timeout_s?: number | null;
+  max_retries?: number | null;
   tags?: string[];
   logging_level?: string;
   allowed_collection_ids?: string[] | null;

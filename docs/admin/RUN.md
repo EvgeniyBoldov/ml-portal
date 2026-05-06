@@ -68,7 +68,53 @@ make down
 - использовать собранные образы в отдельном production deployment (compose/k8s/nomad) в infra-репозитории,
 - не запускать prod напрямую из dev `docker-compose.yml`.
 
-## 8. Runtime diagnostics (admin)
+## 8. Health monitoring
+
+### Контейнер `beat`
+
+Расписание периодических задач выполняется в отдельном контейнере `beat` (Celery Beat), добавленном в `docker-compose.yml`. Он запускается той же точкой входа, что и `worker`, но с командой `celery beat`:
+
+```bash
+docker compose logs --tail=200 beat
+```
+
+Beat активирует расписание только при наличии переменной окружения `BEAT=1`. Проверить, что планировщик работает:
+
+```bash
+docker compose exec beat celery -A app.celery_app inspect scheduled
+```
+
+Задачи выполняются воркерами из очереди `health` (приоритет 3). Убедитесь, что `worker` запущен и слушает эту очередь.
+
+### Подключение к мониторингу
+
+| Endpoint | Назначение |
+|---|---|
+| `GET /api/v1/monitoring/health` | Liveness probe — без обращения к БД |
+| `GET /api/v1/monitoring/health/detailed` | Readiness probe — счётчики коннекторов и моделей |
+| `GET /api/v1/monitoring/metrics` | Prometheus scrape endpoint |
+
+Пример scrape-конфига для Prometheus:
+
+```yaml
+scrape_configs:
+  - job_name: ml-portal
+    static_configs:
+      - targets: ['api:8000']
+    metrics_path: /api/v1/monitoring/metrics
+    scrape_interval: 60s
+```
+
+Без Prometheus метрики можно читать напрямую:
+
+```bash
+curl http://localhost:8000/api/v1/monitoring/metrics
+curl http://localhost:8000/api/v1/monitoring/health/detailed
+```
+
+Подробная документация по всей системе мониторинга: `docs/architecture/HEALTH_MONITORING.md`.
+
+## 9. Runtime diagnostics (admin)
 
 Ключевые admin endpoints для диагностики runtime без container logs:
 

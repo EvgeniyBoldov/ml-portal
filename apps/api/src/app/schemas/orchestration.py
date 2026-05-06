@@ -18,6 +18,7 @@ class OrchestrationBase(BaseModel):
     executor_temperature: Optional[float] = Field(0.7, description="Default temperature for execution/generation")
     executor_timeout_s: Optional[int] = Field(None, description="Default executor timeout in seconds")
     executor_max_steps: Optional[int] = Field(None, description="Default max planner loop iterations")
+    executor_max_retries: Optional[int] = Field(None, description="Default max tool call retries")
 
 
 class ExecutorSettingsUpdate(BaseModel):
@@ -26,6 +27,7 @@ class ExecutorSettingsUpdate(BaseModel):
     executor_temperature: Optional[float] = Field(None, description="Default temperature for execution/generation")
     executor_timeout_s: Optional[int] = Field(None, description="Default executor timeout in seconds")
     executor_max_steps: Optional[int] = Field(None, description="Default max planner loop iterations")
+    executor_max_retries: Optional[int] = Field(None, description="Default max tool call retries")
 
 
 class OrchestrationSettingsResponse(OrchestrationBase):

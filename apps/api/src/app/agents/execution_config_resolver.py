@@ -70,10 +70,21 @@ class ExecutionConfigResolver:
                         f"[Sandbox] Applied platform overrides: {list(platform_ov.keys())}",
                     )
 
-                policy.max_steps = config.get("executor_max_steps", policy.max_steps)
-                timeout_s = config.get("executor_timeout_s")
-                policy.max_wall_time_ms = ((timeout_s if timeout_s is not None else 600) * 1000)
                 agent = exec_request.agent
+
+                # Orchestration defaults
+                orch_max_steps = config.get("executor_max_steps", policy.max_steps)
+                orch_timeout_s = config.get("executor_timeout_s", 600)
+                orch_max_retries = config.get("executor_max_retries", policy.max_retries)
+
+                # Agent-level overrides (NULL = use orchestration default)
+                agent_max_steps = getattr(agent, "max_steps", None) if agent else None
+                agent_timeout_s = getattr(agent, "timeout_s", None) if agent else None
+                agent_max_retries = getattr(agent, "max_retries", None) if agent else None
+
+                policy.max_steps = agent_max_steps if agent_max_steps is not None else orch_max_steps
+                policy.max_wall_time_ms = (agent_timeout_s if agent_timeout_s is not None else orch_timeout_s) * 1000
+                policy.max_retries = agent_max_retries if agent_max_retries is not None else orch_max_retries
 
                 # temperature: Agent -> orchestration default
                 agent_temperature = getattr(agent, "temperature", None) if agent else None
