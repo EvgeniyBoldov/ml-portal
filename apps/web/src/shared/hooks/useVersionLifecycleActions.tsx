@@ -4,6 +4,7 @@ import { Button } from '@/shared/ui';
 export type UnifiedVersionStatus = 'draft' | 'published' | 'archived';
 
 export interface VersionLifecycleCallbacks {
+  onEdit?: () => void;
   onPublish?: () => void;
   onSetPrimary?: () => void;
   onArchive?: () => void;
@@ -61,6 +62,17 @@ export function useVersionLifecycleActions({
   const buttons: React.ReactNode[] = [];
 
   if (normalizedStatus === 'draft') {
+    if (callbacks.onEdit) {
+      buttons.push(
+        <Button
+          key="edit"
+          variant="outline"
+          onClick={callbacks.onEdit}
+        >
+          Редактировать
+        </Button>,
+      );
+    }
     if (callbacks.onPublish) {
       buttons.push(
         <Button

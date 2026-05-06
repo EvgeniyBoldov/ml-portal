@@ -95,6 +95,12 @@ export function useUpdateUser() {
   });
 }
 
+export function useSetUserPassword() {
+  return useMutation<{ ok: boolean }, Error, { id: string; newPassword: string }>({
+    mutationFn: ({ id, newPassword }) => adminApi.setUserPassword(id, newPassword),
+  });
+}
+
 export function useDeleteUser() {
   const queryClient = useQueryClient();
 

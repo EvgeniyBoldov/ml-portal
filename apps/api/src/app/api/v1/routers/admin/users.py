@@ -22,6 +22,7 @@ async def _user_response(user, repo: AsyncUsersRepository) -> dict:
         "full_name": getattr(user, "full_name", None),
         "role": user.role,
         "is_active": getattr(user, "is_active", True),
+        "auth_provider": getattr(user, "auth_provider", "local"),
         "tenant_id": str(default_tid) if default_tid else None,
         "created_at": user.created_at.isoformat() if getattr(user, "created_at", None) else "",
         "updated_at": user.updated_at.isoformat() if getattr(user, "updated_at", None) else None,
@@ -208,6 +209,50 @@ async def update_user(
                 detail=str(e)
             ).model_dump()
         )
+
+@router.post("/{user_id}/password")
+async def set_user_password(
+    user_id: str,
+    body: dict,
+    session: AsyncSession = Depends(db_uow),
+    admin_user = Depends(require_admin),
+):
+    """Set user password (admin only, local accounts only)"""
+    repo = AsyncUsersRepository(session)
+    service = AsyncUsersService(repo)
+
+    user = await repo.get_by_id(user_id)
+    if not user:
+        raise HTTPException(
+            status_code=404,
+            detail=ProblemDetails(title="Not Found", status=404, detail="not_found").model_dump(),
+        )
+
+    auth_provider = getattr(user, "auth_provider", "local")
+    if auth_provider != "local":
+        raise HTTPException(
+            status_code=400,
+            detail=ProblemDetails(
+                title="Bad Request",
+                status=400,
+                detail="password_change_not_allowed_for_non_local_accounts",
+            ).model_dump(),
+        )
+
+    new_password = body.get("new_password", "")
+    if not new_password or len(new_password) < 8:
+        raise HTTPException(
+            status_code=422,
+            detail=ProblemDetails(
+                title="Validation Error",
+                status=422,
+                detail="password_too_short",
+            ).model_dump(),
+        )
+
+    await service.update_user(user_id, {"password": new_password})
+    return {"ok": True}
+
 
 @router.delete("/{user_id}")
 async def delete_user(

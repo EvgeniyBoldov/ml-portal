@@ -188,7 +188,7 @@ export function AgentVersionPage() {
   const {
     mode, isCreate, versionNumber, saving, isLoading,
     parent: agent, existingVersion,
-    formData, handleFieldChange, handleSave, handleCancel,
+    formData, handleFieldChange, handleSave, handleEdit, handleCancel,
     activateMutation: publishMutation,
     deactivateMutation: archiveMutation,
     setRecommendedMutation,
@@ -265,7 +265,8 @@ export function AgentVersionPage() {
     status: existingVersion?.status,
     isCreate,
     isPrimary,
-    callbacks: { 
+    callbacks: {
+      onEdit: handleEdit,
       onPublish,
       onSetPrimary: onSetRecommended,
       onArchive,

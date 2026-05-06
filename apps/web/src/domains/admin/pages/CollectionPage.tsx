@@ -89,24 +89,6 @@ const TOOL_COLUMNS: DataTableColumn<RuntimeOperationRow>[] = [
   { key: 'provider_instance_slug', label: 'Provider', render: (row) => row.provider_instance_slug || '—' },
 ];
 
-function resolveLocalDataInstanceIdForType(
-  connectors: Array<{ id: string; connector_type: string; connector_subtype?: string | null; placement?: string }>,
-  collectionType: CollectionType,
-): string {
-  const local = connectors.find(
-    (connector) =>
-      connector.connector_type === 'data'
-      && connector.placement === 'local'
-      && (
-        collectionType === 'table'
-        || collectionType === 'document'
-        || collectionType === 'api'
-        || String(connector.connector_subtype || '').toLowerCase() === collectionType
-      ),
-  );
-  return local?.id ?? '';
-}
-
 /* ─── Component ─── */
 
 export function CollectionPage() {
@@ -181,14 +163,9 @@ export function CollectionPage() {
         return 'Заполните slug, название и тенант';
       }
       const createType = (data.collection_type ?? 'table') as CollectionType;
-      const effectiveDataInstanceId = String(
-        data.data_instance_id
-        || (createType === 'table' || createType === 'document'
-          ? resolveLocalDataInstanceIdForType(dataConnectors, createType)
-          : ''),
-      );
-      if (!effectiveDataInstanceId) {
-        return 'Нужно выбрать data instance';
+      const isRemoteType = createType === 'sql' || createType === 'api';
+      if (isRemoteType && !data.data_instance_id) {
+        return 'Нужно выбрать коннектор данных';
       }
       return null;
     },
@@ -207,13 +184,6 @@ export function CollectionPage() {
       ) as CollectionField[];
       const hasVectorFields = fields.some((f: CollectionField) => f.search_modes?.includes('vector'));
       const needsVectorConfig = data.has_vector_search || isDocument || hasVectorFields;
-      const createType = (data.collection_type ?? 'table') as CollectionType;
-      const effectiveDataInstanceId = String(
-        data.data_instance_id
-        || (createType === 'table' || createType === 'document'
-          ? resolveLocalDataInstanceIdForType(dataConnectors, createType)
-          : ''),
-      );
 
       return {
         tenant_id: data.tenant_id,
@@ -222,7 +192,7 @@ export function CollectionPage() {
         name: data.name,
         description: data.description,
         fields,
-        data_instance_id: effectiveDataInstanceId,
+        data_instance_id: data.data_instance_id || undefined,
         vector_config: needsVectorConfig ? {
           chunk_strategy: data.chunk_strategy ?? 'by_paragraphs',
           chunk_size: data.chunk_size ?? 512,
@@ -333,13 +303,7 @@ export function CollectionPage() {
   const configFieldsCreate = buildConfigFieldsByType(
     (formData.collection_type ?? 'table') as CollectionType,
     { editableCollectionType: true, editableDataInstance: true, connectorOptions },
-  ).filter((field) => {
-    const createType = (formData.collection_type ?? 'table') as CollectionType;
-    if ((createType === 'table' || createType === 'document') && field.key === 'data_instance_id') {
-      return false;
-    }
-    return true;
-  });
+  );
   const configFieldsViewEdit = buildConfigFieldsByType(
     activeCollectionType,
     { editableCollectionType: false, editableDataInstance: true, connectorOptions },
@@ -401,17 +365,6 @@ export function CollectionPage() {
     vectorization_progress: collection?.vectorization_progress ?? 0,
     fields_count: collection?.fields?.length ?? 0,
   };
-
-  useEffect(() => {
-    if (!isNew) return;
-    const createType = (formData.collection_type ?? 'table') as CollectionType;
-    if (createType !== 'table' && createType !== 'document') return;
-    if (String(formData.data_instance_id || '').trim()) return;
-    const localId = resolveLocalDataInstanceIdForType(dataConnectors, createType);
-    if (localId) {
-      handleFieldChange('data_instance_id', localId);
-    }
-  }, [dataConnectors, formData.collection_type, formData.data_instance_id, handleFieldChange, isNew]);
 
   // Auto-preset: switch fields when collection_type changes
   const handleFieldChangeWrapped = (key: string, value: unknown) => {

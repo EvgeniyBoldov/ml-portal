@@ -64,6 +64,7 @@ export function CollectionVersionPage() {
     formData,
     handleFieldChange,
     handleSave,
+    handleEdit,
     handleCancel,
     activateMutation,
     deactivateMutation,
@@ -121,6 +122,7 @@ export function CollectionVersionPage() {
     isCreate,
     isPrimary: isPrimaryVersion,
     callbacks: {
+      onEdit: handleEdit,
       onPublish: onActivate,
       onSetPrimary: onSetRecommended,
       onArchive: onDeactivate,

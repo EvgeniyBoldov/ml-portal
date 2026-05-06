@@ -11,6 +11,7 @@ export interface User {
   role: 'admin' | 'editor' | 'reader';
   email?: string;
   is_active: boolean;
+  auth_provider?: string;
   tenant_id: string;
   created_at: string;
   updated_at: string;
@@ -430,6 +431,16 @@ export const adminApi = {
     return apiRequest(`/admin/users/${id}/password`, {
       method: 'POST',
       body: JSON.stringify(passwordData),
+    });
+  },
+
+  async setUserPassword(
+    id: string,
+    newPassword: string
+  ): Promise<{ ok: boolean }> {
+    return apiRequest(`/admin/users/${id}/password`, {
+      method: 'POST',
+      body: JSON.stringify({ new_password: newPassword }),
     });
   },
 

@@ -158,7 +158,7 @@ export interface CreateCollectionRequest {
   fields: CollectionField[];
   vector_config?: VectorConfig;
   table_schema?: Record<string, unknown> | null;
-  data_instance_id: string;
+  data_instance_id?: string;
 }
 
 export interface SchemaOperation {

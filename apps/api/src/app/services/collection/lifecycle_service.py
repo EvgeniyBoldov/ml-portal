@@ -57,8 +57,16 @@ class CollectionLifecycleService:
         if existing:
             raise self.host.CollectionExistsError(f"Collection '{slug}' already exists")
 
+        expected_subtype = _expected_data_connector_subtype(collection_type)
+        is_local_type = expected_subtype is None  # table / document
+
         if data_instance_id is None:
-            raise InvalidSchemaError("data_instance_id is required")
+            if not is_local_type:
+                raise InvalidSchemaError("data_instance_id is required for sql/api collections")
+            local_instance = await self.host.tool_instance_service.resolve_local_service_for_collection_type(
+                collection_type
+            )
+            data_instance_id = local_instance.id
 
         data_instance = await self._resolve_and_validate_data_instance(
             tenant_id=tenant_id,
@@ -66,9 +74,7 @@ class CollectionLifecycleService:
             collection_type=collection_type,
         )
 
-        expected_subtype = _expected_data_connector_subtype(collection_type)
-        is_remote = expected_subtype is not None
-        if is_remote:
+        if not is_local_type:
             return await self.create_remote_collection(
                 tenant_id=tenant_id,
                 slug=slug,
@@ -285,7 +291,7 @@ class CollectionLifecycleService:
             raise InvalidSchemaError(f"Data instance {data_instance_id} not found")
         if not instance.is_active:
             raise InvalidSchemaError(f"Data instance {data_instance_id} is not active")
-        if not instance.is_data:
+        if not instance.is_data and not instance.is_local:
             raise InvalidSchemaError(f"Connector {data_instance_id} is not a data connector")
 
         # ToolInstance currently has no explicit tenant_id column in schema.

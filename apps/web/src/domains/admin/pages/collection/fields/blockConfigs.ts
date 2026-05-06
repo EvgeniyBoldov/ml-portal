@@ -85,13 +85,10 @@ type ConfigStrategyCtx = {
 type ConfigStrategy = (ctx: ConfigStrategyCtx) => FieldConfig[];
 
 const CONFIG_FIELDS_BY_TYPE: Record<CollectionType, ConfigStrategy> = {
-  table: ({ connectorOptions, editableDataInstance }) => [
+  table: () => [
     TABLE_NAME_FIELD,
-    { ...DATA_CONNECTOR_FIELD, options: connectorOptions, editable: editableDataInstance },
   ],
-  document: ({ connectorOptions, editableDataInstance }) => [
-    { ...DATA_CONNECTOR_FIELD, options: connectorOptions, editable: editableDataInstance },
-  ],
+  document: () => [],
   sql: ({ connectorOptions, editableDataInstance }) => [
     { ...DATA_CONNECTOR_FIELD, options: connectorOptions, editable: editableDataInstance },
   ],

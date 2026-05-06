@@ -8,15 +8,93 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import { useUser, useUpdateUser, useDeleteUser, useCreateUser } from '@shared/api/hooks/useAdmin';
+import { useUser, useUpdateUser, useDeleteUser, useCreateUser, useSetUserPassword } from '@shared/api/hooks/useAdmin';
 import { useTenants } from '@shared/hooks/useTenants';
 import { qk } from '@shared/api/keys';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
 import { EntityPageV2, Tab, type BreadcrumbItem, type EntityPageMode } from '@/shared/ui/EntityPage';
 import { Block, type FieldConfig } from '@/shared/ui/GridLayout';
-import { Button, ConfirmDialog } from '@/shared/ui';
+import { Button, ConfirmDialog, Modal } from '@/shared/ui';
+import default as Input from '@/shared/ui/Input';
 import { RBACRulesTable } from '@/shared/ui/RBACRulesTable';
 import type { User, Tenant } from '@shared/api/admin';
+
+/* ─── SetPasswordModal ─── */
+
+function SetPasswordModal({
+  open,
+  onClose,
+  onConfirm,
+  saving,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onConfirm: (password: string) => void;
+  saving: boolean;
+}) {
+  const [password, setPassword] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [revealed, setRevealed] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (open) { setPassword(''); setConfirm(''); setError(''); setRevealed(false); }
+  }, [open]);
+
+  const handleSubmit = () => {
+    if (password.length < 8) { setError('Минимум 8 символов'); return; }
+    if (password !== confirm) { setError('Пароли не совпадают'); return; }
+    setError('');
+    onConfirm(password);
+  };
+
+  return (
+    <Modal
+      open={open}
+      title="Установить пароль"
+      onClose={onClose}
+      footer={
+        <>
+          <Button onClick={handleSubmit} disabled={saving}>
+            {saving ? 'Сохранение...' : 'Установить'}
+          </Button>
+          <Button variant="outline" onClick={onClose} disabled={saving}>Отмена</Button>
+        </>
+      }
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+        <div>
+          <label style={{ display: 'block', marginBottom: '0.375rem', fontSize: '0.875rem', fontWeight: 500, color: 'var(--text-primary)' }}>Новый пароль</label>
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            <Input
+              type={revealed ? 'text' : 'password'}
+              value={password}
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setPassword(e.target.value)}
+              placeholder="Минимум 8 символов"
+              autoComplete="new-password"
+            />
+            <Button size="sm" variant="ghost" onClick={() => setRevealed(v => !v)} type="button">
+              {revealed ? '🙈' : '👁'}
+            </Button>
+          </div>
+        </div>
+        <div>
+          <label style={{ display: 'block', marginBottom: '0.375rem', fontSize: '0.875rem', fontWeight: 500, color: 'var(--text-primary)' }}>Повторите пароль</label>
+          <Input
+            type={revealed ? 'text' : 'password'}
+            value={confirm}
+            onChange={(e: React.ChangeEvent<HTMLInputElement>) => setConfirm(e.target.value)}
+            placeholder="Повторите пароль"
+            autoComplete="new-password"
+          />
+        </div>
+        {error && (
+          <div style={{ color: 'var(--color-danger, #e74c3c)', fontSize: '0.875rem' }}>{error}</div>
+        )}
+      </div>
+    </Modal>
+  );
+}
 
 /* ─── Constants ─── */
 
@@ -49,6 +127,32 @@ const BASE_INFO_FIELDS: Omit<FieldConfig, 'options'>[] = [
     label: 'Тенант',
     description: 'Основной тенант пользователя',
   },
+];
+
+const BASE_INFO_FIELDS_CREATE: Omit<FieldConfig, 'options'>[] = [
+  {
+    key: 'login',
+    type: 'text',
+    label: 'Логин',
+    description: 'Уникальный идентификатор пользователя',
+    editable: true,
+    placeholder: 'Введите логин',
+  },
+  {
+    key: 'email',
+    type: 'text',
+    label: 'Email',
+    placeholder: 'user@example.com',
+  },
+  {
+    key: 'tenant_id',
+    type: 'select',
+    label: 'Тенант',
+    description: 'Основной тенант пользователя',
+  },
+];
+
+const HIDDEN_BASE_INFO_FIELDS: Omit<FieldConfig, 'options'>[] = [
 ];
 
 const STATUS_FIELDS: FieldConfig[] = [
@@ -97,6 +201,8 @@ export function UserPage() {
   });
   const [saving, setSaving] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [showSetPassword, setShowSetPassword] = useState(false);
+  const [setPasswordSaving, setSetPasswordSaving] = useState(false);
 
   // ─── Queries ───
   const { data: user, isLoading, refetch } = useUser(id);
@@ -126,6 +232,7 @@ export function UserPage() {
   const createMutation = useCreateUser();
   const updateMutation = useUpdateUser();
   const deleteMutation = useDeleteUser();
+  const setPasswordMutation = useSetUserPassword();
 
   // ─── Handlers ───
   const handleFieldChange = (key: string, value: any) => {
@@ -206,12 +313,17 @@ export function UserPage() {
     }
   };
 
-  const handleResetPassword = async () => {
+  const handleSetPassword = async (newPassword: string) => {
+    if (!id) return;
+    setSetPasswordSaving(true);
     try {
-      // TODO: Add password reset API call
-      showSuccess('Ссылка для сброса пароля отправлена на email');
+      await setPasswordMutation.mutateAsync({ id, newPassword });
+      showSuccess('Пароль установлен');
+      setShowSetPassword(false);
     } catch (err) {
-      showError(err instanceof Error ? err.message : 'Ошибка сброса пароля');
+      showError(err instanceof Error ? err.message : 'Ошибка установки пароля');
+    } finally {
+      setSetPasswordSaving(false);
     }
   };
 
@@ -254,43 +366,60 @@ export function UserPage() {
     f.key === 'tenant_id' ? { ...f, options: tenantOptions } : f as FieldConfig
   );
 
+  const infoFieldsCreate: FieldConfig[] = BASE_INFO_FIELDS_CREATE.map(f =>
+    f.key === 'tenant_id' ? { ...f, options: tenantOptions } : f as FieldConfig
+  );
+
+  const isLocalAccount = !user || (user.auth_provider ?? 'local') === 'local';
+
   // ─── Create mode ───
   if (isNew) {
     return (
-      <EntityPageV2
-        title="Новый пользователь"
-        mode={mode}
-        saving={saving}
-        breadcrumbs={breadcrumbs}
-        backPath="/admin/users"
-        onSave={handleSave}
-        onCancel={handleCancel}
-      >
-        <Tab title="Создание" layout="single">
-          {/* Row 1: Info (1/2) + Tenant (1/2) */}
-          <Block
-            title="Основная информация"
-            icon="user"
-            iconVariant="info"
-            width="1/2"
-            fields={infoFields}
-            data={infoData}
-            editable={true}
-            onChange={handleFieldChange}
-          />
-          {/* Row 2: Status (full) */}
-          <Block
-            title="Статус и роль"
-            icon="shield"
-            iconVariant="warning"
-            width="full"
-            fields={STATUS_FIELDS}
-            data={formData}
-            editable={true}
-            onChange={handleFieldChange}
-          />
-        </Tab>
-      </EntityPageV2>
+      <>
+        <EntityPageV2
+          title="Новый пользователь"
+          mode={mode}
+          saving={saving}
+          breadcrumbs={breadcrumbs}
+          backPath="/admin/users"
+          onSave={handleSave}
+          onCancel={handleCancel}
+        >
+          <Tab title="Создание" layout="single">
+            <Block
+              title="Основная информация"
+              icon="user"
+              iconVariant="info"
+              width="1/2"
+              fields={infoFieldsCreate}
+              data={infoData}
+              editable={true}
+              onChange={handleFieldChange}
+              headerActions={
+                <Button size="sm" variant="outline" onClick={() => setShowSetPassword(true)} type="button">
+                  Установить пароль
+                </Button>
+              }
+            />
+            <Block
+              title="Статус и роль"
+              icon="shield"
+              iconVariant="warning"
+              width="full"
+              fields={STATUS_FIELDS}
+              data={formData}
+              editable={true}
+              onChange={handleFieldChange}
+            />
+          </Tab>
+        </EntityPageV2>
+        <SetPasswordModal
+          open={showSetPassword}
+          onClose={() => setShowSetPassword(false)}
+          onConfirm={(pwd) => { setFormData(prev => ({ ...prev, password: pwd })); setShowSetPassword(false); }}
+          saving={false}
+        />
+      </>
     );
   }
 
@@ -314,9 +443,11 @@ export function UserPage() {
           actions={
             mode === 'view' ? [
               <Button key="edit" onClick={handleEdit}>Редактировать</Button>,
-              <Button key="reset" variant="outline" onClick={handleResetPassword} disabled={!user?.email}>
-                Сбросить пароль
-              </Button>,
+              ...(isLocalAccount ? [
+                <Button key="set-pwd" variant="outline" onClick={() => setShowSetPassword(true)}>
+                  Установить пароль
+                </Button>,
+              ] : []),
             ] : mode === 'edit' ? [
               <Button key="save" onClick={handleSave} disabled={saving}>
                 {saving ? 'Сохранение...' : 'Сохранить'}
@@ -368,6 +499,13 @@ export function UserPage() {
         </Tab>
         )}
       </EntityPageV2>
+
+      <SetPasswordModal
+        open={showSetPassword}
+        onClose={() => setShowSetPassword(false)}
+        onConfirm={handleSetPassword}
+        saving={setPasswordSaving}
+      />
 
       <ConfirmDialog
         open={showDeleteConfirm}

@@ -72,8 +72,9 @@ class CreateCollectionRequest(BaseModel):
     source_contract: Optional[dict] = None
     vector_config: Optional[VectorConfigSchema] = None
     table_schema: Optional[dict] = None
-    # Required FK: each collection is bound to a data instance.
-    data_instance_id: uuid.UUID
+    # Optional for local types (table/document) — backend auto-resolves local service instance.
+    # Required for remote types (sql/api).
+    data_instance_id: Optional[uuid.UUID] = None
 
 
 class SchemaOperation(BaseModel):
