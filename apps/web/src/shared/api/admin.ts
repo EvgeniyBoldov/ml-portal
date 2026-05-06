@@ -335,6 +335,7 @@ export interface ModelProbeInfoResponse {
   model_type?: 'llm_chat' | 'embedding' | 'reranker';
   health_status?: 'healthy' | 'degraded' | 'unavailable';
   raw?: Record<string, unknown>;
+  important_params?: Record<string, unknown>;
 }
 
 export interface EmbeddingUsageTenantRow {
@@ -564,7 +565,7 @@ export const adminApi = {
     });
   },
 
-  async verifyModel(id: string): Promise<Model & { manifest?: Record<string, unknown>; resolved_type_from_manifest?: string | null }> {
+  async verifyModel(id: string): Promise<Model & { manifest?: Record<string, unknown>; resolved_type_from_manifest?: string | null; important_params?: Record<string, unknown> }> {
     return apiRequest(`/admin/models/${id}/verify`, {
       method: 'POST',
     });

@@ -60,14 +60,25 @@ async def _probe_manifest(base_url: str) -> Tuple[Dict[str, Any], str]:
         except Exception:
             health_status = "unavailable"
 
-        resp = await client.get(f"{normalized}/models")
-        resp.raise_for_status()
-        data = resp.json()
-        if not isinstance(data, list) or not data:
-            raise ValueError("models_manifest_empty")
-        first = data[0] or {}
-        if not isinstance(first, dict):
-            raise ValueError("models_manifest_invalid")
+        first: Dict[str, Any] | None = None
+        try:
+            desc_resp = await client.get(f"{normalized}/description")
+            if desc_resp.status_code == 200:
+                desc_data = desc_resp.json()
+                if isinstance(desc_data, dict):
+                    first = desc_data
+        except Exception:
+            first = None
+
+        if first is None:
+            resp = await client.get(f"{normalized}/models")
+            resp.raise_for_status()
+            data = resp.json()
+            if not isinstance(data, list) or not data:
+                raise ValueError("models_manifest_empty")
+            first = data[0] or {}
+            if not isinstance(first, dict):
+                raise ValueError("models_manifest_invalid")
         first["_health"] = health_payload
         return first, health_status
 

@@ -171,6 +171,7 @@ const OTHER_PARAMS_FIELDS: FieldConfig[] = [
   { key: 'modality', type: 'text', label: 'Modality', editable: false },
   { key: 'description', type: 'text', label: 'Description', editable: false },
   { key: 'dimensions', type: 'text', label: 'Dimensions', editable: false },
+  { key: 'important_params_count', type: 'text', label: 'HF params count', editable: false },
 ];
 
 const HEALTH_FIELDS: FieldConfig[] = [
@@ -216,6 +217,7 @@ export function ModelPage() {
   const [maxTokens, setMaxTokens] = useState<string>('');
   const [probingInfo, setProbingInfo] = useState(false);
   const [manifestRaw, setManifestRaw] = useState<Record<string, unknown>>({});
+  const [importantParams, setImportantParams] = useState<Record<string, unknown>>({});
   const [healthBadge, setHealthBadge] = useState<string>('unknown');
   const [showMigrationModal, setShowMigrationModal] = useState(false);
   const [migrationTargetModelId, setMigrationTargetModelId] = useState<string>('');
@@ -424,6 +426,7 @@ export function ModelPage() {
     modality: String(manifestRaw.modality || '—'),
     description: String(manifestRaw.description || '—'),
     dimensions: String(manifestRaw.dimensions ?? '—'),
+    important_params_count: String(Object.keys(importantParams).length || '0'),
   };
   const isEmbedding = (isEditable ? formData.type : model?.type) === 'embedding';
   const migrationModelOptions = (embeddingModelsData?.items || [])
@@ -444,8 +447,11 @@ export function ModelPage() {
       : undefined;
     if (manifest && typeof manifest === 'object') {
       setManifestRaw(manifest as Record<string, unknown>);
+      const parsed = (manifest as Record<string, unknown>).important_params;
+      setImportantParams(parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : {});
     } else {
       setManifestRaw({});
+      setImportantParams({});
     }
   }, [model?.id, model?.health_status]);
 
@@ -489,7 +495,7 @@ export function ModelPage() {
       return { ...f, editable: false, description: 'Заполняется через кнопку "Проверить"' };
     }
     if (f.key === 'type' && isLocalConnector) {
-      return { ...f, editable: false, description: 'Определяется автоматически из modality манифеста' };
+      return { ...f, editable: false, description: 'Определяется автоматически из metadata модели' };
     }
     if (f.key === 'max_tokens' && manifestRaw.max_tokens != null) {
       return { ...f, description: `Лимит по манифесту: ${String(manifestRaw.max_tokens)}` };
@@ -500,7 +506,14 @@ export function ModelPage() {
   const handleProbeModelInfo = async () => {
     setProbingInfo(true);
     try {
-      let info: { provider_model_name?: string; model_version?: string; model_type?: string; health_status?: string; raw?: Record<string, unknown> };
+      let info: {
+        provider_model_name?: string;
+        model_version?: string;
+        model_type?: string;
+        health_status?: string;
+        raw?: Record<string, unknown>;
+        important_params?: Record<string, unknown>;
+      };
       if (!isNew && model?.id) {
         const verified = await adminApi.verifyModel(model.id);
         info = {
@@ -509,6 +522,7 @@ export function ModelPage() {
           model_type: (verified.resolved_type_from_manifest as string) || verified.type,
           health_status: verified.health_status || undefined,
           raw: (verified.manifest || {}) as Record<string, unknown>,
+          important_params: (verified.important_params || {}) as Record<string, unknown>,
         };
       } else {
         const current = String((isEditable ? formData.base_url : viewData.base_url) || '').trim();
@@ -525,6 +539,8 @@ export function ModelPage() {
       if (info.health_status) setHealthBadge(info.health_status);
       const raw = (info.raw || {}) as Record<string, unknown>;
       setManifestRaw(raw);
+      const params = raw.important_params ?? info.important_params;
+      setImportantParams(params && typeof params === 'object' ? (params as Record<string, unknown>) : {});
       const vector = raw.dimensions;
       const maxTok = raw.max_tokens;
       if (typeof vector === 'number' && Number.isFinite(vector)) setVectorDim(String(vector));
@@ -699,6 +715,18 @@ export function ModelPage() {
             fields={OTHER_PARAMS_FIELDS}
             data={otherParamsData}
           />
+          <Block
+            title="HF параметры"
+            icon="file"
+            iconVariant="primary"
+            width="1/2"
+          >
+            <pre className={styles.rawJson}>
+              {Object.keys(importantParams).length
+                ? JSON.stringify(importantParams, null, 2)
+                : 'Параметры не найдены'}
+            </pre>
+          </Block>
           <Block
             title="Метаданные"
             icon="database"

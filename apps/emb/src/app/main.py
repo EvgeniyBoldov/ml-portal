@@ -7,6 +7,7 @@ import logging
 import time
 import os
 import json
+from pathlib import Path
 from typing import List, Dict, Any, Optional, Union
 from datetime import datetime, timezone
 from dataclasses import dataclass
@@ -81,6 +82,7 @@ class ModelInfo(BaseModel):
     version: str
     modality: str
     description: str
+    important_params: Dict[str, Any] = Field(default_factory=dict)
 
 
 class HealthResponse(BaseModel):
@@ -102,6 +104,89 @@ class ModelConfig:
     parallelism: int
     path: str
     manifest: Dict[str, Any]
+    hf_metadata: Dict[str, Any]
+
+
+def _read_json(path: Path) -> Dict[str, Any]:
+    try:
+        if path.exists() and path.is_file():
+            with path.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+                return data if isinstance(data, dict) else {}
+    except Exception as e:
+        logger.warning(f"Failed to read {path.name}: {e}")
+    return {}
+
+
+def _infer_modality(path: Path, config: Dict[str, Any], modules: Dict[str, Any]) -> str:
+    arch = " ".join(config.get("architectures", []) if isinstance(config.get("architectures"), list) else [])
+    model_type = str(config.get("model_type") or "").lower()
+    lower_arch = arch.lower()
+    if "crossencoder" in lower_arch or "sequenceclassification" in lower_arch:
+        return "reranker"
+    if model_type in {"bert", "roberta", "xlm-roberta", "mpnet", "bge", "e5"}:
+        return "embedding"
+    if modules:
+        return "embedding"
+    if (path / "sentence_bert_config.json").exists() or (path / "1_Pooling").exists():
+        return "embedding"
+    return "embedding"
+
+
+def _load_hf_metadata(model_path: str, fallback_alias: str, fallback_version: str) -> Dict[str, Any]:
+    path = Path(model_path)
+    config = _read_json(path / "config.json")
+    tokenizer_config = _read_json(path / "tokenizer_config.json")
+    modules = _read_json(path / "modules.json")
+    sentence_cfg = _read_json(path / "sentence_bert_config.json")
+    generation_config = _read_json(path / "generation_config.json")
+
+    model_name = (
+        str(config.get("_name_or_path") or "")
+        or str(tokenizer_config.get("name_or_path") or "")
+        or path.name
+        or fallback_alias
+    )
+    version = (
+        str(config.get("transformers_version") or "")
+        or str(generation_config.get("transformers_version") or "")
+        or fallback_version
+    )
+
+    max_tokens = (
+        config.get("max_position_embeddings")
+        or tokenizer_config.get("model_max_length")
+        or sentence_cfg.get("max_seq_length")
+    )
+    if isinstance(max_tokens, (int, float)):
+        max_tokens = int(max_tokens)
+    else:
+        max_tokens = None
+
+    hidden_size = config.get("hidden_size")
+    if not isinstance(hidden_size, (int, float)):
+        hidden_size = None
+
+    important_params: Dict[str, Any] = {
+        "architectures": config.get("architectures"),
+        "model_type": config.get("model_type"),
+        "pooling_mode": sentence_cfg.get("pooling_mode"),
+        "normalize_embeddings_default": sentence_cfg.get("normalize_embeddings"),
+        "tokenizer_class": tokenizer_config.get("tokenizer_class"),
+        "max_position_embeddings": config.get("max_position_embeddings"),
+        "model_max_length": tokenizer_config.get("model_max_length"),
+        "hidden_size": hidden_size,
+    }
+    important_params = {k: v for k, v in important_params.items() if v not in (None, "", [], {})}
+
+    return {
+        "name": model_name,
+        "version": version,
+        "modality": _infer_modality(path, config, modules),
+        "max_tokens": max_tokens,
+        "dimensions": int(hidden_size) if hidden_size is not None else None,
+        "important_params": important_params,
+    }
 
 
 class EmbeddingEngine:
@@ -258,7 +343,16 @@ class EmbeddingGateway:
                 parallelism=int(os.getenv("EMB_MODEL_PARALLELISM", os.getenv(f"EMB_PARALLELISM_{env_alias}", "2"))),
                 path=path,
                 manifest=manifest_data,
+                hf_metadata={},
             )
+            hf_metadata = _load_hf_metadata(config.path, resolved_alias, config.version)
+            config.hf_metadata = hf_metadata
+            if hf_metadata.get("version"):
+                config.version = str(hf_metadata["version"])
+            if hf_metadata.get("dimensions") is not None:
+                config.dimensions = int(hf_metadata["dimensions"])
+            if hf_metadata.get("max_tokens") is not None:
+                config.max_tokens = int(hf_metadata["max_tokens"])
             manifest_path = os.path.join(config.path, "manifest.json")
             try:
                 if os.path.exists(manifest_path):
@@ -284,13 +378,22 @@ class EmbeddingGateway:
         """List available models"""
         return [
             ModelInfo(
-                name=str(engine.config.manifest.get("model") or engine.config.alias),
+                name=str(
+                    engine.config.hf_metadata.get("name")
+                    or engine.config.manifest.get("model")
+                    or engine.config.alias
+                ),
                 alias=engine.config.alias,
                 dimensions=engine.config.dimensions,
                 max_tokens=engine.config.max_tokens,
                 version=engine.config.version,
-                modality=str(engine.config.manifest.get("modality") or "embedding"),
+                modality=str(
+                    engine.config.hf_metadata.get("modality")
+                    or engine.config.manifest.get("modality")
+                    or "embedding"
+                ),
                 description=str(engine.config.manifest.get("description") or f"Embedding model {engine.config.alias}"),
+                important_params=engine.config.hf_metadata.get("important_params") or {},
             )
             for engine in self.models.values()
         ]
@@ -314,6 +417,15 @@ async def health_check():
 async def list_models():
     """List available models"""
     return gateway.list_models()
+
+
+@app.get("/description", response_model=ModelInfo)
+async def description():
+    """Primary model description endpoint used by platform probes."""
+    models = gateway.list_models()
+    if not models:
+        raise HTTPException(status_code=503, detail="No models loaded")
+    return models[0]
 
 
 @app.post("/embed", response_model=EmbedResponse)
