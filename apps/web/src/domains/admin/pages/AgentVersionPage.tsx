@@ -201,7 +201,6 @@ export function AgentVersionPage() {
   const isDraft = existingVersion?.status === 'draft';
   const canEdit = isCreate || isDraft;
   const isEditable = (mode === 'edit' || mode === 'create') && canEdit;
-  const showDraftBadge = isEditable && isDraft;
 
   // ─── AI Generation ───
   const availableFields = [
@@ -291,21 +290,6 @@ export function AgentVersionPage() {
       onSave={isEditable ? handleSave : undefined}
       onCancel={isEditable ? handleCancel : undefined}
       actionButtons={isEditable ? undefined : actionButtons}
-      headerActions={
-        showDraftBadge ? (
-          <span style={{
-            fontSize: 12,
-            fontWeight: 600,
-            padding: '3px 10px',
-            borderRadius: 6,
-            background: 'var(--warning-muted, #fef3c7)',
-            color: 'var(--warning, #d97706)',
-            border: '1px solid var(--warning-border, #fde68a)',
-          }}>
-            Редактирование черновика
-          </span>
-        ) : undefined
-      }
     >
       {/* ── Tab 1: Промпт ── */}
       <Tab title="Промпт" layout="grid" id="prompt">
