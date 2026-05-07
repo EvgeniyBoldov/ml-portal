@@ -695,6 +695,31 @@ export const collectionsApi = {
     return apiRequest(`/collections/${collectionId}/docs/${docId}/download?kind=${kind}`);
   },
 
+  startCsvExport: async (
+    slug: string
+  ): Promise<{ export_id: string; status: string; task_id: string; expires_in: number }> => {
+    return apiRequest(`/collections/${slug}/export`, {
+      method: 'POST',
+    });
+  },
+
+  getCsvExportStatus: async (
+    slug: string,
+    exportId: string
+  ): Promise<{
+    export_id: string;
+    status: string;
+    file_id?: string;
+    download_url?: string;
+    file_name?: string;
+    content_type?: string;
+    size_bytes?: number;
+    expires_at?: string;
+    error?: string;
+  }> => {
+    return apiRequest(`/collections/${slug}/export/${exportId}`);
+  },
+
   getStatusEventsUrl: (collectionId: string): string =>
     `/api/v1/collections/${collectionId}/status/events`,
 

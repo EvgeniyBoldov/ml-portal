@@ -3,13 +3,14 @@ from __future__ import annotations
 import uuid
 from typing import List, Optional
 
-from sqlalchemy import text
+from sqlalchemy import func, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
 
 from app.core.exceptions import CollectionNotFoundError
-from app.models.collection import Collection
+from app.models.collection import Collection, CollectionType
+from app.models.rag_ingest import DocumentCollectionMembership
 
 
 class CollectionQueryService:
@@ -72,3 +73,17 @@ class CollectionQueryService:
         await self.host.sync_collection_status(collection, persist=False)
         await self.session.flush()
         return count
+
+    async def get_effective_total_rows(self, collection: Collection) -> int:
+        """Return actual row/document count for collection views."""
+        if collection.collection_type == CollectionType.DOCUMENT.value:
+            result = await self.session.execute(
+                select(func.count())
+                .select_from(DocumentCollectionMembership)
+                .where(
+                    DocumentCollectionMembership.tenant_id == collection.tenant_id,
+                    DocumentCollectionMembership.collection_id == collection.id,
+                )
+            )
+            return int(result.scalar() or 0)
+        return int(collection.total_rows or 0)

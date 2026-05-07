@@ -23,6 +23,7 @@ async def build_collection_response(service: CollectionService, collection) -> C
         )
 
     snapshot = await service.sync_collection_status(collection, persist=False)
+    effective_total_rows = await service.get_effective_total_rows(collection)
     return CollectionResponse(
         id=collection.id,
         tenant_id=collection.tenant_id,
@@ -39,7 +40,7 @@ async def build_collection_response(service: CollectionService, collection) -> C
         has_vector_search=collection.has_vector_search,
         vector_config=collection.vector_config,
         qdrant_collection_name=collection.qdrant_collection_name,
-        total_rows=collection.total_rows,
+        total_rows=effective_total_rows,
         vectorized_rows=collection.vectorized_rows,
         total_chunks=collection.total_chunks,
         failed_rows=collection.failed_rows,

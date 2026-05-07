@@ -185,6 +185,10 @@ class CollectionService:
         """Build effective readiness status and diagnostics for a collection."""
         return await self.status_snapshot.get_status_snapshot(collection)
 
+    async def get_effective_total_rows(self, collection: Collection) -> int:
+        """Effective row count for list/detail APIs."""
+        return await self.query.get_effective_total_rows(collection)
+
     async def sync_collection_status(
         self,
         collection: Collection,

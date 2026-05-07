@@ -31,6 +31,7 @@ async def _build_collection_response(
     collection,
 ) -> CollectionResponse:
     snapshot = await service.sync_collection_status(collection, persist=False)
+    effective_total_rows = await service.get_effective_total_rows(collection)
     return CollectionResponse(
         id=collection.id,
         collection_type=collection.collection_type,
@@ -40,7 +41,7 @@ async def _build_collection_response(
         fields=collection.fields,
         status=snapshot["status"],
         status_details=snapshot["details"],
-        total_rows=collection.total_rows or 0,
+        total_rows=effective_total_rows,
         is_active=collection.is_active,
         has_vector_search=collection.has_vector_search,
         created_at=collection.created_at.isoformat(),

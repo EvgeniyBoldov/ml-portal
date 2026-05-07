@@ -27,6 +27,7 @@ import { ApiError } from '@shared/api/errors';
 import { StatusModalNew } from '@/domains/rag/components/StatusModalNew';
 import { qk } from '@shared/api/keys';
 import { SSEClient, type SSEMessage } from '@shared/lib/sse';
+import { buildFileDownloadUrl } from '@shared/api/files';
 import styles from './CollectionDataPage.module.css';
 
 const PAGE_SIZES = [25, 50, 100];
@@ -92,6 +93,8 @@ function TableCollectionView({ collection, slug }: TableViewProps) {
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [activeExportId, setActiveExportId] = useState<string | null>(null);
   const isReadOnly = Boolean(collection.is_readonly);
 
   React.useEffect(() => {
@@ -199,6 +202,42 @@ function TableCollectionView({ collection, slug }: TableViewProps) {
     window.open(collectionsApi.downloadTemplate(slug), '_blank');
   };
 
+  const pollExportReady = useCallback(async (exportId: string) => {
+    const maxAttempts = 120;
+    for (let i = 0; i < maxAttempts; i += 1) {
+      const status = await collectionsApi.getCsvExportStatus(slug, exportId);
+      if (status.status === 'ready') {
+        const href = status.download_url || (status.file_id ? buildFileDownloadUrl(status.file_id) : '');
+        if (href) {
+          window.open(href, '_blank', 'noopener,noreferrer');
+        }
+        return;
+      }
+      if (status.status === 'failed') {
+        throw new Error(status.error || 'Экспорт завершился с ошибкой');
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+    throw new Error('Превышено время ожидания экспорта');
+  }, [slug]);
+
+  const handleExportCsv = useCallback(async () => {
+    if (exporting || isReadOnly) return;
+    setExporting(true);
+    try {
+      const started = await collectionsApi.startCsvExport(slug);
+      setActiveExportId(started.export_id);
+      showToast('Экспорт запущен', 'success');
+      await pollExportReady(started.export_id);
+      showToast('CSV готов', 'success');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Ошибка экспорта CSV', 'error');
+    } finally {
+      setExporting(false);
+      setActiveExportId(null);
+    }
+  }, [exporting, isReadOnly, pollExportReady, showToast, slug]);
+
   const truncateText = (text: unknown, maxLen = 100): string => {
     if (text === null || text === undefined) return '—';
     const str = String(text);
@@ -231,6 +270,10 @@ function TableCollectionView({ collection, slug }: TableViewProps) {
           <Button variant="outline" onClick={handleDownloadTemplate}>
             <Icon name="download" size={16} />
             Шаблон CSV
+          </Button>
+          <Button variant="outline" onClick={handleExportCsv} disabled={exporting}>
+            <Icon name="download" size={16} />
+            {exporting ? (activeExportId ? 'Экспортируется...' : 'Запуск...') : 'Экспорт CSV'}
           </Button>
           <Button onClick={() => setUploadModalOpen(true)}>
             <Icon name="upload" size={16} />
