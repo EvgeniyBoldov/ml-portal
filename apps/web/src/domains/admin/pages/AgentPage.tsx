@@ -116,6 +116,9 @@ const AGENT_EXEC_FIELDS: FieldConfig[] = [
     label: 'Temperature',
     description: 'Температура генерации (0.0–1.0)',
     placeholder: '0.7',
+    step: 0.1,
+    min: 0,
+    max: 1,
   },
   {
     key: 'max_tokens',
@@ -215,6 +218,7 @@ const INFO_FIELDS: FieldConfig[] = [
     key: 'slug',
     type: 'text',
     label: 'Slug (ID)',
+    required: true,
     editable: false,
     placeholder: 'network-assistant',
   },

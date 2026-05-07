@@ -48,6 +48,7 @@ export function Select({
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const [menuPosition, setMenuPosition] = useState({ top: 0, left: 0, width: 0 });
+  const [menuPlacement, setMenuPlacement] = useState<'top' | 'bottom'>('bottom');
 
   const selectedOption = options.find(opt => opt.value === value);
 
@@ -55,11 +56,19 @@ export function Select({
   const updatePosition = useCallback(() => {
     if (triggerRef.current) {
       const rect = triggerRef.current.getBoundingClientRect();
+      const viewportHeight = window.innerHeight;
+      const approxMenuHeight = 280;
+      const spaceBelow = viewportHeight - rect.bottom;
+      const spaceAbove = rect.top;
+      const shouldOpenUp = spaceBelow < approxMenuHeight && spaceAbove > spaceBelow;
+      const top = shouldOpenUp ? Math.max(8, rect.top - approxMenuHeight - 4) : rect.bottom + 4;
+      const left = Math.min(rect.left, Math.max(8, window.innerWidth - rect.width - 8));
       setMenuPosition({
-        top: rect.bottom + 4,
-        left: rect.left,
+        top,
+        left,
         width: rect.width,
       });
+      setMenuPlacement(shouldOpenUp ? 'top' : 'bottom');
     }
   }, []);
 
@@ -192,6 +201,7 @@ export function Select({
         left: menuPosition.left,
         width: menuPosition.width,
       }}
+      data-placement={menuPlacement}
       onKeyDown={handleMenuKeyDown}
     >
       {options.map((option, index) => (

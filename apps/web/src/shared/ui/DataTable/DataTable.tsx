@@ -90,6 +90,7 @@ export interface DataTableProps<T = any> {
   
   // Pagination
   paginated?: boolean;
+  serverPaginated?: boolean;
   pageSize?: number;
   currentPage?: number;
   totalItems?: number;
@@ -130,6 +131,7 @@ export default function DataTable<T = any>({
   onSearchChange,
   searchFilter,
   paginated = false,
+  serverPaginated = false,
   pageSize: controlledPageSize,
   currentPage: controlledCurrentPage,
   totalItems,
@@ -302,10 +304,10 @@ export default function DataTable<T = any>({
 
   // Paginate data
   const paginatedData = useMemo(() => {
-    if (!paginated) return sortedData;
+    if (!paginated || serverPaginated) return sortedData;
     const start = (currentPage - 1) * pageSize;
     return sortedData.slice(start, start + pageSize);
-  }, [sortedData, paginated, currentPage, pageSize]);
+  }, [sortedData, paginated, serverPaginated, currentPage, pageSize]);
 
   const total = totalItems ?? filteredData.length;
   const totalPages = Math.ceil(total / pageSize);
@@ -431,15 +433,6 @@ export default function DataTable<T = any>({
       <div className={styles.tableWrapper}>
         {loading ? (
           <div className={styles.loading}>Загрузка...</div>
-        ) : paginatedData.length === 0 ? (
-          <div className={styles.empty}>
-            {emptyState || (
-              <>
-                <Icon name="inbox" size={48} />
-                <p>{searchValue ? 'Ничего не найдено' : emptyText}</p>
-              </>
-            )}
-          </div>
         ) : (
           <table className={styles.table}>
             <thead>
@@ -476,7 +469,23 @@ export default function DataTable<T = any>({
               </tr>
             </thead>
             <tbody>
-              {paginatedData.map((row, index) => {
+              {paginatedData.length === 0 ? (
+                <tr>
+                  <td
+                    colSpan={normalizedColumns.length + (selectable ? 1 : 0)}
+                    style={{ padding: 0 }}
+                  >
+                    <div className={styles.empty}>
+                      {emptyState || (
+                        <>
+                          <Icon name="inbox" size={48} />
+                          <p>{searchValue || hasActiveColumnFilters ? 'Ничего не найдено' : emptyText}</p>
+                        </>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ) : paginatedData.map((row, index) => {
                 const rowKey = getRowSelectionKey(row, rowKeyField) ?? index;
                 const isSelected = selectedKeys.has(rowKey);
                 const customRowClass = rowClassName?.(row, index);

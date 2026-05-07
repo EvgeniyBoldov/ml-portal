@@ -82,6 +82,11 @@ export function useAgentDetail(id: string) {
       tags: entity?.tags ?? [],
       allowed_collection_ids: entity?.allowed_collection_ids ?? [],
     }),
+    validateCreate: (data) => {
+      const slug = typeof data?.slug === 'string' ? data.slug.trim() : '';
+      if (!slug) return 'Поле slug обязательно';
+      return null;
+    },
     messages: {
       create: 'Агент создан',
       update: 'Агент обновлен',

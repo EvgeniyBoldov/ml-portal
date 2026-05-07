@@ -191,6 +191,7 @@ export function AgentRunsPage() {
           emptyText="Запуски не найдены"
           onRowClick={(run) => navigate(`/admin/agent-runs/${run.id}`)}
           paginated
+          serverPaginated
           pageSize={effectiveFilters.page_size}
           currentPage={effectiveFilters.page}
           totalItems={runsData?.total}
