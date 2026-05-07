@@ -1,10 +1,9 @@
 import React from 'react';
-import { useChat } from '../contexts/ChatContext';
+import { useChatStatusState } from '../contexts/ChatContext';
 import styles from './ChatStatus.module.css';
 
 export default function ChatStatus() {
-  const { state } = useChat();
-  const { error, isLoading } = state;
+  const { error, isLoading } = useChatStatusState();
 
   if (!error && !isLoading) return null;
 

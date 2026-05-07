@@ -8,12 +8,14 @@ import styles from './MarkdownRenderer.module.css';
 
 interface MarkdownRendererProps {
   content: string;
-  enableSyntaxHighlighting?: boolean; // Новый пропс для управления подсветкой
+  enableSyntaxHighlighting?: boolean;
+  enableLineBreaks?: boolean;
 }
 
 export default function MarkdownRenderer({
   content,
   enableSyntaxHighlighting = true,
+  enableLineBreaks = true,
 }: MarkdownRendererProps) {
   const isSafeHref = (href?: string) => {
     if (!href) return false;
@@ -28,16 +30,16 @@ export default function MarkdownRenderer({
   };
 
   const renderCode = ({
-    inline,
     className,
     children,
     ...props
-  }: React.HTMLAttributes<HTMLElement> & { children?: React.ReactNode; inline?: boolean }) => {
+  }: React.HTMLAttributes<HTMLElement> & { children?: React.ReactNode }) => {
     const match = /language-(\w+)/.exec(className || '');
     const language = match ? match[1] : '';
     const code = String(children ?? '').replace(/\n$/, '');
+    const isBlockCode = Boolean(language) || code.includes('\n');
 
-    if (!inline && enableSyntaxHighlighting) {
+    if (isBlockCode && enableSyntaxHighlighting) {
       const label = language || 'text';
       return (
         <div className={styles.codeContainer}>
@@ -58,7 +60,7 @@ export default function MarkdownRenderer({
     }
 
     return (
-      <code className={inline ? styles.inlineCode : styles.codeBlock} {...props}>
+      <code className={styles.inlineCode} {...props}>
         {children}
       </code>
     );
@@ -67,7 +69,7 @@ export default function MarkdownRenderer({
   return (
     <div className={styles.markdown}>
       <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkBreaks]}
+        remarkPlugins={enableLineBreaks ? [remarkGfm, remarkBreaks] : [remarkGfm]}
         urlTransform={(url) => (isSafeHref(url) ? url : '')}
         components={{
           code: renderCode,

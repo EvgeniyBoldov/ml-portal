@@ -1,10 +1,10 @@
 import React, { useState, useMemo } from 'react';
-import { useChat } from '../contexts/ChatContext';
+import { useChatCatalogState } from '../contexts/ChatContext';
 import Input from '@shared/ui/Input';
 import styles from './ChatSearch.module.css';
 
 export default function ChatSearch() {
-  const { state } = useChat();
+  const state = useChatCatalogState();
   const [searchQuery, setSearchQuery] = useState('');
 
   const filteredChats = useMemo(() => {

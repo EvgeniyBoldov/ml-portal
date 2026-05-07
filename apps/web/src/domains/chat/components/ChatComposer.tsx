@@ -29,6 +29,13 @@ export function ChatComposer({ onSend, onStop, isStreaming, disabled, placeholde
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const attachmentsRef = useRef<Attachment[]>([]);
+
+  const revokePreviews = useCallback((items: Attachment[]) => {
+    for (const item of items) {
+      if (item.preview) URL.revokeObjectURL(item.preview);
+    }
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -62,15 +69,17 @@ export function ChatComposer({ onSend, onStop, isStreaming, disabled, placeholde
     if (!text.trim() && attachments.length === 0) return;
     if (disabled) return;
 
+    const toSend = [...attachments];
     onSend(text.trim(), {
-      attachments: attachments.map(a => a.file),
+      attachments: toSend.map(a => a.file),
     });
 
+    revokePreviews(toSend);
     setText('');
     setAttachments([]);
     setUploadError(null);
     textareaRef.current?.focus();
-  }, [text, attachments, disabled, onSend]);
+  }, [text, attachments, disabled, onSend, revokePreviews]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -136,6 +145,16 @@ export function ChatComposer({ onSend, onStop, isStreaming, disabled, placeholde
     });
   };
 
+  useEffect(() => {
+    attachmentsRef.current = attachments;
+  }, [attachments]);
+
+  useEffect(() => {
+    return () => {
+      revokePreviews(attachmentsRef.current);
+    };
+  }, [revokePreviews]);
+
   const canStop = isStreaming && !!onStop;
   const canSend = (text.trim().length > 0 || attachments.length > 0) && !disabled && !isStreaming;
   const acceptValue = useMemo(() => {
@@ -188,6 +207,7 @@ export function ChatComposer({ onSend, onStop, isStreaming, disabled, placeholde
               onClick={() => setShowMenu((v) => !v)}
               type="button"
               title="Добавить"
+              aria-label="Открыть меню вложений"
               disabled={disabled}
             >
               <Icon name="plus" size={20} />
@@ -224,6 +244,7 @@ export function ChatComposer({ onSend, onStop, isStreaming, disabled, placeholde
               onClick={onStop}
               type="button"
               title="Остановить генерацию"
+              aria-label="Остановить генерацию"
             >
               <Icon name="square" size={16} />
             </button>
@@ -234,6 +255,7 @@ export function ChatComposer({ onSend, onStop, isStreaming, disabled, placeholde
               disabled={!canSend}
               type="button"
               title="Отправить (Enter)"
+              aria-label="Отправить сообщение"
             >
               <Icon name="send" size={20} />
             </button>

@@ -1,9 +1,9 @@
 import React from 'react';
-import { useChat } from '../contexts/ChatContext';
+import { useChatCatalogState } from '../contexts/ChatContext';
 import styles from './ChatStats.module.css';
 
 export default function ChatStats() {
-  const { state } = useChat();
+  const state = useChatCatalogState();
 
   const stats = React.useMemo(() => {
     const chatList = state.chatsOrder.map(id => state.chatsById[id]);

@@ -1,55 +1,24 @@
 import React, { useEffect, useMemo, useRef } from 'react';
 import styles from './Chat.module.css';
-import { useNavigate, useParams } from 'react-router-dom';
-import { useChat } from '@/domains/chat/contexts/ChatContext';
-import EmptyState from '@shared/ui/EmptyState';
-import Button from '@shared/ui/Button';
+import { useParams } from 'react-router-dom';
+import { useChatActions, useChatMessagesState } from '@/domains/chat/contexts/ChatContext';
 import { ChatMessage } from '@/domains/chat/components/ChatMessage';
 import { ChatComposer } from '@/domains/chat/components/ChatComposer';
 import { ConfirmationPrompt } from '@/domains/chat/components/ConfirmationPrompt/ConfirmationPrompt';
 import { Icon } from '@/shared/ui/Icon';
-import type { RAGSource } from '@/domains/chat/components/RAGSources';
-
-function asRagSources(value: unknown): RAGSource[] | undefined {
-  return Array.isArray(value) ? (value as RAGSource[]) : undefined;
-}
-
-function asAttachments(
-  value: unknown
-): Array<{ id?: string; fileId?: string; name: string; type?: string; sizeBytes?: number; url?: string }> | undefined {
-  if (!Array.isArray(value)) return undefined;
-  const items: Array<{ id?: string; fileId?: string; name: string; type?: string; sizeBytes?: number; url?: string }> = [];
-  for (const raw of value) {
-    if (!raw || typeof raw !== 'object') continue;
-    const entry = raw as Record<string, unknown>;
-    const name = typeof entry.file_name === 'string' ? entry.file_name : '';
-    if (!name) continue;
-    items.push({
-      id: typeof entry.id === 'string' ? entry.id : undefined,
-      fileId: typeof entry.file_id === 'string' ? entry.file_id : undefined,
-      name,
-      type: typeof entry.content_type === 'string' ? entry.content_type : undefined,
-      sizeBytes: typeof entry.size_bytes === 'number' ? entry.size_bytes : undefined,
-      url: typeof entry.url === 'string' ? entry.url : undefined,
-    });
-  }
-  return items.length ? items : undefined;
-}
-
-function asAnswerBlocks(value: unknown): Array<Record<string, unknown>> | undefined {
-  if (!Array.isArray(value)) return undefined;
-  return value.filter((item) => item && typeof item === 'object') as Array<Record<string, unknown>>;
-}
 
 export default function Chat() {
   const { chatId } = useParams();
-  const nav = useNavigate();
-  const { state, loadMessages, setCurrentChat, clearPendingState, applyPausedState, sendMessageStream, abortStream } = useChat();
+  const state = useChatMessagesState();
+  const { loadMessages, setCurrentChat, clearPendingState, applyPausedState, sendMessageStream, abortStream } = useChatActions();
   const historyRef = useRef<HTMLDivElement>(null);
   const [busy, setBusy] = React.useState(false);
   const [streamError, setStreamError] = React.useState<string | null>(null);
   const [clarifyInput, setClarifyInput] = React.useState('');
   const [clarifyBusy, setClarifyBusy] = React.useState(false);
+  const [isNearBottom, setIsNearBottom] = React.useState(true);
+  const [hasUnread, setHasUnread] = React.useState(false);
+  const prevMessageCountRef = useRef(0);
 
   const current = useMemo(
     () => (chatId ? state.messagesByChat[chatId] : undefined),
@@ -57,16 +26,40 @@ export default function Chat() {
   );
   const messages = current?.items || [];
 
-  // Auto-scroll to bottom
-  const scrollToBottom = () => {
+  const scrollToBottom = (force: boolean = false) => {
     if (historyRef.current) {
+      if (!force && !isNearBottom) return;
       historyRef.current.scrollTop = historyRef.current.scrollHeight;
     }
   };
 
   useEffect(() => {
-    scrollToBottom();
-  }, [messages.length]);
+    const nextCount = messages.length;
+    const prevCount = prevMessageCountRef.current;
+    if (nextCount > prevCount) {
+      if (isNearBottom) {
+        scrollToBottom(true);
+        setHasUnread(false);
+      } else {
+        setHasUnread(true);
+      }
+    }
+    prevMessageCountRef.current = nextCount;
+  }, [messages.length, isNearBottom]);
+
+  useEffect(() => {
+    const container = historyRef.current;
+    if (!container) return;
+    const onScroll = () => {
+      const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+      const near = distanceFromBottom <= 80;
+      setIsNearBottom(near);
+      if (near) setHasUnread(false);
+    };
+    container.addEventListener('scroll', onScroll);
+    onScroll();
+    return () => container.removeEventListener('scroll', onScroll);
+  }, [chatId, messages.length]);
 
   useEffect(() => {
     if (!chatId) return;
@@ -74,12 +67,12 @@ export default function Chat() {
     clearPendingState();
     setClarifyInput('');
     setCurrentChat(chatId);
-    if (!state.messagesByChat[chatId]?.loaded) {
+    if (!current?.loaded) {
       loadMessages(chatId).catch(console.error);
     }
     setBusy(false);
     setStreamError(null);
-  }, [chatId]);
+  }, [chatId, current?.loaded, clearPendingState, setCurrentChat, loadMessages]);
 
   // Normalize content
   const normalizeContent = (content: unknown): string => {
@@ -101,6 +94,7 @@ export default function Chat() {
     setStreamError(null);
 
     try {
+      scrollToBottom(true);
       let attachmentIds: string[] = [];
       let attachmentMeta: Array<Record<string, unknown>> = [];
       if (options.attachments?.length) {
@@ -287,14 +281,11 @@ export default function Chat() {
           messages.map((m, idx) => (
             <ChatMessage
               key={m.id}
-              id={m.id}
               role={m.role}
               content={normalizeContent(m.content)}
               createdAt={m.created_at}
               isStreaming={m.role === 'assistant' && idx === messages.length - 1 && isStreaming}
-              ragSources={asRagSources(m.meta?.rag_sources)}
-              attachments={asAttachments(m.meta?.attachments)}
-              answerBlocks={asAnswerBlocks(m.meta?.answer_blocks)}
+              meta={m.meta as Record<string, unknown> | undefined}
             />
           ))
         )}
@@ -307,6 +298,20 @@ export default function Chat() {
           </div>
         )}
       </div>
+      {hasUnread && (
+        <button
+          type="button"
+          className={styles.jumpToLatest}
+          onClick={() => {
+            scrollToBottom(true);
+            setHasUnread(false);
+          }}
+          aria-label="Перейти к новым сообщениям"
+        >
+          <Icon name="arrow-down" size={14} />
+          <span>Новые сообщения</span>
+        </button>
+      )}
 
       {pendingConfirmation && (
         <ConfirmationPrompt

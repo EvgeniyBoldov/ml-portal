@@ -41,3 +41,15 @@ class TestChatTitleService:
         assert result is None
         mock_session.flush.assert_not_awaited()
         mock_session.commit.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_generate_chat_title_does_not_override_custom_title(self, service: ChatTitleService, mock_llm_client, chats_repo, mock_session):
+        chats_repo.get_chat_by_id = AsyncMock(return_value=SimpleNamespace(name="Custom title"))
+        mock_llm_client.chat = AsyncMock(return_value={"content": "Generated title"})
+
+        result = await service.generate_chat_title("chat-1", "hello")
+
+        assert result is None
+        mock_llm_client.chat.assert_not_awaited()
+        mock_session.flush.assert_not_awaited()
+        mock_session.commit.assert_not_awaited()

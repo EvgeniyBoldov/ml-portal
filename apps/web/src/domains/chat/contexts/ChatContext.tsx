@@ -1,7 +1,8 @@
-import React, { createContext, useContext, useState, useCallback, useRef, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useCallback, useRef, ReactNode, useMemo } from 'react';
 import { useChats } from '@shared/api/hooks/useChats';
 import { useQueryClient } from '@tanstack/react-query';
 import type { Chat, ChatMessage } from '@shared/api/types';
+import { qk } from '@/shared/api/keys';
 
 type MessageMeta = Record<string, unknown> & {
   rag_sources?: unknown[];
@@ -76,8 +77,7 @@ interface ChatState {
   isStreaming: boolean;
 }
 
-interface ChatContextValue {
-  state: ChatState;
+interface ChatActions {
   loadMessages: (chatId: string) => Promise<void>;
   setCurrentChat: (chatId: string) => void;
   clearPendingState: () => void;
@@ -96,7 +96,25 @@ interface ChatContextValue {
   ) => Promise<void>;
 }
 
-const ChatContext = createContext<ChatContextValue | null>(null);
+const ChatStatusContext = createContext<Pick<ChatState, "error" | "isLoading"> | null>(null);
+const ChatActionsContext = createContext<ChatActions | null>(null);
+const ChatMessagesStateContext = createContext<
+  Pick<
+    ChatState,
+    | "messagesByChat"
+    | "streamStatus"
+    | "pendingConfirmations"
+    | "pendingInput"
+    | "pausedRunId"
+    | "orchestrationEnvelope"
+    | "orchestrationState"
+    | "isStreaming"
+    | "isLoading"
+  > | null
+>(null);
+const ChatCatalogStateContext = createContext<
+  Pick<ChatState, "chatsOrder" | "chatsById" | "messagesByChat"> | null
+>(null);
 
 function toRenderableMessage(message: ChatMessage): Message | null {
   if (message.role !== 'user' && message.role !== 'assistant') {
@@ -126,6 +144,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const [orchestrationState, setOrchestrationState] = useState<OrchestrationState | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const streamStatusRef = useRef<string | null>(null);
 
   const { data: chats } = useChats();
   const queryClient = useQueryClient();
@@ -166,6 +185,14 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     setCurrentChatId(chatId);
   }, []);
 
+  const updateStreamStatus = useCallback((next: string | null) => {
+    if (streamStatusRef.current === next) {
+      return;
+    }
+    streamStatusRef.current = next;
+    setStreamStatus(next);
+  }, []);
+
   const clearPendingState = useCallback(() => {
     setPendingConfirmations([]);
     setPendingConfirmationTokens([]);
@@ -174,8 +201,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     setPausedRunId(null);
     setOrchestrationEnvelope(null);
     setOrchestrationState(null);
-    setStreamStatus(null);
-  }, []);
+    updateStreamStatus(null);
+  }, [updateStreamStatus]);
 
   const abortStream = useCallback(() => {
     if (abortControllerRef.current) {
@@ -206,7 +233,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         runId: runId || null,
       }]);
       setPendingInput(null);
-      setStreamStatus('Ожидание подтверждения...');
+      updateStreamStatus('Ожидание подтверждения...');
       return;
     }
 
@@ -215,8 +242,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       question: question || message || undefined,
       reason,
     });
-    setStreamStatus('Ожидание ввода...');
-  }, []);
+    updateStreamStatus('Ожидание ввода...');
+  }, [updateStreamStatus]);
 
   const sendMessageStream = useCallback(async (
     chatId: string,
@@ -231,7 +258,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   ) => {
     try {
       setError(null);
-      setStreamStatus(null);
+      updateStreamStatus(null);
       setPendingConfirmations([]);
       setPendingInput(null);
       setStopReason(null);
@@ -447,17 +474,22 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               const newTitle = parsed.title;
               if (newTitle && chatId) {
                 // Update chat title in cache immediately
-                queryClient.setQueryData(['chats', 'list'], (oldData: any) => {
-                  if (!oldData?.items) return oldData;
-                  return {
-                    ...oldData,
-                    items: oldData.items.map((chat: any) =>
-                      chat.id === chatId ? { ...chat, name: newTitle } : chat
-                    ),
-                  };
-                });
+                queryClient.setQueriesData(
+                  { queryKey: qk.chats.all() },
+                  (oldData: unknown) => {
+                    if (!oldData || typeof oldData !== 'object') return oldData;
+                    const typed = oldData as { items?: Array<Record<string, unknown>> };
+                    if (!Array.isArray(typed.items)) return oldData;
+                    return {
+                      ...typed,
+                      items: typed.items.map((chat) =>
+                        chat.id === chatId ? { ...chat, name: newTitle } : chat
+                      ),
+                    };
+                  }
+                );
                 // Also invalidate to ensure consistency
-                queryClient.invalidateQueries({ queryKey: ['chats'] });
+                queryClient.invalidateQueries({ queryKey: qk.chats.all() });
               }
             } catch (e) {
               console.error('Failed to parse chat_title event', e);
@@ -513,13 +545,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               const statusText = statusMap[stage];
               if (statusText !== undefined) {
                 if (statusText === '') {
-                  setStreamStatus(null);
+                  updateStreamStatus(null);
                 } else {
-                  setStreamStatus(statusText);
+                  updateStreamStatus(statusText);
                 }
               } else if (stage.startsWith('thinking_step_')) {
                 // Handle dynamic thinking steps
-                setStreamStatus('Думаю...');
+                updateStreamStatus('Думаю...');
               }
             } catch (e) {
               console.error('Failed to parse status event', e);
@@ -535,7 +567,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                 'rag.search': 'Поиск в базе знаний'
               };
               const displayName = toolNames[toolName] || toolName;
-              setStreamStatus(`${displayName}...`);
+              updateStreamStatus(`${displayName}...`);
             } catch (e) {
               console.error('Failed to parse tool_call event', e);
             }
@@ -570,7 +602,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                   };
                 });
               }
-              setStreamStatus('Генерирую ответ...');
+              updateStreamStatus('Генерирую ответ...');
             } catch (e) {
               console.error('Failed to parse tool_result event', e);
             }
@@ -633,16 +665,16 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               const phaseTitle = String(parsed.phase_title || '').trim();
               if ((actionType === 'agent_call' || stepType === 'call_agent') && agentSlug) {
                 if (phaseTitle) {
-                  setStreamStatus(`Шаг ${iteration}: ${agentSlug} (${phaseTitle})...`);
+                  updateStreamStatus(`Шаг ${iteration}: ${agentSlug} (${phaseTitle})...`);
                 } else {
-                  setStreamStatus(`Шаг ${iteration}: ${agentSlug}...`);
+                  updateStreamStatus(`Шаг ${iteration}: ${agentSlug}...`);
                 }
               } else if (actionType === 'final' || stepType === 'finalize') {
-                setStreamStatus('Формирую ответ...');
+                updateStreamStatus('Формирую ответ...');
               } else if (actionType === 'ask_user' || stepType === 'ask_user') {
-                setStreamStatus('Нужно уточнение...');
+                updateStreamStatus('Нужно уточнение...');
               } else {
-                setStreamStatus(`Планирую шаг ${iteration}...`);
+                updateStreamStatus(`Планирую шаг ${iteration}...`);
               }
             } catch (e) {
               console.error('Failed to parse planner_action event', e);
@@ -664,7 +696,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                   runId: typeof parsed.run_id === 'string' ? parsed.run_id : null,
                 },
               ]);
-              setStreamStatus('Ожидание подтверждения...');
+              updateStreamStatus('Ожидание подтверждения...');
             } catch (e) {
               console.error('Failed to parse confirmation_required event', e);
             }
@@ -679,7 +711,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                 question: parsed.question,
                 reason: parsed.reason,
               });
-              setStreamStatus('Ожидание ввода...');
+              updateStreamStatus('Ожидание ввода...');
             } catch (e) {
               console.error('Failed to parse waiting_input event', e);
             }
@@ -703,7 +735,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             try {
               const parsed = JSON.parse(data);
               if (parsed.auto) {
-                setStreamStatus(`Выбран агент: ${parsed.agent}`);
+                updateStreamStatus(`Выбран агент: ${parsed.agent}`);
               }
             } catch (e) {
               console.error('Failed to parse agent_selected event', e);
@@ -723,7 +755,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               setPendingInput(null);
               setStopReason(null);
               setPausedRunId(null);
-              setStreamStatus(null);
+              updateStreamStatus(null);
               if (errorCode) {
                 onError(`${errorCode}: ${errorMessage}`);
               } else {
@@ -734,7 +766,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               setPendingInput(null);
               setStopReason(null);
               setPausedRunId(null);
-              setStreamStatus(null);
+              updateStreamStatus(null);
               onError(data);
             }
           }
@@ -742,7 +774,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       }
 
       // Clear stream status after completion
-      setStreamStatus(null);
+      updateStreamStatus(null);
       setPendingConfirmationTokens([]);
       setOrchestrationEnvelope(null);
       setOrchestrationState(null);
@@ -753,7 +785,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     } catch (err: any) {
       if (err?.name === 'AbortError') {
         // User stopped generation — not an error
-        setStreamStatus(null);
+        updateStreamStatus(null);
         setPendingConfirmations([]);
         setPendingInput(null);
       } else {
@@ -764,7 +796,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         setPendingInput(null);
         setStopReason(null);
         setPausedRunId(null);
-        setStreamStatus(null);
+        updateStreamStatus(null);
         setOrchestrationEnvelope(null);
         setOrchestrationState(null);
       }
@@ -772,41 +804,97 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       setIsStreaming(false);
       abortControllerRef.current = null;
     }
-  }, []);
+  }, [updateStreamStatus]);
 
-  const value: ChatContextValue = {
-    state: {
-      chatsOrder,
-      chatsById,
+  const statusValue = useMemo(
+    () => ({ error, isLoading }),
+    [error, isLoading]
+  );
+  const actionsValue = useMemo<ChatActions>(
+    () => ({
+      loadMessages,
+      setCurrentChat,
+      clearPendingState,
+      applyPausedState,
+      abortStream,
+      sendMessageStream,
+    }),
+    [loadMessages, setCurrentChat, clearPendingState, applyPausedState, abortStream, sendMessageStream]
+  );
+  const messagesStateValue = useMemo(
+    () => ({
       messagesByChat,
-      error,
-      isLoading,
-      currentChatId,
       streamStatus,
       pendingConfirmations,
-      pendingConfirmationTokens,
       pendingInput,
-      stopReason,
       pausedRunId,
       orchestrationEnvelope,
       orchestrationState,
       isStreaming,
-    },
-    loadMessages,
-    setCurrentChat,
-    clearPendingState,
-    applyPausedState,
-    abortStream,
-    sendMessageStream,
-  };
+      isLoading,
+    }),
+    [
+      messagesByChat,
+      streamStatus,
+      pendingConfirmations,
+      pendingInput,
+      pausedRunId,
+      orchestrationEnvelope,
+      orchestrationState,
+      isStreaming,
+      isLoading,
+    ]
+  );
+  const catalogStateValue = useMemo(
+    () => ({
+      chatsOrder,
+      chatsById,
+      messagesByChat,
+    }),
+    [chatsOrder, chatsById, messagesByChat]
+  );
 
-  return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>;
+  return (
+    <ChatStatusContext.Provider value={statusValue}>
+      <ChatActionsContext.Provider value={actionsValue}>
+        <ChatMessagesStateContext.Provider value={messagesStateValue}>
+          <ChatCatalogStateContext.Provider value={catalogStateValue}>
+            {children}
+          </ChatCatalogStateContext.Provider>
+        </ChatMessagesStateContext.Provider>
+      </ChatActionsContext.Provider>
+    </ChatStatusContext.Provider>
+  );
 }
 
-export function useChat() {
-  const context = useContext(ChatContext);
+export function useChatStatusState() {
+  const context = useContext(ChatStatusContext);
   if (!context) {
-    throw new Error('useChat must be used within ChatProvider');
+    throw new Error('useChatStatusState must be used within ChatProvider');
+  }
+  return context;
+}
+
+export function useChatActions() {
+  const context = useContext(ChatActionsContext);
+  if (!context) {
+    throw new Error('useChatActions must be used within ChatProvider');
+  }
+  return context;
+}
+
+export function useChatMessagesState() {
+  const context = useContext(ChatMessagesStateContext);
+  if (!context) {
+    throw new Error('useChatMessagesState must be used within ChatProvider');
+  }
+  return context;
+}
+
+export function useChatCatalogState() {
+  const context = useContext(ChatCatalogStateContext);
+  if (!context) {
+    throw new Error('useChatCatalogState must be used within ChatProvider');
   }
   return context;
 }

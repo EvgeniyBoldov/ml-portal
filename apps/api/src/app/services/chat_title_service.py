@@ -22,6 +22,7 @@ User message: {message}"""
 
     TITLE_MAX_TOKENS: int = 50
     TITLE_TEMPERATURE: float = 0.3
+    DEFAULT_CHAT_NAMES = frozenset({"new chat", "новый чат", ""})
 
     def __init__(
         self,
@@ -36,6 +37,15 @@ User message: {message}"""
     async def generate_chat_title(self, chat_id: str, first_message: str) -> Optional[str]:
         """Generate a title for the chat based on the first message."""
         try:
+            chat = await self.chats_repo.get_chat_by_id(chat_id)
+            if not chat:
+                return None
+
+            current_name = str(getattr(chat, "name", "") or "").strip().lower()
+            if current_name not in self.DEFAULT_CHAT_NAMES:
+                # Chat was already renamed manually or by prior flow; do not overwrite.
+                return None
+
             prompt = self.TITLE_GENERATION_PROMPT.format(message=first_message[:500])
 
             response = await self.llm_client.chat(
@@ -48,13 +58,11 @@ User message: {message}"""
 
             title = response.get("content", "").strip().strip('"\'')
             if title and len(title) > 2:
-                chat = await self.chats_repo.get_chat_by_id(chat_id)
-                if chat:
-                    chat.name = title[:100]
-                    await self.session.flush()
-                    await self.session.commit()
-                    logger.info(f"Generated chat title: {title}")
-                    return title
+                chat.name = title[:100]
+                await self.session.flush()
+                await self.session.commit()
+                logger.info(f"Generated chat title: {title}")
+                return title
         except Exception as exc:
             logger.warning(f"Failed to generate chat title: {exc}")
         return None

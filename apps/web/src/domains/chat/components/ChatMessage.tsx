@@ -1,4 +1,4 @@
-import { useState, memo } from 'react';
+import { useMemo, useState, memo } from 'react';
 import MarkdownRenderer from '@/shared/ui/MarkdownRenderer';
 import { Icon } from '@/shared/ui/Icon';
 import { buildFileDownloadUrl, buildChatAttachmentFileId } from '@/shared/api/files';
@@ -6,35 +6,50 @@ import RAGSources, { type RAGSource } from './RAGSources';
 import styles from './ChatMessage.module.css';
 
 interface ChatMessageProps {
-  id: string;
   role: 'user' | 'assistant';
   content: string;
   createdAt?: string;
   isStreaming?: boolean;
-  ragSources?: RAGSource[];
-  attachments?: Array<{
-    id?: string;
-    fileId?: string;
-    name: string;
-    type?: string;
-    sizeBytes?: number;
-    url?: string;
-  }>;
-  answerBlocks?: Array<Record<string, unknown>>;
+  meta?: Record<string, unknown>;
 }
 
 function ChatMessageComponent({
-  id,
   role,
   content,
   createdAt,
   isStreaming,
-  ragSources,
-  attachments,
-  answerBlocks,
+  meta,
 }: ChatMessageProps) {
   const [copied, setCopied] = useState(false);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
+
+  const ragSources = useMemo(
+    () => (Array.isArray(meta?.rag_sources) ? (meta.rag_sources as RAGSource[]) : undefined),
+    [meta?.rag_sources]
+  );
+  const attachments = useMemo(
+    () =>
+      Array.isArray(meta?.attachments)
+        ? (meta.attachments as Array<Record<string, unknown>>)
+            .map((entry) => ({
+              id: typeof entry.id === 'string' ? entry.id : undefined,
+              fileId: typeof entry.file_id === 'string' ? entry.file_id : undefined,
+              name: typeof entry.file_name === 'string' ? entry.file_name : '',
+              type: typeof entry.content_type === 'string' ? entry.content_type : undefined,
+              sizeBytes: typeof entry.size_bytes === 'number' ? entry.size_bytes : undefined,
+              url: typeof entry.url === 'string' ? entry.url : undefined,
+            }))
+            .filter((item) => item.name)
+        : undefined,
+    [meta?.attachments]
+  );
+  const typedBlocks = useMemo(
+    () =>
+      Array.isArray(meta?.answer_blocks)
+        ? (meta.answer_blocks.filter((item) => item && typeof item === 'object') as Array<Record<string, unknown>>)
+        : [],
+    [meta?.answer_blocks]
+  );
 
   const handleCopy = async () => {
     try {
@@ -59,8 +74,6 @@ function ChatMessageComponent({
   };
 
   const isUser = role === 'user';
-  const typedBlocks = Array.isArray(answerBlocks) ? answerBlocks : [];
-
   const handleDownload = async (file: {
     id?: string;
     fileId?: string;
@@ -82,6 +95,98 @@ function ChatMessageComponent({
       setDownloadingId(null);
     }
   };
+
+  let renderedStructuredCount = 0;
+  const structuredContent = typedBlocks.map((raw, idx) => {
+    const type = String(raw.type || '');
+    if (type === 'bigstring') {
+      const value = typeof raw.value === 'string' ? raw.value : '';
+      if (!value) return null;
+      renderedStructuredCount += 1;
+      return <MarkdownRenderer key={`block-${idx}`} content={value} />;
+    }
+    if (type === 'code') {
+      const lang = typeof raw.language === 'string' ? raw.language : 'text';
+      const value = typeof raw.value === 'string' ? raw.value : '';
+      if (!value) return null;
+      renderedStructuredCount += 1;
+      return <MarkdownRenderer key={`block-${idx}`} content={`\`\`\`${lang}\n${value}\n\`\`\``} enableLineBreaks={false} />;
+    }
+    if (type === 'table') {
+      const columns = Array.isArray(raw.columns) ? raw.columns : [];
+      const rows = Array.isArray(raw.rows) ? raw.rows : [];
+      if (!columns.length) return null;
+      renderedStructuredCount += 1;
+      return (
+        <div className={styles.tableWrap} key={`block-${idx}`}>
+          <table className={styles.table}>
+            <thead>
+              <tr>
+                {columns.map((col, cidx) => (
+                  <th key={`c-${idx}-${cidx}`}>{String(col)}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row, ridx) => {
+                const entry = row as Record<string, unknown>;
+                return (
+                  <tr key={`r-${idx}-${ridx}`}>
+                    {columns.map((col, cidx) => (
+                      <td key={`v-${idx}-${ridx}-${cidx}`}>{String(entry[String(col)] ?? '')}</td>
+                    ))}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      );
+    }
+    if (type === 'file') {
+      const url = typeof raw.url === 'string' ? raw.url : '';
+      const name = typeof raw.name === 'string' ? raw.name : 'file';
+      if (!url) return null;
+      renderedStructuredCount += 1;
+      return (
+        <a
+          key={`block-${idx}`}
+          className={styles.fileLink}
+          href={url}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          {name}
+        </a>
+      );
+    }
+    if (type === 'citations') {
+      const items = Array.isArray(raw.items) ? raw.items : [];
+      if (!items.length) return null;
+      renderedStructuredCount += 1;
+      return (
+        <div className={styles.citations} key={`block-${idx}`}>
+          {items.map((item, sidx) => {
+            const source = item as Record<string, unknown>;
+            const title = typeof source.title === 'string' ? source.title : `source-${sidx + 1}`;
+            const uri = typeof source.uri === 'string' ? source.uri : '';
+            return (
+              <div key={`src-${idx}-${sidx}`} className={styles.citationItem}>
+                {uri ? (
+                  <a href={uri} target="_blank" rel="noopener noreferrer">{title}</a>
+                ) : (
+                  <span>{title}</span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      );
+    }
+    return null;
+  });
+
+  const hasStructuredOutput = renderedStructuredCount > 0;
 
   return (
     <div className={`${styles.message} ${isUser ? styles.user : styles.assistant}`}>
@@ -124,91 +229,9 @@ function ChatMessageComponent({
         <div className={styles.body}>
           {isUser ? (
             <div className={styles.userText}>{content}</div>
-          ) : typedBlocks.length > 0 ? (
+          ) : hasStructuredOutput ? (
             <div className={styles.structured}>
-              {typedBlocks.map((raw, idx) => {
-                const type = String(raw.type || '');
-                if (type === 'bigstring') {
-                  const value = typeof raw.value === 'string' ? raw.value : '';
-                  if (!value) return null;
-                  return <MarkdownRenderer key={`block-${idx}`} content={value} />;
-                }
-                if (type === 'code') {
-                  const lang = typeof raw.language === 'string' ? raw.language : 'text';
-                  const value = typeof raw.value === 'string' ? raw.value : '';
-                  if (!value) return null;
-                  return <MarkdownRenderer key={`block-${idx}`} content={`\`\`\`${lang}\n${value}\n\`\`\``} />;
-                }
-                if (type === 'table') {
-                  const columns = Array.isArray(raw.columns) ? raw.columns : [];
-                  const rows = Array.isArray(raw.rows) ? raw.rows : [];
-                  if (!columns.length) return null;
-                  return (
-                    <div className={styles.tableWrap} key={`block-${idx}`}>
-                      <table className={styles.table}>
-                        <thead>
-                          <tr>
-                            {columns.map((col, cidx) => (
-                              <th key={`c-${idx}-${cidx}`}>{String(col)}</th>
-                            ))}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {rows.map((row, ridx) => {
-                            const entry = row as Record<string, unknown>;
-                            return (
-                              <tr key={`r-${idx}-${ridx}`}>
-                                {columns.map((col, cidx) => (
-                                  <td key={`v-${idx}-${ridx}-${cidx}`}>{String(entry[String(col)] ?? '')}</td>
-                                ))}
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                  );
-                }
-                if (type === 'file') {
-                  const url = typeof raw.url === 'string' ? raw.url : '';
-                  const name = typeof raw.name === 'string' ? raw.name : 'file';
-                  if (!url) return null;
-                  return (
-                    <a
-                      key={`block-${idx}`}
-                      className={styles.fileLink}
-                      href={url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                    >
-                      {name}
-                    </a>
-                  );
-                }
-                if (type === 'citations') {
-                  const items = Array.isArray(raw.items) ? raw.items : [];
-                  if (!items.length) return null;
-                  return (
-                    <div className={styles.citations} key={`block-${idx}`}>
-                      {items.map((item, sidx) => {
-                        const source = item as Record<string, unknown>;
-                        const title = typeof source.title === 'string' ? source.title : `source-${sidx + 1}`;
-                        const uri = typeof source.uri === 'string' ? source.uri : '';
-                        return (
-                          <div key={`src-${idx}-${sidx}`} className={styles.citationItem}>
-                            {uri ? (
-                              <a href={uri} target="_blank" rel="noopener noreferrer">{title}</a>
-                            ) : (
-                              <span>{title}</span>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  );
-                }
-                return null;
-              })}
+              {structuredContent}
             </div>
           ) : content ? (
             <MarkdownRenderer content={content} />
@@ -232,6 +255,8 @@ function ChatMessageComponent({
             <button
               className={styles.actionBtn}
               onClick={handleCopy}
+              type="button"
+              aria-label={copied ? 'Скопировано' : 'Копировать сообщение'}
               title={copied ? 'Скопировано!' : 'Копировать'}
             >
               <Icon name={copied ? 'check' : 'copy'} size={14} />
@@ -243,5 +268,15 @@ function ChatMessageComponent({
   );
 }
 
-export const ChatMessage = memo(ChatMessageComponent);
+function areChatMessagePropsEqual(prev: ChatMessageProps, next: ChatMessageProps) {
+  return (
+    prev.role === next.role
+    && prev.content === next.content
+    && prev.createdAt === next.createdAt
+    && prev.isStreaming === next.isStreaming
+    && prev.meta === next.meta
+  );
+}
+
+export const ChatMessage = memo(ChatMessageComponent, areChatMessagePropsEqual);
 export default ChatMessage;

@@ -1,11 +1,11 @@
 import React, { useState } from 'react';
-import { useChat } from '../contexts/ChatContext';
+import { useChatCatalogState } from '../contexts/ChatContext';
 import Button from '@shared/ui/Button';
 import Modal from '@shared/ui/Modal';
 import styles from './ChatExport.module.css';
 
 export default function ChatExport() {
-  const { state } = useChat();
+  const state = useChatCatalogState();
   const [isOpen, setIsOpen] = useState(false);
   const [exportFormat, setExportFormat] = useState<'json' | 'txt' | 'md'>(
     'json'

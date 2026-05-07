@@ -160,3 +160,41 @@ class TestChatTurnOrchestrator:
             paused_action=None,
             paused_context=None,
         )
+
+    @pytest.mark.asyncio
+    async def test_execute_turn_does_not_generate_title_for_non_default_chat_name(self, orchestrator: ChatTurnOrchestrator):
+        chat = SimpleNamespace(tenant_id="00000000-0000-0000-0000-000000000001", name="My custom chat")
+        orchestrator.turn_service.start_turn = AsyncMock(return_value=SimpleNamespace(id=uuid4()))
+        orchestrator.turn_service.attach_user_message = AsyncMock()
+        orchestrator.turn_service.complete_turn = AsyncMock()
+        orchestrator.persistence_service.create_user_message = AsyncMock(return_value=SimpleNamespace(message_id="user-1", created_at="2026-01-01T12:00:00Z"))
+        orchestrator.persistence_service.create_assistant_message = AsyncMock(return_value=SimpleNamespace(message_id="assistant-1", created_at="2026-01-01T12:00:01Z"))
+        orchestrator.context_service.load_chat_context = AsyncMock(return_value=[])
+        orchestrator.title_service.generate_chat_title = AsyncMock(return_value="Generated title")
+
+        async def fake_run_with_router(**kwargs):
+            yield {"type": "final_content", "content": "Hello", "sources": []}
+
+        events = [
+            event
+            async for event in orchestrator.execute_turn(
+                chat=chat,
+                chat_id="chat-1",
+                user_id="user-1",
+                content="hello",
+                attachment_ids=[],
+                attachment_meta=[],
+                attachment_prompt_context="",
+                idempotency_key=None,
+                model=None,
+                agent_slug=None,
+                continuation_meta=None,
+                run_with_router=fake_run_with_router,
+                store_idempotency=AsyncMock(),
+                bind_attachments=AsyncMock(),
+                process_generated_files=AsyncMock(return_value={"content": "Hello", "attachments": []}),
+            )
+        ]
+
+        assert all(event.get("type") != "chat_title" for event in events)
+        orchestrator.title_service.generate_chat_title.assert_not_awaited()
