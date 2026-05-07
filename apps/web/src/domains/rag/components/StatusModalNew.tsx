@@ -266,8 +266,11 @@ export function StatusModalNew({ docId, docName, onClose, sseUrl, statusGraphUrl
   const handleDownloadOriginal = async () => {
     try {
       if (downloadUrlPrefix) {
-        const response = await apiRequest<{ url: string }>(`${downloadUrlPrefix}?kind=original`);
-        window.open(response.url, '_blank');
+        const response = await apiRequest<{ file_id?: string; download_url?: string }>(`${downloadUrlPrefix}?kind=original`);
+        const href = response.download_url || (response.file_id ? buildFileDownloadUrl(response.file_id) : '');
+        if (href) {
+          window.open(href, '_blank', 'noopener,noreferrer');
+        }
         return;
       }
       const fileId = buildRagDocFileId(docId, 'original');
@@ -280,8 +283,11 @@ export function StatusModalNew({ docId, docName, onClose, sseUrl, statusGraphUrl
   const handleDownloadNormalized = async () => {
     try {
       if (downloadUrlPrefix) {
-        const response = await apiRequest<{ url: string }>(`${downloadUrlPrefix}?kind=canonical`);
-        window.open(response.url, '_blank');
+        const response = await apiRequest<{ file_id?: string; download_url?: string }>(`${downloadUrlPrefix}?kind=canonical`);
+        const href = response.download_url || (response.file_id ? buildFileDownloadUrl(response.file_id) : '');
+        if (href) {
+          window.open(href, '_blank', 'noopener,noreferrer');
+        }
         return;
       }
       const fileId = buildRagDocFileId(docId, 'canonical');

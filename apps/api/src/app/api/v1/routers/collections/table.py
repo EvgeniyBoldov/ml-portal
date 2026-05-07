@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from typing import Optional, Any, Dict
 import uuid
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, UploadFile, File, Depends, Query
 from fastapi.responses import Response
@@ -16,9 +17,16 @@ from app.core.exceptions import CSVValidationError, UploadValidationError
 from app.core.logging import get_logger
 from app.core.security import UserCtx
 from app.models.collection import CollectionType
+from app.core.cache import get_cache
+from app.services.file_delivery_service import FileDeliveryService
 from app.services.collection_csv_service import CollectionCSVService
 from app.services.collection_vectorization_orchestrator import CollectionVectorizationOrchestrator
 from app.services.upload_intake_policy import UploadIntakePolicy
+from app.workers.tasks_collection_export import (
+    EXPORT_META_PREFIX,
+    EXPORT_TTL_SECONDS,
+    export_collection_csv,
+)
 
 from .upload_shared import _resolve_table_collection_by_slug
 
@@ -56,6 +64,25 @@ class DocumentUploadPolicyResponse(BaseModel):
     max_bytes: int
     allowed_extensions: list[str]
     allowed_content_types_by_extension: dict[str, list[str]]
+
+
+class CollectionExportStartResponse(BaseModel):
+    export_id: str
+    status: str
+    task_id: str
+    expires_in: int
+
+
+class CollectionExportStatusResponse(BaseModel):
+    export_id: str
+    status: str
+    file_id: Optional[str] = None
+    download_url: Optional[str] = None
+    file_name: Optional[str] = None
+    content_type: Optional[str] = None
+    size_bytes: Optional[int] = None
+    expires_at: Optional[str] = None
+    error: Optional[str] = None
 
 
 @router.get("/uploads/document-policy", response_model=DocumentUploadPolicyResponse)
@@ -305,6 +332,97 @@ async def download_template(
         content=csv_content,
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f"attachment; filename={slug}_template.csv"},
+    )
+
+
+@router.post("/{slug}/export", response_model=CollectionExportStartResponse)
+async def start_csv_export(
+    slug: str,
+    tenant_id: Optional[uuid.UUID] = Query(None),
+    session: AsyncSession = Depends(db_uow),
+    user: UserCtx = Depends(get_current_user),
+):
+    collection, _, resolved_tenant_id = await _resolve_table_collection_by_slug(slug, session, user, tenant_id)
+    if collection.collection_type != CollectionType.TABLE.value:
+        raise HTTPException(status_code=400, detail="CSV export supported only for table collections")
+
+    field_names = [str(f.get("name")) for f in (collection.fields or []) if str(f.get("name") or "").strip()]
+    if not field_names:
+        raise HTTPException(status_code=400, detail="Collection has no exportable fields")
+
+    export_id = str(uuid.uuid4())
+    cache = await get_cache()
+    meta_key = f"{EXPORT_META_PREFIX}{export_id}"
+    now = datetime.now(timezone.utc)
+    await cache.set(
+        meta_key,
+        {
+            "status": "pending",
+            "tenant_id": str(resolved_tenant_id),
+            "owner_id": str(user.id),
+            "collection_id": str(collection.id),
+            "collection_slug": collection.slug,
+            "created_at": now.isoformat(),
+            "updated_at": now.isoformat(),
+        },
+        ttl=EXPORT_TTL_SECONDS,
+    )
+
+    async_result = export_collection_csv.delay(
+        export_id=export_id,
+        tenant_id=str(resolved_tenant_id),
+        owner_id=str(user.id),
+        collection_id=str(collection.id),
+        collection_slug=str(collection.slug),
+        table_name=str(collection.table_name),
+        field_names=field_names,
+    )
+    return CollectionExportStartResponse(
+        export_id=export_id,
+        status="pending",
+        task_id=str(async_result.id),
+        expires_in=EXPORT_TTL_SECONDS,
+    )
+
+
+@router.get("/{slug}/export/{export_id}", response_model=CollectionExportStatusResponse)
+async def get_csv_export_status(
+    slug: str,
+    export_id: str,
+    tenant_id: Optional[uuid.UUID] = Query(None),
+    session: AsyncSession = Depends(db_uow),
+    user: UserCtx = Depends(get_current_user),
+):
+    collection, _, resolved_tenant_id = await _resolve_table_collection_by_slug(slug, session, user, tenant_id)
+    cache = await get_cache()
+    meta = await cache.get(f"{EXPORT_META_PREFIX}{export_id}")
+    if not meta:
+        raise HTTPException(status_code=404, detail="Export not found or expired")
+    if str(meta.get("tenant_id") or "") != str(resolved_tenant_id):
+        raise HTTPException(status_code=404, detail="Export not found")
+    if str(meta.get("owner_id") or "") != str(user.id):
+        raise HTTPException(status_code=403, detail="Export access denied")
+    if str(meta.get("collection_id") or "") != str(collection.id):
+        raise HTTPException(status_code=404, detail="Export not found")
+
+    status = str(meta.get("status") or "pending")
+    if status != "ready":
+        return CollectionExportStatusResponse(
+            export_id=export_id,
+            status=status,
+            error=str(meta.get("error")) if meta.get("error") else None,
+        )
+
+    file_id = FileDeliveryService.make_collection_export_file_id(export_id)
+    return CollectionExportStatusResponse(
+        export_id=export_id,
+        status="ready",
+        file_id=file_id,
+        download_url=f"/api/v1/files/{file_id}/download",
+        file_name=str(meta.get("file_name") or f"{collection.slug}_export.csv"),
+        content_type=str(meta.get("content_type") or "text/csv"),
+        size_bytes=int(meta.get("size_bytes") or 0),
+        expires_at=str(meta.get("expires_at") or ""),
     )
 
 

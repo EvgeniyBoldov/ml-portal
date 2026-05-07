@@ -76,11 +76,11 @@ class ChatUploadPolicyResponse(BaseModel):
 
 class ChatAttachmentDownloadResponse(BaseModel):
     id: str
+    file_id: str
     file_name: str
     content_type: Optional[str] = None
     size_bytes: int
-    url: str
-    expires_in: int
+    download_url: str
 
 class ChatTurnResponse(BaseModel):
     chat_id: Optional[str] = Field(None)

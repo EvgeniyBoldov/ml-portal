@@ -34,10 +34,10 @@ function ChatMessageComponent({
             .map((entry) => ({
               id: typeof entry.id === 'string' ? entry.id : undefined,
               fileId: typeof entry.file_id === 'string' ? entry.file_id : undefined,
+              downloadUrl: typeof entry.download_url === 'string' ? entry.download_url : undefined,
               name: typeof entry.file_name === 'string' ? entry.file_name : '',
               type: typeof entry.content_type === 'string' ? entry.content_type : undefined,
               sizeBytes: typeof entry.size_bytes === 'number' ? entry.size_bytes : undefined,
-              url: typeof entry.url === 'string' ? entry.url : undefined,
             }))
             .filter((item) => item.name)
         : undefined,
@@ -77,12 +77,12 @@ function ChatMessageComponent({
   const handleDownload = async (file: {
     id?: string;
     fileId?: string;
+    downloadUrl?: string;
     name: string;
-    url?: string;
   }) => {
     try {
-      if (file.url) {
-        window.open(file.url, '_blank', 'noopener,noreferrer');
+      if (file.downloadUrl) {
+        window.open(file.downloadUrl, '_blank', 'noopener,noreferrer');
         return;
       }
       const fileId = file.fileId || (file.id ? buildChatAttachmentFileId(file.id) : null);
@@ -144,15 +144,17 @@ function ChatMessageComponent({
       );
     }
     if (type === 'file') {
-      const url = typeof raw.url === 'string' ? raw.url : '';
+      const fileId = typeof raw.file_id === 'string' ? raw.file_id : '';
+      const downloadUrl = typeof raw.download_url === 'string' ? raw.download_url : '';
       const name = typeof raw.name === 'string' ? raw.name : 'file';
-      if (!url) return null;
+      const href = downloadUrl || (fileId ? buildFileDownloadUrl(fileId) : '');
+      if (!href) return null;
       renderedStructuredCount += 1;
       return (
         <a
           key={`block-${idx}`}
           className={styles.fileLink}
-          href={url}
+          href={href}
           target="_blank"
           rel="noopener noreferrer"
         >

@@ -54,16 +54,18 @@ class StructuredAnswerService:
             )
 
         for att in attachments or []:
-            url = att.get("url")
+            file_id = att.get("file_id")
+            download_url = att.get("download_url")
             name = att.get("file_name") or att.get("name") or "file"
-            if not url:
+            if not file_id and not download_url:
                 continue
             blocks.append(
                 {
                     "type": "file",
                     "label": "Generated file",
                     "name": name,
-                    "url": str(url),
+                    "file_id": str(file_id) if file_id else None,
+                    "download_url": str(download_url) if download_url else None,
                     "content_type": att.get("content_type"),
                     "size_bytes": att.get("size_bytes"),
                 }

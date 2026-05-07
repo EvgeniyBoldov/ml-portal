@@ -691,7 +691,7 @@ export const collectionsApi = {
     collectionId: string,
     docId: string,
     kind: 'original' | 'canonical' = 'original'
-  ): Promise<{ url: string }> => {
+  ): Promise<{ file_id: string; download_url: string }> => {
     return apiRequest(`/collections/${collectionId}/docs/${docId}/download?kind=${kind}`);
   },
 

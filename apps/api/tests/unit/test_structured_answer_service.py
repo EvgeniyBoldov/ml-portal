@@ -10,7 +10,8 @@ def test_structured_answer_blocks_include_code_table_file_and_citations():
     attachments = [
         {
             "file_name": "report.csv",
-            "url": "https://example.local/files/123",
+            "file_id": "chatatt_11111111-1111-1111-1111-111111111111",
+            "download_url": "/api/v1/files/chatatt_11111111-1111-1111-1111-111111111111/download",
             "content_type": "text/csv",
             "size_bytes": 123,
         }

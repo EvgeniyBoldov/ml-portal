@@ -12,7 +12,6 @@ from app.api.deps import db_uow, get_current_user
 from app.core.security import UserCtx
 from app.core.logging import get_logger
 from app.core.config import get_settings
-from app.adapters.s3_client import s3_manager, PresignOptions
 from app.models.rag_ingest import Source
 from app.repositories.factory import get_async_repository_factory, AsyncRepositoryFactory
 from app.services.document_artifacts import get_document_artifact_key
@@ -72,15 +71,8 @@ async def download_rag_file(
         if not s3_key:
             raise HTTPException(status_code=404, detail="File not found")
         
-        url = await s3_manager.generate_presigned_url(
-            bucket=settings.S3_BUCKET_RAG,
-            key=s3_key,
-            options=PresignOptions(method="GET", expires_in=3600)
-        )
-        
         file_id = FileDeliveryService.make_rag_document_file_id(doc_id, kind)
         return {
-            "url": url,
             "file_id": file_id,
             "download_url": f"/api/v1/files/{file_id}/download",
         }

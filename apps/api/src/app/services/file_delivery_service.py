@@ -9,6 +9,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.adapters.s3_client import PresignOptions, s3_manager
+from app.core.cache import get_cache
 from app.core.config import get_settings
 from app.models.chat_attachment import ChatAttachment
 from app.models.rag_ingest import Source
@@ -18,6 +19,7 @@ from app.services.document_artifacts import get_document_artifact_key
 
 CHAT_ATTACHMENT_PREFIX = "chatatt"
 RAG_DOCUMENT_PREFIX = "ragdoc"
+COLLECTION_EXPORT_PREFIX = "colexp"
 RAG_KIND_SET = {"original", "canonical"}
 
 
@@ -38,6 +40,7 @@ class FileDeliveryNotFoundError(ValueError):
 class FileDeliveryService:
     CHAT_RE = re.compile(r"^chatatt_([0-9a-fA-F-]{36})$")
     RAG_RE = re.compile(r"^ragdoc_([0-9a-fA-F-]{36})_(original|canonical)$")
+    COLLECTION_EXPORT_RE = re.compile(r"^colexp_([0-9a-fA-F-]{36})$")
 
     def __init__(self, session: AsyncSession, repo_factory: AsyncRepositoryFactory):
         self.session = session
@@ -51,6 +54,10 @@ class FileDeliveryService:
     @staticmethod
     def make_rag_document_file_id(doc_id: str, kind: str) -> str:
         return f"{RAG_DOCUMENT_PREFIX}_{doc_id}_{kind}"
+
+    @staticmethod
+    def make_collection_export_file_id(export_id: str) -> str:
+        return f"{COLLECTION_EXPORT_PREFIX}_{export_id}"
 
     async def resolve(self, file_id: str, *, owner_id: str) -> ResolvedDownload:
         chat_match = self.CHAT_RE.match(file_id)
@@ -67,6 +74,14 @@ class FileDeliveryService:
                 file_id=file_id,
                 doc_id=rag_match.group(1),
                 kind=rag_match.group(2),
+            )
+
+        export_match = self.COLLECTION_EXPORT_RE.match(file_id)
+        if export_match:
+            return await self._resolve_collection_export(
+                file_id=file_id,
+                export_id=export_match.group(1),
+                owner_id=owner_id,
             )
 
         raise FileDeliveryNotFoundError(f"Unsupported file id: {file_id}")
@@ -155,4 +170,30 @@ class FileDeliveryService:
             file_name=file_name,
             content_type=content_type,
             size_bytes=document.size_bytes,
+        )
+
+    async def _resolve_collection_export(self, *, file_id: str, export_id: str, owner_id: str) -> ResolvedDownload:
+        cache = await get_cache()
+        meta = await cache.get(f"collection_export_meta:{export_id}")
+        if not meta:
+            raise FileDeliveryNotFoundError("Export not found or expired")
+        if str(meta.get("status") or "") != "ready":
+            raise FileDeliveryNotFoundError("Export is not ready")
+        if str(meta.get("tenant_id") or "") != str(self.repo_factory.tenant_id):
+            raise FileDeliveryNotFoundError("Export not found")
+        if str(meta.get("owner_id") or "") != str(owner_id):
+            raise FileDeliveryNotFoundError("Export access denied")
+
+        bucket = str(meta.get("bucket") or "").strip()
+        key = str(meta.get("key") or "").strip()
+        if not bucket or not key:
+            raise FileDeliveryNotFoundError("Export artifact missing")
+
+        return ResolvedDownload(
+            file_id=file_id,
+            bucket=bucket,
+            key=key,
+            file_name=str(meta.get("file_name") or f"collection_export_{export_id}.csv"),
+            content_type=str(meta.get("content_type") or "text/csv"),
+            size_bytes=int(meta.get("size_bytes") or 0),
         )

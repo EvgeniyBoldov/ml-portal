@@ -20,7 +20,13 @@ async def test_create_assistant_message_stores_answer_blocks():
         chat_id=str(uuid4()),
         content="Hello\n```python\nprint('x')\n```",
         rag_sources=[{"title": "Doc", "uri": "kb://doc-1"}],
-        attachments=[{"file_name": "out.txt", "url": "https://example.local/f/1"}],
+        attachments=[
+            {
+                "file_name": "out.txt",
+                "file_id": "chatatt_11111111-1111-1111-1111-111111111111",
+                "download_url": "/api/v1/files/chatatt_11111111-1111-1111-1111-111111111111/download",
+            }
+        ],
     )
 
     assert repo.create_message.await_count == 1

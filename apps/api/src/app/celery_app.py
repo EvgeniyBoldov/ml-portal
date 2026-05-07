@@ -18,6 +18,8 @@ app = Celery(
         "app.workers.tasks_rag_ingest",
         # Collection vectorization tasks
         "app.workers.tasks_collection_vectorize",
+        # Collection export tasks
+        "app.workers.tasks_collection_export",
         # Membership reconcile tasks
         "app.workers.tasks_membership_reconcile",
         # RAG model/status reconcile tasks
@@ -83,6 +85,7 @@ app.conf.task_routes = {
     # Collection vectorization tasks
     "app.workers.tasks_collection_vectorize.vectorize_collection_rows": {"queue": "ingest.embed", "priority": 4},
     "app.workers.tasks_collection_vectorize.reconcile_collection_vectorization": {"queue": "maintenance.default", "priority": 1},
+    "app.workers.tasks_collection_export.export_collection_csv": {"queue": "analyze_medium", "priority": 5},
     "app.workers.tasks_rag_model_reconcile.reconcile_rag_statuses_for_embedding_model": {
         "queue": "maintenance.default",
         "priority": 1,

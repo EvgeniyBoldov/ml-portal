@@ -12,7 +12,7 @@ from fastapi import UploadFile
 from sqlalchemy import Select, and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.adapters.s3_client import PresignOptions, s3_manager
+from app.adapters.s3_client import s3_manager
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.models.chat_attachment import ChatAttachment
@@ -251,7 +251,6 @@ class ChatAttachmentService:
         tenant_id: str,
         owner_id: str,
         attachment_id: str,
-        expires_in: int = 3600,
     ) -> dict[str, Any]:
         try:
             att_id = uuid.UUID(attachment_id)
@@ -271,25 +270,14 @@ class ChatAttachmentService:
             raise ChatAttachmentNotFoundError("Attachment not found")
         row = rows[0]
 
-        url = await s3_manager.generate_presigned_url(
-            bucket=row.storage_bucket,
-            key=row.storage_key,
-            options=PresignOptions(
-                expires_in=expires_in,
-                method="GET",
-                response_headers={
-                    "ResponseContentDisposition": f'attachment; filename="{row.file_name}"',
-                    "ResponseContentType": row.content_type or "application/octet-stream",
-                },
-            ),
-        )
+        file_id = FileDeliveryService.make_chat_attachment_file_id(str(row.id))
         return {
             "id": str(row.id),
+            "file_id": file_id,
             "file_name": row.file_name,
             "content_type": row.content_type,
             "size_bytes": row.size_bytes,
-            "url": url,
-            "expires_in": expires_in,
+            "download_url": f"/api/v1/files/{file_id}/download",
         }
 
     @staticmethod
