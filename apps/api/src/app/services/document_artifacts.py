@@ -129,6 +129,7 @@ def build_document_source_meta(
     collection_id: Optional[str] = None,
     row_id: Optional[str] = None,
     qdrant_collection_name: Optional[str] = None,
+    prefilter: Optional[Dict[str, Any]] = None,
     source: Optional[str] = None,
     scope: Optional[str] = None,
     tags: Optional[list[str]] = None,
@@ -149,6 +150,7 @@ def build_document_source_meta(
         "id": collection_id,
         "row_id": row_id,
         "qdrant_collection_name": qdrant_collection_name,
+        "prefilter": dict(prefilter or {}),
     }
     meta["artifacts"]["original"] = {
         "key": original_key,

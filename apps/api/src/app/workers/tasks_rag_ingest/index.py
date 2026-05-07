@@ -23,11 +23,17 @@ from app.workers.tasks_rag_ingest.stage_results import EmbedResult, IndexResult
 logger = get_logger(__name__)
 
 _INDEX_POINT_NAMESPACE = uuid.UUID("4b32c67e-86c7-4efb-8980-1e0570f31d16")
+_DOC_INDEX_VERSION = "doc-v2-prefilter"
 
 
 def _build_stable_point_id(tenant_id: str, source_id: str, model_alias: str, chunk_id: str) -> str:
     raw = f"{tenant_id}:{source_id}:{model_alias}:{chunk_id}"
     return str(uuid.uuid5(_INDEX_POINT_NAMESPACE, raw))
+
+
+def _prefilter_payload_key(field_name: str) -> str:
+    safe = "".join(ch if ch.isalnum() else "_" for ch in str(field_name))
+    return f"pf_{safe.lower()}"
 
 
 @celery_app.task(
@@ -62,6 +68,7 @@ def index_model(self: Task, embed_result: Dict[str, Any], tenant_id: str) -> Dic
             await ctx.set_processing()
 
             chunk_repo = AsyncChunkRepository(ctx.session, ctx.tenant_id)
+            source_repo = AsyncSourceRepository(ctx.session, ctx.tenant_id)
 
             # 2. Check idempotency
             cached = await ctx.check_idempotency(model_alias=model_alias)
@@ -119,6 +126,12 @@ def index_model(self: Task, embed_result: Dict[str, Any], tenant_id: str) -> Dic
             # 4. Fetch Chunks Metadata from DB
             chunks = await chunk_repo.get_by_source_id(ctx.source_id)
             chunk_map = {c.chunk_id: c for c in chunks}
+            source = await source_repo.get_by_id(ctx.source_id)
+            normalized_meta = normalize_document_source_meta((source.meta or {}) if source else {})
+            collection_meta = normalized_meta.get("collection") or {}
+            raw_prefilter = collection_meta.get("prefilter") or {}
+            if not isinstance(raw_prefilter, dict):
+                raw_prefilter = {}
 
             # 5. Prepare Qdrant Client
             from app.adapters.impl.qdrant import QdrantVectorStore
@@ -251,11 +264,23 @@ def index_model(self: Task, embed_result: Dict[str, Any], tenant_id: str) -> Dic
                             "lang": chunk.lang or "en",
                             "mime": "text/plain",
                             "embed_model_alias": model_alias,
+                            "index_version": _DOC_INDEX_VERSION,
                             "version": model_info.version,
                             "updated_at": datetime.now(timezone.utc).isoformat(),
                             "tags": [],
                             "text": chunk.meta.get("text", "") if chunk.meta else "",
                         }
+                        # Add normalized prefilter keys to allow Qdrant-side metadata prefilter.
+                        for field_name, field_value in raw_prefilter.items():
+                            key = _prefilter_payload_key(field_name)
+                            if isinstance(field_value, (str, int, float, bool)):
+                                payload[key] = field_value
+                            elif isinstance(field_value, list):
+                                scalar_values = [
+                                    v for v in field_value if isinstance(v, (str, int, float, bool))
+                                ]
+                                if scalar_values:
+                                    payload[key] = scalar_values
                         # Enrich with collection context if present
                         if coll_collection_id:
                             payload["collection_id"] = coll_collection_id

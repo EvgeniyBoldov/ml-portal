@@ -39,15 +39,6 @@ const INFO_FIELDS: FieldConfig[] = [
   },
 ];
 
-const STATUS_FIELDS: FieldConfig[] = [
-  {
-    key: 'is_active',
-    type: 'boolean',
-    label: 'Активен',
-    description: 'Тенант доступен для использования',
-  },
-];
-
 const EMBEDDING_FIELDS: FieldConfig[] = [
   {
     key: 'extra_embed_model',
@@ -110,6 +101,7 @@ export function TenantPage() {
     extra_embed_model: '',
     ocr: false,
     layout: false,
+    default_agent_slug: '',
   });
   const [saving, setSaving] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -233,20 +225,10 @@ export function TenantPage() {
     description: tenant?.description || '',
   };
 
-  const statusData = mode === 'edit' ? formData : {
-    is_active: tenant?.is_active || false,
-  };
-
   const embeddingData = mode === 'edit' ? formData : {
     extra_embed_model: tenant?.extra_embed_model || '',
-  };
-
-  const processingData = mode === 'edit' ? formData : {
     ocr: tenant?.ocr || false,
     layout: tenant?.layout || false,
-  };
-
-  const agentData = mode === 'edit' ? formData : {
     default_agent_slug: tenant?.default_agent_slug || '',
   };
 
@@ -277,6 +259,20 @@ export function TenantPage() {
       label: `${m.name} (${m.alias})${m.status === 'deprecated' ? ' (устарела)' : ''}`,
     })),
   ];
+  const infoFieldsWithStatus: FieldConfig[] = [
+    ...INFO_FIELDS,
+    {
+      key: 'is_active',
+      type: 'boolean',
+      label: 'Активен',
+      description: 'Тенант доступен для использования',
+    },
+  ];
+  const embeddingFieldsFull: FieldConfig[] = [
+    { ...EMBEDDING_FIELDS[0], options: embeddingOptions },
+    ...PROCESSING_FIELDS,
+    { ...AGENT_FIELDS[0], options: agentOptions },
+  ];
 
   // ─── Create mode ───
   if (isNew) {
@@ -291,60 +287,24 @@ export function TenantPage() {
         onCancel={handleCancel}
       >
         <Tab title="Создание" layout="single">
-          {/* Row 1: Info (full) */}
           <Block
             title="Основная информация"
             icon="building"
             iconVariant="info"
-            width="full"
-            fields={INFO_FIELDS}
-            data={formData}
-            editable={true}
-            onChange={handleFieldChange}
-          />
-
-          {/* Row 2: Status (1/2) + Embedding (1/2) */}
-          <Block
-            title="Статус"
-            icon="toggle-left"
-            iconVariant="success"
             width="1/2"
-            fields={STATUS_FIELDS}
+            fields={infoFieldsWithStatus}
             data={formData}
             editable={true}
             onChange={handleFieldChange}
           />
 
           <Block
-            title="Модель эмбеддинга"
+            title="Обработка"
             icon="cpu"
             iconVariant="primary"
             width="1/2"
-            fields={[{ ...EMBEDDING_FIELDS[0], options: embeddingOptions }]}
+            fields={embeddingFieldsFull}
             data={embeddingData}
-            editable={true}
-            onChange={handleFieldChange}
-          />
-
-          {/* Row 3: Processing (1/2) + Agent (1/2) */}
-          <Block
-            title="Настройки обработки"
-            icon="settings"
-            iconVariant="warning"
-            width="1/2"
-            fields={PROCESSING_FIELDS}
-            data={formData}
-            editable={true}
-            onChange={handleFieldChange}
-          />
-
-          <Block
-            title="Агент"
-            icon="bot"
-            iconVariant="primary"
-            width="1/2"
-            fields={[{ ...AGENT_FIELDS[0], options: agentOptions }]}
-            data={formData}
             editable={true}
             onChange={handleFieldChange}
           />
@@ -381,60 +341,24 @@ export function TenantPage() {
             ] : []
           }
         >
-          {/* Row 1: Info (full) */}
           <Block
             title="Основная информация"
             icon="building"
             iconVariant="info"
-            width="full"
-            fields={INFO_FIELDS}
-            data={infoData}
-            editable={mode === 'edit'}
-            onChange={handleFieldChange}
-          />
-
-          {/* Row 2: Status (1/2) + Embedding (1/2) */}
-          <Block
-            title="Статус"
-            icon="toggle-left"
-            iconVariant="success"
             width="1/2"
-            fields={STATUS_FIELDS}
-            data={statusData}
+            fields={infoFieldsWithStatus}
+            data={{ ...infoData, is_active: mode === 'edit' ? formData.is_active : (tenant?.is_active || false) }}
             editable={mode === 'edit'}
             onChange={handleFieldChange}
           />
 
           <Block
-            title="Модель эмбеддинга"
+            title="Обработка"
             icon="cpu"
             iconVariant="primary"
             width="1/2"
-            fields={[{ ...EMBEDDING_FIELDS[0], options: embeddingOptions }]}
+            fields={embeddingFieldsFull}
             data={embeddingData}
-            editable={mode === 'edit'}
-            onChange={handleFieldChange}
-          />
-
-          {/* Row 3: Processing (1/3) + Agent (1/3) + Meta (1/3) */}
-          <Block
-            title="Настройки обработки"
-            icon="settings"
-            iconVariant="warning"
-            width="1/3"
-            fields={PROCESSING_FIELDS}
-            data={processingData}
-            editable={mode === 'edit'}
-            onChange={handleFieldChange}
-          />
-
-          <Block
-            title="Агент по умолчанию"
-            icon="bot"
-            iconVariant="primary"
-            width="1/3"
-            fields={[{ ...AGENT_FIELDS[0], options: agentOptions }]}
-            data={agentData}
             editable={mode === 'edit'}
             onChange={handleFieldChange}
           />
@@ -443,7 +367,7 @@ export function TenantPage() {
             title="Метаданные"
             icon="database"
             iconVariant="info"
-            width="1/3"
+            width="full"
             fields={META_FIELDS}
             data={metaData}
           />

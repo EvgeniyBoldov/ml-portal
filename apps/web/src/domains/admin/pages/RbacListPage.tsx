@@ -52,8 +52,8 @@ export function RbacListPage() {
   });
 
   const { data: instances = [] } = useQuery({
-    queryKey: qk.toolInstances.list({ placement: 'remote' }),
-    queryFn: () => toolInstancesApi.list({ placement: 'remote' }),
+    queryKey: qk.toolInstances.list({}),
+    queryFn: () => toolInstancesApi.list({ limit: 1000 }),
   });
 
   const { data: usersData } = useQuery({
@@ -80,6 +80,13 @@ export function RbacListPage() {
   const { data: localDataInstances = [] } = useQuery({
     queryKey: qk.toolInstances.list({ connector_type: 'data', limit: 1000 }),
     queryFn: () => toolInstancesApi.list({ connector_type: 'data', limit: 1000 }),
+    enabled: isComposerOpen,
+    staleTime: 60_000,
+  });
+
+  const { data: localCollectionProviders = [] } = useQuery({
+    queryKey: qk.toolInstances.list({ placement: 'local', instance_kind: 'service', limit: 1000 }),
+    queryFn: () => toolInstancesApi.list({ placement: 'local', instance_kind: 'service', limit: 1000 }),
     enabled: isComposerOpen,
     staleTime: 60_000,
   });
@@ -149,15 +156,29 @@ export function RbacListPage() {
           label: tool.name?.trim() || tool.slug?.trim() || tool.tool_id!,
         }));
     }
-    return localDataInstances.map((instance) => {
-      const name = instance.name?.trim() || instance.slug?.trim() || instance.id;
-      const slug = instance.slug?.trim();
-      return {
-        value: instance.id,
-        label: slug && slug !== name ? `${name} (${slug})` : name,
-      };
+    const localCollectionServiceInstances = localCollectionProviders.filter((instance) => {
+      const providerKind = String(instance.provider_kind ?? '').toLowerCase();
+      return providerKind === 'local_tables' || providerKind === 'local_documents';
     });
-  }, [draftResourceType, agents, localTools, localDataInstances]);
+
+    const merged = [...localDataInstances, ...localCollectionServiceInstances];
+    const seen = new Set<string>();
+
+    return merged
+      .filter((instance) => {
+        if (seen.has(instance.id)) return false;
+        seen.add(instance.id);
+        return true;
+      })
+      .map((instance) => {
+        const name = instance.name?.trim() || instance.slug?.trim() || instance.id;
+        const slug = instance.slug?.trim();
+        return {
+          value: instance.id,
+          label: slug && slug !== name ? `${name} (${slug})` : name,
+        };
+      });
+  }, [draftResourceType, agents, localTools, localDataInstances, localCollectionProviders]);
 
   useEffect(() => {
     if (draftLevel === 'platform') {

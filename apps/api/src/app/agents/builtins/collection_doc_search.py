@@ -91,6 +91,20 @@ class CollectionDocSearchTool(VersionedTool):
         "relevance score, and collection metadata."
     )
 
+    @staticmethod
+    def _prefilter_payload_key(field_name: str) -> str:
+        safe = "".join(ch if ch.isalnum() else "_" for ch in str(field_name))
+        return f"pf_{safe.lower()}"
+
+    def _build_qdrant_prefilter(self, filters: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        if not filters:
+            return None
+        must: List[tuple[str, Any]] = []
+        for key, value in filters.items():
+            payload_key = self._prefilter_payload_key(key)
+            must.append((payload_key, value))
+        return {"must": must} if must else None
+
     @tool_version(
         version="1.0.0",
         input_schema=_INPUT_SCHEMA_V1,
@@ -194,8 +208,18 @@ class CollectionDocSearchTool(VersionedTool):
                 )
                 query_embedding = query_embedding[0]
 
-                row_ids: list[str] | None = None
-                if filters:
+                # 5. Search in dedicated Qdrant collection with payload-level prefilter
+                qdrant_prefilter = self._build_qdrant_prefilter(filters) if filters else None
+                results = await vector_store.search(
+                    collection=collection.qdrant_collection_name,
+                    query=query_embedding,
+                    top_k=k * 2,
+                    filter=qdrant_prefilter,
+                )
+
+                # Backward compatibility: old indexed docs may not have payload prefilter fields yet.
+                # Fallback to SQL row_id prefilter for non-empty filters.
+                if not results and filters:
                     row_ids = await self._resolve_filtered_row_ids(session, collection, filters)
                     if not row_ids:
                         return ToolResult.ok(
@@ -207,14 +231,12 @@ class CollectionDocSearchTool(VersionedTool):
                             "Filters are too broad. Please narrow filters to 2000 rows or fewer.",
                             logs=log.entries_dict(),
                         )
-
-                # 5. Search in dedicated Qdrant collection (no collection_id filter needed)
-                results = await vector_store.search(
-                    collection=collection.qdrant_collection_name,
-                    query=query_embedding,
-                    top_k=k * 2,
-                    filter={"row_id": row_ids} if row_ids is not None else None,
-                )
+                    results = await vector_store.search(
+                        collection=collection.qdrant_collection_name,
+                        query=query_embedding,
+                        top_k=k * 2,
+                        filter={"row_id": row_ids},
+                    )
 
                 if not results:
                     log.info("No results found")

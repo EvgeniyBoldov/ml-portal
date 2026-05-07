@@ -95,7 +95,7 @@ class CollectionDocumentUploadService:
                 "doc_id": str(doc_id),
             }
 
-            row_id = await self._insert_collection_row(
+            row_insert_result = await self._insert_collection_row(
                 collection=collection,
                 file_meta=file_meta,
                 title=title or filename,
@@ -104,6 +104,10 @@ class CollectionDocumentUploadService:
                 tags=",".join(tags) if tags else None,
                 meta_fields=meta_fields or {},
             )
+            if isinstance(row_insert_result, tuple):
+                row_id, prefilter = row_insert_result
+            else:
+                row_id, prefilter = row_insert_result, {}
 
             rag_doc = RAGDocument(
                 id=doc_id,
@@ -131,6 +135,7 @@ class CollectionDocumentUploadService:
                 collection_id=str(collection_id),
                 row_id=str(row_id),
                 qdrant_collection_name=collection.qdrant_collection_name,
+                prefilter=prefilter,
                 source=source,
                 scope=scope,
                 tags=tags or [],
@@ -243,7 +248,7 @@ class CollectionDocumentUploadService:
         scope: Optional[str],
         tags: Optional[str],
         meta_fields: Optional[dict] = None,
-    ) -> uuid.UUID:
+    ) -> tuple[uuid.UUID, dict]:
         import json
 
         row_id = uuid.uuid4()
@@ -280,4 +285,22 @@ class CollectionDocumentUploadService:
         insert_sql = text(f"INSERT INTO {collection.table_name} ({columns}) VALUES ({placeholders})")
         await self.session.execute(insert_sql, values)
 
-        return row_id
+        prefilter: dict = {}
+        for field_def in collection.fields:
+            fname = field_def.get("name")
+            if not fname or not field_def.get("filterable", False):
+                continue
+            ftype = field_def.get("data_type")
+            if ftype == FieldType.FILE.value:
+                continue
+            val = values.get(fname)
+            if val is None:
+                continue
+            if isinstance(val, (str, int, float, bool)):
+                prefilter[fname] = val
+            elif isinstance(val, list):
+                scalar_items = [x for x in val if isinstance(x, (str, int, float, bool))]
+                if scalar_items:
+                    prefilter[fname] = scalar_items
+
+        return row_id, prefilter
