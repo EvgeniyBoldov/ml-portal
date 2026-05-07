@@ -315,37 +315,20 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         };
       });
 
-      const { API_BASE } = await import('@shared/config');
-      const { getAccessToken } = await import('@shared/api/http');
-      const url = `${API_BASE}/chats/${chatId}/messages`;
-      
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-        Accept: 'text/event-stream',
-      };
-      
-      // Add auth token if available
-      const token = getAccessToken();
-      if (token) {
-        headers['Authorization'] = `Bearer ${token}`;
-      }
-
       const controller = new AbortController();
       abortControllerRef.current = controller;
       setIsStreaming(true);
-      
-      const response = await fetch(url, {
-        method: 'POST',
-        headers,
-        credentials: 'include',
+
+      const { fetchStreamWithAuth } = await import('@shared/api/streamAuth');
+      const response = await fetchStreamWithAuth(`/chats/${chatId}/messages`, {
         signal: controller.signal,
-        body: JSON.stringify({
+        body: {
           content: message,
           use_rag: useRag,
           agent_slug: agentSlug,
           attachment_ids: attachmentIds ?? [],
           confirmation_tokens: confirmationTokens ?? [],
-        }),
+        },
       });
 
       if (!response.ok || !response.body) {

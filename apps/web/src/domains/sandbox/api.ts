@@ -3,7 +3,6 @@
  */
 import { apiRequest } from '@/shared/api';
 import { API_BASE } from '@/shared/config';
-import { getAccessToken } from '@/shared/api/http';
 import type { ChatAttachment } from '@/shared/api/types';
 import type {
   SandboxSessionListItem,
@@ -168,15 +167,5 @@ export const sandboxApi = {
   getRunStreamUrl: (sessionId: string): string => {
     const base = API_BASE.replace(/\/$/, '');
     return `${base}${BASE}/sessions/${sessionId}/run`;
-  },
-
-  getRunStreamHeaders: (): Record<string, string> => {
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      Accept: 'text/event-stream',
-    };
-    const token = getAccessToken();
-    if (token) headers['Authorization'] = `Bearer ${token}`;
-    return headers;
   },
 };

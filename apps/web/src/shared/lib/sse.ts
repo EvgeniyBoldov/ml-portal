@@ -44,6 +44,8 @@ export class SSEClient {
   private lastErrorLogAt = 0;
   private errorLogIntervalMs = 2000;
   private url: string;
+  private isRefreshingAuth = false;
+  private disposed = false;
 
   constructor(url: string, onBatch: (events: SSEMessage[]) => void);
   constructor(options: SSEClientOptions);
@@ -67,6 +69,7 @@ export class SSEClient {
     if (this.eventSource) {
       return;
     }
+    this.disposed = false;
 
     const EventSourceCtorLocal = globalThis.EventSource;
     if (!EventSourceCtorLocal) {
@@ -205,7 +208,7 @@ export class SSEClient {
         this.lastErrorLogAt = now;
       }
       this.onErrorCallback?.(error as Event);
-      // Do not manually reconnect; EventSource will auto-retry
+      void this.tryRecoverAuth();
     };
 
     // Start batching
@@ -225,6 +228,7 @@ export class SSEClient {
   // Manual reconnect logic removed to avoid reconnection storms
 
   disconnect(): void {
+    this.disposed = true;
     if (this.eventSource) {
       this.eventSource.close();
       this.eventSource = null;
@@ -245,6 +249,33 @@ export class SSEClient {
     }
 
     return this.eventSource.readyState === EventSourceCtorLocal.OPEN;
+  }
+
+  private async tryRecoverAuth(): Promise<void> {
+    if (this.isRefreshingAuth || this.disposed) {
+      return;
+    }
+    this.isRefreshingAuth = true;
+    try {
+      const { refreshAccessToken } = await import('@/shared/api/http');
+      await refreshAccessToken();
+      if (this.disposed) {
+        return;
+      }
+      const EventSourceCtorLocal = globalThis.EventSource;
+      if (!EventSourceCtorLocal) {
+        return;
+      }
+      if (this.eventSource && this.eventSource.readyState === EventSourceCtorLocal.CLOSED) {
+        this.eventSource.close();
+        this.eventSource = null;
+        await this.connect();
+      }
+    } catch {
+      // Keep silent: auth failure will be handled by the regular app flow.
+    } finally {
+      this.isRefreshingAuth = false;
+    }
   }
 }
 

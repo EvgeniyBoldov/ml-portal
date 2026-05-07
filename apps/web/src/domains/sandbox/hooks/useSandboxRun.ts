@@ -122,16 +122,14 @@ export function useSandboxRun(sessionId: string) {
       };
 
       try {
-        const url = sandboxApi.getRunStreamUrl(sessionId);
-        const headers = sandboxApi.getRunStreamHeaders();
-
-        const response = await fetch(url, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify(body),
-          signal: controller.signal,
-          credentials: 'include',
-        });
+        const { fetchStreamWithAuth } = await import('@/shared/api/streamAuth');
+        const response = await fetchStreamWithAuth(
+          `/sandbox/sessions/${sessionId}/run`,
+          {
+            body,
+            signal: controller.signal,
+          }
+        );
 
         if (!response.ok) {
           const err = await response.text();
