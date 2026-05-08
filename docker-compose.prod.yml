@@ -289,7 +289,7 @@ services:
       - "${NGINX_PORT_HTTPS:-443}:443"
     volumes:
       # Nginx configs — maintained on the server, not inside the image
-      - ${NGINX_CONF_DIR:-./infra/nginx}/prod.conf:/etc/nginx/nginx.conf:ro
+      - ${NGINX_CONF_DIR:-./infra/nginx}/prod.conf:/etc/nginx/conf.d/default.conf:ro
       - ${NGINX_CONF_DIR:-./infra/nginx}/files.conf:/etc/nginx/conf.d/files.conf:ro
       # TLS certificates — managed externally (certbot, vault, etc.)
       - ${SSL_CERT_DIR:-./infra/ssl}:/etc/ssl/certs:ro

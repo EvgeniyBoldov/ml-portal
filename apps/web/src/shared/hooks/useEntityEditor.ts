@@ -112,15 +112,28 @@ export function useEntityEditor<T, TCreate = unknown, TUpdate = unknown>(config:
   }, [entity, isNew]);
 
   // Mutations
+  const invalidateEntityLists = () => {
+    // Special-case remains for models due dedicated admin namespace.
+    if (config.entityType === 'model') {
+      queryClient.invalidateQueries({ queryKey: ['admin', 'models', 'list'] });
+      return;
+    }
+
+    const listKey = config.queryKeys.list as unknown as unknown[];
+    queryClient.invalidateQueries({ queryKey: config.queryKeys.list as QueryKey });
+    if (Array.isArray(listKey) && listKey.length >= 1) {
+      // Also invalidate by stable prefix to catch variants with different params objects.
+      queryClient.invalidateQueries({ queryKey: [listKey[0]] as QueryKey });
+      if (listKey.length >= 2) {
+        queryClient.invalidateQueries({ queryKey: [listKey[0], listKey[1]] as QueryKey });
+      }
+    }
+  };
+
   const createMutation = useMutation({
     mutationFn: (data: TCreate) => config.api.create(data),
     onSuccess: (created) => {
-      // For models, invalidate ALL list queries (with any filters) using prefix
-      if (config.entityType === 'model') {
-        queryClient.invalidateQueries({ queryKey: ['admin', 'models', 'list'] });
-      } else {
-        queryClient.invalidateQueries({ queryKey: config.queryKeys.list as QueryKey });
-      }
+      invalidateEntityLists();
       showSuccess(config.messages.create);
       const newId = getEntityIdentity(created);
       if (!newId) {
@@ -136,12 +149,7 @@ export function useEntityEditor<T, TCreate = unknown, TUpdate = unknown>(config:
     mutationFn: (data: TUpdate) => config.api.update(entityIdentifier!, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: config.queryKeys.detail(entityIdentifier!) });
-      // For models, invalidate ALL list queries (with any filters) using prefix
-      if (config.entityType === 'model') {
-        queryClient.invalidateQueries({ queryKey: ['admin', 'models', 'list'] });
-      } else {
-        queryClient.invalidateQueries({ queryKey: config.queryKeys.list as QueryKey });
-      }
+      invalidateEntityLists();
       showSuccess(config.messages.update);
       setSearchParams({});
     },
@@ -151,12 +159,7 @@ export function useEntityEditor<T, TCreate = unknown, TUpdate = unknown>(config:
   const deleteMutation = useMutation({
     mutationFn: (): Promise<void> => config.api.delete ? config.api.delete(entityIdentifier!) : Promise.resolve(),
     onSuccess: () => {
-      // For models, invalidate ALL list queries (with any filters) using prefix
-      if (config.entityType === 'model') {
-        queryClient.invalidateQueries({ queryKey: ['admin', 'models', 'list'] });
-      } else {
-        queryClient.invalidateQueries({ queryKey: config.queryKeys.list as QueryKey });
-      }
+      invalidateEntityLists();
       if (config.messages.delete) {
         showSuccess(config.messages.delete);
       }

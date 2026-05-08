@@ -40,6 +40,12 @@ const STATUS_TONE: Record<string, 'success' | 'neutral' | 'warn' | 'danger'> = {
   waiting_confirmation: 'warn',
 };
 
+function toVersionStateLabel(versionStatus: string, isCurrent: boolean): string {
+  if (isCurrent) return 'Текущая';
+  if (versionStatus === 'published' || versionStatus === 'active') return 'Опубликована';
+  return 'Неактивная';
+}
+
 export default function SessionSidebar({
   sessionId,
   session,
@@ -244,7 +250,9 @@ export default function SessionSidebar({
                             <span className={styles['override-dot']} />
                           ) : null}
                         </span>
-                        <span className={styles['version-item-status']}>{version.status}</span>
+                        <span className={styles['version-item-status']}>
+                          {toVersionStateLabel(version.status, agent.current_version_id === version.id)}
+                        </span>
                       </button>
                     ))}
                   </div>
@@ -301,8 +309,8 @@ export default function SessionSidebar({
                             </span>
                             <span className={styles['nav-slug']}>{tool.slug}</span>
                             <span className={styles['nav-desc']}>
-                              <Badge tone={resolveToolPublished(tool.id, tool.published) ? 'success' : 'warn'}>
-                                {resolveToolPublished(tool.id, tool.published) ? 'Опубликован' : 'Черновик'}
+                              <Badge tone={resolveToolPublished(tool.id, tool.published) ? 'success' : 'neutral'}>
+                                {resolveToolPublished(tool.id, tool.published) ? 'Доступен' : 'Без активной версии'}
                               </Badge>
                               <span>{tool.source}</span>
                               {tool.domains.length > 1 ? (
@@ -331,7 +339,9 @@ export default function SessionSidebar({
                                   }
                                 >
                                   <span className={styles['version-item-label']}>v{version.version}</span>
-                                  <span className={styles['version-item-status']}>{version.status}</span>
+                                  <span className={styles['version-item-status']}>
+                                    {toVersionStateLabel(version.status, tool.current_version_id === version.id)}
+                                  </span>
                                 </button>
                               ))}
                             </div>
