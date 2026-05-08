@@ -10,6 +10,7 @@ from typing import Any, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field
+from app.schemas.runtime_trace import RunTraceResponse
 
 
 # ── Session ──────────────────────────────────────────────────────────────────
@@ -170,6 +171,7 @@ class SandboxRunDetailResponse(BaseModel):
     started_at: datetime
     finished_at: Optional[datetime] = None
     steps: list[SandboxRunStepResponse] = []
+    trace: Optional[RunTraceResponse] = None
 
 
 # ── Run Step ─────────────────────────────────────────────────────────────────

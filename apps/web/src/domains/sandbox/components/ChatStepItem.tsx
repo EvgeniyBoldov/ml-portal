@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { RunStep, RunStepType } from '../hooks/useSandboxRun';
+import { normalizeTraceEvent } from '@/domains/runtimeTrace/normalize';
 import styles from './ChatStepItem.module.css';
 
 interface Props {
@@ -22,21 +23,18 @@ function hasValue(value: unknown): boolean {
   return value !== null && value !== undefined;
 }
 
-const STEP_META: Record<string, { label: string; icon: string; tone: string }> = {
-  status: { label: 'Статус', icon: '○', tone: 'neutral' },
-  thinking: { label: 'Размышление', icon: '◎', tone: 'neutral' },
-  routing: { label: 'Маршрутизация', icon: '⇢', tone: 'info' },
-  tool_call: { label: 'Вызов инструмента', icon: '⚙', tone: 'info' },
-  tool_result: { label: 'Результат', icon: '✦', tone: 'neutral' },
-  planner_action: { label: 'Действие планера', icon: '▸', tone: 'info' },
-  policy_decision: { label: 'Политика', icon: '⛨', tone: 'warn' },
-  confirmation_required: { label: 'Подтверждение', icon: '⚠', tone: 'warn' },
-  waiting_input: { label: 'Ожидание ввода', icon: '…', tone: 'warn' },
-  stop: { label: 'Стоп', icon: '■', tone: 'neutral' },
-  delta: { label: 'Дельта', icon: '⇣', tone: 'neutral' },
-  final: { label: 'Финал', icon: '✓', tone: 'success' },
-  error: { label: 'Ошибка', icon: '✕', tone: 'error' },
-  done: { label: 'Завершено', icon: '●', tone: 'success' },
+const STEP_META: Record<string, { icon: string; tone: string }> = {
+  input: { icon: '○', tone: 'neutral' },
+  decision: { icon: '⇢', tone: 'info' },
+  planner: { icon: '▸', tone: 'info' },
+  retry: { icon: '↺', tone: 'warn' },
+  llm: { icon: '◈', tone: 'info' },
+  operation: { icon: '⚙', tone: 'info' },
+  policy: { icon: '⛨', tone: 'warn' },
+  budget: { icon: '◷', tone: 'warn' },
+  final: { icon: '✓', tone: 'success' },
+  error: { icon: '✕', tone: 'error' },
+  system: { icon: '·', tone: 'neutral' },
 };
 
 function StepBody({ step }: { step: RunStep }) {
@@ -241,7 +239,14 @@ function StepBody({ step }: { step: RunStep }) {
 }
 
 export default function ChatStepItem({ step, index }: Props) {
-  const meta = STEP_META[step.type] ?? { label: step.type, icon: '·', tone: 'neutral' };
+  const semantic = normalizeTraceEvent({
+    id: step.id,
+    raw_type: step.type,
+    data: step.data,
+    step_number: index,
+    duration_ms: typeof step.data.duration_ms === 'number' ? step.data.duration_ms : undefined,
+  });
+  const meta = STEP_META[semantic.category] ?? STEP_META.system;
   const isMinor = step.type === 'status' || step.type === 'thinking' || step.type === 'delta';
   const [isOpen, setIsOpen] = useState(!isMinor);
 
@@ -254,7 +259,7 @@ export default function ChatStepItem({ step, index }: Props) {
         aria-expanded={isOpen}
       >
         <span className={styles.icon}>{meta.icon}</span>
-        <span className={styles.title}>{meta.label}</span>
+        <span className={styles.title}>{semantic.title}</span>
         <span className={`${styles.chevron} ${isOpen ? styles['chevron-open'] : ''}`}>▾</span>
       </button>
       {isOpen && <StepBody step={step} />}

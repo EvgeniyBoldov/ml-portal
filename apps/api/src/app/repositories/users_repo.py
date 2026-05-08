@@ -28,8 +28,28 @@ class AsyncUsersRepository:
         res = await self.session.execute(select(Users).where(Users.login == login))
         return res.scalar_one_or_none()
 
+    async def get_by_login_ci(self, login: str) -> Optional[Users]:
+        """Case-insensitive login lookup."""
+        normalized = (login or "").strip().lower()
+        if not normalized:
+            return None
+        res = await self.session.execute(
+            select(Users).where(func.lower(Users.login) == normalized)
+        )
+        return res.scalar_one_or_none()
+
     async def get_by_email(self, email: str) -> Optional[Users]:
         res = await self.session.execute(select(Users).where(Users.email == email))
+        return res.scalar_one_or_none()
+
+    async def get_by_email_ci(self, email: str) -> Optional[Users]:
+        """Case-insensitive email lookup."""
+        normalized = (email or "").strip().lower()
+        if not normalized:
+            return None
+        res = await self.session.execute(
+            select(Users).where(func.lower(Users.email) == normalized)
+        )
         return res.scalar_one_or_none()
 
     async def create(self, **kwargs) -> Users:
@@ -309,6 +329,28 @@ class AsyncUsersRepository:
                 ldap_groups=ldap_groups,
                 updated_at=func.now()
             )
+        )
+
+    async def update_ldap_identity(
+        self,
+        user_id: uuid.UUID,
+        *,
+        login: str | None,
+        external_id: str | None,
+    ) -> None:
+        """Update LDAP identity binding fields."""
+        from sqlalchemy import update
+
+        values: Dict[str, Any] = {"updated_at": func.now()}
+        if login:
+            values["login"] = login
+        if external_id:
+            values["external_id"] = external_id
+
+        await self.session.execute(
+            update(Users)
+            .where(Users.id == user_id)
+            .values(**values)
         )
 
     async def update_last_login(self, user_id: uuid.UUID) -> None:

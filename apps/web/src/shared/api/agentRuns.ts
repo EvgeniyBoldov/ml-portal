@@ -2,6 +2,7 @@
  * API client for Agent Runs observability
  */
 import { apiRequest } from './http';
+import type { RunTrace } from '@/domains/runtimeTrace/types';
 
 export interface AgentRunStep {
   id: string;
@@ -57,6 +58,7 @@ export interface AgentRun {
 
 export interface AgentRunDetail extends AgentRun {
   steps: AgentRunStep[];
+  trace?: RunTrace;
 }
 
 export interface AgentRunListResponse {

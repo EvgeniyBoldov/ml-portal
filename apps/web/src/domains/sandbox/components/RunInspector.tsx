@@ -5,6 +5,9 @@
  */
 import { useMemo, useState, type ReactNode } from 'react';
 import type { RunStep } from '../hooks/useSandboxRun';
+import type { SemanticEvent } from '@/domains/runtimeTrace/types';
+import { normalizeTraceEvent } from '@/domains/runtimeTrace/normalize';
+import { buildTraceDiagnostics, TraceDiagnosticsInline } from '@/domains/runtimeTrace/components/TraceDiagnosticsSummary';
 import styles from './RunInspector.module.css';
 
 type Tone = 'neutral' | 'info' | 'warn' | 'success' | 'danger';
@@ -453,10 +456,12 @@ interface Props {
   selectedStepId: string | null;
   runStatus?: string;
   runId?: string | null;
+  traceEvents?: SemanticEvent[];
 }
 
-export default function RunInspector({ steps, selectedStepId, runStatus, runId }: Props) {
+export default function RunInspector({ steps, selectedStepId, runStatus, runId, traceEvents = [] }: Props) {
   const [activeTab, setActiveTab] = useState<InspectTabKey>('summary');
+  const traceDiagnostics = useMemo(() => buildTraceDiagnostics(traceEvents), [traceEvents]);
 
   const selectedStep = useMemo(
     () => (selectedStepId ? steps.find((s) => s.id === selectedStepId) ?? null : null),
@@ -478,6 +483,17 @@ export default function RunInspector({ steps, selectedStepId, runStatus, runId }
   const meta = selectedStep
     ? STEP_META[selectedStep.type] ?? { label: selectedStep.type, icon: '•', tone: 'neutral' as const }
     : null;
+  const semanticEvent = useMemo(() => {
+    if (!selectedStep) return null;
+    const fromTrace = traceEvents.find((item) => item.id === selectedStep.id);
+    if (fromTrace) return fromTrace;
+    return normalizeTraceEvent({
+      id: selectedStep.id,
+      raw_type: selectedStep.type,
+      data: selectedStep.data,
+      duration_ms: typeof selectedStep.data.duration_ms === 'number' ? selectedStep.data.duration_ms : undefined,
+    });
+  }, [selectedStep, traceEvents]);
 
   const summaryFields = useMemo(() => {
     if (!selectedStep) return [];
@@ -599,6 +615,11 @@ export default function RunInspector({ steps, selectedStepId, runStatus, runId }
             </span>
           )}
         </div>
+        {traceEvents.length > 0 && (
+          <div className={styles.subtitle}>
+            <TraceDiagnosticsInline diagnostics={traceDiagnostics} />
+          </div>
+        )}
       </div>
 
       <div className={styles['detail-header']}>
@@ -606,7 +627,7 @@ export default function RunInspector({ steps, selectedStepId, runStatus, runId }
           <span className={styles['detail-label']}>
             {meta?.icon ?? '•'} {meta?.label ?? selectedStep.type}
           </span>
-          <span className={styles['detail-title']}>{getStepTitle(selectedStep)}</span>
+          <span className={styles['detail-title']}>{semanticEvent?.title ?? getStepTitle(selectedStep)}</span>
         </div>
       </div>
 
@@ -628,6 +649,16 @@ export default function RunInspector({ steps, selectedStepId, runStatus, runId }
           <pre className={styles.payload}>{JSON.stringify(selectedStep.data, null, 2)}</pre>
         ) : (
           <>
+            {semanticEvent && active.key === 'summary' ? (
+              <SectionAccordion title="Semantic Trace" count={4} defaultOpen>
+                <div className={styles['param-list']}>
+                  <div className={styles['param-body']}><strong>Category:</strong> {semanticEvent.category}</div>
+                  <div className={styles['param-body']}><strong>Phase:</strong> {semanticEvent.phase}</div>
+                  <div className={styles['param-body']}><strong>Status:</strong> {semanticEvent.status}</div>
+                  <div className={styles['param-body']}><strong>Summary:</strong> {semanticEvent.summary}</div>
+                </div>
+              </SectionAccordion>
+            ) : null}
             <SectionAccordion title="Parameters" count={active.fields.length} defaultOpen>
               <ParamAccordionList fields={active.fields} />
             </SectionAccordion>

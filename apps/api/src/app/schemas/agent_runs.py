@@ -2,6 +2,7 @@ from typing import Any, Dict, List, Optional
 from datetime import datetime
 from uuid import UUID
 from pydantic import BaseModel, Field, ConfigDict
+from app.schemas.runtime_trace import RunTraceResponse
 
 
 class AgentRunStepResponse(BaseModel):
@@ -50,6 +51,7 @@ class AgentRunResponse(BaseModel):
 class AgentRunDetailResponse(AgentRunResponse):
     """Agent run with all steps"""
     steps: List[AgentRunStepResponse] = []
+    trace: Optional[RunTraceResponse] = None
 
 
 class AgentRunListResponse(BaseModel):

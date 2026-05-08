@@ -20,6 +20,7 @@ import ConfigPanel from '../components/ConfigPanel';
 import ConfirmWriteDialog from '../components/ConfirmWriteDialog';
 import type { SandboxSelectedItem } from '../types';
 import type { RunStep } from '../hooks/useSandboxRun';
+import type { SemanticEvent } from '@/domains/runtimeTrace/types';
 import styles from './SandboxSessionPage.module.css';
 
 export default function SandboxSessionPage() {
@@ -37,6 +38,7 @@ export default function SandboxSessionPage() {
   const [inspectorSteps, setInspectorSteps] = useState<RunStep[]>([]);
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
   const [inspectorRunId, setInspectorRunId] = useState<string | null>(null);
+  const [inspectorTraceEvents, setInspectorTraceEvents] = useState<SemanticEvent[]>([]);
 
   const { data: branches = [] } = useQuery({
     queryKey: qk.sandbox.branches.list(sessionId ?? ''),
@@ -111,10 +113,21 @@ export default function SandboxSessionPage() {
     setSelectedItem({ type: 'run', id: runId ?? 'active', name: 'Лог выполнения' });
   };
 
-  const handleSelectStep = (runId: string, stepId: string, steps: RunStep[]) => {
+  const handleSelectStep = async (runId: string, stepId: string, steps: RunStep[]) => {
     setInspectorSteps(steps);
     setSelectedStepId(stepId);
     setInspectorRunId(runId === 'active' ? sandboxRun.activeRun.runId : runId);
+    if (runId !== 'active' && sessionId) {
+      try {
+        const detail = await sandboxApi.getRunDetail(sessionId, runId);
+        const events = detail.trace?.iterations.flatMap((item) => item.events) ?? [];
+        setInspectorTraceEvents(events);
+      } catch {
+        setInspectorTraceEvents([]);
+      }
+    } else {
+      setInspectorTraceEvents([]);
+    }
     setSelectedItem({ type: 'run', id: runId, name: 'Детали шага' });
   };
 
@@ -208,7 +221,9 @@ export default function SandboxSessionPage() {
           onRun={handleRun}
           onStop={sandboxRun.stop}
           onSelectRun={handleSelectRun}
-          onSelectStep={handleSelectStep}
+          onSelectStep={(runId, stepId, steps) => {
+            void handleSelectStep(runId, stepId, steps);
+          }}
         />
       </div>
 
@@ -225,6 +240,7 @@ export default function SandboxSessionPage() {
           selectedStepId={selectedStepId}
           inspectorRunId={inspectorRunId}
           inspectorRunStatus={sandboxRun.activeRun.status}
+          inspectorTraceEvents={inspectorTraceEvents}
         />
       </div>
 

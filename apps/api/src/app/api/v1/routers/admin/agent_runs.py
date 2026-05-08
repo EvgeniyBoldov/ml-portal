@@ -34,6 +34,7 @@ from app.services.runtime_capability_graph_service import (
 )
 from app.services.runtime_hitl_policy_contract_service import RuntimeHitlPolicyContractService
 from app.services.runtime_trace_pack_service import RuntimeTracePackService
+from app.services.runtime_trace_builder import RuntimeTraceBuilder, TraceStep
 from app.services.run_store import RunStore
 
 router = APIRouter(tags=["Agent Runs"])
@@ -194,9 +195,22 @@ async def get_agent_run(
     if not run:
         raise HTTPException(status_code=404, detail="Agent run not found")
     
+    trace = RuntimeTraceBuilder().build(
+        TraceStep(
+            id=str(step.id),
+            raw_type=str(step.step_type),
+            data=dict(step.data or {}),
+            step_number=int(step.step_number) if step.step_number is not None else None,
+            created_at=step.created_at,
+            duration_ms=step.duration_ms,
+        )
+        for step in run.steps
+    )
+
     return AgentRunDetailResponse(
         **AgentRunResponse.model_validate(run).model_dump(),
         steps=[AgentRunStepResponse.model_validate(step) for step in run.steps],
+        trace=trace,
     )
 
 

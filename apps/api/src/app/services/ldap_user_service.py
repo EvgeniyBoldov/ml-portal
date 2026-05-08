@@ -71,7 +71,7 @@ class LDAPUserService:
         Check for existing local user with same login.
         Returns user if conflict (local user exists), None if OK.
         """
-        existing = await self.users_repo.get_by_login(login)
+        existing = await self.users_repo.get_by_login_ci(login)
         if existing and existing.auth_provider == "local":
             return existing
         return None
@@ -90,7 +90,27 @@ class LDAPUserService:
         # Try to find existing LDAP user by external_id
         existing = await self.users_repo.get_by_external_id("ldap", profile.external_id)
 
+        # Fallback for cases when LDAP identifier changes (DN move/rename)
+        # or older records were created with non-canonical login casing/format.
+        if not existing:
+            existing = await self.users_repo.get_by_login_ci(profile.login)
+            if existing and existing.auth_provider != "ldap":
+                existing = None
+
+        if not existing and profile.email:
+            existing = await self.users_repo.get_by_email_ci(profile.email)
+            if existing and existing.auth_provider != "ldap":
+                existing = None
+
         if existing:
+            # Keep LDAP binding stable to prevent duplicate account creation
+            # and chat ownership split across different user IDs.
+            await self.users_repo.update_ldap_identity(
+                user_id=existing.id,
+                login=profile.login,
+                external_id=profile.external_id,
+            )
+
             # Update existing LDAP user
             if self.settings.AUTH_LDAP_UPDATE_PROFILE_ON_LOGIN:
                 await self.users_repo.update_ldap_profile(

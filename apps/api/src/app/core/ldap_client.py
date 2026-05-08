@@ -127,8 +127,16 @@ class LDAPClient:
             except (ValueError, TypeError):
                 pass
 
+        # Get canonical login from LDAP attribute when available.
+        login_attr = self.settings.AUTH_LDAP_USER_LOGIN_ATTR
+        canonical_login = login.strip()
+        if login_attr in attrs and attrs[login_attr]:
+            attr_value = attrs[login_attr][0] if isinstance(attrs[login_attr], list) else attrs[login_attr]
+            if attr_value:
+                canonical_login = str(attr_value).strip()
+
         return LDAPUserProfile(
-            login=login,
+            login=canonical_login,
             email=email,
             full_name=full_name,
             external_id=entry.entry_dn,

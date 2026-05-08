@@ -1,6 +1,7 @@
 /**
  * Sandbox domain types — mirrors backend schemas.
  */
+import type { RunTrace } from '@/domains/runtimeTrace/types';
 
 // ── Session ─────────────────────────────────────────────────────────────────
 
@@ -115,6 +116,7 @@ export interface SandboxRunDetail {
   started_at: string;
   finished_at: string | null;
   steps: SandboxRunStep[];
+  trace?: RunTrace;
 }
 
 export interface SandboxRunCreate {

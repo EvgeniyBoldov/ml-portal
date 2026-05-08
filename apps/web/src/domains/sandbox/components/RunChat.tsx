@@ -10,6 +10,7 @@ import { Icon } from '@/shared/ui/Icon';
 import { qk } from '@/shared/api/keys';
 import type { ActiveRun, RunStep } from '../hooks/useSandboxRun';
 import type { SandboxBranchListItem, SandboxRunListItem } from '../types';
+import { normalizeTraceEvent } from '@/domains/runtimeTrace/normalize';
 import { sandboxApi } from '../api';
 import ChatQuestionCard from './ChatQuestionCard';
 import ChatAnswerCard from './ChatAnswerCard';
@@ -21,45 +22,35 @@ const HIDDEN_STEP_TYPES = new Set(['delta', 'final_content', 'done']);
 
 type Tone = 'neutral' | 'info' | 'warn' | 'success' | 'danger';
 
-const STEP_META: Record<string, { label: string; icon: string; tone: Tone }> = {
-  status:                { label: 'Статус',            icon: '◉', tone: 'neutral' },
-  thinking:              { label: 'Размышление',       icon: '💭', tone: 'neutral' },
-  routing:               { label: 'Маршрутизация',     icon: '🔀', tone: 'info' },
-  tool_call:             { label: 'Вызов',             icon: '🔧', tone: 'info' },
-  tool_result:           { label: 'Результат',         icon: '📋', tone: 'success' },
-  planner_action:        { label: 'Планер',            icon: '📐', tone: 'info' },
-  policy_decision:       { label: 'Политика',          icon: '🛡', tone: 'warn' },
-  confirmation_required: { label: 'Подтверждение',     icon: '⚠', tone: 'warn' },
-  waiting_input:         { label: 'Ожидание',          icon: '⏳', tone: 'warn' },
-  stop:                  { label: 'Стоп',              icon: '⏹', tone: 'neutral' },
-  final:                 { label: 'Финал',             icon: '✅', tone: 'success' },
-  error:                 { label: 'Ошибка',            icon: '❌', tone: 'danger' },
+const CATEGORY_META: Record<string, { icon: string; tone: Tone }> = {
+  input: { icon: '◉', tone: 'neutral' },
+  budget: { icon: '◷', tone: 'warn' },
+  llm: { icon: '◇', tone: 'info' },
+  decision: { icon: '🔀', tone: 'info' },
+  retry: { icon: '↺', tone: 'warn' },
+  operation: { icon: '🔧', tone: 'info' },
+  policy: { icon: '🛡', tone: 'warn' },
+  planner: { icon: '📐', tone: 'info' },
+  final: { icon: '✅', tone: 'success' },
+  error: { icon: '❌', tone: 'danger' },
+  system: { icon: '•', tone: 'neutral' },
 };
 
-function getStepTitle(step: RunStep): string {
-  if (step.type === 'tool_call' || step.type === 'tool_result') {
-    const tool = step.data.tool;
-    if (typeof tool === 'string' && tool.length > 0) return tool;
-  }
-  if (step.type === 'status') {
-    const stage = step.data.stage;
-    if (typeof stage === 'string' && stage.length > 0) return stage;
-  }
-  if (step.type === 'routing') {
-    const slug = step.data.agent_slug;
-    if (typeof slug === 'string' && slug.length > 0) return `→ ${slug}`;
-  }
-  return STEP_META[step.type]?.label ?? step.type;
+function getSemantic(step: RunStep, index: number) {
+  return normalizeTraceEvent({
+    id: step.id,
+    raw_type: step.type,
+    data: step.data,
+    step_number: index,
+    duration_ms: typeof step.data.duration_ms === 'number' ? step.data.duration_ms : undefined,
+  });
 }
 
-function getStepBadge(step: RunStep): { text: string; tone: Tone } | null {
-  if (step.type === 'tool_result') {
-    const success = step.data.success;
-    if (typeof success === 'boolean') {
-      return success ? { text: 'OK', tone: 'success' } : { text: 'FAIL', tone: 'danger' };
-    }
-  }
-  if (step.type === 'error') return { text: 'ERR', tone: 'danger' };
+function getStepBadge(step: RunStep, index: number): { text: string; tone: Tone } | null {
+  const semantic = getSemantic(step, index);
+  if (semantic.status === 'error') return { text: 'ERR', tone: 'danger' };
+  if (semantic.status === 'warn') return { text: 'WARN', tone: 'warn' };
+  if (semantic.status === 'ok') return { text: 'OK', tone: 'success' };
   return null;
 }
 
@@ -171,8 +162,9 @@ function ExpandableSteps({
       {expanded && (
         <div className={styles['steps-list']}>
           {visible.map((step, index) => {
-            const meta = STEP_META[step.type] ?? { label: step.type, icon: '•', tone: 'neutral' as const };
-            const badge = getStepBadge(step);
+            const semantic = getSemantic(step, index);
+            const meta = CATEGORY_META[semantic.category] ?? CATEGORY_META.system;
+            const badge = getStepBadge(step, index);
             const elapsed = index > 0 ? step.timestamp - visible[index - 1].timestamp : 0;
             const isSelected = step.id === selectedStepId;
 
@@ -185,8 +177,8 @@ function ExpandableSteps({
               >
                 <span className={`${styles['step-tone']} ${styles[`tone-${meta.tone}`]}`} />
                 <span className={styles['step-icon']}>{meta.icon}</span>
-                <span className={styles['step-label']}>{meta.label}</span>
-                <span className={styles['step-title']}>{getStepTitle(step)}</span>
+                <span className={styles['step-label']}>{semantic.title}</span>
+                <span className={styles['step-title']}>{semantic.summary}</span>
                 {elapsed > 50 && (
                   <span className={styles['step-elapsed']}>+{fmtDuration(elapsed)}</span>
                 )}

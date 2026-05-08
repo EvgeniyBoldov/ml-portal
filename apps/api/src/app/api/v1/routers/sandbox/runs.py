@@ -40,6 +40,7 @@ from app.services.sandbox_step_enrichment_service import SandboxStepEnrichmentSe
 from app.services.run_store import RunStore
 from app.services.runtime_hitl_protocol_service import RuntimeHitlProtocolService
 from app.services.runtime_terminal_status import planner_terminal_from_event
+from app.services.runtime_trace_builder import RuntimeTraceBuilder, TraceStep
 
 from .helpers import check_session_owner, tenant_uuid, user_uuid
 
@@ -148,6 +149,18 @@ async def get_run_detail(
             )
         )
 
+    trace = RuntimeTraceBuilder().build(
+        TraceStep(
+            id=str(s.id),
+            raw_type=str(s.step_type),
+            data=dict(enriched_steps[idx].step_data or {}),
+            step_number=int(s.order_num) if s.order_num is not None else None,
+            created_at=s.created_at,
+            duration_ms=None,
+        )
+        for idx, s in enumerate(run.steps)
+    )
+
     return SandboxRunDetailResponse(
         id=run.id,
         branch_id=run.branch_id,
@@ -160,6 +173,7 @@ async def get_run_detail(
         started_at=run.started_at,
         finished_at=run.finished_at,
         steps=enriched_steps,
+        trace=trace,
     )
 
 
