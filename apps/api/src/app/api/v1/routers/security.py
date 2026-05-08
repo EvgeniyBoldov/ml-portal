@@ -45,12 +45,13 @@ async def login(
     user = await local_service.authenticate_user(payload.login, payload.password)
     
     # If local auth failed and LDAP is enabled, try LDAP
+    ldap_provisioned = False
     if not user and settings.AUTH_LDAP_ENABLED:
         ldap_service = LDAPUserService(session, settings)
         ldap_result = await ldap_service.authenticate_and_provision(payload.login, payload.password)
         if ldap_result.success and ldap_result.user:
             user = ldap_result.user
-            is_ldap_new = ldap_result.is_new
+            ldap_provisioned = True
         elif ldap_result.error and "Local user with this login already exists" in ldap_result.error:
             # Conflict: local user exists, deny LDAP login
             raise HTTPException(
@@ -60,6 +61,12 @@ async def login(
     
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+
+    # db_session dependency does not auto-commit.
+    # Persist JIT LDAP provisioning in the same request, otherwise user exists only
+    # in transaction scope and disappears after response.
+    if ldap_provisioned:
+        await session.commit()
     
     # Get user's tenant IDs from database
     from sqlalchemy import text
