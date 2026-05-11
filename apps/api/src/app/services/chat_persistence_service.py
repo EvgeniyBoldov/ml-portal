@@ -54,6 +54,7 @@ class ChatPersistenceService:
         content: str,
         rag_sources: Optional[list[Dict[str, Any]]] = None,
         attachments: Optional[list[Dict[str, Any]]] = None,
+        extra_meta: Optional[Dict[str, Any]] = None,
     ) -> PersistedChatMessage:
         meta: Dict[str, Any] = {}
         if rag_sources:
@@ -71,6 +72,8 @@ class ChatPersistenceService:
         meta["grounding"] = self.structured_answer_service.build_grounding(
             rag_sources=rag_sources
         )
+        if extra_meta:
+            meta.update(extra_meta)
         message = await self.messages_repo.create_message(
             chat_id=chat_id,
             role="assistant",

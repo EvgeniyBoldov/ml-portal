@@ -31,7 +31,12 @@ class AsyncRepositoryFactory:
     def __init__(self, session: AsyncSession, tenant_id: uuid.UUID, user_id: Optional[uuid.UUID] = None):
         self.session = session
         self.tenant_id = tenant_id
-        self.user_id = user_id
+        if user_id is None:
+            self.user_id = None
+        elif isinstance(user_id, uuid.UUID):
+            self.user_id = user_id
+        else:
+            self.user_id = uuid.UUID(str(user_id))
         self._repositories: Dict[str, Any] = {}
     
     def get_chats_repository(self) -> AsyncChatsRepository:
@@ -244,4 +249,3 @@ async def _extract_tenant_id_from_user(session: AsyncSession, user: UserCtx) -> 
         status_code=400,
         detail=f"User {user.id} has no tenant assigned. Re-login or assign a tenant.",
     )
-

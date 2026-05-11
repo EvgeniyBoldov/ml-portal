@@ -1,12 +1,10 @@
 .sidebar {
   width: 260px;
-  height: 100vh;
+  flex-shrink: 0;
   background: var(--panel);
   border-right: 1px solid var(--border-color);
   display: flex;
   flex-direction: column;
-  position: sticky;
-  top: 0;
   overflow-y: auto;
 }
 

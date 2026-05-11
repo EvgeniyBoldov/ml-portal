@@ -54,4 +54,34 @@ describe('runtimeTrace normalize', () => {
     expect(event.category).toBe('system');
     expect(event.title).toContain('brand_new_event');
   });
+
+  it('maps llm_request payload into semantic inputs', () => {
+    const event = normalizeTraceEvent({
+      id: 'llm-req',
+      raw_type: 'llm_request',
+      data: {
+        model: 'gpt-x',
+        messages_sent: [{ role: 'system', content: 'prompt' }],
+        request_payload: { goal: 'Find collections' },
+      },
+    });
+
+    expect(event.category).toBe('llm');
+    expect(event.inputs).toEqual({
+      messages: [{ role: 'system', content: 'prompt' }],
+      payload: { goal: 'Find collections' },
+      model: 'gpt-x',
+    });
+    expect(event.summary).toBe('model=gpt-x');
+  });
+
+  it('summarizes planner events with kind and rationale', () => {
+    const event = normalizeTraceEvent({
+      id: 'planner-1',
+      raw_type: 'planner_step',
+      data: { kind: 'call_agent', rationale: 'Need network inventory' },
+    });
+    expect(event.category).toBe('planner');
+    expect(event.summary).toBe('call_agent: Need network inventory');
+  });
 });

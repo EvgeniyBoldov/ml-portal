@@ -4,7 +4,6 @@
  * Tabs:
  * 1. Промпт — prompt parts (identity, mission, scope, rules, tool_use_rules, output_format, examples)
  * 2. Выполнение — safety knobs + заметки
- * 3. Роутинг — routing config
  */
 import { useParams } from 'react-router-dom';
 import {
@@ -124,44 +123,6 @@ const SAFETY_FIELDS: FieldConfig[] = [
   },
 ];
 
-const ROUTING_FIELDS: FieldConfig[] = [
-  {
-    key: 'short_info',
-    type: 'textarea',
-    label: 'Short Info',
-    description: 'Краткое описание для роутера',
-    placeholder: 'Одна фраза — что делает агент и когда его вызывать...',
-    rows: 2,
-  },
-  {
-    key: 'tags',
-    type: 'tags',
-    label: 'Теги',
-    description: 'Теги для роутинга и фильтрации',
-    placeholder: 'network security monitoring...',
-  },
-  {
-    key: 'is_routable',
-    type: 'boolean',
-    label: 'Доступен для авто-роутинга',
-    description: 'Может ли агент быть автоматически выбран роутером',
-  },
-  {
-    key: 'routing_keywords',
-    type: 'tags',
-    label: 'Ключевые слова',
-    description: 'Слова для поиска (5-30)',
-    placeholder: 'тикет инцидент алерт падение...',
-  },
-  {
-    key: 'routing_negative_keywords',
-    type: 'tags',
-    label: 'Стоп-слова',
-    description: 'Слова которые должны исключить выбор агента',
-    placeholder: 'продажи маркетинг аналитика...',
-  },
-];
-
 const NOTES_FIELDS: FieldConfig[] = [
   {
     key: 'notes',
@@ -211,7 +172,6 @@ export function AgentVersionPage() {
     { key: 'tool_use_rules', label: 'Tool Use Rules', description: 'Правила использования инструментов' },
     { key: 'output_format', label: 'Output Format', description: 'Формат вывода' },
     { key: 'examples', label: 'Examples', description: 'Примеры использования' },
-    { key: 'short_info', label: 'Short Info', description: 'Краткое описание' },
     { key: 'tags', label: 'Tags', description: 'Теги для категоризации' },
   ];
 
@@ -237,12 +197,7 @@ export function AgentVersionPage() {
     risk_level: existingVersion?.risk_level ?? '',
     never_do: existingVersion?.never_do ?? '',
     allowed_ops: existingVersion?.allowed_ops ?? '',
-    // Routing
-    short_info: existingVersion?.short_info ?? '',
     tags: existingVersion?.tags ?? [],
-    is_routable: existingVersion?.is_routable ?? false,
-    routing_keywords: existingVersion?.routing_keywords ?? [],
-    routing_negative_keywords: existingVersion?.routing_negative_keywords ?? [],
     notes: existingVersion?.notes ?? '',
   };
 
@@ -361,31 +316,6 @@ export function AgentVersionPage() {
           width="1/2"
           fields={[...NOTES_FIELDS, ...META_FIELDS]}
           data={{ ...viewData, ...metaData }}
-          editable={isEditable}
-          onChange={handleFieldChange}
-        />
-      </Tab>
-
-      {/* ── Tab 3: Роутинг ── */}
-      <Tab title="Роутинг" layout="grid" id="routing">
-        <Block
-          title="Настройки роутинга"
-          icon="route"
-          iconVariant="primary"
-          width="1/2"
-          fields={ROUTING_FIELDS.slice(0, 3)} // short_info, tags, is_routable
-          data={viewData}
-          editable={isEditable}
-          onChange={handleFieldChange}
-        />
-
-        <Block
-          title="Ключевые слова"
-          icon="search"
-          iconVariant="info"
-          width="1/2"
-          fields={ROUTING_FIELDS.slice(3)} // routing_keywords, routing_negative_keywords
-          data={viewData}
           editable={isEditable}
           onChange={handleFieldChange}
         />

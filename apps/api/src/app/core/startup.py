@@ -284,9 +284,26 @@ async def validate_connectors(session_factory: async_sessionmaker[AsyncSession])
             )
 
 
+async def validate_role_contracts_task(session_factory: async_sessionmaker[AsyncSession]) -> None:
+    """Validate system LLM role contracts against Pydantic models.
+
+    This is fail-fast: schema divergence blocks startup.
+    """
+    from app.services.system_llm_role_contracts import validate_role_contracts
+
+    errors = validate_role_contracts()
+    if errors:
+        error_lines = [f"  {role.value}: {msg}" for role, msg in errors.items()]
+        raise RuntimeError(
+            "Role contract validation failed:\n" + "\n".join(error_lines)
+        )
+    logger.info("Role contracts validated successfully")
+
+
 async def run_all(session_factory: async_sessionmaker[AsyncSession]) -> None:
     """Run all startup tasks in order. Each failure is isolated."""
     tasks: list[tuple[str, Callable]] = [
+        ("validate_role_contracts", validate_role_contracts_task),
         ("ensure_default_admin", ensure_default_admin),
         ("register_embedding_models", register_embedding_models),
         ("sync_tool_catalog", sync_tool_catalog),

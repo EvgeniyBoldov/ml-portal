@@ -165,44 +165,17 @@ const AGENT_EXEC_FIELDS: FieldConfig[] = [
       { value: 'high', label: 'High' },
     ],
   },
-];
-
-// Routing
-const ROUTING_FIELDS: FieldConfig[] = [
   {
-    key: 'short_info',
-    type: 'textarea',
-    label: 'Short Info',
-    description: 'Краткое описание для роутера',
-    placeholder: 'Одна фраза — что делает агент и когда его вызывать...',
-    rows: 2,
-  },
-  {
-    key: 'tags',
-    type: 'tags',
-    label: 'Теги',
-    description: 'Теги для роутинга и фильтрации',
-    placeholder: 'network security monitoring...',
-  },
-  {
-    key: 'is_routable',
-    type: 'boolean',
-    label: 'Доступен для авто-роутинга',
-    description: 'Может ли агент быть автоматически выбран роутером',
-  },
-  {
-    key: 'routing_keywords',
-    type: 'tags',
-    label: 'Ключевые слова',
-    description: 'Слова для поиска (5-30)',
-    placeholder: 'тикет инцидент алерт падение...',
-  },
-  {
-    key: 'routing_negative_keywords',
-    type: 'tags',
-    label: 'Стоп-слова',
-    description: 'Слова которые должны исключить выбор агента',
-    placeholder: 'продажи маркетинг аналитика...',
+    key: 'logging_level',
+    type: 'select',
+    label: 'Логирование',
+    description: 'Уровень детализации трейса запуска',
+    options: [
+      { value: 'none', label: 'None — не логировать' },
+      { value: 'errors', label: 'Errors — только ошибки' },
+      { value: 'brief', label: 'Brief — метаданные (по умолчанию)' },
+      { value: 'full', label: 'Full — всё включая промты и ответы' },
+    ],
   },
 ];
 
@@ -319,9 +292,10 @@ export function AgentPage() {
     max_retries: agent?.max_retries ?? null,
     requires_confirmation_for_write: agent?.requires_confirmation_for_write ?? false,
     risk_level: agent?.risk_level || '',
+    logging_level: agent?.logging_level || 'brief',
   };
 
-  // Version data (read-only from current version — prompt + routing only)
+  // Version data (read-only from current version)
   const versionData = currentVersion ? {
     // Prompt parts
     identity: currentVersion.identity ?? '',
@@ -334,18 +308,12 @@ export function AgentPage() {
     // Safety prompt constraints
     never_do: currentVersion.never_do ?? '',
     allowed_ops: currentVersion.allowed_ops ?? '',
-    // Routing
-    short_info: currentVersion.short_info ?? '',
     tags: currentVersion.tags ?? [],
-    is_routable: currentVersion.is_routable ?? false,
-    routing_keywords: currentVersion.routing_keywords ?? [],
-    routing_negative_keywords: currentVersion.routing_negative_keywords ?? [],
     notes: currentVersion.notes ?? '',
   } : {
     identity: '', mission: '', scope: '', rules: '', tool_use_rules: '',
     output_format: '', examples: '', never_do: '', allowed_ops: '',
-    short_info: '', tags: [], is_routable: false,
-    routing_keywords: [], routing_negative_keywords: [], notes: ''
+    tags: [], notes: ''
   };
 
   const allowedCollectionIds = useMemo(
@@ -539,30 +507,6 @@ export function AgentPage() {
                 { key: 'never_do', type: 'textarea', label: 'Never Do', description: 'Что нельзя делать', rows: 4 },
                 { key: 'allowed_ops', type: 'textarea', label: 'Allowed Ops', description: 'Что можно делать', rows: 4 },
               ]}
-              data={versionData}
-              editable={false}
-            />
-          </Tab>
-        )}
-
-        {/* ── Tab 4: Роутинг (только для просмотра) ── */}
-        {!isNew && currentVersionInfo && (
-          <Tab title="Роутинг" layout="grid" id="routing" actions={undefined}>
-            <Block
-              title="Настройки роутинга"
-              icon="route"
-              iconVariant="primary"
-              width="1/2"
-              fields={ROUTING_FIELDS.slice(0, 3)} // short_info, tags, is_routable
-              data={versionData}
-              editable={false}
-            />
-            <Block
-              title="Ключевые слова"
-              icon="search"
-              iconVariant="info"
-              width="1/2"
-              fields={ROUTING_FIELDS.slice(3)} // routing_keywords, routing_negative_keywords
               data={versionData}
               editable={false}
             />

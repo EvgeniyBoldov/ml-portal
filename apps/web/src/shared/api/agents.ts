@@ -44,12 +44,7 @@ export interface AgentVersionInfo {
   // Safety prompt constraints
   never_do?: string | null;
   allowed_ops?: string | null;
-  // Routing
-  short_info?: string | null;
   tags?: string[] | null;
-  is_routable?: boolean;
-  routing_keywords?: string[] | null;
-  routing_negative_keywords?: string[] | null;
   // Meta
   parent_version_id?: string | null;
   notes?: string | null;
@@ -86,12 +81,7 @@ export interface AgentVersion {
   risk_level?: string | null;
   never_do?: string | null;
   allowed_ops?: string | null;
-  // Routing
-  short_info?: string | null;
   tags?: string[] | null;
-  is_routable?: boolean;
-  routing_keywords?: string[] | null;
-  routing_negative_keywords?: string[] | null;
   // Meta
   parent_version_id?: string | null;
   notes?: string | null;
@@ -132,14 +122,6 @@ export interface AgentUpdate {
   allowed_collection_ids?: string[] | null;
 }
 
-export interface AgentRouteRequest {
-  request_text: string;
-}
-
-export interface AgentRouteResponse {
-  selected_agent: Agent;
-}
-
 export interface AgentVersionCreate {
   // Prompt parts
   identity?: string | null;
@@ -161,12 +143,7 @@ export interface AgentVersionCreate {
   risk_level?: string | null;
   never_do?: string | null;
   allowed_ops?: string | null;
-  // Routing
-  short_info?: string | null;
   tags?: string[] | null;
-  is_routable?: boolean;
-  routing_keywords?: string[] | null;
-  routing_negative_keywords?: string[] | null;
   // Meta
   notes?: string | null;
   parent_version_id?: string | null;
@@ -193,12 +170,7 @@ export interface AgentVersionUpdate {
   risk_level?: string | null;
   never_do?: string | null;
   allowed_ops?: string | null;
-  // Routing
-  short_info?: string | null;
   tags?: string[] | null;
-  is_routable?: boolean;
-  routing_keywords?: string[] | null;
-  routing_negative_keywords?: string[] | null;
   // Meta
   notes?: string | null;
 }
@@ -230,13 +202,6 @@ export const agentsApi = {
 
   async delete(id: string): Promise<void> {
     return apiRequest(`/admin/agents/${id}`, { method: 'DELETE' });
-  },
-
-  async route(data: AgentRouteRequest): Promise<AgentRouteResponse> {
-    return apiRequest('/admin/agents/router/route', {
-      method: 'POST',
-      body: JSON.stringify(data),
-    });
   },
 
   // Version CRUD — all by agent UUID

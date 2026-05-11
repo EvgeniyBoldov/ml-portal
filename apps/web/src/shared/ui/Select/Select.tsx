@@ -8,7 +8,7 @@
  * - Error state
  * - Portal rendering для z-index
  */
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useLayoutEffect } from 'react';
 import { createPortal } from 'react-dom';
 import styles from './Select.module.css';
 
@@ -52,25 +52,23 @@ export function Select({
 
   const selectedOption = options.find(opt => opt.value === value);
 
-  // Calculate menu position
-  const updatePosition = useCallback(() => {
-    if (triggerRef.current) {
-      const rect = triggerRef.current.getBoundingClientRect();
-      const viewportHeight = window.innerHeight;
-      const approxMenuHeight = 280;
-      const spaceBelow = viewportHeight - rect.bottom;
-      const spaceAbove = rect.top;
-      const shouldOpenUp = spaceBelow < approxMenuHeight && spaceAbove > spaceBelow;
-      const top = shouldOpenUp ? Math.max(8, rect.top - approxMenuHeight - 4) : rect.bottom + 4;
-      const left = Math.min(rect.left, Math.max(8, window.innerWidth - rect.width - 8));
-      setMenuPosition({
-        top,
-        left,
-        width: rect.width,
-      });
-      setMenuPlacement(shouldOpenUp ? 'top' : 'bottom');
-    }
-  }, []);
+  // Calculate menu position using actual or estimated menu height
+  const updatePosition = useCallback((actualMenuHeight?: number) => {
+    if (!triggerRef.current) return;
+    const rect = triggerRef.current.getBoundingClientRect();
+    const viewportHeight = window.innerHeight;
+    // Use real height if known, otherwise estimate based on option count
+    const menuHeight = actualMenuHeight ?? Math.min(options.length * 48 + 8, 280);
+    const spaceBelow = viewportHeight - rect.bottom - 8;
+    const spaceAbove = rect.top - 8;
+    const shouldOpenUp = spaceBelow < menuHeight && spaceAbove > spaceBelow;
+    const top = shouldOpenUp
+      ? Math.max(8, rect.top - menuHeight - 4)
+      : rect.bottom + 4;
+    const left = Math.max(8, Math.min(rect.left, window.innerWidth - rect.width - 8));
+    setMenuPosition({ top, left, width: rect.width });
+    setMenuPlacement(shouldOpenUp ? 'top' : 'bottom');
+  }, [options.length]);
 
   // Open/close handlers
   const openMenu = useCallback(() => {
@@ -169,6 +167,16 @@ export function Select({
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [isOpen, closeMenu]);
+
+  // Recalculate position using real menu height after it renders
+  useLayoutEffect(() => {
+    if (isOpen && menuRef.current) {
+      const actualHeight = menuRef.current.getBoundingClientRect().height;
+      if (actualHeight > 0) {
+        updatePosition(actualHeight);
+      }
+    }
+  }, [isOpen, updatePosition]);
 
   // Scroll focused item into view
   useEffect(() => {

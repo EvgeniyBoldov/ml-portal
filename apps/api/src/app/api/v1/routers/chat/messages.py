@@ -23,7 +23,8 @@ from app.core.logging import get_logger
 from app.core.security import UserCtx
 from app.models.agent_run import AgentRun
 from app.models.chat import Chats
-from app.repositories.factory import AsyncRepositoryFactory, get_async_repository_factory
+from app.repositories.chats_repo import AsyncChatMessagesRepository
+from app.repositories.factory import AsyncRepositoryFactory
 from app.schemas.chat_events import ChatSSEEventType, ErrorPayload, format_chat_sse, format_chat_sse_done
 from app.schemas.chats import ChatMessageStreamRequest
 from app.schemas.confirmations import ConfirmationIssueRequest, ConfirmationIssueResponse
@@ -54,8 +55,8 @@ async def list_messages(
     chat_id: str,
     limit: int = Query(50, ge=1, le=1000),
     cursor: Optional[str] = Query(None),
-    current_user: UserCtx = Depends(get_current_user),
-    repo_factory: AsyncRepositoryFactory = Depends(get_async_repository_factory),
+    chat_ctx: ChatContext = Depends(resolve_chat_context),
+    session: AsyncSession = Depends(db_session),
 ):
     """List messages for a chat with keyset pagination (cursor = ISO timestamp)"""
     try:
@@ -63,7 +64,11 @@ async def list_messages(
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid chat ID")
 
-    messages_repo = repo_factory.get_chat_messages_repository()
+    messages_repo = AsyncChatMessagesRepository(
+        session=session,
+        tenant_id=uuid.UUID(chat_ctx.tenant_id),
+        user_id=uuid.UUID(chat_ctx.user_id),
+    )
     messages = await messages_repo.get_chat_messages(
         chat_id=str(chat_uuid),
         limit=limit,
@@ -224,8 +229,6 @@ async def resume_run(
     if not run:
         raise HTTPException(status_code=404, detail="Paused run not found")
     if run.user_id and str(run.user_id) != str(current_user.id):
-        raise HTTPException(status_code=404, detail="Paused run not found")
-    if current_user.tenant_ids and str(run.tenant_id) not in set(current_user.tenant_ids):
         raise HTTPException(status_code=404, detail="Paused run not found")
 
     turn = await turn_service.get_by_agent_run_id(run_uuid)

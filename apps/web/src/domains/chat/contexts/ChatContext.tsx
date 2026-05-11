@@ -33,6 +33,15 @@ interface PendingInput {
   reason?: string;
 }
 
+interface ChatProgressEvent {
+  id: string;
+  level: 'info' | 'warn' | 'error';
+  text: string;
+  source: string;
+  created_at: string;
+  details_code?: string;
+}
+
 interface OrchestrationEnvelope {
   phase?: string;
   event_type?: string;
@@ -75,6 +84,7 @@ interface ChatState {
   orchestrationEnvelope: OrchestrationEnvelope | null;
   orchestrationState: OrchestrationState | null;
   isStreaming: boolean;
+  progressEvents: ChatProgressEvent[];
 }
 
 interface ChatActions {
@@ -110,6 +120,7 @@ const ChatMessagesStateContext = createContext<
     | "orchestrationState"
     | "isStreaming"
     | "isLoading"
+    | "progressEvents"
   > | null
 >(null);
 const ChatCatalogStateContext = createContext<
@@ -143,6 +154,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const [orchestrationEnvelope, setOrchestrationEnvelope] = useState<OrchestrationEnvelope | null>(null);
   const [orchestrationState, setOrchestrationState] = useState<OrchestrationState | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
+  const [progressEvents, setProgressEvents] = useState<ChatProgressEvent[]>([]);
   const abortControllerRef = useRef<AbortController | null>(null);
   const streamStatusRef = useRef<string | null>(null);
 
@@ -201,8 +213,25 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     setPausedRunId(null);
     setOrchestrationEnvelope(null);
     setOrchestrationState(null);
+    setProgressEvents([]);
     updateStreamStatus(null);
   }, [updateStreamStatus]);
+
+  const appendProgressEvent = useCallback((text: string, opts?: { level?: 'info' | 'warn' | 'error'; source?: string; details_code?: string }) => {
+    const normalized = text.trim();
+    if (!normalized) return;
+    setProgressEvents((prev) => {
+      const next = [...prev, {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        level: opts?.level || 'info',
+        text: normalized,
+        source: opts?.source || 'runtime',
+        created_at: new Date().toISOString(),
+        details_code: opts?.details_code,
+      }];
+      return next.slice(-10);
+    });
+  }, []);
 
   const abortStream = useCallback(() => {
     if (abortControllerRef.current) {
@@ -265,6 +294,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       setPausedRunId(null);
       setOrchestrationEnvelope(null);
       setOrchestrationState(null);
+      setProgressEvents([]);
       if (confirmationTokens?.length) {
         setPendingConfirmationTokens((prev) => {
           const merged = [...prev, ...confirmationTokens];
@@ -531,10 +561,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                   updateStreamStatus(null);
                 } else {
                   updateStreamStatus(statusText);
+                  appendProgressEvent(statusText.replace(/\.\.\.$/, ''), { source: 'status' });
                 }
               } else if (stage.startsWith('thinking_step_')) {
                 // Handle dynamic thinking steps
                 updateStreamStatus('Думаю...');
+                appendProgressEvent('Думаю', { source: 'thinking' });
               }
             } catch (e) {
               console.error('Failed to parse status event', e);
@@ -551,6 +583,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               };
               const displayName = toolNames[toolName] || toolName;
               updateStreamStatus(`${displayName}...`);
+              appendProgressEvent(`Инструмент: ${displayName}`, { source: 'tool_call' });
             } catch (e) {
               console.error('Failed to parse tool_call event', e);
             }
@@ -586,6 +619,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                 });
               }
               updateStreamStatus('Генерирую ответ...');
+              appendProgressEvent('Генерирую ответ', { source: 'tool_result' });
             } catch (e) {
               console.error('Failed to parse tool_result event', e);
             }
@@ -649,15 +683,20 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               if ((actionType === 'agent_call' || stepType === 'call_agent') && agentSlug) {
                 if (phaseTitle) {
                   updateStreamStatus(`Шаг ${iteration}: ${agentSlug} (${phaseTitle})...`);
+                  appendProgressEvent(`Шаг ${iteration}: ${agentSlug} (${phaseTitle})`, { source: 'planner' });
                 } else {
                   updateStreamStatus(`Шаг ${iteration}: ${agentSlug}...`);
+                  appendProgressEvent(`Шаг ${iteration}: ${agentSlug}`, { source: 'planner' });
                 }
               } else if (actionType === 'final' || stepType === 'finalize') {
                 updateStreamStatus('Формирую ответ...');
+                appendProgressEvent('Формирую ответ', { source: 'planner' });
               } else if (actionType === 'ask_user' || stepType === 'ask_user') {
                 updateStreamStatus('Нужно уточнение...');
+                appendProgressEvent('Нужно уточнение', { source: 'planner', level: 'warn' });
               } else {
                 updateStreamStatus(`Планирую шаг ${iteration}...`);
+                appendProgressEvent(`Планирую шаг ${iteration}`, { source: 'planner' });
               }
             } catch (e) {
               console.error('Failed to parse planner_action event', e);
@@ -680,6 +719,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                 },
               ]);
               updateStreamStatus('Ожидание подтверждения...');
+              appendProgressEvent('Ожидание подтверждения', { source: 'confirmation', level: 'warn' });
             } catch (e) {
               console.error('Failed to parse confirmation_required event', e);
             }
@@ -695,6 +735,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                 reason: parsed.reason,
               });
               updateStreamStatus('Ожидание ввода...');
+              appendProgressEvent('Ожидание ввода', { source: 'waiting_input', level: 'warn' });
             } catch (e) {
               console.error('Failed to parse waiting_input event', e);
             }
@@ -719,6 +760,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               const parsed = JSON.parse(data);
               if (parsed.auto) {
                 updateStreamStatus(`Выбран агент: ${parsed.agent}`);
+                appendProgressEvent(`Выбран агент: ${parsed.agent}`, { source: 'agent_selected' });
               }
             } catch (e) {
               console.error('Failed to parse agent_selected event', e);
@@ -744,6 +786,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               } else {
                 onError(errorMessage);
               }
+              appendProgressEvent(`Ошибка: ${errorCode || 'runtime'}`, { source: 'error', level: 'error', details_code: errorCode || undefined });
             } catch {
               setPendingConfirmations([]);
               setPendingInput(null);
@@ -758,6 +801,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
       // Clear stream status after completion
       updateStreamStatus(null);
+      setProgressEvents([]);
       setPendingConfirmationTokens([]);
       setOrchestrationEnvelope(null);
       setOrchestrationState(null);
@@ -782,12 +826,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         updateStreamStatus(null);
         setOrchestrationEnvelope(null);
         setOrchestrationState(null);
+        setProgressEvents([]);
       }
     } finally {
       setIsStreaming(false);
       abortControllerRef.current = null;
     }
-  }, [updateStreamStatus]);
+  }, [appendProgressEvent, updateStreamStatus]);
 
   const statusValue = useMemo(
     () => ({ error, isLoading }),
@@ -815,6 +860,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       orchestrationState,
       isStreaming,
       isLoading,
+      progressEvents,
     }),
     [
       messagesByChat,
@@ -826,6 +872,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       orchestrationState,
       isStreaming,
       isLoading,
+      progressEvents,
     ]
   );
   const catalogStateValue = useMemo(

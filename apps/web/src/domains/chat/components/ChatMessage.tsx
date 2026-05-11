@@ -50,6 +50,10 @@ function ChatMessageComponent({
         : [],
     [meta?.answer_blocks]
   );
+  const runtimeRunId = useMemo(
+    () => (typeof meta?.runtime_run_id === 'string' ? meta.runtime_run_id : ''),
+    [meta?.runtime_run_id]
+  );
 
   const handleCopy = async () => {
     try {
@@ -254,6 +258,11 @@ function ChatMessageComponent({
         {/* Actions */}
         {!isUser && content && !isStreaming && (
           <div className={styles.actions}>
+            {runtimeRunId ? (
+              <span className={styles.runtimeRunRef} title={`Run ID: ${runtimeRunId}`}>
+                run {runtimeRunId.slice(0, 8)}
+              </span>
+            ) : null}
             <button
               className={styles.actionBtn}
               onClick={handleCopy}

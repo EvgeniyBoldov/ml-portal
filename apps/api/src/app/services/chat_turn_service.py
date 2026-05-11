@@ -53,6 +53,14 @@ class ChatTurnService:
         await self.session.flush()
         return turn
 
+    async def attach_assistant_message(self, turn_id: str | uuid.UUID, message_id: str | uuid.UUID) -> Optional[ChatTurn]:
+        turn = await self.get_by_id(turn_id)
+        if not turn:
+            return None
+        turn.assistant_message_id = uuid.UUID(str(message_id))
+        await self.session.flush()
+        return turn
+
     async def pause_turn(
         self,
         turn_id: str | uuid.UUID,

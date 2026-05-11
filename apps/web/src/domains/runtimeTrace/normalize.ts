@@ -57,6 +57,11 @@ function summarize(rawType: string, data: Record<string, unknown>): string {
   if (rawType === 'user_request') return String(data.content ?? data.request ?? 'User request');
   if (rawType === 'protocol_retry') return String(data.reason ?? 'Protocol retry');
   if (rawType === 'routing') return String(data.agent_slug ?? data.mode ?? 'Routing decision');
+  if (rawType === 'planner_step' || rawType === 'planner_action') {
+    const kind = String(data.kind ?? data.action_type ?? data.action ?? 'planner_step');
+    const rationale = String(data.rationale ?? '').trim();
+    return rationale ? `${kind}: ${rationale}` : kind;
+  }
   if (rawType === 'operation_call' || rawType === 'tool_call') {
     return String(data.operation_slug ?? data.tool ?? data.operation ?? 'Operation call');
   }
@@ -68,8 +73,29 @@ function summarize(rawType: string, data: Record<string, unknown>): string {
   if (rawType === 'llm_call' || rawType === 'llm_response') {
     return `response_length=${String(data.response_length ?? data.tokens_out ?? 'n/a')}`;
   }
-  if (rawType === 'budget_consumed') {
-    return `used=${String(data.consumed ?? data.used ?? data.steps_used ?? 'n/a')}`;
+  if (rawType === 'llm_request') {
+    const model = String(data.model ?? data.provider_model ?? 'unknown');
+    return `model=${model}`;
+  }
+  if (rawType.startsWith('budget_') || rawType === 'budget') {
+    // Budget init/policy events - show limits
+    if (data.max_steps !== undefined && data.used === undefined && data.consumed === undefined) {
+      const steps = data.max_steps ?? data.limit ?? 'n/a';
+      const tools = data.max_tool_calls_total ?? 'n/a';
+      return `limits: steps=${steps}, tools=${tools}`;
+    }
+    // Budget consumed events
+    if (data.used !== undefined || data.consumed !== undefined || data.steps_used !== undefined) {
+      const used = data.consumed ?? data.used ?? data.steps_used ?? 0;
+      const limit = data.limit ?? data.max_steps ?? 'n/a';
+      return `consumed: ${used}/${limit}`;
+    }
+    // Budget exceeded events
+    if (data.kind === 'budget_limit_exceeded' || data.reason || data.code) {
+      return String(data.kind ?? data.reason ?? data.code ?? 'budget_limit');
+    }
+    // Fallback for any budget event
+    return 'budget check';
   }
   if (rawType === 'final' || rawType === 'final_response') {
     return String(data.content ?? data.answer ?? 'Final response');
@@ -135,9 +161,19 @@ export function normalizeTraceEvent(step: TraceSourceStep): SemanticEvent {
 
   const outputs = rawType === 'operation_result' || rawType === 'tool_result'
     ? { result: step.data.result ?? step.data.output ?? step.data.data }
+    : rawType === 'llm_response'
+      ? { content: step.data.response ?? step.data.raw_response ?? step.data.content, parsed_response: step.data.parsed_response }
     : rawType === 'llm_response' || rawType === 'final_response' || rawType === 'final'
       ? { content: step.data.content ?? step.data.answer ?? step.data.response }
       : undefined;
+
+  const llmRequestInputs = rawType === 'llm_request'
+    ? {
+        messages: step.data.messages ?? step.data.messages_sent,
+        payload: step.data.payload ?? step.data.request_payload,
+        model: step.data.model ?? step.data.provider_model,
+      }
+    : undefined;
 
   const budget = rawType.startsWith('budget_') ? step.data : undefined;
 
@@ -152,7 +188,7 @@ export function normalizeTraceEvent(step: TraceSourceStep): SemanticEvent {
     iteration,
     started_at: step.created_at,
     duration_ms: step.duration_ms,
-    inputs,
+    inputs: llmRequestInputs ?? inputs,
     outputs,
     decision: category === 'decision' || category === 'planner' || category === 'policy' || category === 'retry' ? step.data : undefined,
     budget,

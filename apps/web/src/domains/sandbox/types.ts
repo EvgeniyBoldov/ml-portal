@@ -2,6 +2,7 @@
  * Sandbox domain types — mirrors backend schemas.
  */
 import type { RunTrace } from '@/domains/runtimeTrace/types';
+import type { ResponseContract } from '@/shared/api/admin';
 
 // ── Session ─────────────────────────────────────────────────────────────────
 
@@ -222,6 +223,7 @@ export interface SandboxCatalogRouter {
   name: string;
   description: string;
   config?: Record<string, unknown>;
+  response_contract?: ResponseContract | null;
 }
 
 export interface SandboxCatalog {

@@ -20,7 +20,7 @@ class AgentCreate(BaseModel):
     name: str = Field(..., description="Display name")
     description: Optional[str] = None
     tags: Optional[List[str]] = Field(default=None, description="Agent tags for catalog filtering")
-    logging_level: str = Field(default="brief", description="none, brief, full")
+    logging_level: str = Field(default="brief", description="none | errors | brief | full")
     model: Optional[str] = Field(default=None, description="LLM model alias")
     temperature: Optional[float] = Field(default=None, description="LLM temperature (orchestration default if None)")
     max_tokens: Optional[int] = Field(default=None, description="Max output tokens (orchestration default if None)")
@@ -55,7 +55,7 @@ class AgentResponse(BaseModel):
     description: Optional[str] = None
     tags: Optional[List[str]] = None
     current_version_id: Optional[UUID] = None
-    logging_level: str = Field(default="brief", description="none, brief, full")
+    logging_level: str = Field(default="brief", description="none | errors | brief | full")
     model: Optional[str] = None
     temperature: Optional[float] = None
     max_tokens: Optional[int] = None
@@ -112,12 +112,7 @@ class AgentVersionCreate(BaseModel):
     # Safety prompt constraints
     never_do: Optional[str] = Field(default=None, description="Explicit prohibitions")
     allowed_ops: Optional[str] = Field(default=None, description="Allowed operations")
-    # Routing
-    short_info: Optional[str] = Field(default=None, description="Short description for routing")
-    tags: Optional[List[str]] = Field(default=None, description="Version-specific tags for routing")
-    is_routable: bool = Field(default=False, description="Whether this version can be selected by router")
-    routing_keywords: Optional[List[str]] = Field(default=None, description="Keywords for routing (5-30)")
-    routing_negative_keywords: Optional[List[str]] = Field(default=None, description="Negative keywords for routing")
+    tags: Optional[List[str]] = Field(default=None, description="Version-specific tags")
     # Meta
     notes: Optional[str] = None
     parent_version_id: Optional[UUID] = Field(default=None, description="Parent version ID for data inheritance")
@@ -135,12 +130,7 @@ class AgentVersionUpdate(BaseModel):
     # Safety prompt constraints
     never_do: Optional[str] = None
     allowed_ops: Optional[str] = None
-    # Routing
-    short_info: Optional[str] = None
     tags: Optional[List[str]] = None
-    is_routable: Optional[bool] = None
-    routing_keywords: Optional[List[str]] = None
-    routing_negative_keywords: Optional[List[str]] = None
     # Meta
     notes: Optional[str] = None
 
@@ -161,12 +151,7 @@ class AgentVersionResponse(BaseModel):
     # Safety prompt constraints
     never_do: Optional[str] = None
     allowed_ops: Optional[str] = None
-    # Routing
-    short_info: Optional[str] = None
     tags: Optional[List[str]] = None
-    is_routable: bool = False
-    routing_keywords: Optional[List[str]] = None
-    routing_negative_keywords: Optional[List[str]] = None
     # Meta
     parent_version_id: Optional[UUID] = None
     notes: Optional[str] = None

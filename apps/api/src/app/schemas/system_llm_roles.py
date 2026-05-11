@@ -1,7 +1,7 @@
 """
 SystemLLMRole schemas for API.
 """
-from typing import Optional, List, Dict, Any, Union
+from typing import Optional, List, Dict, Any, Union, Literal
 from datetime import datetime
 from uuid import UUID
 from pydantic import BaseModel, Field, ConfigDict
@@ -38,6 +38,43 @@ class SystemLLMRoleBase(BaseModel):
     is_active: Optional[bool] = Field(True, description="Whether this role configuration is active")
 
 
+class ContractFailurePolicy(BaseModel):
+    on_invalid: str = Field(..., description="Invalid output handling policy")
+
+
+class JsonResponseContract(BaseModel):
+    format: Literal["json"]
+    schema: Dict[str, Any]
+    plain_text: None = None
+    markdown: None = None
+    examples: List[Dict[str, Any]] = Field(default_factory=list)
+    failure_policy: ContractFailurePolicy
+    format_locked: bool = Field(default=True, description="Whether the response format is locked (uneditable)")
+
+
+class PlainTextResponseContract(BaseModel):
+    format: Literal["plain_text"]
+    schema: None = None
+    plain_text: Dict[str, Any]
+    markdown: None = None
+    examples: List[Dict[str, Any]] = Field(default_factory=list)
+    failure_policy: ContractFailurePolicy
+    format_locked: bool = Field(default=True, description="Whether the response format is locked (uneditable)")
+
+
+class MarkdownResponseContract(BaseModel):
+    format: Literal["markdown"]
+    schema: None = None
+    plain_text: None = None
+    markdown: Dict[str, Any]
+    examples: List[Dict[str, Any]] = Field(default_factory=list)
+    failure_policy: ContractFailurePolicy
+    format_locked: bool = Field(default=True, description="Whether the response format is locked (uneditable)")
+
+
+ResponseContract = Union[JsonResponseContract, PlainTextResponseContract, MarkdownResponseContract]
+
+
 class SystemLLMRoleCreate(SystemLLMRoleBase):
     """Schema for creating SystemLLMRole."""
     pass
@@ -65,6 +102,7 @@ class SystemLLMRoleUpdate(BaseModel):
 class SystemLLMRoleResponse(SystemLLMRoleBase):
     """Schema for SystemLLMRole response."""
     id: UUID
+    response_contract: Optional[ResponseContract] = None
     created_at: datetime
     updated_at: datetime
     

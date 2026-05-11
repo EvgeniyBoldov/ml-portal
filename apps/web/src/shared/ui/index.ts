@@ -127,3 +127,10 @@ export { PlanVisualization } from './PlanVisualization';
 
 // AI Generate
 export { AIGenerateButton } from './AIGenerateButton';
+export { ResponseContractCard } from './ResponseContractCard';
+
+// Contract Components (new contract-aware role editor)
+export { ContractFieldsBlock } from './ContractFieldsBlock';
+export type { ContractFieldsBlockProps } from './ContractFieldsBlock';
+export { ContractCriteriaBlock } from './ContractCriteriaBlock';
+export type { ContractCriteriaBlockProps } from './ContractCriteriaBlock';

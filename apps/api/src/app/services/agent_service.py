@@ -3,8 +3,8 @@ Agent Service v2 - business logic for versioned agents.
 
 Architecture:
 - Agent (container) - human-readable metadata (name, slug, description, tags)
-- AgentVersion - prompt parts, execution config, safety knobs, and routing fields
-- Runtime routing uses version metadata + operation bindings.
+- AgentVersion - prompt parts and notes
+- Runtime routing is planner/RBAC-driven (legacy auto-routing removed).
 
 Version workflow:
 - Create → always draft
@@ -143,12 +143,6 @@ class AgentService:
                 # Safety prompt constraints
                 "never_do": version.never_do,
                 "allowed_ops": version.allowed_ops,
-                # Routing
-                "short_info": version.short_info,
-                "tags": version.tags,
-                "is_routable": version.is_routable,
-                "routing_keywords": version.routing_keywords,
-                "routing_negative_keywords": version.routing_negative_keywords,
                 # Meta
                 "notes": version.notes,
                 "created_at": version.created_at,
@@ -239,54 +233,9 @@ class AgentService:
         return await self.agent_repo.list_agents(skip, limit)
 
     async def route_agent(self, request_text: str) -> Optional[Agent]:
-        """Select best routable agent by keyword scoring over routing metadata."""
-        stmt = (
-            select(Agent, AgentVersion)
-            .join(AgentVersion, Agent.current_version_id == AgentVersion.id)
-            .where(
-                AgentVersion.is_routable.is_(True),
-                AgentVersion.status == AgentVersionStatus.PUBLISHED.value,
-            )
-        )
-        result = await self.session.execute(stmt)
-        candidates = result.all()
-
-        if not candidates:
-            return None
-
-        normalized_text = request_text.lower().strip()
-
-        def score(agent: Agent, version: AgentVersion) -> int:
-            value = 0
-
-            # Positive keywords
-            if version.routing_keywords:
-                for kw in version.routing_keywords:
-                    if kw.lower() in normalized_text:
-                        value += 3
-
-            # Negative keywords (penalty)
-            if version.routing_negative_keywords:
-                for kw in version.routing_negative_keywords:
-                    if kw.lower() in normalized_text:
-                        value -= 5
-
-            # Tags as secondary signal
-            version_tags = version.tags or []
-            for tag in version_tags:
-                if tag.lower() in normalized_text:
-                    value += 1
-
-            if agent.tags:
-                for tag in agent.tags:
-                    if tag.lower() in normalized_text:
-                        value += 1
-
-            return value
-
-        ranked = sorted(candidates, key=lambda row: score(row[0], row[1]), reverse=True)
-        best_agent, best_version = ranked[0]
-        return best_agent if score(best_agent, best_version) > 0 else None
+        """Legacy API kept for backward compatibility; auto-routing removed."""
+        _ = request_text
+        return None
 
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -361,7 +310,7 @@ class AgentService:
         "output_format", "examples",
         "model", "timeout_s", "max_steps", "max_retries", "max_tokens", "temperature",
         "requires_confirmation_for_write", "risk_level", "never_do", "allowed_ops",
-        "short_info", "tags", "is_routable", "routing_keywords", "routing_negative_keywords",
+        "tags",
     ]
 
     async def _create_version_for_agent(
@@ -481,8 +430,7 @@ class AgentService:
         Resolve default agent slug for a tenant.
         Priority:
         1) tenant.default_agent_slug (if exists in DB)
-        2) first routable published agent
-        3) first agent with any published version
+        2) first agent with any published version
         """
         tenant_default: Optional[str] = None
         if tenant_id:
@@ -503,22 +451,7 @@ class AgentService:
             if await self.agent_repo.get_by_slug(candidate):
                 return candidate
 
-        # Choose the first routable published agent deterministically.
-        routable_stmt = (
-            select(Agent.slug)
-            .join(AgentVersion, Agent.current_version_id == AgentVersion.id)
-            .where(
-                AgentVersion.is_routable.is_(True),
-                AgentVersion.status == AgentVersionStatus.PUBLISHED.value,
-            )
-            .order_by(asc(Agent.created_at))
-            .limit(1)
-        )
-        routable_slug = (await self.session.execute(routable_stmt)).scalar_one_or_none()
-        if routable_slug:
-            return routable_slug
-
-        # Last resort: any agent with a published version.
+        # Any agent with a published version.
         published_stmt = (
             select(Agent.slug)
             .join(AgentVersion, Agent.id == AgentVersion.agent_id)
@@ -534,19 +467,15 @@ class AgentService:
 
     async def list_routable_agents(self) -> List[Agent]:
         """
-        List only agents that have a published routable version.
-        Used by triage to build available_agents list.
+        Legacy method name retained: returns agents with published versions.
         """
         stmt = (
             select(Agent)
-            .join(AgentVersion, Agent.current_version_id == AgentVersion.id)
-            .where(
-                AgentVersion.is_routable.is_(True),
-                AgentVersion.status == AgentVersionStatus.PUBLISHED.value,
-            )
+            .join(AgentVersion, Agent.id == AgentVersion.agent_id)
+            .where(AgentVersion.status == AgentVersionStatus.PUBLISHED.value)
         )
         result = await self.session.execute(stmt)
-        return list(result.scalars().all())
+        return list(result.scalars().unique().all())
 
     async def resolve_published_version(
         self,

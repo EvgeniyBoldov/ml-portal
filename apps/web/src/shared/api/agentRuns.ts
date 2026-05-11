@@ -42,7 +42,7 @@ export interface AgentRun {
   user_id?: string;
   tenant_id: string;
   agent_slug: string;
-  logging_level?: 'none' | 'brief' | 'full';
+  logging_level?: 'none' | 'errors' | 'brief' | 'full';
   status: 'running' | 'completed' | 'failed';
   total_steps: number;
   total_tool_calls: number;

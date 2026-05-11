@@ -245,13 +245,13 @@ async def resolve_chat_context(
     session: AsyncSession = Depends(db_session),
     current_user: UserCtx = Depends(get_current_user),
 ) -> ChatContext:
-    """Load chat, verify tenant assignment and user access.
+    """Load chat, verify ownership and resolve tenant from chat row.
 
     Raises HTTPException on:
     - Invalid chat_id UUID
     - Chat not found
     - Chat has no tenant
-    - User not in chat's tenant
+    - Chat does not belong to current user
     """
     try:
         chat_uuid = _uuid.UUID(chat_id)
@@ -262,13 +262,12 @@ async def resolve_chat_context(
     chat_row = result.scalar_one_or_none()
     if not chat_row:
         raise HTTPException(status_code=404, detail="Chat not found")
+    if str(chat_row.owner_id) != str(current_user.id):
+        raise HTTPException(status_code=404, detail="Chat not found")
     if not chat_row.tenant_id:
         raise HTTPException(status_code=400, detail="Chat has no tenant assigned")
 
     tenant_id = _uuid.UUID(str(chat_row.tenant_id))
-    user_tenant_ids = {_uuid.UUID(str(tid)) for tid in (current_user.tenant_ids or [])}
-    if user_tenant_ids and tenant_id not in user_tenant_ids:
-        raise HTTPException(status_code=403, detail="Access denied: user does not belong to chat tenant")
 
     return ChatContext(
         chat_id=str(chat_uuid),

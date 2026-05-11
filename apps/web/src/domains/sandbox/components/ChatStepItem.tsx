@@ -35,6 +35,7 @@ const STEP_META: Record<string, { icon: string; tone: string }> = {
   final: { icon: '✓', tone: 'success' },
   error: { icon: '✕', tone: 'error' },
   system: { icon: '·', tone: 'neutral' },
+  intent: { icon: '✨', tone: 'info' }, // High-level intent descriptions
 };
 
 function StepBody({ step }: { step: RunStep }) {
@@ -70,6 +71,22 @@ function StepBody({ step }: { step: RunStep }) {
                   <span key={t} className={styles.tag}>{t}</span>
                 ))}
               </span>
+            </div>
+          )}
+        </div>
+      );
+
+    case 'intent':
+      return (
+        <div className={styles.body}>
+          <div className={styles.row}>
+            <span className={styles.label}>Действие</span>
+            <span className={styles.value}>{stringifyValue(d.description)}</span>
+          </div>
+          {hasValue(d.details) && typeof d.details === 'object' && d.details !== null && Object.keys(d.details).length > 0 && (
+            <div className={styles.row}>
+              <span className={styles.label}>Детали</span>
+              <pre className={styles.code}>{stringifyValue(d.details)}</pre>
             </div>
           )}
         </div>

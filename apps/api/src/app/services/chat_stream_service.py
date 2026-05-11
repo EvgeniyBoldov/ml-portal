@@ -36,6 +36,9 @@ from app.core.db import get_session_factory
 
 logger = get_logger(__name__)
 
+def _safe_stream_error(code: str, user_message: str) -> Dict[str, str]:
+    return {"type": "error", "error": user_message, "code": code}
+
 
 class ChatStreamService:
     """Compatibility façade for chat streaming built on smaller chat services."""
@@ -183,11 +186,11 @@ class ChatStreamService:
                 attachment_ids=attachment_ids,
             )
             if turn_cached and turn_cached.get("state") == "conflict":
-                yield {"type": "error", "error": "Idempotency key was already used with different request payload"}
+                yield _safe_stream_error("idempotency_conflict", "Idempotency key was already used with different request payload")
                 return
 
             if turn_cached and turn_cached.get("state") == "processing":
-                yield {"type": "error", "error": "Request with this idempotency key is already in progress"}
+                yield _safe_stream_error("idempotency_processing", "Request with this idempotency key is already in progress")
                 return
 
             if turn_cached and turn_cached.get("state") == "completed":
@@ -227,15 +230,12 @@ class ChatStreamService:
                 }
                 return
         
-        # 2. Verify access
-        if not await self.verify_chat_access(chat_id, user_id):
-            yield {"type": "error", "error": "Access denied"}
-            return
-
         try:
             chat = await self.chats_repo.get_chat_by_id(chat_id)
             if not chat:
-                yield {"type": "error", "error": "Chat not found"}
+                # Route-level access control is handled by resolve_chat_context.
+                # Here we keep transport semantics: unknown/inaccessible chat -> not found.
+                yield _safe_stream_error("chat_not_found", "Chat not found")
                 return
 
             attachment_rows = []
@@ -250,7 +250,8 @@ class ChatStreamService:
                         attachment_ids=attachment_ids,
                     )
                 except ChatAttachmentNotFoundError as exc:
-                    yield {"type": "error", "error": str(exc)}
+                    logger.warning("chat_attachment_not_found: %s", exc)
+                    yield _safe_stream_error("attachment_not_found", "Attachment not found or access denied")
                     return
                 attachment_prompt_context = await self.attachment_service.build_prompt_context(
                     attachments=attachment_rows
@@ -278,7 +279,7 @@ class ChatStreamService:
 
         except Exception as e:
             logger.error(f"Error in send_message_stream: {e}", exc_info=True)
-            yield {"type": "error", "error": str(e)}
+            yield _safe_stream_error("chat_stream_failed", "Failed to process chat request")
 
     
     async def _run_with_router(
@@ -367,9 +368,14 @@ class ChatStreamService:
                     "stage": "rbac_agent_invoke_denied",
                     "agent_slug": details.get("agent_slug"),
                 }
+            user_message = "Agent unavailable"
+            if reason_code == "rbac_agent_invoke_denied":
+                user_message = "Access denied to invoke selected agent"
+            elif reason_code:
+                user_message = f"Agent unavailable: {reason_code}"
             yield {
                 "type": "error",
-                "error": str(e),
+                "error": user_message,
                 "code": reason_code,
                 "details": details,
                 "missing_tools": e.missing.tools if e.missing else [],
@@ -378,7 +384,7 @@ class ChatStreamService:
             }
         except Exception as e:
             logger.error(f"Router error: {e}", exc_info=True)
-            yield {"type": "error", "error": f"Routing failed: {str(e)}"}
+            yield _safe_stream_error("routing_failed", "Routing failed")
 
     async def _process_generated_files(
         self,

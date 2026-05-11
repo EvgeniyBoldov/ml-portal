@@ -33,9 +33,16 @@ logger = get_logger(__name__)
 
 
 class TraceLevel(str, Enum):
-    """Normalized trace verbosity used by runtime and sandbox."""
+    """Normalized trace verbosity used by runtime and sandbox.
+
+    - none:   No steps recorded at all (only run envelope).
+    - errors: Only error steps, budget violations, and final status.
+    - brief:  Metadata + hashes, no heavy payloads (default).
+    - full:   Everything — messages, arguments, results, final answer.
+    """
 
     NONE = "none"
+    ERRORS = "errors"
     BRIEF = "brief"
     FULL = "full"
 
@@ -44,8 +51,10 @@ class TraceLevel(str, Enum):
         if value is None:
             return cls.BRIEF
         normalized = str(value).strip().lower()
-        if normalized == "short":
+        if normalized in ("short", "brief"):
             normalized = "brief"
+        if normalized in ("error",):
+            normalized = "errors"
         try:
             return cls(normalized)
         except ValueError:
@@ -158,6 +167,21 @@ class ExecutionTraceLogger:
             tokens_out=tokens_out,
             duration_ms=duration_ms,
             error=error,
+        )
+
+    async def log_intent(
+        self,
+        run_id: Optional[uuid.UUID],
+        description: str,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> Optional[uuid.UUID]:
+        """Log a high-level intent step (e.g., 'Сформирую план', 'Проверяю стойки в NetBox')."""
+        if run_id is None:
+            return None
+        return await self.run_store.add_intent(
+            run_id=run_id,
+            description=description,
+            details=details,
         )
 
     async def finish_run(

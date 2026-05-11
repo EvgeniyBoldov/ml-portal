@@ -24,7 +24,8 @@ export type RunStepType =
   | 'waiting_input'
   | 'run_paused'
   | 'stop'
-  | 'done';
+  | 'done'
+  | 'intent'; // High-level intent descriptions
 
 export interface RunStep {
   id: string;

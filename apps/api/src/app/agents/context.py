@@ -2,6 +2,7 @@
 Контексты выполнения для Agent Runtime
 """
 from __future__ import annotations
+import asyncio
 import time
 from dataclasses import dataclass, field
 from dataclasses import fields as dataclass_fields
@@ -154,6 +155,18 @@ class ToolContext:
     def tool_logger(self, tool_slug: str) -> ToolLogger:
         """Create a ToolLogger scoped to a specific tool execution."""
         return ToolLogger(tool_slug)
+    
+    async def log_intent(self, description: str, details: Optional[Dict[str, Any]] = None) -> None:
+        """Log a high-level intent step (e.g., 'Сформирую план', 'Проверяю стойки в NetBox')."""
+        deps = self.get_runtime_deps()
+        if deps.runtime_trace_logger:
+            run_id = self.extra.get("run_id")
+            if run_id:
+                await deps.runtime_trace_logger.log_intent(
+                    run_id=run_id,
+                    description=description,
+                    details=details,
+                )
 
     def get_runtime_deps(self) -> RuntimeDependencies:
         raw = self.extra.get("runtime_deps")

@@ -7,6 +7,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Select, type SelectOption } from '@/shared/ui/Select';
 import Badge from '@/shared/ui/Badge';
 import Button from '@/shared/ui/Button';
+import { ResponseContractCard } from '@/shared/ui';
 import { agentsApi, type AgentVersion } from '@/shared/api/agents';
 import { qk } from '@/shared/api/keys';
 import { platformSettingsApi } from '@/shared/api/admin';
@@ -102,7 +103,7 @@ const AGENT_SECTIONS: Array<{ title: string; keys: string[] }> = [
   { title: 'Prompt', keys: ['identity', 'mission', 'scope', 'rules', 'tool_use_rules', 'output_format', 'examples'] },
   { title: 'Execution', keys: ['model', 'timeout_s', 'max_steps', 'max_retries', 'max_tokens', 'temperature'] },
   { title: 'Safety', keys: ['requires_confirmation_for_write', 'risk_level', 'never_do', 'allowed_ops'] },
-  { title: 'Routing', keys: ['short_info', 'tags', 'is_routable', 'routing_keywords', 'routing_negative_keywords', 'bindings'] },
+  { title: 'Tags', keys: ['tags', 'bindings'] },
 ];
 
 const LONG_TEXT_KEYS = new Set([
@@ -656,21 +657,20 @@ export function ConfigPanel({
     });
   };
 
-  // Run inspector mode: show selected step detail
-  if (selectedItem?.type === 'run' && inspectorSteps) {
-    return (
-      <RunInspector
-        steps={inspectorSteps}
-        selectedStepId={selectedStepId ?? null}
-        runStatus={inspectorRunStatus}
-        runId={inspectorRunId}
-        traceEvents={inspectorTraceEvents}
-      />
-    );
-  }
+  const isRunInspectorMode = selectedItem?.type === 'run' && inspectorSteps;
 
   return (
     <div className={styles.panel}>
+      {isRunInspectorMode ? (
+        <RunInspector
+          steps={inspectorSteps}
+          selectedStepId={selectedStepId ?? null}
+          runStatus={inspectorRunStatus}
+          runId={inspectorRunId}
+          traceEvents={inspectorTraceEvents}
+        />
+      ) : (
+      <>
       <div className={styles.header}>
         <div className={styles['header-main']}>
           <span className={styles.title}>
@@ -728,6 +728,16 @@ export function ConfigPanel({
       <div className={styles.body}>
         {selectedItem && visibleSections.length > 0 ? (
           <div className={styles['sections-list']}>
+            {selectedItem.type === 'router' && selectedRouter?.response_contract ? (
+              <div className={styles.section}>
+                <div className={styles['section-title']}>Response Contract</div>
+                <ResponseContractCard
+                  contract={selectedRouter.response_contract}
+                  rulesText={String((selectedRouter.config?.rules as string | undefined) ?? '')}
+                  outputRequirementsText={String((selectedRouter.config?.output_requirements as string | undefined) ?? '')}
+                />
+              </div>
+            ) : null}
             {visibleSections.map((section) => (
               <div key={section.title} className={styles.section}>
                 <div className={styles['section-title']}>{section.title}</div>
@@ -772,6 +782,8 @@ export function ConfigPanel({
           </div>
         )}
       </div>
+      </>
+      )}
     </div>
   );
 }

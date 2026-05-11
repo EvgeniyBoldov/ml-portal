@@ -39,6 +39,24 @@ def service(mock_session, mock_redis, mock_llm_client, chats_repo, messages_repo
 
 class TestChatStreamServiceInvariants:
     @pytest.mark.asyncio
+    async def test_top_level_exception_is_sanitized(self, service: ChatStreamService, chats_repo: AsyncMock):
+        service.verify_chat_access = AsyncMock(return_value=True)
+        service.check_turn_idempotency = AsyncMock(return_value=None)
+        service.check_idempotency = AsyncMock(return_value=None)
+        chats_repo.get_chat_by_id = AsyncMock(side_effect=RuntimeError("db failed with stacktrace data"))
+
+        events = [
+            event
+            async for event in service.send_message_stream(
+                chat_id="00000000-0000-0000-0000-000000000010",
+                user_id="00000000-0000-0000-0000-000000000020",
+                content="hello",
+            )
+        ]
+
+        assert events == [{"type": "error", "error": "Failed to process chat request", "code": "chat_stream_failed"}]
+
+    @pytest.mark.asyncio
     async def test_cached_short_circuit_returns_single_cached_event(self, service: ChatStreamService):
         service.verify_chat_access = AsyncMock(return_value=True)
         service.check_turn_idempotency = AsyncMock(return_value=None)
@@ -77,7 +95,11 @@ class TestChatStreamServiceInvariants:
             )
         ]
 
-        assert events == [{"type": "error", "error": "Request with this idempotency key is already in progress"}]
+        assert events == [{
+            "type": "error",
+            "error": "Request with this idempotency key is already in progress",
+            "code": "idempotency_processing",
+        }]
 
     @pytest.mark.asyncio
     async def test_turn_idempotency_completed_returns_cached_event(self, service: ChatStreamService):
@@ -120,6 +142,7 @@ class TestChatStreamServiceInvariants:
         assert events == [{
             "type": "error",
             "error": "Idempotency key was already used with different request payload",
+            "code": "idempotency_conflict",
         }]
 
     @pytest.mark.asyncio

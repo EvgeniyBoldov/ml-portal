@@ -9,6 +9,7 @@ Sub-routers:
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, Query
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from .chats import router as chats_router
 from .chats import create_chat as create_chat_core
@@ -18,9 +19,8 @@ from .attachments import router as attachments_router
 from .meta import router as meta_router
 from .messages import resume_run  # backward-compat for tests/importers
 from .messages import ChatStreamService, get_redis, get_llm_client  # patch points in legacy tests
-from app.api.deps import get_current_user
+from app.api.deps import db_uow, get_current_user
 from app.core.security import UserCtx
-from app.repositories.factory import AsyncRepositoryFactory, get_async_repository_factory
 
 router = APIRouter(tags=["chat"])
 
@@ -36,14 +36,14 @@ async def list_chats_no_slash(
     cursor: Optional[str] = Query(None),
     q: Optional[str] = Query(None),
     current_user: UserCtx = Depends(get_current_user),
-    repo_factory: AsyncRepositoryFactory = Depends(get_async_repository_factory),
+    session: AsyncSession = Depends(db_uow),
 ):
     return await list_chats_core(
         limit=limit,
         cursor=cursor,
         q=q,
         current_user=current_user,
-        repo_factory=repo_factory,
+        session=session,
     )
 
 
@@ -51,12 +51,12 @@ async def list_chats_no_slash(
 async def create_chat_no_slash(
     body: Dict[str, Any],
     current_user: UserCtx = Depends(get_current_user),
-    repo_factory: AsyncRepositoryFactory = Depends(get_async_repository_factory),
+    session: AsyncSession = Depends(db_uow),
 ):
     return await create_chat_core(
         body=body,
         current_user=current_user,
-        repo_factory=repo_factory,
+        session=session,
     )
 
 __all__ = [

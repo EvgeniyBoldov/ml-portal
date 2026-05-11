@@ -15,10 +15,7 @@ AGENT_VERSION_SAFETY_FIELDS = frozenset({
     "requires_confirmation_for_write", "risk_level",
     "never_do", "allowed_ops",
 })
-AGENT_VERSION_ROUTING_FIELDS = frozenset({
-    "short_info", "tags", "is_routable",
-    "routing_keywords", "routing_negative_keywords",
-})
+AGENT_VERSION_ROUTING_FIELDS = frozenset({"tags"})
 AGENT_VERSION_ALL_FIELDS = (
     AGENT_VERSION_PROMPT_FIELDS
     | AGENT_VERSION_EXEC_FIELDS
@@ -131,16 +128,7 @@ SANDBOX_BLUEPRINTS: List[Dict[str, Any]] = [
                     _field("allowed_ops", "Allowed ops", "allowed_ops", field_type="text"),
                 ],
             ),
-            _section(
-                "Routing",
-                [
-                    _field("short_info", "Short info", "short_info", field_type="text"),
-                    _field("tags", "Tags", "tags", field_type="tags"),
-                    _field("is_routable", "Routable", "is_routable", field_type="boolean"),
-                    _field("routing_keywords", "Routing keywords", "routing_keywords", field_type="tags"),
-                    _field("routing_negative_keywords", "Routing negative keywords", "routing_negative_keywords", field_type="tags"),
-                ],
-            ),
+            _section("Tags", [_field("tags", "Tags", "tags", field_type="tags")]),
             _section(
                 "Meta",
                 [

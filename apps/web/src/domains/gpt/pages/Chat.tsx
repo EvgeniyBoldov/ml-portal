@@ -5,6 +5,7 @@ import { useChatActions, useChatMessagesState } from '@/domains/chat/contexts/Ch
 import { ChatMessage } from '@/domains/chat/components/ChatMessage';
 import { ChatComposer } from '@/domains/chat/components/ChatComposer';
 import { ConfirmationPrompt } from '@/domains/chat/components/ConfirmationPrompt/ConfirmationPrompt';
+import { ChatProgressBlock } from '@/domains/chat/components/ChatProgressBlock';
 import { Icon } from '@/shared/ui/Icon';
 
 export default function Chat() {
@@ -248,25 +249,6 @@ export default function Chat() {
       <div className={styles.header}>
         <div className={styles.headerInfo}>
           <h2 className={styles.headerTitle}>Чат</h2>
-          {state.orchestrationEnvelope && (
-            <span className={styles.envelopeBadge}>
-              {`${state.orchestrationEnvelope.phase || 'runtime'} #${state.orchestrationEnvelope.sequence || 0}`}
-            </span>
-          )}
-          {state.orchestrationState && (
-            <span className={styles.stateBadge}>
-              {[
-                state.orchestrationState.run_status,
-                state.orchestrationState.current_agent_slug,
-                state.orchestrationState.current_phase_id,
-              ]
-                .filter(Boolean)
-                .join(' · ') || 'runtime'}
-            </span>
-          )}
-          {state.streamStatus && (
-            <span className={styles.streamStatus}>{state.streamStatus}</span>
-          )}
         </div>
       </div>
 
@@ -289,6 +271,7 @@ export default function Chat() {
             />
           ))
         )}
+        {state.isStreaming && <ChatProgressBlock lines={state.progressEvents} />}
 
         {/* Error message */}
         {streamError && (

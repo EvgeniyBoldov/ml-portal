@@ -79,6 +79,7 @@ export function useAgentDetail(id: string) {
       max_retries: entity?.max_retries ?? null,
       requires_confirmation_for_write: entity?.requires_confirmation_for_write ?? null,
       risk_level: entity?.risk_level ?? '',
+      logging_level: entity?.logging_level ?? 'brief',
       tags: entity?.tags ?? [],
       allowed_collection_ids: entity?.allowed_collection_ids ?? [],
     }),
@@ -140,12 +141,7 @@ export function useAgentVersionEditor(agentId: string, versionParam: string | un
       risk_level: version?.risk_level ?? '',
       never_do: version?.never_do ?? '',
       allowed_ops: version?.allowed_ops ?? '',
-      // Routing
-      short_info: version?.short_info ?? '',
       tags: version?.tags ?? [],
-      is_routable: version?.is_routable ?? false,
-      routing_keywords: version?.routing_keywords ?? [],
-      routing_negative_keywords: version?.routing_negative_keywords ?? [],
       notes: version?.notes ?? '',
     }),
     buildCreatePayload: (formData, sourceVersion) => ({
@@ -169,12 +165,7 @@ export function useAgentVersionEditor(agentId: string, versionParam: string | un
       risk_level: toNullableString(formData.risk_level),
       never_do: toNullableString(formData.never_do),
       allowed_ops: toNullableString(formData.allowed_ops),
-      // Routing
-      short_info: toNullableString(formData.short_info),
       tags: toNullableStringArray(formData.tags),
-      is_routable: typeof formData.is_routable === 'boolean' ? formData.is_routable : false,
-      routing_keywords: toNullableStringArray(formData.routing_keywords),
-      routing_negative_keywords: toNullableStringArray(formData.routing_negative_keywords),
       notes: toNullableString(formData.notes),
       parent_version_id: sourceVersion?.id,
     }),

@@ -15,6 +15,7 @@ def orchestrator() -> ChatTurnOrchestrator:
     title_service = AsyncMock()
     turn_service = AsyncMock()
     turn_service.build_request_hash = MagicMock(return_value="request-hash")
+    turn_service.attach_assistant_message = AsyncMock()
     return ChatTurnOrchestrator(
         context_service=context_service,
         persistence_service=persistence_service,
@@ -29,6 +30,7 @@ class TestChatTurnOrchestrator:
         chat = SimpleNamespace(tenant_id="00000000-0000-0000-0000-000000000001", name="New Chat")
         orchestrator.turn_service.start_turn = AsyncMock(return_value=SimpleNamespace(id=uuid4()))
         orchestrator.turn_service.attach_user_message = AsyncMock()
+        orchestrator.turn_service.attach_assistant_message = AsyncMock()
         orchestrator.turn_service.complete_turn = AsyncMock()
         orchestrator.persistence_service.create_user_message = AsyncMock(return_value=SimpleNamespace(message_id="user-1", created_at="2026-01-01T12:00:00Z"))
         orchestrator.persistence_service.create_assistant_message = AsyncMock(return_value=SimpleNamespace(message_id="assistant-1", created_at="2026-01-01T12:00:01Z"))
@@ -77,6 +79,7 @@ class TestChatTurnOrchestrator:
         chat = SimpleNamespace(tenant_id="00000000-0000-0000-0000-000000000001", name="Chat")
         orchestrator.turn_service.start_turn = AsyncMock(return_value=SimpleNamespace(id=uuid4()))
         orchestrator.turn_service.attach_user_message = AsyncMock()
+        orchestrator.turn_service.attach_assistant_message = AsyncMock()
         orchestrator.turn_service.fail_turn = AsyncMock()
         orchestrator.persistence_service.create_user_message = AsyncMock(return_value=SimpleNamespace(message_id="user-1", created_at="2026-01-01T12:00:00Z"))
         orchestrator.context_service.load_chat_context = AsyncMock(return_value=[{"role": "user", "content": "prev"}])
@@ -120,6 +123,7 @@ class TestChatTurnOrchestrator:
         chat = SimpleNamespace(tenant_id="00000000-0000-0000-0000-000000000001", name="Chat")
         orchestrator.turn_service.start_turn = AsyncMock(return_value=SimpleNamespace(id=turn_id))
         orchestrator.turn_service.attach_user_message = AsyncMock()
+        orchestrator.turn_service.attach_assistant_message = AsyncMock()
         orchestrator.turn_service.pause_turn = AsyncMock()
         orchestrator.persistence_service.create_user_message = AsyncMock(return_value=SimpleNamespace(message_id="user-1", created_at="2026-01-01T12:00:00Z"))
         orchestrator.context_service.load_chat_context = AsyncMock(return_value=[])
@@ -166,6 +170,7 @@ class TestChatTurnOrchestrator:
         chat = SimpleNamespace(tenant_id="00000000-0000-0000-0000-000000000001", name="My custom chat")
         orchestrator.turn_service.start_turn = AsyncMock(return_value=SimpleNamespace(id=uuid4()))
         orchestrator.turn_service.attach_user_message = AsyncMock()
+        orchestrator.turn_service.attach_assistant_message = AsyncMock()
         orchestrator.turn_service.complete_turn = AsyncMock()
         orchestrator.persistence_service.create_user_message = AsyncMock(return_value=SimpleNamespace(message_id="user-1", created_at="2026-01-01T12:00:00Z"))
         orchestrator.persistence_service.create_assistant_message = AsyncMock(return_value=SimpleNamespace(message_id="assistant-1", created_at="2026-01-01T12:00:01Z"))
@@ -198,3 +203,46 @@ class TestChatTurnOrchestrator:
 
         assert all(event.get("type") != "chat_title" for event in events)
         orchestrator.title_service.generate_chat_title.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_execute_turn_persists_failed_assistant_message_on_runtime_error(self, orchestrator: ChatTurnOrchestrator):
+        chat = SimpleNamespace(tenant_id="00000000-0000-0000-0000-000000000001", name="Chat")
+        orchestrator.turn_service.start_turn = AsyncMock(return_value=SimpleNamespace(id=uuid4()))
+        orchestrator.turn_service.attach_user_message = AsyncMock()
+        orchestrator.turn_service.attach_assistant_message = AsyncMock()
+        orchestrator.turn_service.fail_turn = AsyncMock()
+        orchestrator.persistence_service.create_user_message = AsyncMock(return_value=SimpleNamespace(message_id="user-1", created_at="2026-01-01T12:00:00Z"))
+        orchestrator.persistence_service.create_assistant_message = AsyncMock(return_value=SimpleNamespace(message_id="assistant-failed-1", created_at="2026-01-01T12:00:01Z"))
+        orchestrator.context_service.load_chat_context = AsyncMock(return_value=[])
+
+        async def fake_run_with_router(**kwargs):
+            yield {"type": "error", "error": "budget exceeded in planner", "code": "planner_failed", "run_id": "11111111-1111-1111-1111-111111111111"}
+
+        events = [
+            event
+            async for event in orchestrator.execute_turn(
+                chat=chat,
+                chat_id="chat-1",
+                user_id="user-1",
+                content="hello",
+                attachment_ids=[],
+                attachment_meta=[],
+                attachment_prompt_context="",
+                idempotency_key=None,
+                model=None,
+                agent_slug=None,
+                continuation_meta=None,
+                run_with_router=fake_run_with_router,
+                store_idempotency=AsyncMock(),
+                bind_attachments=AsyncMock(),
+                process_generated_files=AsyncMock(return_value={"content": "", "attachments": []}),
+            )
+        ]
+
+        assert any(event["type"] == "error" for event in events)
+        orchestrator.persistence_service.create_assistant_message.assert_awaited_once()
+        kwargs = orchestrator.persistence_service.create_assistant_message.await_args.kwargs
+        assert kwargs["content"]
+        assert "traceback" not in kwargs["content"].lower()
+        assert kwargs["extra_meta"]["runtime_status"] == "failed"
+        assert kwargs["extra_meta"]["runtime_run_id"] == "11111111-1111-1111-1111-111111111111"

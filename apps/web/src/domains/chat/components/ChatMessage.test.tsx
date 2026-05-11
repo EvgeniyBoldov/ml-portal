@@ -41,4 +41,16 @@ describe('ChatMessage', () => {
 
     expect(screen.getByTestId('markdown')).toHaveTextContent('**bold** plain');
   });
+
+  it('renders runtime run reference when present in meta', () => {
+    render(
+      <ChatMessage
+        role="assistant"
+        content="answer"
+        meta={{ runtime_run_id: '11111111-1111-1111-1111-111111111111' }}
+      />
+    );
+
+    expect(screen.getByText(/run 11111111/i)).toBeInTheDocument();
+  });
 });

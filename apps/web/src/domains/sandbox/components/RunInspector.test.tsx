@@ -34,9 +34,16 @@ describe('RunInspector semantic trace', () => {
     );
 
     expect(screen.getByText(/Semantic Trace/)).toBeInTheDocument();
+    expect(screen.getByText(/Trace Artifacts/)).toBeInTheDocument();
     expect(screen.getByText(/Category:/)).toBeInTheDocument();
     expect(screen.getAllByText(/operation/).length).toBeGreaterThan(0);
     expect(screen.getByText(/Summary:/)).toBeInTheDocument();
     expect(screen.getByText(/collection.document.search/)).toBeInTheDocument();
+  });
+
+  it('renders explicit empty state when no step selected', () => {
+    render(<RunInspector steps={[]} selectedStepId={null} />);
+    expect(screen.getByText(/No step selected/)).toBeInTheDocument();
+    expect(screen.getByText(/Click a step in chat timeline to inspect details/)).toBeInTheDocument();
   });
 });

@@ -26,13 +26,17 @@ class TraceStep:
 class RuntimeTraceBuilder:
     _CATEGORY_MAP: Dict[str, str] = {
         "user_request": "input",
+        "budget_init": "budget",
         "budget_policy": "budget",
         "budget_consumed": "budget",
         "budget_limit_exceeded": "budget",
+        "budget_check": "budget",
+        "budget": "budget",
         "llm_call": "llm",
         "llm_request": "llm",
         "llm_response": "llm",
         "routing": "decision",
+        "triage": "decision",
         "protocol_retry": "retry",
         "planner_action": "planner",
         "planner_step": "planner",

@@ -8,6 +8,7 @@ from typing import Optional
 
 from fastapi import Request, status
 from fastapi.responses import JSONResponse
+from starlette.responses import Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.core.logging import get_logger
@@ -29,7 +30,18 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         request.state.request_id = request.headers.get("X-Request-Id") or str(uuid.uuid4())
         request.state.tenant_id = request.headers.get("X-Tenant-Id")
-        response = await call_next(request)
+        try:
+            response = await call_next(request)
+        except RuntimeError as exc:
+            # Starlette may raise this on client disconnect while streaming/request body upload.
+            if "No response returned." in str(exc):
+                logger.info(
+                    "Client disconnected before response was returned: %s %s",
+                    request.method,
+                    request.url.path,
+                )
+                return Response(status_code=204)
+            raise
         response.headers["X-Request-Id"] = request.state.request_id
         return response
 
@@ -230,7 +242,6 @@ class TenantMiddleware(BaseHTTPMiddleware):
     @staticmethod
     def _is_protected_endpoint(path: str) -> bool:
         protected_prefixes = (
-            "/api/v1/chats",
             "/api/v1/users",
             "/api/v1/rag",
             "/api/v1/artifacts",

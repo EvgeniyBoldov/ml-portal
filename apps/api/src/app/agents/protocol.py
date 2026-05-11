@@ -100,7 +100,7 @@ def parse_llm_response(content: str, *, strict: bool = False) -> ParsedResponse:
         ParsedResponse с текстом и списком operation_calls
     """
     operation_calls: List[OperationCall] = []
-    seen_operations: set = set()
+    seen_operations: set = set()  # Will store (operation_slug, args_json) tuples
     text = content
     
     # 1. Try canonical ```operation_call ... ```
@@ -108,9 +108,12 @@ def parse_llm_response(content: str, *, strict: bool = False) -> ParsedResponse:
     for match in matches:
         try:
             data = json.loads(match.strip())
-            if "operation" in data and data["operation"] not in seen_operations:
-                operation_calls.append(OperationCall.from_dict(data))
-                seen_operations.add(data["operation"])
+            if "operation" in data:
+                args_json = json.dumps(data.get("arguments", {}), sort_keys=True)
+                op_key = (data["operation"], args_json)
+                if op_key not in seen_operations:
+                    operation_calls.append(OperationCall.from_dict(data))
+                    seen_operations.add(op_key)
         except json.JSONDecodeError:
             continue
     if operation_calls:
@@ -122,9 +125,12 @@ def parse_llm_response(content: str, *, strict: bool = False) -> ParsedResponse:
     for match in matches:
         try:
             data = json.loads(match.strip())
-            if "operation" in data and data["operation"] not in seen_operations:
-                operation_calls.append(OperationCall.from_dict(data))
-                seen_operations.add(data["operation"])
+            if "operation" in data:
+                args_json = json.dumps(data.get("arguments", {}), sort_keys=True)
+                op_key = (data["operation"], args_json)
+                if op_key not in seen_operations:
+                    operation_calls.append(OperationCall.from_dict(data))
+                    seen_operations.add(op_key)
         except json.JSONDecodeError:
             continue
     if operation_calls:
@@ -137,9 +143,11 @@ def parse_llm_response(content: str, *, strict: bool = False) -> ParsedResponse:
         for js in json_strs:
             try:
                 data = json.loads(js)
-                if data["operation"] not in seen_operations:
+                args_json = json.dumps(data.get("arguments", {}), sort_keys=True)
+                op_key = (data["operation"], args_json)
+                if op_key not in seen_operations:
                     operation_calls.append(OperationCall.from_dict(data))
-                    seen_operations.add(data["operation"])
+                    seen_operations.add(op_key)
                     text = text.replace(js, '', 1)
             except (json.JSONDecodeError, KeyError):
                 continue

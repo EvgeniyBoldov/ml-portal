@@ -101,6 +101,10 @@ class AgentToolRuntime(BaseRuntime):
             enable_logging=enable_logging,
         )
         await run_session.start()
+        
+        # Add run_id to context for intent logging
+        if run_session.run_id:
+            ctx.extra["run_id"] = run_session.run_id
 
         user_content = messages[-1].get("content", "") if messages else ""
         await run_session.log_step("user_request", {
@@ -128,6 +132,12 @@ class AgentToolRuntime(BaseRuntime):
             )
 
         yield RuntimeEvent.status("agent_operation_loop_started")
+        
+        # Log high-level intent
+        await ctx.log_intent(
+            "Запускаю выполнение агента",
+            {"agent_slug": agent.slug, "operations_count": len(available_operations)}
+        )
 
         # Build working messages for LLM (mutable copy)
         llm_messages: List[Dict[str, Any]] = [
@@ -193,6 +203,14 @@ class AgentToolRuntime(BaseRuntime):
                     runtime_budget.record_agent_step()
 
                 # Non-streaming LLM call to let agent decide
+                await run_session.log_step("llm_request", {
+                    "step": step + 1,
+                    "model": gen.model,
+                    "temperature": gen.temperature,
+                    "max_tokens": gen.max_tokens,
+                    "messages": llm_messages,
+                    "native_tool_calling": native_tool_calling,
+                })
                 llm_start = time.time()
                 raw_response_dict: Optional[Dict[str, Any]] = None
                 if native_tool_calling and tools_payload:
@@ -214,6 +232,13 @@ class AgentToolRuntime(BaseRuntime):
                         max_tokens=gen.max_tokens,
                     )
                 llm_duration = int((time.time() - llm_start) * 1000)
+
+                await run_session.log_step("llm_response", {
+                    "step": step + 1,
+                    "model": gen.model,
+                    "content": raw_response,
+                    "response_length": len(raw_response),
+                }, duration_ms=llm_duration)
 
                 await run_session.log_step("llm_call", {
                     "step": step + 1,
@@ -291,13 +316,22 @@ class AgentToolRuntime(BaseRuntime):
                         continue
 
                     # No operation calls — agent decided to answer directly
+                    await ctx.log_intent(
+                        "Формирую финальный ответ",
+                        {"step": step + 1, "operation_calls_total": len(loop_state.operation_outputs)}
+                    )
+                    final_answer_content: List[str] = []
                     async for ev in self._handle_no_operation_calls(
                         exec_request, messages, llm_messages,
                         parsed, loop_state.operation_outputs, loop_state.sources, gen, run_session, sandbox_ov,
                     ):
+                        if ev.type == RuntimeEventType.FINAL and isinstance(ev.data, dict):
+                            final_answer_content.append(str(ev.data.get("content", "") or ""))
                         yield ev
                     await run_session.log_step("final_response", {
-                        "step": step + 1, "operation_calls_total": len(loop_state.operation_outputs),
+                        "step": step + 1,
+                        "operation_calls_total": len(loop_state.operation_outputs),
+                        "content": final_answer_content[0] if final_answer_content else "",
                     })
                     if isinstance(runtime_budget, RuntimeBudgetTracker):
                         budget_snapshot = runtime_budget.snapshot()
@@ -337,6 +371,12 @@ class AgentToolRuntime(BaseRuntime):
                     return
                 operation_calls_total_ref = [loop_state.operation_calls_total]
                 for operation_call in parsed.operation_calls:
+                    # Log intent before executing each operation
+                    await ctx.log_intent(
+                        f"Выполняю операцию: {operation_call.operation_slug}",
+                        {"arguments": operation_call.arguments}
+                    )
+                    
                     prev_outputs = len(loop_state.operation_outputs)
                     async for ev in self._execute_single_operation_call(
                         operation_call=operation_call,
@@ -469,10 +509,18 @@ class AgentToolRuntime(BaseRuntime):
 
             # Max steps reached — synthesize with whatever we have
             if loop_state.operation_outputs:
+                synth_final_content: List[str] = []
                 async for ev in self._synthesize_answer(
                     exec_request, messages, loop_state.operation_outputs, loop_state.sources, gen, run_session,
                 ):
+                    if ev.type == RuntimeEventType.FINAL and isinstance(ev.data, dict):
+                        synth_final_content.append(str(ev.data.get("content", "") or ""))
                     yield ev
+                await run_session.log_step("final_response", {
+                    "step": step + 1,
+                    "operation_calls_total": len(loop_state.operation_outputs),
+                    "content": synth_final_content[0] if synth_final_content else "",
+                })
             else:
                 yield RuntimeEvent.error(
                     f"Maximum agent steps ({policy.max_steps}) reached without result",

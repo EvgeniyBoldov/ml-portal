@@ -13,9 +13,8 @@ All entity operations use UUID, not slug.
 """
 from typing import List, Optional
 from uuid import UUID
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
 
 from app.api.deps import db_session, require_admin
 from app.core.security import UserCtx
@@ -30,17 +29,8 @@ from app.schemas.agents import (
     AgentVersionUpdate,
     AgentVersionResponse,
 )
-from pydantic import BaseModel, Field
 
 router = APIRouter(tags=["agents"])
-
-
-class AgentRouteRequest(BaseModel):
-    request_text: str = Field(..., min_length=1)
-
-
-class AgentRouteResponse(BaseModel):
-    selected_agent: AgentResponse
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -114,21 +104,6 @@ async def get_agent(
 ):
     service = AgentService(db)
     return await service.get_agent_detail(agent_id)
-
-
-@router.post("/router/route", response_model=AgentRouteResponse)
-async def route_agent(
-    data: AgentRouteRequest,
-    db: AsyncSession = Depends(db_session),
-    _: UserCtx = Depends(require_admin),
-):
-    service = AgentService(db)
-    selected = await service.route_agent(
-        request_text=data.request_text,
-    )
-    if not selected:
-        raise HTTPException(status_code=404, detail="No routable agent matches request")
-    return AgentRouteResponse(selected_agent=selected)
 
 
 @router.put("/{agent_id}", response_model=AgentResponse)

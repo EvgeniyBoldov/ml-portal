@@ -136,9 +136,10 @@ class ChatTurnOrchestrator:
 
         assistant_content = ""
         rag_sources = []
-        llm_error = None
+        llm_error: Optional[dict[str, str]] = None
         run_paused = False
         paused_run_id: Optional[str] = None
+        last_run_id: Optional[str] = None
         paused_reason: Optional[str] = None
         paused_action: Optional[dict] = None
         paused_context: Optional[dict] = None
@@ -154,6 +155,8 @@ class ChatTurnOrchestrator:
                 model=model,
                 content=content,
             ):
+                if isinstance(event_data.get("run_id"), str):
+                    last_run_id = str(event_data.get("run_id"))
                 if event_data.get("type") == "delta":
                     if turn.phase != TurnPhase.DELTA_STREAMING:
                         turn.transition(TurnPhase.DELTA_STREAMING)
@@ -163,7 +166,10 @@ class ChatTurnOrchestrator:
                     rag_sources = event_data.get("sources", [])
                     _final_stop_reason = event_data.get("stop_reason")
                     if _final_stop_reason in ("failed", "loop_detected", "budget_exceeded", "aborted"):
-                        llm_error = f"Agent run ended with status: {_final_stop_reason}"
+                        llm_error = self._normalize_runtime_error(
+                            code=f"runtime_{_final_stop_reason}",
+                            raw_message=f"Agent run ended with status: {_final_stop_reason}",
+                        )
                 elif event_data.get("type") == "run_paused":
                     run_paused = True
                     paused_run_id = event_data.get("run_id")
@@ -172,17 +178,23 @@ class ChatTurnOrchestrator:
                     paused_context = event_data.get("context")
                     turn.transition(TurnPhase.PAUSED)
                 elif event_data.get("type") == "error":
-                    llm_error = event_data.get("error")
+                    llm_error = self._normalize_runtime_error(
+                        code=str(event_data.get("code") or "runtime_error"),
+                        raw_message=str(event_data.get("error") or "Runtime error"),
+                    )
                     terminal_event_emitted = True
 
                 if event_data.get("type") not in ("final_content", "run_paused"):
                     yield event_data
         except Exception as runtime_exc:
-            llm_error = str(runtime_exc)
-            logger.error(f"AgentRuntime error: {llm_error}", exc_info=True)
+            llm_error = self._normalize_runtime_error(
+                code="unknown_runtime_error",
+                raw_message=str(runtime_exc),
+            )
+            logger.error("AgentRuntime error: %s", llm_error["operator_message"], exc_info=True)
             turn.force_error()
-            await self.turn_service.fail_turn(turn_id, error_message=llm_error)
-            yield {"type": "error", "error": llm_error}
+            await self.turn_service.fail_turn(turn_id, error_message=llm_error["operator_message"])
+            yield {"type": "error", "error": llm_error["user_message"], "code": llm_error["code"]}
 
         if assistant_content and not llm_error:
             generated_attachment_ids: list[str] = []
@@ -206,6 +218,7 @@ class ChatTurnOrchestrator:
                 content=assistant_content,
                 rag_sources=rag_sources,
                 attachments=generated_attachment_meta,
+                extra_meta={"runtime_run_id": last_run_id} if last_run_id else None,
             )
 
             if generated_attachment_ids:
@@ -271,7 +284,66 @@ class ChatTurnOrchestrator:
             terminal_event_emitted = True
         elif llm_error:
             turn.force_error()
-            await self.turn_service.fail_turn(turn_id, error_message=llm_error)
+            await self.turn_service.fail_turn(turn_id, error_message=llm_error["operator_message"])
+            if assistant_content.strip():
+                partial_message = await self.persistence_service.create_assistant_message(
+                    chat_id=chat_id,
+                    content=assistant_content.strip(),
+                    rag_sources=rag_sources,
+                    extra_meta={
+                        "runtime_status": "partial",
+                        "runtime_error_code": llm_error["code"],
+                        "runtime_error_message": llm_error["user_message"],
+                        "runtime_run_id": last_run_id,
+                    },
+                )
+                await self.turn_service.attach_assistant_message(turn_id, partial_message.message_id)
+            else:
+                failed_message = await self.persistence_service.create_assistant_message(
+                    chat_id=chat_id,
+                    content=llm_error["user_message"],
+                    rag_sources=rag_sources,
+                    extra_meta={
+                        "runtime_status": "failed",
+                        "runtime_error_code": llm_error["code"],
+                        "runtime_run_id": last_run_id,
+                    },
+                )
+                await self.turn_service.attach_assistant_message(turn_id, failed_message.message_id)
             if not terminal_event_emitted:
-                yield {"type": "error", "error": llm_error}
+                yield {"type": "error", "error": llm_error["user_message"], "code": llm_error["code"]}
             terminal_event_emitted = True
+
+    @staticmethod
+    def _normalize_runtime_error(*, code: str, raw_message: str) -> dict[str, str]:
+        normalized_code = (code or "unknown_runtime_error").strip().lower()
+        message_lc = (raw_message or "").lower()
+        if "budget" in normalized_code or "budget" in message_lc:
+            normalized_code = "budget_exceeded"
+            user_message = "Достигнут лимит выполнения запроса. Попробуйте сузить запрос."
+        elif "retry" in normalized_code or "retry" in message_lc:
+            normalized_code = "max_retries_exceeded"
+            user_message = "Не удалось завершить запрос после нескольких попыток. Попробуйте позже."
+        elif "tool" in normalized_code and "unavailable" in message_lc:
+            normalized_code = "tool_unavailable"
+            user_message = "Один из инструментов сейчас недоступен. Попробуйте позже."
+        elif "timeout" in normalized_code or "timeout" in message_lc:
+            normalized_code = "tool_timeout"
+            user_message = "Превышено время ожидания инструмента. Попробуйте позже."
+        elif "planner" in normalized_code or "planner" in message_lc:
+            normalized_code = "planner_failed"
+            user_message = "Не удалось построить план выполнения запроса. Попробуйте переформулировать вопрос."
+        elif "policy" in normalized_code or "denied" in message_lc:
+            normalized_code = "policy_blocked"
+            user_message = "Запрос заблокирован политикой доступа."
+        elif "agent" in normalized_code or "runtime_failed" in normalized_code:
+            normalized_code = "agent_failed"
+            user_message = "Не удалось завершить выполнение агентом. Попробуйте позже."
+        else:
+            normalized_code = "unknown_runtime_error"
+            user_message = "Произошла внутренняя ошибка выполнения. Попробуйте позже."
+        return {
+            "code": normalized_code,
+            "user_message": user_message,
+            "operator_message": raw_message or normalized_code,
+        }

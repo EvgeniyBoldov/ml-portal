@@ -14,14 +14,86 @@ import { Badge, Button } from '@/shared/ui';
 import { getStatusProps } from '@/shared/lib/statusConfig';
 import ConfirmDialog from '@/shared/ui/ConfirmDialog';
 import { buildRunTrace } from '@/domains/runtimeTrace/normalize';
-import type { SemanticEvent } from '@/domains/runtimeTrace/types';
 import { buildTraceDiagnostics } from '@/domains/runtimeTrace/components/TraceDiagnosticsSummary';
+import { aggregateRun } from '@/domains/runtimeTrace/aggregator';
+import { RunInputBlock } from '@/domains/runtimeTrace/components/RunInputBlock';
+import { RunTraceLog } from '@/domains/runtimeTrace/components/TraceEntryCard';
+import { RunFinalBlock } from '@/domains/runtimeTrace/components/RunFinalBlock';
+import traceV2Styles from '@/domains/runtimeTrace/components/TraceV2.module.css';
 import styles from './AgentRunPage.module.css';
 
 function formatDuration(ms?: number): string {
   if (!ms) return '—';
   if (ms < 1000) return `${ms}ms`;
   return `${(ms / 1000).toFixed(2)}s`;
+}
+
+function DiagnosticValue({ value }: { value: unknown }): React.ReactNode {
+  if (value === null || value === undefined) return '—';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (Array.isArray(value)) return `[${value.length} items]`;
+  if (typeof value === 'object') {
+    // Render object as key=value pairs for readability
+    const entries = Object.entries(value).slice(0, 4); // max 4 fields
+    const preview = entries.map(([k, v]) => {
+      let vStr: string;
+      if (v === null || v === undefined) vStr = 'null';
+      else if (typeof v === 'string') vStr = v.length > 20 ? `${v.slice(0, 20)}...` : v;
+      else if (typeof v === 'object') vStr = '[obj]';
+      else vStr = String(v);
+      return `${k}=${vStr}`;
+    }).join(' · ');
+    const more = Object.keys(value).length > 4 ? ' ...' : '';
+    return preview + more;
+  }
+  return String(value);
+}
+
+function RunSummary({ run, diagnostics, trace }: { run?: { status: string; duration_ms?: number; error?: string }; diagnostics: { budgetEvents: number; llmCalls: number; operationCalls: number; failedOperations: number; runtimeErrors: Array<{ code: string; userMessage: string }> }; trace: { iterations: Array<{ events: unknown[] }> } }) {
+  const isFailed = run?.status === 'failed' || run?.status === 'error' || diagnostics.runtimeErrors.length > 0;
+  const isPartial = run?.status === 'partial';
+  const statusTone = isFailed ? 'danger' : isPartial ? 'warn' : 'success';
+  const statusLabel = isFailed ? 'Failed' : isPartial ? 'Partial' : 'Success';
+  const totalSteps = trace.iterations.reduce((sum, it) => sum + it.events.length, 0);
+  const totalIterations = trace.iterations.length;
+  const firstError = diagnostics.runtimeErrors[0];
+
+  return (
+    <div className={`${styles['run-summary']} ${isFailed ? styles['run-summary-failed'] : ''}`}>
+      <div className={styles['run-summary-header']}>
+        <Badge tone={statusTone as 'success' | 'warn' | 'danger'}>{statusLabel}</Badge>
+        <span className={styles['run-summary-duration']}>{formatDuration(run?.duration_ms)}</span>
+      </div>
+      <div className={styles['run-summary-stats']}>
+        <div className={styles['run-summary-stat']}>
+          <span className={styles['run-summary-value']}>{totalIterations}</span>
+          <span className={styles['run-summary-label']}>iterations</span>
+        </div>
+        <div className={styles['run-summary-stat']}>
+          <span className={styles['run-summary-value']}>{totalSteps}</span>
+          <span className={styles['run-summary-label']}>steps</span>
+        </div>
+        <div className={styles['run-summary-stat']}>
+          <span className={styles['run-summary-value']}>{diagnostics.llmCalls}</span>
+          <span className={styles['run-summary-label']}>LLM</span>
+        </div>
+        <div className={styles['run-summary-stat']}>
+          <span className={styles['run-summary-value']}>{diagnostics.operationCalls}</span>
+          <span className={styles['run-summary-label']}>operations</span>
+        </div>
+        <div className={styles['run-summary-stat']}>
+          <span className={styles['run-summary-value']}>{diagnostics.failedOperations}</span>
+          <span className={styles['run-summary-label']}>failed</span>
+        </div>
+      </div>
+      {firstError && (
+        <div className={styles['run-summary-error']}>
+          <strong>{firstError.code}:</strong> {firstError.userMessage}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function formatDate(dateStr?: string): string {
@@ -36,55 +108,6 @@ function formatDate(dateStr?: string): string {
   });
 }
 
-function eventTone(status: SemanticEvent['status']): 'info' | 'success' | 'warn' | 'danger' | 'neutral' {
-  if (status === 'ok') return 'success';
-  if (status === 'warn') return 'warn';
-  if (status === 'error') return 'danger';
-  return 'info';
-}
-
-function StepItem({ event, index }: { event: SemanticEvent; index: number }) {
-  const [expanded, setExpanded] = useState(false);
-
-  return (
-    <div className={styles['step-item']} onClick={() => setExpanded((v) => !v)}>
-      <div className={styles['step-header']}>
-        <span className={styles['step-number']}>#{index + 1}</span>
-        <Badge tone={eventTone(event.status)}>{event.title}</Badge>
-        <Badge tone="neutral">{event.category}</Badge>
-        <div className={styles['step-meta']}>
-          {event.duration_ms != null && <span>{event.duration_ms}ms</span>}
-          <span className={styles['step-toggle']}>{expanded ? '▼' : '▶'}</span>
-        </div>
-      </div>
-
-      <div className={styles['step-preview']}>
-        <div className={styles['step-preview-row']}>
-          <span className={styles['step-preview-label']}>Summary:</span>
-          <span className={styles['step-preview-value']}>{event.summary || '—'}</span>
-        </div>
-      </div>
-
-      {expanded && (
-        <>
-          <div className={styles['step-preview-expanded']}>
-            <div className={styles['step-preview-row']}>
-              <span className={styles['step-preview-label']}>Phase:</span>
-              <span className={styles['step-preview-value']}>{event.phase}</span>
-            </div>
-            {event.started_at && (
-              <div className={styles['step-preview-row']}>
-                <span className={styles['step-preview-label']}>At:</span>
-                <span className={styles['step-preview-value']}>{formatDate(event.started_at)}</span>
-              </div>
-            )}
-          </div>
-          <pre className={styles['step-data']}>{JSON.stringify(event.raw.raw, null, 2)}</pre>
-        </>
-      )}
-    </div>
-  );
-}
 
 export function AgentRunPage() {
   const { id } = useParams<{ id: string }>();
@@ -132,6 +155,12 @@ export function AgentRunPage() {
     })));
   }, [run?.trace, steps]);
   const diagnostics = useMemo(() => buildTraceDiagnostics(trace.iterations.flatMap((item) => item.events)), [trace]);
+  const aggregated = useMemo(() => aggregateRun(trace, {
+    status: run?.status,
+    agentSlug: run?.agent_slug,
+    loggingLevel: run?.logging_level,
+    contextSnapshot: run?.context_snapshot,
+  }), [trace, run]);
 
   const OVERVIEW_FIELDS: FieldConfig[] = [
     { key: 'id', type: 'code', label: 'ID', editable: false },
@@ -240,6 +269,12 @@ export function AgentRunPage() {
             </Button>,
           ]}
         >
+          {run && (
+            <Block title="Run Summary" icon="activity" iconVariant="primary" width="full">
+              <RunSummary run={run} diagnostics={diagnostics} trace={trace} />
+            </Block>
+          )}
+
           {snap?.request_text && (
             <Block title="Запрос пользователя" icon="message-square" iconVariant="info" width="full">
               <div className={styles['request-text']}>{snap.request_text}</div>
@@ -279,14 +314,14 @@ export function AgentRunPage() {
           <Block title="Budget Diagnostics" icon="gauge" iconVariant="warning" width="1/2">
             <div className={styles['context-snapshot']}>
               budget events: {diagnostics.budgetEvents}
-              {'\n'}last budget: {diagnostics.lastBudget}
+              {'\n'}last budget: <DiagnosticValue value={diagnostics.lastBudget} />
             </div>
           </Block>
 
           <Block title="LLM Diagnostics" icon="sparkles" iconVariant="info" width="1/2">
             <div className={styles['context-snapshot']}>
               llm calls: {diagnostics.llmCalls}
-              {'\n'}last llm: {diagnostics.lastLlm}
+              {'\n'}last llm: <DiagnosticValue value={diagnostics.lastLlm} />
             </div>
           </Block>
 
@@ -294,24 +329,31 @@ export function AgentRunPage() {
             <div className={styles['context-snapshot']}>
               operation events: {diagnostics.operationCalls}
               {'\n'}failed operations: {diagnostics.failedOperations}
-              {'\n'}last operation: {diagnostics.lastOperation}
+              {'\n'}last operation: <DiagnosticValue value={diagnostics.lastOperation} />
             </div>
           </Block>
+
+          {diagnostics.runtimeErrors.length > 0 && (
+            <Block title="Runtime Errors" icon="alert-triangle" iconVariant="danger" width="full">
+              <div className={styles['context-snapshot']}>
+                {diagnostics.runtimeErrors.slice(-3).map((item, idx) => (
+                  <div key={`${item.code}-${idx}`} style={{ marginBottom: 10 }}>
+                    <div><strong>code:</strong> {item.code}</div>
+                    <div><strong>user:</strong> {item.userMessage}</div>
+                    <div><strong>operator:</strong> {item.operatorMessage}</div>
+                  </div>
+                ))}
+              </div>
+            </Block>
+          )}
         </Tab>
 
         <Tab title="Трейс" layout="full" id="steps" badge={trace.total_events}>
-          {trace.iterations.length > 0 ? (
-            <div className={styles['steps-list']}>
-              {trace.iterations.map((iteration) => (
-                <div key={iteration.index}>
-                  <div style={{ fontSize: 12, color: 'var(--text-muted)', margin: '12px 0 6px' }}>
-                    Итерация #{iteration.index + 1}
-                  </div>
-                  {iteration.events.map((event, idx) => (
-                    <StepItem key={event.id} event={event} index={idx} />
-                  ))}
-                </div>
-              ))}
+          {trace.total_events > 0 ? (
+            <div className={traceV2Styles.traceV2}>
+              <RunInputBlock input={aggregated.input} />
+              <RunTraceLog entries={aggregated.traceEntries} />
+              <RunFinalBlock final={aggregated.final} />
             </div>
           ) : (
             <div className={styles['empty-steps']}>Нет записанных шагов. Возможно, уровень логирования агента — «none».</div>

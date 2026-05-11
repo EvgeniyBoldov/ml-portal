@@ -261,6 +261,8 @@ class SandboxCatalogRouterItem(BaseModel):
     id: str
     name: str
     description: str
+    config: Optional[dict[str, Any]] = None
+    response_contract: Optional[dict[str, Any]] = None
 
 
 class SandboxCatalogResponse(BaseModel):

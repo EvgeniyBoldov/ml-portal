@@ -18,8 +18,14 @@ from app.schemas.system_llm_roles import (
     TriageRoleUpdate, PlannerRoleUpdate, SummaryRoleUpdate, MemoryRoleUpdate,
     SynthesizerRoleUpdate, FactExtractorRoleUpdate, SummaryCompactorRoleUpdate,
 )
+from app.services.system_llm_role_contracts import build_response_contract
 
 router = APIRouter(prefix="/system-llm-roles", tags=["system-llm-roles"])
+
+
+def _serialize_role(role) -> SystemLLMRoleResponse:
+    base = SystemLLMRoleResponse.model_validate(role)
+    return base.model_copy(update={"response_contract": build_response_contract(role.role_type)})
 
 
 @router.get("", response_model=List[SystemLLMRoleResponse])
@@ -35,8 +41,8 @@ async def list_roles(
         roles = await service.get_roles_by_type(role_type)
     else:
         roles = await service.get_all_roles()
-    
-    return roles
+
+    return [_serialize_role(role) for role in roles]
 
 
 @router.get("/{role_id}", response_model=SystemLLMRoleResponse)
@@ -48,7 +54,7 @@ async def get_role(
     """Get a specific system LLM role."""
     service = SystemLLMRoleService(session)
     role = await service.get_role(role_id)
-    return role
+    return _serialize_role(role)
 
 
 @router.get("/active/{role_type}", response_model=SystemLLMRoleResponse)
@@ -63,8 +69,8 @@ async def get_active_role(
     
     if not role:
         raise HTTPException(status_code=404, detail=f"No active {role_type.value} role found")
-    
-    return role
+
+    return _serialize_role(role)
 
 
 @router.post("", response_model=SystemLLMRoleResponse)
@@ -76,7 +82,7 @@ async def create_role(
     """Create a new system LLM role."""
     service = SystemLLMRoleService(session)
     role = await service.create_role(data)
-    return role
+    return _serialize_role(role)
 
 
 @router.put("/{role_id}", response_model=SystemLLMRoleResponse)
@@ -89,7 +95,7 @@ async def update_role(
     """Update a system LLM role."""
     service = SystemLLMRoleService(session)
     role = await service.update_role(role_id, data)
-    return role
+    return _serialize_role(role)
 
 
 @router.delete("/{role_id}")
@@ -117,7 +123,7 @@ async def activate_role(
     """Activate a role and deactivate others of the same type."""
     service = SystemLLMRoleService(session)
     role = await service.activate_role(role_id)
-    return role
+    return _serialize_role(role)
 
 
 # === Role-specific update endpoints ===
@@ -134,7 +140,7 @@ async def update_triage_role(
     service = SystemLLMRoleService(session)
     role = await service.update_triage_role(data)
     await session.commit()
-    return role
+    return _serialize_role(role)
 
 
 @router.patch("/planner", response_model=SystemLLMRoleResponse)
@@ -147,7 +153,7 @@ async def update_planner_role(
     service = SystemLLMRoleService(session)
     role = await service.update_planner_role(data)
     await session.commit()
-    return role
+    return _serialize_role(role)
 
 
 @router.patch("/summary", response_model=SystemLLMRoleResponse)
@@ -160,7 +166,7 @@ async def update_summary_role(
     service = SystemLLMRoleService(session)
     role = await service.update_summary_role(data)
     await session.commit()
-    return role
+    return _serialize_role(role)
 
 
 @router.patch("/memory", response_model=SystemLLMRoleResponse)
@@ -173,7 +179,7 @@ async def update_memory_role(
     service = SystemLLMRoleService(session)
     role = await service.update_memory_role(data)
     await session.commit()
-    return role
+    return _serialize_role(role)
 
 
 @router.patch("/synthesizer", response_model=SystemLLMRoleResponse)
@@ -186,7 +192,7 @@ async def update_synthesizer_role(
     service = SystemLLMRoleService(session)
     role = await service.update_synthesizer_role(data)
     await session.commit()
-    return role
+    return _serialize_role(role)
 
 
 @router.patch("/fact-extractor", response_model=SystemLLMRoleResponse)
@@ -199,7 +205,7 @@ async def update_fact_extractor_role(
     service = SystemLLMRoleService(session)
     role = await service.update_fact_extractor_role(data)
     await session.commit()
-    return role
+    return _serialize_role(role)
 
 
 @router.patch("/summary-compactor", response_model=SystemLLMRoleResponse)
@@ -212,7 +218,7 @@ async def update_summary_compactor_role(
     service = SystemLLMRoleService(session)
     role = await service.update_summary_compactor_role(data)
     await session.commit()
-    return role
+    return _serialize_role(role)
 
 
 @router.post("/ensure-defaults")

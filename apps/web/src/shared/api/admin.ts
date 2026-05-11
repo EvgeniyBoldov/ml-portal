@@ -46,6 +46,44 @@ export type SystemLLMRoleType =
   | 'summary_compactor';
 export type RetryBackoffType = 'none' | 'linear' | 'exp';
 
+export type ResponseContractFormat = 'json' | 'plain_text' | 'markdown';
+
+export interface ResponseContractFailurePolicy {
+  on_invalid: string;
+}
+
+export interface JsonResponseContract {
+  format: 'json';
+  schema: Record<string, any>;
+  plain_text: null;
+  markdown: null;
+  examples: Array<Record<string, any>>;
+  failure_policy: ResponseContractFailurePolicy;
+  format_locked?: boolean;
+}
+
+export interface PlainTextResponseContract {
+  format: 'plain_text';
+  schema: null;
+  plain_text: Record<string, any>;
+  markdown: null;
+  examples: Array<Record<string, any>>;
+  failure_policy: ResponseContractFailurePolicy;
+  format_locked?: boolean;
+}
+
+export interface MarkdownResponseContract {
+  format: 'markdown';
+  schema: null;
+  plain_text: null;
+  markdown: Record<string, any>;
+  examples: Array<Record<string, any>>;
+  failure_policy: ResponseContractFailurePolicy;
+  format_locked?: boolean;
+}
+
+export type ResponseContract = JsonResponseContract | PlainTextResponseContract | MarkdownResponseContract;
+
 export interface SystemLLMRole {
   id: string;
   role_type: SystemLLMRoleType;
@@ -60,6 +98,7 @@ export interface SystemLLMRole {
   timeout_s?: number | null;
   max_retries?: number | null;
   retry_backoff?: RetryBackoffType | null;
+  response_contract?: ResponseContract | null;
   is_active?: boolean | null;
   created_at: string;
   updated_at: string;

@@ -8,6 +8,8 @@ import type { RunStep } from '../hooks/useSandboxRun';
 import type { SemanticEvent } from '@/domains/runtimeTrace/types';
 import { normalizeTraceEvent } from '@/domains/runtimeTrace/normalize';
 import { buildTraceDiagnostics, TraceDiagnosticsInline } from '@/domains/runtimeTrace/components/TraceDiagnosticsSummary';
+import { extractTraceArtifacts } from '@/domains/runtimeTrace/artifacts';
+import { TraceArtifactsView } from '@/domains/runtimeTrace/components/TraceArtifactsView';
 import styles from './RunInspector.module.css';
 
 type Tone = 'neutral' | 'info' | 'warn' | 'success' | 'danger';
@@ -494,6 +496,10 @@ export default function RunInspector({ steps, selectedStepId, runStatus, runId, 
       duration_ms: typeof selectedStep.data.duration_ms === 'number' ? selectedStep.data.duration_ms : undefined,
     });
   }, [selectedStep, traceEvents]);
+  const semanticArtifacts = useMemo(
+    () => (semanticEvent ? extractTraceArtifacts(semanticEvent) : {}),
+    [semanticEvent],
+  );
 
   const summaryFields = useMemo(() => {
     if (!selectedStep) return [];
@@ -572,6 +578,19 @@ export default function RunInspector({ steps, selectedStepId, runStatus, runId, 
       return mapToFields(selectedStep.data).map((f) => ({ ...f, tone: 'danger' as const }));
     }
     return [];
+  }, [selectedStep]);
+
+  const runtimeErrorFields = useMemo(() => {
+    if (!selectedStep) return [];
+    const source = selectedStep.data || {};
+    const code = source.runtime_error_code ?? source.code;
+    const userMessage = source.runtime_error_message ?? source.user_message;
+    const operatorMessage = source.operator_message ?? source.error ?? source.message;
+    const payload: Record<string, unknown> = {};
+    if (code !== undefined) payload.code = code;
+    if (userMessage !== undefined) payload.user_message = userMessage;
+    if (operatorMessage !== undefined) payload.operator_message = operatorMessage;
+    return mapToFields(payload).map((field) => ({ ...field, tone: 'danger' as const }));
   }, [selectedStep]);
 
   const tabs = useMemo<InspectTabSpec[]>(
@@ -659,12 +678,27 @@ export default function RunInspector({ steps, selectedStepId, runStatus, runId, 
                 </div>
               </SectionAccordion>
             ) : null}
+            {semanticEvent && active.key === 'summary' ? (
+              <SectionAccordion title="Trace Artifacts" defaultOpen>
+                <TraceArtifactsView
+                  artifacts={semanticArtifacts}
+                  className={styles['param-list']}
+                  titleClassName={styles['param-label']}
+                  preClassName={styles['field-json']}
+                />
+              </SectionAccordion>
+            ) : null}
             <SectionAccordion title="Parameters" count={active.fields.length} defaultOpen>
               <ParamAccordionList fields={active.fields} />
             </SectionAccordion>
             {active.key === 'summary' ? (
               <SectionAccordion title="Errors" count={errorFields.length} defaultOpen={errorFields.length > 0}>
                 <ParamAccordionList fields={errorFields} />
+              </SectionAccordion>
+            ) : null}
+            {active.key === 'summary' && runtimeErrorFields.length > 0 ? (
+              <SectionAccordion title="Runtime error contract" count={runtimeErrorFields.length} defaultOpen>
+                <ParamAccordionList fields={runtimeErrorFields} />
               </SectionAccordion>
             ) : null}
           </>

@@ -38,19 +38,27 @@ from app.services.runtime_terminal_status import normalize_run_status_for_storag
 logger = get_logger(__name__)
 
 # Maximum size for stored payloads in full mode (chars)
-_MAX_PAYLOAD_SIZE = 10_000
+_MAX_PAYLOAD_SIZE = 100_000
 
-# Brief mode truncation lengths
+# Brief mode truncation lengths (keys that are kept partially even in brief)
 _BRIEF_KEEP_TRUNCATED = {
-    "user_request:content": 200,
-    "final_response:content": 500,
-    "llm_request:system_prompt": 100,
-    "llm_response:content": 200,
-    "operation_call:arguments": 200,
-    "operation_result:result": 200,
-    "tool_call:arguments": 200,
-    "tool_result:result": 200,
+    "user_request:content": 500,
+    "final_response:content": 1000,
+    "llm_request:system_prompt": 200,
+    "llm_response:content": 500,
+    "operation_call:arguments": 500,
+    "operation_result:result": 500,
+    "tool_call:arguments": 500,
+    "tool_result:result": 500,
 }
+
+# Step types logged in "errors" mode (lightweight metadata + error info only)
+_ERRORS_STEP_TYPES = frozenset({
+    "error",
+    "budget_limit_exceeded",
+    "final_response",
+    "budget_consumed",
+})
 
 def _truncate(value: Any, max_len: int = _MAX_PAYLOAD_SIZE) -> Any:
     """Truncate string values to prevent bloated JSONB."""
@@ -136,10 +144,22 @@ class RunStore:
     def _should_log(self, run_id: uuid.UUID) -> bool:
         """Check if this run should record steps at all."""
         return self._logging_levels.get(run_id, "brief") != "none"
-    
+
     def _is_full(self, run_id: uuid.UUID) -> bool:
         """Check if this run uses full logging."""
         return self._logging_levels.get(run_id) == "full"
+
+    def _is_errors(self, run_id: uuid.UUID) -> bool:
+        """Check if this run uses errors-only logging."""
+        return self._logging_levels.get(run_id) == "errors"
+
+    def _should_log_step(self, run_id: uuid.UUID, step_type: str) -> bool:
+        """Check if a particular step_type should be recorded for this run."""
+        if not self._should_log(run_id):
+            return False
+        if self._is_errors(run_id):
+            return step_type in _ERRORS_STEP_TYPES
+        return True
     
     def _strip_for_brief(self, step_type: str, data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -148,7 +168,9 @@ class RunStore:
         Exception: user_request.content and final_response.content are kept truncated
         so the question text and answer are always visible in the run view.
         """
+        # Heavy keys for brief mode - intent steps are lightweight so always keep full content
         heavy_keys = {
+            "intent": set(),  # Always keep full intent descriptions
             "llm_request": {"messages", "system_prompt"},
             "llm_response": {"content", "raw_response"},
             "operation_call": {"arguments", "input"},
@@ -248,6 +270,19 @@ class RunStore:
 
         return run_id
     
+    async def add_intent(
+        self,
+        run_id: uuid.UUID,
+        description: str,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> Optional[uuid.UUID]:
+        """Add a high-level intent description step (e.g., 'Сформирую план', 'Проверяю стойки в NetBox')."""
+        return await self.add_step(
+            run_id=run_id,
+            step_type="intent",
+            data={"description": description, "details": details or {}},
+        )
+    
     async def add_step(
         self,
         run_id: uuid.UUID,
@@ -262,9 +297,9 @@ class RunStore:
         Add a step to an existing run.
         Returns step ID or None if logging is disabled for this run.
         """
-        if not self._should_log(run_id):
+        if not self._should_log_step(run_id, step_type):
             return None
-        
+
         async with self._state_lock:
             step_number = self._step_counters.get(run_id, 0)
             self._step_counters[run_id] = step_number + 1
@@ -273,8 +308,14 @@ class RunStore:
 
         # Apply level-aware data stripping
         if self._is_full(run_id):
-            # Truncate very large values but keep everything
+            # Full mode: keep everything, just prevent extreme JSONB bloat
             stored_data = {k: _truncate(v) for k, v in safe_data.items()}
+        elif self._is_errors(run_id):
+            # Errors mode: keep only lightweight fields — step metadata, budget, error details
+            _errors_keep = {"step", "kind", "code", "error", "error_code", "message",
+                            "user_message", "operator_message", "recoverable", "retryable",
+                            "operation_calls_total", "consumed", "limit", "status"}
+            stored_data = {k: v for k, v in safe_data.items() if k in _errors_keep}
         else:
             stored_data = self._strip_for_brief(step_type, safe_data)
 

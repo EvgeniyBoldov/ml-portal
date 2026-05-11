@@ -11,6 +11,7 @@ from app.api.deps import db_session, require_admin
 from app.core.security import UserCtx
 from app.models.agent import Agent
 from app.models.discovered_tool import DiscoveredTool
+from app.models.system_llm_role import SystemLLMRole, SystemLLMRoleType
 from app.models.tool import Tool
 from app.schemas.sandbox import (
     SandboxCatalogAgentItem,
@@ -23,6 +24,7 @@ from app.schemas.sandbox import (
 )
 from app.services.sandbox_override_resolver import SandboxOverrideResolver
 from app.services.sandbox_service import SandboxService
+from app.services.system_llm_role_contracts import build_response_contract
 
 from .helpers import tenant_uuid
 
@@ -133,6 +135,53 @@ async def get_sandbox_catalog(
     system_routers = [
         SandboxCatalogRouterItem(id="default", name="Default Router", description="Стандартный роутер"),
         SandboxCatalogRouterItem(id="planner", name="Planner Router", description="Маршрутизация через planner"),
+    ]
+    role_rows = await db.execute(
+        select(SystemLLMRole).where(
+            SystemLLMRole.is_active.is_(True),
+            SystemLLMRole.role_type.in_([
+                SystemLLMRoleType.TRIAGE.value,
+                SystemLLMRoleType.PLANNER.value,
+            ]),
+        )
+    )
+    active_roles = {role.role_type: role for role in role_rows.scalars().all()}
+
+    def _role_snapshot(role_type: str) -> dict:
+        role = active_roles.get(role_type)
+        if role is None:
+            return {}
+        return {
+            "id": str(role.id),
+            "role_type": role.role_type,
+            "identity": role.identity,
+            "mission": role.mission,
+            "rules": role.rules,
+            "safety": role.safety,
+            "output_requirements": role.output_requirements,
+            "model": role.model,
+            "temperature": role.temperature,
+            "max_tokens": role.max_tokens,
+            "timeout_s": role.timeout_s,
+            "max_retries": role.max_retries,
+            "retry_backoff": role.retry_backoff,
+        }
+
+    system_routers = [
+        SandboxCatalogRouterItem(
+            id="default",
+            name="Default Router",
+            description="Стандартный роутер",
+            config=_role_snapshot(SystemLLMRoleType.TRIAGE.value),
+            response_contract=build_response_contract(SystemLLMRoleType.TRIAGE),
+        ),
+        SandboxCatalogRouterItem(
+            id="planner",
+            name="Planner Router",
+            description="Маршрутизация через planner",
+            config=_role_snapshot(SystemLLMRoleType.PLANNER.value),
+            response_contract=build_response_contract(SystemLLMRoleType.PLANNER),
+        ),
     ]
 
     domain_groups = [

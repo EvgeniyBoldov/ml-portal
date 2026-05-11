@@ -326,7 +326,7 @@ _VERSION_FIELDS = [
     "output_format", "examples",
     "model", "timeout_s", "max_steps", "max_retries", "max_tokens", "temperature",
     "requires_confirmation_for_write", "risk_level", "never_do", "allowed_ops",
-    "short_info", "tags", "is_routable", "routing_keywords", "routing_negative_keywords",
+    "tags",
 ]
 
 

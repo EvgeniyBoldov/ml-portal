@@ -80,10 +80,7 @@ async def generate_agent_version(
             "tool_use_rules": "Правила использования инструментов",
             "output_format": "Формат вывода результатов",
             "examples": "Примеры использования (в виде JSON массива)",
-            "short_info": "Краткое описание для роутинга",
             "tags": "Теги для категоризации (в виде JSON массива)",
-            "routing_keywords": "Ключевые слова для роутинга (в виде JSON массива)",
-            "routing_negative_keywords": "Стоп-слова для роутинга (в виде JSON массива)",
         }
         
         # Вызвать LLM
@@ -123,5 +120,4 @@ async def _removed_generate_tool_version(tool_id: UUID) -> None:
         status_code=status.HTTP_410_GONE,
         detail="AI generation for tool releases is removed; MCP schema is the source of truth.",
     )
-
 
