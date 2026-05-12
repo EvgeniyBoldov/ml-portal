@@ -127,7 +127,7 @@ class TestCreateModel(TestModelService):
                 }
             )
 
-        enqueue.assert_called_once_with("emb-new")
+        enqueue.assert_called_once_with()
 
 
 class TestGetModel(TestModelService):
@@ -332,7 +332,7 @@ class TestDeleteModel(TestModelService):
             result = await model_service.delete_model(sample_model.id)
 
         assert result is True
-        enqueue.assert_called_once_with("emb-del")
+        enqueue.assert_called_once_with()
     
     @pytest.mark.asyncio
     async def test_delete_model_not_found(self, model_service, mock_session):

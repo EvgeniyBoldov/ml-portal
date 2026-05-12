@@ -299,6 +299,46 @@ class OperationExecutionFacade:
         return None, None
 
     @staticmethod
+    def _coerce_args(arguments: Dict[str, Any], schema: Dict[str, Any]) -> Dict[str, Any]:
+        """Coerce argument types to match schema (e.g., string->int for integer fields)."""
+        if not isinstance(arguments, dict) or not isinstance(schema, dict):
+            return arguments
+
+        properties = schema.get("properties", {})
+        if not isinstance(properties, dict):
+            return arguments
+
+        coerced = dict(arguments)
+        for key, value in coerced.items():
+            prop_schema = properties.get(key, {})
+            if not isinstance(prop_schema, dict):
+                continue
+
+            expected_type = prop_schema.get("type")
+            if expected_type == "integer" and isinstance(value, str):
+                # Try to coerce string to int
+                try:
+                    coerced[key] = int(value)
+                except (ValueError, TypeError):
+                    pass
+            elif expected_type == "integer" and isinstance(value, float):
+                # Coerce float to int (truncate)
+                coerced[key] = int(value)
+            elif expected_type == "number" and isinstance(value, str):
+                # Try to coerce string to float
+                try:
+                    coerced[key] = float(value)
+                except (ValueError, TypeError):
+                    pass
+            elif expected_type == "boolean" and isinstance(value, str):
+                # Coerce common boolean strings
+                if value.lower() in ("true", "1", "yes", "on"):
+                    coerced[key] = True
+                elif value.lower() in ("false", "0", "no", "off"):
+                    coerced[key] = False
+        return coerced
+
+    @staticmethod
     def _validate_args(
         operation: ResolvedOperation,
         arguments: Dict[str, Any],
@@ -306,9 +346,13 @@ class OperationExecutionFacade:
         schema = operation.input_schema or {}
         if not schema:
             return None
+
+        # Coerce types before validation to handle LLM passing strings instead of integers
+        coerced_args = OperationExecutionFacade._coerce_args(arguments, schema)
+
         if _JSONSCHEMA_AVAILABLE and _jsonschema is not None:
-            return OperationExecutionFacade._validate_args_jsonschema(arguments, schema)
-        return OperationExecutionFacade._validate_args_builtin(arguments, schema)
+            return OperationExecutionFacade._validate_args_jsonschema(coerced_args, schema)
+        return OperationExecutionFacade._validate_args_builtin(coerced_args, schema)
 
     @staticmethod
     def _validate_args_jsonschema(

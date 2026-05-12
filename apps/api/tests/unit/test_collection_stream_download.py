@@ -33,12 +33,6 @@ async def test_download_canonical_uses_membership_source_meta(monkeypatch):
         "_resolve_collection_and_doc_with_membership",
         AsyncMock(return_value=(fake_collection, fake_document, doc_uuid, MagicMock(), fake_membership)),
     )
-    monkeypatch.setattr(
-        download_router.s3_manager,
-        "generate_presigned_url",
-        AsyncMock(return_value="https://presigned"),
-    )
-
     result = await download_router.download_collection_doc(
         collection_id=collection_id,
         doc_id=str(doc_uuid),
@@ -47,8 +41,8 @@ async def test_download_canonical_uses_membership_source_meta(monkeypatch):
         user=SimpleNamespace(id=str(uuid4()), role="admin", tenant_ids=[]),
     )
 
-    assert result["url"] == "https://presigned"
-    download_router.s3_manager.generate_presigned_url.assert_awaited_once()
+    assert result["file_id"] == f"ragdoc_{doc_uuid}_canonical"
+    assert result["download_url"] == f"/api/v1/files/ragdoc_{doc_uuid}_canonical/download"
 
 
 @pytest.mark.asyncio

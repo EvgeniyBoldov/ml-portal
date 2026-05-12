@@ -40,6 +40,7 @@ def _memory(*, can_finalize: bool = True) -> WorkingMemory:
 
 class _FakeRunSession:
     def __init__(self) -> None:
+        self.run_id = uuid4()
         self.finished: tuple[str, str | None] | None = None
 
     async def start(self) -> None:

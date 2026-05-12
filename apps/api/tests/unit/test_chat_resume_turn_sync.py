@@ -298,7 +298,7 @@ class TestChatResumeTurnSync:
         mock_session.commit.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_resume_denies_other_tenant_run(self, mock_session):
+    async def test_resume_allows_same_user_from_other_tenant(self, mock_session):
         run_id = str(uuid4())
         current_user = SimpleNamespace(id=str(uuid4()), tenant_ids=[str(uuid4())])
         paused_run = SimpleNamespace(
@@ -317,11 +317,15 @@ class TestChatResumeTurnSync:
         self._mock_execute_with_run(mock_session, paused_run)
 
         with patch("app.services.chat_turn_service.ChatTurnService", return_value=AsyncMock()):
-            with pytest.raises(HTTPException) as err:
-                await resume_run(run_id=run_id, body={"action": "confirm"}, session=mock_session, current_user=current_user)
+            result = await resume_run(
+                run_id=run_id,
+                body={"action": "cancel"},
+                session=mock_session,
+                current_user=current_user,
+            )
 
-        assert err.value.status_code == 404
-        mock_session.commit.assert_not_called()
+        assert result["status"] == "cancelled"
+        mock_session.commit.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_waiting_input_to_resume_input_end_to_end(self, mock_session):

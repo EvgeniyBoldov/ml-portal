@@ -16,6 +16,7 @@ import {
 } from '@/shared/api/hooks/usePlatformSettings';
 import { Block, Button, ConfirmDialog, ContractCriteriaBlock, ContractFieldsBlock, EntityPageV2, Tab } from '@/shared/ui';
 import type { GridFieldConfig as FieldConfig } from '@/shared/ui';
+import { Input, Textarea } from '@/shared/ui';
 
 const BACKOFF_OPTIONS = [
   { value: 'none', label: 'Без паузы' },
@@ -26,6 +27,7 @@ const BACKOFF_OPTIONS = [
 // Prompt fields WITHOUT output_requirements - contract replaces it for JSON roles
 const ROLE_PROMPT_KEYS = ['identity', 'mission', 'rules', 'safety'];
 const ROLE_PARAM_KEYS = ['model', 'temperature', 'max_tokens', 'timeout_s', 'max_retries', 'retry_backoff'];
+const RESPONSE_FORMAT_FIELD_KEY = 'response_format';
 
 type RoleFormData = SystemLLMRoleUpdate & Record<string, unknown>;
 
@@ -77,6 +79,60 @@ function mapRoleToFields(role?: SystemLLMRole): RoleFormData {
     timeout_s: role?.timeout_s ?? DEFAULT_ROLE_FORM.timeout_s,
     max_retries: role?.max_retries ?? DEFAULT_ROLE_FORM.max_retries,
     retry_backoff: role?.retry_backoff ?? DEFAULT_ROLE_FORM.retry_backoff,
+  };
+}
+
+function getResponseFormatValue(contract?: ResponseContract | null): unknown {
+  if (!contract) return '—';
+  if (contract.format === 'json') return contract.schema ?? {};
+  return contract.format;
+}
+
+function buildRulesFields(
+  fields: FieldConfig[],
+  contract?: ResponseContract | null
+): FieldConfig[] {
+  const promptFields = fields.filter((f) => ROLE_PROMPT_KEYS.includes(f.key));
+  const isJson = contract?.format === 'json';
+  const formatField: FieldConfig = {
+    key: RESPONSE_FORMAT_FIELD_KEY,
+    label: 'Формат ответа',
+    type: 'custom',
+    description: 'Основа response contract. Поле только для просмотра.',
+    editable: false,
+    render: (value) => {
+      if (isJson) {
+        const jsonValue = typeof value === 'string' ? value : JSON.stringify(value ?? {}, null, 2);
+        return (
+          <Textarea
+            value={jsonValue}
+            onChange={() => {}}
+            rows={8}
+            disabled
+          />
+        );
+      }
+      return (
+        <Input
+          value={String(value ?? '—')}
+          onChange={() => {}}
+          disabled
+        />
+      );
+    },
+  };
+  return [...promptFields, formatField];
+}
+
+function buildRulesData(
+  mode: 'view' | 'edit',
+  form: RoleFormData,
+  role?: SystemLLMRole
+): Record<string, unknown> {
+  const base = mode === 'edit' ? form : mapRoleToFields(role);
+  return {
+    ...base,
+    [RESPONSE_FORMAT_FIELD_KEY]: getResponseFormatValue(role?.response_contract),
   };
 }
 
@@ -245,8 +301,8 @@ export function OrchestrationPage() {
             icon="shield"
             iconVariant="primary"
             width="2/3"
-            fields={resolvedPlannerFields.filter((f) => ROLE_PROMPT_KEYS.includes(f.key))}
-            data={plannerMode === 'edit' ? plannerForm : mapRoleToFields(plannerRole)}
+            fields={buildRulesFields(resolvedPlannerFields, plannerRole?.response_contract)}
+            data={buildRulesData(plannerMode, plannerForm, plannerRole)}
             editable={plannerMode === 'edit'}
             onChange={plannerMode === 'edit' ? (k, v) => setPlannerForm((p) => ({ ...p, [k]: v })) : undefined}
           >
@@ -274,7 +330,7 @@ export function OrchestrationPage() {
                 <Button key="cancel" variant="outline" onClick={() => { setSynthMode('view'); setSynthForm(DEFAULT_ROLE_FORM); }}>Отмена</Button>,
               ]}
         >
-          <Block title="Правила" icon="shield" iconVariant="primary" width="2/3" fields={resolvedSynthesizerFields.filter((f) => ROLE_PROMPT_KEYS.includes(f.key))} data={synthMode === 'edit' ? synthForm : mapRoleToFields(synthesizerRole)} editable={synthMode === 'edit'} onChange={synthMode === 'edit' ? (k, v) => setSynthForm((p) => ({ ...p, [k]: v })) : undefined}>
+          <Block title="Правила" icon="shield" iconVariant="primary" width="2/3" fields={buildRulesFields(resolvedSynthesizerFields, synthesizerRole?.response_contract)} data={buildRulesData(synthMode, synthForm, synthesizerRole)} editable={synthMode === 'edit'} onChange={synthMode === 'edit' ? (k, v) => setSynthForm((p) => ({ ...p, [k]: v })) : undefined}>
             <RulesCoverageTokens
               contract={synthesizerRole?.response_contract}
               rulesText={String((synthMode === 'edit' ? synthForm.rules : synthesizerRole?.rules) ?? '')}
@@ -298,7 +354,7 @@ export function OrchestrationPage() {
                 <Button key="cancel" variant="outline" onClick={() => { setFactMode('view'); setFactForm(DEFAULT_ROLE_FORM); }}>Отмена</Button>,
               ]}
         >
-          <Block title="Правила" icon="shield" iconVariant="primary" width="2/3" fields={resolvedFactExtractorFields.filter((f) => ROLE_PROMPT_KEYS.includes(f.key))} data={factMode === 'edit' ? factForm : mapRoleToFields(factExtractorRole)} editable={factMode === 'edit'} onChange={factMode === 'edit' ? (k, v) => setFactForm((p) => ({ ...p, [k]: v })) : undefined}>
+          <Block title="Правила" icon="shield" iconVariant="primary" width="2/3" fields={buildRulesFields(resolvedFactExtractorFields, factExtractorRole?.response_contract)} data={buildRulesData(factMode, factForm, factExtractorRole)} editable={factMode === 'edit'} onChange={factMode === 'edit' ? (k, v) => setFactForm((p) => ({ ...p, [k]: v })) : undefined}>
             <RulesCoverageTokens
               contract={factExtractorRole?.response_contract}
               rulesText={String((factMode === 'edit' ? factForm.rules : factExtractorRole?.rules) ?? '')}
@@ -323,7 +379,7 @@ export function OrchestrationPage() {
                 <Button key="cancel" variant="outline" onClick={() => { setCompactMode('view'); setCompactForm(DEFAULT_ROLE_FORM); }}>Отмена</Button>,
               ]}
         >
-          <Block title="Правила" icon="shield" iconVariant="primary" width="2/3" fields={resolvedSummaryCompactorFields.filter((f) => ROLE_PROMPT_KEYS.includes(f.key))} data={compactMode === 'edit' ? compactForm : mapRoleToFields(summaryCompactorRole)} editable={compactMode === 'edit'} onChange={compactMode === 'edit' ? (k, v) => setCompactForm((p) => ({ ...p, [k]: v })) : undefined}>
+          <Block title="Правила" icon="shield" iconVariant="primary" width="2/3" fields={buildRulesFields(resolvedSummaryCompactorFields, summaryCompactorRole?.response_contract)} data={buildRulesData(compactMode, compactForm, summaryCompactorRole)} editable={compactMode === 'edit'} onChange={compactMode === 'edit' ? (k, v) => setCompactForm((p) => ({ ...p, [k]: v })) : undefined}>
             <RulesCoverageTokens
               contract={summaryCompactorRole?.response_contract}
               rulesText={String((compactMode === 'edit' ? compactForm.rules : summaryCompactorRole?.rules) ?? '')}

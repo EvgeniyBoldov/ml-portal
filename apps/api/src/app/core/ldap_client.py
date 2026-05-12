@@ -10,13 +10,42 @@ import ssl
 from dataclasses import dataclass
 from typing import Any
 
-from ldap3 import Server, Connection, ALL, Tls, AUTO_BIND_NO_TLS
-from ldap3.core.exceptions import LDAPException, LDAPBindError, LDAPSocketOpenError
-
 from app.core.config import Settings
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
+
+# Lazy import ldap3 (not available in all environments)
+_ldap3_imported = False
+_Server = None
+_Connection = None
+_ALL = None
+_Tls = None
+_AUTO_BIND_NO_TLS = None
+_LDAPException = None
+_LDAPBindError = None
+_LDAPSocketOpenError = None
+
+
+def _ensure_ldap3():
+    global _ldap3_imported, _Server, _Connection, _ALL, _Tls, _AUTO_BIND_NO_TLS
+    global _LDAPException, _LDAPBindError, _LDAPSocketOpenError
+    if not _ldap3_imported:
+        try:
+            from ldap3 import Server, Connection, ALL, Tls, AUTO_BIND_NO_TLS
+            from ldap3.core.exceptions import LDAPException, LDAPBindError, LDAPSocketOpenError
+            _Server = Server
+            _Connection = Connection
+            _ALL = ALL
+            _Tls = Tls
+            _AUTO_BIND_NO_TLS = AUTO_BIND_NO_TLS
+            _LDAPException = LDAPException
+            _LDAPBindError = LDAPBindError
+            _LDAPSocketOpenError = LDAPSocketOpenError
+            _ldap3_imported = True
+        except ImportError as e:
+            logger.warning(f"ldap3 not available: {e}")
+            raise RuntimeError("LDAP support not available. Install ldap3 package.") from e
 
 
 @dataclass(frozen=True)
@@ -46,43 +75,45 @@ class LDAPClient:
         self._server: Server | None = None
         self._service_conn: Connection | None = None
 
-    def _get_server(self) -> Server:
+    def _get_server(self):
         """Get or create LDAP server instance."""
         if self._server is None:
-            tls = None
-            if self.settings.AUTH_LDAP_USE_TLS:
-                tls_kwargs: dict[str, Any] = {"validate": ssl.CERT_REQUIRED if self.settings.AUTH_LDAP_TLS_VERIFY else ssl.CERT_NONE}
-                if self.settings.AUTH_LDAP_TLS_CA_FILE:
-                    tls_kwargs["ca_certs_file"] = self.settings.AUTH_LDAP_TLS_CA_FILE
-                tls = Tls(**tls_kwargs)
+            _ensure_ldap3()
+        tls = None
+        if self.settings.AUTH_LDAP_USE_TLS:
+            tls_kwargs: dict[str, Any] = {"validate": ssl.CERT_REQUIRED if self.settings.AUTH_LDAP_TLS_VERIFY else ssl.CERT_NONE}
+            if self.settings.AUTH_LDAP_TLS_CA_FILE:
+                tls_kwargs["ca_certs_file"] = self.settings.AUTH_LDAP_TLS_CA_FILE
+            tls = _Tls(**tls_kwargs)
 
-            self._server = Server(
+            self._server = _Server(
                 self.settings.AUTH_LDAP_SERVER_URI or "ldap://localhost:389",
-                get_info=ALL,
+                get_info=_ALL,
                 use_ssl=self.settings.AUTH_LDAP_USE_TLS and self.settings.AUTH_LDAP_SERVER_URI and self.settings.AUTH_LDAP_SERVER_URI.startswith("ldaps://"),
                 tls=tls if tls else None,
                 connect_timeout=self.settings.AUTH_LDAP_TIMEOUT_SECONDS,
             )
         return self._server
 
-    def _get_service_connection(self) -> Connection | None:
+    def _get_service_connection(self):
         """Get connection bound with service account."""
         if not self.settings.AUTH_LDAP_BIND_DN or not self.settings.AUTH_LDAP_BIND_PASSWORD:
             logger.debug("LDAP service credentials not configured")
             return None
 
+        _ensure_ldap3()
         try:
-            conn = Connection(
+            conn = _Connection(
                 self._get_server(),
                 user=self.settings.AUTH_LDAP_BIND_DN,
                 password=self.settings.AUTH_LDAP_BIND_PASSWORD,
-                auto_bind=AUTO_BIND_NO_TLS if not self.settings.AUTH_LDAP_USE_TLS else True,
+                auto_bind=_AUTO_BIND_NO_TLS if not self.settings.AUTH_LDAP_USE_TLS else True,
                 receive_timeout=self.settings.AUTH_LDAP_TIMEOUT_SECONDS,
             )
             if self.settings.AUTH_LDAP_USE_TLS and not conn.start_tls():
                 logger.warning("LDAP StartTLS failed")
             return conn
-        except LDAPException as exc:
+        except _LDAPException as exc:
             logger.warning(f"LDAP service bind failed: {exc}")
             return None
 
@@ -188,18 +219,18 @@ class LDAPClient:
 
             # Try to bind as user with provided password
             try:
-                user_conn = Connection(
+                user_conn = _Connection(
                     self._get_server(),
                     user=user_dn,
                     password=password,
-                    auto_bind=AUTO_BIND_NO_TLS if not self.settings.AUTH_LDAP_USE_TLS else True,
+                    auto_bind=_AUTO_BIND_NO_TLS if not self.settings.AUTH_LDAP_USE_TLS else True,
                     receive_timeout=self.settings.AUTH_LDAP_TIMEOUT_SECONDS,
                 )
                 # Close immediately - bind success means auth success
                 user_conn.unbind()
-            except LDAPBindError:
+            except _LDAPBindError:
                 return LDAPAuthResult(success=False, error="Invalid credentials")
-            except LDAPException as exc:
+            except _LDAPException as exc:
                 return LDAPAuthResult(success=False, error=f"LDAP bind error: {exc}")
 
             # Parse profile from entry we already have
@@ -209,7 +240,7 @@ class LDAPClient:
 
             return LDAPAuthResult(success=True, user=profile)
 
-        except LDAPException as exc:
+        except _LDAPException as exc:
             logger.warning(f"LDAP authentication error: {exc}")
             return LDAPAuthResult(success=False, error=f"LDAP error: {exc}")
         finally:
@@ -249,7 +280,7 @@ class LDAPClient:
 
             return self._parse_user_entry(service_conn.entries[0], login)
 
-        except LDAPException as exc:
+        except _LDAPException as exc:
             logger.warning(f"LDAP lookup error: {exc}")
             return None
         finally:
@@ -290,7 +321,7 @@ class LDAPClient:
                 "server_uri": self.settings.AUTH_LDAP_SERVER_URI,
             }
 
-        except LDAPException as exc:
+        except _LDAPException as exc:
             return {
                 "status": "error",
                 "reachable": True,  # Connection worked but search failed

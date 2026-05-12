@@ -36,6 +36,7 @@ async def test_list_collections_filters_denied_by_rbac(monkeypatch):
     fake_service = SimpleNamespace(
         list_collections=AsyncMock(return_value=[allowed, denied]),
         sync_collection_status=AsyncMock(return_value={"status": "ready", "details": {}}),
+        get_effective_total_rows=AsyncMock(return_value=0),
     )
 
     monkeypatch.setattr(
@@ -76,6 +77,8 @@ async def test_get_collection_returns_404_when_denied_by_rbac(monkeypatch):
     denied = _fake_collection("denied")
     fake_service = SimpleNamespace(
         get_by_slug=AsyncMock(return_value=denied),
+        sync_collection_status=AsyncMock(return_value={"status": "ready", "details": {}}),
+        get_effective_total_rows=AsyncMock(return_value=0),
     )
 
     monkeypatch.setattr(

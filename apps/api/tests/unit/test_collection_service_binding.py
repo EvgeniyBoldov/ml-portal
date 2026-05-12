@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
-from pydantic import ValidationError
 
 from app.core.exceptions import ConflictError
 from app.models.collection import Collection
@@ -14,25 +13,24 @@ from app.schemas.collections import CreateCollectionRequest
 from app.services.collection_service import CollectionService, InvalidSchemaError
 
 
-def test_create_request_requires_data_instance_id():
-    with pytest.raises(ValidationError):
-        CreateCollectionRequest(
-            tenant_id=uuid4(),
-            collection_type="table",
-            slug="devices",
-            name="Devices",
-            fields=[],
-        )
+def test_create_request_allows_missing_data_instance_id_for_local_types():
+    req = CreateCollectionRequest(
+        tenant_id=uuid4(),
+        collection_type="table",
+        slug="devices",
+        name="Devices",
+        fields=[],
+    )
+    assert req.data_instance_id is None
 
 
 @pytest.mark.asyncio
-async def test_create_rejects_missing_data_instance_id_in_service():
-    session = MagicMock()
+async def test_create_local_collection_rejects_missing_data_instance_id():
+    session = AsyncMock()
     service = CollectionService(session=session)
-    service.get_by_slug = AsyncMock(return_value=None)
 
     with pytest.raises(InvalidSchemaError, match="data_instance_id is required"):
-        await service.create_collection(
+        await service._create_local_collection(
             tenant_id=uuid4(),
             slug="devices",
             name="Devices",

@@ -3,6 +3,23 @@ from typing import Sequence, Mapping, Any
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.http import models as qm
 from app.core.config import get_settings
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
+
+
+def _is_not_found_error(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return "404" in msg or "not found" in msg
+
+
+def _is_query_endpoint_unsupported(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return (
+        ("404" in msg and "/points/query" in msg)
+        or "unknown endpoint" in msg
+        or "method not allowed" in msg
+    )
 
 def _match_condition(key: str, value: Any) -> qm.FieldCondition:
     if isinstance(value, (list, tuple, set)):
@@ -82,28 +99,65 @@ class QdrantVectorStore:
             points.append(qm.PointStruct(id=pid, vector=list(vec), payload=dict(payloads[i])))
         await self._client.upsert(collection_name=collection, points=points)
 
-    async def search(self, collection: str, query: Sequence[float], top_k: int = 5, filter: Mapping[str, Any] | qm.Filter | None = None) -> list[dict]:
-        """Search vectors using query_points (qdrant-client >= 1.7.0)"""
+    async def search(
+        self,
+        collection: str,
+        query: Sequence[float],
+        top_k: int = 5,
+        filter: Mapping[str, Any] | qm.Filter | None = None,
+    ) -> list[dict]:
+        """
+        Search vectors via async query API.
+
+        Primary path uses `query_points` (supported by current async client).
+        If collection was concurrently removed and backend returns 404, return [].
+        """
         query_filter = _dict_to_filter(filter) if not isinstance(filter, qm.Filter) else filter
-        
-        # Use query_points instead of deprecated search method
-        response = await self._client.query_points(
-            collection_name=collection,
-            query=list(query),
-            limit=top_k,
-            query_filter=query_filter,
-            with_payload=True,
-        )
-        
-        # Convert ScoredPoint objects to dicts
-        return [
-            {
-                "id": point.id,
-                "score": point.score,
-                "payload": point.payload or {},
-            }
-            for point in response.points
-        ]
+        try:
+            response = await self._client.query_points(
+                collection_name=collection,
+                query=list(query),
+                limit=top_k,
+                query_filter=query_filter,
+                with_payload=True,
+            )
+            points = getattr(response, "points", response) or []
+            return [
+                {
+                    "id": point.id,
+                    "score": point.score,
+                    "payload": point.payload or {},
+                }
+                for point in points
+            ]
+        except Exception as exc:
+            if _is_query_endpoint_unsupported(exc):
+                logger.info("Qdrant query_points unsupported, fallback to legacy search for %s", collection)
+                try:
+                    points = await self._client.search(
+                        collection_name=collection,
+                        query_vector=list(query),
+                        limit=top_k,
+                        query_filter=query_filter,
+                        with_payload=True,
+                    )
+                    return [
+                        {
+                            "id": point.id,
+                            "score": point.score,
+                            "payload": point.payload or {},
+                        }
+                        for point in (points or [])
+                    ]
+                except Exception as legacy_exc:
+                    if _is_not_found_error(legacy_exc):
+                        logger.warning("Qdrant collection not found during legacy search: %s", collection)
+                        return []
+                    raise
+            if _is_not_found_error(exc):
+                logger.warning("Qdrant collection not found during search: %s", collection)
+                return []
+            raise
 
     async def delete_by_filter(self, collection: str, filter: Mapping[str, Any] | qm.Filter) -> None:
         query_filter = _dict_to_filter(filter) if not isinstance(filter, qm.Filter) else filter
