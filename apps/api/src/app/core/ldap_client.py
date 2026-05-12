@@ -79,18 +79,24 @@ class LDAPClient:
         """Get or create LDAP server instance."""
         if self._server is None:
             _ensure_ldap3()
-        tls = None
-        if self.settings.AUTH_LDAP_USE_TLS:
-            tls_kwargs: dict[str, Any] = {"validate": ssl.CERT_REQUIRED if self.settings.AUTH_LDAP_TLS_VERIFY else ssl.CERT_NONE}
-            if self.settings.AUTH_LDAP_TLS_CA_FILE:
-                tls_kwargs["ca_certs_file"] = self.settings.AUTH_LDAP_TLS_CA_FILE
-            tls = _Tls(**tls_kwargs)
+            tls = None
+            if self.settings.AUTH_LDAP_USE_TLS:
+                tls_kwargs: dict[str, Any] = {
+                    "validate": ssl.CERT_REQUIRED if self.settings.AUTH_LDAP_TLS_VERIFY else ssl.CERT_NONE
+                }
+                if self.settings.AUTH_LDAP_TLS_CA_FILE:
+                    tls_kwargs["ca_certs_file"] = self.settings.AUTH_LDAP_TLS_CA_FILE
+                tls = _Tls(**tls_kwargs)
 
             self._server = _Server(
                 self.settings.AUTH_LDAP_SERVER_URI or "ldap://localhost:389",
                 get_info=_ALL,
-                use_ssl=self.settings.AUTH_LDAP_USE_TLS and self.settings.AUTH_LDAP_SERVER_URI and self.settings.AUTH_LDAP_SERVER_URI.startswith("ldaps://"),
-                tls=tls if tls else None,
+                use_ssl=bool(
+                    self.settings.AUTH_LDAP_USE_TLS
+                    and self.settings.AUTH_LDAP_SERVER_URI
+                    and self.settings.AUTH_LDAP_SERVER_URI.startswith("ldaps://")
+                ),
+                tls=tls,
                 connect_timeout=self.settings.AUTH_LDAP_TIMEOUT_SECONDS,
             )
         return self._server
