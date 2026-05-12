@@ -74,7 +74,12 @@ Delivery endpoints:
 - `GET /api/v1/chats/attachments/{attachment_id}/download`
 - `GET /api/v1/files/{file_id}/download`
 
-The public API returns a redirectable/presigned URL instead of exposing storage details directly.
+The public API returns a backend download endpoint (`/api/v1/files/{file_id}/download`) and streams the file through the backend proxy without exposing direct MinIO/S3 URLs.
+
+Deprecation note:
+- direct object-storage links in message metadata (`url`, presigned S3/MinIO URLs) are deprecated;
+- canonical metadata fields are `file_id` and `download_url`;
+- legacy `url` values are supported only as a backward-compatibility fallback for previously persisted messages.
 
 ## Runtime rule
 

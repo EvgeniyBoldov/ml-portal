@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { ChatMessage } from './ChatMessage';
 
 vi.mock('@/shared/ui/MarkdownRenderer', () => ({
@@ -6,6 +6,10 @@ vi.mock('@/shared/ui/MarkdownRenderer', () => ({
 }));
 
 describe('ChatMessage', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it('falls back to content when answer blocks are unknown', () => {
     render(
       <ChatMessage
@@ -52,5 +56,49 @@ describe('ChatMessage', () => {
     );
 
     expect(screen.getByText(/run 11111111/i)).toBeInTheDocument();
+  });
+
+  it('downloads attachment by download_url', () => {
+    const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
+    render(
+      <ChatMessage
+        role="assistant"
+        content="answer"
+        meta={{
+          attachments: [
+            {
+              id: 'att-1',
+              file_name: 'report.csv',
+              download_url: '/api/v1/files/chatatt_att-1/download',
+            },
+          ],
+        }}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /report.csv/i }));
+    expect(openSpy).toHaveBeenCalledWith('/api/v1/files/chatatt_att-1/download', '_blank', 'noopener,noreferrer');
+  });
+
+  it('supports legacy attachment url in meta', () => {
+    const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
+    render(
+      <ChatMessage
+        role="assistant"
+        content="answer"
+        meta={{
+          attachments: [
+            {
+              id: 'att-legacy',
+              file_name: 'legacy.txt',
+              url: '/legacy/signed/url',
+            },
+          ],
+        }}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /legacy.txt/i }));
+    expect(openSpy).toHaveBeenCalledWith('/legacy/signed/url', '_blank', 'noopener,noreferrer');
   });
 });

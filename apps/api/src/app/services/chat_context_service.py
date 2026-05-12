@@ -36,6 +36,8 @@ class ChatContextService:
 
         context: List[Dict[str, str]] = []
         for msg in messages:
+            if msg.role not in {"user", "assistant"}:
+                continue
             content_text = msg.content
             if isinstance(content_text, dict) and "text" in content_text:
                 content_text = content_text["text"]

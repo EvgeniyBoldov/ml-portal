@@ -34,7 +34,10 @@ function ChatMessageComponent({
             .map((entry) => ({
               id: typeof entry.id === 'string' ? entry.id : undefined,
               fileId: typeof entry.file_id === 'string' ? entry.file_id : undefined,
-              downloadUrl: typeof entry.download_url === 'string' ? entry.download_url : undefined,
+              downloadUrl:
+                typeof entry.download_url === 'string'
+                  ? entry.download_url
+                  : (typeof entry.url === 'string' ? entry.url : undefined),
               name: typeof entry.file_name === 'string' ? entry.file_name : '',
               type: typeof entry.content_type === 'string' ? entry.content_type : undefined,
               sizeBytes: typeof entry.size_bytes === 'number' ? entry.size_bytes : undefined,
@@ -149,7 +152,10 @@ function ChatMessageComponent({
     }
     if (type === 'file') {
       const fileId = typeof raw.file_id === 'string' ? raw.file_id : '';
-      const downloadUrl = typeof raw.download_url === 'string' ? raw.download_url : '';
+      const downloadUrl =
+        typeof raw.download_url === 'string'
+          ? raw.download_url
+          : (typeof raw.url === 'string' ? raw.url : '');
       const name = typeof raw.name === 'string' ? raw.name : 'file';
       const href = downloadUrl || (fileId ? buildFileDownloadUrl(fileId) : '');
       if (!href) return null;

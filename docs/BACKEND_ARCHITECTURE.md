@@ -1,5 +1,21 @@
 # Backend Architecture
 
+## System LLM Role Contracts
+
+Response contracts for orchestration roles (Planner, Fact Extractor, Summary Compactor, Synthesizer, etc.) are generated dynamically from Pydantic models:
+
+- **Source of truth**: Pydantic models (`PlannerLLMOutput`, `_LLMFactOutput`, `_LLMSummaryOutput`, `TriageDecision`) define the JSON schema
+- **Schema generation**: `build_response_contract()` in `app/services/system_llm_role_contracts.py` generates JSON Schema via `model_json_schema()`
+- **Enrichment**: Schema is enriched with contract metadata (`x_when` for conditional fields, `oneOf` for discriminated unions)
+- **Startup validation**: `validate_role_contracts()` runs on startup and blocks app launch if schema divergence detected
+- **Format lock**: All built-in roles have `format_locked: true` — contracts are read-only in UI
+
+### Contract Types
+
+- **JSON contracts**: Used by Planner, Fact Extractor, Summary Compactor, Triage — render as structured form fields
+- **Plain text contracts**: Used by Synthesizer — render as criteria/forbidden lists
+- **Markdown contracts**: Reserved for future roles
+
 ## Runtime
 
 Runtime использует MCP-compatible operation descriptor как контракт capabilities/discovery.

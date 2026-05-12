@@ -38,6 +38,22 @@ class TestChatContextService:
         ]
 
     @pytest.mark.asyncio
+    async def test_load_chat_context_filters_non_conversational_roles(self, service: ChatContextService, messages_repo: AsyncMock):
+        messages_repo.get_recent_chat_messages.return_value = [
+            SimpleNamespace(role="system", content={"text": "runtime internal"}),
+            SimpleNamespace(role="user", content={"text": "question"}),
+            SimpleNamespace(role="assistant", content={"text": "answer"}),
+            SimpleNamespace(role="tool", content={"text": "operation payload"}),
+        ]
+
+        result = await service.load_chat_context(str(uuid4()), limit=10)
+
+        assert result == [
+            {"role": "user", "content": "question"},
+            {"role": "assistant", "content": "answer"},
+        ]
+
+    @pytest.mark.asyncio
     async def test_load_chat_context_with_summary_uses_summary_plus_recent(self, service: ChatContextService):
         service.get_latest_summary_text = AsyncMock(return_value="short summary")
         service.load_chat_context = AsyncMock(return_value=[{"role": "user", "content": "recent"}])

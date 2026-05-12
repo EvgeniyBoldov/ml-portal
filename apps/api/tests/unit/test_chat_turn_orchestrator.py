@@ -246,3 +246,104 @@ class TestChatTurnOrchestrator:
         assert "traceback" not in kwargs["content"].lower()
         assert kwargs["extra_meta"]["runtime_status"] == "failed"
         assert kwargs["extra_meta"]["runtime_run_id"] == "11111111-1111-1111-1111-111111111111"
+
+    @pytest.mark.asyncio
+    async def test_execute_turn_stops_completed_path_after_terminal_error(self, orchestrator: ChatTurnOrchestrator):
+        chat = SimpleNamespace(tenant_id="00000000-0000-0000-0000-000000000001", name="Chat")
+        turn_id = uuid4()
+        orchestrator.turn_service.start_turn = AsyncMock(return_value=SimpleNamespace(id=turn_id))
+        orchestrator.turn_service.attach_user_message = AsyncMock()
+        orchestrator.turn_service.attach_assistant_message = AsyncMock()
+        orchestrator.turn_service.complete_turn = AsyncMock()
+        orchestrator.turn_service.fail_turn = AsyncMock()
+        orchestrator.persistence_service.create_user_message = AsyncMock(
+            return_value=SimpleNamespace(message_id="user-1", created_at="2026-01-01T12:00:00Z")
+        )
+        orchestrator.persistence_service.create_assistant_message = AsyncMock(
+            return_value=SimpleNamespace(message_id="assistant-failed-1", created_at="2026-01-01T12:00:01Z")
+        )
+        orchestrator.context_service.load_chat_context = AsyncMock(return_value=[])
+
+        # Runtime emits terminal error first; orchestrator must not go through normal final/completed path.
+        async def fake_run_with_router(**kwargs):
+            yield {"type": "error", "error": "budget exhausted", "code": "budget_exceeded", "run_id": "run-1"}
+            yield {"type": "final_content", "content": "late-content", "sources": []}
+
+        store_idempotency = AsyncMock()
+        events = [
+            event
+            async for event in orchestrator.execute_turn(
+                chat=chat,
+                chat_id="chat-1",
+                user_id="user-1",
+                content="hello",
+                attachment_ids=[],
+                attachment_meta=[],
+                attachment_prompt_context="",
+                idempotency_key="idem-1",
+                model=None,
+                agent_slug=None,
+                continuation_meta=None,
+                run_with_router=fake_run_with_router,
+                store_idempotency=store_idempotency,
+                bind_attachments=AsyncMock(),
+                process_generated_files=AsyncMock(return_value={"content": "late-content", "attachments": []}),
+            )
+        ]
+
+        event_types = [event["type"] for event in events]
+        assert "final" not in event_types
+        assert not any(event.get("stage") == "completed" for event in events if event.get("type") == "status")
+        orchestrator.turn_service.complete_turn.assert_not_awaited()
+        store_idempotency.assert_not_awaited()
+        orchestrator.turn_service.fail_turn.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_execute_turn_persists_sanitized_budget_failure_message(self, orchestrator: ChatTurnOrchestrator):
+        chat = SimpleNamespace(tenant_id="00000000-0000-0000-0000-000000000001", name="Chat")
+        orchestrator.turn_service.start_turn = AsyncMock(return_value=SimpleNamespace(id=uuid4()))
+        orchestrator.turn_service.attach_user_message = AsyncMock()
+        orchestrator.turn_service.attach_assistant_message = AsyncMock()
+        orchestrator.turn_service.fail_turn = AsyncMock()
+        orchestrator.persistence_service.create_user_message = AsyncMock(
+            return_value=SimpleNamespace(message_id="user-1", created_at="2026-01-01T12:00:00Z")
+        )
+        orchestrator.persistence_service.create_assistant_message = AsyncMock(
+            return_value=SimpleNamespace(message_id="assistant-failed-1", created_at="2026-01-01T12:00:01Z")
+        )
+        orchestrator.context_service.load_chat_context = AsyncMock(return_value=[])
+
+        async def fake_run_with_router(**kwargs):
+            yield {
+                "type": "error",
+                "error": "Traceback: budget_policy max_steps exceeded with internal stack",
+                "code": "budget_exceeded",
+                "run_id": "11111111-1111-1111-1111-111111111111",
+            }
+
+        _ = [
+            event
+            async for event in orchestrator.execute_turn(
+                chat=chat,
+                chat_id="chat-1",
+                user_id="user-1",
+                content="hello",
+                attachment_ids=[],
+                attachment_meta=[],
+                attachment_prompt_context="",
+                idempotency_key=None,
+                model=None,
+                agent_slug=None,
+                continuation_meta=None,
+                run_with_router=fake_run_with_router,
+                store_idempotency=AsyncMock(),
+                bind_attachments=AsyncMock(),
+                process_generated_files=AsyncMock(return_value={"content": "", "attachments": []}),
+            )
+        ]
+
+        kwargs = orchestrator.persistence_service.create_assistant_message.await_args.kwargs
+        assert kwargs["content"] == "Достигнут лимит выполнения запроса. Попробуйте сузить запрос."
+        assert "traceback" not in kwargs["content"].lower()
+        assert kwargs["extra_meta"]["runtime_status"] == "failed"
+        assert kwargs["extra_meta"]["runtime_error_code"] == "budget_exceeded"
