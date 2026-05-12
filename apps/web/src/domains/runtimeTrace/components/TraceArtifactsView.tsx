@@ -87,7 +87,9 @@ function LLMRequestCard({ data }: { data: unknown }) {
   const maxTokens = d.max_tokens ?? d.maxTokens ?? (d.params && typeof d.params === 'object' ? (d.params as Record<string, unknown>).max_tokens : undefined);
   
   // Check if this is brief mode (only hashes/lengths, no real data)
-  const isBriefMode = !messages && (d.messages_hash || d.messages_length || d.system_prompt_hash);
+  const isBriefMode = Boolean(
+    !messages && (d.messages_hash || d.messages_length || d.system_prompt_hash),
+  );
   
   return (
     <div className={styles.card}>

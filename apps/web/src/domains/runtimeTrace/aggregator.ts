@@ -184,10 +184,16 @@ export function aggregateRun(
     };
   },
 ): AggregatedRun {
+  const toTs = (value?: string): number => {
+    if (!value) return 0;
+    const ts = new Date(value).getTime();
+    return Number.isFinite(ts) ? ts : 0;
+  };
+
   // Flatten all events and sort by actual timestamp to ensure chronological order across iterations
   const allEvents: SemanticEvent[] = trace.iterations
     .flatMap((it) => it.events)
-    .sort((a, b) => new Date(a.started_at).getTime() - new Date(b.started_at).getTime());
+    .sort((a, b) => toTs(a.started_at) - toTs(b.started_at));
 
   // ── 1. Extract Input ──────────────────────────────────────────────────────
   const userReqEvent = allEvents.find((e) => e.raw_type === 'user_request');

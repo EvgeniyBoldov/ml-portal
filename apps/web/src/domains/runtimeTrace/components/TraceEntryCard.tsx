@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import type { MouseEvent as ReactMouseEvent } from 'react';
 import { Badge } from '@/shared/ui';
 import type {
   TraceEntry,
@@ -252,8 +253,8 @@ function LLMEntryBody({ entry }: { entry: LLMTraceEntry }) {
   return (
     <div>
       <IOViewer panels={panels} />
-      <details className={styles.rawDetails} onClick={(e: MouseEvent) => e.stopPropagation()}>
-        <summary onClick={(e: MouseEvent) => e.stopPropagation()}>Show raw ({entry.rawEvents.length} events)</summary>
+      <details className={styles.rawDetails} onClick={(e: ReactMouseEvent<HTMLDetailsElement>) => e.stopPropagation()}>
+        <summary onClick={(e: ReactMouseEvent<HTMLElement>) => e.stopPropagation()}>Show raw ({entry.rawEvents.length} events)</summary>
         <pre className={styles.entryPre}>
           {entry.rawEvents.map((e) => JSON.stringify(e.raw.raw, null, 2)).join('\n\n---\n\n')}
         </pre>
@@ -320,8 +321,8 @@ function ToolEntryBody({ entry }: { entry: ToolTraceEntry }) {
         </div>
       )}
       <IOViewer panels={panels} defaultSide={entry.output != null ? 'out' : 'in'} />
-      <details className={styles.rawDetails} onClick={(e: MouseEvent) => e.stopPropagation()}>
-        <summary onClick={(e: MouseEvent) => e.stopPropagation()}>Show raw ({entry.rawEvents.length} events)</summary>
+      <details className={styles.rawDetails} onClick={(e: ReactMouseEvent<HTMLDetailsElement>) => e.stopPropagation()}>
+        <summary onClick={(e: ReactMouseEvent<HTMLElement>) => e.stopPropagation()}>Show raw ({entry.rawEvents.length} events)</summary>
         <pre className={styles.entryPre}>
           {entry.rawEvents.map((e) => JSON.stringify(e.raw.raw, null, 2)).join('\n\n---\n\n')}
         </pre>
