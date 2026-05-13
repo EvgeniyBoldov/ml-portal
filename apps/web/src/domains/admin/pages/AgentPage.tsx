@@ -266,7 +266,7 @@ export function AgentPage() {
   });
 
   const { data: collectionsData } = useQuery({
-    queryKey: qk.collections.list({}),
+    queryKey: qk.collections.adminList({ page: 1, size: 100 }),
     queryFn: () => collectionsApi.listAll({ page: 1, size: 100 }),
     enabled: !isNew,
     staleTime: 30_000,

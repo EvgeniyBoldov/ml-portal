@@ -40,6 +40,7 @@ class RuntimeTraceBuilder:
         "protocol_retry": "retry",
         "planner_action": "planner",
         "planner_step": "planner",
+        "intent": "planner",
         "operation_call": "operation",
         "tool_call": "operation",
         "operation_result": "operation",
@@ -73,6 +74,7 @@ class RuntimeTraceBuilder:
         "tool_result": "Результат операции",
         "planner_action": "Планировщик",
         "planner_step": "Планировщик",
+        "intent": "Интент",
         "policy_decision": "Решение политики",
         "confirmation_required": "Требуется подтверждение",
         "final": "Финальный ответ",
@@ -186,6 +188,8 @@ class RuntimeTraceBuilder:
             return str(data.get("reason") or "Protocol retry")
         if raw_type == "routing":
             return str(data.get("agent_slug") or data.get("mode") or "Routing decision")
+        if raw_type == "intent":
+            return str(data.get("description") or "Intent")
         if raw_type in {"operation_call", "tool_call"}:
             return str(data.get("operation_slug") or data.get("tool") or data.get("operation") or "Operation call")
         if raw_type in {"operation_result", "tool_result"}:
@@ -201,4 +205,3 @@ class RuntimeTraceBuilder:
         if raw_type == "error":
             return str(data.get("error") or data.get("message") or "Error")
         return str(data)[:180] if data else raw_type
-

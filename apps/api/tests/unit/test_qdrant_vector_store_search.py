@@ -41,7 +41,11 @@ async def test_search_returns_empty_list_on_404_not_found() -> None:
         async def query_points(self, **kwargs):  # noqa: ANN003
             raise RuntimeError("404 Not Found")
 
+    async def fake_legacy_search(**kwargs):  # noqa: ANN003
+        raise RuntimeError("404 Not Found")
+
     store._client = FakeClient()  # noqa: SLF001
+    store._legacy_search = fake_legacy_search  # type: ignore[method-assign] # noqa: SLF001
     result = await store.search("missing_collection", [0.1, 0.2], top_k=5)
     assert result == []
 
@@ -68,16 +72,15 @@ async def test_search_fallbacks_to_legacy_search_when_query_points_endpoint_miss
         async def query_points(self, **kwargs):  # noqa: ANN003
             raise RuntimeError("404 Not Found for /collections/coll_a/points/query")
 
-        async def search(self, **kwargs):  # noqa: ANN003
-            assert kwargs["collection_name"] == "coll_a"
-            assert kwargs["query_vector"] == [0.1, 0.2]
-            assert kwargs["limit"] == 2
-            assert kwargs["with_payload"] is True
-            return [
-                SimpleNamespace(id="p3", score=0.66, payload={"text": "gamma"}),
-            ]
-
     store._client = FakeClient()  # noqa: SLF001
+    async def fake_legacy_search(**kwargs):  # noqa: ANN003
+        assert kwargs["collection"] == "coll_a"
+        assert kwargs["query"] == [0.1, 0.2]
+        assert kwargs["top_k"] == 2
+        return [
+            {"id": "p3", "score": 0.66, "payload": {"text": "gamma"}},
+        ]
+    store._legacy_search = fake_legacy_search  # type: ignore[method-assign] # noqa: SLF001
     result = await store.search("coll_a", [0.1, 0.2], top_k=2)
 
     assert result == [

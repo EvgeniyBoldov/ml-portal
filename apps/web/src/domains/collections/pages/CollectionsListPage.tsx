@@ -22,7 +22,7 @@ export default function CollectionsListPage() {
   const [search, setSearch] = useState('');
 
   const { data, isLoading } = useQuery({
-    queryKey: qk.collections.list(),
+    queryKey: qk.collections.appList({ active_only: true }),
     queryFn: () => collectionsApi.list(true),
   });
 

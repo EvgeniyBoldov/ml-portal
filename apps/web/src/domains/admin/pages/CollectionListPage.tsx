@@ -30,7 +30,7 @@ export function CollectionListPage() {
   const [search, setSearch] = useState('');
 
   const { data, isLoading } = useQuery({
-    queryKey: qk.collections.list(),
+    queryKey: qk.collections.adminList({ page: 1, size: 100 }),
     queryFn: () => collectionsApi.listAll({ size: 100 }),
   });
 

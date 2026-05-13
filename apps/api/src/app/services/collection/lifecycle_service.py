@@ -51,11 +51,7 @@ class CollectionLifecycleService:
         table_name: Optional[str] = None,
         table_schema: Optional[dict] = None,
     ) -> Collection:
-        self.contract.validate_slug(slug)
-
-        existing = await self.host.get_by_slug(tenant_id, slug)
-        if existing:
-            raise self.host.CollectionExistsError(f"Collection '{slug}' already exists")
+        slug = await self._resolve_unique_slug(tenant_id=tenant_id, name=name, slug=slug)
 
         expected_subtype = _expected_data_connector_subtype(collection_type)
         is_local_type = expected_subtype is None  # table / document
@@ -100,6 +96,37 @@ class CollectionLifecycleService:
             collection_type=collection_type,
             data_instance_id=data_instance_id,
         )
+
+    async def _resolve_unique_slug(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        name: str,
+        slug: str,
+    ) -> str:
+        raw_slug = str(slug or "").strip().lower()
+        if raw_slug:
+            self.contract.validate_slug(raw_slug)
+            existing = await self.host.get_by_slug(tenant_id, raw_slug)
+            if existing:
+                raise self.host.CollectionExistsError(f"Collection '{raw_slug}' already exists")
+            return raw_slug
+
+        base = self.contract.slugify_name(name)
+        base = base[:50]
+        if not base:
+            base = "collection"
+
+        candidate = base
+        suffix = 2
+        while await self.host.get_by_slug(tenant_id, candidate):
+            suffix_token = f"_{suffix}"
+            head = base[: max(1, 50 - len(suffix_token))]
+            candidate = f"{head}{suffix_token}"
+            suffix += 1
+
+        self.contract.validate_slug(candidate)
+        return candidate
 
     async def create_local_collection(
         self,

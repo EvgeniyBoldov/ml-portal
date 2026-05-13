@@ -13,9 +13,9 @@ export const INFO_FIELDS: FieldConfig[] = [
     key: 'slug',
     type: 'text',
     label: 'Slug (ID)',
-    description: 'Уникальный идентификатор (нельзя изменить после создания)',
+    description: 'Опционально. Если не заполнен, будет автоматически сгенерирован из названия',
     editable: false,
-    placeholder: 'customer-data',
+    placeholder: 'customer_data',
   },
   {
     key: 'name',

@@ -152,7 +152,7 @@ export interface CollectionListResponse {
 export interface CreateCollectionRequest {
   tenant_id?: string;
   collection_type?: CollectionType;
-  slug: string;
+  slug?: string;
   name: string;
   description?: string;
   fields: CollectionField[];

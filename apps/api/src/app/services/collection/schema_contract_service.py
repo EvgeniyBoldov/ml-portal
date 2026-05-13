@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from typing import List
 
 from app.core.exceptions import InvalidSchemaError
@@ -141,6 +142,33 @@ class CollectionSchemaContractService:
             raise InvalidSchemaError(
                 "Slug must start with letter, contain only lowercase letters, numbers, underscores"
             )
+
+    def slugify_name(self, name: str, *, fallback: str = "collection") -> str:
+        raw = str(name or "").strip().lower()
+        if not raw:
+            return fallback
+
+        cyr_map = {
+            "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e",
+            "ж": "zh", "з": "z", "и": "i", "й": "y", "к": "k", "л": "l", "м": "m",
+            "н": "n", "о": "o", "п": "p", "р": "r", "с": "s", "т": "t", "у": "u",
+            "ф": "f", "х": "h", "ц": "ts", "ч": "ch", "ш": "sh", "щ": "sch",
+            "ъ": "", "ы": "y", "ь": "", "э": "e", "ю": "yu", "я": "ya",
+        }
+        transliterated = "".join(cyr_map.get(ch, ch) for ch in raw)
+        ascii_text = (
+            unicodedata.normalize("NFKD", transliterated)
+            .encode("ascii", "ignore")
+            .decode("ascii")
+        )
+        normalized = re.sub(r"[^a-z0-9]+", "_", ascii_text).strip("_")
+        normalized = re.sub(r"_+", "_", normalized)
+
+        if not normalized:
+            normalized = fallback
+        if not re.match(r"^[a-z]", normalized):
+            normalized = f"{fallback}_{normalized}" if normalized else fallback
+        return normalized[:50]
 
     def validate_fields(self, fields: List[dict], collection_type: str) -> None:
         local_types_requiring_fields = {CollectionType.TABLE.value, CollectionType.SQL.value}

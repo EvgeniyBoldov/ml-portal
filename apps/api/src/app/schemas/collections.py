@@ -1,4 +1,5 @@
 """Pydantic schemas for Collections API."""
+import re
 from typing import Any, Optional, List, Literal
 import uuid
 from pydantic import BaseModel, Field, ConfigDict, model_validator
@@ -65,7 +66,7 @@ class CreateCollectionRequest(BaseModel):
         default=CollectionType.TABLE.value,
         pattern=r"^(table|document|sql|api)$",
     )
-    slug: str = Field(..., min_length=1, max_length=50)
+    slug: Optional[str] = Field(default=None, min_length=1, max_length=50)
     name: str = Field(..., min_length=1, max_length=255)
     description: Optional[str] = None
     fields: List[FieldSchema] = Field(default_factory=list)
@@ -75,6 +76,18 @@ class CreateCollectionRequest(BaseModel):
     # Optional for local types (table/document) — backend auto-resolves local service instance.
     # Required for remote types (sql/api).
     data_instance_id: Optional[uuid.UUID] = None
+
+    @model_validator(mode="after")
+    def validate_name_chars(self) -> "CreateCollectionRequest":
+        normalized_name = str(self.name or "").strip()
+        if not normalized_name:
+            raise ValueError("name is required")
+        if not re.match(r"^[\w\s-]+$", normalized_name, flags=re.UNICODE):
+            raise ValueError("name must contain only letters, numbers, spaces, '_' or '-'")
+        self.name = normalized_name
+        if self.slug is not None:
+            self.slug = str(self.slug).strip().lower()
+        return self
 
 
 class SchemaOperation(BaseModel):
@@ -120,6 +133,14 @@ class UpdateCollectionRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_non_empty(self) -> "UpdateCollectionRequest":
+        if self.name is not None:
+            normalized_name = str(self.name or "").strip()
+            if not normalized_name:
+                raise ValueError("name must not be empty")
+            if not re.match(r"^[\w\s-]+$", normalized_name, flags=re.UNICODE):
+                raise ValueError("name must contain only letters, numbers, spaces, '_' or '-'")
+            self.name = normalized_name
+
         has_metadata_patch = bool(
             self.model_fields_set
             & {"name", "description", "is_active", "table_name", "table_schema"}

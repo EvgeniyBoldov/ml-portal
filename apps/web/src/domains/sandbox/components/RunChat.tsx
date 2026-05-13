@@ -7,6 +7,7 @@ import { useState, useRef, useEffect, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Button from '@/shared/ui/Button';
 import { Icon } from '@/shared/ui/Icon';
+import { Badge, Tooltip } from '@/shared/ui';
 import { qk } from '@/shared/api/keys';
 import type { ActiveRun, RunStep } from '../hooks/useSandboxRun';
 import type { SandboxBranchListItem, SandboxRunListItem } from '../types';
@@ -21,6 +22,7 @@ import styles from './RunChat.module.css';
 const HIDDEN_STEP_TYPES = new Set(['delta', 'final_content', 'done']);
 
 type Tone = 'neutral' | 'info' | 'warn' | 'success' | 'danger';
+type BudgetTone = 'neutral' | 'warn' | 'danger';
 
 const CATEGORY_META: Record<string, { icon: string; tone: Tone }> = {
   input: { icon: '◉', tone: 'neutral' },
@@ -52,6 +54,283 @@ function getStepBadge(step: RunStep, index: number): { text: string; tone: Tone 
   if (semantic.status === 'warn') return { text: 'WARN', tone: 'warn' };
   if (semantic.status === 'ok') return { text: 'OK', tone: 'success' };
   return null;
+}
+
+type BudgetCompact = {
+  key: string;
+  label: string;
+  used: number;
+  limit?: number;
+  tone: BudgetTone;
+  tooltip: string;
+};
+
+type DisplayStep = {
+  id: string;
+  sourceStepId: string;
+  title: string;
+  summary: string;
+  tone: Tone;
+  icon: string;
+  elapsedMs: number;
+  badge?: { text: string; tone: Tone } | null;
+  depth: number;
+  budget: BudgetCompact[];
+  entity: {
+    kind: 'planner' | 'agent' | 'llm' | 'tool_batch' | 'system';
+    label: string;
+    tone: Tone;
+  };
+};
+
+function toRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function toNum(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
+    const n = Number(value);
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
+}
+
+function toneByUsage(used: number, limit?: number): BudgetTone {
+  if (typeof limit !== 'number' || limit <= 0) return 'neutral';
+  const ratio = used / limit;
+  if (ratio >= 0.9) return 'danger';
+  if (ratio >= 0.7) return 'warn';
+  return 'neutral';
+}
+
+function compactBudgetFromData(data: Record<string, unknown>): BudgetCompact[] {
+  const shared = toRecord(data.shared_budget ?? data.runtime_budget ?? data.budget);
+  const sharedSteps = toRecord(shared.steps);
+  const sharedTools = toRecord(shared.tools);
+  const sharedRetries = toRecord(shared.retries);
+  const sharedTokens = toRecord(shared.tokens);
+
+  const stepsUsed = toNum(sharedSteps.used) ?? toNum(data.steps_used) ?? toNum(data.used) ?? toNum(data.consumed);
+  const stepsLimit = toNum(sharedSteps.limit) ?? toNum(data.max_steps) ?? toNum(data.limit);
+
+  const opsUsed =
+    toNum(sharedTools.used)
+    ?? toNum(data.tool_calls_used)
+    ?? toNum(data.operation_calls_total)
+    ?? toNum(data.tools_used);
+  const opsLimit = toNum(sharedTools.limit) ?? toNum(data.max_tool_calls_total);
+
+  const retriesUsed = toNum(sharedRetries.used) ?? toNum(data.retries_used) ?? toNum(data.retry_count);
+  const retriesLimit = toNum(sharedRetries.limit) ?? toNum(data.max_retries);
+
+  const tokensUsed =
+    toNum(sharedTokens.used)
+    ?? toNum(data.tokens_used)
+    ?? toNum(data.tokens_out)
+    ?? toNum(data.response_length);
+  const tokensLimit = toNum(sharedTokens.limit) ?? toNum(data.max_tokens_total) ?? toNum(data.max_tokens);
+
+  const items: BudgetCompact[] = [];
+  if (stepsUsed !== null && (stepsLimit !== null || stepsUsed > 0)) {
+    items.push({
+      key: 'steps',
+      label: 'steps',
+      used: stepsUsed,
+      limit: stepsLimit ?? undefined,
+      tone: toneByUsage(stepsUsed, stepsLimit ?? undefined),
+      tooltip: `Шаги: ${stepsUsed}${stepsLimit !== null ? ` / ${stepsLimit}` : ''}`,
+    });
+  }
+  if (opsUsed !== null && (opsLimit !== null || opsUsed > 0)) {
+    items.push({
+      key: 'ops',
+      label: 'ops',
+      used: opsUsed,
+      limit: opsLimit ?? undefined,
+      tone: toneByUsage(opsUsed, opsLimit ?? undefined),
+      tooltip: `Операции/инструменты: ${opsUsed}${opsLimit !== null ? ` / ${opsLimit}` : ''}`,
+    });
+  }
+  if (retriesUsed !== null && (retriesLimit !== null || retriesUsed > 0)) {
+    items.push({
+      key: 'retry',
+      label: 'retry',
+      used: retriesUsed,
+      limit: retriesLimit ?? undefined,
+      tone: toneByUsage(retriesUsed, retriesLimit ?? undefined),
+      tooltip: `Ретраи: ${retriesUsed}${retriesLimit !== null ? ` / ${retriesLimit}` : ''}`,
+    });
+  }
+  if (tokensUsed !== null && (tokensLimit !== null || tokensUsed > 0)) {
+    items.push({
+      key: 'tokens',
+      label: 'tokens',
+      used: tokensUsed,
+      limit: tokensLimit ?? undefined,
+      tone: toneByUsage(tokensUsed, tokensLimit ?? undefined),
+      tooltip: `Токены: ${tokensUsed}${tokensLimit !== null ? ` / ${tokensLimit}` : ''}`,
+    });
+  }
+  return items;
+}
+
+function buildDisplaySteps(steps: RunStep[]): DisplayStep[] {
+  const result: DisplayStep[] = [];
+  let activeAgentSlug = '';
+  let pendingToolBatch: {
+    firstStepId: string;
+    count: number;
+    success: number;
+    failed: number;
+    tools: Set<string>;
+    elapsedMs: number;
+    budget: BudgetCompact[];
+  } | null = null;
+
+  const flushToolBatch = () => {
+    if (!pendingToolBatch) return;
+    const toolsLabel = Array.from(pendingToolBatch.tools).slice(0, 3).join(', ');
+    const truncated = pendingToolBatch.tools.size > 3 ? '…' : '';
+    const statusSummary =
+      pendingToolBatch.failed > 0
+        ? `${pendingToolBatch.success} ok / ${pendingToolBatch.failed} err`
+        : `${pendingToolBatch.success} ok`;
+    result.push({
+      id: `batch_${pendingToolBatch.firstStepId}`,
+      sourceStepId: pendingToolBatch.firstStepId,
+      title: 'Tool batch',
+      summary: `${pendingToolBatch.count} вызов(ов): ${toolsLabel}${truncated} · ${statusSummary}`,
+      tone: pendingToolBatch.failed > 0 ? 'warn' : 'info',
+      icon: '🧰',
+      elapsedMs: pendingToolBatch.elapsedMs,
+      badge: pendingToolBatch.failed > 0 ? { text: 'WARN', tone: 'warn' } : null,
+      depth: 2,
+      budget: pendingToolBatch.budget,
+      entity: {
+        kind: 'tool_batch',
+        label: 'Tool batch',
+        tone: pendingToolBatch.failed > 0 ? 'warn' : 'info',
+      },
+    });
+    pendingToolBatch = null;
+  };
+
+  for (let index = 0; index < steps.length; index++) {
+    const step = steps[index];
+    const semantic = getSemantic(step, index);
+    const meta = CATEGORY_META[semantic.category] ?? CATEGORY_META.system;
+    const badge = getStepBadge(step, index);
+    const elapsed = index > 0 ? Math.max(0, step.timestamp - steps[index - 1].timestamp) : 0;
+    const data = toRecord(step.data);
+    const budget = compactBudgetFromData(data);
+
+    const isPlannerControl =
+      step.type === 'planner_action'
+      || step.type === 'planner_step'
+      || step.type === 'routing'
+      || step.type === 'policy_decision';
+    const isToolLike =
+      step.type === 'tool_call'
+      || step.type === 'tool_result'
+      || step.type === 'operation_call'
+      || step.type === 'operation_result';
+    const isAgentInternal =
+      step.type === 'llm_request'
+      || step.type === 'llm_call'
+      || step.type === 'llm_response'
+      || step.type === 'intent'
+      || step.type === 'budget_policy'
+      || step.type === 'budget_consumed'
+      || step.type === 'budget_limit_exceeded'
+      || step.type === 'user_request'
+      || step.type === 'final_response';
+
+    if (isPlannerControl) {
+      flushToolBatch();
+      const kind = String(data.kind ?? data.action_type ?? '').toLowerCase();
+      const nextAgentSlug = typeof data.agent_slug === 'string' ? data.agent_slug : '';
+      if ((kind === 'call_agent' || step.type === 'routing') && nextAgentSlug) {
+        activeAgentSlug = nextAgentSlug;
+      } else if (kind === 'final' || kind === 'direct_answer' || kind === 'clarify' || kind === 'abort') {
+        activeAgentSlug = '';
+      }
+      result.push({
+        id: step.id,
+        sourceStepId: step.id,
+        title: semantic.title,
+        summary: semantic.summary,
+        tone: meta.tone,
+        icon: meta.icon,
+        elapsedMs: elapsed,
+        badge,
+        depth: 0,
+        budget,
+        entity: {
+          kind: 'planner',
+          label: 'Planner',
+          tone: 'info',
+        },
+      });
+      continue;
+    }
+
+    if (isToolLike && activeAgentSlug) {
+      const toolName = String(data.tool ?? data.operation_slug ?? data.operation ?? 'tool');
+      const isSuccess = data.success === true;
+      const isFailed = data.success === false;
+      if (!pendingToolBatch) {
+        pendingToolBatch = {
+          firstStepId: step.id,
+          count: 0,
+          success: 0,
+          failed: 0,
+          tools: new Set<string>(),
+          elapsedMs: 0,
+          budget: [],
+        };
+      }
+      pendingToolBatch.count += 1;
+      pendingToolBatch.tools.add(toolName);
+      if (isSuccess) pendingToolBatch.success += 1;
+      if (isFailed) pendingToolBatch.failed += 1;
+      pendingToolBatch.elapsedMs += elapsed;
+      if (budget.length > 0) pendingToolBatch.budget = budget;
+      continue;
+    }
+
+    flushToolBatch();
+
+    const depth = activeAgentSlug && (isAgentInternal || isToolLike) ? 1 : 0;
+    const isLlmStep =
+      step.type === 'llm_request'
+      || step.type === 'llm_call'
+      || step.type === 'llm_response';
+    const entity =
+      depth === 0
+        ? { kind: 'system' as const, label: 'Runtime', tone: 'neutral' as Tone }
+        : isLlmStep
+          ? { kind: 'llm' as const, label: 'LLM', tone: 'info' as Tone }
+          : { kind: 'agent' as const, label: activeAgentSlug ? `Agent:${activeAgentSlug}` : 'Agent', tone: 'info' as Tone };
+    result.push({
+      id: step.id,
+      sourceStepId: step.id,
+      title: semantic.title,
+      summary: semantic.summary,
+      tone: meta.tone,
+      icon: meta.icon,
+      elapsedMs: elapsed,
+      badge,
+      depth,
+      budget,
+      entity,
+    });
+  }
+
+  flushToolBatch();
+  return result;
 }
 
 function fmtDuration(ms: number): string {
@@ -119,6 +398,7 @@ function ExpandableSteps({
 }) {
   const [expanded, setExpanded] = useState(false);
   const visible = useMemo(() => getVisibleSteps(steps), [steps]);
+  const displaySteps = useMemo(() => buildDisplaySteps(visible), [visible]);
   const toolCalls = useMemo(() => buildToolSummary(steps), [steps]);
   const totalDuration = useMemo(() => {
     if (steps.length < 2) return null;
@@ -126,7 +406,7 @@ function ExpandableSteps({
     return diff > 0 ? fmtDuration(diff) : null;
   }, [steps]);
 
-  if (visible.length === 0 && !isRunning) return null;
+  if (displaySteps.length === 0 && !isRunning) return null;
 
   return (
     <div className={styles['steps-block']}>
@@ -161,30 +441,39 @@ function ExpandableSteps({
 
       {expanded && (
         <div className={styles['steps-list']}>
-          {visible.map((step, index) => {
-            const semantic = getSemantic(step, index);
-            const meta = CATEGORY_META[semantic.category] ?? CATEGORY_META.system;
-            const badge = getStepBadge(step, index);
-            const elapsed = index > 0 ? step.timestamp - visible[index - 1].timestamp : 0;
-            const isSelected = step.id === selectedStepId;
+          {displaySteps.map((item) => {
+            const isSelected = item.sourceStepId === selectedStepId;
 
             return (
               <button
-                key={step.id}
+                key={item.id}
                 type="button"
                 className={`${styles['step-row']} ${isSelected ? styles['step-row-selected'] : ''}`}
-                onClick={() => onSelectStep(step.id)}
+                onClick={() => onSelectStep(item.sourceStepId)}
+                style={{ paddingLeft: `${8 + item.depth * 18}px` }}
               >
-                <span className={`${styles['step-tone']} ${styles[`tone-${meta.tone}`]}`} />
-                <span className={styles['step-icon']}>{meta.icon}</span>
-                <span className={styles['step-label']}>{semantic.title}</span>
-                <span className={styles['step-title']}>{semantic.summary}</span>
-                {elapsed > 50 && (
-                  <span className={styles['step-elapsed']}>+{fmtDuration(elapsed)}</span>
+                <span className={`${styles['step-tone']} ${styles[`tone-${item.tone}`]}`} />
+                <span className={styles['step-icon']}>{item.icon}</span>
+                <span className={`${styles['step-entity']} ${styles[`step-entity-${item.entity.tone}`]}`}>
+                  {item.entity.label}
+                </span>
+                <span className={styles['step-label']}>{item.title}</span>
+                <span className={styles['step-title']}>{item.summary}</span>
+                {item.elapsedMs > 50 && (
+                  <span className={styles['step-elapsed']}>+{fmtDuration(item.elapsedMs)}</span>
                 )}
-                {badge && (
-                  <span className={`${styles['step-badge']} ${styles[`badge-${badge.tone}`]}`}>
-                    {badge.text}
+                {item.budget.map((metric) => (
+                  <Tooltip key={`${item.id}_${metric.key}`} content={metric.tooltip} position="top" maxWidth={260}>
+                    <span>
+                      <Badge tone={metric.tone === 'danger' ? 'danger' : metric.tone === 'warn' ? 'warn' : 'neutral'} size="sm">
+                        {metric.used}{typeof metric.limit === 'number' ? `/${metric.limit}` : ''}
+                      </Badge>
+                    </span>
+                  </Tooltip>
+                ))}
+                {item.badge && (
+                  <span className={`${styles['step-badge']} ${styles[`badge-${item.badge.tone}`]}`}>
+                    {item.badge.text}
                   </span>
                 )}
               </button>
@@ -535,6 +824,21 @@ export default function RunChat({
     return null;
   }, [activeRun.steps]);
 
+  const activeUserMessage = useMemo(() => {
+    const fromRun = String(activeRun.requestText || '').trim();
+    if (fromRun) return fromRun;
+    const fromLineage = String(lineageRuns.find((r) => r.id === activeRun.runId)?.request_text || '').trim();
+    if (fromLineage) return fromLineage;
+    return input.trim();
+  }, [activeRun.requestText, activeRun.runId, lineageRuns, input]);
+
+  const activeAssistantMessage = useMemo(() => {
+    const finalText = String(activeRun.finalContent || '').trim();
+    if (finalText) return finalText;
+    if (isWaitingInput && latestClarifyQuestion) return latestClarifyQuestion;
+    return '';
+  }, [activeRun.finalContent, isWaitingInput, latestClarifyQuestion]);
+
   return (
     <div className={styles.chat}>
       <div className={styles.messages} ref={messagesRef}>
@@ -565,11 +869,7 @@ export default function RunChat({
         {hasActiveRun && (
           <div className={styles['conversation-item']}>
             <div className={styles['question-row']}>
-              <ChatQuestionCard text={
-                activeRun.steps.length > 0
-                  ? ((lineageRuns.find((r) => r.id === activeRun.runId)?.request_text ?? input) || 'Запрос')
-                  : (input || 'Запрос')
-              } />
+              <ChatQuestionCard text={activeUserMessage} />
             </div>
 
             <ExpandableSteps
@@ -580,8 +880,8 @@ export default function RunChat({
             />
 
             <div className={styles['answer-row']}>
-              {showActiveAnswerCard && (
-                <ChatAnswerCard text={activeRun.finalContent} isRunning={isRunning} />
+              {(showActiveAnswerCard || (isWaitingInput && !!latestClarifyQuestion)) && (
+                <ChatAnswerCard text={activeAssistantMessage} isRunning={isRunning} />
               )}
               {!isReadOnly && !isRunning && activeRun.finalContent && (
                 <button
@@ -598,9 +898,6 @@ export default function RunChat({
             {!isReadOnly && isWaitingInput && (
               <div className={styles['clarify-box']}>
                 <div className={styles['clarify-title']}>Нужно уточнение от пользователя</div>
-                {latestClarifyQuestion && (
-                  <div className={styles['clarify-question']}>{latestClarifyQuestion}</div>
-                )}
                 <div className={styles['clarify-row']}>
                   <textarea
                     ref={clarifyInputRef}

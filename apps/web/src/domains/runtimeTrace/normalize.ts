@@ -12,6 +12,7 @@ const CATEGORY_MAP: Record<string, TraceCategory> = {
   protocol_retry: 'retry',
   planner_action: 'planner',
   planner_step: 'planner',
+  intent: 'planner',
   operation_call: 'operation',
   tool_call: 'operation',
   operation_result: 'operation',
@@ -61,6 +62,9 @@ function summarize(rawType: string, data: Record<string, unknown>): string {
     const kind = String(data.kind ?? data.action_type ?? data.action ?? 'planner_step');
     const rationale = String(data.rationale ?? '').trim();
     return rationale ? `${kind}: ${rationale}` : kind;
+  }
+  if (rawType === 'intent') {
+    return String(data.description ?? 'Intent');
   }
   if (rawType === 'operation_call' || rawType === 'tool_call') {
     return String(data.operation_slug ?? data.tool ?? data.operation ?? 'Operation call');
@@ -138,6 +142,7 @@ function titleOf(rawType: string, category: TraceCategory): string {
     tool_result: 'Результат операции',
     planner_action: 'Планировщик',
     planner_step: 'Планировщик',
+    intent: 'Интент',
     policy_decision: 'Решение политики',
     confirmation_required: 'Требуется подтверждение',
     final: 'Финальный ответ',

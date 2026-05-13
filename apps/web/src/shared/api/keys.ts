@@ -3,7 +3,7 @@
  * Centralized query keys prevent hardcoding and ensure consistency
  * 
  * Usage:
- * - useQuery({ queryKey: qk.collections.list() })
+ * - useQuery({ queryKey: qk.collections.appList({ active_only: true }) })
  * - queryClient.invalidateQueries({ queryKey: qk.collections.all() })
  */
 
@@ -145,8 +145,10 @@ export const qk = {
   },
   collections: {
     all: () => ['collections'] as const,
-    list: (params?: { tenant_id?: string; is_active?: boolean }) =>
-      ['collections', 'list', params] as const,
+    appList: (params?: { active_only?: boolean }) =>
+      ['collections', 'app-list', params] as const,
+    adminList: (params?: { page?: number; size?: number; tenant_id?: string; is_active?: boolean }) =>
+      ['collections', 'admin-list', params] as const,
     presets: () => ['collections', 'type-presets'] as const,
     detail: (slug: string) => ['collections', 'detail', slug] as const,
     versions: (id: string) => ['collections', 'versions', id] as const,

@@ -462,7 +462,7 @@ interface Props {
 }
 
 export default function RunInspector({ steps, selectedStepId, runStatus, runId, traceEvents = [] }: Props) {
-  const [activeTab, setActiveTab] = useState<InspectTabKey>('summary');
+  const [activeTab, setActiveTab] = useState<InspectTabKey>('input');
   const traceDiagnostics = useMemo(() => buildTraceDiagnostics(traceEvents), [traceEvents]);
 
   const selectedStep = useMemo(
@@ -593,12 +593,25 @@ export default function RunInspector({ steps, selectedStepId, runStatus, runId, 
     return mapToFields(payload).map((field) => ({ ...field, tone: 'danger' as const }));
   }, [selectedStep]);
 
+  const budgetFields = useMemo(() => {
+    if (!selectedStep) return [];
+    const data = selectedStep.data || {};
+    const budgetRaw = (
+      data.shared_budget
+      ?? data.runtime_budget
+      ?? data.budget
+      ?? (semanticArtifacts.budget as Record<string, unknown> | undefined)
+    );
+    if (!budgetRaw || typeof budgetRaw !== 'object') return [];
+    return mapToFields(budgetRaw as Record<string, unknown>);
+  }, [selectedStep, semanticArtifacts.budget]);
+
   const tabs = useMemo<InspectTabSpec[]>(
     () => [
-      { key: 'summary', label: 'Summary', fields: summaryFields },
       { key: 'input', label: 'Input', fields: inputFields },
       { key: 'output', label: 'Output', fields: outputFields },
-      { key: 'context', label: 'Context', fields: contextFields },
+      { key: 'context', label: 'Meta', fields: contextFields },
+      { key: 'summary', label: 'Overview', fields: summaryFields },
       { key: 'raw', label: 'Raw', fields: [] },
     ],
     [summaryFields, inputFields, outputFields, contextFields],
@@ -691,6 +704,11 @@ export default function RunInspector({ steps, selectedStepId, runStatus, runId, 
             <SectionAccordion title="Parameters" count={active.fields.length} defaultOpen>
               <ParamAccordionList fields={active.fields} />
             </SectionAccordion>
+            {active.key === 'summary' && budgetFields.length > 0 ? (
+              <SectionAccordion title="Budget / Limits (raw)" count={budgetFields.length} defaultOpen>
+                <ParamAccordionList fields={budgetFields} />
+              </SectionAccordion>
+            ) : null}
             {active.key === 'summary' ? (
               <SectionAccordion title="Errors" count={errorFields.length} defaultOpen={errorFields.length > 0}>
                 <ParamAccordionList fields={errorFields} />

@@ -136,7 +136,7 @@ export function CollectionPage() {
       delete: (id) => collectionsApi.delete(id),
     },
     queryKeys: {
-      list: qk.collections.list(),
+      list: qk.collections.adminList(),
       detail: (id) => qk.collections.detail(id),
     },
     getInitialFormData: (col) => ({
@@ -159,8 +159,8 @@ export function CollectionPage() {
       ) as CollectionField[],
     }),
     validateCreate: (data) => {
-      if (!data.slug?.trim() || !data.name?.trim() || !data.tenant_id) {
-        return 'Заполните slug, название и тенант';
+      if (!data.name?.trim() || !data.tenant_id) {
+        return 'Заполните название и тенант';
       }
       const createType = (data.collection_type ?? 'table') as CollectionType;
       const isRemoteType = createType === 'sql' || createType === 'api';
@@ -188,7 +188,7 @@ export function CollectionPage() {
       return {
         tenant_id: data.tenant_id,
         collection_type: data.collection_type ?? 'table',
-        slug: data.slug,
+        slug: data.slug?.trim() || undefined,
         name: data.name,
         description: data.description,
         fields,

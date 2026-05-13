@@ -76,7 +76,7 @@ services:
   # ===========================================================================
 
   qdrant:
-    image: qdrant/qdrant:v1.9.2
+    image: qdrant/qdrant:v1.17.1
     <<: *restart
     volumes:
       - qdrant_data:/qdrant/storage

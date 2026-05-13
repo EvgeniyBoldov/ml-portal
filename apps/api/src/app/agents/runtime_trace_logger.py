@@ -106,3 +106,19 @@ class RuntimeTraceLogger:
             data=payload,
             error=str(error),
         )
+
+    async def log_intent(
+        self,
+        run_id: Optional[UUID],
+        *,
+        description: str,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> Optional[UUID]:
+        payload: Dict[str, Any] = {"description": str(description or "").strip()}
+        if details:
+            payload["details"] = details
+        return await self.trace.log_step(
+            run_id,
+            step_type="intent",
+            data=payload,
+        )
