@@ -27,6 +27,7 @@ from uuid import UUID, uuid4
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.context import ToolContext
+from app.agents.runtime.logging import LoggingConfig, LoggingLevel
 from app.agents.runtime_rbac_resolver import RuntimeRbacResolver
 from app.core.http.clients import LLMClientProtocol
 from app.core.logging import get_logger
@@ -118,12 +119,13 @@ class RuntimePipeline:
         run_id = uuid4()
 
         # --- Create top-level AgentRun so pause/resume can find it by run_id
+        run_logging_level = await self._resolve_run_logging_level(ctx)
         if self._run_store is not None:
             try:
                 await self._run_store.start_run(
                     tenant_id=str(tenant_id),
                     agent_slug=request.agent_slug or "planner",
-                    logging_level="brief",
+                    logging_level=run_logging_level,
                     user_id=str(user_id),
                     chat_id=str(chat_id) if chat_id else None,
                     run_id_override=run_id,
@@ -249,6 +251,16 @@ class RuntimePipeline:
         if not hasattr(ctx, "extra") or ctx.extra is None:
             ctx.extra = {}
         ctx.extra["sandbox_overrides"] = current
+
+    @staticmethod
+    async def _resolve_run_logging_level(ctx: ToolContext) -> str:
+        """Resolve top-level run logging level with safe fallback."""
+        if not isinstance(getattr(ctx, "extra", None), dict):
+            return LoggingLevel.BRIEF.value
+        try:
+            return (await LoggingConfig.resolve(ctx)).value
+        except Exception:
+            return LoggingLevel.BRIEF.value
 
     # ------------------------------------------------------------------ #
     # Internal helpers                                                   #

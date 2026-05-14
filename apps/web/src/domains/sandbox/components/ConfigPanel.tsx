@@ -25,6 +25,7 @@ import ConfigTabs from './ConfigTabs';
 import RunInspector from './RunInspector';
 import type { RunStep } from '../hooks/useSandboxRun';
 import type { SemanticEvent } from '@/domains/runtimeTrace/types';
+import type { VirtualInspectorStep } from './RunChat';
 import { SandboxResolver } from '../lib/sandboxResolver';
 import styles from './ConfigPanel.module.css';
 
@@ -37,6 +38,7 @@ interface SessionConfigPanelProps {
   catalog?: SandboxCatalog;
   inspectorSteps?: RunStep[];
   selectedStepId?: string | null;
+  selectedVirtualStep?: VirtualInspectorStep | null;
   inspectorRunId?: string | null;
   inspectorRunStatus?: string;
   inspectorTraceEvents?: SemanticEvent[];
@@ -255,7 +257,7 @@ function buildSectionsFromBlueprint(
 export function ConfigPanel({
   ...props
 }: SessionConfigPanelProps) {
-  const { overrides, selectedItem, catalog, sessionId, isReadOnly, activeBranchId, inspectorSteps, selectedStepId, inspectorRunId, inspectorRunStatus, inspectorTraceEvents } = props;
+  const { overrides, selectedItem, catalog, sessionId, isReadOnly, activeBranchId, inspectorSteps, selectedStepId, selectedVirtualStep, inspectorRunId, inspectorRunStatus, inspectorTraceEvents } = props;
   const queryClient = useQueryClient();
   const [activeSectionTab, setActiveSectionTab] = useState<string>('');
   const [activeParameterTab, setActiveParameterTab] = useState<'platform'>('platform');
@@ -665,6 +667,7 @@ export function ConfigPanel({
         <RunInspector
           steps={inspectorSteps}
           selectedStepId={selectedStepId ?? null}
+          selectedVirtualStep={selectedVirtualStep ?? null}
           runStatus={inspectorRunStatus}
           runId={inspectorRunId}
           traceEvents={inspectorTraceEvents}

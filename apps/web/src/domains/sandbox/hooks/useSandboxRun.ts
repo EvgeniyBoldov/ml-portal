@@ -31,6 +31,7 @@ export type RunStepType =
   | 'routing'
   | 'planner_action'
   | 'planner_step'
+  | 'agent_result'
   | 'policy_decision'
   | 'confirmation_required'
   | 'waiting_input'

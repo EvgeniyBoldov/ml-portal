@@ -454,8 +454,20 @@
   background: var(--bg-hover);
 }
 
+.step-row-success {
+  background: color-mix(in srgb, #22c55e 12%, transparent);
+}
+
+.step-row-partial {
+  background: color-mix(in srgb, #f59e0b 14%, transparent);
+}
+
+.step-row-error {
+  background: color-mix(in srgb, #ef4444 14%, transparent);
+}
+
 .step-row-selected {
-  background: var(--bg-tertiary);
+  background: color-mix(in srgb, var(--bg-tertiary) 78%, var(--bg-primary));
   border-color: var(--accent-primary);
 }
 
@@ -463,6 +475,12 @@
   width: 6px;
   height: 6px;
   border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.step-tone-empty {
+  width: 6px;
+  height: 6px;
   flex-shrink: 0;
 }
 

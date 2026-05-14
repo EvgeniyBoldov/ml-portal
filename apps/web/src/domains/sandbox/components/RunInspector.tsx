@@ -5,6 +5,7 @@
  */
 import { useMemo, useState, type ReactNode } from 'react';
 import type { RunStep } from '../hooks/useSandboxRun';
+import type { VirtualInspectorStep } from './RunChat';
 import type { SemanticEvent } from '@/domains/runtimeTrace/types';
 import { normalizeTraceEvent } from '@/domains/runtimeTrace/normalize';
 import { buildTraceDiagnostics, TraceDiagnosticsInline } from '@/domains/runtimeTrace/components/TraceDiagnosticsSummary';
@@ -13,7 +14,7 @@ import { TraceArtifactsView } from '@/domains/runtimeTrace/components/TraceArtif
 import styles from './RunInspector.module.css';
 
 type Tone = 'neutral' | 'info' | 'warn' | 'success' | 'danger';
-type InspectTabKey = 'summary' | 'input' | 'output' | 'context' | 'raw';
+type InspectTabKey = 'summary' | 'input' | 'output' | 'context' | 'budgets' | 'raw';
 type InspectFieldType =
   | 'datetime'
   | 'duration'
@@ -37,6 +38,12 @@ interface InspectTabSpec {
   key: InspectTabKey;
   label: string;
   fields: InspectField[];
+}
+
+interface BudgetRow {
+  name: string;
+  budget: string;
+  value: string;
 }
 
 interface StepRefValue {
@@ -341,6 +348,126 @@ function deriveStepDuration(step: RunStep, prevStep?: RunStep, nextStep?: RunSte
   return null;
 }
 
+function toNum(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
+    const n = Number(value);
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
+}
+
+function getBudgetSnapshot(step: RunStep): {
+  stepsUsed?: number;
+  stepsLimit?: number;
+  opsUsed?: number;
+  opsLimit?: number;
+  retriesUsed?: number;
+  retriesLimit?: number;
+  tokensUsed?: number;
+  tokensLimit?: number;
+} {
+  const d = step.data || {};
+  const shared = (d.shared_budget ?? d.runtime_budget ?? d.budget ?? {}) as Record<string, unknown>;
+  const sharedSteps = (shared.steps ?? {}) as Record<string, unknown>;
+  const sharedTools = (shared.tools ?? {}) as Record<string, unknown>;
+  const sharedRetries = (shared.retries ?? {}) as Record<string, unknown>;
+  const sharedTokens = (shared.tokens ?? {}) as Record<string, unknown>;
+  return {
+    stepsUsed: toNum(sharedSteps.used) ?? toNum(d.steps_used) ?? toNum(d.used) ?? toNum(d.consumed) ?? undefined,
+    stepsLimit: toNum(sharedSteps.limit) ?? toNum(d.max_steps) ?? toNum(d.limit) ?? undefined,
+    opsUsed: toNum(sharedTools.used) ?? toNum(d.tool_calls_used) ?? toNum(d.operation_calls_total) ?? toNum(d.tools_used) ?? undefined,
+    opsLimit: toNum(sharedTools.limit) ?? toNum(d.max_tool_calls_total) ?? undefined,
+    retriesUsed: toNum(sharedRetries.used) ?? toNum(d.retries_used) ?? toNum(d.retry_count) ?? undefined,
+    retriesLimit: toNum(sharedRetries.limit) ?? toNum(d.max_retries) ?? undefined,
+    tokensUsed: toNum(sharedTokens.used) ?? toNum(d.tokens_used) ?? toNum(d.tokens_out) ?? toNum(d.response_length) ?? undefined,
+    tokensLimit: toNum(sharedTokens.limit) ?? toNum(d.max_tokens_total) ?? toNum(d.max_tokens) ?? undefined,
+  };
+}
+
+function isPlannerStep(step: RunStep): boolean {
+  return step.type === 'planner_action' || step.type === 'planner_step' || step.type === 'routing' || step.type === 'policy_decision';
+}
+
+function isToolStep(step: RunStep): boolean {
+  return step.type === 'tool_call' || step.type === 'tool_result' || step.type === 'operation_call' || step.type === 'operation_result';
+}
+
+function resolveAgentWindow(steps: RunStep[], selectedIndex: number): { start: number; end: number; agentSlug?: string } {
+  let agentSlug: string | undefined;
+  for (let i = selectedIndex; i >= 0; i--) {
+    const s = steps[i];
+    const kind = String(s.data.kind ?? s.data.action_type ?? '').toLowerCase();
+    const slug = typeof s.data.agent_slug === 'string' ? s.data.agent_slug : '';
+    if ((s.type === 'planner_step' || s.type === 'planner_action') && kind === 'call_agent') {
+      agentSlug = slug || undefined;
+      const start = i;
+      let end = steps.length - 1;
+      for (let j = i + 1; j < steps.length; j++) {
+        const n = steps[j];
+        if (n.type === 'agent_result' || n.type === 'final' || n.type === 'error') {
+          end = j;
+          break;
+        }
+        if (isPlannerStep(n)) {
+          end = Math.max(i, j - 1);
+          break;
+        }
+      }
+      return { start, end, agentSlug };
+    }
+  }
+  const fallbackSlug = typeof steps[selectedIndex]?.data.agent_slug === 'string'
+    ? (steps[selectedIndex].data.agent_slug as string)
+    : undefined;
+  return { start: 0, end: steps.length - 1, agentSlug: fallbackSlug };
+}
+
+function resolveAgentLlmIo(steps: RunStep[], selectedIndex: number): {
+  prompt: Record<string, unknown> | null;
+  response: Record<string, unknown> | null;
+} {
+  if (selectedIndex < 0 || selectedIndex >= steps.length) return { prompt: null, response: null };
+  const window = resolveAgentWindow(steps, selectedIndex);
+  const windowSteps = steps.slice(window.start, window.end + 1);
+  let firstReq: RunStep | null = null;
+  let lastResp: RunStep | null = null;
+  for (const s of windowSteps) {
+    if (!firstReq && (s.type === 'llm_request' || s.type === 'llm_call')) firstReq = s;
+    if (s.type === 'llm_response') lastResp = s;
+  }
+
+  const prompt = firstReq
+    ? {
+        model: firstReq.data.model ?? firstReq.data.provider_model,
+        messages: firstReq.data.messages ?? firstReq.data.messages_sent,
+        payload: firstReq.data.payload ?? firstReq.data.request_payload,
+        prompt: firstReq.data.prompt ?? firstReq.data.system_prompt,
+      }
+    : null;
+  const response = lastResp
+    ? {
+        model: lastResp.data.model ?? lastResp.data.provider_model,
+        response: lastResp.data.response ?? lastResp.data.raw_response ?? lastResp.data.content,
+        parsed_response: lastResp.data.parsed_response,
+        tokens_out: lastResp.data.tokens_out ?? lastResp.data.response_length,
+      }
+    : null;
+
+  return { prompt, response };
+}
+
+function extractPartitionPayload(step: RunStep): Record<string, unknown> | null {
+  const d = step.data || {};
+  const direct = d.partition ?? d.partial_mode ?? d.partition_mode ?? d.partition_state;
+  if (direct && typeof direct === 'object' && !Array.isArray(direct)) return direct as Record<string, unknown>;
+  const stage = String(d.stage ?? '').toLowerCase();
+  if (stage.includes('partial') || stage.includes('partition')) {
+    return d as Record<string, unknown>;
+  }
+  return null;
+}
+
 function renderFieldValue(field: InspectField): JSX.Element {
   const value = field.value;
   if (value === null || value === undefined) return <span className={styles['field-empty']}>—</span>;
@@ -456,18 +583,23 @@ function SectionAccordion({
 interface Props {
   steps: RunStep[];
   selectedStepId: string | null;
+  selectedVirtualStep?: VirtualInspectorStep | null;
   runStatus?: string;
   runId?: string | null;
   traceEvents?: SemanticEvent[];
 }
 
-export default function RunInspector({ steps, selectedStepId, runStatus, runId, traceEvents = [] }: Props) {
+export default function RunInspector({ steps, selectedStepId, selectedVirtualStep = null, runStatus, runId, traceEvents = [] }: Props) {
   const [activeTab, setActiveTab] = useState<InspectTabKey>('input');
   const traceDiagnostics = useMemo(() => buildTraceDiagnostics(traceEvents), [traceEvents]);
 
   const selectedStep = useMemo(
     () => (selectedStepId ? steps.find((s) => s.id === selectedStepId) ?? null : null),
     [steps, selectedStepId],
+  );
+  const selectedIndex = useMemo(
+    () => (selectedStep ? steps.indexOf(selectedStep) : -1),
+    [steps, selectedStep],
   );
 
   const prevStep = useMemo(() => {
@@ -502,6 +634,15 @@ export default function RunInspector({ steps, selectedStepId, runStatus, runId, 
   );
 
   const summaryFields = useMemo(() => {
+    if (selectedVirtualStep) {
+      return mapToFields({
+        virtual_kind: selectedVirtualStep.kind,
+        virtual_label: selectedVirtualStep.label,
+        title: selectedVirtualStep.title,
+        summary: selectedVirtualStep.summary,
+        raw_count: selectedVirtualStep.raw.length,
+      });
+    }
     if (!selectedStep) return [];
     const startTs = selectedStep.timestamp;
     const duration = deriveStepDuration(selectedStep, prevStep, nextStep);
@@ -519,10 +660,36 @@ export default function RunInspector({ steps, selectedStepId, runStatus, runId, 
 
     const highlights = pickRecordByKeys(selectedStep.data, ['stage', 'decision', 'operation', 'tool', 'agent_slug', 'model']);
     return [...base, ...mapToFields(highlights)];
-  }, [selectedStep, prevStep, nextStep]);
+  }, [selectedStep, prevStep, nextStep, selectedVirtualStep]);
 
   const inputFields = useMemo(() => {
+    if (selectedVirtualStep?.input) return mapToFields(selectedVirtualStep.input);
     if (!selectedStep) return [];
+    const isToolStepSelected =
+      selectedStep.type === 'tool_call'
+      || selectedStep.type === 'tool_result'
+      || selectedStep.type === 'operation_call'
+      || selectedStep.type === 'operation_result';
+    if (isToolStepSelected) {
+      const toolInput = selectedStep.data.input
+        ?? selectedStep.data.arguments
+        ?? selectedStep.data.parameters
+        ?? selectedStep.data.payload
+        ?? selectedStep.data.request;
+      const payload = {
+        tool: selectedStep.data.tool ?? selectedStep.data.operation_slug ?? selectedStep.data.operation,
+        input: toolInput,
+      };
+      return mapToFields(payload);
+    }
+    if (selectedIndex >= 0) {
+      const llmIo = resolveAgentLlmIo(steps, selectedIndex);
+      if (llmIo.prompt) {
+        return mapToFields({
+          llm_prompt: llmIo.prompt,
+        });
+      }
+    }
     const refs = readRefsMap(selectedStep.data.refs);
     const prioritized = pickRecordByKeys(selectedStep.data, INPUT_KEYS);
     const source =
@@ -530,19 +697,45 @@ export default function RunInspector({ steps, selectedStepId, runStatus, runId, 
         ? prioritized
         : sanitizeSectionRecord(selectedStep.data.input ?? selectedStep.data.payload ?? selectedStep.data.arguments, 'input');
     return mapToFields(source, refs);
-  }, [selectedStep]);
+  }, [selectedStep, selectedIndex, steps, selectedVirtualStep]);
 
   const outputFields = useMemo(() => {
+    if (selectedVirtualStep?.output) return mapToFields(selectedVirtualStep.output);
     if (!selectedStep) return [];
+    const isToolStepSelected =
+      selectedStep.type === 'tool_call'
+      || selectedStep.type === 'tool_result'
+      || selectedStep.type === 'operation_call'
+      || selectedStep.type === 'operation_result';
+    if (isToolStepSelected) {
+      const toolOutput = selectedStep.data.output
+        ?? selectedStep.data.result
+        ?? selectedStep.data.data
+        ?? selectedStep.data.response;
+      const payload = {
+        tool: selectedStep.data.tool ?? selectedStep.data.operation_slug ?? selectedStep.data.operation,
+        output: toolOutput,
+      };
+      return mapToFields(payload);
+    }
+    if (selectedIndex >= 0) {
+      const llmIo = resolveAgentLlmIo(steps, selectedIndex);
+      if (llmIo.response) {
+        return mapToFields({
+          llm_response: llmIo.response,
+        });
+      }
+    }
     const refs = readRefsMap(selectedStep.data.refs);
     const prioritized = pickRecordByKeys(selectedStep.data, OUTPUT_KEYS);
     const rest = omitKeys(selectedStep.data, [...INPUT_KEYS, ...ERROR_KEYS, ...CONTEXT_KEYS]);
     const fallback = sanitizeSectionRecord(selectedStep.data.output ?? selectedStep.data.result ?? selectedStep.data.response, 'output');
     const source = Object.keys(prioritized).length > 0 ? { ...rest, ...prioritized } : Object.keys(rest).length > 0 ? rest : fallback;
     return mapToFields(source, refs);
-  }, [selectedStep]);
+  }, [selectedStep, selectedIndex, steps, selectedVirtualStep]);
 
   const contextFields = useMemo(() => {
+    if (selectedVirtualStep?.context) return mapToFields(selectedVirtualStep.context);
     if (!selectedStep) return [];
     const refs = readRefsMap(selectedStep.data.refs);
     const prioritized = pickRecordByKeys(selectedStep.data, CONTEXT_KEYS);
@@ -566,7 +759,7 @@ export default function RunInspector({ steps, selectedStepId, runStatus, runId, 
       });
     }
     return fields;
-  }, [selectedStep]);
+  }, [selectedStep, selectedVirtualStep]);
 
   const errorFields = useMemo(() => {
     if (!selectedStep) return [];
@@ -594,6 +787,14 @@ export default function RunInspector({ steps, selectedStepId, runStatus, runId, 
   }, [selectedStep]);
 
   const budgetFields = useMemo(() => {
+    if (selectedVirtualStep?.budget && selectedVirtualStep.budget.length > 0) {
+      return selectedVirtualStep.budget.map((item) => ({
+        key: item.key,
+        label: item.label,
+        value: `${item.used}${typeof item.limit === 'number' ? ` / ${item.limit}` : ''}`,
+        type: 'string' as const,
+      }));
+    }
     if (!selectedStep) return [];
     const data = selectedStep.data || {};
     const budgetRaw = (
@@ -604,13 +805,100 @@ export default function RunInspector({ steps, selectedStepId, runStatus, runId, 
     );
     if (!budgetRaw || typeof budgetRaw !== 'object') return [];
     return mapToFields(budgetRaw as Record<string, unknown>);
-  }, [selectedStep, semanticArtifacts.budget]);
+  }, [selectedStep, semanticArtifacts.budget, selectedVirtualStep]);
+
+  const budgetTable = useMemo(() => {
+    if (!selectedStep || selectedIndex < 0) return { rows: [] as BudgetRow[], summary: [] as BudgetRow[], agentLabel: '' };
+    const window = resolveAgentWindow(steps, selectedIndex);
+    const windowSteps = steps.slice(window.start, window.end + 1);
+    const agentLabel = window.agentSlug ? `Agent:${window.agentSlug}` : 'Agent';
+
+    const toolCounts = new Map<string, number>();
+    for (const s of windowSteps) {
+      if (!isToolStep(s)) continue;
+      const tool = String(s.data.tool ?? s.data.operation_slug ?? s.data.operation ?? 'unknown').trim() || 'unknown';
+      if (s.type === 'tool_result' || s.type === 'operation_result') {
+        toolCounts.set(tool, (toolCounts.get(tool) ?? 0) + 1);
+      }
+    }
+
+    let firstBudget: ReturnType<typeof getBudgetSnapshot> | null = null;
+    let lastBudget: ReturnType<typeof getBudgetSnapshot> | null = null;
+    for (const s of windowSteps) {
+      const b = getBudgetSnapshot(s);
+      const hasAny = Object.values(b).some((v) => typeof v === 'number');
+      if (!hasAny) continue;
+      if (!firstBudget) firstBudget = b;
+      lastBudget = b;
+    }
+
+    const budgetFmt = (used?: number, limit?: number) =>
+      typeof limit === 'number' ? `${used ?? 0}/${limit}` : `${used ?? 0}`;
+    const delta = (a?: number, b?: number) =>
+      typeof a === 'number' && typeof b === 'number' ? Math.max(0, b - a) : (b ?? a ?? 0);
+
+    const opsUsedDelta = delta(firstBudget?.opsUsed, lastBudget?.opsUsed);
+    const rows: BudgetRow[] = Array.from(toolCounts.entries()).map(([tool, count]) => ({
+      name: `Tool:${tool}`,
+      budget: budgetFmt(lastBudget?.opsUsed, lastBudget?.opsLimit),
+      value: `calls ${count}`,
+    }));
+    rows.push({
+      name: 'Operations расход',
+      budget: budgetFmt(lastBudget?.opsUsed, lastBudget?.opsLimit),
+      value: `${opsUsedDelta}`,
+    });
+
+    const summary: BudgetRow[] = [
+      { name: 'Steps', budget: budgetFmt(lastBudget?.stepsUsed, lastBudget?.stepsLimit), value: `${delta(firstBudget?.stepsUsed, lastBudget?.stepsUsed)}` },
+      { name: 'Ops', budget: budgetFmt(lastBudget?.opsUsed, lastBudget?.opsLimit), value: `${opsUsedDelta}` },
+      { name: 'Retries', budget: budgetFmt(lastBudget?.retriesUsed, lastBudget?.retriesLimit), value: `${delta(firstBudget?.retriesUsed, lastBudget?.retriesUsed)}` },
+      { name: 'Tokens', budget: budgetFmt(lastBudget?.tokensUsed, lastBudget?.tokensLimit), value: `${delta(firstBudget?.tokensUsed, lastBudget?.tokensUsed)}` },
+    ];
+
+    return { rows, summary, agentLabel };
+  }, [selectedStep, selectedIndex, steps]);
+
+  const partitionPayload = useMemo(() => {
+    if (selectedVirtualStep?.partition) return selectedVirtualStep.partition;
+    if (!selectedStep) return null;
+    const own = extractPartitionPayload(selectedStep);
+    if (own) return own;
+
+    const isToolStepSelected =
+      selectedStep.type === 'tool_call'
+      || selectedStep.type === 'tool_result'
+      || selectedStep.type === 'operation_call'
+      || selectedStep.type === 'operation_result';
+    if (isToolStepSelected) {
+      const idx = selectedIndex;
+      if (idx >= 0) {
+        const near = [steps[idx - 1], steps[idx + 1]].filter(Boolean) as RunStep[];
+        for (const s of near) {
+          const p = extractPartitionPayload(s);
+          if (p) return p;
+        }
+      }
+      return null;
+    }
+
+    if (selectedIndex >= 0) {
+      const window = resolveAgentWindow(steps, selectedIndex);
+      const windowSteps = steps.slice(window.start, window.end + 1);
+      for (const s of windowSteps) {
+        const p = extractPartitionPayload(s);
+        if (p) return p;
+      }
+    }
+    return null;
+  }, [selectedStep, selectedIndex, steps, selectedVirtualStep]);
 
   const tabs = useMemo<InspectTabSpec[]>(
     () => [
       { key: 'input', label: 'Input', fields: inputFields },
       { key: 'output', label: 'Output', fields: outputFields },
       { key: 'context', label: 'Meta', fields: contextFields },
+      { key: 'budgets', label: 'Budgets', fields: [] },
       { key: 'summary', label: 'Overview', fields: summaryFields },
       { key: 'raw', label: 'Raw', fields: [] },
     ],
@@ -619,7 +907,7 @@ export default function RunInspector({ steps, selectedStepId, runStatus, runId, 
 
   const active = tabs.find((t) => t.key === activeTab) ?? tabs[0];
 
-  if (!selectedStep) {
+  if (!selectedStep && !selectedVirtualStep) {
     return (
       <div className={styles.inspector}>
         <div className={styles.header}>
@@ -657,9 +945,9 @@ export default function RunInspector({ steps, selectedStepId, runStatus, runId, 
       <div className={styles['detail-header']}>
         <div className={styles['detail-title-block']}>
           <span className={styles['detail-label']}>
-            {meta?.icon ?? '•'} {meta?.label ?? selectedStep.type}
+            {meta?.icon ?? '•'} {meta?.label ?? selectedVirtualStep?.label ?? selectedStep?.type ?? 'virtual'}
           </span>
-          <span className={styles['detail-title']}>{semanticEvent?.title ?? getStepTitle(selectedStep)}</span>
+          <span className={styles['detail-title']}>{selectedVirtualStep?.title ?? semanticEvent?.title ?? (selectedStep ? getStepTitle(selectedStep) : 'Virtual step')}</span>
         </div>
       </div>
 
@@ -678,7 +966,42 @@ export default function RunInspector({ steps, selectedStepId, runStatus, runId, 
 
       <div className={styles.detail}>
         {active.key === 'raw' ? (
-          <pre className={styles.payload}>{JSON.stringify(selectedStep.data, null, 2)}</pre>
+          <pre className={styles.payload}>{JSON.stringify(selectedVirtualStep?.raw ?? selectedStep?.data ?? {}, null, 2)}</pre>
+        ) : active.key === 'budgets' ? (
+          <SectionAccordion title={`Agent budgets: ${budgetTable.agentLabel || 'Agent'}`} defaultOpen>
+            {budgetTable.rows.length === 0 ? (
+              <div className={styles['section-empty']}>No budget data for this agent window</div>
+            ) : (
+              <table className={styles['budget-table']}>
+                <thead>
+                  <tr>
+                    <th>Название</th>
+                    <th>Бюджет</th>
+                    <th>Значение</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {budgetTable.rows.map((row, idx) => (
+                    <tr key={`${row.name}-${idx}`}>
+                      <td>{row.name}</td>
+                      <td>{row.budget}</td>
+                      <td>{row.value}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            <div className={styles['budget-summary']}>
+              <div className={styles['budget-summary-title']}>Итог по агенту</div>
+              {budgetTable.summary.map((row) => (
+                <div key={row.name} className={styles['budget-summary-row']}>
+                  <span>{row.name}</span>
+                  <span>{row.budget}</span>
+                  <span>{row.value}</span>
+                </div>
+              ))}
+            </div>
+          </SectionAccordion>
         ) : (
           <>
             {semanticEvent && active.key === 'summary' ? (
@@ -717,6 +1040,11 @@ export default function RunInspector({ steps, selectedStepId, runStatus, runId, 
             {active.key === 'summary' && runtimeErrorFields.length > 0 ? (
               <SectionAccordion title="Runtime error contract" count={runtimeErrorFields.length} defaultOpen>
                 <ParamAccordionList fields={runtimeErrorFields} />
+              </SectionAccordion>
+            ) : null}
+            {active.key === 'summary' && partitionPayload ? (
+              <SectionAccordion title="Partition" count={1} defaultOpen>
+                <pre className={styles.payload}>{JSON.stringify(partitionPayload, null, 2)}</pre>
               </SectionAccordion>
             ) : null}
           </>

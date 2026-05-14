@@ -154,6 +154,22 @@ async def _collect(gen) -> List[RuntimeEvent]:
     return [e async for e in gen]
 
 
+class _Ctx:
+    def __init__(self, *, extra=None):
+        self.extra = dict(extra or {})
+
+    def get_runtime_deps(self):
+        return SimpleNamespace(
+            sandbox_overrides=dict(self.extra.get("sandbox_overrides") or {}),
+            session_factory=None,
+        )
+
+    def set_runtime_deps(self, deps):
+        sandbox_overrides = getattr(deps, "sandbox_overrides", None)
+        if isinstance(sandbox_overrides, dict):
+            self.extra["sandbox_overrides"] = sandbox_overrides
+
+
 # ------------------------------------------------------------- direct_answer --
 
 
@@ -336,3 +352,65 @@ async def test_pipeline_paused_path_uses_same_run_id_for_stop_and_run_store_paus
     pause_kwargs = run_store.pause_run.await_args.kwargs
     assert str(start_kwargs["run_id_override"]) == stop_run_id
     assert str(pause_kwargs["run_id"]) == stop_run_id
+
+
+@pytest.mark.asyncio
+async def test_pipeline_uses_full_logging_level_for_top_level_run_from_sandbox_override():
+    chat_id, user_id, tenant_id = uuid4(), uuid4(), uuid4()
+    run_store = AsyncMock()
+    pipeline = RuntimePipeline(session=AsyncMock(), llm_client=AsyncMock(), run_store=run_store)
+    pipeline._assembler.memory_builder.build = AsyncMock(
+        return_value=_canned_turn_memory(chat_id, user_id, tenant_id)
+    )
+    pipeline._assembler.memory_writer.finalize = AsyncMock()
+    outcome = PlanningOutcome(
+        kind=PlanningOutcomeKind.PAUSED,
+        stop_reason=PipelineStopReason.WAITING_INPUT,
+    )
+    pipeline._assembler.build_planning_stage = MagicMock(
+        return_value=_StubPlanningStage(outcome)
+    )
+    pipeline._assembler.build_finalization_stage = MagicMock()
+    ctx = _Ctx(extra={})
+    request = _request(chat_id, user_id, tenant_id, text="need input").model_copy(
+        update={"sandbox_overrides": {"logging_level": "full"}}
+    )
+
+    with patch("app.runtime.pipeline.PlatformConfigLoader") as platform_cls:
+        platform_cls.return_value.load = AsyncMock(return_value=_canned_platform())
+        await _collect(pipeline.execute(request=request, ctx=ctx))
+
+    assert run_store.start_run.await_count == 1
+    assert run_store.start_run.await_args.kwargs["logging_level"] == "full"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_uses_brief_logging_level_by_default_for_top_level_run():
+    chat_id, user_id, tenant_id = uuid4(), uuid4(), uuid4()
+    run_store = AsyncMock()
+    pipeline = RuntimePipeline(session=AsyncMock(), llm_client=AsyncMock(), run_store=run_store)
+    pipeline._assembler.memory_builder.build = AsyncMock(
+        return_value=_canned_turn_memory(chat_id, user_id, tenant_id)
+    )
+    pipeline._assembler.memory_writer.finalize = AsyncMock()
+    outcome = PlanningOutcome(
+        kind=PlanningOutcomeKind.PAUSED,
+        stop_reason=PipelineStopReason.WAITING_INPUT,
+    )
+    pipeline._assembler.build_planning_stage = MagicMock(
+        return_value=_StubPlanningStage(outcome)
+    )
+    pipeline._assembler.build_finalization_stage = MagicMock()
+    ctx = _Ctx(extra={})
+
+    with patch("app.runtime.pipeline.PlatformConfigLoader") as platform_cls:
+        platform_cls.return_value.load = AsyncMock(return_value=_canned_platform())
+        await _collect(
+            pipeline.execute(
+                request=_request(chat_id, user_id, tenant_id, text="need input"),
+                ctx=ctx,
+            )
+        )
+
+    assert run_store.start_run.await_count == 1
+    assert run_store.start_run.await_args.kwargs["logging_level"] == "brief"

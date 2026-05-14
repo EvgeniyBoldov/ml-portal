@@ -35,7 +35,7 @@ const CATEGORY_META: Record<string, { icon: string; tone: Tone }> = {
   planner: { icon: '📐', tone: 'info' },
   final: { icon: '✅', tone: 'success' },
   error: { icon: '❌', tone: 'danger' },
-  system: { icon: '•', tone: 'neutral' },
+  system: { icon: '', tone: 'neutral' },
 };
 
 function getSemantic(step: RunStep, index: number) {
@@ -68,6 +68,7 @@ type BudgetCompact = {
 type DisplayStep = {
   id: string;
   sourceStepId: string;
+  rawStepIds: string[];
   title: string;
   summary: string;
   tone: Tone;
@@ -76,12 +77,27 @@ type DisplayStep = {
   badge?: { text: string; tone: Tone } | null;
   depth: number;
   budget: BudgetCompact[];
+  state: 'neutral' | 'success' | 'partial' | 'error';
   entity: {
-    kind: 'planner' | 'agent' | 'llm' | 'tool_batch' | 'system';
+    kind: 'planner' | 'agent' | 'llm' | 'tool' | 'runtime' | 'system';
     label: string;
     tone: Tone;
   };
 };
+
+export interface VirtualInspectorStep {
+  id: string;
+  kind: DisplayStep['entity']['kind'];
+  label: string;
+  title: string;
+  summary: string;
+  budget: BudgetCompact[];
+  input: Record<string, unknown> | null;
+  output: Record<string, unknown> | null;
+  partition: Record<string, unknown> | null;
+  context: Record<string, unknown>;
+  raw: Array<{ id: string; type: RunStep['type']; data: Record<string, unknown>; timestamp: number }>;
+}
 
 function toRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -178,45 +194,31 @@ function compactBudgetFromData(data: Record<string, unknown>): BudgetCompact[] {
 }
 
 function buildDisplaySteps(steps: RunStep[]): DisplayStep[] {
+  const findAgentAnchorStepId = (fromIndex: number): string => {
+    for (let i = fromIndex + 1; i < steps.length; i++) {
+      const candidate = steps[i];
+      const t = candidate.type;
+      if (t === 'planner_action' || t === 'planner_step' || t === 'routing' || t === 'policy_decision') break;
+      if (t === 'delta' || t === 'final_content' || t === 'done') continue;
+      return candidate.id;
+    }
+    return steps[fromIndex].id;
+  };
+
   const result: DisplayStep[] = [];
   let activeAgentSlug = '';
-  let pendingToolBatch: {
-    firstStepId: string;
-    count: number;
-    success: number;
-    failed: number;
-    tools: Set<string>;
-    elapsedMs: number;
-    budget: BudgetCompact[];
-  } | null = null;
-
-  const flushToolBatch = () => {
-    if (!pendingToolBatch) return;
-    const toolsLabel = Array.from(pendingToolBatch.tools).slice(0, 3).join(', ');
-    const truncated = pendingToolBatch.tools.size > 3 ? '…' : '';
-    const statusSummary =
-      pendingToolBatch.failed > 0
-        ? `${pendingToolBatch.success} ok / ${pendingToolBatch.failed} err`
-        : `${pendingToolBatch.success} ok`;
-    result.push({
-      id: `batch_${pendingToolBatch.firstStepId}`,
-      sourceStepId: pendingToolBatch.firstStepId,
-      title: 'Tool batch',
-      summary: `${pendingToolBatch.count} вызов(ов): ${toolsLabel}${truncated} · ${statusSummary}`,
-      tone: pendingToolBatch.failed > 0 ? 'warn' : 'info',
-      icon: '🧰',
-      elapsedMs: pendingToolBatch.elapsedMs,
-      badge: pendingToolBatch.failed > 0 ? { text: 'WARN', tone: 'warn' } : null,
-      depth: 2,
-      budget: pendingToolBatch.budget,
-      entity: {
-        kind: 'tool_batch',
-        label: 'Tool batch',
-        tone: pendingToolBatch.failed > 0 ? 'warn' : 'info',
-      },
-    });
-    pendingToolBatch = null;
-  };
+  let activeAgentOpen = false;
+  let activeAgentNodeAdded = false;
+  let llmBatchOpen = false;
+  let llmBatchIndex = 0;
+  const plannerTypes = new Set<RunStep['type']>(['planner_action', 'planner_step', 'routing', 'policy_decision']);
+  const toolTypes = new Set<RunStep['type']>(['tool_call', 'tool_result', 'operation_call', 'operation_result']);
+  const runtimeMetaTypes = new Set<RunStep['type']>([
+    'status', 'thinking', 'intent', 'budget_policy', 'budget_consumed', 'budget_limit_exceeded',
+  ]);
+  const explicitAgentTypes = new Set<RunStep['type']>([
+    'llm_request', 'llm_call', 'llm_response', 'user_request', 'final_response',
+  ]);
 
   for (let index = 0; index < steps.length; index++) {
     const step = steps[index];
@@ -227,39 +229,46 @@ function buildDisplaySteps(steps: RunStep[]): DisplayStep[] {
     const data = toRecord(step.data);
     const budget = compactBudgetFromData(data);
 
-    const isPlannerControl =
-      step.type === 'planner_action'
-      || step.type === 'planner_step'
-      || step.type === 'routing'
-      || step.type === 'policy_decision';
-    const isToolLike =
-      step.type === 'tool_call'
-      || step.type === 'tool_result'
-      || step.type === 'operation_call'
-      || step.type === 'operation_result';
-    const isAgentInternal =
-      step.type === 'llm_request'
-      || step.type === 'llm_call'
-      || step.type === 'llm_response'
-      || step.type === 'intent'
-      || step.type === 'budget_policy'
-      || step.type === 'budget_consumed'
-      || step.type === 'budget_limit_exceeded'
-      || step.type === 'user_request'
-      || step.type === 'final_response';
+    const isPlannerControl = plannerTypes.has(step.type);
+    const isToolLike = toolTypes.has(step.type);
+    const isRuntimeMeta = runtimeMetaTypes.has(step.type);
+    const isAgentBoundary =
+      step.type === 'agent_result'
+      || (step.type === 'final' && activeAgentOpen)
+      || (step.type === 'error' && activeAgentOpen);
+    const stepAgentSlug = typeof data.agent_slug === 'string' ? data.agent_slug : '';
+    const stepStage = String(data.stage ?? '').toLowerCase();
+    const isAgentScopedStatus =
+      step.type === 'status'
+      && (
+        (!!activeAgentSlug && stepAgentSlug === activeAgentSlug)
+        || stepStage.includes('agent')
+        || stepStage.includes('subagent')
+      );
 
     if (isPlannerControl) {
-      flushToolBatch();
+      if (activeAgentOpen) {
+        activeAgentOpen = false;
+        activeAgentNodeAdded = false;
+      }
+      llmBatchOpen = false;
       const kind = String(data.kind ?? data.action_type ?? '').toLowerCase();
       const nextAgentSlug = typeof data.agent_slug === 'string' ? data.agent_slug : '';
-      if ((kind === 'call_agent' || step.type === 'routing') && nextAgentSlug) {
+      if (kind === 'call_agent') {
+        activeAgentSlug = nextAgentSlug;
+        activeAgentOpen = true;
+        activeAgentNodeAdded = false;
+      } else if (step.type === 'routing' && nextAgentSlug) {
         activeAgentSlug = nextAgentSlug;
       } else if (kind === 'final' || kind === 'direct_answer' || kind === 'clarify' || kind === 'abort') {
         activeAgentSlug = '';
+        activeAgentOpen = false;
+        activeAgentNodeAdded = false;
       }
       result.push({
         id: step.id,
         sourceStepId: step.id,
+        rawStepIds: [step.id],
         title: semantic.title,
         summary: semantic.summary,
         tone: meta.tone,
@@ -268,55 +277,140 @@ function buildDisplaySteps(steps: RunStep[]): DisplayStep[] {
         badge,
         depth: 0,
         budget,
+        state: step.type === 'planner_action' && String(data.kind ?? '').toLowerCase() === 'abort'
+          ? 'error'
+          : 'neutral',
         entity: {
           kind: 'planner',
           label: 'Planner',
           tone: 'info',
         },
       });
-      continue;
-    }
 
-    if (isToolLike && activeAgentSlug) {
-      const toolName = String(data.tool ?? data.operation_slug ?? data.operation ?? 'tool');
-      const isSuccess = data.success === true;
-      const isFailed = data.success === false;
-      if (!pendingToolBatch) {
-        pendingToolBatch = {
-          firstStepId: step.id,
-          count: 0,
-          success: 0,
-          failed: 0,
-          tools: new Set<string>(),
+      if (kind === 'call_agent' && activeAgentOpen && !activeAgentNodeAdded) {
+        const agentLabel = activeAgentSlug ? `Agent:${activeAgentSlug}` : 'Agent';
+        const agentAnchorStepId = findAgentAnchorStepId(index);
+        result.push({
+          id: `${step.id}__agent_node`,
+          sourceStepId: agentAnchorStepId,
+          rawStepIds: [agentAnchorStepId],
+          title: 'Агент',
+          summary: activeAgentSlug ? `Вызван ${activeAgentSlug}` : 'Вызов агента',
+          tone: 'info',
+          icon: '🤖',
           elapsedMs: 0,
+          badge: null,
+          depth: 1,
           budget: [],
-        };
+          state: 'neutral',
+          entity: {
+            kind: 'agent',
+            label: agentLabel,
+            tone: 'info',
+          },
+        });
+        activeAgentNodeAdded = true;
       }
-      pendingToolBatch.count += 1;
-      pendingToolBatch.tools.add(toolName);
-      if (isSuccess) pendingToolBatch.success += 1;
-      if (isFailed) pendingToolBatch.failed += 1;
-      pendingToolBatch.elapsedMs += elapsed;
-      if (budget.length > 0) pendingToolBatch.budget = budget;
       continue;
     }
 
-    flushToolBatch();
+    if (!activeAgentOpen && isAgentScopedStatus) {
+      activeAgentOpen = true;
+      activeAgentNodeAdded = true;
+    }
 
-    const depth = activeAgentSlug && (isAgentInternal || isToolLike) ? 1 : 0;
+    if (activeAgentOpen && isRuntimeMeta) {
+      const batchStart = index;
+      const batchTypes: string[] = [];
+      const batchRawIds: string[] = [];
+      let batchBudget = budget;
+      let lastStep = step;
+      while (index < steps.length && runtimeMetaTypes.has(steps[index].type)) {
+        const s = steps[index];
+        batchTypes.push(s.type);
+        batchRawIds.push(s.id);
+        lastStep = s;
+        const b = compactBudgetFromData(toRecord(s.data));
+        if (b.length > 0) batchBudget = b;
+        index += 1;
+      }
+      index -= 1;
+      const uniqueTypes = Array.from(new Set(batchTypes));
+      const batchSummary = uniqueTypes.length === 1
+        ? uniqueTypes[0]
+        : `${uniqueTypes[0]} +${uniqueTypes.length - 1}`;
+      result.push({
+        id: `${steps[batchStart].id}__runtime_batch`,
+        sourceStepId: steps[batchStart].id,
+        rawStepIds: batchRawIds,
+        title: 'Runtime',
+        summary: `agent runtime: ${batchSummary}`,
+        tone: 'neutral',
+        icon: '',
+        elapsedMs: batchStart > 0 ? Math.max(0, steps[batchStart].timestamp - steps[batchStart - 1].timestamp) : 0,
+        badge: getStepBadge(lastStep, index),
+        depth: 1,
+        budget: batchBudget,
+        state: 'neutral',
+        entity: {
+          kind: 'runtime',
+          label: 'Runtime',
+          tone: 'neutral',
+        },
+      });
+      continue;
+    }
+
+    if ((step.type === 'llm_request' || step.type === 'llm_call' || step.type === 'llm_response') && activeAgentOpen) {
+      llmBatchOpen = true;
+      llmBatchIndex += 1;
+    }
+
+    if ((step.type === 'final_response' || step.type === 'final' || step.type === 'error') && activeAgentOpen) {
+      llmBatchOpen = false;
+    }
+
+    const depth = activeAgentOpen
+      ? (isToolLike ? 3 : 1)
+      : 0;
     const isLlmStep =
       step.type === 'llm_request'
       || step.type === 'llm_call'
       || step.type === 'llm_response';
+    const toolName = String(data.tool ?? data.operation_slug ?? data.operation ?? '').trim();
+    const isResponseStep = step.type === 'final' || step.type === 'final_response';
+    const isUnmappedInAgent = activeAgentOpen && !isToolLike && !isLlmStep && !explicitAgentTypes.has(step.type);
     const entity =
       depth === 0
         ? { kind: 'system' as const, label: 'Runtime', tone: 'neutral' as Tone }
+        : isToolLike
+          ? {
+              kind: 'tool' as const,
+              label: toolName ? `Tool:${toolName}` : `Tool #${llmBatchIndex}`,
+              tone: 'info' as Tone,
+            }
         : isLlmStep
           ? { kind: 'llm' as const, label: 'LLM', tone: 'info' as Tone }
+        : isResponseStep
+          ? { kind: 'agent' as const, label: activeAgentSlug ? `Agent:${activeAgentSlug}` : 'Agent', tone: 'success' as Tone }
+        : isUnmappedInAgent
+          ? { kind: 'runtime' as const, label: 'Runtime (unmapped)', tone: 'warn' as Tone }
           : { kind: 'agent' as const, label: activeAgentSlug ? `Agent:${activeAgentSlug}` : 'Agent', tone: 'info' as Tone };
+    const stage = String(data.stage ?? '').toLowerCase();
+    const isPartial = stage.includes('partial') || stage.includes('degrad');
+    const isError = badge?.tone === 'danger' || step.type === 'error' || data.success === false;
+    const isSuccess = data.success === true || badge?.tone === 'success';
+    const state: DisplayStep['state'] = isError
+      ? 'error'
+      : isPartial
+        ? 'partial'
+        : isSuccess
+          ? 'success'
+          : 'neutral';
     result.push({
       id: step.id,
       sourceStepId: step.id,
+      rawStepIds: [step.id],
       title: semantic.title,
       summary: semantic.summary,
       tone: meta.tone,
@@ -325,11 +419,16 @@ function buildDisplaySteps(steps: RunStep[]): DisplayStep[] {
       badge,
       depth,
       budget,
+      state,
       entity,
     });
-  }
 
-  flushToolBatch();
+    if (isAgentBoundary) {
+      activeAgentOpen = false;
+      activeAgentNodeAdded = false;
+      llmBatchOpen = false;
+    }
+  }
   return result;
 }
 
@@ -371,8 +470,8 @@ function apiStepsToRunSteps(
 function buildToolSummary(steps: RunStep[]): Map<string, number> {
   const tools = new Map<string, number>();
   for (const s of steps) {
-    if (s.type === 'tool_call') {
-      const tool = (s.data.tool as string) ?? '?';
+    if (s.type === 'tool_call' || s.type === 'tool_result' || s.type === 'operation_result') {
+      const tool = (s.data.tool as string) ?? (s.data.operation_slug as string) ?? '?';
       tools.set(tool, (tools.get(tool) ?? 0) + 1);
     }
   }
@@ -383,22 +482,162 @@ function getVisibleSteps(steps: RunStep[]): RunStep[] {
   return steps.filter((s) => !HIDDEN_STEP_TYPES.has(s.type));
 }
 
+function getToolLikeName(step: RunStep): string {
+  return String(step.data.tool ?? step.data.operation_slug ?? step.data.operation ?? '');
+}
+
+function mergeStepPairs(steps: RunStep[]): RunStep[] {
+  const merged: RunStep[] = [];
+  for (let i = 0; i < steps.length; i++) {
+    const current = steps[i];
+    const next = steps[i + 1];
+
+    const isToolPair =
+      !!next &&
+      (current.type === 'tool_call' || current.type === 'operation_call') &&
+      (next.type === 'tool_result' || next.type === 'operation_result') &&
+      (
+        getToolLikeName(current) === getToolLikeName(next) ||
+        getToolLikeName(current).length === 0 ||
+        getToolLikeName(next).length === 0
+      );
+
+    if (isToolPair) {
+      const input = current.data.arguments ?? current.data.parameters ?? current.data.input ?? current.data.payload;
+      const output = next.data.result ?? next.data.output ?? next.data.data ?? next.data.response;
+      merged.push({
+        id: `${current.id}__${next.id}`,
+        type: next.type,
+        timestamp: next.timestamp,
+        data: {
+          ...next.data,
+          input,
+          output,
+          tool: current.data.tool ?? next.data.tool,
+          operation_slug: current.data.operation_slug ?? next.data.operation_slug,
+          _merged_from: [current.id, next.id],
+        },
+      });
+      i += 1;
+      continue;
+    }
+
+    const isLlmPair =
+      !!next &&
+      (current.type === 'llm_request' || current.type === 'llm_call') &&
+      next.type === 'llm_response';
+
+    if (isLlmPair) {
+      merged.push({
+        id: `${current.id}__${next.id}`,
+        type: 'llm_response',
+        timestamp: next.timestamp,
+        data: {
+          ...next.data,
+          model: current.data.model ?? next.data.model,
+          temperature: current.data.temperature ?? next.data.temperature,
+          max_tokens: current.data.max_tokens ?? next.data.max_tokens,
+          messages: current.data.messages ?? current.data.messages_sent ?? current.data.payload,
+          input: current.data.messages ?? current.data.messages_sent ?? current.data.payload,
+          output: next.data.response ?? next.data.raw_response ?? next.data.content,
+          _merged_from: [current.id, next.id],
+        },
+      });
+      i += 1;
+      continue;
+    }
+
+    merged.push(current);
+  }
+  return merged;
+}
+
 // ── ExpandableSteps — inline step list in chat ────────────────────────────
 
 function ExpandableSteps({
   steps,
   isRunning,
-  selectedStepId,
+  selectedDisplayStepId,
   onSelectStep,
 }: {
   steps: RunStep[];
   isRunning: boolean;
-  selectedStepId: string | null;
-  onSelectStep: (stepId: string) => void;
+  selectedDisplayStepId: string | null;
+  onSelectStep: (displayStepId: string, rawStepId: string, virtualStep: VirtualInspectorStep, inspectorSteps: RunStep[]) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const visible = useMemo(() => getVisibleSteps(steps), [steps]);
+  const visible = useMemo(() => mergeStepPairs(getVisibleSteps(steps)), [steps]);
   const displaySteps = useMemo(() => buildDisplaySteps(visible), [visible]);
+  const virtualSteps = useMemo(() => {
+    const byId = new Map(visible.map((s) => [s.id, s]));
+    const findPartition = (rows: RunStep[]) => {
+      for (const row of rows) {
+        const d = row.data || {};
+        const p = d.partition ?? d.partial_mode ?? d.partition_mode ?? d.partition_state;
+        if (p && typeof p === 'object' && !Array.isArray(p)) return p as Record<string, unknown>;
+      }
+      return null;
+    };
+    return new Map(
+      displaySteps.map((item) => {
+        const rawSteps = item.rawStepIds
+          .map((id) => byId.get(id))
+          .filter((x): x is RunStep => Boolean(x));
+        const first = rawSteps[0];
+        const last = rawSteps[rawSteps.length - 1];
+        const llmReq = rawSteps.find((s) => s.type === 'llm_request' || s.type === 'llm_call');
+        const llmResp = [...rawSteps].reverse().find((s) => s.type === 'llm_response');
+        const toolStep = rawSteps.find((s) =>
+          s.type === 'tool_result' || s.type === 'operation_result' || s.type === 'tool_call' || s.type === 'operation_call');
+        const input = item.entity.kind === 'tool'
+          ? {
+              tool: toolStep?.data.tool ?? toolStep?.data.operation_slug ?? toolStep?.data.operation,
+              input: toolStep?.data.input ?? toolStep?.data.arguments ?? toolStep?.data.parameters ?? toolStep?.data.payload,
+            }
+          : llmReq
+            ? {
+                model: llmReq.data.model ?? llmReq.data.provider_model,
+                messages: llmReq.data.messages ?? llmReq.data.messages_sent,
+                payload: llmReq.data.payload ?? llmReq.data.request_payload,
+              }
+            : first
+              ? { input: first.data.input ?? first.data.payload ?? first.data.arguments }
+              : null;
+        const output = item.entity.kind === 'tool'
+          ? {
+              tool: toolStep?.data.tool ?? toolStep?.data.operation_slug ?? toolStep?.data.operation,
+              output: toolStep?.data.output ?? toolStep?.data.result ?? toolStep?.data.data ?? toolStep?.data.response,
+            }
+          : llmResp
+            ? {
+                response: llmResp.data.response ?? llmResp.data.raw_response ?? llmResp.data.content,
+                parsed_response: llmResp.data.parsed_response,
+                tokens_out: llmResp.data.tokens_out ?? llmResp.data.response_length,
+              }
+            : last
+              ? { output: last.data.output ?? last.data.result ?? last.data.response ?? last.data.content }
+              : null;
+        const virtual: VirtualInspectorStep = {
+          id: item.id,
+          kind: item.entity.kind,
+          label: item.entity.label,
+          title: item.title,
+          summary: item.summary,
+          budget: item.budget,
+          input,
+          output,
+          partition: findPartition(rawSteps),
+          context: {
+            entity_kind: item.entity.kind,
+            entity_label: item.entity.label,
+            raw_types: rawSteps.map((s) => s.type),
+          },
+          raw: rawSteps.map((s) => ({ id: s.id, type: s.type, data: s.data, timestamp: s.timestamp })),
+        };
+        return [item.id, virtual] as const;
+      }),
+    );
+  }, [displaySteps, visible]);
   const toolCalls = useMemo(() => buildToolSummary(steps), [steps]);
   const totalDuration = useMemo(() => {
     if (steps.length < 2) return null;
@@ -442,17 +681,26 @@ function ExpandableSteps({
       {expanded && (
         <div className={styles['steps-list']}>
           {displaySteps.map((item) => {
-            const isSelected = item.sourceStepId === selectedStepId;
+            const isSelected = item.id === selectedDisplayStepId;
+            const showTone = item.entity.kind !== 'planner' && item.entity.kind !== 'runtime';
 
             return (
               <button
                 key={item.id}
                 type="button"
-                className={`${styles['step-row']} ${isSelected ? styles['step-row-selected'] : ''}`}
-                onClick={() => onSelectStep(item.sourceStepId)}
+                className={`${styles['step-row']} ${styles[`step-row-${item.state}`]} ${isSelected ? styles['step-row-selected'] : ''}`}
+                onClick={() => {
+                  const virtual = virtualSteps.get(item.id);
+                  if (!virtual) return;
+                  onSelectStep(item.id, item.sourceStepId, virtual, visible);
+                }}
                 style={{ paddingLeft: `${8 + item.depth * 18}px` }}
               >
-                <span className={`${styles['step-tone']} ${styles[`tone-${item.tone}`]}`} />
+                {showTone ? (
+                  <span className={`${styles['step-tone']} ${styles[`tone-${item.tone}`]}`} />
+                ) : (
+                  <span className={styles['step-tone-empty']} />
+                )}
                 <span className={styles['step-icon']}>{item.icon}</span>
                 <span className={`${styles['step-entity']} ${styles[`step-entity-${item.entity.tone}`]}`}>
                   {item.entity.label}
@@ -493,7 +741,7 @@ function HistoricalRunItem({
   branch,
   isCurrentBranch,
   isReadOnly,
-  selectedStepId,
+  selectedDisplayStepId,
   onSelectStep,
   onForkBranch,
 }: {
@@ -502,8 +750,14 @@ function HistoricalRunItem({
   branch?: SandboxBranchListItem;
   isCurrentBranch: boolean;
   isReadOnly: boolean;
-  selectedStepId: string | null;
-  onSelectStep: (runId: string, stepId: string, steps: RunStep[]) => void;
+  selectedDisplayStepId: string | null;
+  onSelectStep: (
+    runId: string,
+    displayStepId: string,
+    rawStepId: string,
+    virtualStep: VirtualInspectorStep,
+    steps: RunStep[],
+  ) => void;
   onForkBranch: (runId: string, sourceText: string) => void;
 }) {
   const { data: runDetail } = useQuery({
@@ -534,8 +788,8 @@ function HistoricalRunItem({
       <ExpandableSteps
         steps={runSteps}
         isRunning={false}
-        selectedStepId={selectedStepId}
-        onSelectStep={(stepId) => onSelectStep(run.id, stepId, runSteps)}
+        selectedDisplayStepId={selectedDisplayStepId}
+        onSelectStep={(displayStepId, rawStepId, virtualStep, inspectorSteps) => onSelectStep(run.id, displayStepId, rawStepId, virtualStep, inspectorSteps)}
       />
 
       <div className={styles['answer-row']}>
@@ -579,7 +833,7 @@ interface Props {
   onRun: (text: string, parentRunId?: string | null, attachmentIds?: string[]) => void;
   onStop: () => void;
   onSelectRun?: (runId?: string) => void;
-  onSelectStep?: (runId: string, stepId: string, steps: RunStep[]) => void;
+  onSelectStep?: (runId: string, stepId: string, virtualStep: VirtualInspectorStep, steps: RunStep[]) => void;
 }
 
 // ── RunChat ──────────────────────────────────────────────────────────────────
@@ -612,6 +866,7 @@ export default function RunChat({
     allowed_content_types_by_extension?: Record<string, string[]>;
   } | null>(null);
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
+  const [selectedDisplayStepId, setSelectedDisplayStepId] = useState<string | null>(null);
   const messagesRef = useRef<HTMLDivElement>(null);
   const clarifyInputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -654,6 +909,7 @@ export default function RunChat({
   useEffect(() => {
     setInput('');
     setSelectedStepId(null);
+    setSelectedDisplayStepId(null);
   }, [activeBranchId]);
 
   useEffect(() => {
@@ -778,16 +1034,17 @@ export default function RunChat({
     }
   };
 
-  const handleSelectStep = (runId: string, stepId: string, steps: RunStep[]) => {
-    setSelectedStepId(stepId);
+  const handleSelectStep = (
+    runId: string,
+    displayStepId: string,
+    rawStepId: string,
+    virtualStep: VirtualInspectorStep,
+    steps: RunStep[],
+  ) => {
+    setSelectedDisplayStepId(displayStepId);
+    setSelectedStepId(rawStepId);
     onSelectRun?.(runId);
-    onSelectStep?.(runId, stepId, steps);
-  };
-
-  const handleSelectActiveStep = (stepId: string) => {
-    setSelectedStepId(stepId);
-    onSelectRun?.();
-    onSelectStep?.('active', stepId, activeRun.steps);
+    onSelectStep?.(runId, rawStepId, virtualStep, steps);
   };
 
   const handleForkBranch = (parentRunId: string, sourceText: string) => {
@@ -860,7 +1117,7 @@ export default function RunChat({
             branch={run.branch_id ? branchMap.get(run.branch_id) : undefined}
             isCurrentBranch={run.branch_id === activeBranchId}
             isReadOnly={isReadOnly}
-            selectedStepId={selectedStepId}
+            selectedDisplayStepId={selectedDisplayStepId}
             onSelectStep={handleSelectStep}
             onForkBranch={handleForkBranch}
           />
@@ -875,8 +1132,13 @@ export default function RunChat({
             <ExpandableSteps
               steps={activeRun.steps}
               isRunning={isRunning}
-              selectedStepId={selectedStepId}
-              onSelectStep={handleSelectActiveStep}
+              selectedDisplayStepId={selectedDisplayStepId}
+              onSelectStep={(displayStepId, rawStepId, virtualStep, inspectorSteps) => {
+                setSelectedDisplayStepId(displayStepId);
+                setSelectedStepId(rawStepId);
+                onSelectRun?.();
+                onSelectStep?.('active', rawStepId, virtualStep, inspectorSteps);
+              }}
             />
 
             <div className={styles['answer-row']}>

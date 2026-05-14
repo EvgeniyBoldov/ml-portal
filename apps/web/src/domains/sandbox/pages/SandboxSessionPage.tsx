@@ -16,6 +16,7 @@ import Button from '@/shared/ui/Button';
 import { sandboxApi } from '../api';
 import SessionSidebar from '../components/SessionSidebar';
 import RunChat from '../components/RunChat';
+import type { VirtualInspectorStep } from '../components/RunChat';
 import ConfigPanel from '../components/ConfigPanel';
 import ConfirmWriteDialog from '../components/ConfirmWriteDialog';
 import type { SandboxSelectedItem } from '../types';
@@ -60,6 +61,7 @@ export default function SandboxSessionPage() {
   // Inspector state: steps + selected step for right panel
   const [inspectorSteps, setInspectorSteps] = useState<RunStep[]>([]);
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
+  const [selectedVirtualStep, setSelectedVirtualStep] = useState<VirtualInspectorStep | null>(null);
   const [inspectorRunId, setInspectorRunId] = useState<string | null>(null);
   const [inspectorTraceEvents, setInspectorTraceEvents] = useState<SemanticEvent[]>([]);
   
@@ -111,9 +113,10 @@ export default function SandboxSessionPage() {
     setSelectedItem({ type: 'run', id: runId ?? 'active', name: 'Лог выполнения' });
   };
 
-  const handleSelectStep = async (runId: string, stepId: string, steps: RunStep[]) => {
+  const handleSelectStep = async (runId: string, stepId: string, virtualStep: VirtualInspectorStep, steps: RunStep[]) => {
     setInspectorSteps(steps);
     setSelectedStepId(stepId);
+    setSelectedVirtualStep(virtualStep);
     setInspectorRunId(runId === 'active' ? sandboxRun.activeRun.runId : runId);
     if (runId !== 'active' && sessionId) {
       try {
@@ -128,6 +131,15 @@ export default function SandboxSessionPage() {
     }
     setSelectedItem({ type: 'run', id: runId, name: 'Детали шага' });
   };
+
+  useEffect(() => {
+    if (!selectedStepId) return;
+    const exists = inspectorSteps.some((step) => step.id === selectedStepId);
+    if (!exists) {
+      setSelectedStepId(null);
+      setSelectedVirtualStep(null);
+    }
+  }, [inspectorSteps, selectedStepId]);
 
   const handleCreateBranchFromMessage = async (
     sourceText: string,
@@ -288,8 +300,8 @@ export default function SandboxSessionPage() {
           onRun={handleRun}
           onStop={sandboxRun.stop}
           onSelectRun={handleSelectRun}
-          onSelectStep={(runId, stepId, steps) => {
-            void handleSelectStep(runId, stepId, steps);
+          onSelectStep={(runId, stepId, virtualStep, steps) => {
+            void handleSelectStep(runId, stepId, virtualStep, steps);
           }}
         />
       </div>
@@ -313,6 +325,7 @@ export default function SandboxSessionPage() {
           catalog={catalog}
           inspectorSteps={inspectorSteps}
           selectedStepId={selectedStepId}
+          selectedVirtualStep={selectedVirtualStep}
           inspectorRunId={inspectorRunId}
           inspectorRunStatus={sandboxRun.activeRun.status}
           inspectorTraceEvents={inspectorTraceEvents}
