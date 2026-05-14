@@ -1,0 +1,125 @@
+.panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2, 8px);
+  padding: var(--space-3, 12px);
+  border-bottom: 1px solid var(--border-color, #e5e7eb);
+  background: var(--bg-secondary, #f9fafb);
+}
+
+.headerTitle {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+  font-size: var(--text-sm, 14px);
+}
+
+.headerMeta {
+  font-size: var(--text-xs, 12px);
+  color: var(--text-tertiary, #9ca3af);
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+
+.body {
+  flex: 1;
+  overflow: auto;
+  padding: var(--space-2, 8px);
+}
+
+.tabContent {
+  padding: var(--space-3, 12px) 0;
+}
+
+.fields {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3, 12px);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1, 4px);
+}
+
+.label {
+  font-size: var(--text-xs, 12px);
+  color: var(--text-secondary, #6b7280);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.value {
+  font-size: var(--text-sm, 14px);
+  color: var(--text-primary, #1a1a1a);
+}
+
+.code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: var(--text-xs, 12px);
+  background: var(--bg-active, #f3f4f6);
+  padding: var(--space-2, 8px);
+  border-radius: var(--radius-sm, 4px);
+  overflow: auto;
+  max-height: 400px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.empty {
+  padding: var(--space-4, 16px);
+  text-align: center;
+  color: var(--text-tertiary, #9ca3af);
+}
+
+.notice {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2, 8px);
+  padding: var(--space-3, 12px);
+  border-radius: var(--radius-md, 6px);
+  border: 1px solid var(--border-color, #e5e7eb);
+}
+
+.notice-info {
+  background: var(--info-light, #eff6ff);
+  border-color: var(--info, #3b82f6);
+}
+
+.notice-warn {
+  background: #fffbeb;
+  border-color: #f59e0b;
+}
+
+.notice-danger {
+  background: #fef2f2;
+  border-color: #ef4444;
+}
+
+.notice-success {
+  background: #ecfdf5;
+  border-color: #10b981;
+}
+
+.notice-neutral {
+  background: var(--bg-secondary, #f9fafb);
+}
+
+.noticeText {
+  margin: 0;
+  font-size: var(--text-sm, 14px);
+}
+
+.noticeCode {
+  margin: 0;
+}

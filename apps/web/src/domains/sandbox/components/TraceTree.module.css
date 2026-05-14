@@ -1,0 +1,33 @@
+/* TraceTree Styles */
+
+.tree {
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-2, 8px);
+  overflow-x: auto;
+}
+
+.node {
+  display: flex;
+  flex-direction: column;
+}
+
+.children {
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  margin-left: 8px;
+  padding-left: 8px;
+}
+
+/* Optional: visual connector lines for tree */
+.children::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--border-color, #e5e7eb);
+  opacity: 0.5;
+}

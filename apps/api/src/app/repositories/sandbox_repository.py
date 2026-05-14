@@ -159,6 +159,14 @@ class SandboxSessionRepository:
         await self.session.flush()
         return result.rowcount
 
+    async def delete_expired(self) -> int:
+        """Hard-delete sessions past expires_at (cascades to related sandbox entities)."""
+        now = datetime.now(timezone.utc)
+        stmt = delete(SandboxSession).where(SandboxSession.expires_at < now)
+        result = await self.session.execute(stmt)
+        await self.session.flush()
+        return result.rowcount
+
     async def get_overrides_count(self, session_id: UUID) -> int:
         stmt = select(func.count()).where(SandboxOverride.session_id == session_id)
         return await self.session.scalar(stmt) or 0

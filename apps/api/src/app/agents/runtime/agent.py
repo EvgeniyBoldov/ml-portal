@@ -101,6 +101,10 @@ class AgentToolRuntime(BaseRuntime):
             enable_logging=enable_logging,
         )
         await run_session.start()
+        agent_event_ctx = {
+            "agent_slug": agent.slug,
+            "agent_run_id": str(run_session.run_id) if run_session.run_id else None,
+        }
         
         # Add run_id to context for intent logging
         if run_session.run_id:
@@ -129,9 +133,10 @@ class AgentToolRuntime(BaseRuntime):
             yield RuntimeEvent.status(
                 "partial_mode",
                 warning=exec_request.partial_mode_warning,
+                **agent_event_ctx,
             )
 
-        yield RuntimeEvent.status("agent_operation_loop_started")
+        yield RuntimeEvent.status("agent_operation_loop_started", **agent_event_ctx)
         
         # Log high-level intent
         await ctx.log_intent(
@@ -158,15 +163,7 @@ class AgentToolRuntime(BaseRuntime):
         ) and bool(available_operations)
         tools_payload = build_tools_payload(available_operations) if native_tool_calling else None
         runtime_budget = ctx.extra.get("runtime_budget_tracker")
-        _saved_outer_budget = None
         if isinstance(runtime_budget, RuntimeBudgetTracker):
-            _saved_outer_budget = runtime_budget.save_budget()
-            runtime_budget.apply_agent_limits_inplace(
-                max_steps=policy.max_steps,
-                max_tool_calls_total=policy.max_tool_calls_total,
-                tool_timeout_ms=policy.tool_timeout_ms,
-                max_steps_without_success=max_steps_without_success,
-            )
             budget_payload["shared_budget"] = runtime_budget.snapshot()
         tool_ledger = ctx.extra.get("runtime_tool_ledger")
         reuse_enabled = bool(ctx.extra.get("runtime_tool_reuse_enabled", True))
@@ -189,7 +186,7 @@ class AgentToolRuntime(BaseRuntime):
                     await run_session.finish("failed", "Wall time limit exceeded")
                     return
 
-                yield RuntimeEvent.thinking(step + 1)
+                yield RuntimeEvent(RuntimeEventType.THINKING, {"step": step + 1, **agent_event_ctx})
                 if isinstance(runtime_budget, RuntimeBudgetTracker):
                     if not runtime_budget.can_run_agent_step():
                         yield RuntimeEvent.error(
@@ -336,7 +333,7 @@ class AgentToolRuntime(BaseRuntime):
                     if isinstance(runtime_budget, RuntimeBudgetTracker):
                         budget_snapshot = runtime_budget.snapshot()
                         await run_session.log_step("budget_consumed", budget_snapshot)
-                        yield RuntimeEvent.status("budget_consumed", budget=budget_snapshot)
+                        yield RuntimeEvent.status("budget_consumed", budget=budget_snapshot, **agent_event_ctx)
                     await run_session.finish("completed")
                     return
 
@@ -380,6 +377,8 @@ class AgentToolRuntime(BaseRuntime):
                     prev_outputs = len(loop_state.operation_outputs)
                     async for ev in self._execute_single_operation_call(
                         operation_call=operation_call,
+                        agent_slug=agent.slug,
+                        agent_run_id=str(run_session.run_id) if run_session.run_id else None,
                         ctx=ctx,
                         available_operations=available_operations,
                         policy=policy,
@@ -505,7 +504,7 @@ class AgentToolRuntime(BaseRuntime):
                 if isinstance(runtime_budget, RuntimeBudgetTracker):
                     budget_snapshot = runtime_budget.snapshot()
                     await run_session.log_step("budget_consumed", budget_snapshot)
-                    yield RuntimeEvent.status("budget_consumed", budget=budget_snapshot)
+                    yield RuntimeEvent.status("budget_consumed", budget=budget_snapshot, **agent_event_ctx)
 
             # Max steps reached — synthesize with whatever we have
             if loop_state.operation_outputs:
@@ -531,7 +530,7 @@ class AgentToolRuntime(BaseRuntime):
             if isinstance(runtime_budget, RuntimeBudgetTracker):
                 budget_snapshot = runtime_budget.snapshot()
                 await run_session.log_step("budget_consumed", budget_snapshot)
-                yield RuntimeEvent.status("budget_consumed", budget=budget_snapshot)
+                yield RuntimeEvent.status("budget_consumed", budget=budget_snapshot, **agent_event_ctx)
             await run_session.finish("completed" if loop_state.operation_outputs else "failed")
 
         except Exception as e:
@@ -544,14 +543,12 @@ class AgentToolRuntime(BaseRuntime):
             )
             await run_session.finish("failed", str(e))
 
-        finally:
-            if isinstance(runtime_budget, RuntimeBudgetTracker) and _saved_outer_budget is not None:
-                runtime_budget.restore_budget(_saved_outer_budget)
-
     async def _execute_single_operation_call(
         self,
         *,
         operation_call: Any,
+        agent_slug: str,
+        agent_run_id: Optional[str],
         ctx: "ToolContext",
         available_operations: List[Any],
         policy: Any,
@@ -601,16 +598,23 @@ class AgentToolRuntime(BaseRuntime):
             await run_session.finish("failed", limit_message)
             return
 
-        yield RuntimeEvent.operation_call(
-            operation_call.operation_slug,
-            operation_call.id,
-            operation_call.arguments,
+        yield RuntimeEvent(
+            RuntimeEventType.OPERATION_CALL,
+            {
+                "operation": operation_call.operation_slug,
+                "call_id": operation_call.id,
+                "arguments": operation_call.arguments,
+                "agent_slug": agent_slug,
+                "agent_run_id": agent_run_id,
+            },
         )
         await run_session.log_step("operation_call", {
             "operation_slug": operation_call.operation_slug,
             "call_id": operation_call.id,
             "arguments": operation_call.arguments,
             "input": operation_call.arguments,
+            "agent_slug": agent_slug,
+            "agent_run_id": agent_run_id,
         })
 
         try:
@@ -664,7 +668,7 @@ class AgentToolRuntime(BaseRuntime):
             if len(raw_str) > MAX_OPERATION_RESULT_PREVIEW_CHARS:
                 sse_data = raw_str[:MAX_OPERATION_RESULT_PREVIEW_CHARS]
                 sse_truncated = True
-        yield RuntimeEvent.operation_result(
+        operation_result_payload = RuntimeEvent.operation_result(
             operation_call.operation_slug,
             operation_call.id,
             result.success,
@@ -677,6 +681,9 @@ class AgentToolRuntime(BaseRuntime):
             envelope=envelope.to_metadata(),
             truncated=sse_truncated if sse_truncated else None,
         )
+        operation_result_payload.data["agent_slug"] = agent_slug
+        operation_result_payload.data["agent_run_id"] = agent_run_id
+        yield operation_result_payload
         await run_session.log_step("operation_result", {
             "operation_slug": operation_call.operation_slug,
             "call_id": operation_call.id,
@@ -685,6 +692,8 @@ class AgentToolRuntime(BaseRuntime):
             "reused_from_call_id": result.metadata.get("reused_from_call_id"),
             "output": result.data if result.success else result.error,
             "result": result.data if result.success else result.error,
+            "agent_slug": agent_slug,
+            "agent_run_id": agent_run_id,
         })
 
         raw_output = result.data or {}

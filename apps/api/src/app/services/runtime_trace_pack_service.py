@@ -247,6 +247,8 @@ class RuntimeTracePackService:
                     "step_type": step_type,
                     "operation_slug": data.get("operation_slug") or data.get("canonical_op_slug") or data.get("operation"),
                     "tool_slug": data.get("tool_slug"),
+                    "agent_slug": data.get("agent_slug"),
+                    "agent_run_id": data.get("agent_run_id"),
                     "input": data.get("input", data.get("arguments", data.get("parameters"))),
                     "output": data.get("output", data.get("result", data.get("data"))),
                     "risk_level": data.get("risk_level"),

@@ -1,0 +1,60 @@
+/* Budget UI Components Styles */
+
+/* Budget Pill */
+.pillContainer {
+  display: inline-flex;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1, 4px);
+}
+
+.pillLabel {
+  opacity: 0.8;
+}
+
+.pillValue {
+  font-weight: 600;
+}
+
+/* Budget Pills Group */
+.pillsGroup {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--space-1, 4px);
+}
+
+/* Budget Table */
+.tableContainer {
+  padding: var(--space-3, 12px) 0;
+}
+
+.tableTitle {
+  font-weight: 600;
+  font-size: var(--text-sm, 14px);
+  margin-bottom: var(--space-2, 8px);
+  color: var(--text-primary, #1a1a1a);
+}
+
+.number {
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+
+.emptyCell {
+  color: var(--text-tertiary, #9ca3af);
+}
+
+.pctBadge {
+  min-width: 3ch;
+  justify-content: center;
+}
+
+.empty {
+  padding: var(--space-4, 16px);
+  text-align: center;
+  color: var(--text-tertiary, #9ca3af);
+  font-size: var(--text-sm, 14px);
+}

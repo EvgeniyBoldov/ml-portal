@@ -1,0 +1,41 @@
+/* TraceSteps Styles */
+
+.container {
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-2, 8px);
+}
+
+.empty {
+  padding: var(--space-4, 16px);
+  text-align: center;
+  color: var(--text-tertiary, #9ca3af);
+  font-size: var(--text-sm, 14px);
+}
+
+.runningIndicator {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2, 8px);
+  padding: var(--space-2, 8px) var(--space-3, 12px);
+  margin: var(--space-2, 8px) 0;
+  color: var(--text-secondary, #6b7280);
+  font-size: var(--text-sm, 14px);
+}
+
+.pulse {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--success, #22c55e);
+  animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}

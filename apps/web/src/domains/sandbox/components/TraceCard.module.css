@@ -1,0 +1,138 @@
+/* TraceCard Styles */
+
+.card {
+  display: flex;
+  flex-direction: column;
+  margin: 2px 0;
+  border-radius: var(--radius-md, 6px);
+  background: var(--bg-primary, #fff);
+  border: 1px solid var(--border-color, #e5e7eb);
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.card:hover {
+  background: var(--bg-hover, #f9fafb);
+}
+
+.selected {
+  border-color: var(--primary, #3b82f6);
+  background: var(--primary-light, #eff6ff);
+}
+
+/* Kind-specific styling */
+.unknown {
+  border-left: 3px solid var(--warning, #f59e0b);
+  background: var(--warning-light, #fffbeb);
+}
+
+.error {
+  border-left: 3px solid var(--danger, #ef4444);
+}
+
+.agent {
+  border-left: 3px solid var(--success, #22c55e);
+}
+
+.llm {
+  border-left: 3px solid var(--info, #3b82f6);
+}
+
+.tool {
+  border-left: 3px solid var(--text-tertiary, #9ca3af);
+}
+
+/* Header */
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2, 8px);
+  padding: var(--space-2, 8px) var(--space-3, 12px);
+  cursor: pointer;
+  user-select: none;
+  min-height: 36px;
+}
+
+/* Expand button */
+.expandBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary, #6b7280);
+  cursor: pointer;
+  border-radius: var(--radius-sm, 4px);
+  transition: background 0.15s ease;
+}
+
+.expandBtn:hover {
+  background: var(--bg-active, #f3f4f6);
+}
+
+.expandPlaceholder {
+  width: 20px;
+  flex-shrink: 0;
+}
+
+/* Kind badge */
+.kindBadge {
+  flex-shrink: 0;
+  text-transform: uppercase;
+  font-size: 10px !important;
+  letter-spacing: 0.5px;
+}
+
+/* Status icon */
+.statusIcon {
+  font-size: 12px;
+  width: 16px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.ok { color: var(--success, #22c55e); }
+.warn { color: var(--warning, #f59e0b); }
+.error { color: var(--danger, #ef4444); }
+.info { color: var(--info, #3b82f6); }
+.pending { color: var(--text-tertiary, #9ca3af); }
+
+/* Title */
+.title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-sm, 14px);
+  color: var(--text-primary, #1a1a1a);
+}
+
+/* Collapsed summary (agent) */
+.collapsedSummary {
+  font-size: var(--text-xs, 12px);
+  color: var(--text-secondary, #6b7280);
+  white-space: nowrap;
+}
+
+/* Duration */
+.duration {
+  font-size: var(--text-xs, 12px);
+  color: var(--text-tertiary, #9ca3af);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  white-space: nowrap;
+}
+
+/* Budget pills */
+.budgetPills {
+  flex-shrink: 0;
+}
+
+/* Unknown hint */
+.unknownHint {
+  font-size: 12px;
+  flex-shrink: 0;
+  cursor: help;
+}

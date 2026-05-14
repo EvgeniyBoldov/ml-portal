@@ -45,7 +45,10 @@ export default function SandboxListPage() {
       render: (row) => (
         <span
           className={styles['session-name']}
-          onClick={() => navigate(`/admin/sandbox/${row.id}`)}
+          onClick={(e) => {
+            e.stopPropagation();
+            navigate(`/admin/sandbox/${row.id}`);
+          }}
         >
           {row.name}
         </span>
@@ -96,14 +99,20 @@ export default function SandboxListPage() {
           <Button
             size="sm"
             variant="ghost"
-            onClick={() => navigate(`/admin/sandbox/${row.id}`)}
+            onClick={(e) => {
+              e.stopPropagation();
+              navigate(`/admin/sandbox/${row.id}`);
+            }}
           >
             Открыть
           </Button>
           <Button
             size="sm"
             variant="ghost"
-            onClick={() => setDeleteId(row.id)}
+            onClick={(e) => {
+              e.stopPropagation();
+              setDeleteId(row.id);
+            }}
           >
             Удалить
           </Button>
@@ -145,7 +154,7 @@ export default function SandboxListPage() {
             data={sessions}
             loading={isLoading}
             idField="id"
-            onRowClick={(row) => navigate(`/sandbox/${row.id}`)}
+            onRowClick={(row) => navigate(`/admin/sandbox/${row.id}`)}
           />
         </div>
       )}

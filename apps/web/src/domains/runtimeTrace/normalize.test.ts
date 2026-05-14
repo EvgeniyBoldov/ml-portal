@@ -44,15 +44,31 @@ describe('runtimeTrace normalize', () => {
     expect(trace.iterations[1].events).toHaveLength(2);
   });
 
-  it('falls back unknown types to system', () => {
+  it('falls back unknown types to unknown category (not system)', () => {
     const event = normalizeTraceEvent({
       id: 'z',
       raw_type: 'brand_new_event',
       data: { a: 1 },
     });
 
-    expect(event.category).toBe('system');
+    expect(event.category).toBe('unknown');
     expect(event.title).toContain('brand_new_event');
+  });
+
+  it('recognizes system-like events by pattern', () => {
+    const statusEvent = normalizeTraceEvent({
+      id: 's1',
+      raw_type: 'custom_status_event',
+      data: {},
+    });
+    expect(statusEvent.category).toBe('system');
+
+    const unknownEvent = normalizeTraceEvent({
+      id: 'u1',
+      raw_type: 'completely_unknown_xyz',
+      data: {},
+    });
+    expect(unknownEvent.category).toBe('unknown');
   });
 
   it('maps llm_request payload into semantic inputs', () => {

@@ -91,8 +91,15 @@ class PlanningStage:
         runtime_state.goal = runtime_state.goal or request.request_text
         runtime_state.current_user_query = request.request_text
         planner_agents: List[Dict[str, Any]] = list(available_agents or [])
+        planner_run_id = str(run_id)
 
         while runtime_state.iter_count < self._max_iterations:
+            planner_iteration = runtime_state.iter_count + 1
+            planner_event_ctx = {
+                "planner_run_id": planner_run_id,
+                "planner_iteration_id": f"{planner_run_id}:planner:{planner_iteration}",
+                "iteration": planner_iteration,
+            }
             if self._budget_tracker is not None and not self._budget_tracker.can_run_planner_iteration():
                 break
             if self._budget_tracker is not None:
@@ -100,7 +107,7 @@ class PlanningStage:
             yield PhasedEvent(
                 RuntimeEvent.status(
                     "planner_thinking",
-                    iteration=runtime_state.iter_count + 1,
+                    **planner_event_ctx,
                     budget=(
                         self._budget_tracker.snapshot()
                         if self._budget_tracker is not None
@@ -139,7 +146,7 @@ class PlanningStage:
                 return
 
             step_record = {
-                "iteration": runtime_state.iter_count + 1,
+                "iteration": planner_iteration,
                 "kind": step.kind.value,
                 "agent_slug": step.agent_slug,
                 "phase_id": step.phase_id,
@@ -153,6 +160,7 @@ class PlanningStage:
                     iteration=runtime_state.iter_count,
                     kind=step.kind.value,
                     payload={
+                        **planner_event_ctx,
                         "agent_slug": step.agent_slug,
                         "rationale": step.rationale,
                         "phase_id": step.phase_id,
@@ -285,6 +293,7 @@ class PlanningStage:
                     yield PhasedEvent(
                         RuntimeEvent.status(
                             "planner_agent_removed_unavailable",
+                            **planner_event_ctx,
                             agent=step.agent_slug,
                             remaining_agents=len(planner_agents),
                         ),
@@ -296,7 +305,7 @@ class PlanningStage:
                     source="pipeline",
                 )
                 yield PhasedEvent(
-                    RuntimeEvent.status("agent_non_retryable_failure_finalize"),
+                    RuntimeEvent.status("agent_non_retryable_failure_finalize", **planner_event_ctx),
                     OrchestrationPhase.PLANNER,
                 )
                 self.outcome = PlanningOutcome(
@@ -316,7 +325,7 @@ class PlanningStage:
                     source="pipeline",
                 )
                 yield PhasedEvent(
-                    RuntimeEvent.status("loop_detected"),
+                    RuntimeEvent.status("loop_detected", **planner_event_ctx),
                     OrchestrationPhase.PLANNER,
                 )
                 self.outcome = PlanningOutcome(
@@ -330,6 +339,8 @@ class PlanningStage:
         yield PhasedEvent(
             RuntimeEvent.status(
                 "max_iters_reached",
+                planner_run_id=planner_run_id,
+                planner_iteration_id=f"{planner_run_id}:planner:{runtime_state.iter_count}",
                 iterations=runtime_state.iter_count,
                 budget=(
                     self._budget_tracker.snapshot()

@@ -29,6 +29,12 @@ const CATEGORY_MAP: Record<string, TraceCategory> = {
   run_paused: 'system',
   stop: 'system',
   done: 'system',
+  // Future backend events (Stage 1)
+  orchestrator_start: 'system',
+  orchestrator_end: 'system',
+  agent_start: 'system',
+  agent_end: 'system',
+  partial_mode: 'system',
 };
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -123,7 +129,17 @@ function phaseOf(category: TraceCategory): string {
   if (category === 'decision' || category === 'planner' || category === 'retry' || category === 'policy') return 'decision';
   if (category === 'operation') return 'operation';
   if (category === 'final' || category === 'error') return 'final';
+  if (category === 'unknown') return 'unknown';
   return 'system';
+}
+
+function phaseFromEnvelopeOrCategory(data: Record<string, unknown>, category: TraceCategory): string {
+  const env = asRecord(data._envelope);
+  const envelopePhase = env.phase;
+  if (typeof envelopePhase === 'string' && envelopePhase.trim()) {
+    return envelopePhase.trim().toLowerCase();
+  }
+  return phaseOf(category);
 }
 
 function titleOf(rawType: string, category: TraceCategory): string {
@@ -152,9 +168,51 @@ function titleOf(rawType: string, category: TraceCategory): string {
   return titles[rawType] ?? `${category}: ${rawType}`;
 }
 
+// System-level events that should NOT be marked as 'unknown' even if not in CATEGORY_MAP
+const SYSTEM_EVENT_PATTERNS = ['status', 'delta', 'thinking', 'waiting', 'stop', 'done', 'run_', 'intent'];
+
+function isSystemEvent(rawType: string): boolean {
+  return SYSTEM_EVENT_PATTERNS.some(pattern => rawType.toLowerCase().includes(pattern));
+}
+
+function toRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function extractBudgetPayload(rawType: string, data: Record<string, unknown>): Record<string, unknown> | undefined {
+  if (rawType.startsWith('budget_')) return data;
+
+  const candidates = [
+    data.shared_budget,
+    data.runtime_budget,
+    data.budget,
+    data.sharedBudget,
+    data.runtimeBudget,
+  ];
+
+  for (const candidate of candidates) {
+    const record = toRecord(candidate);
+    if (record) return record;
+  }
+
+  // Some events carry budget-like fields directly
+  const hasBudgetLikeFields =
+    data.consumed_planner_iterations !== undefined
+    || data.max_planner_iterations !== undefined
+    || data.consumed_tool_calls !== undefined
+    || data.max_tool_calls_total !== undefined
+    || data.remaining_wall_time_ms !== undefined
+    || data.max_wall_time_ms !== undefined
+    || data.tokens_in !== undefined
+    || data.tokens_consumed !== undefined;
+
+  return hasBudgetLikeFields ? data : undefined;
+}
+
 export function normalizeTraceEvent(step: TraceSourceStep): SemanticEvent {
   const rawType = step.raw_type;
-  const category = CATEGORY_MAP[rawType] ?? 'system';
+  const category = CATEGORY_MAP[rawType] ?? (isSystemEvent(rawType) ? 'system' : 'unknown');
   const iteration = pickIteration(step);
   const summary = summarize(rawType, step.data);
 
@@ -180,7 +238,7 @@ export function normalizeTraceEvent(step: TraceSourceStep): SemanticEvent {
       }
     : undefined;
 
-  const budget = rawType.startsWith('budget_') ? step.data : undefined;
+  const budget = extractBudgetPayload(rawType, step.data);
 
   return {
     id: step.id,
@@ -189,7 +247,7 @@ export function normalizeTraceEvent(step: TraceSourceStep): SemanticEvent {
     title: titleOf(rawType, category),
     summary,
     status: statusOf(rawType, step.data),
-    phase: phaseOf(category),
+    phase: phaseFromEnvelopeOrCategory(step.data, category),
     iteration,
     started_at: step.created_at,
     duration_ms: step.duration_ms,

@@ -9,7 +9,8 @@ export type TraceCategory =
   | 'planner'
   | 'final'
   | 'error'
-  | 'system';
+  | 'system'
+  | 'unknown';
 
 export type TraceStatus = 'ok' | 'warn' | 'error' | 'info';
 

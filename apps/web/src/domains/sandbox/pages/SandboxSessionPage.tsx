@@ -21,7 +21,7 @@ import ConfigPanel from '../components/ConfigPanel';
 import ConfirmWriteDialog from '../components/ConfirmWriteDialog';
 import type { SandboxSelectedItem } from '../types';
 import type { RunStep } from '../hooks/useSandboxRun';
-import type { SemanticEvent } from '@/domains/runtimeTrace/types';
+import type { TraceEntity } from '@/domains/runtimeTrace/entityTypes';
 import styles from './SandboxSessionPage.module.css';
 
 const SIDEBAR_WIDTH_KEY = 'sandbox.sidebar.width';
@@ -61,9 +61,7 @@ export default function SandboxSessionPage() {
   // Inspector state: steps + selected step for right panel
   const [inspectorSteps, setInspectorSteps] = useState<RunStep[]>([]);
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
-  const [selectedVirtualStep, setSelectedVirtualStep] = useState<VirtualInspectorStep | null>(null);
-  const [inspectorRunId, setInspectorRunId] = useState<string | null>(null);
-  const [inspectorTraceEvents, setInspectorTraceEvents] = useState<SemanticEvent[]>([]);
+  const [selectedEntity, setSelectedEntity] = useState<TraceEntity | null>(null); // New hierarchical entity
   
   const sandboxRun = useSandboxRun(sessionId ?? '');
 
@@ -113,33 +111,12 @@ export default function SandboxSessionPage() {
     setSelectedItem({ type: 'run', id: runId ?? 'active', name: 'Лог выполнения' });
   };
 
-  const handleSelectStep = async (runId: string, stepId: string, virtualStep: VirtualInspectorStep, steps: RunStep[]) => {
+  const handleSelectStep = async (runId: string, stepId: string, virtualStep: VirtualInspectorStep, steps: RunStep[], entity?: TraceEntity) => {
     setInspectorSteps(steps);
     setSelectedStepId(stepId);
-    setSelectedVirtualStep(virtualStep);
-    setInspectorRunId(runId === 'active' ? sandboxRun.activeRun.runId : runId);
-    if (runId !== 'active' && sessionId) {
-      try {
-        const detail = await sandboxApi.getRunDetail(sessionId, runId);
-        const events = detail.trace?.iterations.flatMap((item) => item.events) ?? [];
-        setInspectorTraceEvents(events);
-      } catch {
-        setInspectorTraceEvents([]);
-      }
-    } else {
-      setInspectorTraceEvents([]);
-    }
+    setSelectedEntity(entity ?? null);
     setSelectedItem({ type: 'run', id: runId, name: 'Детали шага' });
   };
-
-  useEffect(() => {
-    if (!selectedStepId) return;
-    const exists = inspectorSteps.some((step) => step.id === selectedStepId);
-    if (!exists) {
-      setSelectedStepId(null);
-      setSelectedVirtualStep(null);
-    }
-  }, [inspectorSteps, selectedStepId]);
 
   const handleCreateBranchFromMessage = async (
     sourceText: string,
@@ -300,8 +277,8 @@ export default function SandboxSessionPage() {
           onRun={handleRun}
           onStop={sandboxRun.stop}
           onSelectRun={handleSelectRun}
-          onSelectStep={(runId, stepId, virtualStep, steps) => {
-            void handleSelectStep(runId, stepId, virtualStep, steps);
+          onSelectStep={(runId, stepId, virtualStep, steps, entity) => {
+            void handleSelectStep(runId, stepId, virtualStep, steps, entity);
           }}
         />
       </div>
@@ -324,11 +301,7 @@ export default function SandboxSessionPage() {
           activeBranchId={activeBranchId}
           catalog={catalog}
           inspectorSteps={inspectorSteps}
-          selectedStepId={selectedStepId}
-          selectedVirtualStep={selectedVirtualStep}
-          inspectorRunId={inspectorRunId}
-          inspectorRunStatus={sandboxRun.activeRun.status}
-          inspectorTraceEvents={inspectorTraceEvents}
+          selectedEntity={selectedEntity}
         />
       </div>
 

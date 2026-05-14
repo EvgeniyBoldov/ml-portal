@@ -22,10 +22,9 @@ import type {
 } from '../types';
 import ConfigDataField, { type SandboxConfigField, type SandboxConfigFieldType } from './ConfigDataField';
 import ConfigTabs from './ConfigTabs';
-import RunInspector from './RunInspector';
+import { EntityInspector } from './EntityInspector';
 import type { RunStep } from '../hooks/useSandboxRun';
-import type { SemanticEvent } from '@/domains/runtimeTrace/types';
-import type { VirtualInspectorStep } from './RunChat';
+import type { TraceEntity } from '@/domains/runtimeTrace/entityTypes';
 import { SandboxResolver } from '../lib/sandboxResolver';
 import styles from './ConfigPanel.module.css';
 
@@ -37,11 +36,7 @@ interface SessionConfigPanelProps {
   activeBranchId: string;
   catalog?: SandboxCatalog;
   inspectorSteps?: RunStep[];
-  selectedStepId?: string | null;
-  selectedVirtualStep?: VirtualInspectorStep | null;
-  inspectorRunId?: string | null;
-  inspectorRunStatus?: string;
-  inspectorTraceEvents?: SemanticEvent[];
+  selectedEntity?: TraceEntity | null; // New hierarchical entity
 }
 
 function stringifyValue(value: unknown): string {
@@ -257,7 +252,7 @@ function buildSectionsFromBlueprint(
 export function ConfigPanel({
   ...props
 }: SessionConfigPanelProps) {
-  const { overrides, selectedItem, catalog, sessionId, isReadOnly, activeBranchId, inspectorSteps, selectedStepId, selectedVirtualStep, inspectorRunId, inspectorRunStatus, inspectorTraceEvents } = props;
+  const { overrides, selectedItem, catalog, sessionId, isReadOnly, activeBranchId, inspectorSteps, selectedEntity } = props;
   const queryClient = useQueryClient();
   const [activeSectionTab, setActiveSectionTab] = useState<string>('');
   const [activeParameterTab, setActiveParameterTab] = useState<'platform'>('platform');
@@ -659,18 +654,14 @@ export function ConfigPanel({
     });
   };
 
-  const isRunInspectorMode = selectedItem?.type === 'run' && inspectorSteps;
+  const isEntityInspectorMode = selectedItem?.type === 'run' && selectedEntity;
 
   return (
     <div className={styles.panel}>
-      {isRunInspectorMode ? (
-        <RunInspector
-          steps={inspectorSteps}
-          selectedStepId={selectedStepId ?? null}
-          selectedVirtualStep={selectedVirtualStep ?? null}
-          runStatus={inspectorRunStatus}
-          runId={inspectorRunId}
-          traceEvents={inspectorTraceEvents}
+      {isEntityInspectorMode ? (
+        <EntityInspector
+          entity={selectedEntity}
+          steps={inspectorSteps ?? []}
         />
       ) : (
       <>

@@ -436,3 +436,6 @@ class SandboxService:
 
     async def cleanup_expired(self) -> int:
         return await self.sessions.archive_expired()
+
+    async def purge_expired(self) -> int:
+        return await self.sessions.delete_expired()

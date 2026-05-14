@@ -5,7 +5,7 @@ Handles automatic cleanup of old audit logs, agent runs, etc.
 """
 from __future__ import annotations
 from app.core.logging import get_logger
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from celery import shared_task
 from sqlalchemy import delete
@@ -15,6 +15,7 @@ import os
 
 from app.models.audit_log import AuditLog
 from app.models.agent_run import AgentRun
+from app.models.sandbox import SandboxSession
 
 logger = get_logger(__name__)
 
@@ -103,6 +104,41 @@ def cleanup_old_agent_runs(self):
         raise self.retry(exc=e)
 
 
+@shared_task(
+    name="app.workers.tasks_cleanup.cleanup_expired_sandbox_sessions",
+    bind=True,
+    max_retries=3,
+    default_retry_delay=60,
+)
+def cleanup_expired_sandbox_sessions(self):
+    """
+    Delete sandbox sessions past TTL (expires_at), including all cascade-linked records.
+    """
+    import asyncio
+
+    async def _cleanup():
+        AsyncSessionLocal = get_async_session()
+        async with AsyncSessionLocal() as session:
+            cutoff_date = datetime.now(timezone.utc)
+            result = await session.execute(
+                delete(SandboxSession).where(SandboxSession.expires_at < cutoff_date)
+            )
+            deleted_count = result.rowcount
+            await session.commit()
+            logger.info(
+                "Deleted %s expired sandbox sessions (expires_at < %s)",
+                deleted_count,
+                cutoff_date.isoformat(),
+            )
+            return deleted_count
+
+    try:
+        return asyncio.run(_cleanup())
+    except Exception as e:
+        logger.error(f"Failed to cleanup expired sandbox sessions: {e}", exc_info=True)
+        raise self.retry(exc=e)
+
+
 @shared_task(name="app.workers.tasks_cleanup.run_all_cleanup")
 def run_all_cleanup():
     """
@@ -121,6 +157,11 @@ def run_all_cleanup():
         results["agent_runs"] = cleanup_old_agent_runs.delay().get(timeout=300)
     except Exception as e:
         results["agent_runs"] = f"error: {e}"
+
+    try:
+        results["sandbox_sessions"] = cleanup_expired_sandbox_sessions.delay().get(timeout=300)
+    except Exception as e:
+        results["sandbox_sessions"] = f"error: {e}"
     
     logger.info(f"Cleanup completed: {results}")
     return results

@@ -103,6 +103,7 @@ app.conf.task_routes = {
     # LDAP tasks
     "app.workers.tasks_ldap_sync.sync_ldap_users": {"queue": "maintenance.default", "priority": 2},
     "app.workers.tasks_ldap_sync.ldap_health_check": {"queue": "health", "priority": 3},
+    "app.workers.tasks_cleanup.cleanup_expired_sandbox_sessions": {"queue": "cleanup_low", "priority": 1},
 
     # Reindex tasks
     "app.workers.tasks_reindex.reindex_source": {"queue": "reindex.default", "priority": 2},
@@ -204,6 +205,10 @@ if settings.BEAT == 1:
         "ldap-health-check": {
             "task": "app.workers.tasks_ldap_sync.ldap_health_check",
             "schedule": 300.0,  # 5 minutes
+        },
+        "sandbox-sessions-expired-cleanup": {
+            "task": "app.workers.tasks_cleanup.cleanup_expired_sandbox_sessions",
+            "schedule": 600.0,  # 10 minutes
         },
     }
 
