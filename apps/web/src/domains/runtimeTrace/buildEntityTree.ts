@@ -236,15 +236,18 @@ function buildLLMData(events: SemanticEvent[]): LLMData {
   const reqInputs = request?.inputs ?? {};
   const respRaw = response?.raw?.raw ?? {};
   const respOutputs = response?.outputs ?? {};
+  const toString = (value: unknown): string | undefined => (typeof value === 'string' ? value : undefined);
+  const toNumber = (value: unknown): number | undefined => (typeof value === 'number' ? value : undefined);
+  const toRecordArray = (value: unknown): Array<Record<string, unknown>> | undefined => (
+    Array.isArray(value) ? value.filter((item): item is Record<string, unknown> => typeof item === 'object' && item !== null) : undefined
+  );
   const llmCallId = (reqRaw.llm_call_id ?? respRaw.llm_call_id) as string | undefined;
   const parentEntityType = (reqRaw.parent_entity_type ?? respRaw.parent_entity_type) as string | undefined;
   const parentEntityId = (reqRaw.parent_entity_id ?? respRaw.parent_entity_id) as string | undefined;
   const purpose = (reqRaw.purpose ?? respRaw.purpose) as string | undefined;
 
-  const messages = (reqInputs.messages ?? reqRaw.messages) as Array<Record<string, unknown>> | undefined;
-  const systemPrompt = typeof (reqInputs.systemPrompt ?? reqRaw.system_prompt) === 'string'
-    ? (reqInputs.systemPrompt ?? reqRaw.system_prompt)
-    : undefined;
+  const messages = toRecordArray(reqInputs.messages ?? reqRaw.messages);
+  const systemPrompt = toString(reqInputs.systemPrompt ?? reqRaw.system_prompt);
 
   // Brief mode detection
   const isBriefMode = !!(respRaw.messages_hash || respRaw.system_prompt_hash);
@@ -301,15 +304,9 @@ function buildLLMData(events: SemanticEvent[]): LLMData {
     } : undefined,
     decision: toolCalls.length > 0 ? { toolCalls } : undefined,
     params: {
-      model: typeof (reqInputs.model ?? reqRaw.model) === 'string'
-        ? (reqInputs.model ?? reqRaw.model)
-        : undefined,
-      temperature: typeof (reqInputs.temperature ?? reqRaw.temperature) === 'number'
-        ? (reqInputs.temperature ?? reqRaw.temperature)
-        : undefined,
-      maxTokens: typeof (reqInputs.maxTokens ?? reqInputs.max_tokens ?? reqRaw.max_tokens) === 'number'
-        ? (reqInputs.maxTokens ?? reqInputs.max_tokens ?? reqRaw.max_tokens)
-        : undefined,
+      model: toString(reqInputs.model ?? reqRaw.model),
+      temperature: toNumber(reqInputs.temperature ?? reqRaw.temperature),
+      maxTokens: toNumber(reqInputs.maxTokens ?? reqInputs.max_tokens ?? reqRaw.max_tokens),
     },
     tokensIn,
     tokensOut,

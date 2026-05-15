@@ -9,7 +9,7 @@ import Button from '@/shared/ui/Button';
 import { Icon } from '@/shared/ui/Icon';
 import { Badge, Tooltip } from '@/shared/ui';
 import { qk } from '@/shared/api/keys';
-import type { RunStep } from '../hooks/useSandboxRun';
+import type { ActiveRun, RunStep } from '../hooks/useSandboxRun';
 import type { SandboxBranchListItem, SandboxRunListItem } from '../types';
 import { normalizeTraceEvent } from '@/domains/runtimeTrace/normalize';
 import type { TraceEntity } from '@/domains/runtimeTrace/entityTypes';
@@ -22,6 +22,27 @@ import styles from './RunChat.module.css';
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 const HIDDEN_STEP_TYPES = new Set(['delta', 'final_content', 'done']);
+
+export interface VirtualInspectorBudgetItem {
+  key: string;
+  label: string;
+  used: number;
+  limit?: number;
+}
+
+export interface VirtualInspectorStep {
+  id: string;
+  kind: string;
+  label: string;
+  title: string;
+  summary: string;
+  budget: VirtualInspectorBudgetItem[];
+  input: unknown;
+  output: unknown;
+  partition: unknown;
+  context: Record<string, unknown>;
+  raw: unknown[];
+}
 
 type Tone = 'neutral' | 'info' | 'warn' | 'success' | 'danger';
 type BudgetTone = 'neutral' | 'warn' | 'danger';
@@ -179,9 +200,9 @@ function ExpandableSteps({
               const virtual: VirtualInspectorStep = {
                 id: entity.id,
                 kind: entity.kind,
-                label: entity.name,
-                title: entity.name,
-                summary: entity.outcome ?? '',
+                label: entity.title,
+                title: entity.title,
+                summary: entity.status,
                 budget: [], // TODO: map from entity.budget
                 input: null,
                 output: null,
