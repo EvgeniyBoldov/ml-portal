@@ -108,6 +108,16 @@ class Synthesizer:
             planner_hint=planner_hint,
             system_prompt=system_prompt,
         )
+        llm_call_id = f"{run_id}:synthesis-llm:1"
+        synthesis_run_id = f"{run_id}:synthesis:1"
+        yield RuntimeEvent.llm_request(
+            llm_call_id=llm_call_id,
+            model=effective_model or "unknown",
+            messages=messages,
+            parent_entity_type="synthesis_run",
+            parent_entity_id=synthesis_run_id,
+            purpose="final_answer",
+        )
         buffer: List[str] = []
         try:
             async for chunk in self.llm_client.chat_stream(
@@ -127,6 +137,22 @@ class Synthesizer:
                 return
 
         full = "".join(buffer).strip()
+        yield RuntimeEvent.llm_response(
+            llm_call_id=llm_call_id,
+            model=effective_model or "unknown",
+            content=full,
+            response_length=len(full),
+            parent_entity_type="synthesis_run",
+            parent_entity_id=synthesis_run_id,
+        )
+        yield RuntimeEvent.llm_call(
+            llm_call_id=llm_call_id,
+            model=effective_model or "unknown",
+            response_length=len(full),
+            parent_entity_type="synthesis_run",
+            parent_entity_id=synthesis_run_id,
+            purpose="final_answer",
+        )
         if not full:
             # Fallback: stitched summaries.
             full = self._stitched_fallback(runtime_state=runtime_state)

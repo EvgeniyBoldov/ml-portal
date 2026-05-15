@@ -44,6 +44,7 @@ class StructuredCallResult(Generic[T]):
     trace_id: Optional[UUID]
     raw_response: str
     duration_ms: int
+    model: str
 
 
 _JSON_FENCE = re.compile(r"```(?:json)?\s*(\{.*?\}|\[.*?\])\s*```", re.DOTALL | re.IGNORECASE)
@@ -158,6 +159,7 @@ class StructuredLLMCall:
                 trace_id=None,
                 raw_response=raw_response,
                 duration_ms=duration_ms,
+                model=model,
             )
 
         # All attempts failed — try fallback factory if provided.
@@ -170,6 +172,7 @@ class StructuredLLMCall:
                     trace_id=None,
                     raw_response=raw_response,
                     duration_ms=duration_ms,
+                    model=model,
                 )
             except Exception as fallback_exc:
                 logger.error("StructuredLLMCall fallback failed role=%s: %s", role, fallback_exc)

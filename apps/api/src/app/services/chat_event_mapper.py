@@ -54,6 +54,13 @@ class ChatEventMapper:
                 "orchestration_envelope": env,
             }
 
+        if event.type in {RuntimeEventType.LLM_REQUEST, RuntimeEventType.LLM_RESPONSE, RuntimeEventType.LLM_CALL}:
+            return {
+                "type": event.type.value,
+                **event.data,
+                "orchestration_envelope": env,
+            }
+
         if event.type == RuntimeEventType.DELTA:
             return {"type": "delta", "content": event.data.get("content")}
 

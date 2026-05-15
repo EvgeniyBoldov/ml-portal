@@ -205,8 +205,12 @@ export function BudgetsTab({ entity, steps }: { entity: TraceEntity; steps: RunS
   const fallbackSnapshot = aggregateBudgetFromSteps(entity, steps);
   const plannerWindow = entity.kind === 'planner' ? plannerBudgetFromWindow(entity, steps) : {};
 
-  const snapshot = entity.budgetSnapshot ?? fallbackSnapshot ?? plannerWindow.snapshot;
-  const delta = entity.budgetDelta ?? plannerWindow.delta;
+  const snapshot = entity.kind === 'planner'
+    ? (plannerWindow.snapshot ?? entity.budgetSnapshot ?? fallbackSnapshot)
+    : (entity.budgetSnapshot ?? fallbackSnapshot ?? plannerWindow.snapshot);
+  const delta = entity.kind === 'planner'
+    ? (plannerWindow.delta ?? entity.budgetDelta)
+    : (entity.budgetDelta ?? plannerWindow.delta);
 
   return (
     <BudgetTable

@@ -2,7 +2,7 @@ import { InspectorTabs } from '@/shared/ui/Inspector';
 import { isToolData, type TraceEntity } from '@/domains/runtimeTrace/entityTypes';
 import type { RunStep } from '../../../hooks/useSandboxRun';
 import { BudgetsTab, InfoTab, RawTab } from '../shared';
-import { InspectorJsonBlock } from '@/shared/ui/Inspector';
+import { InspectorFieldGroup, InspectorFieldRow, InspectorJsonBlock } from '@/shared/ui/Inspector';
 
 export function ToolInspectorTabs({ entity, steps }: { entity: TraceEntity; steps: RunStep[] }) {
   const data = isToolData(entity.data) ? entity.data : null;
@@ -12,7 +12,13 @@ export function ToolInspectorTabs({ entity, steps }: { entity: TraceEntity; step
     if (tab === 'info') return (
       <>
         <InfoTab entity={entity} steps={steps} />
-        <InspectorJsonBlock value={{ calledByAgentSlug: data?.calledByAgentSlug, calledByAgentRunId: data?.calledByAgentRunId }} />
+        <InspectorFieldGroup>
+          <InspectorFieldRow label="Tool"><code>{data?.toolSlug ?? '—'}</code></InspectorFieldRow>
+          <InspectorFieldRow label="Call ID"><code>{data?.callId ?? '—'}</code></InspectorFieldRow>
+          <InspectorFieldRow label="Called By Agent"><code>{data?.calledByAgentSlug ?? '—'}</code></InspectorFieldRow>
+          <InspectorFieldRow label="Agent Run ID"><code>{data?.calledByAgentRunId ?? '—'}</code></InspectorFieldRow>
+          <InspectorFieldRow label="LLM Call ID"><code>{data?.llmCallId ?? '—'}</code></InspectorFieldRow>
+        </InspectorFieldGroup>
       </>
     );
     if (tab === 'input') return <InspectorJsonBlock value={data?.arguments ?? '—'} />;

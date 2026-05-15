@@ -13,6 +13,7 @@ in `output_requirements`. The model field names in the prompt must match.
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID
 
@@ -29,6 +30,17 @@ from app.runtime.planner.validator import validate_next_step
 from app.runtime.turn_state import RuntimeTurnState
 
 logger = get_logger(__name__)
+
+
+@dataclass
+class PlannerLLMTrace:
+    llm_call_id: str
+    model: str
+    request_payload: Dict[str, Any]
+    raw_response: str
+    response_length: int
+    duration_ms: int
+
 
 class PlannerLLMOutput(BaseModel):
     """Schema the planner LLM is required to produce."""
@@ -101,7 +113,8 @@ class Planner:
         tenant_id: Optional[UUID] = None,
         user_id: Optional[UUID] = None,
         agent_run_id: Optional[UUID] = None,
-    ) -> NextStep:
+        planner_iteration_id: Optional[str] = None,
+    ) -> tuple[NextStep, Optional[PlannerLLMTrace]]:
         allowed_slugs = [a.get("slug") for a in available_agents if a.get("slug")]
         payload_base = self._input_builder.build(
             runtime_state=runtime_state,
@@ -142,13 +155,26 @@ class Planner:
                 runtime_state=runtime_state,
             )
             if err is None:
-                return candidate
+                llm_call_id = (
+                    f"{planner_iteration_id}:planner-llm:{attempt + 1}"
+                    if planner_iteration_id
+                    else f"planner-llm:{attempt + 1}"
+                )
+                trace = PlannerLLMTrace(
+                    llm_call_id=llm_call_id,
+                    model=result.model or "unknown",
+                    request_payload=payload,
+                    raw_response=result.raw_response,
+                    response_length=len(result.raw_response or ""),
+                    duration_ms=result.duration_ms,
+                )
+                return candidate, trace
 
             logger.info("Planner validation retry (attempt=%s): %s", attempt, err)
             last_error = err
 
         # Two attempts failed → safe forced finalize if we have facts, else abort.
-        return self._safe_fallback(runtime_state, last_error)
+        return self._safe_fallback(runtime_state, last_error), None
 
     # --------------------------------------------------------------- helpers --
 

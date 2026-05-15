@@ -52,6 +52,38 @@
   justify-content: center;
 }
 
+.usageCell {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2, 8px);
+}
+
+.usageTrack {
+  width: 90px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--bg-tertiary, #eef2f7);
+  overflow: hidden;
+}
+
+.usageFill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 180ms ease;
+}
+
+.usageNeutral {
+  background: var(--info-500, #3b82f6);
+}
+
+.usageWarn {
+  background: var(--warning-500, #f59e0b);
+}
+
+.usageDanger {
+  background: var(--danger-500, #ef4444);
+}
+
 .empty {
   padding: var(--space-4, 16px);
   text-align: center;

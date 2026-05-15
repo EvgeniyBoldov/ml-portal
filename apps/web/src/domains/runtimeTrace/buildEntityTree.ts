@@ -157,7 +157,7 @@ function computeBudgetDelta(start?: BudgetSnapshot, end?: BudgetSnapshot): Budge
     const e = end[key];
     if (s || e) {
       delta[key] = {
-        used: (e?.used ?? 0) - (s?.used ?? 0),
+        used: Math.max(0, (e?.used ?? 0) - (s?.used ?? 0)),
         limit: e?.limit ?? s?.limit,
       };
     }
@@ -221,6 +221,12 @@ function buildLLMData(events: SemanticEvent[]): LLMData {
   // Try multiple sources for request data
   const reqRaw = request?.raw?.raw ?? {};
   const reqInputs = request?.inputs ?? {};
+  const respRaw = response?.raw?.raw ?? {};
+  const respOutputs = response?.outputs ?? {};
+  const llmCallId = (reqRaw.llm_call_id ?? respRaw.llm_call_id) as string | undefined;
+  const parentEntityType = (reqRaw.parent_entity_type ?? respRaw.parent_entity_type) as string | undefined;
+  const parentEntityId = (reqRaw.parent_entity_id ?? respRaw.parent_entity_id) as string | undefined;
+  const purpose = (reqRaw.purpose ?? respRaw.purpose) as string | undefined;
 
   const messages = (reqInputs.messages ?? reqRaw.messages) as Array<Record<string, unknown>> | undefined;
   const systemPrompt = typeof (reqInputs.systemPrompt ?? reqRaw.system_prompt) === 'string'
@@ -228,8 +234,6 @@ function buildLLMData(events: SemanticEvent[]): LLMData {
     : undefined;
 
   // Brief mode detection
-  const respRaw = response?.raw?.raw ?? {};
-  const respOutputs = response?.outputs ?? {};
   const isBriefMode = !!(respRaw.messages_hash || respRaw.system_prompt_hash);
   const messagesHash = typeof respRaw.messages_hash === 'string' ? respRaw.messages_hash : undefined;
   const systemPromptHash = typeof respRaw.system_prompt_hash === 'string' ? respRaw.system_prompt_hash : undefined;
@@ -264,6 +268,10 @@ function buildLLMData(events: SemanticEvent[]): LLMData {
 
   return {
     kind: 'llm',
+    llmCallId: typeof llmCallId === 'string' ? llmCallId : undefined,
+    parentEntityType: typeof parentEntityType === 'string' ? parentEntityType : undefined,
+    parentEntityId: typeof parentEntityId === 'string' ? parentEntityId : undefined,
+    purpose: typeof purpose === 'string' ? purpose : undefined,
     prompt: messages || systemPrompt || messagesHash || systemPromptHash ? {
       messages,
       systemPrompt,
@@ -318,6 +326,7 @@ function buildToolData(events: SemanticEvent[]): ToolData {
   );
 
   const callId = String(callInputs.call_id ?? rawCall.call_id ?? '');
+  const llmCallId = (callInputs.llm_call_id ?? rawCall.llm_call_id ?? resultOutputs.llm_call_id ?? rawResult.llm_call_id) as string | undefined;
   const calledByAgentSlug = (callInputs.agent_slug ?? rawCall.agent_slug ?? resultOutputs.agent_slug ?? rawResult.agent_slug) as string | undefined;
   const calledByAgentRunId = (callInputs.agent_run_id ?? rawCall.agent_run_id ?? resultOutputs.agent_run_id ?? rawResult.agent_run_id) as string | undefined;
 
@@ -344,6 +353,7 @@ function buildToolData(events: SemanticEvent[]): ToolData {
     kind: 'tool',
     toolSlug,
     callId: callId || undefined,
+    llmCallId: typeof llmCallId === 'string' ? llmCallId : undefined,
     calledByAgentSlug: typeof calledByAgentSlug === 'string' ? calledByAgentSlug : undefined,
     calledByAgentRunId: typeof calledByAgentRunId === 'string' ? calledByAgentRunId : undefined,
     arguments: Object.keys(args).length > 0 ? args : undefined,
@@ -592,6 +602,8 @@ export function buildEntityTree(
 
   // Track pending pairs (llm_request waiting for llm_response, etc.)
   const pendingPairs: Map<string, PendingPair> = new Map();
+  const llmEntityByCallId: Map<string, TraceEntity> = new Map();
+  const llmEventsByCallId: Map<string, SemanticEvent[]> = new Map();
   const agentByRunId: Map<string, TraceEntity> = new Map();
   const pendingAgentsBySlug: Map<string, TraceEntity[]> = new Map();
 
@@ -744,6 +756,13 @@ export function buildEntityTree(
       if (resolvedAgent) return resolvedAgent;
     }
     return stack[stack.length - 1].entity;
+  }
+
+  function getLlmCallId(event: SemanticEvent): string {
+    const raw = (event.raw?.raw ?? {}) as Record<string, unknown>;
+    const explicit = raw.llm_call_id;
+    if (typeof explicit === 'string' && explicit.trim()) return explicit.trim();
+    return `fallback:${event.iteration}:${event.id}`;
   }
 
   function closeCurrentAgentWindow(endEvent: SemanticEvent, status: TraceEntity['status'] = 'ok'): void {
@@ -1010,41 +1029,54 @@ export function buildEntityTree(
 
     // --- Handle llm_request (start pending pair) ---
     if (rawType === 'llm_request') {
-      const pairId = `llm-${event.id}`;
-      pendingPairs.set(pairId, { type: 'llm', startEvent: event, events: [event] });
+      const llmCallId = getLlmCallId(event);
+      pendingPairs.set(llmCallId, { type: 'llm', startEvent: event, events: [event] });
+      llmEventsByCallId.set(llmCallId, [event]);
       continue;
     }
 
     // --- Handle llm_response / llm_call (complete llm pair) ---
     if (rawType === 'llm_response' || rawType === 'llm_call') {
-      // Find matching request (heuristic: previous llm_request in same iteration)
-      const matchingRequest = events
-        .slice(0, i)
-        .reverse()
-        .find(e => e.raw_type === 'llm_request' && e.iteration === event.iteration);
+      const llmCallId = getLlmCallId(event);
+      const pending = pendingPairs.get(llmCallId);
+      const knownEvents = llmEventsByCallId.get(llmCallId) ?? pending?.events ?? [];
+      const pairEvents = [...knownEvents, event].filter(
+        (candidate, idx, arr) => arr.findIndex(item => item.id === candidate.id) === idx,
+      );
+      llmEventsByCallId.set(llmCallId, pairEvents);
 
-      const pairEvents: SemanticEvent[] = matchingRequest ? [matchingRequest, event] : [event];
+      const existingEntity = llmEntityByCallId.get(llmCallId);
+      if (existingEntity) {
+        for (const pe of pairEvents) {
+          if (!existingEntity.sourceEventIds.includes(pe.id)) existingEntity.sourceEventIds.push(pe.id);
+        }
+        existingEntity.status = event.status;
+        existingEntity.durationMs = pairEvents.reduce((acc, current) => acc + (current.duration_ms ?? 0), 0);
+        existingEntity.data = buildLLMData(pairEvents);
+      } else {
+        const llmEntity: TraceEntity = {
+          id: hashIds([llmCallId, ...pairEvents.map(e => e.id)]),
+          kind: 'llm',
+          parentId: null,
+          depth: 0,
+          children: [],
+          title: event.summary ?? 'LLM',
+          status: event.status,
+          startedAt: pairEvents[0]?.started_at ?? event.started_at,
+          durationMs: pairEvents.reduce((acc, current) => acc + (current.duration_ms ?? 0), 0),
+          sourceEventIds: pairEvents.map(e => e.id),
+          budgetSnapshot: extractBudgetSnapshot(event),
+          data: buildLLMData(pairEvents),
+        };
 
-      const llmEntity: TraceEntity = {
-        id: hashIds(pairEvents.map(e => e.id)),
-        kind: 'llm',
-        parentId: null,
-        depth: 0,
-        children: [],
-        title: event.summary ?? 'LLM',
-        status: event.status,
-        startedAt: matchingRequest?.started_at ?? event.started_at,
-        durationMs: (matchingRequest?.duration_ms ?? 0) + (event.duration_ms ?? 0),
-        sourceEventIds: pairEvents.map(e => e.id),
-        budgetSnapshot: extractBudgetSnapshot(event),
-        data: buildLLMData(pairEvents),
-      };
+        const parent = resolveParentForEvent(event);
+        llmEntity.parentId = parent.id;
+        llmEntity.depth = parent.depth + 1;
+        parent.children.push(llmEntity);
+        llmEntityByCallId.set(llmCallId, llmEntity);
+      }
 
-      // Attach by explicit phase/id first, fallback to stack
-      const parent = resolveParentForEvent(event);
-      llmEntity.parentId = parent.id;
-      llmEntity.depth = parent.depth + 1;
-      parent.children.push(llmEntity);
+      if (rawType === 'llm_call') pendingPairs.delete(llmCallId);
 
       if (currentAgentWindow) {
         currentAgentWindow.events.push(event);

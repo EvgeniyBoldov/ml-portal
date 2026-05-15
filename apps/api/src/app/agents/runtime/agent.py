@@ -170,6 +170,11 @@ class AgentToolRuntime(BaseRuntime):
 
         try:
             for step in range(policy.max_steps):
+                llm_call_id = (
+                    f"{run_session.run_id}:agent-llm:{step + 1}"
+                    if run_session.run_id
+                    else f"agent-llm:{step + 1}"
+                )
                 elapsed_ms = (time.time() - loop_state.start_time) * 1000
                 global_remaining = (
                     runtime_budget.remaining_wall_time_ms()
@@ -207,7 +212,27 @@ class AgentToolRuntime(BaseRuntime):
                     "max_tokens": gen.max_tokens,
                     "messages": llm_messages,
                     "native_tool_calling": native_tool_calling,
+                    "llm_call_id": llm_call_id,
+                    "parent_entity_type": "agent_run",
+                    "parent_entity_id": str(run_session.run_id) if run_session.run_id else None,
+                    "agent_run_id": str(run_session.run_id) if run_session.run_id else None,
+                    "agent_slug": agent.slug,
+                    "purpose": "tool_decision_or_answer",
                 })
+                yield RuntimeEvent.llm_request(
+                    llm_call_id=llm_call_id,
+                    step=step + 1,
+                    model=gen.model,
+                    temperature=gen.temperature,
+                    max_tokens=gen.max_tokens,
+                    messages=llm_messages,
+                    native_tool_calling=native_tool_calling,
+                    parent_entity_type="agent_run",
+                    parent_entity_id=str(run_session.run_id) if run_session.run_id else None,
+                    agent_run_id=str(run_session.run_id) if run_session.run_id else None,
+                    agent_slug=agent.slug,
+                    purpose="tool_decision_or_answer",
+                )
                 llm_start = time.time()
                 raw_response_dict: Optional[Dict[str, Any]] = None
                 if native_tool_calling and tools_payload:
@@ -235,13 +260,47 @@ class AgentToolRuntime(BaseRuntime):
                     "model": gen.model,
                     "content": raw_response,
                     "response_length": len(raw_response),
+                    "llm_call_id": llm_call_id,
+                    "parent_entity_type": "agent_run",
+                    "parent_entity_id": str(run_session.run_id) if run_session.run_id else None,
+                    "agent_run_id": str(run_session.run_id) if run_session.run_id else None,
+                    "agent_slug": agent.slug,
                 }, duration_ms=llm_duration)
+                yield RuntimeEvent.llm_response(
+                    llm_call_id=llm_call_id,
+                    step=step + 1,
+                    model=gen.model,
+                    content=raw_response,
+                    response_length=len(raw_response),
+                    parent_entity_type="agent_run",
+                    parent_entity_id=str(run_session.run_id) if run_session.run_id else None,
+                    agent_run_id=str(run_session.run_id) if run_session.run_id else None,
+                    agent_slug=agent.slug,
+                )
 
                 await run_session.log_step("llm_call", {
                     "step": step + 1,
                     "response_length": len(raw_response),
                     "native_tool_calling": native_tool_calling,
+                    "llm_call_id": llm_call_id,
+                    "parent_entity_type": "agent_run",
+                    "parent_entity_id": str(run_session.run_id) if run_session.run_id else None,
+                    "agent_run_id": str(run_session.run_id) if run_session.run_id else None,
+                    "agent_slug": agent.slug,
                 }, duration_ms=llm_duration)
+                yield RuntimeEvent.llm_call(
+                    llm_call_id=llm_call_id,
+                    step=step + 1,
+                    model=gen.model,
+                    response_length=len(raw_response),
+                    native_tool_calling=native_tool_calling,
+                    duration_ms=llm_duration,
+                    parent_entity_type="agent_run",
+                    parent_entity_id=str(run_session.run_id) if run_session.run_id else None,
+                    agent_run_id=str(run_session.run_id) if run_session.run_id else None,
+                    agent_slug=agent.slug,
+                    purpose="tool_decision_or_answer",
+                )
 
                 # Parse operation calls — native path first, then text fallback
                 strict_protocol = bool(platform_config.get("strict_operation_protocol", False))
@@ -379,6 +438,7 @@ class AgentToolRuntime(BaseRuntime):
                         operation_call=operation_call,
                         agent_slug=agent.slug,
                         agent_run_id=str(run_session.run_id) if run_session.run_id else None,
+                        llm_call_id=llm_call_id,
                         ctx=ctx,
                         available_operations=available_operations,
                         policy=policy,
@@ -549,6 +609,7 @@ class AgentToolRuntime(BaseRuntime):
         operation_call: Any,
         agent_slug: str,
         agent_run_id: Optional[str],
+        llm_call_id: Optional[str],
         ctx: "ToolContext",
         available_operations: List[Any],
         policy: Any,
@@ -606,6 +667,7 @@ class AgentToolRuntime(BaseRuntime):
                 "arguments": operation_call.arguments,
                 "agent_slug": agent_slug,
                 "agent_run_id": agent_run_id,
+                "llm_call_id": llm_call_id,
             },
         )
         await run_session.log_step("operation_call", {
@@ -615,6 +677,7 @@ class AgentToolRuntime(BaseRuntime):
             "input": operation_call.arguments,
             "agent_slug": agent_slug,
             "agent_run_id": agent_run_id,
+            "llm_call_id": llm_call_id,
         })
 
         try:
@@ -683,6 +746,7 @@ class AgentToolRuntime(BaseRuntime):
         )
         operation_result_payload.data["agent_slug"] = agent_slug
         operation_result_payload.data["agent_run_id"] = agent_run_id
+        operation_result_payload.data["llm_call_id"] = llm_call_id
         yield operation_result_payload
         await run_session.log_step("operation_result", {
             "operation_slug": operation_call.operation_slug,
@@ -694,6 +758,7 @@ class AgentToolRuntime(BaseRuntime):
             "result": result.data if result.success else result.error,
             "agent_slug": agent_slug,
             "agent_run_id": agent_run_id,
+            "llm_call_id": llm_call_id,
         })
 
         raw_output = result.data or {}

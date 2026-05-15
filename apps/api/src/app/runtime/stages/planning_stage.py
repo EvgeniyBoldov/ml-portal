@@ -118,7 +118,7 @@ class PlanningStage:
             )
 
             try:
-                step = await self._planner.next_step(
+                planner_result = await self._planner.next_step(
                     runtime_state=runtime_state,
                     available_agents=planner_agents,
                     outline=runtime_state.outline,
@@ -127,7 +127,14 @@ class PlanningStage:
                     tenant_id=tenant_id,
                     user_id=user_id,
                     agent_run_id=run_id,
+                    planner_iteration_id=planner_event_ctx["planner_iteration_id"],
                 )
+                if isinstance(planner_result, tuple):
+                    step = planner_result[0]
+                    planner_llm_trace = planner_result[1] if len(planner_result) > 1 else None
+                else:
+                    step = planner_result
+                    planner_llm_trace = None
             except Exception as exc:
                 logger.error(
                     "Planner failure on iter=%s: %s", runtime_state.iter_count, exc, exc_info=True
@@ -144,6 +151,51 @@ class PlanningStage:
                     error_message=str(exc),
                 )
                 return
+
+            if planner_llm_trace is not None:
+                llm_parent_id = planner_event_ctx["planner_iteration_id"]
+                yield PhasedEvent(
+                    RuntimeEvent.llm_request(
+                        llm_call_id=planner_llm_trace.llm_call_id,
+                        model=planner_llm_trace.model,
+                        messages=[
+                            {"role": "user", "content": planner_llm_trace.request_payload},
+                        ],
+                        parent_entity_type="planner_iteration",
+                        parent_entity_id=llm_parent_id,
+                        planner_iteration_id=llm_parent_id,
+                        planner_run_id=planner_event_ctx["planner_run_id"],
+                        purpose="planning_decision",
+                    ),
+                    OrchestrationPhase.PLANNER,
+                )
+                yield PhasedEvent(
+                    RuntimeEvent.llm_response(
+                        llm_call_id=planner_llm_trace.llm_call_id,
+                        model=planner_llm_trace.model,
+                        content=planner_llm_trace.raw_response,
+                        response_length=planner_llm_trace.response_length,
+                        parent_entity_type="planner_iteration",
+                        parent_entity_id=llm_parent_id,
+                        planner_iteration_id=llm_parent_id,
+                        planner_run_id=planner_event_ctx["planner_run_id"],
+                    ),
+                    OrchestrationPhase.PLANNER,
+                )
+                yield PhasedEvent(
+                    RuntimeEvent.llm_call(
+                        llm_call_id=planner_llm_trace.llm_call_id,
+                        model=planner_llm_trace.model,
+                        response_length=planner_llm_trace.response_length,
+                        duration_ms=planner_llm_trace.duration_ms,
+                        parent_entity_type="planner_iteration",
+                        parent_entity_id=llm_parent_id,
+                        planner_iteration_id=llm_parent_id,
+                        planner_run_id=planner_event_ctx["planner_run_id"],
+                        purpose="planning_decision",
+                    ),
+                    OrchestrationPhase.PLANNER,
+                )
 
             step_record = {
                 "iteration": planner_iteration,

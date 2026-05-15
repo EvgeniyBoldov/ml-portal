@@ -192,6 +192,10 @@ function metricOf(
   return source?.[key];
 }
 
+function formatValue(value: number, unit: string): string {
+  return `${formatNumber(value)}${unit ? ` ${unit}` : ''}`;
+}
+
 export function BudgetTable({
   snapshot,
   delta,
@@ -211,8 +215,8 @@ export function BudgetTable({
   const addRow = (key: keyof BudgetSnapshot, unit: string) => {
     const totalMetric = metricOf(snapshot, key);
     const entityMetric = metricOf(delta, key);
-    const totalUsed = totalMetric?.used ?? 0;
-    const entityUsed = entityMetric?.used ?? totalUsed;
+    const totalUsed = Math.max(0, totalMetric?.used ?? 0);
+    const entityUsed = Math.max(0, entityMetric?.used ?? totalUsed);
     const limit = totalMetric?.limit ?? entityMetric?.limit;
 
     if (entityUsed <= 0 && totalUsed <= 0) return;
@@ -249,26 +253,57 @@ export function BudgetTable({
       dataIndex: 'metric',
     },
     {
-      key: 'usage',
-      title: 'Сущность / Всего / Лимит',
+      key: 'entity',
+      title: 'Сущность',
       align: 'right',
       render: (_, row) => (
         <span className={styles.number}>
-          {formatNumber(row.entityUsed)} / {formatNumber(row.totalUsed)} / {row.limit !== undefined ? formatNumber(row.limit) : '—'}
+          {formatValue(row.entityUsed, row.unit)}
+        </span>
+      ),
+    },
+    {
+      key: 'total',
+      title: 'Всего',
+      align: 'right',
+      render: (_, row) => (
+        <span className={styles.number}>
+          {formatValue(row.totalUsed, row.unit)}
+        </span>
+      ),
+    },
+    {
+      key: 'limit',
+      title: 'Лимит',
+      align: 'right',
+      render: (_, row) => (
+        <span className={styles.number}>
+          {row.limit !== undefined ? formatValue(row.limit, row.unit) : '—'}
         </span>
       ),
     },
     {
       key: 'pct',
-      title: '% лимита (всего)',
+      title: 'Использование',
       align: 'right',
       render: (_, row) => {
         if (row.pctTotal === null) return <span className={styles.emptyCell}>—</span>;
         const tone = toneForPercent(row.pctTotal);
         return (
-          <Badge tone={tone} size="small" className={styles.pctBadge}>
-            {row.pctTotal}%
-          </Badge>
+          <div className={styles.usageCell}>
+            <div className={styles.usageTrack}>
+              <div
+                className={[
+                  styles.usageFill,
+                  tone === 'danger' ? styles.usageDanger : tone === 'warn' ? styles.usageWarn : styles.usageNeutral,
+                ].join(' ')}
+                style={{ width: `${row.pctTotal}%` }}
+              />
+            </div>
+            <Badge tone={tone} size="small" className={styles.pctBadge}>
+              {row.pctTotal}%
+            </Badge>
+          </div>
         );
       },
     },

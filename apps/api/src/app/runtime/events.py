@@ -34,6 +34,9 @@ class RuntimeEventType(str, Enum):
     # Progress
     STATUS = "status"
     PLANNER_STEP = "planner_step"
+    LLM_REQUEST = "llm_request"
+    LLM_RESPONSE = "llm_response"
+    LLM_CALL = "llm_call"
     # Operation (tool) execution, emitted by AgentToolRuntime
     OPERATION_CALL = "operation_call"
     OPERATION_RESULT = "operation_result"
@@ -67,6 +70,18 @@ class RuntimeEvent:
             RuntimeEventType.PLANNER_STEP,
             {"iteration": iteration, "kind": kind, **payload},
         )
+
+    @classmethod
+    def llm_request(cls, **payload: Any) -> "RuntimeEvent":
+        return cls(RuntimeEventType.LLM_REQUEST, dict(payload))
+
+    @classmethod
+    def llm_response(cls, **payload: Any) -> "RuntimeEvent":
+        return cls(RuntimeEventType.LLM_RESPONSE, dict(payload))
+
+    @classmethod
+    def llm_call(cls, **payload: Any) -> "RuntimeEvent":
+        return cls(RuntimeEventType.LLM_CALL, dict(payload))
 
     @classmethod
     def operation_call(cls, *, operation: str, call_id: str, arguments: Dict[str, Any]) -> "RuntimeEvent":

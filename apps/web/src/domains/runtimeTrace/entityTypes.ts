@@ -47,6 +47,10 @@ export type BudgetDelta = BudgetSnapshot;
 
 export interface LLMData {
   kind: 'llm';
+  llmCallId?: string;
+  parentEntityType?: string;
+  parentEntityId?: string;
+  purpose?: string;
   prompt?: {
     messages?: Array<Record<string, unknown>>;
     systemPrompt?: string;
@@ -82,6 +86,7 @@ export interface ToolData {
   kind: 'tool';
   toolSlug: string;
   callId?: string;
+  llmCallId?: string;
   calledByAgentSlug?: string;
   calledByAgentRunId?: string;
   arguments?: Record<string, unknown>;
