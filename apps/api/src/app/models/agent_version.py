@@ -120,6 +120,11 @@ class AgentVersion(Base):
             parts.append(f"# РАЗРЕШЁННЫЕ ОПЕРАЦИИ\n{self.allowed_ops}")
         return "\n\n".join(parts) if parts else ""
 
+    @property
+    def planner_short_info(self) -> Optional[str]:
+        """Planner-facing concise routing hint (stored in short_info)."""
+        return self.short_info
+
     agent: Mapped["Agent"] = relationship(
         "Agent",
         back_populates="versions",

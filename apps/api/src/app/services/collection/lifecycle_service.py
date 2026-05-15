@@ -3,11 +3,12 @@ from __future__ import annotations
 import uuid
 from typing import List, Optional
 
-from sqlalchemy import select, text
+from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ConflictError, InvalidSchemaError
 from app.models.collection import Collection, CollectionStatus, CollectionType, FieldType
+from app.models.rbac import RbacRule, ResourceType
 from app.models.tool_instance import ToolInstance
 
 
@@ -341,8 +342,18 @@ class CollectionLifecycleService:
         if not collection:
             return False
 
+        collection_id = collection.id
         table_name = getattr(collection, "table_name", None)
         qdrant_collection_name = getattr(collection, "qdrant_collection_name", None)
+
+        # RBAC must be scoped to data entities (collections) for resource_type="instance".
+        # Remove linked RBAC rules before deleting the collection.
+        await self.session.execute(
+            delete(RbacRule).where(
+                RbacRule.resource_type == ResourceType.INSTANCE.value,
+                RbacRule.resource_id == collection_id,
+            )
+        )
 
         await self.session.delete(collection)
         await self.session.flush()

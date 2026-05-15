@@ -14,7 +14,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import RbacRuleNotFoundError, RbacRuleDuplicateError
+from app.core.exceptions import RbacRuleNotFoundError, RbacRuleDuplicateError, ValidationError
 from app.models.rbac import RbacRule, RbacLevel, ResourceType, RbacEffect
 from app.repositories.rbac_repository import RbacRuleRepository
 from app.core.logging import get_logger
@@ -48,6 +48,8 @@ class RbacService:
         owner_platform: bool = False,
         created_by_user_id: Optional[UUID] = None,
     ) -> RbacRule:
+        await self._validate_resource_binding(resource_type, resource_id)
+
         rule = RbacRule(
             level=level,
             owner_user_id=owner_user_id,
@@ -70,13 +72,26 @@ class RbacService:
     async def update_rule(
         self,
         rule_id: UUID,
-        effect: str,
+        effect: Optional[str] = None,
+        resource_type: Optional[str] = None,
+        resource_id: Optional[UUID] = None,
     ) -> RbacRule:
-        """Update rule effect (allow ↔ deny)."""
+        """Update rule fields."""
         rule = await self.get_rule(rule_id)
-        rule.effect = effect
+        next_resource_type = resource_type or rule.resource_type
+        next_resource_id = resource_id or rule.resource_id
+        await self._validate_resource_binding(next_resource_type, next_resource_id)
+
+        if effect is not None:
+            rule.effect = effect
+        if resource_type is not None:
+            rule.resource_type = resource_type
+        if resource_id is not None:
+            rule.resource_id = resource_id
         result = await self.rule_repo.update(rule)
-        logger.info(f"Updated RBAC rule {rule_id}: effect={effect}")
+        logger.info(
+            f"Updated RBAC rule {rule_id}: effect={rule.effect}, resource_type={rule.resource_type}, resource_id={rule.resource_id}"
+        )
         return result
 
     async def delete_rule(self, rule_id: UUID) -> None:
@@ -270,7 +285,7 @@ class RbacService:
             resource_name = resource_info.get("name") or resource_info.get("slug") or {
                 "agent": "Агент",
                 "tool": "Инструмент",
-                "instance": "Коннектор",
+                "instance": "Данные",
                 "collection": "Коллекция",
                 "operation": "Операция",
             }.get(rule.resource_type, rule.resource_type)
@@ -332,10 +347,21 @@ class RbacService:
             model=tool_model,
             ids=resource_ids["tool"],
         )
-        name_map["instance"] = await self._load_name_map_by_ids(
-            model=instance_model,
-            ids=resource_ids["instance"],
+        # "instance" in UI is data resource. First resolve by collections;
+        # then fallback to legacy connector ids for backward compatibility.
+        instance_ids: set[UUID] = set(resource_ids["instance"])
+        instance_name_map = await self._load_name_map_by_ids(
+            model=collection_model,
+            ids=instance_ids,
         )
+        unresolved_instance_ids = {rid for rid in instance_ids if rid not in instance_name_map}
+        if unresolved_instance_ids:
+            legacy_instance_map = await self._load_name_map_by_ids(
+                model=instance_model,
+                ids=unresolved_instance_ids,
+            )
+            instance_name_map.update(legacy_instance_map)
+        name_map["instance"] = instance_name_map
         name_map["collection"] = await self._load_name_map_by_ids(
             model=collection_model,
             ids=resource_ids["collection"],
@@ -362,3 +388,34 @@ class RbacService:
             }
             for row in result.all()
         }
+
+    async def _validate_resource_binding(self, resource_type: str, resource_id: UUID) -> None:
+        """
+        Validate semantic binding for RBAC resources.
+        "instance" is treated as data resource (Collection) in admin UI.
+        """
+        allowed_types = {ResourceType.AGENT.value, ResourceType.INSTANCE.value}
+        if resource_type not in allowed_types:
+            raise ValidationError(
+                f"resource_type '{resource_type}' is not supported. Allowed: agent, instance"
+            )
+
+        if resource_type == ResourceType.AGENT.value:
+            from app.models.agent import Agent
+
+            exists_stmt = select(Agent.id).where(Agent.id == resource_id)
+            exists = (await self.session.execute(exists_stmt)).scalar_one_or_none()
+            if exists is None:
+                raise ValidationError(
+                    f"resource_id '{resource_id}' is not an agent for resource_type='agent'"
+                )
+            return
+
+        from app.models.collection import Collection
+
+        exists_stmt = select(Collection.id).where(Collection.id == resource_id)
+        exists = (await self.session.execute(exists_stmt)).scalar_one_or_none()
+        if exists is None:
+            raise ValidationError(
+                f"resource_id '{resource_id}' is not a data entity (collection) for resource_type='instance'"
+            )

@@ -10,7 +10,7 @@
 import { useState, useEffect } from 'react';
 import { useParams, useSearchParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { rbacApi, type RbacEffect, type RbacRule } from '@/shared/api/rbac';
+import { rbacApi, type RbacEffect, type RbacRule, type ResourceType } from '@/shared/api/rbac';
 import { qk } from '@/shared/api/keys';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
 import type { EntityPageMode } from '@/shared/ui';
@@ -27,6 +27,8 @@ export function useRbacRuleEditor() {
   const mode: EntityPageMode = isEditMode ? 'edit' : 'view';
 
   const [effect, setEffect] = useState<RbacEffect>('deny');
+  const [resourceType, setResourceType] = useState<ResourceType>('agent');
+  const [resourceId, setResourceId] = useState('');
   const [saving, setSaving] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
@@ -40,13 +42,20 @@ export function useRbacRuleEditor() {
   });
 
   useEffect(() => {
-    if (rule) setEffect(rule.effect);
+    if (!rule) return;
+    setEffect(rule.effect);
+    setResourceType(rule.resource_type);
+    setResourceId(rule.resource_id);
   }, [rule]);
 
   // ─── Mutations ───
 
   const updateMutation = useMutation({
-    mutationFn: () => rbacApi.updateRule(id!, { effect }),
+    mutationFn: () => rbacApi.updateRule(id!, {
+      effect,
+      resource_type: resourceType,
+      resource_id: resourceId,
+    }),
     onSuccess: (updated: RbacRule) => {
       queryClient.setQueryData(qk.rbac.detail(id!), updated);
       queryClient.invalidateQueries({ queryKey: qk.rbac.list({}) });
@@ -72,6 +81,10 @@ export function useRbacRuleEditor() {
   const handleEdit = () => setSearchParams({ mode: 'edit' });
 
   const handleSave = async () => {
+    if (!resourceId) {
+      showError('Выберите ресурс');
+      return;
+    }
     setSaving(true);
     try {
       await updateMutation.mutateAsync();
@@ -81,7 +94,11 @@ export function useRbacRuleEditor() {
   };
 
   const handleCancel = () => {
-    if (rule) setEffect(rule.effect);
+    if (rule) {
+      setEffect(rule.effect);
+      setResourceType(rule.resource_type);
+      setResourceId(rule.resource_id);
+    }
     setSearchParams({});
   };
 
@@ -96,6 +113,10 @@ export function useRbacRuleEditor() {
     mode,
     effect,
     setEffect,
+    resourceType,
+    setResourceType,
+    resourceId,
+    setResourceId,
     saving,
     showDeleteConfirm,
     setShowDeleteConfirm,

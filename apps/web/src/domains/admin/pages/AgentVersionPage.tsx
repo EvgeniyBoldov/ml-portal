@@ -46,6 +46,14 @@ const IDENTITY_FIELDS: FieldConfig[] = [
     placeholder: 'Работаешь только с сетевым оборудованием. НЕ занимаешься серверами...',
     rows: 4,
   },
+  {
+    key: 'planner_short_info',
+    type: 'textarea',
+    label: 'Short Info (Planner)',
+    description: 'Используется только планером для выбора агента; в системный промпт агента не входит',
+    placeholder: 'Коротко: когда этот агент должен вызываться планером',
+    rows: 3,
+  },
 ];
 
 const RULES_FIELDS: FieldConfig[] = [
@@ -189,6 +197,7 @@ export function AgentVersionPage() {
     identity: existingVersion?.identity ?? '',
     mission: existingVersion?.mission ?? '',
     scope: existingVersion?.scope ?? '',
+    planner_short_info: existingVersion?.planner_short_info ?? '',
     rules: existingVersion?.rules ?? '',
     tool_use_rules: existingVersion?.tool_use_rules ?? '',
     output_format: existingVersion?.output_format ?? '',

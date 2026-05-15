@@ -307,7 +307,7 @@ class AgentService:
     # ── Version fields that can be inherited from parent ─────────────────
     _VERSION_FIELDS = [
         "identity", "mission", "scope", "rules", "tool_use_rules",
-        "output_format", "examples",
+        "output_format", "examples", "short_info",
         "model", "timeout_s", "max_steps", "max_retries", "max_tokens", "temperature",
         "requires_confirmation_for_write", "risk_level", "never_do", "allowed_ops",
         "tags",
@@ -476,6 +476,36 @@ class AgentService:
         )
         result = await self.session.execute(stmt)
         return list(result.scalars().unique().all())
+
+    async def list_routable_agents_for_planner(self) -> List[Dict[str, str]]:
+        """
+        Return planner-visible agents with concise planner summary.
+        Source priority: AgentVersion.short_info -> AgentVersion.mission -> Agent.description.
+        """
+        stmt = (
+            select(Agent, AgentVersion)
+            .join(AgentVersion, Agent.id == AgentVersion.agent_id)
+            .where(AgentVersion.status == AgentVersionStatus.PUBLISHED.value)
+        )
+        result = await self.session.execute(stmt)
+        rows = result.all()
+        items: List[Dict[str, str]] = []
+        seen: set[str] = set()
+        for agent, version in rows:
+            slug = str(getattr(agent, "slug", "") or "").strip()
+            if not slug or slug in seen:
+                continue
+            seen.add(slug)
+            description = (
+                str(getattr(version, "short_info", "") or "").strip()
+                or str(getattr(version, "mission", "") or "").strip()
+                or str(getattr(agent, "description", "") or "").strip()
+            )
+            items.append({
+                "slug": slug,
+                "description": description,
+            })
+        return items
 
     async def resolve_published_version(
         self,

@@ -8,12 +8,14 @@
 import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { adminApi } from '@/shared/api/admin';
+import { agentsApi } from '@/shared/api/agents';
+import collectionsApi from '@/shared/api/collections';
 import { rbacApi, type RbacEffect } from '@/shared/api/rbac';
 import { qk } from '@/shared/api/keys';
 import { useRbacRuleEditor } from '@/shared/hooks/useRbacRuleEditor';
 import { EntityPageV2, Tab, type BreadcrumbItem } from '@/shared/ui/EntityPage';
 import { Block } from '@/shared/ui/GridLayout';
-import { Badge, Button, ConfirmDialog } from '@/shared/ui';
+import { Badge, Button, ConfirmDialog, Select } from '@/shared/ui';
 import {
   RBAC_EFFECT_LABELS,
   RBAC_EFFECT_TONES,
@@ -60,6 +62,10 @@ export function RbacRulePage() {
     mode,
     effect,
     setEffect,
+    resourceType,
+    setResourceType,
+    resourceId,
+    setResourceId,
     saving,
     showDeleteConfirm,
     setShowDeleteConfirm,
@@ -69,9 +75,6 @@ export function RbacRulePage() {
     handleDelete,
     handleDeleteConfirm,
   } = useRbacRuleEditor();
-
-  const resourceType = rule?.resource_type;
-  const resourceId = rule?.resource_id ?? null;
 
   const { data: resourceRules = [] } = useQuery({
     queryKey: qk.rbac.enrichedRules({ resource_type: resourceType, resource_id: resourceId ?? undefined }),
@@ -226,6 +229,43 @@ export function RbacRulePage() {
       )
     : '';
 
+  const { data: agents = [] } = useQuery({
+    queryKey: qk.agents.list({ limit: 1000 }),
+    queryFn: () => agentsApi.list({ limit: 1000 }),
+    enabled: mode === 'edit',
+    staleTime: 30_000,
+  });
+
+  const { data: collectionsData } = useQuery({
+    queryKey: qk.collections.adminList({ size: 1000, is_active: true }),
+    queryFn: () => collectionsApi.listAll({ size: 1000, is_active: true }),
+    enabled: mode === 'edit',
+    staleTime: 30_000,
+  });
+
+  const resourceTypeOptions = [
+    { value: 'agent', label: 'Агенты' },
+    { value: 'instance', label: 'Данные' },
+  ];
+
+  const resourceOptions = useMemo(() => {
+    if (resourceType === 'agent') {
+      return agents.map((agent) => ({
+        value: agent.id,
+        label: agent.name?.trim() || agent.slug?.trim() || agent.id,
+      }));
+    }
+    return (collectionsData?.items ?? []).map((collection) => ({
+      value: collection.id,
+      label: collection.name?.trim() || collection.slug?.trim() || collection.id,
+    }));
+  }, [resourceType, agents, collectionsData]);
+
+  const effectOptions = [
+    { value: 'deny', label: 'Запрещён' },
+    { value: 'allow', label: 'Разрешён' },
+  ];
+
   return (
     <>
       <EntityPageV2
@@ -240,7 +280,10 @@ export function RbacRulePage() {
         onCancel={handleCancel}
         actionButtons={
           mode === 'view' ? (
-            <Button variant="danger" onClick={handleDelete}>Удалить</Button>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <Button variant="outline" onClick={handleEdit}>Редактировать</Button>
+              <Button variant="danger" onClick={handleDelete}>Удалить</Button>
+            </div>
           ) : undefined
         }
       >
@@ -281,19 +324,47 @@ export function RbacRulePage() {
             <div style={{ display: 'grid', gap: 12 }}>
               <div>
                 <div style={{ color: 'var(--text-tertiary)', fontSize: 12, marginBottom: 4 }}>Тип ресурса</div>
-                <div style={{ fontWeight: 500 }}>
-                  {currentRule ? RBAC_RESOURCE_TYPE_LABELS[currentRule.resource.type] : '—'}
-                </div>
+                {mode === 'edit' ? (
+                  <Select
+                    value={resourceType}
+                    onChange={(value) => {
+                      setResourceType(value as 'agent' | 'instance');
+                      setResourceId('');
+                    }}
+                    options={resourceTypeOptions}
+                  />
+                ) : (
+                  <div style={{ fontWeight: 500 }}>
+                    {currentRule ? RBAC_RESOURCE_TYPE_LABELS[currentRule.resource.type] : '—'}
+                  </div>
+                )}
               </div>
               <div>
                 <div style={{ color: 'var(--text-tertiary)', fontSize: 12, marginBottom: 4 }}>Ресурс</div>
-                <div style={{ fontWeight: 500 }}>
-                  {currentResourceName || currentRule?.resource.name || currentRule?.resource.slug || '—'}
-                </div>
+                {mode === 'edit' ? (
+                  <Select
+                    value={resourceId}
+                    onChange={setResourceId}
+                    options={resourceOptions}
+                    placeholder="Выберите ресурс"
+                  />
+                ) : (
+                  <div style={{ fontWeight: 500 }}>
+                    {currentResourceName || currentRule?.resource.name || currentRule?.resource.slug || '—'}
+                  </div>
+                )}
               </div>
               <div>
                 <div style={{ color: 'var(--text-tertiary)', fontSize: 12, marginBottom: 4 }}>Текущее действие</div>
-                {currentRule ? effectBadge(currentRule.effect) : <Badge tone="neutral">—</Badge>}
+                {mode === 'edit' ? (
+                  <Select
+                    value={effect}
+                    onChange={(value) => setEffect(value as RbacEffect)}
+                    options={effectOptions}
+                  />
+                ) : (
+                  currentRule ? effectBadge(currentRule.effect) : <Badge tone="neutral">—</Badge>
+                )}
               </div>
             </div>
           </Block>

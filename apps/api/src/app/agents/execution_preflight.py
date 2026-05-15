@@ -99,6 +99,7 @@ class ExecutionRequest:
     sandbox_branch_id: Optional[UUID] = None
     sandbox_snapshot_id: Optional[UUID] = None
     sandbox_trace: Dict[str, Any] = field(default_factory=dict)
+    rbac_audit: Dict[str, Any] = field(default_factory=dict)
 
 
 class ExecutionPreflight:
@@ -183,9 +184,10 @@ class ExecutionPreflight:
             )
 
             # 2b. Apply unified collection access filter.
-            collection_filter_reason = self._apply_collection_filter(
+            collection_filter_reason, collection_filter_audit = self._apply_collection_filter(
                 operation_result=operation_result,
                 agent=agent_result.agent,
+                agent_slug=agent_slug,
                 default_collection_allow=default_collection_allow,
             )
             if collection_filter_reason:
@@ -263,6 +265,10 @@ class ExecutionPreflight:
                 routing_reasons=routing_reasons,
                 routing_duration_ms=int((time.time() - start_time) * 1000),
                 request_text=request_text[:500] if request_text else None,
+                rbac_audit={
+                    "agent_slug": agent_slug,
+                    "collection_filter": collection_filter_audit,
+                },
             )
 
             await self._log_decision(
@@ -332,29 +338,66 @@ class ExecutionPreflight:
         *,
         operation_result: Any,
         agent: Any,
+        agent_slug: str,
         default_collection_allow: bool,
-    ) -> Optional[str]:
+    ) -> tuple[Optional[str], Dict[str, Any]]:
         """Step 2b: filter data instances/operations by agent capability + RBAC. Returns a log reason or None."""
         capability_ids: Optional[set] = None
         if agent and getattr(agent, "allowed_collection_ids", None):
             capability_ids = {str(cid) for cid in agent.allowed_collection_ids}
 
+        before_instances = list(operation_result.resolved_data_instances or [])
+        by_capability_denied: list[str] = []
+        by_rbac_denied: list[str] = []
+        allowed_after_filter: list[str] = []
+
         def _passes(collection_id: Any, collection_slug: Optional[str]) -> bool:
             cid_str = str(collection_id) if collection_id else ""
             if capability_ids is not None and cid_str not in capability_ids:
+                by_capability_denied.append(collection_slug or cid_str or "unknown")
                 return False
             if collection_slug and operation_result.effective_permissions is not None:
                 if not operation_result.effective_permissions.is_collection_allowed(collection_slug):
+                    by_rbac_denied.append(collection_slug)
                     return False
             return True
 
-        before_count = len(operation_result.resolved_data_instances)
+        before_count = len(before_instances)
         filtered_instances = [
-            inst for inst in operation_result.resolved_data_instances
+            inst for inst in before_instances
             if _passes(inst.collection_id, inst.collection_slug)
         ]
+        allowed_after_filter = sorted({
+            str(inst.collection_slug or inst.slug or "").strip()
+            for inst in filtered_instances
+            if str(inst.collection_slug or inst.slug or "").strip()
+        })
+        all_candidates = sorted({
+            str(inst.collection_slug or inst.slug or "").strip()
+            for inst in before_instances
+            if str(inst.collection_slug or inst.slug or "").strip()
+        })
+        bound_collections = sorted({
+            str(inst.collection_slug or "").strip()
+            for inst in before_instances
+            if capability_ids is not None and str(inst.collection_id or "") in capability_ids and str(inst.collection_slug or "").strip()
+        })
+        audit_payload = {
+            "agent_slug": agent_slug,
+            "default_collection_allow": bool(default_collection_allow),
+            "capability_bound_collection_ids": sorted(capability_ids) if capability_ids is not None else [],
+            "capability_bound_collections": bound_collections,
+            "candidates": all_candidates,
+            "allowed": allowed_after_filter,
+            "denied_by_capability": sorted(set(by_capability_denied)),
+            "denied_by_rbac": sorted(set(by_rbac_denied)),
+            "before_count": before_count,
+            "after_count": len(filtered_instances),
+        }
+        logger.info("Runtime RBAC agent collection filter: %s", audit_payload)
+
         if len(filtered_instances) == before_count:
-            return None
+            return None, audit_payload
 
         operation_result.resolved_data_instances = filtered_instances
         allowed_instance_slugs = {inst.slug for inst in filtered_instances}
@@ -372,7 +415,7 @@ class ExecutionPreflight:
             f"Collection access filter: {before_count} → {len(filtered_instances)} instances "
             f"(capability={'set' if capability_ids is not None else 'any'}, "
             f"rbac_default_allow={default_collection_allow})"
-        )
+        ), audit_payload
 
     async def _build_available_actions(
         self,

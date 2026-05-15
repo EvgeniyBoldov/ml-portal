@@ -143,6 +143,14 @@ class AgentExecutor:
             yield RuntimeEvent.status(msg, agent=agent_slug)
             return
 
+        collection_filter_audit = (sub_request.rbac_audit or {}).get("collection_filter")
+        if isinstance(collection_filter_audit, dict):
+            yield RuntimeEvent.status(
+                "agent_rbac_snapshot",
+                agent_slug=agent_slug,
+                rbac=collection_filter_audit,
+            )
+
         # Inject execution deps before any tool-runtime call.
         deps = ctx.get_runtime_deps()
         deps.operation_executor = deps.operation_executor or self._operation_executor

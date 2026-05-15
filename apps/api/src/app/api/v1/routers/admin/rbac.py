@@ -130,9 +130,14 @@ async def update_rule(
     db: AsyncSession = Depends(db_session),
     _: UserCtx = Depends(require_admin),
 ):
-    """Update a rule's effect (allow ↔ deny)."""
+    """Update a rule."""
     service = RbacService(db)
-    rule = await service.update_rule(rule_id=rule_id, effect=data.effect)
+    rule = await service.update_rule(
+        rule_id=rule_id,
+        effect=data.effect,
+        resource_type=data.resource_type,
+        resource_id=data.resource_id,
+    )
     await db.commit()
     return RbacRuleResponse.model_validate(rule)
 

@@ -1,5 +1,5 @@
 import Badge from '@/shared/ui/Badge';
-import { InspectorFieldGroup, InspectorFieldRow, InspectorTabs } from '@/shared/ui/Inspector';
+import { InspectorFieldGroup, InspectorFieldRow, InspectorNotice, InspectorTabs } from '@/shared/ui/Inspector';
 import { isPlannerData, type TraceEntity } from '@/domains/runtimeTrace/entityTypes';
 import type { RunStep } from '../../../hooks/useSandboxRun';
 import { BudgetsTab, formatDuration, RawTab } from '../shared';
@@ -88,13 +88,39 @@ function PlannerRationaleTab({ entity, steps }: { entity: TraceEntity; steps: Ru
   );
 }
 
+function PlannerRbacTab({ steps }: { steps: RunStep[] }) {
+  const snapshot = [...steps]
+    .reverse()
+    .find((s) => s.type === 'status' && String(s.data.stage ?? '') === 'planner_rbac_snapshot');
+
+  const rbac = (snapshot?.data.rbac ?? null) as Record<string, unknown> | null;
+  if (!rbac) {
+    return <InspectorNotice tone="neutral" title="RBAC Snapshot" message="Снимок RBAC для планера не найден" />;
+  }
+
+  const candidates = Array.isArray(rbac.candidates) ? rbac.candidates.map(String) : [];
+  const allowed = Array.isArray(rbac.allowed) ? rbac.allowed.map(String) : [];
+  const denied = Array.isArray(rbac.denied_by_rbac) ? rbac.denied_by_rbac.map(String) : [];
+
+  return (
+    <InspectorFieldGroup>
+      <InspectorFieldRow label="Кандидаты">{String(candidates.length)}</InspectorFieldRow>
+      <InspectorFieldRow label="Доступно">{String(allowed.length)}</InspectorFieldRow>
+      <InspectorFieldRow label="Срезано RBAC">{String(denied.length)}</InspectorFieldRow>
+      <InspectorFieldRow label="Allowed">{allowed.length ? allowed.join(', ') : '—'}</InspectorFieldRow>
+      <InspectorFieldRow label="Denied">{denied.length ? denied.join(', ') : '—'}</InspectorFieldRow>
+    </InspectorFieldGroup>
+  );
+}
+
 export function PlannerInspectorTabs({ entity, steps }: { entity: TraceEntity; steps: RunStep[] }) {
-  const tabs = [{ key: 'info', label: 'Info' }, { key: 'decision', label: 'Decision' }, { key: 'rationale', label: 'Rationale' }, { key: 'budgets', label: 'Budgets' }, { key: 'raw', label: 'Raw' }];
+  const tabs = [{ key: 'info', label: 'Info' }, { key: 'decision', label: 'Decision' }, { key: 'rationale', label: 'Rationale' }, { key: 'rbac', label: 'RBAC' }, { key: 'budgets', label: 'Budgets' }, { key: 'raw', label: 'Raw' }];
 
   return <InspectorTabs entityId={entity.id} tabs={tabs} render={(tab) => {
     if (tab === 'info') return <PlannerInfoTab entity={entity} steps={steps} />;
     if (tab === 'decision') return <PlannerDecisionTab entity={entity} steps={steps} />;
     if (tab === 'rationale') return <PlannerRationaleTab entity={entity} steps={steps} />;
+    if (tab === 'rbac') return <PlannerRbacTab steps={steps} />;
     if (tab === 'budgets') return <BudgetsTab entity={entity} steps={steps} />;
     return <RawTab value={entity.data} entity={entity} steps={steps} />;
   }} />;

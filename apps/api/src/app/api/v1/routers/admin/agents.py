@@ -32,6 +32,12 @@ from app.schemas.agents import (
 
 router = APIRouter(tags=["agents"])
 
+def _map_version_payload(data: dict) -> dict:
+    payload = dict(data or {})
+    if "planner_short_info" in payload:
+        payload["short_info"] = payload.pop("planner_short_info")
+    return payload
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # AGENT CONTAINER
@@ -170,7 +176,7 @@ async def create_version(
     service = AgentService(db)
     result = await service.create_version_by_agent_id(
         agent_id=agent_id,
-        data=data.model_dump(exclude_unset=True, exclude={"parent_version_id"}),
+        data=_map_version_payload(data.model_dump(exclude_unset=True, exclude={"parent_version_id"})),
         parent_version_id=data.parent_version_id,
     )
     await db.commit()
@@ -200,7 +206,7 @@ async def update_version(
     version = await service.get_version_by_number_and_agent_id(agent_id, version_number)
     result = await service.update_version(
         version_id=version.id,
-        data=data.model_dump(exclude_unset=True),
+        data=_map_version_payload(data.model_dump(exclude_unset=True)),
     )
     await db.commit()
     return result

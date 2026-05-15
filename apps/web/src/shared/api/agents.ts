@@ -41,6 +41,7 @@ export interface AgentVersionInfo {
   tool_use_rules?: string | null;
   output_format?: string | null;
   examples?: string | null;
+  planner_short_info?: string | null;
   // Safety prompt constraints
   never_do?: string | null;
   allowed_ops?: string | null;
@@ -69,6 +70,7 @@ export interface AgentVersion {
   tool_use_rules?: string | null;
   output_format?: string | null;
   examples?: string | null;
+  planner_short_info?: string | null;
   // Execution config
   model?: string | null;
   timeout_s?: number | null;
@@ -131,6 +133,7 @@ export interface AgentVersionCreate {
   tool_use_rules?: string | null;
   output_format?: string | null;
   examples?: string | null;
+  planner_short_info?: string | null;
   // Execution config
   model?: string | null;
   timeout_s?: number | null;
@@ -158,6 +161,7 @@ export interface AgentVersionUpdate {
   tool_use_rules?: string | null;
   output_format?: string | null;
   examples?: string | null;
+  planner_short_info?: string | null;
   // Execution config
   model?: string | null;
   timeout_s?: number | null;

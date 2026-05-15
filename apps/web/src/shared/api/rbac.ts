@@ -32,7 +32,9 @@ export interface RbacRuleCreate {
 }
 
 export interface RbacRuleUpdate {
-  effect: RbacEffect;
+  effect?: RbacEffect;
+  resource_type?: ResourceType;
+  resource_id?: string;
 }
 
 export interface CheckAccessRequest {

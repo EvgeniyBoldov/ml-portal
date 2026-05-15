@@ -109,6 +109,7 @@ class AgentVersionCreate(BaseModel):
     tool_use_rules: Optional[str] = Field(default=None, description="How/when to call tools")
     output_format: Optional[str] = Field(default=None, description="Response structure/JSON schema")
     examples: Optional[str] = Field(default=None, description="Few-shot examples")
+    planner_short_info: Optional[str] = Field(default=None, description="Короткое описание для планера")
     # Safety prompt constraints
     never_do: Optional[str] = Field(default=None, description="Explicit prohibitions")
     allowed_ops: Optional[str] = Field(default=None, description="Allowed operations")
@@ -127,6 +128,7 @@ class AgentVersionUpdate(BaseModel):
     tool_use_rules: Optional[str] = None
     output_format: Optional[str] = None
     examples: Optional[str] = None
+    planner_short_info: Optional[str] = None
     # Safety prompt constraints
     never_do: Optional[str] = None
     allowed_ops: Optional[str] = None
@@ -148,6 +150,7 @@ class AgentVersionResponse(BaseModel):
     tool_use_rules: Optional[str] = None
     output_format: Optional[str] = None
     examples: Optional[str] = None
+    planner_short_info: Optional[str] = None
     # Safety prompt constraints
     never_do: Optional[str] = None
     allowed_ops: Optional[str] = None
@@ -168,6 +171,7 @@ class AgentVersionInfo(BaseModel):
     status: str
     identity: Optional[str] = None
     mission: Optional[str] = None
+    planner_short_info: Optional[str] = None
     notes: Optional[str] = None
     created_at: datetime
     updated_at: Optional[datetime] = None

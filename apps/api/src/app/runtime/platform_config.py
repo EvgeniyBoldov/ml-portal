@@ -85,17 +85,17 @@ class PlatformConfigLoader:
         from app.services.agent_service import AgentService
 
         try:
-            agents = await AgentService(self._session).list_routable_agents()
+            agents = await AgentService(self._session).list_routable_agents_for_planner()
         except Exception as exc:
             logger.warning("Failed to list routable agents: %s", exc)
             return []
         return [
             {
-                "slug": getattr(a, "slug", None),
-                "description": getattr(a, "description", "") or "",
+                "slug": str(item.get("slug") or "").strip(),
+                "description": str(item.get("description") or "").strip(),
             }
-            for a in agents
-            if getattr(a, "slug", None)
+            for item in agents
+            if str(item.get("slug") or "").strip()
         ]
 
     @staticmethod

@@ -18,7 +18,9 @@ class RbacRuleCreate(BaseModel):
 
 
 class RbacRuleUpdate(BaseModel):
-    effect: str = Field(..., description="allow | deny")
+    effect: Optional[str] = Field(None, description="allow | deny")
+    resource_type: Optional[str] = Field(None, description="agent | tool | instance")
+    resource_id: Optional[UUID] = None
 
 
 class RbacRuleResponse(BaseModel):

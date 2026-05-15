@@ -90,7 +90,7 @@ class RuntimePipeline:
         # --- RBAC resolve FIRST (before memory build) -----------------
         # If agent_slug is denied by RBAC, we treat it as None (fallback to default)
         explicit_slug = request.agent_slug
-        available_agents = await self._resolve_available_agents_for_planner(
+        available_agents, planner_rbac_audit = await self._resolve_available_agents_for_planner(
             platform=platform,
             explicit_slug=explicit_slug,
             user_id=user_id,
@@ -141,6 +141,15 @@ class RuntimePipeline:
             goal=request.request_text,
             current_user_query=request.request_text,
             memory_bundle=turn_mem.memory_bundle,
+        )
+        yield envelope.stamp(
+            RuntimeEvent.status(
+                "planner_rbac_snapshot",
+                rbac=planner_rbac_audit,
+                explicit_agent_slug=explicit_slug,
+            ),
+            OrchestrationPhase.PLANNER,
+            run_id=str(runtime_state.run_id),
         )
 
         # --- Planning (single decision engine) --------------------------
@@ -342,7 +351,7 @@ class RuntimePipeline:
         explicit_slug: Optional[str],
         user_id: UUID,
         tenant_id: UUID,
-    ) -> List[dict]:
+    ) -> tuple[List[dict], dict]:
         """Build planner-visible agents with RBAC and explicit-slug validation.
 
         Why:
@@ -386,9 +395,27 @@ class RuntimePipeline:
             slug_getter=lambda item: str((item or {}).get("slug") or "").strip() or None,
             default_allow=True,
         )
-        if denied:
-            logger.info("Planner candidate agents denied by RBAC: %s", ", ".join(sorted(denied)))
-        return filtered
+        candidate_slugs = sorted({
+            str((item or {}).get("slug") or "").strip()
+            for item in candidates
+            if str((item or {}).get("slug") or "").strip()
+        })
+        allowed_slugs = sorted({
+            str((item or {}).get("slug") or "").strip()
+            for item in filtered
+            if str((item or {}).get("slug") or "").strip()
+        })
+        denied_slugs = sorted(set(denied))
+        audit_payload = {
+            "default_collection_allow": default_collection_allow,
+            "candidates": candidate_slugs,
+            "allowed": allowed_slugs,
+            "denied_by_rbac": denied_slugs,
+            "before_count": len(candidates),
+            "after_count": len(filtered),
+        }
+        logger.info("Runtime RBAC planner agent filter: %s", audit_payload)
+        return filtered, audit_payload
 
 
 def _extract_attachment_ids(
