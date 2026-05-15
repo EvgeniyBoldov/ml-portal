@@ -15,10 +15,10 @@ import { Button, DataTable, FormModal, Input, Select } from '@/shared/ui';
 import { qk } from '@/shared/api/keys';
 import { adminApi } from '@/shared/api/admin';
 import { agentsApi, type Agent } from '@/shared/api/agents';
-import { discoveredToolsApi } from '@/shared/api/discoveredTools';
 import { toolInstancesApi, type ToolInstance } from '@/shared/api/toolInstances';
 import { tenantApi } from '@/shared/api/tenant';
 import { rbacApi, type EnrichedRule, type RbacEffect, type RbacRuleCreate, type ResourceType } from '@/shared/api/rbac';
+import collectionsApi from '@/shared/api/collections';
 import { buildRbacRuleColumns, resolveRbacSearchText } from '../shared/rbacRuleTable';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
 
@@ -70,23 +70,9 @@ export function RbacListPage() {
     staleTime: 60_000,
   });
 
-  const { data: localTools = [] } = useQuery({
-    queryKey: qk.discoveredTools.list({ source: 'local', is_active: true }),
-    queryFn: () => discoveredToolsApi.list({ source: 'local', is_active: true }),
-    enabled: isComposerOpen,
-    staleTime: 60_000,
-  });
-
-  const { data: localDataInstances = [] } = useQuery({
-    queryKey: qk.toolInstances.list({ connector_type: 'data', limit: 1000 }),
-    queryFn: () => toolInstancesApi.list({ connector_type: 'data', limit: 1000 }),
-    enabled: isComposerOpen,
-    staleTime: 60_000,
-  });
-
-  const { data: localCollectionProviders = [] } = useQuery({
-    queryKey: qk.toolInstances.list({ placement: 'local', instance_kind: 'service', limit: 1000 }),
-    queryFn: () => toolInstancesApi.list({ placement: 'local', instance_kind: 'service', limit: 1000 }),
+  const { data: collectionsData } = useQuery({
+    queryKey: qk.collections.adminList({ size: 1000, is_active: true }),
+    queryFn: () => collectionsApi.listAll({ size: 1000, is_active: true }),
     enabled: isComposerOpen,
     staleTime: 60_000,
   });
@@ -148,37 +134,15 @@ export function RbacListPage() {
         label: agent.name?.trim() || agent.slug?.trim() || agent.id,
       }));
     }
-    if (draftResourceType === 'tool') {
-      return localTools
-        .filter((tool) => !!tool.tool_id)
-        .map((tool) => ({
-          value: tool.tool_id!,
-          label: tool.name?.trim() || tool.slug?.trim() || tool.tool_id!,
-        }));
-    }
-    const localCollectionServiceInstances = localCollectionProviders.filter((instance) => {
-      const providerKind = String(instance.provider_kind ?? '').toLowerCase();
-      return providerKind === 'local_tables' || providerKind === 'local_documents';
+    return (collectionsData?.items ?? []).map((collection) => {
+      const name = collection.name?.trim() || collection.slug?.trim() || collection.id;
+      const slug = collection.slug?.trim();
+      return {
+        value: collection.id,
+        label: slug && slug !== name ? `${name} (${slug})` : name,
+      };
     });
-
-    const merged = [...localDataInstances, ...localCollectionServiceInstances];
-    const seen = new Set<string>();
-
-    return merged
-      .filter((instance) => {
-        if (seen.has(instance.id)) return false;
-        seen.add(instance.id);
-        return true;
-      })
-      .map((instance) => {
-        const name = instance.name?.trim() || instance.slug?.trim() || instance.id;
-        const slug = instance.slug?.trim();
-        return {
-          value: instance.id,
-          label: slug && slug !== name ? `${name} (${slug})` : name,
-        };
-      });
-  }, [draftResourceType, agents, localTools, localDataInstances, localCollectionProviders]);
+  }, [draftResourceType, agents, collectionsData]);
 
   useEffect(() => {
     if (draftLevel === 'platform') {
