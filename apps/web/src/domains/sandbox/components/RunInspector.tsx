@@ -663,7 +663,9 @@ export default function RunInspector({ steps, selectedStepId, selectedVirtualSte
   }, [selectedStep, prevStep, nextStep, selectedVirtualStep]);
 
   const inputFields = useMemo(() => {
-    if (selectedVirtualStep?.input) return mapToFields(selectedVirtualStep.input);
+    if (selectedVirtualStep?.input) {
+      return mapToFields(sanitizeSectionRecord(selectedVirtualStep.input, 'input'));
+    }
     if (!selectedStep) return [];
     const isToolStepSelected =
       selectedStep.type === 'tool_call'
@@ -700,7 +702,9 @@ export default function RunInspector({ steps, selectedStepId, selectedVirtualSte
   }, [selectedStep, selectedIndex, steps, selectedVirtualStep]);
 
   const outputFields = useMemo(() => {
-    if (selectedVirtualStep?.output) return mapToFields(selectedVirtualStep.output);
+    if (selectedVirtualStep?.output) {
+      return mapToFields(sanitizeSectionRecord(selectedVirtualStep.output, 'output'));
+    }
     if (!selectedStep) return [];
     const isToolStepSelected =
       selectedStep.type === 'tool_call'

@@ -275,12 +275,10 @@ function buildLLMData(events: SemanticEvent[]): LLMData {
   }
 
   // Tokens (will be populated after backend Stage 1)
-  const tokensIn = typeof (respRaw.tokens_in ?? respOutputs.tokens_in) === 'number'
-    ? (respRaw.tokens_in ?? respOutputs.tokens_in)
-    : undefined;
-  const tokensOut = typeof (respRaw.tokens_out ?? respOutputs.tokens_out) === 'number'
-    ? (respRaw.tokens_out ?? respOutputs.tokens_out)
-    : undefined;
+  const tokensInRaw = respRaw.tokens_in ?? respOutputs.tokens_in;
+  const tokensOutRaw = respRaw.tokens_out ?? respOutputs.tokens_out;
+  const tokensIn = toNumber(tokensInRaw);
+  const tokensOut = toNumber(tokensOutRaw);
 
   return {
     kind: 'llm',
@@ -358,6 +356,8 @@ function buildToolData(events: SemanticEvent[]): ToolData {
     ? String(resultOutputs.error ?? resultOutputs.message ??
         rawResult.error ?? rawResult.message ?? 'Failed')
     : undefined;
+  const errorCodeRaw = resultOutputs.error_code ?? rawResult.error_code;
+  const retryableRaw = resultOutputs.retryable ?? rawResult.retryable;
 
   return {
     kind: 'tool',
@@ -371,12 +371,8 @@ function buildToolData(events: SemanticEvent[]): ToolData {
       success,
       data: resultData,
       error: errorMessage,
-      errorCode: typeof (resultOutputs.error_code ?? rawResult.error_code) === 'string'
-        ? (resultOutputs.error_code ?? rawResult.error_code)
-        : undefined,
-      retryable: typeof (resultOutputs.retryable ?? rawResult.retryable) === 'boolean'
-        ? (resultOutputs.retryable ?? rawResult.retryable)
-        : undefined,
+      errorCode: typeof errorCodeRaw === 'string' ? errorCodeRaw : undefined,
+      retryable: typeof retryableRaw === 'boolean' ? retryableRaw : undefined,
     },
     retries: retries.length > 0 ? retries.map((r, i) => ({
       attempt: i + 1,
