@@ -24,7 +24,7 @@ from uuid import UUID
 
 from app.agents.context import ToolContext
 from app.core.logging import get_logger
-from app.runtime.budget import RuntimeBudgetTracker
+from app.runtime.budget import RuntimeBudgetTracker, build_budget_payload
 from app.runtime.contracts import (
     NextStepKind,
     PipelineRequest,
@@ -104,15 +104,45 @@ class PlanningStage:
                 break
             if self._budget_tracker is not None:
                 self._budget_tracker.record_planner_iteration()
+            planner_budget = (
+                build_budget_payload(
+                    scope="planner_iteration",
+                    snapshot={
+                        "steps": {
+                            "used": planner_iteration,
+                            "limit": self._budget_tracker.budget.max_planner_iterations,
+                        },
+                        "wall_time_ms": {
+                            "used": max(
+                                0,
+                                self._budget_tracker.budget.max_wall_time_ms
+                                - self._budget_tracker.remaining_wall_time_ms(),
+                            ),
+                            "limit": self._budget_tracker.budget.max_wall_time_ms,
+                        },
+                        "tools": {
+                            "used": self._budget_tracker.snapshot().get("consumed_tool_calls", 0),
+                            "limit": self._budget_tracker.budget.max_tool_calls_total,
+                        },
+                        "agent_steps": {
+                            "used": self._budget_tracker.snapshot().get("consumed_agent_steps", 0),
+                            "limit": self._budget_tracker.budget.max_agent_steps,
+                        },
+                    },
+                    delta={
+                        "steps": 1,
+                    },
+                    counts_as_step=True,
+                    event_role="stage",
+                )
+                if self._budget_tracker is not None
+                else None
+            )
             yield PhasedEvent(
                 RuntimeEvent.status(
                     "planner_thinking",
                     **planner_event_ctx,
-                    budget=(
-                        self._budget_tracker.snapshot()
-                        if self._budget_tracker is not None
-                        else None
-                    ),
+                    budget=planner_budget,
                 ),
                 OrchestrationPhase.PLANNER,
             )

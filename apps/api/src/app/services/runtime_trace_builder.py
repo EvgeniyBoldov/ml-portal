@@ -116,7 +116,13 @@ class RuntimeTraceBuilder:
             else None
         )
         decision = data if category in {"decision", "planner", "policy", "retry"} else None
-        budget = data if raw_type.startswith("budget_") else None
+        budget = (
+            data.get("budget")
+            if isinstance(data.get("budget"), dict)
+            else data
+            if raw_type.startswith("budget_")
+            else None
+        )
         refs = data.get("refs") if isinstance(data.get("refs"), dict) else None
         return SemanticEventResponse(
             id=step.id,

@@ -49,6 +49,9 @@ _PASS_THROUGH = {
     LegacyEventType.STATUS: RuntimeEventType.STATUS,
     LegacyEventType.OPERATION_CALL: RuntimeEventType.OPERATION_CALL,
     LegacyEventType.OPERATION_RESULT: RuntimeEventType.OPERATION_RESULT,
+    LegacyEventType.LLM_REQUEST: RuntimeEventType.LLM_REQUEST,
+    LegacyEventType.LLM_RESPONSE: RuntimeEventType.LLM_RESPONSE,
+    LegacyEventType.LLM_CALL: RuntimeEventType.LLM_CALL,
     LegacyEventType.CONFIRMATION_REQUIRED: RuntimeEventType.CONFIRMATION_REQUIRED,
     LegacyEventType.ERROR: RuntimeEventType.ERROR,
 }
@@ -317,7 +320,8 @@ class AgentExecutor:
                         data["truncated"] = True
             return RuntimeEvent(mapped, data)
         if legacy.type == LegacyEventType.THINKING:
-            return RuntimeEvent.status("thinking", step=legacy.data.get("step"))
+            data = dict(legacy.data or {})
+            return RuntimeEvent.status("thinking", **data)
         # DELTA, FINAL, PLANNER_ACTION, POLICY_DECISION, WAITING_INPUT, STOP:
         # these are handled at pipeline level; don't leak.
         return None

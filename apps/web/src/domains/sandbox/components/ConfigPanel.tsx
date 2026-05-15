@@ -81,6 +81,13 @@ function toDisplayFieldName(raw: string): string {
     .join(' ');
 }
 
+function getVersionStatusTone(status: string): 'success' | 'neutral' | 'warn' | 'danger' {
+  if (status === 'published' || status === 'active') return 'success';
+  if (status === 'draft') return 'warn';
+  if (status === 'archived') return 'neutral';
+  return 'neutral';
+}
+
 const TYPE_LABELS: Record<string, string> = {
   agent_version: 'Версия агента',
   tool_release: 'Релиз инструмента',
@@ -334,13 +341,17 @@ export function ConfigPanel({
   const selectedEntityMeta = useMemo(() => {
     if (!selectedItem) return null;
     if (selectedItem.type === 'agent') {
-      return { entityType: selectedBlueprint?.entity_type ?? 'agent_version', entityId: selectedAgentVersionId || null };
+      return {
+        entityType: selectedBlueprint?.entity_type ?? 'agent_version',
+        entityId: selectedItem.versionId ?? selectedAgentVersionId ?? null,
+      };
     }
     if (selectedItem.type === 'tool') {
       return { entityType: selectedBlueprint?.entity_type ?? 'discovered_tool', entityId: selectedTool?.id ?? null };
     }
     if (selectedItem.type === 'router') {
-      return { entityType: selectedBlueprint?.entity_type ?? 'orchestration', entityId: selectedRouter?.id ?? null };
+      const routerEntityId = typeof selectedRouter?.config?.id === 'string' ? selectedRouter.config.id : null;
+      return { entityType: selectedBlueprint?.entity_type ?? 'orchestration', entityId: routerEntityId };
     }
     return { entityType: selectedBlueprint?.entity_type ?? 'orchestration', entityId: null };
   }, [selectedAgentVersionId, selectedBlueprint?.entity_type, selectedItem, selectedRouter?.id, selectedTool?.id]);
@@ -358,8 +369,8 @@ export function ConfigPanel({
     const overrideVersionId = typeof overrideValue === 'string' ? overrideValue : '';
     const hasOverrideVersion = overrideVersionId.length > 0 && selectedAgent.versions.some((version) => version.id === overrideVersionId);
     const nextVersionId =
-      (hasOverrideVersion ? overrideVersionId : undefined) ??
       selectedItem.versionId ??
+      (hasOverrideVersion ? overrideVersionId : undefined) ??
       selectedAgent.current_version_id ??
       selectedAgent.versions[0]?.id ??
       '';
@@ -382,15 +393,6 @@ export function ConfigPanel({
       '';
     setSelectedToolVersionId(nextVersionId);
   }, [overrideMap, selectedItem?.id, selectedItem?.type, selectedItem?.versionId, selectedTool]);
-
-  const agentVersionOptions = useMemo<SelectOption[]>(
-    () =>
-      (selectedAgent?.versions ?? []).map((version) => ({
-        value: version.id,
-        label: `v${version.version} · ${version.status}`,
-      })),
-    [selectedAgent],
-  );
 
   const toolVersionOptions = useMemo<SelectOption[]>(
     () =>
@@ -541,19 +543,47 @@ export function ConfigPanel({
   };
 
   const canClearEntity = useMemo(() => {
-    if (!selectedEntityMeta) return false;
+    if (!selectedEntityMeta || !selectedItem) return false;
+    if (selectedItem.type === 'parameter' && selectedItem.id === 'platform') {
+      return branchOverrides.some(
+        (item) =>
+          item.entity_type === 'orchestration' &&
+          item.entity_id === null &&
+          item.field_path.startsWith('platform.'),
+      );
+    }
     return overrideMap.hasEntityOverrides(
       selectedEntityMeta.entityType,
       selectedEntityMeta.entityId,
     );
-  }, [overrideMap, selectedEntityMeta]);
+  }, [branchOverrides, overrideMap, selectedEntityMeta, selectedItem]);
+
+  const activeSandboxVersionId = useMemo(() => {
+    const overrideValue = overrideMap.getOverride('orchestration', null, 'agent.version_id')?.value_json;
+    if (typeof overrideValue === 'string' && overrideValue.trim().length > 0) {
+      return overrideValue;
+    }
+    return selectedAgent?.current_version_id ?? null;
+  }, [overrideMap, selectedAgent?.current_version_id]);
+
+  const isSelectedAgentVersionPrimary = Boolean(
+    selectedItem?.type === 'agent' &&
+    selectedAgentVersionId &&
+    activeSandboxVersionId &&
+    selectedAgentVersionId === activeSandboxVersionId,
+  );
 
   const handleSaveFieldValue = async (field: SandboxConfigField, rawValue: string): Promise<void> => {
     if (!selectedEntityMeta || !activeBranchId) return;
     if (field.editable === false) return;
     if (rawValue.trim().length === 0) return;
     const key = getFieldKey(field.name);
-    const parsedValue = parseValue(rawValue, field.type);
+    let parsedValue: unknown;
+    try {
+      parsedValue = parseValue(rawValue, field.type);
+    } catch {
+      return;
+    }
     await upsertMutation.mutateAsync({
       entity_type: selectedEntityMeta.entityType,
       entity_id: selectedEntityMeta.entityId,
@@ -572,6 +602,15 @@ export function ConfigPanel({
     const key = getFieldKey(field.name);
     setDrafts((prev) => ({ ...prev, [key]: rawValue }));
     await handleSaveFieldValue(field, rawValue);
+  };
+
+  const handleCancelFieldDraft = (fieldName: string): void => {
+    const key = getFieldKey(fieldName);
+    setDrafts((prev) => {
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
   };
 
   const handleClearField = async (fieldName: string): Promise<void> => {
@@ -606,7 +645,26 @@ export function ConfigPanel({
   };
 
   const handleClearEntity = async (): Promise<void> => {
-    if (!selectedEntityMeta || !activeBranchId) return;
+    if (!selectedEntityMeta || !activeBranchId || !selectedItem) return;
+    if (selectedItem.type === 'parameter' && selectedItem.id === 'platform') {
+      const platformFields = branchOverrides
+        .filter(
+          (item) =>
+            item.entity_type === 'orchestration' &&
+            item.entity_id === null &&
+            item.field_path.startsWith('platform.'),
+        )
+        .map((item) => item.field_path);
+      for (const fieldPath of platformFields) {
+        await clearMutation.mutateAsync({
+          entity_type: 'orchestration',
+          entity_id: null,
+          field_path: fieldPath,
+        });
+      }
+      setDrafts({});
+      return;
+    }
     await clearMutation.mutateAsync({
       entity_type: selectedEntityMeta.entityType,
       entity_id: selectedEntityMeta.entityId,
@@ -630,6 +688,29 @@ export function ConfigPanel({
       entity_id: null,
       field_path: 'agent.version_id',
       value_json: versionId,
+      value_type: 'select',
+    });
+  };
+
+  const handleSetBranchPrimary = async (): Promise<void> => {
+    if (!selectedAgent) return;
+    const targetVersionId = selectedItem?.type === 'agent' ? (selectedItem.versionId ?? selectedAgentVersionId) : selectedAgentVersionId;
+    if (!targetVersionId) return;
+    setSelectedAgentVersionId(targetVersionId);
+    if (!activeBranchId) return;
+    if (targetVersionId === selectedAgent.current_version_id) {
+      await clearMutation.mutateAsync({
+        entity_type: 'orchestration',
+        entity_id: null,
+        field_path: 'agent.version_id',
+      });
+      return;
+    }
+    await upsertMutation.mutateAsync({
+      entity_type: 'orchestration',
+      entity_id: null,
+      field_path: 'agent.version_id',
+      value_json: targetVersionId,
       value_type: 'select',
     });
   };
@@ -667,21 +748,19 @@ export function ConfigPanel({
       <>
       <div className={styles.header}>
         <div className={styles['header-main']}>
-          <span className={styles.title}>
-            {selectedItem ? selectedItem.name : 'Конфигурация'}
-          </span>
-          {selectedItem?.type === 'agent' && agentVersionOptions.length > 0 ? (
-            <Select
-              className={styles['version-select']}
-              value={selectedAgentVersionId}
-              options={agentVersionOptions}
-              placeholder="Версия агента"
-              disabled={isReadOnly}
-              onChange={(value) => {
-                void handleAgentVersionChange(value);
-              }}
-            />
-          ) : null}
+          <div className={styles['header-title-row']}>
+            <span className={styles.title}>
+              {selectedItem ? selectedItem.name : 'Конфигурация'}
+            </span>
+            {selectedItem?.type === 'agent' && selectedBaseAgentVersion ? (
+              <Badge tone={getVersionStatusTone(selectedBaseAgentVersion.status)} size="sm">
+                v{selectedBaseAgentVersion.version} · {selectedBaseAgentVersion.status}
+              </Badge>
+            ) : null}
+            {selectedItem?.type === 'agent' && isSelectedAgentVersionPrimary ? (
+              <Badge tone="success" size="sm">Основная в песочнице</Badge>
+            ) : null}
+          </div>
           {selectedItem?.type === 'tool' && toolVersionOptions.length > 0 ? (
             <Select
               className={styles['version-select']}
@@ -697,9 +776,30 @@ export function ConfigPanel({
           {selectedItem ? (
             <div className={styles['header-actions-row']}>
               {overrides.length > 0 && <Badge tone="warn">{overrides.length}</Badge>}
-              <Button className={styles['header-btn']} size="sm" variant="outline" onClick={handleClearEntity} disabled={isReadOnly || !canClearEntity}>
-                Очистить
-              </Button>
+              {!isReadOnly && canClearEntity ? (
+                <Button
+                  className={`${styles['header-btn']} ${styles['btn-clear']}`}
+                  size="sm"
+                  variant="outline"
+                  onClick={handleClearEntity}
+                >
+                  Сбросить overrides
+                </Button>
+              ) : null}
+              {selectedItem.type === 'agent' ? (
+                !isReadOnly && selectedAgentVersionId && !isSelectedAgentVersionPrimary ? (
+                  <Button
+                    className={`${styles['header-btn']} ${styles['btn-primary']}`}
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      void handleSetBranchPrimary();
+                    }}
+                  >
+                    Сделать основной
+                  </Button>
+                ) : null
+              ) : null}
             </div>
           ) : (
             <span className={styles['empty-hint']}>Выбери элемент слева</span>
@@ -748,15 +848,22 @@ export function ConfigPanel({
                       status={isDirty(field.name) ? 'dirty' : isOverridden(field.name) ? 'overridden' : 'default'}
                       readOnly={isReadOnly || field.editable === false}
                       onChange={(value) => setDrafts((prev) => ({ ...prev, [getFieldKey(field.name)]: value }))}
-                      onCommitValue={(value) => {
+                      onApply={(value) => {
                         void handleCommitField(field, value);
                       }}
-                      onClear={() => {
+                      onCancelDraft={() => {
+                        handleCancelFieldDraft(field.name);
+                      }}
+                      onClearOverride={() => {
                         void handleClearField(field.name);
                       }}
-                      onUseDefault={() => {
+                      onCopyDefault={() => {
                         handleUseDefaultFieldValue(field);
                       }}
+                      showCopyDefault={!isOverridden(field.name) && getFieldInputValue(field.name).trim().length === 0}
+                      showClearOverride={isOverridden(field.name)}
+                      showApply={isDirty(field.name)}
+                      showCancelDraft={isDirty(field.name)}
                     />
                   ))}
                 </div>

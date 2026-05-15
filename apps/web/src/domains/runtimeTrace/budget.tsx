@@ -38,8 +38,8 @@ function toneForPercent(pct: number | null): 'neutral' | 'warn' | 'danger' {
 // ------------------------------------------------------------------
 
 const LABELS: Record<string, string> = {
-  steps: 'Шаги',
-  tools: 'Тулзы',
+  steps: 'Степы',
+  tools: 'Вызовы',
   retries: 'Ретраи',
   tokens: 'Токены',
   wallTimeMs: 'Время',
@@ -71,6 +71,7 @@ interface BudgetPillProps {
   label: string;
   unit?: string;
   showLimit?: boolean;
+  mode?: 'delta' | 'total';
   className?: string;
 }
 
@@ -80,6 +81,7 @@ export function BudgetPill({
   label,
   unit = '',
   showLimit = true,
+  mode = 'total',
   className = '',
 }: BudgetPillProps): React.ReactElement {
   const pct = percentUsed(metric.used, metric.limit);
@@ -96,9 +98,11 @@ export function BudgetPill({
     description,
   ].filter(Boolean).join(' • ');
 
-  const display = showLimit && metric.limit !== undefined
-    ? `${formatNumber(metric.used)}/${formatNumber(metric.limit)}${unit ? unit[0] : ''}`
-    : `${formatNumber(metric.used)}${unit ? unit[0] : ''}`;
+  const display = mode === 'delta'
+    ? `+${formatNumber(metric.used)}${unit ? ` ${unit}` : ''}`
+    : showLimit && metric.limit !== undefined
+      ? `${formatNumber(metric.used)}/${formatNumber(metric.limit)}${unit ? unit[0] : ''}`
+      : `${formatNumber(metric.used)}${unit ? unit[0] : ''}`;
 
   return (
     <span className={[styles.pillContainer, className].join(' ')} title={tooltip}>
@@ -128,6 +132,7 @@ export function BudgetPills({
   className = '',
 }: BudgetPillsProps): React.ReactElement | null {
   const source = delta ?? snapshot;
+  const mode: 'delta' | 'total' = delta ? 'delta' : 'total';
   if (!source) return null;
 
   const pills = kinds
@@ -145,6 +150,7 @@ export function BudgetPills({
           label={LABELS[kind]}
           unit={UNITS[kind]}
           showLimit={metric.limit !== undefined}
+          mode={mode}
         />
       );
     });

@@ -24,9 +24,14 @@ interface Props {
   status: 'default' | 'dirty' | 'overridden';
   readOnly: boolean;
   onChange: (value: string) => void;
-  onCommitValue: (value: string) => void;
-  onClear: () => void;
-  onUseDefault: () => void;
+  onApply: (value: string) => void;
+  onCancelDraft: () => void;
+  onClearOverride: () => void;
+  onCopyDefault: () => void;
+  showCopyDefault: boolean;
+  showClearOverride: boolean;
+  showApply: boolean;
+  showCancelDraft: boolean;
 }
 
 export default function ConfigDataField({
@@ -39,9 +44,14 @@ export default function ConfigDataField({
   status,
   readOnly,
   onChange,
-  onCommitValue,
-  onClear,
-  onUseDefault,
+  onApply,
+  onCancelDraft,
+  onClearOverride,
+  onCopyDefault,
+  showCopyDefault,
+  showClearOverride,
+  showApply,
+  showCancelDraft,
 }: Props) {
   const isWide = field.type === 'text' || field.type === 'json';
   const isNumeric = field.type === 'integer' || field.type === 'float';
@@ -67,9 +77,7 @@ export default function ConfigDataField({
           <Toggle
             checked={normalizedInputValue.trim().toLowerCase() === 'true'}
             onChange={(checked) => {
-              const nextValue = String(checked);
-              onChange(nextValue);
-              onCommitValue(nextValue);
+              onChange(String(checked));
             }}
             disabled={readOnly}
             label={normalizedInputValue.trim().toLowerCase() === 'true' ? 'true' : 'false'}
@@ -83,10 +91,7 @@ export default function ConfigDataField({
         <Select
           options={selectOptions}
           value={normalizedInputValue}
-          onChange={(value) => {
-            onChange(value);
-            onCommitValue(value);
-          }}
+          onChange={(value) => onChange(value)}
           disabled={readOnly || selectOptions.length === 0}
           placeholder={defaultValue || 'Выберите значение'}
         />
@@ -101,12 +106,6 @@ export default function ConfigDataField({
           value={inputValue}
           placeholder={defaultValue}
           onChange={(event) => onChange(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter') {
-              event.preventDefault();
-              onCommitValue(event.currentTarget.value);
-            }
-          }}
           disabled={readOnly}
         />
       );
@@ -118,12 +117,6 @@ export default function ConfigDataField({
           className={styles['value-input-wide']}
           rows={field.type === 'json' ? 6 : 4}
           {...inputProps}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
-              event.preventDefault();
-              onCommitValue(event.currentTarget.value);
-            }
-          }}
         />
       );
     }
@@ -133,12 +126,6 @@ export default function ConfigDataField({
         className={styles['value-input']}
         type={isNumeric ? 'number' : 'text'}
         {...inputProps}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter') {
-            event.preventDefault();
-            onCommitValue(event.currentTarget.value);
-          }
-        }}
       />
     );
   };
@@ -150,24 +137,50 @@ export default function ConfigDataField({
           <div className={styles['field-name']} title={tooltipText}>{displayName ?? field.name}</div>
           {!readOnly ? (
             <div className={styles['field-tools']}>
-              <button
-                type="button"
-                className={styles['icon-btn']}
-                onClick={onClear}
-                aria-label="Очистить поле"
-                title="Очистить поле"
-              >
-                ×
-              </button>
-              <button
-                type="button"
-                className={styles['icon-btn']}
-                onClick={onUseDefault}
-                aria-label="Скопировать значение по умолчанию"
-                title="Скопировать значение по умолчанию"
-              >
-                ⧉
-              </button>
+              {showCopyDefault ? (
+                <button
+                  type="button"
+                  className={`${styles['icon-btn']} ${styles['icon-btn-copy']}`}
+                  onClick={onCopyDefault}
+                  aria-label="Скопировать значение по умолчанию"
+                  title="Скопировать"
+                >
+                  ⧉
+                </button>
+              ) : null}
+              {showClearOverride ? (
+                <button
+                  type="button"
+                  className={`${styles['icon-btn']} ${styles['icon-btn-clear']}`}
+                  onClick={onClearOverride}
+                  aria-label="Очистить override"
+                  title="Очистить override"
+                >
+                  ×
+                </button>
+              ) : null}
+              {showApply ? (
+                <button
+                  type="button"
+                  className={`${styles['icon-btn']} ${styles['icon-btn-apply']} ${styles['icon-btn-accent']}`}
+                  onClick={() => onApply(inputValue)}
+                  aria-label="Применить"
+                  title="Применить"
+                >
+                  ✓
+                </button>
+              ) : null}
+              {showCancelDraft ? (
+                <button
+                  type="button"
+                  className={`${styles['icon-btn']} ${styles['icon-btn-cancel']}`}
+                  onClick={onCancelDraft}
+                  aria-label="Отменить изменения"
+                  title="Отмена"
+                >
+                  ↺
+                </button>
+              ) : null}
             </div>
           ) : null}
         </div>

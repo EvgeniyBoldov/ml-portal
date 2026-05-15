@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 
 @dataclass(frozen=True)
@@ -114,6 +114,49 @@ class RuntimeBudgetTracker:
             "consumed_tool_calls": self._tool_calls,
             "remaining_wall_time_ms": self.remaining_wall_time_ms(),
         }
+
+    def as_metrics_snapshot(self) -> Dict[str, Dict[str, int]]:
+        """Canonical budget snapshot for UI/logging (single schema)."""
+        return {
+            "steps": {
+                "used": self._agent_steps,
+                "limit": self.budget.max_agent_steps,
+            },
+            "tools": {
+                "used": self._tool_calls,
+                "limit": self.budget.max_tool_calls_total,
+            },
+            "planner_iterations": {
+                "used": self._planner_iterations,
+                "limit": self.budget.max_planner_iterations,
+            },
+            "wall_time_ms": {
+                "used": max(0, self.budget.max_wall_time_ms - self.remaining_wall_time_ms()),
+                "limit": self.budget.max_wall_time_ms,
+            },
+        }
+
+
+def build_budget_payload(
+    *,
+    scope: str,
+    snapshot: Dict[str, Dict[str, int]],
+    delta: Optional[Dict[str, int]] = None,
+    counts_as_step: bool = False,
+    event_role: str = "stage",
+) -> Dict[str, Any]:
+    """Unified budget envelope embedded into existing `budget` key."""
+    payload: Dict[str, Any] = {
+        "scope": scope,
+        "snapshot": snapshot,
+        "metered": {
+            "counts_as_step": bool(counts_as_step),
+            "event_role": event_role,
+        },
+    }
+    if delta:
+        payload["delta"] = dict(delta)
+    return payload
 
 
 def _as_positive_int(value: Any, default: int) -> int:

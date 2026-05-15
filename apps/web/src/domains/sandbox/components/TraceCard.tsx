@@ -119,6 +119,9 @@ export function TraceCard({
         }
       : badge;
   const budgetKinds = BUDGET_KINDS[kind] ?? [];
+  const showTotals = kind === 'run' || kind === 'agent';
+  const pillsSnapshot = showTotals ? budgetSnapshot : undefined;
+  const pillsDelta = showTotals ? undefined : budgetDelta;
   const statusIcon = STATUS_ICONS[status] ?? '○';
 
   let collapsedSummary: string | null = null;
@@ -182,8 +185,8 @@ export function TraceCard({
 
         {budgetKinds.length > 0 && (
           <BudgetPills
-            snapshot={budgetSnapshot}
-            delta={budgetDelta}
+            snapshot={pillsSnapshot}
+            delta={pillsDelta}
             kinds={budgetKinds}
             className={styles.budgetPills}
           />

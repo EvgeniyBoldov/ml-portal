@@ -62,8 +62,9 @@
 .field-tools {
   display: inline-flex;
   align-items: center;
-  justify-content: flex-start;
+  justify-content: flex-end;
   gap: 4px;
+  margin-left: auto;
 }
 
 .icon-btn {
@@ -85,6 +86,50 @@
 .icon-btn:hover {
   color: var(--text-primary);
   border-color: var(--text-secondary);
+}
+
+.icon-btn-apply {
+  color: #1f9d4c;
+  border-color: rgba(31, 157, 76, 0.35);
+}
+
+.icon-btn-apply:hover {
+  color: #147137;
+  border-color: #1f9d4c;
+}
+
+.icon-btn-copy {
+  color: #1b5fbe;
+  border-color: rgba(27, 95, 190, 0.35);
+}
+
+.icon-btn-copy:hover {
+  color: #12468d;
+  border-color: #1b5fbe;
+}
+
+.icon-btn-clear {
+  color: #b42d22;
+  border-color: rgba(180, 45, 34, 0.35);
+}
+
+.icon-btn-clear:hover {
+  color: #8f241b;
+  border-color: #b42d22;
+}
+
+.icon-btn-cancel {
+  color: #b26a00;
+  border-color: rgba(178, 106, 0, 0.35);
+}
+
+.icon-btn-cancel:hover {
+  color: #7d4a00;
+  border-color: #b26a00;
+}
+
+.icon-btn-accent {
+  background: color-mix(in srgb, #1f9d4c 10%, var(--bg-primary));
 }
 
 .field-btn {

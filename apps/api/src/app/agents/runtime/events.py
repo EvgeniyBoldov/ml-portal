@@ -16,6 +16,9 @@ class RuntimeEventType(str, Enum):
     THINKING = "thinking"
     OPERATION_CALL = "operation_call"
     OPERATION_RESULT = "operation_result"
+    LLM_REQUEST = "llm_request"
+    LLM_RESPONSE = "llm_response"
+    LLM_CALL = "llm_call"
     DELTA = "delta"
     FINAL = "final"
     ERROR = "error"
@@ -96,6 +99,18 @@ class RuntimeEvent:
         if truncated:
             payload["truncated"] = True
         return cls(RuntimeEventType.OPERATION_RESULT, payload)
+
+    @classmethod
+    def llm_request(cls, **payload: Any) -> RuntimeEvent:
+        return cls(RuntimeEventType.LLM_REQUEST, dict(payload))
+
+    @classmethod
+    def llm_response(cls, **payload: Any) -> RuntimeEvent:
+        return cls(RuntimeEventType.LLM_RESPONSE, dict(payload))
+
+    @classmethod
+    def llm_call(cls, **payload: Any) -> RuntimeEvent:
+        return cls(RuntimeEventType.LLM_CALL, dict(payload))
 
     @classmethod
     def delta(cls, content: str) -> RuntimeEvent:

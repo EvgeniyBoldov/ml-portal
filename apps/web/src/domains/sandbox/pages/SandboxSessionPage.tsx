@@ -79,6 +79,12 @@ export default function SandboxSessionPage() {
     staleTime: 15_000,
   });
 
+  useEffect(() => {
+    if (activeBranchId) return;
+    if (branches.length === 0) return;
+    setActiveBranchId(branches[0].id);
+  }, [activeBranchId, branches]);
+
   const forkBranchMutation = useMutation({
     mutationFn: (payload: {
       sourceBranchId: string;

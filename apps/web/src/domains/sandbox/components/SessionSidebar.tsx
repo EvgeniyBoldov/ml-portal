@@ -27,11 +27,19 @@ interface Props {
 const TYPE_LABELS: Record<string, string> = {
   agent_version: 'Агент',
   discovered_tool: 'Инструмент',
-  orchestration: 'Оркестрация',
+  orchestration: 'Оркестратор',
   policy: 'Политика',
   limit: 'Лимит',
   model: 'Модель',
 };
+
+function getOverrideGroupKey(override: { entity_type: string; entity_id: string | null; field_path: string }): string {
+  if (override.entity_type === 'orchestration' && override.entity_id === null) {
+    if (override.field_path.startsWith('platform.')) return 'orchestration:global:platform';
+    if (override.field_path === 'agent.version_id') return 'orchestration:global:agent_version_pin';
+  }
+  return `${override.entity_type}:${override.entity_id ?? 'global'}`;
+}
 
 const STATUS_TONE: Record<string, 'success' | 'neutral' | 'warn' | 'danger'> = {
   running: 'warn',
@@ -84,6 +92,9 @@ export default function SessionSidebar({
   const hasOverrideForEntity = (entityType: string, entityId: string | null): boolean =>
     branchOverrides.some((override) => override.entity_type === entityType && (override.entity_id ?? null) === entityId);
 
+  const countOverridesForEntity = (entityType: string, entityId: string | null): number =>
+    branchOverrides.filter((override) => override.entity_type === entityType && (override.entity_id ?? null) === entityId).length;
+
   const hasOverrideForParameter = (parameterTab: 'platform'): boolean =>
     branchOverrides.some(
       (override) =>
@@ -121,13 +132,15 @@ export default function SessionSidebar({
     return entityTypeLabel;
   };
 
-  const groupedOverrides = branchOverrides.reduce<Record<string, { key: string; title: string; fields: string[] }>>((acc, override) => {
-    const entityKey = `${override.entity_type}:${override.entity_id ?? 'global'}`;
+  const groupedOverrides = branchOverrides.reduce<Record<string, { key: string; title: string; fields: string[]; entityType: string; entityId: string | null }>>((acc, override) => {
+    const entityKey = getOverrideGroupKey(override);
     if (!acc[entityKey]) {
       acc[entityKey] = {
         key: entityKey,
         title: resolveOverrideTitle(override),
         fields: [],
+        entityType: override.entity_type,
+        entityId: override.entity_id ?? null,
       };
     }
     acc[entityKey].fields.push(override.field_path);
@@ -135,6 +148,152 @@ export default function SessionSidebar({
   }, {});
 
   const groupedOverridesList = Object.values(groupedOverrides);
+
+  const resolveOverrideSelection = (groupKey: string): SandboxSelectedItem | null => {
+    const items = branchOverrides.filter((item) => getOverrideGroupKey(item) === groupKey);
+    if (items.length === 0) return null;
+
+    const first = items[0];
+    if (first.entity_type === 'agent_version') {
+      const targetVersionId = first.entity_id;
+      if (!targetVersionId) return null;
+      for (const agent of catalog.agents) {
+        const version = agent.versions.find((v) => v.id === targetVersionId);
+        if (version) {
+          return {
+            type: 'agent',
+            id: agent.id,
+            name: `${agent.name} v${version.version}`,
+            versionId: version.id,
+          };
+        }
+      }
+      return null;
+    }
+
+    if (first.entity_type === 'discovered_tool') {
+      if (!first.entity_id) return null;
+      const tool = catalog.tools.find((t) => t.id === first.entity_id);
+      if (!tool) return null;
+      const releaseOverride = items.find((item) => item.field_path === 'tool_release_id');
+      const releaseId = typeof releaseOverride?.value_json === 'string' ? releaseOverride.value_json : null;
+      return {
+        type: 'tool',
+        id: tool.id,
+        name: releaseId ? `${tool.name}` : tool.name,
+        versionId: releaseId,
+      };
+    }
+
+    if (first.entity_type === 'orchestration') {
+      const versionOverride = items.find((item) => item.field_path === 'agent.version_id');
+      if (versionOverride && typeof versionOverride.value_json === 'string') {
+        const targetVersionId = versionOverride.value_json;
+        for (const agent of catalog.agents) {
+          const version = agent.versions.find((v) => v.id === targetVersionId);
+          if (version) {
+            return {
+              type: 'agent',
+              id: agent.id,
+              name: `${agent.name} v${version.version}`,
+              versionId: version.id,
+            };
+          }
+        }
+      }
+      if (first.entity_id) {
+        const router = catalog.system_routers.find(
+          (item) => typeof item.config?.id === 'string' && item.config.id === first.entity_id,
+        );
+        if (router) {
+          return { type: 'router', id: router.id, name: router.name };
+        }
+      }
+      if (groupKey === 'orchestration:global:platform') {
+        return { type: 'parameter', id: 'platform', name: 'Платформа' };
+      }
+      return null;
+    }
+
+    return null;
+  };
+
+  const isOverrideGroupSelected = (groupKey: string): boolean => {
+    const target = resolveOverrideSelection(groupKey);
+    if (!target || !selectedItem) return false;
+    if (target.type !== selectedItem.type) return false;
+    if (target.id !== selectedItem.id) return false;
+    if ((target.versionId ?? null) !== (selectedItem.versionId ?? null)) return false;
+    return true;
+  };
+
+  const overrideGroupMeta = (group: { key: string; title: string; fields: string[]; entityType: string; entityId: string | null }) => {
+    const target = resolveOverrideSelection(group.key);
+    const typeLabel = TYPE_LABELS[group.entityType] ?? group.entityType;
+
+    if (group.key === 'orchestration:global:agent_version_pin' && group.fields.includes('agent.version_id')) {
+      let versionFlow: string | null = null;
+      let agentName = '—';
+      if (target?.type === 'agent' && target.versionId) {
+        const agent = catalog.agents.find((item) => item.id === target.id);
+        agentName = agent?.name ?? agentName;
+        const targetVersion = agent?.versions.find((item) => item.id === target.versionId);
+        const currentVersion = agent?.versions.find((item) => item.id === agent.current_version_id);
+        if (currentVersion && targetVersion) {
+          versionFlow = `v${currentVersion.version}->v${targetVersion.version}`;
+        } else if (targetVersion) {
+          versionFlow = `v${targetVersion.version}`;
+        }
+      }
+      return {
+        typeLabel: 'Агент',
+        nameLabel: agentName,
+        versionLabel: versionFlow,
+      };
+    }
+
+    if (group.key === 'orchestration:global:platform') {
+      return {
+        typeLabel: 'Параметры',
+        nameLabel: 'Платформа',
+        versionLabel: null,
+      };
+    }
+
+    if (target?.type === 'agent' && target.versionId) {
+      const agent = catalog.agents.find((item) => item.id === target.id);
+      const version = agent?.versions.find((item) => item.id === target.versionId);
+      return {
+        typeLabel,
+        nameLabel: agent?.name ?? group.title,
+        versionLabel: version ? `v${version.version}` : '—',
+      };
+    }
+
+    if (target?.type === 'tool') {
+      const tool = catalog.tools.find((item) => item.id === target.id);
+      const version = tool?.versions.find((item) => item.id === (target.versionId ?? ''));
+      return {
+        typeLabel,
+        nameLabel: tool?.name ?? group.title,
+        versionLabel: version ? `v${version.version}` : '—',
+      };
+    }
+
+    if (target?.type === 'router') {
+      return {
+        typeLabel: 'Оркестратор',
+        nameLabel: target.name,
+        versionLabel: null,
+      };
+    }
+
+    return {
+      typeLabel,
+      nameLabel: group.title,
+      versionLabel: null,
+    };
+  };
 
   const normalizedDomainGroups = catalog.domain_groups.map((group) => ({
     ...group,
@@ -166,6 +325,26 @@ export default function SessionSidebar({
     selectedItem?.type === 'tool' &&
     selectedItem.id === toolId &&
     (selectedItem.versionId ?? null) === versionId;
+
+  const activeBranchAgentVersionId = (() => {
+    const item = branchOverrides.find(
+      (override) =>
+        override.entity_type === 'orchestration' &&
+        override.entity_id === null &&
+        override.field_path === 'agent.version_id',
+    );
+    return typeof item?.value_json === 'string' ? item.value_json : null;
+  })();
+
+  const activeBranchAgentId = useMemo(() => {
+    if (!activeBranchAgentVersionId) return null;
+    for (const agent of catalog.agents) {
+      if (agent.versions.some((version) => version.id === activeBranchAgentVersionId)) {
+        return agent.id;
+      }
+    }
+    return null;
+  }, [activeBranchAgentVersionId, catalog.agents]);
 
   return (
     <div className={styles.sidebar}>
@@ -245,10 +424,17 @@ export default function SessionSidebar({
                         }
                       >
                         <span className={styles['version-item-label']}>
+                          <span className={styles['version-left-mark']}>
+                            {activeBranchAgentVersionId && activeBranchAgentId === agent.id
+                              ? activeBranchAgentVersionId === version.id ? '✓' : ''
+                              : agent.current_version_id === version.id ? '✓' : ''}
+                          </span>
                           v{version.version}
-                          {hasOverrideForEntity('agent_version', version.id) ? (
-                            <span className={styles['override-dot']} />
-                          ) : null}
+                        </span>
+                        <span className={styles['version-item-count']}>
+                          {countOverridesForEntity('agent_version', version.id) > 0
+                            ? countOverridesForEntity('agent_version', version.id)
+                            : ''}
                         </span>
                         <span className={styles['version-item-status']}>
                           {toVersionStateLabel(version.status, agent.current_version_id === version.id)}
@@ -382,15 +568,33 @@ export default function SessionSidebar({
         ) : (
           <div className={styles['override-list']}>
             {groupedOverridesList.map((group) => (
-              <div key={group.key} className={styles['override-item']}>
-                <div className={styles['override-label']}>
-                  <span className={styles['active-dot']} />
-                  <span className={styles['override-name']}>{group.title}</span>
+              (() => {
+                const meta = overrideGroupMeta(group);
+                return (
+              <button
+                type="button"
+                key={group.key}
+                className={`${styles['override-item']} ${isOverrideGroupSelected(group.key) ? styles['override-item-active'] : ''}`}
+                onClick={() => {
+                  const target = resolveOverrideSelection(group.key);
+                  if (target) onSelectItem(target);
+                }}
+              >
+                <div className={styles['override-main-row']}>
+                  <span className={styles['override-type']}>{meta.typeLabel}</span>
+                  <span className={styles['override-name']}>
+                    {meta.nameLabel}
+                  </span>
                 </div>
-                <span className={styles['override-type']}>
-                  {group.fields.length} полей
-                </span>
-              </div>
+                <div className={styles['override-sub-row']}>
+                  {meta.versionLabel ? <span className={styles['override-chip']}>{meta.versionLabel}</span> : null}
+                  {group.key !== 'orchestration:global:agent_version_pin' ? (
+                    <span className={styles['override-chip']}>{group.fields.length} полей</span>
+                  ) : null}
+                </div>
+              </button>
+                );
+              })()
             ))}
           </div>
         )}

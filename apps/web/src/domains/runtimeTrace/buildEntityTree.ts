@@ -49,21 +49,25 @@ function hashIds(ids: string[]): string {
 
 function extractBudgetSnapshot(event: SemanticEvent): BudgetSnapshot | undefined {
   if (!event.budget || typeof event.budget !== 'object') return undefined;
-  const b = event.budget;
+  const b = event.budget as Record<string, unknown>;
+  const nestedSnapshot = (typeof b.snapshot === 'object' && b.snapshot)
+    ? (b.snapshot as Record<string, unknown>)
+    : null;
+  const source = nestedSnapshot ?? b;
 
   const snapshot: BudgetSnapshot = {};
 
   // Steps / iterations
-  if (b.consumed_planner_iterations !== undefined || b.max_planner_iterations !== undefined) {
+  if (source.consumed_planner_iterations !== undefined || source.max_planner_iterations !== undefined) {
     snapshot.steps = {
-      used: typeof b.consumed_planner_iterations === 'number' ? b.consumed_planner_iterations : 0,
-      limit: typeof b.max_planner_iterations === 'number' ? b.max_planner_iterations : undefined,
+      used: typeof source.consumed_planner_iterations === 'number' ? source.consumed_planner_iterations : 0,
+      limit: typeof source.max_planner_iterations === 'number' ? source.max_planner_iterations : undefined,
     };
   }
 
   // Steps (nested format: steps.{used,limit})
-  if (!snapshot.steps && typeof b.steps === 'object' && b.steps) {
-    const steps = b.steps as Record<string, unknown>;
+  if (!snapshot.steps && typeof source.steps === 'object' && source.steps) {
+    const steps = source.steps as Record<string, unknown>;
     const used = typeof steps.used === 'number' ? steps.used : undefined;
     const limit = typeof steps.limit === 'number' ? steps.limit : undefined;
     if (used !== undefined || limit !== undefined) {
@@ -72,16 +76,16 @@ function extractBudgetSnapshot(event: SemanticEvent): BudgetSnapshot | undefined
   }
 
   // Tools
-  if (b.consumed_tool_calls !== undefined || b.max_tool_calls_total !== undefined) {
+  if (source.consumed_tool_calls !== undefined || source.max_tool_calls_total !== undefined) {
     snapshot.tools = {
-      used: typeof b.consumed_tool_calls === 'number' ? b.consumed_tool_calls : 0,
-      limit: typeof b.max_tool_calls_total === 'number' ? b.max_tool_calls_total : undefined,
+      used: typeof source.consumed_tool_calls === 'number' ? source.consumed_tool_calls : 0,
+      limit: typeof source.max_tool_calls_total === 'number' ? source.max_tool_calls_total : undefined,
     };
   }
 
   // Tools (nested format: tools.{used,limit})
-  if (!snapshot.tools && typeof b.tools === 'object' && b.tools) {
-    const tools = b.tools as Record<string, unknown>;
+  if (!snapshot.tools && typeof source.tools === 'object' && source.tools) {
+    const tools = source.tools as Record<string, unknown>;
     const used = typeof tools.used === 'number' ? tools.used : undefined;
     const limit = typeof tools.limit === 'number' ? tools.limit : undefined;
     if (used !== undefined || limit !== undefined) {
@@ -90,13 +94,13 @@ function extractBudgetSnapshot(event: SemanticEvent): BudgetSnapshot | undefined
   }
 
   // Retries (from protocol_retry tracking)
-  if (b.retries !== undefined) {
-    snapshot.retries = { used: Number(b.retries), limit: undefined };
+  if (source.retries !== undefined && typeof source.retries !== 'object') {
+    snapshot.retries = { used: Number(source.retries), limit: undefined };
   }
 
   // Retries (nested format: retries.{used,limit})
-  if (!snapshot.retries && typeof b.retries === 'object' && b.retries) {
-    const retries = b.retries as Record<string, unknown>;
+  if (!snapshot.retries && typeof source.retries === 'object' && source.retries) {
+    const retries = source.retries as Record<string, unknown>;
     const used = typeof retries.used === 'number' ? retries.used : undefined;
     const limit = typeof retries.limit === 'number' ? retries.limit : undefined;
     if (used !== undefined || limit !== undefined) {
@@ -105,16 +109,16 @@ function extractBudgetSnapshot(event: SemanticEvent): BudgetSnapshot | undefined
   }
 
   // Tokens (if available)
-  if (b.tokens_in !== undefined || b.tokens_consumed !== undefined) {
+  if (source.tokens_in !== undefined || source.tokens_consumed !== undefined) {
     snapshot.tokens = {
-      used: Number(b.tokens_consumed ?? b.tokens_in ?? 0),
-      limit: typeof b.tokens_limit === 'number' ? b.tokens_limit : undefined,
+      used: Number(source.tokens_consumed ?? source.tokens_in ?? 0),
+      limit: typeof source.tokens_limit === 'number' ? source.tokens_limit : undefined,
     };
   }
 
   // Tokens (nested format: tokens.{used,limit})
-  if (!snapshot.tokens && typeof b.tokens === 'object' && b.tokens) {
-    const tokens = b.tokens as Record<string, unknown>;
+  if (!snapshot.tokens && typeof source.tokens === 'object' && source.tokens) {
+    const tokens = source.tokens as Record<string, unknown>;
     const used = typeof tokens.used === 'number' ? tokens.used : undefined;
     const limit = typeof tokens.limit === 'number' ? tokens.limit : undefined;
     if (used !== undefined || limit !== undefined) {
@@ -123,9 +127,9 @@ function extractBudgetSnapshot(event: SemanticEvent): BudgetSnapshot | undefined
   }
 
   // Wall time
-  if (b.remaining_wall_time_ms !== undefined || b.max_wall_time_ms !== undefined) {
-    const remaining = typeof b.remaining_wall_time_ms === 'number' ? b.remaining_wall_time_ms : undefined;
-    const max = typeof b.max_wall_time_ms === 'number' ? b.max_wall_time_ms : undefined;
+  if (source.remaining_wall_time_ms !== undefined || source.max_wall_time_ms !== undefined) {
+    const remaining = typeof source.remaining_wall_time_ms === 'number' ? source.remaining_wall_time_ms : undefined;
+    const max = typeof source.max_wall_time_ms === 'number' ? source.max_wall_time_ms : undefined;
     const used = max !== undefined && remaining !== undefined ? Math.max(0, max - remaining) : undefined;
     snapshot.wallTimeMs = {
       used: used ?? 0,
@@ -134,8 +138,17 @@ function extractBudgetSnapshot(event: SemanticEvent): BudgetSnapshot | undefined
   }
 
   // Wall time (nested format: wallTimeMs.{used,limit})
-  if (!snapshot.wallTimeMs && typeof b.wallTimeMs === 'object' && b.wallTimeMs) {
-    const wallTime = b.wallTimeMs as Record<string, unknown>;
+  if (!snapshot.wallTimeMs && typeof source.wall_time_ms === 'object' && source.wall_time_ms) {
+    const wallTime = source.wall_time_ms as Record<string, unknown>;
+    const used = typeof wallTime.used === 'number' ? wallTime.used : undefined;
+    const limit = typeof wallTime.limit === 'number' ? wallTime.limit : undefined;
+    if (used !== undefined || limit !== undefined) {
+      snapshot.wallTimeMs = { used: used ?? 0, limit };
+    }
+  }
+
+  if (!snapshot.wallTimeMs && typeof source.wallTimeMs === 'object' && source.wallTimeMs) {
+    const wallTime = source.wallTimeMs as Record<string, unknown>;
     const used = typeof wallTime.used === 'number' ? wallTime.used : undefined;
     const limit = typeof wallTime.limit === 'number' ? wallTime.limit : undefined;
     if (used !== undefined || limit !== undefined) {
@@ -146,22 +159,23 @@ function extractBudgetSnapshot(event: SemanticEvent): BudgetSnapshot | undefined
   return Object.keys(snapshot).length > 0 ? snapshot : undefined;
 }
 
-function computeBudgetDelta(start?: BudgetSnapshot, end?: BudgetSnapshot): BudgetDelta | undefined {
-  if (!start || !end) return undefined;
-
+function extractBudgetDelta(event: SemanticEvent): BudgetDelta | undefined {
+  if (!event.budget || typeof event.budget !== 'object') return undefined;
+  const b = event.budget as Record<string, unknown>;
+  if (!b.delta || typeof b.delta !== 'object') return undefined;
+  const d = b.delta as Record<string, unknown>;
   const delta: BudgetDelta = {};
-  const keys: (keyof BudgetSnapshot)[] = ['steps', 'tools', 'retries', 'tokens', 'wallTimeMs'];
 
-  for (const key of keys) {
-    const s = start[key];
-    const e = end[key];
-    if (s || e) {
-      delta[key] = {
-        used: Math.max(0, (e?.used ?? 0) - (s?.used ?? 0)),
-        limit: e?.limit ?? s?.limit,
-      };
-    }
-  }
+  const addScalar = (key: keyof BudgetDelta, value: unknown) => {
+    if (typeof value !== 'number' || value <= 0) return;
+    delta[key] = { used: value };
+  };
+
+  addScalar('steps', d.steps);
+  addScalar('tools', d.tools);
+  addScalar('retries', d.retries);
+  addScalar('tokens', d.tokens);
+  addScalar('wallTimeMs', d.wall_time_ms ?? d.wallTimeMs);
 
   return Object.keys(delta).length > 0 ? delta : undefined;
 }
@@ -170,7 +184,7 @@ function mergeBudgetSnapshots(a: BudgetSnapshot, b: BudgetSnapshot): BudgetSnaps
   const mergeMetric = (m1?: BudgetMetric, m2?: BudgetMetric): BudgetMetric | undefined => {
     if (!m1 && !m2) return undefined;
     return {
-      used: (m1?.used ?? 0) + (m2?.used ?? 0),
+      used: Math.max(m1?.used ?? 0, m2?.used ?? 0),
       limit: m2?.limit ?? m1?.limit,
     };
   };
@@ -184,6 +198,20 @@ function mergeBudgetSnapshots(a: BudgetSnapshot, b: BudgetSnapshot): BudgetSnaps
   };
 }
 
+function sumBudgetDeltas(a: BudgetDelta, b: BudgetDelta): BudgetDelta {
+  const sumMetric = (m1?: BudgetMetric, m2?: BudgetMetric): BudgetMetric | undefined => {
+    if (!m1 && !m2) return undefined;
+    return { used: (m1?.used ?? 0) + (m2?.used ?? 0), limit: m2?.limit ?? m1?.limit };
+  };
+  return {
+    steps: sumMetric(a.steps, b.steps),
+    tools: sumMetric(a.tools, b.tools),
+    retries: sumMetric(a.retries, b.retries),
+    tokens: sumMetric(a.tokens, b.tokens),
+    wallTimeMs: sumMetric(a.wallTimeMs, b.wallTimeMs),
+  };
+}
+
 function collectBudgetFromEvents(events: SemanticEvent[]): BudgetSnapshot | undefined {
   let acc: BudgetSnapshot = {};
   for (const event of events) {
@@ -193,21 +221,6 @@ function collectBudgetFromEvents(events: SemanticEvent[]): BudgetSnapshot | unde
     }
   }
   return Object.keys(acc).length > 0 ? acc : undefined;
-}
-
-function aggregateChildrenBudget(entity: TraceEntity): BudgetSnapshot {
-  if (entity.children.length === 0) {
-    return entity.budgetSnapshot ?? {};
-  }
-
-  let aggregated: BudgetSnapshot = {};
-  for (const child of entity.children) {
-    const childBudget = aggregateChildrenBudget(child);
-    aggregated = mergeBudgetSnapshots(aggregated, childBudget);
-  }
-
-  // Merge with entity's own budget (entity budget takes precedence for limit)
-  return mergeBudgetSnapshots(aggregated, entity.budgetSnapshot ?? {});
 }
 
 // ------------------------------------------------------------------
@@ -809,10 +822,16 @@ export function buildEntityTree(
 
     // Global budget accumulation at run level for a consistent budget tab
     const eventBudget = extractBudgetSnapshot(event);
+    const eventDelta = extractBudgetDelta(event);
     if (eventBudget) {
       root.budgetSnapshot = root.budgetSnapshot
         ? mergeBudgetSnapshots(root.budgetSnapshot, eventBudget)
         : eventBudget;
+    }
+    if (eventDelta) {
+      root.budgetDelta = root.budgetDelta
+        ? sumBudgetDeltas(root.budgetDelta, eventDelta)
+        : eventDelta;
     }
 
     // --- Handle orchestrator_start (backend Stage 1) ---
@@ -1110,6 +1129,10 @@ export function buildEntityTree(
         durationMs: (pending?.startEvent.duration_ms ?? 0) + (event.duration_ms ?? 0),
         sourceEventIds: pairEvents.map(e => e.id),
         budgetSnapshot: extractBudgetSnapshot(event),
+        budgetDelta: pairEvents
+          .map(extractBudgetDelta)
+          .filter((v): v is BudgetDelta => !!v)
+          .reduce((acc, curr) => sumBudgetDeltas(acc, curr), {} as BudgetDelta),
         data: buildToolData(pairEvents),
       };
 
@@ -1208,6 +1231,12 @@ export function buildEntityTree(
             ? mergeBudgetSnapshots(parent.budgetSnapshot, budget)
             : budget;
         }
+        const delta = extractBudgetDelta(event);
+        if (delta) {
+          parent.budgetDelta = parent.budgetDelta
+            ? sumBudgetDeltas(parent.budgetDelta, delta)
+            : delta;
+        }
         if (currentAgentWindow) currentAgentWindow.events.push(event);
         continue;
       }
@@ -1277,20 +1306,21 @@ export function buildEntityTree(
       computeAggregateBudgets(child);
     }
 
-    // Merge children's budgets into this entity's budgetDelta
-    if (entity.children.length > 0) {
-      const childrenBudget = entity.children
-        .map(c => c.budgetSnapshot)
-        .filter((b): b is BudgetSnapshot => !!b)
-        .reduce((a, b) => mergeBudgetSnapshots(a, b), {} as BudgetSnapshot);
+    if (entity.children.length === 0) return;
 
-      if (Object.keys(childrenBudget).length > 0 && !entity.budgetSnapshot) {
-        entity.budgetSnapshot = childrenBudget;
-      }
+    const childrenSnapshots = entity.children
+      .map(c => c.budgetSnapshot)
+      .filter((b): b is BudgetSnapshot => !!b);
+    const childrenDeltas = entity.children
+      .map(c => c.budgetDelta)
+      .filter((b): b is BudgetDelta => !!b);
 
-      if (entity.budgetSnapshot) {
-        entity.budgetDelta = computeBudgetDelta(childrenBudget, entity.budgetSnapshot);
-      }
+    if (!entity.budgetSnapshot && childrenSnapshots.length > 0) {
+      entity.budgetSnapshot = childrenSnapshots.reduce((a, b) => mergeBudgetSnapshots(a, b), {} as BudgetSnapshot);
+    }
+
+    if (!entity.budgetDelta && childrenDeltas.length > 0) {
+      entity.budgetDelta = childrenDeltas.reduce((a, b) => sumBudgetDeltas(a, b), {} as BudgetDelta);
     }
   }
 

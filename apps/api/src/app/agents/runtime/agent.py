@@ -25,6 +25,7 @@ class AgentLoopState:
     sources: List[dict] = field(default_factory=list)
     operation_calls_total: int = 0
     steps_without_successful_tool_result: int = 0
+    retry_count: int = 0
     start_time: float = 0.0
     force_tool_choice: bool = False
 
@@ -41,7 +42,7 @@ from app.agents.runtime.base import BaseRuntime
 from app.agents.runtime.events import RuntimeEvent, RuntimeEventType
 from app.agents.runtime.policy import GenerationParams, PolicyLimits
 from app.core.logging import get_logger
-from app.runtime.budget import RuntimeBudgetTracker
+from app.runtime.budget import RuntimeBudgetTracker, build_budget_payload
 from app.runtime.operation_errors import OperationResultEnvelope, RuntimeErrorCode
 
 if TYPE_CHECKING:
@@ -191,7 +192,6 @@ class AgentToolRuntime(BaseRuntime):
                     await run_session.finish("failed", "Wall time limit exceeded")
                     return
 
-                yield RuntimeEvent(RuntimeEventType.THINKING, {"step": step + 1, **agent_event_ctx})
                 if isinstance(runtime_budget, RuntimeBudgetTracker):
                     if not runtime_budget.can_run_agent_step():
                         yield RuntimeEvent.error(
@@ -203,6 +203,22 @@ class AgentToolRuntime(BaseRuntime):
                         await run_session.finish("failed", "Agent step budget exhausted")
                         return
                     runtime_budget.record_agent_step()
+                thinking_budget = build_budget_payload(
+                    scope="agent_run",
+                    snapshot={
+                        "steps": {"used": step + 1, "limit": policy.max_steps},
+                        "tools": {"used": loop_state.operation_calls_total, "limit": policy.max_tool_calls_total},
+                        "retries": {"used": loop_state.retry_count, "limit": policy.max_retries},
+                        "wall_time_ms": {"used": elapsed_ms, "limit": policy.max_wall_time_ms},
+                    },
+                    delta={"steps": 1},
+                    counts_as_step=True,
+                    event_role="stage",
+                )
+                yield RuntimeEvent(
+                    RuntimeEventType.THINKING,
+                    {"step": step + 1, "budget": thinking_budget, **agent_event_ctx},
+                )
 
                 # Non-streaming LLM call to let agent decide
                 await run_session.log_step("llm_request", {
@@ -369,6 +385,7 @@ class AgentToolRuntime(BaseRuntime):
                                 ],
                             },
                         )
+                        loop_state.retry_count += 1
                         continue
 
                     # No operation calls — agent decided to answer directly
@@ -390,9 +407,25 @@ class AgentToolRuntime(BaseRuntime):
                         "content": final_answer_content[0] if final_answer_content else "",
                     })
                     if isinstance(runtime_budget, RuntimeBudgetTracker):
-                        budget_snapshot = runtime_budget.snapshot()
-                        await run_session.log_step("budget_consumed", budget_snapshot)
-                        yield RuntimeEvent.status("budget_consumed", budget=budget_snapshot, **agent_event_ctx)
+                        budget_payload_struct = build_budget_payload(
+                            scope="agent_run",
+                            snapshot={
+                                "steps": {"used": step + 1, "limit": policy.max_steps},
+                                "tools": {
+                                    "used": loop_state.operation_calls_total,
+                                    "limit": policy.max_tool_calls_total,
+                                },
+                                "retries": {"used": loop_state.retry_count, "limit": policy.max_retries},
+                                "wall_time_ms": {
+                                    "used": int((time.time() - loop_state.start_time) * 1000),
+                                    "limit": policy.max_wall_time_ms,
+                                },
+                            },
+                            counts_as_step=False,
+                            event_role="budget",
+                        )
+                        await run_session.log_step("budget_consumed", {"budget": budget_payload_struct})
+                        yield RuntimeEvent.status("budget_consumed", budget=budget_payload_struct, **agent_event_ctx)
                     await run_session.finish("completed")
                     return
 
@@ -562,9 +595,25 @@ class AgentToolRuntime(BaseRuntime):
                     f"total_outputs={len(loop_state.operation_outputs)}",
                 )
                 if isinstance(runtime_budget, RuntimeBudgetTracker):
-                    budget_snapshot = runtime_budget.snapshot()
-                    await run_session.log_step("budget_consumed", budget_snapshot)
-                    yield RuntimeEvent.status("budget_consumed", budget=budget_snapshot, **agent_event_ctx)
+                    budget_payload_struct = build_budget_payload(
+                        scope="agent_run",
+                        snapshot={
+                            "steps": {"used": step + 1, "limit": policy.max_steps},
+                            "tools": {
+                                "used": loop_state.operation_calls_total,
+                                "limit": policy.max_tool_calls_total,
+                            },
+                            "retries": {"used": loop_state.retry_count, "limit": policy.max_retries},
+                            "wall_time_ms": {
+                                "used": int((time.time() - loop_state.start_time) * 1000),
+                                "limit": policy.max_wall_time_ms,
+                            },
+                        },
+                        counts_as_step=False,
+                        event_role="budget",
+                    )
+                    await run_session.log_step("budget_consumed", {"budget": budget_payload_struct})
+                    yield RuntimeEvent.status("budget_consumed", budget=budget_payload_struct, **agent_event_ctx)
 
             # Max steps reached — synthesize with whatever we have
             if loop_state.operation_outputs:
@@ -588,9 +637,25 @@ class AgentToolRuntime(BaseRuntime):
                     retryable=True,
                 )
             if isinstance(runtime_budget, RuntimeBudgetTracker):
-                budget_snapshot = runtime_budget.snapshot()
-                await run_session.log_step("budget_consumed", budget_snapshot)
-                yield RuntimeEvent.status("budget_consumed", budget=budget_snapshot, **agent_event_ctx)
+                budget_payload_struct = build_budget_payload(
+                    scope="agent_run",
+                    snapshot={
+                        "steps": {"used": min(policy.max_steps, step + 1), "limit": policy.max_steps},
+                        "tools": {
+                            "used": loop_state.operation_calls_total,
+                            "limit": policy.max_tool_calls_total,
+                        },
+                        "retries": {"used": loop_state.retry_count, "limit": policy.max_retries},
+                        "wall_time_ms": {
+                            "used": int((time.time() - loop_state.start_time) * 1000),
+                            "limit": policy.max_wall_time_ms,
+                        },
+                    },
+                    counts_as_step=False,
+                    event_role="budget",
+                )
+                await run_session.log_step("budget_consumed", {"budget": budget_payload_struct})
+                yield RuntimeEvent.status("budget_consumed", budget=budget_payload_struct, **agent_event_ctx)
             await run_session.finish("completed" if loop_state.operation_outputs else "failed")
 
         except Exception as e:
@@ -696,7 +761,8 @@ class AgentToolRuntime(BaseRuntime):
             await run_session.finish("waiting_confirmation", str(exc))
             return
 
-        if not bool(result.metadata.get("reused")):
+        consumed_tool_call = not bool(result.metadata.get("reused"))
+        if consumed_tool_call:
             operation_calls_total_ref[0] += 1
             if isinstance(runtime_budget, RuntimeBudgetTracker):
                 runtime_budget.record_tool_call()
@@ -747,6 +813,15 @@ class AgentToolRuntime(BaseRuntime):
         operation_result_payload.data["agent_slug"] = agent_slug
         operation_result_payload.data["agent_run_id"] = agent_run_id
         operation_result_payload.data["llm_call_id"] = llm_call_id
+        operation_result_payload.data["budget"] = build_budget_payload(
+            scope="agent_run",
+            snapshot={
+                "tools": {"used": operation_calls_total_ref[0], "limit": policy.max_tool_calls_total},
+            },
+            delta={"tools": 1} if consumed_tool_call else {"tools": 0},
+            counts_as_step=False,
+            event_role="stage",
+        )
         yield operation_result_payload
         await run_session.log_step("operation_result", {
             "operation_slug": operation_call.operation_slug,
