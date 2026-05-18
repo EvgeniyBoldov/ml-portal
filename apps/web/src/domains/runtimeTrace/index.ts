@@ -21,10 +21,13 @@ export type {
 // Entity types (Stage 2)
 export type {
   AgentData,
-  BudgetDelta,
+  BuildEntityTreeOptions,
   BudgetMetric,
   BudgetSnapshot,
-  BuildEntityTreeOptions,
+  BudgetDelta,
+  EntityBudget,
+  EntityLimits,
+  EntityUsed,
   EntityData,
   EntityKind,
   ErrorData,
@@ -61,7 +64,11 @@ export {
 export { buildRunTrace, normalizeTraceEvent } from './normalize';
 
 // Budget UI (Stage 6)
-export { BudgetPill, BudgetPills, BudgetTable } from './budget';
+export { BudgetPills, BudgetTable, SpendSummary } from './budget';
+export { parseBudgetSnapshot } from './budget';
+
+// Runtime trace UI
+export { RuntimeTraceTree } from './components/RuntimeTraceTree';
 
 // Artifacts (existing)
 export { extractTraceArtifacts } from './artifacts';

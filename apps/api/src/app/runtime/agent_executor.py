@@ -47,6 +47,7 @@ MAX_OPERATION_RESULT_PREVIEW_CHARS = 4096  # Limit payload size in SSE
 # Legacy -> v3 event-type mapping. Types absent from this map are dropped.
 _PASS_THROUGH = {
     LegacyEventType.STATUS: RuntimeEventType.STATUS,
+    LegacyEventType.BUDGET_SNAPSHOT: RuntimeEventType.BUDGET_SNAPSHOT,
     LegacyEventType.OPERATION_CALL: RuntimeEventType.OPERATION_CALL,
     LegacyEventType.OPERATION_RESULT: RuntimeEventType.OPERATION_RESULT,
     LegacyEventType.LLM_REQUEST: RuntimeEventType.LLM_REQUEST,
@@ -82,6 +83,7 @@ class AgentExecutor:
         self,
         *,
         step: NextStep,
+        lifecycle_agent_run_id: Optional[str] = None,
         runtime_state: RuntimeTurnState,
         messages: List[Dict[str, Any]],
         ctx: ToolContext,
@@ -200,7 +202,10 @@ class AgentExecutor:
                 model=model,
                 enable_logging=True,
             ):
-                translated = self._translate(legacy)
+                translated = self._translate(
+                    legacy,
+                    lifecycle_agent_run_id=lifecycle_agent_run_id or str(legacy.data.get("agent_run_id") or ""),
+                )
                 if translated is not None:
                     yield translated
 
@@ -306,12 +311,72 @@ class AgentExecutor:
     # ---------------------------------------------------------------- helpers --
 
     @staticmethod
-    def _translate(legacy: LegacyEvent) -> Optional[RuntimeEvent]:
+    def _translate(
+        legacy: LegacyEvent,
+        *,
+        lifecycle_agent_run_id: Optional[str] = None,
+    ) -> Optional[RuntimeEvent]:
         """Map legacy runtime events to v3. DELTA/FINAL are suppressed;
-        THINKING collapses into STATUS; unknown types drop silently."""
+        unknown types drop silently."""
         mapped = _PASS_THROUGH.get(legacy.type)
         if mapped is not None:
             data = dict(legacy.data)
+            normalized_agent_run_id = lifecycle_agent_run_id or str(data.get("agent_run_id") or data.get("parent_entity_id") or "")
+            # Hard contract: all sub-agent scoped events must share one agent_run_id
+            # and parent linkage so frontend trace can deterministically nest LLM/tool
+            # under the exact agent invocation container.
+            previous_parent = data.get("parent_entity_id")
+            previous_agent_run = data.get("agent_run_id")
+            if previous_parent is not None and normalized_agent_run_id and str(previous_parent) != normalized_agent_run_id:
+                data["upstream_parent_entity_id"] = previous_parent
+            if previous_agent_run is not None and normalized_agent_run_id and str(previous_agent_run) != normalized_agent_run_id:
+                data["upstream_agent_run_id"] = previous_agent_run
+            if normalized_agent_run_id:
+                data["agent_run_id"] = normalized_agent_run_id
+                data["parent_entity_type"] = "agent_run"
+                data["parent_entity_id"] = normalized_agent_run_id
+
+            # Normalize legacy agent budget payload to the new per-entity schema
+            # so frontend tree can bind spend to the lifecycle agent entity.
+            if legacy.type == LegacyEventType.BUDGET_SNAPSHOT:
+                snapshot = data.get("snapshot")
+                own: Dict[str, int] = {}
+                limits: Dict[str, int] = {}
+                if isinstance(snapshot, dict):
+                    metric_map = {
+                        "planner_iterations": "planner_steps",
+                        "agent_steps": "agent_steps",
+                        "tool_calls": "tool_calls",
+                        "tokens_in": "tokens_in",
+                        "tokens_out": "tokens_out",
+                        "tokens_total": "tokens_total",
+                        "retries": "retries",
+                        "wall_time_ms": "wall_time_ms",
+                    }
+                    for legacy_name, target_name in metric_map.items():
+                        metric_obj = snapshot.get(legacy_name)
+                        if not isinstance(metric_obj, dict):
+                            continue
+                        used = metric_obj.get("used")
+                        limit = metric_obj.get("limit")
+                        if isinstance(used, (int, float)):
+                            own[target_name] = int(used)
+                        if isinstance(limit, (int, float)):
+                            limits[target_name] = int(limit)
+
+                data = {
+                    "entity_type": "agent_run",
+                    "entity_id": normalized_agent_run_id or str(data.get("entity_id") or data.get("owner_id") or ""),
+                    "parent_entity_type": "agent_run",
+                    "parent_entity_id": normalized_agent_run_id or str(data.get("parent_entity_id") or ""),
+                    "agent_run_id": normalized_agent_run_id or str(data.get("agent_run_id") or ""),
+                    "reason": data.get("reason"),
+                    "delta": data.get("delta") if isinstance(data.get("delta"), dict) else {},
+                    "own": own,
+                    "limits": limits or None,
+                    "at_ms": data.get("at_ms"),
+                }
+
             # Limit OPERATION_RESULT payload size to prevent SSE leakage of large data
             if legacy.type == LegacyEventType.OPERATION_RESULT and "data" in data:
                 payload = data["data"]
@@ -327,9 +392,6 @@ class AgentExecutor:
                         data["data"] = raw_str[:MAX_OPERATION_RESULT_PREVIEW_CHARS] + "... [truncated]"
                         data["truncated"] = True
             return RuntimeEvent(mapped, data)
-        if legacy.type == LegacyEventType.THINKING:
-            data = dict(legacy.data or {})
-            return RuntimeEvent.status("thinking", **data)
         # DELTA, FINAL, PLANNER_ACTION, POLICY_DECISION, WAITING_INPUT, STOP:
         # these are handled at pipeline level; don't leak.
         return None

@@ -40,7 +40,7 @@ _FULL_STEP_TYPES = frozenset({
     "user_request", "routing_complete", "triage_complete",
     "error", "final", "final_content", "done",
     # Detailed types
-    "status", "thinking", "operation_call", "operation_result", "tool_call", "tool_result",
+    "status", "operation_call", "operation_result", "tool_call", "tool_result",
     "delta", "planner_action", "planner_fact",
     "confirmation_required", "waiting_input", "stop",
     "agent_selected", "agent_tool_loop_started",
@@ -62,7 +62,7 @@ def should_emit_event(level: LoggingLevel, event_type: str) -> bool:
     """Check if an SSE event should be emitted at the given level.
 
     SSE events are always emitted for delta/final/error/done regardless of level.
-    Other events (tool_call, thinking, etc.) depend on level.
+    Other events (tool_call, status, etc.) depend on level.
     """
     # Always emit these (client needs them for rendering)
     always_emit = {"delta", "final", "final_content", "error", "done",

@@ -26,19 +26,39 @@ export type EntityKind =
 // Budget Types
 // ------------------------------------------------------------------
 
-export interface BudgetMetric {
+export type BudgetMetric =
+  | 'planner_steps'
+  | 'agent_steps'
+  | 'tool_calls'
+  | 'tokens_in'
+  | 'tokens_out'
+  | 'tokens_total'
+  | 'retries'
+  | 'wall_time_ms';
+
+export type EntityUsed = Partial<Record<BudgetMetric, number>>;
+export type EntityLimits = Partial<Record<BudgetMetric, number>>;
+
+export interface EntityBudget {
+  own: EntityUsed;
+  aggregated: EntityUsed;
+  limits: EntityLimits | null;
+  role?: string;
+}
+
+// Backward-compatible aliases used by legacy rendering paths.
+export interface LegacyBudgetMetric {
   used: number;
-  limit?: number;
+  limit?: number | null;
+  remaining?: number | null;
 }
-
 export interface BudgetSnapshot {
-  steps?: BudgetMetric;
-  tools?: BudgetMetric;
-  retries?: BudgetMetric;
-  tokens?: BudgetMetric;
-  wallTimeMs?: BudgetMetric;
+  steps?: LegacyBudgetMetric;
+  tools?: LegacyBudgetMetric;
+  retries?: LegacyBudgetMetric;
+  tokens?: LegacyBudgetMetric;
+  wallTimeMs?: LegacyBudgetMetric;
 }
-
 export type BudgetDelta = BudgetSnapshot;
 
 // ------------------------------------------------------------------
@@ -222,7 +242,9 @@ export interface TraceEntity {
   startedAt?: string;
   durationMs?: number;
 
-  // Budget (aggregated for this entity)
+  // Budget (new model)
+  budget?: EntityBudget;
+  // Legacy fields (to be removed after full migration)
   budgetSnapshot?: BudgetSnapshot;
   budgetDelta?: BudgetDelta;
 
@@ -257,6 +279,18 @@ export interface BuildEntityTreeOptions {
   linkSubAgents?: boolean;
   /** Sub-agent runs to merge into the tree (empty if linkSubAgents=false or backend not ready) */
   subAgentRuns?: SubAgentRun[];
+  /** Optional sink for step-by-step container assembly debug records */
+  debugRecords?: ContainerDebugRecord[];
+}
+
+export interface ContainerDebugRecord {
+  eventId: string;
+  rawType: string;
+  phase: string;
+  action: string;
+  entityId?: string;
+  entityKind?: EntityKind;
+  note?: string;
 }
 
 // ------------------------------------------------------------------

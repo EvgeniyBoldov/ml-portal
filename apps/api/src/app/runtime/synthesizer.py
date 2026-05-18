@@ -19,6 +19,7 @@ already produced a user-ready answer.
 """
 from __future__ import annotations
 
+import time
 from typing import AsyncGenerator, Dict, List, Optional
 from uuid import UUID
 
@@ -119,6 +120,7 @@ class Synthesizer:
             purpose="final_answer",
         )
         buffer: List[str] = []
+        started_at = time.monotonic()
         try:
             async for chunk in self.llm_client.chat_stream(
                 messages,
@@ -149,6 +151,10 @@ class Synthesizer:
             llm_call_id=llm_call_id,
             model=effective_model or "unknown",
             response_length=len(full),
+            tokens_in=max(1, len(str(messages)) // 4),
+            tokens_out=max(1, len(full) // 4) if full else 0,
+            tokens_total=(max(1, len(str(messages)) // 4) + (max(1, len(full) // 4) if full else 0)),
+            duration_ms=int((time.monotonic() - started_at) * 1000),
             parent_entity_type="synthesis_run",
             parent_entity_id=synthesis_run_id,
             purpose="final_answer",

@@ -126,6 +126,7 @@ class LimitService:
         max_wall_time_ms: Optional[int] = None,
         tool_timeout_ms: Optional[int] = None,
         max_retries: Optional[int] = None,
+        max_tokens_total: Optional[int] = None,
         extra_config: Optional[Dict[str, Any]] = None,
         notes: Optional[str] = None,
         parent_version_id: Optional[UUID] = None,
@@ -146,6 +147,7 @@ class LimitService:
             'max_wall_time_ms': None,
             'tool_timeout_ms': None,
             'max_retries': None,
+            'max_tokens_total': None,
             'extra_config': {},
         }
 
@@ -157,6 +159,7 @@ class LimitService:
                 inherited['max_wall_time_ms'] = parent.max_wall_time_ms
                 inherited['tool_timeout_ms'] = parent.tool_timeout_ms
                 inherited['max_retries'] = parent.max_retries
+                inherited['max_tokens_total'] = parent.max_tokens_total
                 inherited['extra_config'] = parent.extra_config or {}
                 logger.info(
                     f"Inheriting from v{parent.version} for limit '{limit_slug}'"
@@ -175,6 +178,7 @@ class LimitService:
             max_wall_time_ms=max_wall_time_ms if max_wall_time_ms is not None else inherited['max_wall_time_ms'],
             tool_timeout_ms=tool_timeout_ms if tool_timeout_ms is not None else inherited['tool_timeout_ms'],
             max_retries=max_retries if max_retries is not None else inherited['max_retries'],
+            max_tokens_total=max_tokens_total if max_tokens_total is not None else inherited['max_tokens_total'],
             extra_config=extra_config if extra_config is not None else inherited['extra_config'],
             notes=notes,
             parent_version_id=parent_version_id,
@@ -217,6 +221,7 @@ class LimitService:
         max_wall_time_ms: Optional[int] = None,
         tool_timeout_ms: Optional[int] = None,
         max_retries: Optional[int] = None,
+        max_tokens_total: Optional[int] = None,
         extra_config: Optional[Dict[str, Any]] = None,
         notes: Optional[str] = None,
     ) -> LimitVersion:
@@ -238,6 +243,8 @@ class LimitService:
             update_data['tool_timeout_ms'] = tool_timeout_ms
         if max_retries is not None:
             update_data['max_retries'] = max_retries
+        if max_tokens_total is not None:
+            update_data['max_tokens_total'] = max_tokens_total
         if extra_config is not None:
             update_data['extra_config'] = extra_config
         if notes is not None:
@@ -327,6 +334,7 @@ class LimitService:
             "max_wall_time_ms": version.max_wall_time_ms,
             "tool_timeout_ms": version.tool_timeout_ms,
             "max_retries": version.max_retries,
+            "max_tokens_total": version.max_tokens_total,
             **version.extra_config,
         }
 
@@ -337,4 +345,5 @@ class LimitService:
             "max_wall_time_ms": 300000,
             "tool_timeout_ms": 30000,
             "max_retries": 3,
+            "max_tokens_total": None,
         }

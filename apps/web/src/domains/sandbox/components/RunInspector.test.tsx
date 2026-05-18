@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import RunInspector from './RunInspector';
 import type { RunStep } from '../hooks/useSandboxRun';
 
@@ -33,6 +33,7 @@ describe('RunInspector semantic trace', () => {
       />,
     );
 
+    fireEvent.click(screen.getByRole('button', { name: 'Overview' }));
     expect(screen.getByText(/Semantic Trace/)).toBeInTheDocument();
     expect(screen.getByText(/Trace Artifacts/)).toBeInTheDocument();
     expect(screen.getByText(/Category:/)).toBeInTheDocument();

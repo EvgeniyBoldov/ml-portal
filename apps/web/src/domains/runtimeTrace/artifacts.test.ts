@@ -55,25 +55,39 @@ describe('runtimeTrace artifacts', () => {
 
   it('extracts budget and decision artifacts', () => {
     const budgetEvent = baseEvent({
-      raw_type: 'budget_limit_exceeded',
+      raw_type: 'budget_snapshot',
       category: 'budget',
       raw: {
         id: 'b1',
-        raw_type: 'budget_limit_exceeded',
-        raw: { kind: 'max_steps', consumed: 10, limit: 10 },
+        raw_type: 'budget_snapshot',
+        raw: {
+          owner_scope: 'run',
+          owner_id: 'run-1',
+          snapshot: { agent_steps: { used: 10, limit: 10, remaining: 0 } },
+          delta: { agent_steps: 1 },
+          reason: 'limit_exceeded',
+          at_ms: 1000,
+        },
       },
     });
     const decisionEvent = baseEvent({
-      raw_type: 'planner_step',
+      raw_type: 'planner_decision',
       category: 'planner',
       raw: {
         id: 'd1',
-        raw_type: 'planner_step',
+        raw_type: 'planner_decision',
         raw: { kind: 'call_agent', rationale: 'need infra data', agent_slug: 'netops' },
       },
     });
 
-    expect(extractTraceArtifacts(budgetEvent).budget).toEqual({ kind: 'max_steps', used: 10, limit: 10 });
+    expect(extractTraceArtifacts(budgetEvent).budget).toEqual({
+      owner_scope: 'run',
+      owner_id: 'run-1',
+      snapshot: { agent_steps: { used: 10, limit: 10, remaining: 0 } },
+      delta: { agent_steps: 1 },
+      reason: 'limit_exceeded',
+      at_ms: 1000,
+    });
     expect(extractTraceArtifacts(decisionEvent).decision).toEqual({
       kind: 'call_agent',
       rationale: 'need infra data',

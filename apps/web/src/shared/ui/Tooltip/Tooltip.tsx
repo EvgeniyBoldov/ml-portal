@@ -106,10 +106,19 @@ export function Tooltip({
   }, []);
 
   useEffect(() => {
+    const handleScroll = () => {
+      hideTooltip();
+    };
+    
+    window.addEventListener('scroll', handleScroll, true);
+    window.addEventListener('resize', hideTooltip);
+    
     return () => {
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
+      window.removeEventListener('scroll', handleScroll, true);
+      window.removeEventListener('resize', hideTooltip);
     };
-  }, []);
+  }, [hideTooltip]);
 
   return (
     <div

@@ -29,6 +29,8 @@
 /* Budget Table */
 .tableContainer {
   padding: var(--space-3, 12px) 0;
+  overflow-x: auto;
+  font-size: var(--text-xs, 12px);
 }
 
 .tableTitle {
@@ -36,6 +38,28 @@
   font-size: var(--text-sm, 14px);
   margin-bottom: var(--space-2, 8px);
   color: var(--text-primary, #1a1a1a);
+}
+
+.tableContainer :global(.tableHeader th) {
+  font-size: 10px;
+  padding: 2px 3px;
+  white-space: nowrap;
+  line-height: 1.1;
+  height: auto;
+  vertical-align: top;
+}
+
+.tableContainer :global(.tableHeader th span) {
+  display: inline-block;
+  max-width: 60px;
+  word-wrap: break-word;
+  white-space: normal;
+  line-height: 1.1;
+}
+
+.tableContainer :global(.tableCell) {
+  padding: 2px 3px;
+  font-size: 10px;
 }
 
 .number {
@@ -47,6 +71,31 @@
   color: var(--text-tertiary, #9ca3af);
 }
 
+.metricHint {
+  border-bottom: 1px dotted var(--border-color, #d1d5db);
+  cursor: help;
+}
+
+.limitChain {
+  font-size: var(--text-xs, 12px);
+  color: var(--text-secondary, #6b7280);
+  white-space: nowrap;
+}
+
+.breakdownTooltip {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 220px;
+}
+
+.breakdownRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
 .pctBadge {
   min-width: 3ch;
   justify-content: center;
@@ -55,12 +104,12 @@
 .usageCell {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-2, 8px);
+  gap: 2px;
 }
 
 .usageTrack {
-  width: 90px;
-  height: 6px;
+  width: 30px;
+  height: 3px;
   border-radius: 999px;
   background: var(--bg-tertiary, #eef2f7);
   overflow: hidden;

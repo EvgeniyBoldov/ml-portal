@@ -26,12 +26,7 @@ class TraceStep:
 class RuntimeTraceBuilder:
     _CATEGORY_MAP: Dict[str, str] = {
         "user_request": "input",
-        "budget_init": "budget",
-        "budget_policy": "budget",
-        "budget_consumed": "budget",
-        "budget_limit_exceeded": "budget",
-        "budget_check": "budget",
-        "budget": "budget",
+        "budget_snapshot": "budget",
         "llm_call": "llm",
         "llm_request": "llm",
         "llm_response": "llm",
@@ -39,7 +34,7 @@ class RuntimeTraceBuilder:
         "triage": "decision",
         "protocol_retry": "retry",
         "planner_action": "planner",
-        "planner_step": "planner",
+        "planner_decision": "planner",
         "intent": "planner",
         "operation_call": "operation",
         "tool_call": "operation",
@@ -51,7 +46,6 @@ class RuntimeTraceBuilder:
         "final_response": "final",
         "error": "error",
         "status": "system",
-        "thinking": "system",
         "delta": "system",
         "waiting_input": "system",
         "run_paused": "system",
@@ -61,8 +55,7 @@ class RuntimeTraceBuilder:
 
     _TITLES: Dict[str, str] = {
         "user_request": "Запрос",
-        "budget_policy": "Лимиты",
-        "budget_consumed": "Расход лимитов",
+        "budget_snapshot": "Снимок бюджета",
         "llm_call": "LLM вызов",
         "llm_request": "LLM запрос",
         "llm_response": "LLM ответ",
@@ -73,7 +66,7 @@ class RuntimeTraceBuilder:
         "operation_result": "Результат операции",
         "tool_result": "Результат операции",
         "planner_action": "Планировщик",
-        "planner_step": "Планировщик",
+        "planner_decision": "Решение планировщика",
         "intent": "Интент",
         "policy_decision": "Решение политики",
         "confirmation_required": "Требуется подтверждение",
@@ -116,13 +109,7 @@ class RuntimeTraceBuilder:
             else None
         )
         decision = data if category in {"decision", "planner", "policy", "retry"} else None
-        budget = (
-            data.get("budget")
-            if isinstance(data.get("budget"), dict)
-            else data
-            if raw_type.startswith("budget_")
-            else None
-        )
+        budget = data if raw_type == "budget_snapshot" else None
         refs = data.get("refs") if isinstance(data.get("refs"), dict) else None
         return SemanticEventResponse(
             id=step.id,
@@ -204,8 +191,11 @@ class RuntimeTraceBuilder:
             return f"{op} {status}"
         if raw_type in {"llm_call", "llm_response"}:
             return f"response_length={data.get('response_length') or data.get('tokens_out') or 'n/a'}"
-        if raw_type == "budget_consumed":
-            return f"used={data.get('consumed') or data.get('used') or data.get('steps_used') or 'n/a'}"
+        if raw_type == "budget_snapshot":
+            owner = data.get("owner_scope") or data.get("scope") or "unknown"
+            return f"{owner}: snapshot"
+        if raw_type == "budget_snapshot":
+            return f"{data.get('owner_scope') or 'unknown'}: snapshot"
         if raw_type in {"final", "final_response"}:
             return str(data.get("content") or data.get("answer") or "Final response")
         if raw_type == "error":

@@ -32,9 +32,10 @@ from app.agents.runtime_rbac_resolver import RuntimeRbacResolver
 from app.core.http.clients import LLMClientProtocol
 from app.core.logging import get_logger
 from app.runtime.assembler import PipelineAssembler
-from app.runtime.budget import RuntimeBudget, RuntimeBudgetTracker
+from app.runtime.budgets import BudgetExceededError, BudgetRegistry, BudgetResolver
 from app.runtime.contracts import PipelineRequest, PipelineStopReason
 from app.runtime.envelope import EventEnvelopeStamper, PhasedEvent
+from app.runtime.event_emitter import RuntimeEventEmitter
 from app.runtime.events import OrchestrationPhase, RuntimeEvent, RuntimeEventType
 from app.runtime.memory.fact_extractor import AgentResultSnippet
 from app.runtime.memory.transport import TurnMemory
@@ -142,28 +143,60 @@ class RuntimePipeline:
             current_user_query=request.request_text,
             memory_bundle=turn_mem.memory_bundle,
         )
-        yield envelope.stamp(
+        run_id_str = str(run_id)
+        emitter = RuntimeEventEmitter(stamper=envelope, run_id=run_id_str)
+        orchestrator_id = f"{run_id}:orchestrator"
+        yield emitter.emit(
+            RuntimeEvent.run_start(run_id=run_id_str),
+            phase=OrchestrationPhase.PIPELINE,
+        )
+        yield emitter.emit(
             RuntimeEvent.status(
                 "planner_rbac_snapshot",
                 rbac=planner_rbac_audit,
                 explicit_agent_slug=explicit_slug,
             ),
-            OrchestrationPhase.PLANNER,
-            run_id=str(runtime_state.run_id),
+            phase=OrchestrationPhase.PLANNER,
+        )
+        yield emitter.emit(
+            RuntimeEvent.orchestrator_start(
+                orchestrator_id=orchestrator_id,
+                run_id=run_id_str,
+                role="planner",
+            ),
+            phase=OrchestrationPhase.PLANNER,
+        )
+
+        # Per-entity budget registry
+        budget_resolver = BudgetResolver(self._session)
+        run_limits_v2 = await budget_resolver.resolve_run(platform.config)
+        budget_registry = BudgetRegistry(run_limits=run_limits_v2)
+        budget_registry.register(
+            entity_type="run",
+            entity_id=run_id_str,
+            parent_entity_id=None,
+            limits=run_limits_v2.as_entity_limits(),
+        )
+        ctx.extra["runtime_budget_registry"] = budget_registry
+        ctx.extra["runtime_budget_resolver"] = budget_resolver
+        run_budget_payload = budget_registry.emit_snapshot(run_id_str, reason="init") or {}
+        yield emitter.emit(
+            RuntimeEvent.budget_snapshot(
+                entity_type="run",
+                entity_id=run_id_str,
+                parent_entity_id=None,
+                own=run_budget_payload.get("own", {}),
+                limits=run_budget_payload.get("limits"),
+                delta={},
+                reason="init",
+                at_ms=run_budget_payload.get("at_ms"),
+            ),
+            phase=OrchestrationPhase.PIPELINE,
         )
 
         # --- Planning (single decision engine) --------------------------
-        runtime_budget = RuntimeBudget.from_platform_config(
-            planner_max_steps=platform.policy.max_steps,
-            planner_max_wall_time_ms=platform.policy.max_wall_time_ms,
-            platform_config=platform.config,
-        )
-        budget_tracker = RuntimeBudgetTracker(budget=runtime_budget)
-        ctx.extra["runtime_budget_tracker"] = budget_tracker
-
         planning_stage = self._assembler.build_planning_stage(
             max_iterations=platform.policy.max_steps,
-            budget_tracker=budget_tracker,
         )
         async for phased in planning_stage.run(
             runtime_state=runtime_state,
@@ -173,8 +206,9 @@ class RuntimePipeline:
             tenant_id=tenant_id,
             available_agents=available_agents,
             platform_config=platform.config,
+            orchestrator_id=orchestrator_id,
         ):
-            yield envelope.stamp_phased(phased, run_id=str(runtime_state.run_id))
+            yield emitter.emit_phased(phased)
 
         assert planning_stage.outcome is not None
         planning_outcome = planning_stage.outcome
@@ -184,6 +218,19 @@ class RuntimePipeline:
             PlanningOutcomeKind.ABORTED,
             PlanningOutcomeKind.FAILED,
         ):
+            terminal_status = (planning_outcome.stop_reason.value if planning_outcome.stop_reason else "failed")
+            yield emitter.emit(
+                RuntimeEvent.orchestrator_end(
+                    orchestrator_id=orchestrator_id,
+                    run_id=run_id_str,
+                    status=terminal_status,
+                ),
+                phase=OrchestrationPhase.PLANNER,
+            )
+            yield emitter.emit(
+                RuntimeEvent.run_end(run_id=run_id_str, status=terminal_status),
+                phase=OrchestrationPhase.PIPELINE,
+            )
             # Persist pause state so resume endpoint can find run by run_id.
             if planning_outcome.kind == PlanningOutcomeKind.PAUSED and self._run_store is not None:
                 try:
@@ -218,6 +265,15 @@ class RuntimePipeline:
             return
 
         # --- Finalization -----------------------------------------------
+        yield emitter.emit(
+            RuntimeEvent.orchestrator_end(
+                orchestrator_id=orchestrator_id,
+                run_id=run_id_str,
+                status="completed",
+            ),
+            phase=OrchestrationPhase.PLANNER,
+        )
+
         if planning_outcome.kind == PlanningOutcomeKind.NEEDS_FINAL:
             async for ev in self._run_finalization(
                 runtime_state=runtime_state,
@@ -225,10 +281,21 @@ class RuntimePipeline:
                 planner_hint=planning_outcome.planner_hint,
                 model=request.model,
                 envelope=envelope,
+                run_id=run_id,
+                budget_registry=budget_registry,
+                budget_resolver=budget_resolver,
             ):
                 yield ev
         # PlanningOutcomeKind.DIRECT already emitted delta+final inside
         # the stage; nothing to finalize beyond memory write-back below.
+
+        yield emitter.emit(
+            RuntimeEvent.run_end(
+                run_id=run_id_str,
+                status=planning_outcome.stop_reason.value if planning_outcome.stop_reason else "completed",
+            ),
+            phase=OrchestrationPhase.PIPELINE,
+        )
 
         # --- Memory: write path (new) -----------------------------------
         await self._finalize_memory(
@@ -242,6 +309,34 @@ class RuntimePipeline:
     def _apply_sandbox_overrides(request: PipelineRequest, ctx: ToolContext) -> None:
         """Apply sandbox overrides from request into ToolContext as the canonical path."""
         request_overrides = dict(request.sandbox_overrides or {})
+        budget_override = request_overrides.get("budget")
+        if isinstance(budget_override, dict):
+            canonical_budget: dict[str, int] = {}
+            for src_key, dst_key in (
+                ("planner_iterations", "max_planner_iterations"),
+                ("max_planner_iterations", "max_planner_iterations"),
+                ("agent_steps", "max_agent_steps"),
+                ("max_agent_steps", "max_agent_steps"),
+                ("tool_calls", "max_tool_calls_total"),
+                ("max_tool_calls_total", "max_tool_calls_total"),
+                ("retries", "max_retries"),
+                ("max_retries", "max_retries"),
+                ("wall_time_ms", "max_wall_time_ms"),
+                ("max_wall_time_ms", "max_wall_time_ms"),
+                ("tool_timeout_ms", "per_tool_timeout_ms"),
+                ("per_tool_timeout_ms", "per_tool_timeout_ms"),
+                ("max_steps_without_success", "max_steps_without_success"),
+                ("loop_threshold", "loop_threshold"),
+                ("max_tokens_total", "max_tokens_total"),
+            ):
+                value = budget_override.get(src_key)
+                if isinstance(value, int):
+                    canonical_budget[dst_key] = value
+            if canonical_budget:
+                runtime_budget = request_overrides.get("runtime_budget")
+                merged_runtime_budget = dict(runtime_budget) if isinstance(runtime_budget, dict) else {}
+                merged_runtime_budget.update(canonical_budget)
+                request_overrides["runtime_budget"] = merged_runtime_budget
         if not request_overrides:
             return
 
@@ -283,8 +378,53 @@ class RuntimePipeline:
         planner_hint: Optional[str],
         model: Optional[str],
         envelope: EventEnvelopeStamper,
+        run_id: Optional[UUID] = None,
+        budget_registry: Optional[BudgetRegistry] = None,
+        budget_resolver: Optional[BudgetResolver] = None,
     ) -> AsyncGenerator[RuntimeEvent, None]:
+        effective_run_id = run_id or runtime_state.run_id
+        synthesis_id = f"{effective_run_id}:synthesis:1"
+        if budget_registry is not None:
+            synthesis_limits = None
+            if budget_resolver is not None:
+                try:
+                    synthesis_limits = await budget_resolver.resolve_orchestrator("synthesizer")
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Failed to resolve synthesizer limits: %s", exc)
+            budget_registry.register(
+                entity_type="synthesis_run",
+                entity_id=synthesis_id,
+                parent_entity_id=str(effective_run_id),
+                role="synthesizer",
+                limits=synthesis_limits,
+            )
+            init_payload = budget_registry.emit_snapshot(synthesis_id, reason="init") or {}
+            yield envelope.stamp(
+                RuntimeEvent.budget_snapshot(
+                    entity_type="synthesis_run",
+                    entity_id=synthesis_id,
+                    parent_entity_type="run",
+                    parent_entity_id=str(effective_run_id),
+                    role="synthesizer",
+                    own=init_payload.get("own", {}),
+                    limits=init_payload.get("limits"),
+                    delta={},
+                    reason="init",
+                    at_ms=init_payload.get("at_ms"),
+                ),
+                OrchestrationPhase.SYNTHESIS,
+                run_id=str(effective_run_id),
+            )
+        yield envelope.stamp(
+            RuntimeEvent.synthesis_start(
+                synthesis_id=synthesis_id,
+                run_id=str(effective_run_id),
+            ),
+            OrchestrationPhase.SYNTHESIS,
+            run_id=str(effective_run_id),
+        )
         final_stage = self._assembler.build_finalization_stage()
+        synthesis_status = "completed"
         async for phased in final_stage.run(
             runtime_state=runtime_state,
             stop_reason=stop_reason,
@@ -303,7 +443,146 @@ class RuntimePipeline:
                     stop_reason=stop_reason.value,
                 )
                 phased = PhasedEvent(ev, phased.phase)
+            if ev.type == RuntimeEventType.ERROR:
+                synthesis_status = "failed"
+            if budget_registry is not None:
+                try:
+                    if ev.type == RuntimeEventType.LLM_REQUEST:
+                        in_tokens = self._estimate_tokens_from_payload(ev.data.get("messages"))
+                        if in_tokens > 0:
+                            budget_registry.consume(synthesis_id, "tokens_in", in_tokens, reason="tokens")
+                            budget_registry.consume(synthesis_id, "tokens_total", in_tokens, reason="tokens")
+                            snap = budget_registry.emit_snapshot(
+                                synthesis_id,
+                                reason="tokens",
+                                delta={"tokens_in": in_tokens, "tokens_total": in_tokens},
+                            ) or {}
+                            yield envelope.stamp(
+                                RuntimeEvent.budget_snapshot(
+                                    entity_type="synthesis_run",
+                                    entity_id=synthesis_id,
+                                    parent_entity_type="run",
+                                    parent_entity_id=str(effective_run_id),
+                                    role="synthesizer",
+                                    own=snap.get("own", {}),
+                                    limits=snap.get("limits"),
+                                    delta={"tokens_in": in_tokens, "tokens_total": in_tokens},
+                                    reason="tokens",
+                                    at_ms=snap.get("at_ms"),
+                                ),
+                                OrchestrationPhase.SYNTHESIS,
+                                run_id=str(runtime_state.run_id),
+                            )
+                    elif ev.type == RuntimeEventType.LLM_RESPONSE:
+                        out_tokens = self._estimate_tokens_from_payload(ev.data.get("content"))
+                        if out_tokens > 0:
+                            budget_registry.consume(synthesis_id, "tokens_out", out_tokens, reason="tokens")
+                            budget_registry.consume(synthesis_id, "tokens_total", out_tokens, reason="tokens")
+                            snap = budget_registry.emit_snapshot(
+                                synthesis_id,
+                                reason="tokens",
+                                delta={"tokens_out": out_tokens, "tokens_total": out_tokens},
+                            ) or {}
+                            yield envelope.stamp(
+                                RuntimeEvent.budget_snapshot(
+                                    entity_type="synthesis_run",
+                                    entity_id=synthesis_id,
+                                    parent_entity_type="run",
+                                    parent_entity_id=str(effective_run_id),
+                                    role="synthesizer",
+                                    own=snap.get("own", {}),
+                                    limits=snap.get("limits"),
+                                    delta={"tokens_out": out_tokens, "tokens_total": out_tokens},
+                                    reason="tokens",
+                                    at_ms=snap.get("at_ms"),
+                                ),
+                                OrchestrationPhase.SYNTHESIS,
+                                run_id=str(runtime_state.run_id),
+                            )
+                    elif ev.type == RuntimeEventType.LLM_CALL:
+                        dur = ev.data.get("duration_ms")
+                        if isinstance(dur, int) and dur > 0:
+                            budget_registry.consume(synthesis_id, "wall_time_ms", dur, reason="wall_time")
+                            snap = budget_registry.emit_snapshot(
+                                synthesis_id,
+                                reason="wall_time",
+                                delta={"wall_time_ms": dur},
+                            ) or {}
+                            yield envelope.stamp(
+                                RuntimeEvent.budget_snapshot(
+                                    entity_type="synthesis_run",
+                                    entity_id=synthesis_id,
+                                    parent_entity_type="run",
+                                    parent_entity_id=str(effective_run_id),
+                                    role="synthesizer",
+                                    own=snap.get("own", {}),
+                                    limits=snap.get("limits"),
+                                    delta={"wall_time_ms": dur},
+                                    reason="wall_time",
+                                    at_ms=snap.get("at_ms"),
+                                ),
+                                OrchestrationPhase.SYNTHESIS,
+                                run_id=str(runtime_state.run_id),
+                            )
+                except BudgetExceededError as exc:
+                    synthesis_status = "failed"
+                    yield envelope.stamp(
+                        RuntimeEvent.error(
+                            f"Synthesizer budget exceeded: {exc.metric}",
+                            recoverable=False,
+                            parent_entity_type="synthesis_run",
+                            parent_entity_id=synthesis_id,
+                        ),
+                        OrchestrationPhase.SYNTHESIS,
+                        run_id=str(runtime_state.run_id),
+                    )
+                    break
             yield envelope.stamp_phased(phased, run_id=str(runtime_state.run_id))
+        if budget_registry is not None:
+            final_payload = budget_registry.emit_snapshot(synthesis_id, reason="finalize") or {}
+            yield envelope.stamp(
+                RuntimeEvent.budget_snapshot(
+                    entity_type="synthesis_run",
+                    entity_id=synthesis_id,
+                    parent_entity_type="run",
+                    parent_entity_id=str(effective_run_id),
+                    role="synthesizer",
+                    own=final_payload.get("own", {}),
+                    limits=final_payload.get("limits"),
+                    delta={},
+                    reason="finalize",
+                    at_ms=final_payload.get("at_ms"),
+                ),
+                OrchestrationPhase.SYNTHESIS,
+                run_id=str(effective_run_id),
+            )
+        yield envelope.stamp(
+            RuntimeEvent.synthesis_end(
+                synthesis_id=synthesis_id,
+                run_id=str(effective_run_id),
+                status=synthesis_status,
+            ),
+            OrchestrationPhase.SYNTHESIS,
+            run_id=str(effective_run_id),
+        )
+
+    @staticmethod
+    def _estimate_tokens_from_payload(value: object) -> int:
+        import json
+
+        if value is None:
+            return 0
+        try:
+            if isinstance(value, str):
+                raw = value
+            else:
+                raw = json.dumps(value, ensure_ascii=False, default=str)
+        except Exception:
+            raw = str(value)
+        raw = (raw or "").strip()
+        if not raw:
+            return 0
+        return max(1, len(raw) // 4)
 
     async def _finalize_memory(
         self,

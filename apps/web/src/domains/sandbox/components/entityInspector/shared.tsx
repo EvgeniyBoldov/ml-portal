@@ -1,7 +1,8 @@
+import React from 'react';
 import Badge from '@/shared/ui/Badge';
 import { InspectorFieldGroup, InspectorFieldRow, InspectorJsonBlock } from '@/shared/ui/Inspector';
-import type { BudgetSnapshot, TraceEntity } from '@/domains/runtimeTrace/entityTypes';
-import { BudgetTable } from '@/domains/runtimeTrace/budget';
+import type { BudgetMetric, EntityLimits, EntityUsed, TraceEntity } from '@/domains/runtimeTrace/entityTypes';
+import { BudgetTable, SpendSummary } from '@/domains/runtimeTrace/budget';
 import type { RunStep } from '../../hooks/useSandboxRun';
 
 export function formatDuration(ms?: number): string {
@@ -37,8 +38,8 @@ export function InfoTab({ entity, steps }: { entity: TraceEntity; steps: RunStep
   );
 }
 
-function toRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+function toRecord(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   return value as Record<string, unknown>;
 }
 
@@ -51,174 +52,69 @@ function num(value: unknown): number | undefined {
   return undefined;
 }
 
-function mergeMetric(
-  base: BudgetSnapshot[keyof BudgetSnapshot],
-  next: BudgetSnapshot[keyof BudgetSnapshot],
-) {
-  if (!base) return next;
-  if (!next) return base;
-  return {
-    used: Math.max(base.used, next.used),
-    limit: next.limit ?? base.limit,
-  };
-}
+const METRICS: BudgetMetric[] = [
+  'planner_steps',
+  'agent_steps',
+  'tool_calls',
+  'tokens_in',
+  'tokens_out',
+  'tokens_total',
+  'retries',
+  'wall_time_ms',
+];
 
-function extractBudgetFromStep(step: RunStep): BudgetSnapshot | undefined {
+function extractBudgetFromStep(step: RunStep): { used: EntityUsed; limits: EntityLimits | null } | undefined {
   const d = step.data as Record<string, unknown>;
-  const raw =
-    toRecord(d.shared_budget)
-    ?? toRecord(d.runtime_budget)
-    ?? toRecord(d.budget)
-    ?? d;
+  const own = toRecord(d.own);
+  const limits = toRecord(d.limits);
+  if (!own && !limits) return undefined;
 
-  const snap: BudgetSnapshot = {};
+  const used: EntityUsed = {};
+  const entityLimits: EntityLimits = {};
 
-  const stepsRaw = toRecord(raw.steps);
-  const toolsRaw = toRecord(raw.tools);
-  const retriesRaw = toRecord(raw.retries);
-  const tokensRaw = toRecord(raw.tokens);
-  const wallRaw = toRecord(raw.wallTimeMs);
-
-  const stepsUsed = num(stepsRaw?.used) ?? num(raw.consumed_planner_iterations);
-  const stepsLimit = num(stepsRaw?.limit) ?? num(raw.max_planner_iterations) ?? num(raw.max_steps);
-  if (stepsUsed !== undefined || stepsLimit !== undefined) snap.steps = { used: stepsUsed ?? 0, limit: stepsLimit };
-
-  const toolsUsed = num(toolsRaw?.used) ?? num(raw.consumed_tool_calls);
-  const toolsLimit = num(toolsRaw?.limit) ?? num(raw.max_tool_calls_total);
-  if (toolsUsed !== undefined || toolsLimit !== undefined) snap.tools = { used: toolsUsed ?? 0, limit: toolsLimit };
-
-  const retriesUsed = num(retriesRaw?.used) ?? num(raw.retries);
-  const retriesLimit = num(retriesRaw?.limit);
-  if (retriesUsed !== undefined || retriesLimit !== undefined) snap.retries = { used: retriesUsed ?? 0, limit: retriesLimit };
-
-  const tokensUsed = num(tokensRaw?.used) ?? num(raw.tokens_consumed) ?? num(raw.tokens_in);
-  const tokensLimit = num(tokensRaw?.limit) ?? num(raw.tokens_limit);
-  if (tokensUsed !== undefined || tokensLimit !== undefined) snap.tokens = { used: tokensUsed ?? 0, limit: tokensLimit };
-
-  const wallUsed = num(wallRaw?.used)
-    ?? ((num(raw.max_wall_time_ms) !== undefined && num(raw.remaining_wall_time_ms) !== undefined)
-      ? Math.max(0, (num(raw.max_wall_time_ms) ?? 0) - (num(raw.remaining_wall_time_ms) ?? 0))
-      : undefined);
-  const wallLimit = num(wallRaw?.limit) ?? num(raw.max_wall_time_ms);
-  if (wallUsed !== undefined || wallLimit !== undefined) snap.wallTimeMs = { used: wallUsed ?? 0, limit: wallLimit };
-
-  return Object.keys(snap).length > 0 ? snap : undefined;
-}
-
-function aggregateBudgetFromSteps(entity: TraceEntity, steps: RunStep[]): BudgetSnapshot | undefined {
-  const sourceIds = new Set<string>();
-  const collectIds = (node: TraceEntity) => {
-    node.sourceEventIds.forEach((id) => sourceIds.add(id));
-    node.children.forEach(collectIds);
-  };
-  collectIds(entity);
-
-  const related = steps.filter((step) => sourceIds.has(step.id));
-  if (related.length === 0) return undefined;
-
-  let acc: BudgetSnapshot = {};
-  for (const step of related) {
-    const snap = extractBudgetFromStep(step);
-    if (!snap) continue;
-    acc.steps = mergeMetric(acc.steps, snap.steps);
-    acc.tools = mergeMetric(acc.tools, snap.tools);
-    acc.retries = mergeMetric(acc.retries, snap.retries);
-    acc.tokens = mergeMetric(acc.tokens, snap.tokens);
-    acc.wallTimeMs = mergeMetric(acc.wallTimeMs, snap.wallTimeMs);
+  for (const metric of METRICS) {
+    const usedVal = num(own?.[metric]);
+    if (usedVal !== undefined) used[metric] = usedVal;
+    const limitVal = num(limits?.[metric]);
+    if (limitVal !== undefined) entityLimits[metric] = limitVal;
   }
 
-  return Object.keys(acc).length > 0 ? acc : undefined;
-}
-
-function diffMetric(
-  before: BudgetSnapshot[keyof BudgetSnapshot],
-  after: BudgetSnapshot[keyof BudgetSnapshot],
-): BudgetSnapshot[keyof BudgetSnapshot] {
-  if (!after && !before) return undefined;
-  const afterUsed = after?.used ?? 0;
-  const beforeUsed = before?.used ?? 0;
   return {
-    used: Math.max(0, afterUsed - beforeUsed),
-    limit: after?.limit ?? before?.limit,
-  };
-}
-
-function buildDeltaFromSnapshots(before: BudgetSnapshot, after: BudgetSnapshot): BudgetSnapshot {
-  return {
-    steps: diffMetric(before.steps, after.steps),
-    tools: diffMetric(before.tools, after.tools),
-    retries: diffMetric(before.retries, after.retries),
-    tokens: diffMetric(before.tokens, after.tokens),
-    wallTimeMs: diffMetric(before.wallTimeMs, after.wallTimeMs),
-  };
-}
-
-function plannerBudgetFromWindow(entity: TraceEntity, steps: RunStep[]): { snapshot?: BudgetSnapshot; delta?: BudgetSnapshot } {
-  if (entity.sourceEventIds.length === 0 || steps.length === 0) return {};
-
-  const ids = new Set(entity.sourceEventIds);
-  const indices = steps
-    .map((step, idx) => (ids.has(step.id) ? idx : -1))
-    .filter((idx) => idx >= 0);
-  if (indices.length === 0) return {};
-
-  const start = Math.min(...indices);
-  const end = Math.max(...indices);
-
-  let before: BudgetSnapshot | undefined;
-  for (let i = start; i >= 0; i--) {
-    const snap = extractBudgetFromStep(steps[i]);
-    if (snap) {
-      before = snap;
-      break;
-    }
-  }
-
-  let after: BudgetSnapshot | undefined;
-  for (let i = end; i < steps.length; i++) {
-    const snap = extractBudgetFromStep(steps[i]);
-    if (snap) {
-      after = snap;
-      break;
-    }
-  }
-
-  if (!after && before) return { snapshot: before };
-  if (!after) return {};
-  if (!before) return { snapshot: after };
-
-  return {
-    snapshot: after,
-    delta: buildDeltaFromSnapshots(before, after),
+    used,
+    limits: Object.keys(entityLimits).length > 0 ? entityLimits : null,
   };
 }
 
 function budgetTitleForKind(kind: TraceEntity['kind']): string {
   if (kind === 'agent') return 'Бюджет агента';
-  if (kind === 'planner' || kind === 'decision' || kind === 'orchestrator') return 'Бюджет планирования';
-  if (kind === 'tool') return 'Бюджет инструмента';
+  if (kind === 'planner' || kind === 'decision' || kind === 'orchestrator') return 'Бюджет оркестратора';
+  if (kind === 'tool') return 'Расход инструмента';
   if (kind === 'run') return 'Бюджет запуска';
   return 'Использование бюджета';
 }
 
 export function BudgetsTab({ entity, steps }: { entity: TraceEntity; steps: RunStep[] }) {
-  const fallbackSnapshot = aggregateBudgetFromSteps(entity, steps);
-  const plannerWindow = entity.kind === 'planner' ? plannerBudgetFromWindow(entity, steps) : {};
+  const fromStep = steps
+    .filter((step) => entity.sourceEventIds.includes(step.id))
+    .map(extractBudgetFromStep)
+    .find(Boolean);
 
-  const snapshot = entity.kind === 'planner'
-    ? (plannerWindow.snapshot ?? entity.budgetSnapshot ?? fallbackSnapshot)
-    : (entity.budgetSnapshot ?? fallbackSnapshot ?? plannerWindow.snapshot);
-  const delta = entity.kind === 'planner'
-    ? (plannerWindow.delta ?? entity.budgetDelta)
-    : (entity.budgetDelta ?? plannerWindow.delta);
+  const used = entity.kind === 'run'
+    ? (entity.budget?.aggregated ?? fromStep?.used ?? {})
+    : (entity.budget?.own ?? fromStep?.used ?? {});
+  const limits = entity.budget?.limits ?? fromStep?.limits;
 
-  return (
-    <BudgetTable
-      snapshot={snapshot}
-      delta={delta}
-      title={budgetTitleForKind(entity.kind)}
-    />
-  );
+  if (limits && Object.keys(limits).length > 0) {
+    return (
+      <BudgetTable
+        title={budgetTitleForKind(entity.kind)}
+        used={used}
+        limits={limits}
+      />
+    );
+  }
+
+  return <SpendSummary used={used} />;
 }
 
 export function RawTab({ value, entity, steps }: { value: unknown; entity?: TraceEntity; steps?: RunStep[] }) {

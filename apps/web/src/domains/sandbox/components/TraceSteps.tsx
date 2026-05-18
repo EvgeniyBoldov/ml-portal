@@ -7,7 +7,7 @@
 import * as React from 'react';
 import { buildEntityTree, flattenEntityTree, findEntityById } from '@/domains/runtimeTrace/buildEntityTree';
 import { normalizeTraceEvent } from '@/domains/runtimeTrace/normalize';
-import type { TraceEntity } from '@/domains/runtimeTrace/entityTypes';
+import type { ContainerDebugRecord, TraceEntity } from '@/domains/runtimeTrace/entityTypes';
 import type { RunStep } from '../hooks/useSandboxRun';
 import { TraceTree } from './TraceTree';
 import styles from './TraceSteps.module.css';
@@ -32,6 +32,19 @@ function convertRunStepsToSemanticEvents(steps: RunStep[]) {
   );
 }
 
+function isTraceDebugEnabled(): boolean {
+  if (typeof window === 'undefined') return false;
+  const globalFlag = (window as Window & { __TRACE_DEBUG__?: boolean }).__TRACE_DEBUG__ === true;
+  if (globalFlag) return true;
+  try {
+    return window.localStorage.getItem('trace_debug') === '1';
+  } catch {
+    return false;
+  }
+}
+
+let lastDebugSignature = '';
+
 export function TraceSteps({
   steps,
   isRunning,
@@ -42,7 +55,17 @@ export function TraceSteps({
   const tree = React.useMemo(() => {
     if (steps.length === 0) return null;
     const events = convertRunStepsToSemanticEvents(steps);
-    return buildEntityTree(events);
+    const debugRecords: ContainerDebugRecord[] = [];
+    const treeResult = buildEntityTree(events, { debugRecords });
+    const debugEnabled = isTraceDebugEnabled();
+    if (debugEnabled) {
+      const signature = `${steps.length}:${steps[steps.length - 1]?.id ?? 'none'}`;
+      if (signature === lastDebugSignature) return treeResult;
+      lastDebugSignature = signature;
+      // eslint-disable-next-line no-console
+      console.table(debugRecords);
+    }
+    return treeResult;
   }, [steps]);
 
   // Manage expanded state

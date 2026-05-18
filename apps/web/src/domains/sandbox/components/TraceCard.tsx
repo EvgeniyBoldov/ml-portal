@@ -19,6 +19,12 @@ interface TraceCardProps {
   hasChildren: boolean;
 }
 
+interface ToneMeta {
+  badgeLabel: string;
+  badgeTone: 'neutral' | 'success' | 'warn' | 'danger' | 'info';
+  className: string;
+}
+
 const formatTitle = (entity: TraceEntity): string => {
   const { kind, data, title } = entity;
 
@@ -27,13 +33,23 @@ const formatTitle = (entity: TraceEntity): string => {
       if (data.kind === 'run') return data.userRequest?.slice(0, 60) ?? title;
       return title;
     case 'orchestrator':
-      if (data.kind === 'orchestrator') return data.slug ?? title;
+      if (data.kind === 'orchestrator') {
+        if (data.role === 'synthesizer') return 'Synthesis';
+        if (data.role === 'planner') return 'Planner';
+        return data.slug ?? title;
+      }
       return title;
     case 'planner':
       if (data.kind === 'planner') {
-        const kindLabel = data.stepKind ?? 'planner';
-        const rationale = data.rationale?.slice(0, 40);
-        return rationale ? `${kindLabel}: ${rationale}` : kindLabel;
+        const rationale = data.rationale?.trim();
+        if (rationale) return rationale.slice(0, 72);
+        if (data.stepKind === 'call_agent') {
+          return data.decision?.chosenAgentSlug
+            ? `Агент: ${data.decision.chosenAgentSlug}`
+            : 'Вызов агента';
+        }
+        if (data.stepKind === 'final' || data.stepKind === 'direct_answer') return 'Ответ пользователю';
+        return 'Шаг планера';
       }
       return title;
     case 'agent':
@@ -66,27 +82,47 @@ const formatTitle = (entity: TraceEntity): string => {
   }
 };
 
-const KIND_BADGES: Record<string, { label: string; tone: 'neutral' | 'success' | 'warn' | 'danger' | 'info' }> = {
-  run: { label: 'Run', tone: 'neutral' },
-  orchestrator: { label: 'Orc', tone: 'info' },
-  planner: { label: 'Plan', tone: 'info' },
-  agent: { label: 'Agent', tone: 'success' },
-  llm: { label: 'LLM', tone: 'info' },
-  tool: { label: 'Tool', tone: 'neutral' },
-  decision: { label: 'Dec', tone: 'info' },
-  error: { label: 'Err', tone: 'danger' },
-  unknown: { label: 'New', tone: 'warn' },
+const formatPlannerStepKind = (stepKind?: string): string => {
+  const normalized = String(stepKind ?? '').toLowerCase();
+  if (normalized === 'call_agent') return 'Вызвать агента';
+  if (normalized === 'final') return 'Финальный ответ';
+  if (normalized === 'ask_user') return 'Уточнение';
+  if (normalized === 'direct_answer') return 'Прямой ответ';
+  if (normalized === 'abort') return 'Прервать';
+  if (normalized === 'iteration') return 'Итерация планера';
+  return stepKind ?? 'planner';
+};
+
+const resolveToneMeta = (entity: TraceEntity): ToneMeta => {
+  if (entity.kind === 'orchestrator' && entity.data.kind === 'orchestrator') {
+    if (entity.data.role === 'synthesizer') {
+      return { badgeLabel: 'SYNT', badgeTone: 'info', className: styles.synthesis };
+    }
+    if (entity.data.role === 'fact_extractor') {
+      return { badgeLabel: 'FACT', badgeTone: 'warn', className: styles.fact };
+    }
+    return { badgeLabel: 'PLAN', badgeTone: 'info', className: styles.planner };
+  }
+  if (entity.kind === 'planner') {
+    return { badgeLabel: 'PLAN', badgeTone: 'info', className: styles.planner };
+  }
+  if (entity.kind === 'llm') return { badgeLabel: 'LLM', badgeTone: 'warn', className: styles.llm };
+  if (entity.kind === 'agent') return { badgeLabel: 'AGENT', badgeTone: 'success', className: styles.agent };
+  if (entity.kind === 'tool') return { badgeLabel: 'TOOL', badgeTone: 'neutral', className: styles.tool };
+  if (entity.kind === 'run') return { badgeLabel: 'RUN', badgeTone: 'neutral', className: styles.run };
+  if (entity.kind === 'error') return { badgeLabel: 'ERR', badgeTone: 'danger', className: styles.error };
+  return { badgeLabel: 'NEW', badgeTone: 'warn', className: styles.unknown };
 };
 
 // Краткий сквозной вид по логу: приоритет на агент/планер/тул
-const BUDGET_KINDS: Record<string, Array<'steps' | 'tools' | 'retries' | 'tokens' | 'wallTimeMs'>> = {
-  run: ['steps', 'tools'],
-  orchestrator: ['steps', 'wallTimeMs'],
-  agent: ['steps', 'tools', 'tokens', 'wallTimeMs'],
-  llm: ['tokens', 'wallTimeMs'],
-  tool: ['tools', 'retries', 'wallTimeMs'],
-  planner: ['steps', 'wallTimeMs'],
-  decision: ['steps'],
+const BUDGET_KINDS: Record<string, Array<'planner_steps' | 'agent_steps' | 'tool_calls' | 'tokens_total' | 'retries' | 'wall_time_ms'>> = {
+  run: ['planner_steps', 'tool_calls'],
+  orchestrator: ['planner_steps', 'tokens_total', 'wall_time_ms'],
+  agent: ['agent_steps', 'tokens_total', 'wall_time_ms'],
+  llm: ['tokens_total'],
+  tool: ['tool_calls', 'retries', 'wall_time_ms'],
+  planner: ['planner_steps', 'wall_time_ms'],
+  decision: ['planner_steps'],
   error: [],
   unknown: [],
 };
@@ -99,6 +135,37 @@ const STATUS_ICONS: Record<string, string> = {
   pending: '◌',
 };
 
+function StepMeta({
+  entity,
+  durationMs,
+  collapsedSummary,
+}: {
+  entity: TraceEntity;
+  durationMs?: number;
+  collapsedSummary: string | null;
+}): React.ReactElement {
+  const plannerAction =
+    entity.kind === 'planner' && entity.data.kind === 'planner'
+      ? (
+        entity.data.stepKind === 'call_agent' && entity.data.decision?.chosenAgentSlug
+          ? `${formatPlannerStepKind(entity.data.stepKind)}: ${entity.data.decision.chosenAgentSlug}`
+          : formatPlannerStepKind(entity.data.stepKind)
+      )
+      : null;
+
+  return (
+    <>
+      {plannerAction && <span className={styles.actionType}>{plannerAction}</span>}
+      {collapsedSummary && <span className={styles.collapsedSummary}>{collapsedSummary}</span>}
+      {durationMs !== undefined && (
+        <span className={styles.duration}>
+          {(durationMs / 1000).toFixed(1)}s
+        </span>
+      )}
+    </>
+  );
+}
+
 export function TraceCard({
   entity,
   isExpanded,
@@ -107,21 +174,14 @@ export function TraceCard({
   isSelected,
   hasChildren,
 }: TraceCardProps): React.ReactElement {
-  const { kind, status, durationMs, budgetSnapshot, budgetDelta, children } = entity;
+  const { kind, status, durationMs, children } = entity;
 
   const title = formatTitle(entity);
-  const badge = KIND_BADGES[kind] ?? { label: kind, tone: 'neutral' as const };
-  const effectiveBadge =
-    kind === 'orchestrator' && entity.data.kind === 'orchestrator'
-      ? {
-          ...badge,
-          label: /synth/i.test(entity.data.slug ?? '') || entity.data.role === 'synthesizer' ? 'SYNT' : 'ORC',
-        }
-      : badge;
+  const toneMeta = resolveToneMeta(entity);
   const budgetKinds = BUDGET_KINDS[kind] ?? [];
-  const showTotals = kind === 'run' || kind === 'agent';
-  const pillsSnapshot = showTotals ? budgetSnapshot : undefined;
-  const pillsDelta = showTotals ? undefined : budgetDelta;
+  const showAggregated = kind === 'run' || kind === 'orchestrator' || kind === 'agent';
+  const pillsUsed = showAggregated ? entity.budget?.aggregated : entity.budget?.own;
+  const pillsLimits = entity.budget?.limits ?? null;
   const statusIcon = STATUS_ICONS[status] ?? '○';
 
   let collapsedSummary: string | null = null;
@@ -141,7 +201,7 @@ export function TraceCard({
     <div
       className={[
         styles.card,
-        styles[kind],
+        toneMeta.className,
         isSelected && styles.selected,
         isUnknown && styles.unknown,
         status === 'error' && styles.error,
@@ -163,8 +223,8 @@ export function TraceCard({
         )}
         {!hasChildren && <span className={styles.expandPlaceholder} />}
 
-        <Badge tone={effectiveBadge.tone} size="small" className={styles.kindBadge}>
-          {effectiveBadge.label}
+        <Badge tone={toneMeta.badgeTone} size="small" className={styles.kindBadge}>
+          {toneMeta.badgeLabel}
         </Badge>
 
         <span className={[styles.statusIcon, styles[status]].join(' ')}>
@@ -175,19 +235,13 @@ export function TraceCard({
           {title}
         </span>
 
-        {collapsedSummary && <span className={styles.collapsedSummary}>{collapsedSummary}</span>}
-
-        {durationMs !== undefined && (
-          <span className={styles.duration}>
-            {(durationMs / 1000).toFixed(1)}s
-          </span>
-        )}
+        <StepMeta entity={entity} durationMs={durationMs} collapsedSummary={collapsedSummary} />
 
         {budgetKinds.length > 0 && (
           <BudgetPills
-            snapshot={pillsSnapshot}
-            delta={pillsDelta}
-            kinds={budgetKinds}
+            used={pillsUsed}
+            limits={pillsLimits}
+            metrics={budgetKinds}
             className={styles.budgetPills}
           />
         )}

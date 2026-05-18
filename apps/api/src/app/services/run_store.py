@@ -55,9 +55,8 @@ _BRIEF_KEEP_TRUNCATED = {
 # Step types logged in "errors" mode (lightweight metadata + error info only)
 _ERRORS_STEP_TYPES = frozenset({
     "error",
-    "budget_limit_exceeded",
     "final_response",
-    "budget_consumed",
+    "budget_snapshot",
 })
 
 def _truncate(value: Any, max_len: int = _MAX_PAYLOAD_SIZE) -> Any:

@@ -34,7 +34,7 @@ from app.runtime.memory.summary_compactor import (
 
 def _llm_result(value):
     return StructuredCallResult(
-        value=value, trace_id=None, raw_response="", duration_ms=1
+        value=value, trace_id=None, raw_response="", duration_ms=1, model="test"
     )
 
 

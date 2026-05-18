@@ -14,6 +14,7 @@ class RuntimeEventType(str, Enum):
     """Типы событий runtime"""
     STATUS = "status"
     THINKING = "thinking"
+    BUDGET_SNAPSHOT = "budget_snapshot"
     OPERATION_CALL = "operation_call"
     OPERATION_RESULT = "operation_result"
     LLM_REQUEST = "llm_request"

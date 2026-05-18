@@ -254,98 +254,67 @@ function DecisionCard({ data }: { data: unknown }) {
 function BudgetCard({ data }: { data: unknown }) {
   if (!data || typeof data !== 'object') return <pre className={styles.code}>{JSON.stringify(data, null, 2)}</pre>;
   const d = data as Record<string, unknown>;
-  
-  const kind = String(d.kind ?? d.reason ?? d.code ?? 'budget');
-  const isInit = kind === 'budget_policy' || kind === 'budget_init' || (d.max_steps !== undefined && d.used === undefined && d.consumed === undefined);
-  const isExceeded = kind === 'budget_limit_exceeded' || kind === 'no_successful_operation_result';
-  
-  // For init events, show limits
-  if (isInit) {
+
+  const kind = String(d.reason ?? d.kind ?? d.code ?? 'budget');
+  const snapshot = typeof d.snapshot === 'object' && d.snapshot ? d.snapshot as Record<string, unknown> : null;
+  const toolCalls = snapshot && typeof snapshot.tool_calls === 'object' ? snapshot.tool_calls as Record<string, unknown> : null;
+  const plannerIterations = snapshot && typeof snapshot.planner_iterations === 'object'
+    ? snapshot.planner_iterations as Record<string, unknown>
+    : null;
+  const agentSteps = snapshot && typeof snapshot.agent_steps === 'object' ? snapshot.agent_steps as Record<string, unknown> : null;
+  const retries = snapshot && typeof snapshot.retries === 'object' ? snapshot.retries as Record<string, unknown> : null;
+  const tokensTotal = snapshot && typeof snapshot.tokens_total === 'object' ? snapshot.tokens_total as Record<string, unknown> : null;
+  const wall = snapshot && typeof snapshot.wall_time_ms === 'object' ? snapshot.wall_time_ms as Record<string, unknown> : null;
+  const isExceeded = kind === 'no_successful_operation_result' || kind === 'limit_exceeded';
+
+  if (snapshot) {
+    const stepsUsed = Number(agentSteps?.used ?? plannerIterations?.used ?? 0);
+    const stepsLimit = Number(agentSteps?.limit ?? plannerIterations?.limit ?? 0);
+    const toolsUsed = Number(toolCalls?.used ?? 0);
+    const toolsLimit = Number(toolCalls?.limit ?? 0);
     return (
       <div className={styles.card}>
         <div className={styles.budgetHeader}>
-          <Badge tone="info">Execution Limits</Badge>
+          <Badge tone="info">Budget Snapshot</Badge>
         </div>
-        <div className={styles.budgetLimits}>
-          {d.max_steps !== undefined && (
-            <div className={styles.budgetLimitItem}>
-              <span className={styles.budgetLimitName}>Max Steps</span>
-              <span className={styles.budgetLimitValue}>{Number(d.max_steps)}</span>
+        <div className={styles.budgetStats}>
+          <div className={styles.budgetStat}>
+            <span className={styles.budgetLabel}>Agent steps</span>
+            <span className={styles.budgetValue}>{stepsUsed}{stepsLimit > 0 ? `/${stepsLimit}` : ''}</span>
+          </div>
+          <div className={styles.budgetStat}>
+            <span className={styles.budgetLabel}>Tool calls</span>
+            <span className={styles.budgetValue}>{toolsUsed}{toolsLimit > 0 ? `/${toolsLimit}` : ''}</span>
+          </div>
+          {retries && (
+            <div className={styles.budgetStat}>
+              <span className={styles.budgetLabel}>Retries</span>
+              <span className={styles.budgetValue}>{Number(retries.used ?? 0)}{Number(retries.limit ?? 0) > 0 ? `/${Number(retries.limit)}` : ''}</span>
             </div>
           )}
-          {d.max_tool_calls_total !== undefined && (
-            <div className={styles.budgetLimitItem}>
-              <span className={styles.budgetLimitName}>Max Tool Calls</span>
-              <span className={styles.budgetLimitValue}>{Number(d.max_tool_calls_total)}</span>
+          {tokensTotal && (
+            <div className={styles.budgetStat}>
+              <span className={styles.budgetLabel}>Tokens</span>
+              <span className={styles.budgetValue}>{Number(tokensTotal.used ?? 0)}{Number(tokensTotal.limit ?? 0) > 0 ? `/${Number(tokensTotal.limit)}` : ''}</span>
             </div>
           )}
-          {d.max_retries !== undefined && (
-            <div className={styles.budgetLimitItem}>
-              <span className={styles.budgetLimitName}>Max Retries</span>
-              <span className={styles.budgetLimitValue}>{Number(d.max_retries)}</span>
-            </div>
-          )}
-          {d.tool_timeout_ms !== undefined && (
-            <div className={styles.budgetLimitItem}>
-              <span className={styles.budgetLimitName}>Tool Timeout</span>
-              <span className={styles.budgetLimitValue}>{Number(d.tool_timeout_ms)}ms</span>
-            </div>
-          )}
-          {d.max_wall_time_ms !== undefined && (
-            <div className={styles.budgetLimitItem}>
-              <span className={styles.budgetLimitName}>Wall Time</span>
-              <span className={styles.budgetLimitValue}>{Number(d.max_wall_time_ms)}ms</span>
+          {wall && (
+            <div className={styles.budgetStat}>
+              <span className={styles.budgetLabel}>Wall time</span>
+              <span className={styles.budgetValue}>{Number(wall.used ?? 0)}ms{Number(wall.limit ?? 0) > 0 ? `/${Number(wall.limit)}ms` : ''}</span>
             </div>
           )}
         </div>
       </div>
     );
   }
-  
-  // For consumed events, show progress
-  const used = Number(d.used ?? d.consumed ?? d.steps_used ?? 0);
-  const limit = Number(d.limit ?? d.max_steps ?? 0);
-  const remaining = d.remaining !== undefined ? Number(d.remaining) : limit > 0 ? limit - used : undefined;
-  const percentage = limit > 0 ? Math.round((used / limit) * 100) : 0;
-  
+
   return (
     <div className={styles.card}>
       <div className={styles.budgetHeader}>
-        <Badge tone={isExceeded ? 'danger' : 'info'}>{isExceeded ? '⚠ Limit Reached' : 'Budget Usage'}</Badge>
+        <Badge tone={isExceeded ? 'danger' : 'neutral'}>{kind}</Badge>
       </div>
-      <div className={styles.budgetBar}>
-        <div 
-          className={styles.budgetBarFill} 
-          style={{ 
-            width: `${Math.min(percentage, 100)}%`, 
-            background: isExceeded ? 'var(--danger)' : percentage > 90 ? 'var(--danger)' : percentage > 70 ? 'var(--warn)' : 'var(--success)' 
-          }} 
-        />
-      </div>
-      <div className={styles.budgetStats}>
-        <div className={styles.budgetStat}>
-          <span className={styles.budgetLabel}>Consumed</span>
-          <span className={styles.budgetValue}>{used}</span>
-        </div>
-        <div className={styles.budgetStat}>
-          <span className={styles.budgetLabel}>Limit</span>
-          <span className={styles.budgetValue}>{limit}</span>
-        </div>
-        {remaining !== undefined && (
-          <div className={styles.budgetStat}>
-            <span className={styles.budgetLabel}>Remaining</span>
-            <span className={`${styles.budgetValue} ${remaining === 0 ? styles.budgetExhausted : ''}`}>
-              {remaining}
-            </span>
-          </div>
-        )}
-      </div>
-      {kind !== 'budget' && kind !== 'budget_consumed' && (
-        <div className={styles.cardRow}>
-          <span className={styles.cardLabel}>Type:</span>
-          <Badge tone={isExceeded ? 'danger' : 'neutral'}>{kind}</Badge>
-        </div>
-      )}
+      <pre className={styles.code}>{JSON.stringify(d, null, 2)}</pre>
     </div>
   );
 }

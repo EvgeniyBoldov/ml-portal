@@ -1,10 +1,9 @@
 import type { RunTrace, SemanticEvent, TraceCategory, TraceSourceStep, TraceStatus } from './types';
+import { parseBudgetSnapshot } from './budget';
 
 const CATEGORY_MAP: Record<string, TraceCategory> = {
   user_request: 'input',
-  budget_policy: 'budget',
-  budget_consumed: 'budget',
-  budget_limit_exceeded: 'budget',
+  budget_snapshot: 'budget',
   llm_call: 'llm',
   llm_request: 'llm',
   llm_response: 'llm',
@@ -12,6 +11,9 @@ const CATEGORY_MAP: Record<string, TraceCategory> = {
   protocol_retry: 'retry',
   planner_action: 'planner',
   planner_step: 'planner',
+  planner_decision: 'planner',
+  planner_iteration_start: 'planner',
+  planner_iteration_end: 'planner',
   intent: 'planner',
   operation_call: 'operation',
   tool_call: 'operation',
@@ -22,18 +24,25 @@ const CATEGORY_MAP: Record<string, TraceCategory> = {
   final: 'final',
   final_response: 'final',
   error: 'error',
+  // Lifecycle — run
+  run_start: 'system',
+  run_end: 'system',
+  // Lifecycle — orchestrator
+  orchestrator_start: 'system',
+  orchestrator_end: 'system',
+  // Lifecycle — agent
+  agent_start: 'system',
+  agent_end: 'system',
+  // Lifecycle — synthesis
+  synthesis_start: 'system',
+  synthesis_end: 'system',
+  // Other system
   status: 'system',
-  thinking: 'system',
   delta: 'system',
   waiting_input: 'system',
   run_paused: 'system',
   stop: 'system',
   done: 'system',
-  // Future backend events (Stage 1)
-  orchestrator_start: 'system',
-  orchestrator_end: 'system',
-  agent_start: 'system',
-  agent_end: 'system',
   partial_mode: 'system',
 };
 
@@ -64,8 +73,8 @@ function summarize(rawType: string, data: Record<string, unknown>): string {
   if (rawType === 'user_request') return String(data.content ?? data.request ?? 'User request');
   if (rawType === 'protocol_retry') return String(data.reason ?? 'Protocol retry');
   if (rawType === 'routing') return String(data.agent_slug ?? data.mode ?? 'Routing decision');
-  if (rawType === 'planner_step' || rawType === 'planner_action') {
-    const kind = String(data.kind ?? data.action_type ?? data.action ?? 'planner_step');
+  if (rawType === 'planner_action' || rawType === 'planner_step' || rawType === 'planner_decision') {
+    const kind = String(data.kind ?? data.action_type ?? data.action ?? 'planner_decision');
     const rationale = String(data.rationale ?? '').trim();
     return rationale ? `${kind}: ${rationale}` : kind;
   }
@@ -87,30 +96,33 @@ function summarize(rawType: string, data: Record<string, unknown>): string {
     const model = String(data.model ?? data.provider_model ?? 'unknown');
     return `model=${model}`;
   }
-  if (rawType.startsWith('budget_') || rawType === 'budget') {
-    // Budget init/policy events - show limits
-    if (data.max_steps !== undefined && data.used === undefined && data.consumed === undefined) {
-      const steps = data.max_steps ?? data.limit ?? 'n/a';
-      const tools = data.max_tool_calls_total ?? 'n/a';
-      return `limits: steps=${steps}, tools=${tools}`;
-    }
-    // Budget consumed events
-    if (data.used !== undefined || data.consumed !== undefined || data.steps_used !== undefined) {
-      const used = data.consumed ?? data.used ?? data.steps_used ?? 0;
-      const limit = data.limit ?? data.max_steps ?? 'n/a';
-      return `consumed: ${used}/${limit}`;
-    }
-    // Budget exceeded events
-    if (data.kind === 'budget_limit_exceeded' || data.reason || data.code) {
-      return String(data.kind ?? data.reason ?? data.code ?? 'budget_limit');
-    }
-    // Fallback for any budget event
-    return 'budget check';
+  if (rawType === 'budget_snapshot') {
+    const entityType = String(data.entity_type ?? data.owner_scope ?? 'unknown');
+    return `${entityType}: snapshot`;
   }
   if (rawType === 'final' || rawType === 'final_response') {
     return String(data.content ?? data.answer ?? 'Final response');
   }
   if (rawType === 'error') return String(data.error ?? data.message ?? 'Error');
+  // Lifecycle events
+  if (rawType === 'planner_iteration_start') {
+    return `Iteration ${String(data.iteration ?? 1)}`;
+  }
+  if (rawType === 'planner_iteration_end') {
+    return `Iteration ${String(data.iteration ?? 1)}: ${String(data.status ?? 'done')}`;
+  }
+  if (rawType === 'agent_start') {
+    return `Agent: ${String(data.agent_slug ?? 'unknown')}`;
+  }
+  if (rawType === 'agent_end') {
+    return `Agent ${String(data.agent_slug ?? 'unknown')}: ${String(data.status ?? 'done')}`;
+  }
+  if (rawType === 'orchestrator_start') return String(data.role ?? 'orchestrator');
+  if (rawType === 'orchestrator_end') return `${String(data.role ?? 'orchestrator')}: ${String(data.status ?? 'done')}`;
+  if (rawType === 'synthesis_start') return 'synthesis';
+  if (rawType === 'synthesis_end') return `synthesis: ${String(data.status ?? 'done')}`;
+  if (rawType === 'run_start') return String(data.entity_id ?? 'run');
+  if (rawType === 'run_end') return `run: ${String(data.status ?? 'done')}`;
   return Object.keys(data).length > 0 ? JSON.stringify(data).slice(0, 180) : rawType;
 }
 
@@ -145,8 +157,7 @@ function phaseFromEnvelopeOrCategory(data: Record<string, unknown>, category: Tr
 function titleOf(rawType: string, category: TraceCategory): string {
   const titles: Record<string, string> = {
     user_request: 'Запрос',
-    budget_policy: 'Лимиты',
-    budget_consumed: 'Расход лимитов',
+    budget_snapshot: 'Снимок бюджета',
     llm_call: 'LLM вызов',
     llm_request: 'LLM запрос',
     llm_response: 'LLM ответ',
@@ -158,56 +169,38 @@ function titleOf(rawType: string, category: TraceCategory): string {
     tool_result: 'Результат операции',
     planner_action: 'Планировщик',
     planner_step: 'Планировщик',
+    planner_decision: 'Решение планировщика',
+    planner_iteration_start: 'Итерация плана: старт',
+    planner_iteration_end: 'Итерация плана: конец',
     intent: 'Интент',
     policy_decision: 'Решение политики',
     confirmation_required: 'Требуется подтверждение',
     final: 'Финальный ответ',
     final_response: 'Финальный ответ',
     error: 'Ошибка',
+    run_start: 'Запуск run',
+    run_end: 'Завершение run',
+    orchestrator_start: 'Оркестратор: старт',
+    orchestrator_end: 'Оркестратор: конец',
+    agent_start: 'Агент: старт',
+    agent_end: 'Агент: конец',
+    synthesis_start: 'Синтез: старт',
+    synthesis_end: 'Синтез: конец',
   };
   return titles[rawType] ?? `${category}: ${rawType}`;
 }
 
 // System-level events that should NOT be marked as 'unknown' even if not in CATEGORY_MAP
-const SYSTEM_EVENT_PATTERNS = ['status', 'delta', 'thinking', 'waiting', 'stop', 'done', 'run_', 'intent'];
+const SYSTEM_EVENT_PATTERNS = ['status', 'delta', 'waiting', 'stop', 'done', 'run_', 'intent'];
 
 function isSystemEvent(rawType: string): boolean {
   return SYSTEM_EVENT_PATTERNS.some(pattern => rawType.toLowerCase().includes(pattern));
 }
 
-function toRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  return value as Record<string, unknown>;
-}
-
 function extractBudgetPayload(rawType: string, data: Record<string, unknown>): Record<string, unknown> | undefined {
-  if (rawType.startsWith('budget_')) return data;
-
-  const candidates = [
-    data.shared_budget,
-    data.runtime_budget,
-    data.budget,
-    data.sharedBudget,
-    data.runtimeBudget,
-  ];
-
-  for (const candidate of candidates) {
-    const record = toRecord(candidate);
-    if (record) return record;
-  }
-
-  // Some events carry budget-like fields directly
-  const hasBudgetLikeFields =
-    data.consumed_planner_iterations !== undefined
-    || data.max_planner_iterations !== undefined
-    || data.consumed_tool_calls !== undefined
-    || data.max_tool_calls_total !== undefined
-    || data.remaining_wall_time_ms !== undefined
-    || data.max_wall_time_ms !== undefined
-    || data.tokens_in !== undefined
-    || data.tokens_consumed !== undefined;
-
-  return hasBudgetLikeFields ? data : undefined;
+  if (rawType !== 'budget_snapshot') return undefined;
+  const parsed = parseBudgetSnapshot(data);
+  return parsed ? { ...data, _parsed: parsed } : data;
 }
 
 export function normalizeTraceEvent(step: TraceSourceStep): SemanticEvent {
@@ -240,6 +233,19 @@ export function normalizeTraceEvent(step: TraceSourceStep): SemanticEvent {
 
   const budget = extractBudgetPayload(rawType, step.data);
 
+  const lifecycleRefs: Record<string, unknown> = {};
+  if (step.data.entity_id) lifecycleRefs.entity_id = step.data.entity_id;
+  if (step.data.entity_type) lifecycleRefs.entity_type = step.data.entity_type;
+  if (step.data.parent_entity_id) lifecycleRefs.parent_entity_id = step.data.parent_entity_id;
+  if (step.data.parent_entity_type) lifecycleRefs.parent_entity_type = step.data.parent_entity_type;
+  if (step.data.agent_slug) lifecycleRefs.agent_slug = step.data.agent_slug;
+  if (step.data.agent_run_id) lifecycleRefs.agent_run_id = step.data.agent_run_id;
+  if (step.data.llm_call_id) lifecycleRefs.llm_call_id = step.data.llm_call_id;
+
+  const refs = Object.keys(lifecycleRefs).length > 0
+    ? { ...asRecord(step.data.refs), ...lifecycleRefs }
+    : asRecord(step.data.refs);
+
   return {
     id: step.id,
     raw_type: rawType,
@@ -255,7 +261,7 @@ export function normalizeTraceEvent(step: TraceSourceStep): SemanticEvent {
     outputs,
     decision: category === 'decision' || category === 'planner' || category === 'policy' || category === 'retry' ? step.data : undefined,
     budget,
-    refs: asRecord(step.data.refs),
+    refs,
     raw: {
       id: step.id,
       raw_type: rawType,

@@ -29,16 +29,32 @@
   border-left: 3px solid var(--danger, #ef4444);
 }
 
+.run {
+  border-left: 3px solid #64748b;
+}
+
+.planner {
+  border-left: 3px solid #2563eb;
+}
+
+.synthesis {
+  border-left: 3px solid #06b6d4;
+}
+
+.fact {
+  border-left: 3px solid #ec4899;
+}
+
 .agent {
-  border-left: 3px solid var(--success, #22c55e);
+  border-left: 3px solid #16a34a;
 }
 
 .llm {
-  border-left: 3px solid var(--info, #3b82f6);
+  border-left: 3px solid #eab308;
 }
 
 .tool {
-  border-left: 3px solid var(--text-tertiary, #9ca3af);
+  border-left: 3px solid #6b7280;
 }
 
 /* Header */
@@ -114,6 +130,12 @@
 .collapsedSummary {
   font-size: var(--text-xs, 12px);
   color: var(--text-secondary, #6b7280);
+  white-space: nowrap;
+}
+
+.actionType {
+  font-size: var(--text-xs, 12px);
+  color: var(--text-secondary, #4b5563);
   white-space: nowrap;
 }
 

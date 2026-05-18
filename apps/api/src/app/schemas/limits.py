@@ -47,6 +47,7 @@ class LimitVersionCreate(BaseModel):
     max_wall_time_ms: Optional[int] = Field(None, description="Max wall time in ms")
     tool_timeout_ms: Optional[int] = Field(None, description="Tool timeout in ms")
     max_retries: Optional[int] = Field(None, description="Max retries")
+    max_tokens_total: Optional[int] = Field(None, description="Max tokens total")
     extra_config: Optional[Dict[str, Any]] = Field(None, description="Extra config")
     notes: Optional[str] = Field(None, description="Notes about this version")
     parent_version_id: Optional[UUID] = Field(None, description="Parent version ID")
@@ -58,6 +59,7 @@ class LimitVersionUpdate(BaseModel):
     max_wall_time_ms: Optional[int] = None
     tool_timeout_ms: Optional[int] = None
     max_retries: Optional[int] = None
+    max_tokens_total: Optional[int] = None
     extra_config: Optional[Dict[str, Any]] = None
     notes: Optional[str] = None
 
@@ -72,6 +74,7 @@ class LimitVersionResponse(BaseModel):
     max_wall_time_ms: Optional[int] = None
     tool_timeout_ms: Optional[int] = None
     max_retries: Optional[int] = None
+    max_tokens_total: Optional[int] = None
     extra_config: Dict[str, Any] = {}
     parent_version_id: Optional[UUID] = None
     notes: Optional[str] = None
@@ -90,6 +93,7 @@ class LimitVersionInfo(BaseModel):
     max_wall_time_ms: Optional[int] = None
     tool_timeout_ms: Optional[int] = None
     max_retries: Optional[int] = None
+    max_tokens_total: Optional[int] = None
     notes: Optional[str] = None
     created_at: datetime
 

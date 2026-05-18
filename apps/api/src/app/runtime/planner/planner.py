@@ -40,6 +40,9 @@ class PlannerLLMTrace:
     raw_response: str
     response_length: int
     duration_ms: int
+    tokens_in: int = 0
+    tokens_out: int = 0
+    tokens_total: int = 0
 
 
 class PlannerLLMOutput(BaseModel):
@@ -167,6 +170,12 @@ class Planner:
                     raw_response=result.raw_response,
                     response_length=len(result.raw_response or ""),
                     duration_ms=result.duration_ms,
+                    tokens_in=self._estimate_tokens(json.dumps(payload, ensure_ascii=False, default=str)),
+                    tokens_out=self._estimate_tokens(result.raw_response or ""),
+                    tokens_total=(
+                        self._estimate_tokens(json.dumps(payload, ensure_ascii=False, default=str))
+                        + self._estimate_tokens(result.raw_response or "")
+                    ),
                 )
                 return candidate, trace
 
@@ -218,3 +227,11 @@ class Planner:
             kind=NextStepKind.ABORT,
             rationale=f"planner_failed_no_facts: {reason or 'unknown'}",
         )
+
+    @staticmethod
+    def _estimate_tokens(text: str) -> int:
+        raw = (text or "").strip()
+        if not raw:
+            return 0
+        # Heuristic fallback when provider usage is unavailable.
+        return max(1, len(raw) // 4)

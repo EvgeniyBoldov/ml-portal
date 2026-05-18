@@ -30,10 +30,10 @@ class TestChatEventMapper:
 
         assert mapper.map_runtime_event(event) is None
 
-    def test_maps_planner_step_event(self):
+    def test_maps_planner_decision_event(self):
         mapper = ChatEventMapper()
         event = SimpleNamespace(
-            type=RuntimeEventType.PLANNER_STEP,
+            type=RuntimeEventType.PLANNER_DECISION,
             data={
                 "iteration": 3,
                 "kind": "call_agent",

@@ -31,9 +31,27 @@ class OrchestrationPhase(str, Enum):
 class RuntimeEventType(str, Enum):
     """Canonical event types. No legacy names — sandbox/SSE mappers adapt to these."""
 
+    # Lifecycle — run
+    RUN_START = "run_start"
+    RUN_END = "run_end"
+    # Lifecycle — orchestrator (planner loop)
+    ORCHESTRATOR_START = "orchestrator_start"
+    ORCHESTRATOR_END = "orchestrator_end"
+    # Lifecycle — planner iteration
+    PLANNER_ITERATION_START = "planner_iteration_start"
+    PLANNER_ITERATION_END = "planner_iteration_end"
+    # Lifecycle — agent
+    AGENT_START = "agent_start"
+    AGENT_END = "agent_end"
+    # Lifecycle — synthesis
+    SYNTHESIS_START = "synthesis_start"
+    SYNTHESIS_END = "synthesis_end"
     # Progress
     STATUS = "status"
-    PLANNER_STEP = "planner_step"
+    PLANNER_DECISION = "planner_decision"
+    PROTOCOL_RETRY = "protocol_retry"
+    INTENT = "intent"
+    BUDGET_SNAPSHOT = "budget_snapshot"
     LLM_REQUEST = "llm_request"
     LLM_RESPONSE = "llm_response"
     LLM_CALL = "llm_call"
@@ -58,6 +76,89 @@ class RuntimeEvent:
     type: RuntimeEventType
     data: Dict[str, Any] = field(default_factory=dict)
 
+    # -------- lifecycle constructors --------
+
+    @classmethod
+    def run_start(cls, *, run_id: str, **extra: Any) -> "RuntimeEvent":
+        return cls(RuntimeEventType.RUN_START, {"entity_id": run_id, "entity_type": "run", **extra})
+
+    @classmethod
+    def run_end(cls, *, run_id: str, status: str = "completed", **extra: Any) -> "RuntimeEvent":
+        return cls(RuntimeEventType.RUN_END, {"entity_id": run_id, "entity_type": "run", "status": status, **extra})
+
+    @classmethod
+    def orchestrator_start(cls, *, orchestrator_id: str, run_id: str, role: str = "planner", **extra: Any) -> "RuntimeEvent":
+        return cls(RuntimeEventType.ORCHESTRATOR_START, {
+            "entity_id": orchestrator_id, "entity_type": "orchestrator",
+            "parent_entity_type": "run", "parent_entity_id": run_id,
+            "role": role, **extra,
+        })
+
+    @classmethod
+    def orchestrator_end(cls, *, orchestrator_id: str, run_id: str, status: str = "completed", **extra: Any) -> "RuntimeEvent":
+        return cls(RuntimeEventType.ORCHESTRATOR_END, {
+            "entity_id": orchestrator_id, "entity_type": "orchestrator",
+            "parent_entity_type": "run", "parent_entity_id": run_id,
+            "status": status, **extra,
+        })
+
+    @classmethod
+    def planner_iteration_start(
+        cls, *, iteration_id: str, orchestrator_id: str, iteration: int, **extra: Any
+    ) -> "RuntimeEvent":
+        return cls(RuntimeEventType.PLANNER_ITERATION_START, {
+            "entity_id": iteration_id, "entity_type": "planner_iteration",
+            "parent_entity_type": "orchestrator", "parent_entity_id": orchestrator_id,
+            "iteration": iteration, **extra,
+        })
+
+    @classmethod
+    def planner_iteration_end(
+        cls, *, iteration_id: str, orchestrator_id: str, iteration: int, status: str = "completed", **extra: Any
+    ) -> "RuntimeEvent":
+        return cls(RuntimeEventType.PLANNER_ITERATION_END, {
+            "entity_id": iteration_id, "entity_type": "planner_iteration",
+            "parent_entity_type": "orchestrator", "parent_entity_id": orchestrator_id,
+            "iteration": iteration, "status": status, **extra,
+        })
+
+    @classmethod
+    def agent_start(
+        cls, *, agent_run_id: str, parent_entity_id: str, parent_entity_type: str = "planner_iteration",
+        agent_slug: str, **extra: Any
+    ) -> "RuntimeEvent":
+        return cls(RuntimeEventType.AGENT_START, {
+            "entity_id": agent_run_id, "entity_type": "agent_run",
+            "parent_entity_type": parent_entity_type, "parent_entity_id": parent_entity_id,
+            "agent_slug": agent_slug, **extra,
+        })
+
+    @classmethod
+    def agent_end(
+        cls, *, agent_run_id: str, parent_entity_id: str, parent_entity_type: str = "planner_iteration",
+        agent_slug: str, status: str = "completed", **extra: Any
+    ) -> "RuntimeEvent":
+        return cls(RuntimeEventType.AGENT_END, {
+            "entity_id": agent_run_id, "entity_type": "agent_run",
+            "parent_entity_type": parent_entity_type, "parent_entity_id": parent_entity_id,
+            "agent_slug": agent_slug, "status": status, **extra,
+        })
+
+    @classmethod
+    def synthesis_start(cls, *, synthesis_id: str, run_id: str, **extra: Any) -> "RuntimeEvent":
+        return cls(RuntimeEventType.SYNTHESIS_START, {
+            "entity_id": synthesis_id, "entity_type": "synthesis_run",
+            "parent_entity_type": "run", "parent_entity_id": run_id, **extra,
+        })
+
+    @classmethod
+    def synthesis_end(cls, *, synthesis_id: str, run_id: str, status: str = "completed", **extra: Any) -> "RuntimeEvent":
+        return cls(RuntimeEventType.SYNTHESIS_END, {
+            "entity_id": synthesis_id, "entity_type": "synthesis_run",
+            "parent_entity_type": "run", "parent_entity_id": run_id,
+            "status": status, **extra,
+        })
+
     # -------- constructors (keep call-sites terse) --------
 
     @classmethod
@@ -67,9 +168,68 @@ class RuntimeEvent:
     @classmethod
     def planner_step(cls, *, iteration: int, kind: str, payload: Dict[str, Any]) -> "RuntimeEvent":
         return cls(
-            RuntimeEventType.PLANNER_STEP,
+            RuntimeEventType.PLANNER_DECISION,
             {"iteration": iteration, "kind": kind, **payload},
         )
+
+    @classmethod
+    def planner_decision(cls, *, iteration: int, kind: str, payload: Dict[str, Any]) -> "RuntimeEvent":
+        return cls(
+            RuntimeEventType.PLANNER_DECISION,
+            {"iteration": iteration, "kind": kind, **payload},
+        )
+
+    @classmethod
+    def budget_snapshot(
+        cls,
+        *,
+        entity_type: Optional[str] = None,
+        entity_id: Optional[str] = None,
+        own: Optional[Dict[str, Any]] = None,
+        limits: Optional[Dict[str, Any]] = None,
+        delta: Optional[Dict[str, Any]] = None,
+        reason: Optional[str] = None,
+        at_ms: Optional[int] = None,
+        parent_entity_type: Optional[str] = None,
+        parent_entity_id: Optional[str] = None,
+        role: Optional[str] = None,
+        # legacy compatibility
+        owner_scope: Optional[str] = None,
+        owner_id: Optional[str] = None,
+        snapshot: Optional[Dict[str, Any]] = None,
+        parent_owner_id: Optional[str] = None,
+    ) -> "RuntimeEvent":
+        payload: Dict[str, Any] = {}
+
+        if entity_type is not None or entity_id is not None or own is not None or limits is not None:
+            payload.update({
+                "entity_type": entity_type,
+                "entity_id": entity_id,
+                "own": own or {},
+                "limits": limits,
+            })
+            if role is not None:
+                payload["role"] = role
+        else:
+            payload.update({
+                "owner_scope": owner_scope,
+                "owner_id": owner_id,
+                "snapshot": snapshot or {},
+            })
+
+        if delta is not None:
+            payload["delta"] = delta
+        if reason is not None:
+            payload["reason"] = reason
+        if at_ms is not None:
+            payload["at_ms"] = at_ms
+        if parent_entity_type is not None:
+            payload["parent_entity_type"] = parent_entity_type
+        if parent_entity_id is not None:
+            payload["parent_entity_id"] = parent_entity_id
+        if parent_owner_id is not None:
+            payload["parent_owner_id"] = parent_owner_id
+        return cls(RuntimeEventType.BUDGET_SNAPSHOT, payload)
 
     @classmethod
     def llm_request(cls, **payload: Any) -> "RuntimeEvent":
@@ -84,11 +244,30 @@ class RuntimeEvent:
         return cls(RuntimeEventType.LLM_CALL, dict(payload))
 
     @classmethod
-    def operation_call(cls, *, operation: str, call_id: str, arguments: Dict[str, Any]) -> "RuntimeEvent":
-        return cls(
-            RuntimeEventType.OPERATION_CALL,
-            {"operation": operation, "call_id": call_id, "arguments": arguments},
-        )
+    def operation_call(
+        cls,
+        *,
+        operation: str,
+        call_id: str,
+        arguments: Dict[str, Any],
+        parent_entity_type: Optional[str] = None,
+        parent_entity_id: Optional[str] = None,
+        agent_slug: Optional[str] = None,
+        agent_run_id: Optional[str] = None,
+        llm_call_id: Optional[str] = None,
+    ) -> "RuntimeEvent":
+        payload: Dict[str, Any] = {"operation": operation, "call_id": call_id, "arguments": arguments}
+        if parent_entity_type is not None:
+            payload["parent_entity_type"] = parent_entity_type
+        if parent_entity_id is not None:
+            payload["parent_entity_id"] = parent_entity_id
+        if agent_slug is not None:
+            payload["agent_slug"] = agent_slug
+        if agent_run_id is not None:
+            payload["agent_run_id"] = agent_run_id
+        if llm_call_id is not None:
+            payload["llm_call_id"] = llm_call_id
+        return cls(RuntimeEventType.OPERATION_CALL, payload)
 
     @classmethod
     def operation_result(
@@ -102,6 +281,11 @@ class RuntimeEvent:
         retryable: Optional[bool] = None,
         safe_message: Optional[str] = None,
         envelope: Optional[Dict[str, Any]] = None,
+        parent_entity_type: Optional[str] = None,
+        parent_entity_id: Optional[str] = None,
+        agent_slug: Optional[str] = None,
+        agent_run_id: Optional[str] = None,
+        llm_call_id: Optional[str] = None,
     ) -> "RuntimeEvent":
         payload: Dict[str, Any] = {
             "operation": operation,
@@ -119,6 +303,16 @@ class RuntimeEvent:
             payload["safe_message"] = safe_message
         if envelope is not None:
             payload["result"] = dict(envelope)
+        if parent_entity_type is not None:
+            payload["parent_entity_type"] = parent_entity_type
+        if parent_entity_id is not None:
+            payload["parent_entity_id"] = parent_entity_id
+        if agent_slug is not None:
+            payload["agent_slug"] = agent_slug
+        if agent_run_id is not None:
+            payload["agent_run_id"] = agent_run_id
+        if llm_call_id is not None:
+            payload["llm_call_id"] = llm_call_id
         return cls(RuntimeEventType.OPERATION_RESULT, payload)
 
     @classmethod
@@ -202,6 +396,8 @@ class RuntimeEvent:
         recoverable: bool = False,
         error_code: Optional[RuntimeErrorCode | str] = None,
         retryable: Optional[bool] = None,
+        parent_entity_type: Optional[str] = None,
+        parent_entity_id: Optional[str] = None,
     ) -> "RuntimeEvent":
         payload: Dict[str, Any] = {"error": message, "recoverable": recoverable}
         if error_code is not None:
@@ -210,6 +406,10 @@ class RuntimeEvent:
             )
         if retryable is not None:
             payload["retryable"] = bool(retryable)
+        if parent_entity_type is not None:
+            payload["parent_entity_type"] = parent_entity_type
+        if parent_entity_id is not None:
+            payload["parent_entity_id"] = parent_entity_id
         return cls(RuntimeEventType.ERROR, payload)
 
     # -------- envelope --------

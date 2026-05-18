@@ -14,11 +14,11 @@ async def test_platform_config_loader_happy_path_builds_snapshot():
         "app.services.runtime_config_service.RuntimeConfigService.get_pipeline_config",
         new=AsyncMock(return_value={"policy": {"max_steps": 7, "max_wall_time_ms": 3333}}),
     ), patch(
-        "app.services.agent_service.AgentService.list_routable_agents",
+        "app.services.agent_service.AgentService.list_routable_agents_for_planner",
         new=AsyncMock(
             return_value=[
-                SimpleNamespace(slug="ops", description="Operations"),
-                SimpleNamespace(slug="analyst", description="Analytics"),
+                {"slug": "ops", "description": "Operations"},
+                {"slug": "analyst", "description": "Analytics"},
             ]
         ),
     ):
@@ -40,8 +40,8 @@ async def test_platform_config_loader_degrades_when_config_unavailable():
         "app.services.runtime_config_service.RuntimeConfigService.get_pipeline_config",
         new=AsyncMock(side_effect=RuntimeError("config down")),
     ), patch(
-        "app.services.agent_service.AgentService.list_routable_agents",
-        new=AsyncMock(return_value=[SimpleNamespace(slug="ops", description="Ops")]),
+        "app.services.agent_service.AgentService.list_routable_agents_for_planner",
+        new=AsyncMock(return_value=[{"slug": "ops", "description": "Ops"}]),
     ):
         snapshot = await PlatformConfigLoader(SimpleNamespace()).load()
 
@@ -56,7 +56,7 @@ async def test_platform_config_loader_degrades_when_agents_unavailable():
         "app.services.runtime_config_service.RuntimeConfigService.get_pipeline_config",
         new=AsyncMock(return_value={"policy": {"max_steps": 4}}),
     ), patch(
-        "app.services.agent_service.AgentService.list_routable_agents",
+        "app.services.agent_service.AgentService.list_routable_agents_for_planner",
         new=AsyncMock(side_effect=RuntimeError("agents down")),
     ):
         snapshot = await PlatformConfigLoader(SimpleNamespace()).load()

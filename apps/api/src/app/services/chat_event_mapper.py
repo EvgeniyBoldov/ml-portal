@@ -81,7 +81,7 @@ class ChatEventMapper:
                 "orchestration_envelope": env,
             }
 
-        if event.type == RuntimeEventType.PLANNER_STEP:
+        if event.type == RuntimeEventType.PLANNER_DECISION:
             kind = event.data.get("kind")
             rationale = event.data.get("rationale")
             action_type = self._planner_action_type(kind)

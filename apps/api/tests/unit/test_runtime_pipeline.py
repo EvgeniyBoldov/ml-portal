@@ -150,6 +150,34 @@ def test_pipeline_applies_request_sandbox_overrides_into_context():
     }
 
 
+def test_pipeline_normalizes_budget_override_into_runtime_budget():
+    ctx = SimpleNamespace(extra={})
+    request = PipelineRequest(
+        request_text="hi",
+        chat_id=str(uuid4()),
+        user_id=str(uuid4()),
+        tenant_id=str(uuid4()),
+        messages=[],
+        sandbox_overrides={
+            "budget": {
+                "agent_steps": 15,
+                "tool_calls": 33,
+                "wall_time_ms": 180000,
+                "max_tokens_total": 50000,
+            }
+        },
+    )
+
+    RuntimePipeline._apply_sandbox_overrides(request, ctx)  # noqa: SLF001
+
+    assert ctx.extra["sandbox_overrides"]["runtime_budget"] == {
+        "max_agent_steps": 15,
+        "max_tool_calls_total": 33,
+        "max_wall_time_ms": 180000,
+        "max_tokens_total": 50000,
+    }
+
+
 async def _collect(gen) -> List[RuntimeEvent]:
     return [e async for e in gen]
 

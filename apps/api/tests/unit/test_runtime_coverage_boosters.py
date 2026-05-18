@@ -20,7 +20,7 @@ from app.agents.runtime.agent import AgentToolRuntime
 from app.runtime.agent_executor import AgentExecutor
 from app.runtime.contracts import NextStep, NextStepKind
 from app.runtime.events import RuntimeEventType
-from app.runtime.budget import RuntimeBudget, RuntimeBudgetTracker
+from app.runtime.budgets import BudgetLimitsResolver, RunBudgetLedger
 from app.runtime.llm.structured import StructuredCallError
 from app.agents.runtime.llm import LLMAdapter
 from app.runtime.memory.working_memory import WorkingMemory
@@ -149,8 +149,7 @@ def test_agent_executor_helper_paths():
 
     legacy_thinking = SimpleNamespace(type=LegacyEventType.THINKING, data={"step": 2})
     translated_thinking = AgentExecutor._translate(legacy_thinking)  # noqa: SLF001
-    assert translated_thinking is not None
-    assert translated_thinking.type == RuntimeEventType.STATUS
+    assert translated_thinking is None
 
     legacy_final = SimpleNamespace(type=LegacyEventType.FINAL, data={"content": "x"})
     assert AgentExecutor._translate(legacy_final) is None  # noqa: SLF001
@@ -182,6 +181,7 @@ async def test_agent_executor_fast_fallback_when_no_operations():
             mode=ExecutionMode.PARTIAL,
             execution_graph={},
             resolved_operations=[],
+            rbac_audit=None,
         )
     )
 
@@ -358,7 +358,10 @@ async def test_planner_retry_and_fallback_paths():
                     rationale="first",
                     agent_slug="forbidden",
                     agent_input={},
-                )
+                ),
+                model="test-model",
+                raw_response="",
+                duration_ms=1,
             ),
             SimpleNamespace(
                 value=PlannerLLMOutput(
@@ -366,13 +369,16 @@ async def test_planner_retry_and_fallback_paths():
                     rationale="second",
                     agent_slug="analyst",
                     agent_input={"query": "q"},
-                )
+                ),
+                model="test-model",
+                raw_response="",
+                duration_ms=1,
             ),
         ]
     )
 
     mem_retry = _memory()
-    step = await planner.next_step(
+    step, _ = await planner.next_step(
         runtime_state=ensure_runtime_turn_state(mem_retry),
         available_agents=[{"slug": "analyst", "description": "A"}],
     )
@@ -381,7 +387,7 @@ async def test_planner_retry_and_fallback_paths():
 
     planner.llm.invoke = AsyncMock(side_effect=StructuredCallError("llm down"))
     mem_fallback = _memory()
-    fallback = await planner.next_step(
+    fallback, _ = await planner.next_step(
         runtime_state=ensure_runtime_turn_state(mem_fallback),
         available_agents=[],
     )
@@ -398,12 +404,15 @@ async def test_planner_emits_direct_answer_kind_when_llm_returns_one():
                 kind="direct_answer",
                 rationale="small-talk",
                 final_answer="Привет! Чем могу помочь?",
-            )
+            ),
+            model="test-model",
+            raw_response="",
+            duration_ms=1,
         )
     )
 
     mem_direct = _memory()
-    step = await planner.next_step(
+    step, _ = await planner.next_step(
         runtime_state=ensure_runtime_turn_state(mem_direct),
         available_agents=[],
     )
@@ -565,15 +574,21 @@ async def test_agent_tool_runtime_respects_shared_budget_tool_call_limit(monkeyp
         partial_mode_warning=None,
     )
     ctx = ToolContext(tenant_id=uuid4(), user_id=uuid4(), chat_id=uuid4())
-    ctx.extra["runtime_budget_tracker"] = RuntimeBudgetTracker(
-        budget=RuntimeBudget(
-            max_planner_iterations=10,
-            max_agent_steps=10,
-            max_tool_calls_total=2,
-            max_wall_time_ms=120_000,
-            per_tool_timeout_ms=30_000,
-            max_steps_without_success=2,
-        )
+    ctx.extra["runtime_budget_ledger"] = RunBudgetLedger(
+        limits=BudgetLimitsResolver.resolve_from_platform(
+            planner_max_steps=10,
+            planner_max_wall_time_ms=120_000,
+            platform_config={
+                "runtime_budget": {
+                    "max_planner_iterations": 10,
+                    "max_agent_steps": 10,
+                    "max_tool_calls_total": 2,
+                    "max_wall_time_ms": 120_000,
+                    "per_tool_timeout_ms": 30_000,
+                    "max_steps_without_success": 2,
+                }
+            },
+        ).run
     )
     events = [
         e
@@ -654,15 +669,21 @@ async def test_agent_tool_runtime_reused_call_does_not_consume_shared_budget(mon
     ctx = ToolContext(tenant_id=uuid4(), user_id=uuid4(), chat_id=uuid4())
     ctx.extra["runtime_tool_ledger"] = _FakeLedger()
     ctx.extra["runtime_tool_reuse_enabled"] = True
-    ctx.extra["runtime_budget_tracker"] = RuntimeBudgetTracker(
-        budget=RuntimeBudget(
-            max_planner_iterations=10,
-            max_agent_steps=10,
-            max_tool_calls_total=2,
-            max_wall_time_ms=120_000,
-            per_tool_timeout_ms=30_000,
-            max_steps_without_success=2,
-        )
+    ctx.extra["runtime_budget_ledger"] = RunBudgetLedger(
+        limits=BudgetLimitsResolver.resolve_from_platform(
+            planner_max_steps=10,
+            planner_max_wall_time_ms=120_000,
+            platform_config={
+                "runtime_budget": {
+                    "max_planner_iterations": 10,
+                    "max_agent_steps": 10,
+                    "max_tool_calls_total": 2,
+                    "max_wall_time_ms": 120_000,
+                    "per_tool_timeout_ms": 30_000,
+                    "max_steps_without_success": 2,
+                }
+            },
+        ).run
     )
     events = [
         e
@@ -679,10 +700,7 @@ async def test_agent_tool_runtime_reused_call_does_not_consume_shared_budget(mon
     op_results = [e for e in events if e.type == LegacyEventType.OPERATION_RESULT]
     assert len(op_results) == 2
     assert bool(op_results[-1].data.get("reused")) is True
-    assert any(
-        e.type == LegacyEventType.STATUS and e.data.get("stage") == "budget_consumed"
-        for e in events
-    )
+    assert any(e.type == LegacyEventType.BUDGET_SNAPSHOT for e in events)
 
 
 @pytest.mark.asyncio

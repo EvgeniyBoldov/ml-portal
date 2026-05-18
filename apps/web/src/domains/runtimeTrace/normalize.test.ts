@@ -94,7 +94,7 @@ describe('runtimeTrace normalize', () => {
   it('summarizes planner events with kind and rationale', () => {
     const event = normalizeTraceEvent({
       id: 'planner-1',
-      raw_type: 'planner_step',
+      raw_type: 'planner_decision',
       data: { kind: 'call_agent', rationale: 'Need network inventory' },
     });
     expect(event.category).toBe('planner');

@@ -369,14 +369,15 @@ function getBudgetSnapshot(step: RunStep): {
 } {
   const d = step.data || {};
   const shared = (d.shared_budget ?? d.runtime_budget ?? d.budget ?? {}) as Record<string, unknown>;
-  const sharedSteps = (shared.steps ?? {}) as Record<string, unknown>;
-  const sharedTools = (shared.tools ?? {}) as Record<string, unknown>;
-  const sharedRetries = (shared.retries ?? {}) as Record<string, unknown>;
-  const sharedTokens = (shared.tokens ?? {}) as Record<string, unknown>;
+  const snapshot = (shared.snapshot ?? {}) as Record<string, unknown>;
+  const sharedSteps = ((shared.steps ?? snapshot.agent_steps ?? snapshot.planner_iterations) ?? {}) as Record<string, unknown>;
+  const sharedTools = ((shared.tools ?? snapshot.tool_calls) ?? {}) as Record<string, unknown>;
+  const sharedRetries = ((shared.retries ?? snapshot.retries) ?? {}) as Record<string, unknown>;
+  const sharedTokens = ((shared.tokens ?? snapshot.tokens_total ?? snapshot.tokens_out) ?? {}) as Record<string, unknown>;
   return {
-    stepsUsed: toNum(sharedSteps.used) ?? toNum(d.steps_used) ?? toNum(d.used) ?? toNum(d.consumed) ?? undefined,
+    stepsUsed: toNum(sharedSteps.used) ?? toNum(d.steps_used) ?? toNum(d.used) ?? undefined,
     stepsLimit: toNum(sharedSteps.limit) ?? toNum(d.max_steps) ?? toNum(d.limit) ?? undefined,
-    opsUsed: toNum(sharedTools.used) ?? toNum(d.tool_calls_used) ?? toNum(d.operation_calls_total) ?? toNum(d.tools_used) ?? undefined,
+    opsUsed: toNum(sharedTools.used) ?? toNum(d.tool_calls_used) ?? toNum(d.operation_calls_total) ?? undefined,
     opsLimit: toNum(sharedTools.limit) ?? toNum(d.max_tool_calls_total) ?? undefined,
     retriesUsed: toNum(sharedRetries.used) ?? toNum(d.retries_used) ?? toNum(d.retry_count) ?? undefined,
     retriesLimit: toNum(sharedRetries.limit) ?? toNum(d.max_retries) ?? undefined,
@@ -386,7 +387,7 @@ function getBudgetSnapshot(step: RunStep): {
 }
 
 function isPlannerStep(step: RunStep): boolean {
-  return step.type === 'planner_action' || step.type === 'planner_step' || step.type === 'routing' || step.type === 'policy_decision';
+  return step.type === 'planner_action' || step.type === 'planner_decision' || step.type === 'planner_step' || step.type === 'routing' || step.type === 'policy_decision';
 }
 
 function isToolStep(step: RunStep): boolean {
@@ -399,7 +400,7 @@ function resolveAgentWindow(steps: RunStep[], selectedIndex: number): { start: n
     const s = steps[i];
     const kind = String(s.data.kind ?? s.data.action_type ?? '').toLowerCase();
     const slug = typeof s.data.agent_slug === 'string' ? s.data.agent_slug : '';
-    if ((s.type === 'planner_step' || s.type === 'planner_action') && kind === 'call_agent') {
+    if ((s.type === 'planner_decision' || s.type === 'planner_step' || s.type === 'planner_action') && kind === 'call_agent') {
       agentSlug = slug || undefined;
       const start = i;
       let end = steps.length - 1;

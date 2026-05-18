@@ -25,7 +25,15 @@ def test_trace_pack_collects_operations_prompts_and_tool_io():
         context_snapshot={"mode": "pipeline", "db_dsn": "postgresql://user:secret@localhost:5432/app"},
         error=None,
         steps=[
-            _step(0, "budget_policy", {"max_steps": 10, "max_tool_calls_total": 50}),
+            _step(0, "budget_snapshot", {
+                "owner_scope": "run",
+                "owner_id": "run-1",
+                "snapshot": {
+                    "planner_iterations": {"used": 0, "limit": 10, "remaining": 10},
+                    "tool_calls": {"used": 0, "limit": 50, "remaining": 50},
+                },
+                "reason": "init",
+            }),
             _step(0, "llm_request", {"model": "gpt-test", "system_prompt": "You are...", "messages": [{"role": "user", "content": "token=abc"}]}),
             _step(1, "operation_call", {"operation_slug": "collection.document.search", "input": {"query": "vpn", "api_key": "secret"}}),
             _step(2, "operation_result", {"operation_slug": "collection.document.search", "output": {"hits": 3}}),
@@ -43,7 +51,7 @@ def test_trace_pack_collects_operations_prompts_and_tool_io():
     assert len(pack["prompt_surfaces"]) == 1
     assert len(pack["tool_io"]) == 2
     assert pack["total_steps"] == 5
-    assert any(item["step_type"] == "budget_policy" for item in pack["timeline"])
+    assert any(item["step_type"] == "budget_snapshot" for item in pack["timeline"])
 
 
 def test_trace_pack_collects_run_and_step_errors():

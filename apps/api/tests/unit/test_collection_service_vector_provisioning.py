@@ -217,6 +217,7 @@ async def test_delete_collection_deletes_db_row_before_best_effort_cleanup(monke
     service = CollectionService(session=session)
     tenant_id = uuid4()
     collection = SimpleNamespace(
+        id=uuid4(),
         tenant_id=tenant_id,
         slug="docs",
         table_name="coll_test_docs",

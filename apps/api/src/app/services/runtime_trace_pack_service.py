@@ -11,14 +11,12 @@ class RuntimeTracePackService:
 
     TRACE_STEP_TYPES = {
         "user_request",
-        "budget_policy",
-        "budget_consumed",
-        "budget_limit_exceeded",
+        "budget_snapshot",
         "triage_complete",
         "preflight_complete",
         "routing_decision",
         "policy_decision",
-        "planner_step",
+        "planner_decision",
         "llm_call",
         "llm_request",
         "llm_response",
@@ -81,18 +79,14 @@ class RuntimeTracePackService:
         return {}
 
     def _collect_budget(self, steps: Iterable[Any]) -> Dict[str, Any]:
-        policy: Dict[str, Any] = {}
-        consumed: List[Dict[str, Any]] = []
+        snapshots: List[Dict[str, Any]] = []
         for step in steps:
             step_type = str(getattr(step, "step_type", "") or "")
             data = getattr(step, "data", None) or {}
             if not isinstance(data, dict):
                 continue
-            if step_type == "budget_policy":
-                policy.update(data)
-                continue
-            if step_type in {"budget_consumed", "budget_limit_exceeded"}:
-                consumed.append(
+            if step_type == "budget_snapshot":
+                snapshots.append(
                     {
                         "step_number": getattr(step, "step_number", None),
                         "step_type": step_type,
@@ -100,17 +94,17 @@ class RuntimeTracePackService:
                     }
                 )
                 continue
-            if step_type == "status" and data.get("budget"):
-                consumed.append(
+            # Backward compatibility with legacy status-embedded budget
+            if step_type == "status" and isinstance(data.get("budget"), dict):
+                snapshots.append(
                     {
                         "step_number": getattr(step, "step_number", None),
-                        "step_type": step_type,
+                        "step_type": "budget_snapshot",
                         "data": data.get("budget"),
                     }
                 )
         return {
-            "policy": policy,
-            "consumed": consumed,
+            "snapshots": snapshots,
         }
 
     @staticmethod
@@ -118,7 +112,7 @@ class RuntimeTracePackService:
         entries: List[Dict[str, Any]] = []
         for step in steps:
             step_type = str(getattr(step, "step_type", "") or "")
-            if step_type not in {"planner_step", "llm_request", "llm_response"}:
+            if step_type not in {"planner_decision", "llm_request", "llm_response"}:
                 continue
             data = getattr(step, "data", None) or {}
             if not isinstance(data, dict):

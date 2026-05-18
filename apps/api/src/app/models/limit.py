@@ -118,6 +118,7 @@ class LimitVersion(Base):
     max_wall_time_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     tool_timeout_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     max_retries: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    max_tokens_total: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     extra_config: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
 

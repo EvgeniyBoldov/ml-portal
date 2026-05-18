@@ -63,21 +63,16 @@ export function extractTraceArtifacts(event: SemanticEvent): TraceArtifacts {
   if (validation && event.category === 'llm') artifacts.validation = validation;
 
   if (event.category === 'budget') {
-    // Extract budget fields directly from raw data
-    const budgetData = {
-      kind: pickFirst(raw, ['kind', 'reason', 'code', 'raw_type']),
-      used: pickFirst(raw, ['consumed', 'used', 'steps_used']),
-      limit: raw.limit,
-      remaining: raw.remaining,
-      max_steps: raw.max_steps,
-      max_tool_calls_total: raw.max_tool_calls_total,
-      max_wall_time_ms: raw.max_wall_time_ms,
-      tool_timeout_ms: raw.tool_timeout_ms,
-      max_retries: raw.max_retries,
-    };
-    // Keep all non-undefined values
-    const filtered = Object.fromEntries(Object.entries(budgetData).filter(([, v]) => v !== undefined && v !== null));
-    artifacts.budget = Object.keys(filtered).length > 0 ? filtered : raw;
+    const budgetData = compactRecord({
+      owner_scope: raw.owner_scope,
+      owner_id: raw.owner_id,
+      parent_owner_id: raw.parent_owner_id,
+      snapshot: raw.snapshot,
+      delta: raw.delta,
+      reason: raw.reason,
+      at_ms: raw.at_ms,
+    });
+    artifacts.budget = budgetData ?? raw;
   }
 
   if (event.category === 'planner' || event.category === 'decision' || event.category === 'policy' || event.category === 'retry') {

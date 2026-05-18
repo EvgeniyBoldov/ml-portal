@@ -36,7 +36,19 @@ describe('buildEntityTree', () => {
   describe('simple run (user → llm → final)', () => {
     const events: SemanticEvent[] = [
       makeEvent({ id: 'e1', raw_type: 'user_request', category: 'input', summary: 'Hello', inputs: { content: 'Hello' } }),
-      makeEvent({ id: 'e2', raw_type: 'budget_policy', category: 'budget', budget: { max_steps: 10, max_tool_calls_total: 50 } }),
+      makeEvent({
+        id: 'e2',
+        raw_type: 'budget_snapshot',
+        category: 'budget',
+        budget: {
+          owner_scope: 'run',
+          owner_id: 'run-1',
+          snapshot: {
+            planner_iterations: { used: 0, limit: 10, remaining: 10 },
+            tool_calls: { used: 0, limit: 50, remaining: 50 },
+          },
+        },
+      }),
       makeEvent({ id: 'e3', raw_type: 'llm_request', category: 'llm', inputs: { model: 'gpt-4', messages: [{ role: 'user', content: 'Hello' }] } }),
       makeEvent({ id: 'e4', raw_type: 'llm_response', category: 'llm', status: 'ok', outputs: { content: 'Hi there!' } }),
       makeEvent({ id: 'e5', raw_type: 'final_response', category: 'final', status: 'ok', outputs: { content: 'Hi there!' } }),
@@ -74,7 +86,7 @@ describe('buildEntityTree', () => {
   describe('run with tool call', () => {
     const events: SemanticEvent[] = [
       makeEvent({ id: 'e1', raw_type: 'user_request', category: 'input', summary: 'Search docs' }),
-      makeEvent({ id: 'e2', raw_type: 'planner_step', category: 'planner', decision: { kind: 'call_agent', agent_slug: 'viewer' }, summary: 'call_agent: Need to search' }),
+      makeEvent({ id: 'e2', raw_type: 'planner_decision', category: 'planner', decision: { kind: 'call_agent', agent_slug: 'viewer' }, summary: 'call_agent: Need to search' }),
       makeEvent({ id: 'e3', raw_type: 'llm_request', category: 'llm', iteration: 1 }),
       makeEvent({ id: 'e4', raw_type: 'llm_response', category: 'llm', iteration: 1 }),
       makeEvent({
@@ -93,7 +105,7 @@ describe('buildEntityTree', () => {
       makeEvent({ id: 'e7', raw_type: 'final_response', category: 'final', status: 'ok' }),
     ];
 
-    it('creates agent entity for planner_step call_agent', () => {
+    it('creates agent entity for planner_decision call_agent', () => {
       const tree = buildEntityTree(events);
       const agents = flattenEntityTree(tree).filter(e => e.kind === 'agent');
       expect(agents.length).toBe(1);
@@ -154,7 +166,7 @@ describe('buildEntityTree', () => {
   describe('run with error', () => {
     const events: SemanticEvent[] = [
       makeEvent({ id: 'e1', raw_type: 'user_request', category: 'input' }),
-      makeEvent({ id: 'e2', raw_type: 'planner_step', category: 'planner', decision: { kind: 'call_agent', agent_slug: 'viewer' } }),
+      makeEvent({ id: 'e2', raw_type: 'planner_decision', category: 'planner', decision: { kind: 'call_agent', agent_slug: 'viewer' } }),
       makeEvent({ id: 'e3', raw_type: 'llm_request', category: 'llm' }),
       makeEvent({
         id: 'e4',
@@ -183,41 +195,118 @@ describe('buildEntityTree', () => {
     });
   });
 
-  describe('run with multiple orchestrators (planner + fact_extractor)', () => {
-    // This test represents future state when backend Stage 1 adds orchestrator events
+  describe('3-pass: lifecycle events from Stage 1 backend', () => {
+    // Full lifecycle event stream with entity_id / parent_entity_id
+    const RUN_ID = 'run-abc';
+    const ORCH_ID = 'run-abc:orchestrator';
+    const ITER_ID = 'run-abc:planner:1';
+    const AGENT_RUN_ID = 'run-abc:agent:viewer:1';
+    const SYNTH_ID = 'run-abc:synthesis:1';
+    const LLM_CALL_ID = 'llm-call-1';
+
+    function lc(id: string, raw_type: string, raw: Record<string, unknown>): SemanticEvent {
+      return makeEvent({ id, raw_type, category: 'system', raw: { id, raw_type, raw } });
+    }
+
     const events: SemanticEvent[] = [
-      makeEvent({ id: 'e1', raw_type: 'user_request', category: 'input' }),
-      // Future: orchestrator_start for planner
-      makeEvent({ id: 'e2', raw_type: 'orchestrator_start', category: 'system', raw: { id: 'e2', raw_type: 'orchestrator_start', raw: { slug: 'planner', role: 'planner' } } }),
-      makeEvent({ id: 'e3', raw_type: 'planner_step', category: 'planner', decision: { kind: 'call_agent', agent_slug: 'viewer' } }),
-      makeEvent({ id: 'e4', raw_type: 'agent_start', category: 'system', raw: { id: 'e4', raw_type: 'agent_start', raw: { slug: 'viewer' } } }),
-      makeEvent({ id: 'e5', raw_type: 'llm_request', category: 'llm' }),
-      makeEvent({ id: 'e6', raw_type: 'llm_response', category: 'llm' }),
-      makeEvent({ id: 'e7', raw_type: 'agent_end', category: 'system' }),
-      // Future: orchestrator_end for planner
-      makeEvent({ id: 'e8', raw_type: 'orchestrator_end', category: 'system' }),
-      // Future: orchestrator_start for synthesizer
-      makeEvent({ id: 'e9', raw_type: 'orchestrator_start', category: 'system', raw: { id: 'e9', raw_type: 'orchestrator_start', raw: { slug: 'synthesizer', role: 'synthesizer' } } }),
-      makeEvent({ id: 'e10', raw_type: 'llm_request', category: 'llm' }),
-      makeEvent({ id: 'e11', raw_type: 'llm_response', category: 'llm' }),
-      makeEvent({ id: 'e12', raw_type: 'orchestrator_end', category: 'system' }),
-      makeEvent({ id: 'e13', raw_type: 'final_response', category: 'final' }),
+      lc('s1', 'run_start', { entity_id: RUN_ID, entity_type: 'run' }),
+      lc('s2', 'orchestrator_start', { entity_id: ORCH_ID, entity_type: 'orchestrator', parent_entity_id: RUN_ID, parent_entity_type: 'run', role: 'planner' }),
+      lc('s3', 'planner_iteration_start', { entity_id: ITER_ID, entity_type: 'planner_iteration', parent_entity_id: ORCH_ID, parent_entity_type: 'orchestrator', iteration: 1 }),
+      makeEvent({ id: 'e4', raw_type: 'planner_decision', category: 'planner', decision: { kind: 'call_agent', agent_slug: 'viewer' }, refs: { parent_entity_id: ITER_ID } }),
+      lc('s5', 'agent_start', { entity_id: AGENT_RUN_ID, entity_type: 'agent_run', parent_entity_id: ITER_ID, parent_entity_type: 'planner_iteration', agent_slug: 'viewer' }),
+      makeEvent({ id: 'e6', raw_type: 'llm_request', category: 'llm', refs: { parent_entity_id: AGENT_RUN_ID, llm_call_id: LLM_CALL_ID }, raw: { id: 'e6', raw_type: 'llm_request', raw: { llm_call_id: LLM_CALL_ID, parent_entity_id: AGENT_RUN_ID } } }),
+      makeEvent({ id: 'e7', raw_type: 'llm_response', category: 'llm', status: 'ok', refs: { parent_entity_id: AGENT_RUN_ID, llm_call_id: LLM_CALL_ID }, raw: { id: 'e7', raw_type: 'llm_response', raw: { llm_call_id: LLM_CALL_ID, parent_entity_id: AGENT_RUN_ID } } }),
+      makeEvent({ id: 'e8', raw_type: 'operation_call', category: 'operation', refs: { parent_entity_id: AGENT_RUN_ID }, raw: { id: 'e8', raw_type: 'operation_call', raw: { operation_slug: 'rag.search', call_id: 'c1', parent_entity_id: AGENT_RUN_ID } } }),
+      makeEvent({ id: 'e9', raw_type: 'operation_result', category: 'operation', status: 'ok', refs: { parent_entity_id: AGENT_RUN_ID }, raw: { id: 'e9', raw_type: 'operation_result', raw: { call_id: 'c1', success: true, parent_entity_id: AGENT_RUN_ID } } }),
+      lc('s10', 'agent_end', { entity_id: AGENT_RUN_ID, entity_type: 'agent_run', parent_entity_id: ITER_ID, parent_entity_type: 'planner_iteration', agent_slug: 'viewer', status: 'completed' }),
+      lc('s11', 'planner_iteration_end', { entity_id: ITER_ID, entity_type: 'planner_iteration', parent_entity_id: ORCH_ID, iteration: 1, status: 'completed' }),
+      lc('s12', 'orchestrator_end', { entity_id: ORCH_ID, entity_type: 'orchestrator', parent_entity_id: RUN_ID, status: 'completed' }),
+      lc('s13', 'synthesis_start', { entity_id: SYNTH_ID, entity_type: 'synthesis_run', parent_entity_id: RUN_ID, parent_entity_type: 'run' }),
+      makeEvent({ id: 'e14', raw_type: 'final_response', category: 'final', status: 'ok', refs: { parent_entity_id: SYNTH_ID }, outputs: { content: 'Done' } }),
+      lc('s15', 'synthesis_end', { entity_id: SYNTH_ID, entity_type: 'synthesis_run', parent_entity_id: RUN_ID, status: 'completed' }),
+      lc('s16', 'run_end', { entity_id: RUN_ID, entity_type: 'run', status: 'completed' }),
     ];
 
-    it('creates orchestrator entities when backend Stage 1 events present', () => {
+    it('creates run entity at root', () => {
       const tree = buildEntityTree(events);
-      const orchestrators = flattenEntityTree(tree).filter(e => e.kind === 'orchestrator');
-      expect(orchestrators.length).toBe(2);
+      expect(tree.kind).toBe('run');
+      expect(tree.id).toBe(RUN_ID);
     });
 
-    it('nests agent under orchestrator', () => {
+    it('creates orchestrator as child of run', () => {
       const tree = buildEntityTree(events);
-      const orchestrator = flattenEntityTree(tree).find(e => e.kind === 'orchestrator' && e.title === 'planner');
-      expect(orchestrator).toBeDefined();
-      if (orchestrator) {
-        const hasAgentChild = orchestrator.children.some(c => c.kind === 'agent');
-        expect(hasAgentChild).toBe(true);
-      }
+      const orch = flattenEntityTree(tree).find(e => e.id === ORCH_ID);
+      expect(orch).toBeDefined();
+      expect(orch?.kind).toBe('orchestrator');
+      expect(orch?.parentId).toBe(RUN_ID);
+    });
+
+    it('creates planner iteration as child of orchestrator', () => {
+      const tree = buildEntityTree(events);
+      const iter = flattenEntityTree(tree).find(e => e.id === ITER_ID);
+      expect(iter).toBeDefined();
+      expect(iter?.kind).toBe('planner');
+      expect(iter?.parentId).toBe(ORCH_ID);
+    });
+
+    it('creates agent as child of planner iteration', () => {
+      const tree = buildEntityTree(events);
+      const agent = flattenEntityTree(tree).find(e => e.id === AGENT_RUN_ID);
+      expect(agent).toBeDefined();
+      expect(agent?.kind).toBe('agent');
+      expect(agent?.parentId).toBe(ITER_ID);
+      expect(agent?.data.kind === 'agent' && agent.data.slug).toBe('viewer');
+    });
+
+    it('attaches llm entity under agent via parent_entity_id', () => {
+      const tree = buildEntityTree(events);
+      const agent = flattenEntityTree(tree).find(e => e.id === AGENT_RUN_ID);
+      expect(agent).toBeDefined();
+      const llmChildren = agent!.children.filter(c => c.kind === 'llm');
+      expect(llmChildren.length).toBe(1);
+    });
+
+    it('attaches tool entity under agent via parent_entity_id', () => {
+      const tree = buildEntityTree(events);
+      const agent = flattenEntityTree(tree).find(e => e.id === AGENT_RUN_ID);
+      expect(agent).toBeDefined();
+      const toolChildren = agent!.children.filter(c => c.kind === 'tool');
+      expect(toolChildren.length).toBe(1);
+    });
+
+    it('creates synthesis entity as child of run', () => {
+      const tree = buildEntityTree(events);
+      const synth = flattenEntityTree(tree).find(e => e.id === SYNTH_ID);
+      expect(synth).toBeDefined();
+      expect(synth?.kind).toBe('orchestrator');
+      expect(synth?.parentId).toBe(RUN_ID);
+    });
+
+    it('sets completed status on entities after *_end events', () => {
+      const tree = buildEntityTree(events);
+      const agent = flattenEntityTree(tree).find(e => e.id === AGENT_RUN_ID);
+      expect(agent?.status).toBe('ok');
+    });
+
+    it('planner_decision enriches planner iteration title', () => {
+      const tree = buildEntityTree(events);
+      const iter = flattenEntityTree(tree).find(e => e.id === ITER_ID);
+      expect(iter).toBeDefined();
+      // planner_decision was attached to iter, so its stepKind is updated
+      expect(iter?.data.kind).toBe('planner');
+    });
+
+    it('tree depth is correct: run(0) → orch(1) → iter(2) → agent(3) → tool(4)', () => {
+      const tree = buildEntityTree(events);
+      expect(tree.depth).toBe(0);
+      const orch = flattenEntityTree(tree).find(e => e.id === ORCH_ID);
+      expect(orch?.depth).toBe(1);
+      const iter = flattenEntityTree(tree).find(e => e.id === ITER_ID);
+      expect(iter?.depth).toBe(2);
+      const agent = flattenEntityTree(tree).find(e => e.id === AGENT_RUN_ID);
+      expect(agent?.depth).toBe(3);
+      const tool = agent!.children.find(c => c.kind === 'tool');
+      expect(tool?.depth).toBe(4);
     });
   });
 
@@ -242,15 +331,16 @@ describe('buildEntityTree', () => {
     const events: SemanticEvent[] = [
       makeEvent({
         id: 'e1',
-        raw_type: 'budget_consumed',
+        raw_type: 'budget_snapshot',
         category: 'budget',
         budget: {
-          consumed_planner_iterations: 2,
-          max_planner_iterations: 10,
-          consumed_tool_calls: 5,
-          max_tool_calls_total: 50,
-          remaining_wall_time_ms: 45000,
-          max_wall_time_ms: 60000,
+          owner_scope: 'run',
+          owner_id: 'run-1',
+          snapshot: {
+            planner_iterations: { used: 2, limit: 10, remaining: 8 },
+            tool_calls: { used: 5, limit: 50, remaining: 45 },
+            wall_time_ms: { used: 15000, limit: 60000, remaining: 45000 },
+          },
         },
       }),
     ];
@@ -258,8 +348,8 @@ describe('buildEntityTree', () => {
     it('extracts budget metrics from budget events', () => {
       const tree = buildEntityTree(events);
       expect(tree.budgetSnapshot).toBeDefined();
-      expect(tree.budgetSnapshot?.steps).toEqual({ used: 2, limit: 10 });
-      expect(tree.budgetSnapshot?.tools).toEqual({ used: 5, limit: 50 });
+      expect(tree.budgetSnapshot?.steps).toEqual({ used: 2, limit: 10, remaining: 8 });
+      expect(tree.budgetSnapshot?.tools).toEqual({ used: 5, limit: 50, remaining: 45 });
     });
   });
 
@@ -294,7 +384,7 @@ describe('buildEntityTree', () => {
   describe('sub-agent heuristic (MVP without backend Stage 1)', () => {
     const events: SemanticEvent[] = [
       makeEvent({ id: 'e1', raw_type: 'user_request', category: 'input' }),
-      makeEvent({ id: 'e2', raw_type: 'planner_step', category: 'planner', decision: { kind: 'call_agent', agent_slug: 'sub-agent' } }),
+      makeEvent({ id: 'e2', raw_type: 'planner_decision', category: 'planner', decision: { kind: 'call_agent', agent_slug: 'sub-agent' } }),
       // In MVP, sub-agent llm/tool events are NOT visible (they're in separate run)
       // We only see operation_call/result through AgentExecutor translation
       makeEvent({

@@ -15,11 +15,7 @@ import { getStatusProps } from '@/shared/lib/statusConfig';
 import ConfirmDialog from '@/shared/ui/ConfirmDialog';
 import { buildRunTrace } from '@/domains/runtimeTrace/normalize';
 import { buildTraceDiagnostics } from '@/domains/runtimeTrace/components/TraceDiagnosticsSummary';
-import { aggregateRun } from '@/domains/runtimeTrace/aggregator';
-import { RunInputBlock } from '@/domains/runtimeTrace/components/RunInputBlock';
-import { RunTraceLog } from '@/domains/runtimeTrace/components/TraceEntryCard';
-import { RunFinalBlock } from '@/domains/runtimeTrace/components/RunFinalBlock';
-import traceV2Styles from '@/domains/runtimeTrace/components/TraceV2.module.css';
+import { RuntimeTraceTree } from '@/domains/runtimeTrace/components/RuntimeTraceTree';
 import styles from './AgentRunPage.module.css';
 
 function formatDuration(ms?: number): string {
@@ -155,13 +151,6 @@ export function AgentRunPage() {
     })));
   }, [run?.trace, steps]);
   const diagnostics = useMemo(() => buildTraceDiagnostics(trace.iterations.flatMap((item) => item.events)), [trace]);
-  const aggregated = useMemo(() => aggregateRun(trace, {
-    status: run?.status,
-    agentSlug: run?.agent_slug,
-    loggingLevel: run?.logging_level,
-    contextSnapshot: run?.context_snapshot,
-  }), [trace, run]);
-
   const OVERVIEW_FIELDS: FieldConfig[] = [
     { key: 'id', type: 'code', label: 'ID', editable: false },
     { key: 'agent_slug', type: 'text', label: 'Агент', editable: false },
@@ -350,11 +339,7 @@ export function AgentRunPage() {
 
         <Tab title="Трейс" layout="full" id="steps" badge={trace.total_events}>
           {trace.total_events > 0 ? (
-            <div className={traceV2Styles.traceV2}>
-              <RunInputBlock input={aggregated.input} />
-              <RunTraceLog entries={aggregated.traceEntries} />
-              <RunFinalBlock final={aggregated.final} />
-            </div>
+            <RuntimeTraceTree events={trace.iterations.flatMap((it) => it.events)} />
           ) : (
             <div className={styles['empty-steps']}>Нет записанных шагов. Возможно, уровень логирования агента — «none».</div>
           )}

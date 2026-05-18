@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from app.runtime.budget import RuntimeBudget, RuntimeBudgetTracker
+from app.runtime.budgets import BudgetLimitsResolver, RunBudgetLedger
 
 
 def test_runtime_budget_from_platform_config_uses_defaults_and_overrides():
-    budget = RuntimeBudget.from_platform_config(
+    resolved = BudgetLimitsResolver.resolve_from_platform(
         planner_max_steps=12,
         planner_max_wall_time_ms=120_000,
         platform_config={
@@ -16,6 +16,7 @@ def test_runtime_budget_from_platform_config_uses_defaults_and_overrides():
         },
     )
 
+    budget = resolved.run
     assert budget.max_planner_iterations == 12
     assert budget.max_wall_time_ms == 120_000
     assert budget.max_agent_steps == 7
@@ -24,15 +25,21 @@ def test_runtime_budget_from_platform_config_uses_defaults_and_overrides():
 
 
 def test_runtime_budget_tracker_counts_and_limits():
-    tracker = RuntimeBudgetTracker(
-        budget=RuntimeBudget(
-            max_planner_iterations=2,
-            max_agent_steps=2,
-            max_tool_calls_total=1,
-            max_wall_time_ms=120_000,
-            per_tool_timeout_ms=30_000,
-            max_steps_without_success=2,
-        )
+    tracker = RunBudgetLedger(
+        limits=BudgetLimitsResolver.resolve_from_platform(
+            planner_max_steps=2,
+            planner_max_wall_time_ms=120_000,
+            platform_config={
+                "runtime_budget": {
+                    "max_planner_iterations": 2,
+                    "max_agent_steps": 2,
+                    "max_tool_calls_total": 1,
+                    "max_wall_time_ms": 120_000,
+                    "per_tool_timeout_ms": 30_000,
+                    "max_steps_without_success": 2,
+                }
+            },
+        ).run
     )
 
     assert tracker.can_run_planner_iteration() is True
@@ -63,15 +70,21 @@ def test_agent_limit_should_apply_within_remaining_global_budget():
     global max_tool_calls_total=10, consumed=4, agent local limit=2
     => agent can still do exactly 2 calls (from remaining 6).
     """
-    tracker = RuntimeBudgetTracker(
-        budget=RuntimeBudget(
-            max_planner_iterations=10,
-            max_agent_steps=20,
-            max_tool_calls_total=10,
-            max_wall_time_ms=120_000,
-            per_tool_timeout_ms=30_000,
-            max_steps_without_success=2,
-        )
+    tracker = RunBudgetLedger(
+        limits=BudgetLimitsResolver.resolve_from_platform(
+            planner_max_steps=10,
+            planner_max_wall_time_ms=120_000,
+            platform_config={
+                "runtime_budget": {
+                    "max_planner_iterations": 10,
+                    "max_agent_steps": 20,
+                    "max_tool_calls_total": 10,
+                    "max_wall_time_ms": 120_000,
+                    "per_tool_timeout_ms": 30_000,
+                    "max_steps_without_success": 2,
+                }
+            },
+        ).run
     )
 
     # Simulate previous agents already consumed 4 global calls

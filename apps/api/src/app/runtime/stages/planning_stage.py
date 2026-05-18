@@ -20,11 +20,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, AsyncIterator, Dict, List, Optional
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from app.agents.context import ToolContext
 from app.core.logging import get_logger
-from app.runtime.budget import RuntimeBudgetTracker, build_budget_payload
+from app.runtime.budgets import BudgetRegistry, BudgetResolver, BudgetExceededError
 from app.runtime.contracts import (
     NextStepKind,
     PipelineRequest,
@@ -67,12 +67,10 @@ class PlanningStage:
         planner: PlannerServicePort,
         agent_executor: AgentExecutionPort,
         max_iterations: int,
-        budget_tracker: Optional[RuntimeBudgetTracker] = None,
     ) -> None:
         self._planner = planner
         self._agent = agent_executor
         self._max_iterations = max_iterations
-        self._budget_tracker = budget_tracker
         self.outcome: Optional[PlanningOutcome] = None
 
     async def run(
@@ -85,6 +83,7 @@ class PlanningStage:
         tenant_id: UUID,
         available_agents: List[Dict[str, Any]],
         platform_config: Dict[str, Any],
+        orchestrator_id: Optional[str] = None,
     ) -> AsyncIterator[PhasedEvent]:
         run_id = runtime_state.run_id
         chat_id = runtime_state.chat_id
@@ -92,60 +91,100 @@ class PlanningStage:
         runtime_state.current_user_query = request.request_text
         planner_agents: List[Dict[str, Any]] = list(available_agents or [])
         planner_run_id = str(run_id)
-
-        while runtime_state.iter_count < self._max_iterations:
-            planner_iteration = runtime_state.iter_count + 1
-            planner_event_ctx = {
-                "planner_run_id": planner_run_id,
-                "planner_iteration_id": f"{planner_run_id}:planner:{planner_iteration}",
-                "iteration": planner_iteration,
-            }
-            if self._budget_tracker is not None and not self._budget_tracker.can_run_planner_iteration():
-                break
-            if self._budget_tracker is not None:
-                self._budget_tracker.record_planner_iteration()
-            planner_budget = (
-                build_budget_payload(
-                    scope="planner_iteration",
-                    snapshot={
-                        "steps": {
-                            "used": planner_iteration,
-                            "limit": self._budget_tracker.budget.max_planner_iterations,
-                        },
-                        "wall_time_ms": {
-                            "used": max(
-                                0,
-                                self._budget_tracker.budget.max_wall_time_ms
-                                - self._budget_tracker.remaining_wall_time_ms(),
-                            ),
-                            "limit": self._budget_tracker.budget.max_wall_time_ms,
-                        },
-                        "tools": {
-                            "used": self._budget_tracker.snapshot().get("consumed_tool_calls", 0),
-                            "limit": self._budget_tracker.budget.max_tool_calls_total,
-                        },
-                        "agent_steps": {
-                            "used": self._budget_tracker.snapshot().get("consumed_agent_steps", 0),
-                            "limit": self._budget_tracker.budget.max_agent_steps,
-                        },
-                    },
-                    delta={
-                        "steps": 1,
-                    },
-                    counts_as_step=True,
-                    event_role="stage",
-                )
-                if self._budget_tracker is not None
-                else None
+        effective_orchestrator_id = orchestrator_id or f"{run_id}:orchestrator"
+        budget_registry = ctx.extra.get("runtime_budget_registry")
+        planner_registry = budget_registry if isinstance(budget_registry, BudgetRegistry) else None
+        budget_resolver = ctx.extra.get("runtime_budget_resolver")
+        planner_limits = None
+        if isinstance(budget_resolver, BudgetResolver):
+            planner_limits = await budget_resolver.resolve_orchestrator("planner")
+        if planner_registry is not None:
+            planner_registry.register(
+                entity_type="orchestrator",
+                entity_id=effective_orchestrator_id,
+                parent_entity_id=str(run_id),
+                role="planner",
+                limits=planner_limits,
             )
+            init_payload = planner_registry.emit_snapshot(effective_orchestrator_id, reason="init") or {}
             yield PhasedEvent(
-                RuntimeEvent.status(
-                    "planner_thinking",
-                    **planner_event_ctx,
-                    budget=planner_budget,
+                RuntimeEvent.budget_snapshot(
+                    entity_type="orchestrator",
+                    entity_id=effective_orchestrator_id,
+                    parent_entity_type="run",
+                    parent_entity_id=str(run_id),
+                    role="planner",
+                    own=init_payload.get("own", {}),
+                    limits=init_payload.get("limits"),
+                    delta={},
+                    reason="init",
+                    at_ms=init_payload.get("at_ms"),
                 ),
                 OrchestrationPhase.PLANNER,
             )
+
+        while runtime_state.iter_count < self._max_iterations:
+            planner_iteration = runtime_state.iter_count + 1
+            planner_iteration_id = f"{planner_run_id}:planner:{planner_iteration}"
+            planner_event_ctx = {
+                "planner_run_id": planner_run_id,
+                "planner_iteration_id": planner_iteration_id,
+                "iteration": planner_iteration,
+            }
+            yield PhasedEvent(
+                RuntimeEvent.planner_iteration_start(
+                    iteration_id=planner_iteration_id,
+                    orchestrator_id=effective_orchestrator_id,
+                    iteration=planner_iteration,
+                ),
+                OrchestrationPhase.PLANNER,
+            )
+            if planner_registry is not None:
+                try:
+                    planner_registry.consume(
+                        effective_orchestrator_id,
+                        "planner_steps",
+                        1,
+                        reason="step",
+                    )
+                except BudgetExceededError as exc:
+                    runtime_state.status = PipelineStopReason.FAILED.value
+                    runtime_state.final_error = f"budget_exceeded: {exc.metric}"
+                    yield PhasedEvent(
+                        RuntimeEvent.error(
+                            f"Planner budget exceeded: {exc.metric}",
+                            recoverable=False,
+                            parent_entity_type="orchestrator",
+                            parent_entity_id=effective_orchestrator_id,
+                        ),
+                        OrchestrationPhase.PLANNER,
+                    )
+                    self.outcome = PlanningOutcome(
+                        kind=PlanningOutcomeKind.FAILED,
+                        stop_reason=PipelineStopReason.FAILED,
+                        error_message=str(exc),
+                    )
+                    return
+                planner_payload = planner_registry.emit_snapshot(
+                    effective_orchestrator_id,
+                    reason="step",
+                    delta={"planner_steps": 1},
+                ) or {}
+                yield PhasedEvent(
+                    RuntimeEvent.budget_snapshot(
+                        entity_type="orchestrator",
+                        entity_id=effective_orchestrator_id,
+                        parent_entity_type="run",
+                        parent_entity_id=str(run_id),
+                        role="planner",
+                        own=planner_payload.get("own", {}),
+                        limits=planner_payload.get("limits"),
+                        delta={"planner_steps": 1},
+                        reason="step",
+                        at_ms=planner_payload.get("at_ms"),
+                    ),
+                    OrchestrationPhase.PLANNER,
+                )
 
             try:
                 planner_result = await self._planner.next_step(
@@ -172,7 +211,18 @@ class PlanningStage:
                 runtime_state.status = PipelineStopReason.FAILED.value
                 runtime_state.final_error = f"planner_exception: {exc}"
                 yield PhasedEvent(
-                    RuntimeEvent.error(f"Planner failed: {exc}", recoverable=False),
+                    RuntimeEvent.error(f"Planner failed: {exc}", recoverable=False,
+                                       parent_entity_type="planner_iteration",
+                                       parent_entity_id=planner_iteration_id),
+                    OrchestrationPhase.PLANNER,
+                )
+                yield PhasedEvent(
+                    RuntimeEvent.planner_iteration_end(
+                        iteration_id=planner_iteration_id,
+                        orchestrator_id=effective_orchestrator_id,
+                        iteration=planner_iteration,
+                        status="failed",
+                    ),
                     OrchestrationPhase.PLANNER,
                 )
                 self.outcome = PlanningOutcome(
@@ -217,6 +267,9 @@ class PlanningStage:
                         llm_call_id=planner_llm_trace.llm_call_id,
                         model=planner_llm_trace.model,
                         response_length=planner_llm_trace.response_length,
+                        tokens_in=planner_llm_trace.tokens_in,
+                        tokens_out=planner_llm_trace.tokens_out,
+                        tokens_total=planner_llm_trace.tokens_total,
                         duration_ms=planner_llm_trace.duration_ms,
                         parent_entity_type="planner_iteration",
                         parent_entity_id=llm_parent_id,
@@ -226,6 +279,84 @@ class PlanningStage:
                     ),
                     OrchestrationPhase.PLANNER,
                 )
+                if planner_registry is not None:
+                    try:
+                        if planner_llm_trace.tokens_in > 0:
+                            planner_registry.consume(
+                                effective_orchestrator_id,
+                                "tokens_in",
+                                planner_llm_trace.tokens_in,
+                                reason="tokens",
+                            )
+                        if planner_llm_trace.tokens_out > 0:
+                            planner_registry.consume(
+                                effective_orchestrator_id,
+                                "tokens_out",
+                                planner_llm_trace.tokens_out,
+                                reason="tokens",
+                            )
+                        if planner_llm_trace.tokens_total > 0:
+                            planner_registry.consume(
+                                effective_orchestrator_id,
+                                "tokens_total",
+                                planner_llm_trace.tokens_total,
+                                reason="tokens",
+                            )
+                        if planner_llm_trace.duration_ms > 0:
+                            planner_registry.consume(
+                                effective_orchestrator_id,
+                                "wall_time_ms",
+                                planner_llm_trace.duration_ms,
+                                reason="wall_time",
+                            )
+                    except BudgetExceededError as exc:
+                        runtime_state.status = PipelineStopReason.FAILED.value
+                        runtime_state.final_error = f"budget_exceeded: {exc.metric}"
+                        yield PhasedEvent(
+                            RuntimeEvent.error(
+                                f"Planner budget exceeded: {exc.metric}",
+                                recoverable=False,
+                                parent_entity_type="orchestrator",
+                                parent_entity_id=effective_orchestrator_id,
+                            ),
+                            OrchestrationPhase.PLANNER,
+                        )
+                        self.outcome = PlanningOutcome(
+                            kind=PlanningOutcomeKind.FAILED,
+                            stop_reason=PipelineStopReason.FAILED,
+                            error_message=str(exc),
+                        )
+                        return
+                    planner_tokens_delta: Dict[str, int] = {}
+                    if planner_llm_trace.tokens_in > 0:
+                        planner_tokens_delta["tokens_in"] = planner_llm_trace.tokens_in
+                    if planner_llm_trace.tokens_out > 0:
+                        planner_tokens_delta["tokens_out"] = planner_llm_trace.tokens_out
+                    if planner_llm_trace.tokens_total > 0:
+                        planner_tokens_delta["tokens_total"] = planner_llm_trace.tokens_total
+                    if planner_llm_trace.duration_ms > 0:
+                        planner_tokens_delta["wall_time_ms"] = planner_llm_trace.duration_ms
+                    if planner_tokens_delta:
+                        planner_payload = planner_registry.emit_snapshot(
+                            effective_orchestrator_id,
+                            reason="tokens",
+                            delta=planner_tokens_delta,
+                        ) or {}
+                        yield PhasedEvent(
+                            RuntimeEvent.budget_snapshot(
+                                entity_type="orchestrator",
+                                entity_id=effective_orchestrator_id,
+                                parent_entity_type="run",
+                                parent_entity_id=str(run_id),
+                                role="planner",
+                                own=planner_payload.get("own", {}),
+                                limits=planner_payload.get("limits"),
+                                delta=planner_tokens_delta,
+                                reason="tokens",
+                                at_ms=planner_payload.get("at_ms"),
+                            ),
+                            OrchestrationPhase.PLANNER,
+                        )
 
             step_record = {
                 "iteration": planner_iteration,
@@ -243,6 +374,9 @@ class PlanningStage:
                     kind=step.kind.value,
                     payload={
                         **planner_event_ctx,
+                        "parent_entity_type": "planner_iteration",
+                        "parent_entity_id": planner_iteration_id,
+                        "planner_iteration_id": planner_iteration_id,
                         "agent_slug": step.agent_slug,
                         "rationale": step.rationale,
                         "phase_id": step.phase_id,
@@ -274,6 +408,15 @@ class PlanningStage:
                     ),
                     OrchestrationPhase.SYNTHESIS,
                 )
+                yield PhasedEvent(
+                    RuntimeEvent.planner_iteration_end(
+                        iteration_id=planner_iteration_id,
+                        orchestrator_id=effective_orchestrator_id,
+                        iteration=planner_iteration,
+                        status="completed",
+                    ),
+                    OrchestrationPhase.PLANNER,
+                )
                 self.outcome = PlanningOutcome(
                     kind=PlanningOutcomeKind.DIRECT,
                     stop_reason=PipelineStopReason.COMPLETED,
@@ -283,6 +426,15 @@ class PlanningStage:
 
             if step.kind == NextStepKind.FINAL:
                 runtime_state.status = PipelineStopReason.COMPLETED.value
+                yield PhasedEvent(
+                    RuntimeEvent.planner_iteration_end(
+                        iteration_id=planner_iteration_id,
+                        orchestrator_id=effective_orchestrator_id,
+                        iteration=planner_iteration,
+                        status="completed",
+                    ),
+                    OrchestrationPhase.PLANNER,
+                )
                 self.outcome = PlanningOutcome(
                     kind=PlanningOutcomeKind.NEEDS_FINAL,
                     stop_reason=PipelineStopReason.COMPLETED,
@@ -307,6 +459,15 @@ class PlanningStage:
                     ),
                     OrchestrationPhase.PLANNER,
                 )
+                yield PhasedEvent(
+                    RuntimeEvent.planner_iteration_end(
+                        iteration_id=planner_iteration_id,
+                        orchestrator_id=effective_orchestrator_id,
+                        iteration=planner_iteration,
+                        status="paused",
+                    ),
+                    OrchestrationPhase.PLANNER,
+                )
                 self.outcome = PlanningOutcome(
                     kind=PlanningOutcomeKind.PAUSED,
                     stop_reason=PipelineStopReason.WAITING_INPUT,
@@ -317,7 +478,18 @@ class PlanningStage:
                 runtime_state.status = PipelineStopReason.ABORTED.value
                 runtime_state.final_error = step.rationale
                 yield PhasedEvent(
-                    RuntimeEvent.error(f"Aborted: {step.rationale}", recoverable=False),
+                    RuntimeEvent.error(f"Aborted: {step.rationale}", recoverable=False,
+                                       parent_entity_type="planner_iteration",
+                                       parent_entity_id=planner_iteration_id),
+                    OrchestrationPhase.PLANNER,
+                )
+                yield PhasedEvent(
+                    RuntimeEvent.planner_iteration_end(
+                        iteration_id=planner_iteration_id,
+                        orchestrator_id=effective_orchestrator_id,
+                        iteration=planner_iteration,
+                        status="aborted",
+                    ),
                     OrchestrationPhase.PLANNER,
                 )
                 self.outcome = PlanningOutcome(
@@ -329,6 +501,23 @@ class PlanningStage:
 
             # kind == CALL_AGENT
             _agent_version_id = self._resolve_agent_version_override(request)
+            _agent_run_id_for_lifecycle = str(uuid4())
+            _agent_start_emitted = False
+
+            def _ensure_agent_start() -> str:
+                nonlocal _agent_start_emitted
+                if not _agent_start_emitted:
+                    yield_event = RuntimeEvent.agent_start(
+                        agent_run_id=_agent_run_id_for_lifecycle,
+                        parent_entity_id=planner_iteration_id,
+                        parent_entity_type="planner_iteration",
+                        agent_slug=step.agent_slug or "unknown",
+                    )
+                    _agent_start_emitted = True
+                    return yield_event
+                return None  # type: ignore[return-value]
+
+            _agent_final_status = "completed"
             async for event in self._agent.execute(
                 step=step,
                 runtime_state=runtime_state,
@@ -339,7 +528,13 @@ class PlanningStage:
                 platform_config=platform_config,
                 model=request.model,
                 agent_version_id=_agent_version_id,
+                lifecycle_agent_run_id=_agent_run_id_for_lifecycle,
             ):
+                start_event = _ensure_agent_start()
+                if start_event is not None:
+                    yield PhasedEvent(start_event, OrchestrationPhase.AGENT)
+                if event.type == RuntimeEventType.ERROR:
+                    _agent_final_status = "failed"
                 yield PhasedEvent(event, OrchestrationPhase.AGENT)
                 if event.type == RuntimeEventType.CONFIRMATION_REQUIRED:
                     runtime_state.status = PipelineStopReason.WAITING_CONFIRMATION.value
@@ -360,11 +555,42 @@ class PlanningStage:
                         RuntimeEvent(RuntimeEventType.STOP, stop_event_data),
                         OrchestrationPhase.PLANNER,
                     )
+                    yield PhasedEvent(
+                        RuntimeEvent.agent_end(
+                            agent_run_id=_agent_run_id_for_lifecycle,
+                            parent_entity_id=planner_iteration_id,
+                            parent_entity_type="planner_iteration",
+                            agent_slug=step.agent_slug or "unknown",
+                            status="paused",
+                        ),
+                        OrchestrationPhase.AGENT,
+                    )
+                    yield PhasedEvent(
+                        RuntimeEvent.planner_iteration_end(
+                            iteration_id=planner_iteration_id,
+                            orchestrator_id=effective_orchestrator_id,
+                            iteration=planner_iteration,
+                            status="paused",
+                        ),
+                        OrchestrationPhase.PLANNER,
+                    )
                     self.outcome = PlanningOutcome(
                         kind=PlanningOutcomeKind.PAUSED,
                         stop_reason=PipelineStopReason.WAITING_CONFIRMATION,
                     )
                     return
+
+            if not _agent_start_emitted:
+                yield PhasedEvent(
+                    RuntimeEvent.agent_start(
+                        agent_run_id=_agent_run_id_for_lifecycle,
+                        parent_entity_id=planner_iteration_id,
+                        parent_entity_type="planner_iteration",
+                        agent_slug=step.agent_slug or "unknown",
+                    ),
+                    OrchestrationPhase.AGENT,
+                )
+                _agent_start_emitted = True
 
             # Early degrade path: sub-agent failed with a known hard
             # token/payload limit error. Additional planner iterations usually
@@ -381,6 +607,17 @@ class PlanningStage:
                         ),
                         OrchestrationPhase.PLANNER,
                     )
+            yield PhasedEvent(
+                RuntimeEvent.agent_end(
+                    agent_run_id=_agent_run_id_for_lifecycle,
+                    parent_entity_id=planner_iteration_id,
+                    parent_entity_type="planner_iteration",
+                    agent_slug=step.agent_slug or "unknown",
+                    status=_agent_final_status,
+                ),
+                OrchestrationPhase.AGENT,
+            )
+
             if self._has_non_retryable_agent_failure(runtime_state, step.agent_slug):
                 runtime_state.add_runtime_fact(
                     "Agent failed with non-retryable runtime error; finalizing from collected facts.",
@@ -390,6 +627,15 @@ class PlanningStage:
                     RuntimeEvent.status("agent_non_retryable_failure_finalize", **planner_event_ctx),
                     OrchestrationPhase.PLANNER,
                 )
+                yield PhasedEvent(
+                    RuntimeEvent.planner_iteration_end(
+                        iteration_id=planner_iteration_id,
+                        orchestrator_id=effective_orchestrator_id,
+                        iteration=planner_iteration,
+                        status="failed",
+                    ),
+                    OrchestrationPhase.PLANNER,
+                )
                 self.outcome = PlanningOutcome(
                     kind=PlanningOutcomeKind.NEEDS_FINAL,
                     stop_reason=PipelineStopReason.FAILED,
@@ -397,10 +643,7 @@ class PlanningStage:
                 )
                 return
 
-            loop_threshold = (
-                self._budget_tracker.budget.loop_threshold
-                if self._budget_tracker else 3
-            )
+            loop_threshold = 3
             if runtime_state.detect_loop(threshold=loop_threshold):
                 runtime_state.add_runtime_fact(
                     "Loop detected by runtime; synthesizing from facts.",
@@ -410,12 +653,31 @@ class PlanningStage:
                     RuntimeEvent.status("loop_detected", **planner_event_ctx),
                     OrchestrationPhase.PLANNER,
                 )
+                yield PhasedEvent(
+                    RuntimeEvent.planner_iteration_end(
+                        iteration_id=planner_iteration_id,
+                        orchestrator_id=effective_orchestrator_id,
+                        iteration=planner_iteration,
+                        status="loop_detected",
+                    ),
+                    OrchestrationPhase.PLANNER,
+                )
                 self.outcome = PlanningOutcome(
                     kind=PlanningOutcomeKind.NEEDS_FINAL,
                     stop_reason=PipelineStopReason.LOOP_DETECTED,
                     planner_hint=None,
                 )
                 return
+
+            yield PhasedEvent(
+                RuntimeEvent.planner_iteration_end(
+                    iteration_id=planner_iteration_id,
+                    orchestrator_id=effective_orchestrator_id,
+                    iteration=planner_iteration,
+                    status="completed",
+                ),
+                OrchestrationPhase.PLANNER,
+            )
 
         # Max iterations reached → synthesize whatever we have.
         yield PhasedEvent(
@@ -424,11 +686,6 @@ class PlanningStage:
                 planner_run_id=planner_run_id,
                 planner_iteration_id=f"{planner_run_id}:planner:{runtime_state.iter_count}",
                 iterations=runtime_state.iter_count,
-                budget=(
-                    self._budget_tracker.snapshot()
-                    if self._budget_tracker is not None
-                    else None
-                ),
             ),
             OrchestrationPhase.PLANNER,
         )

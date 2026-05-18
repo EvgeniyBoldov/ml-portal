@@ -20,16 +20,18 @@ const RISK_TONE: Record<string, 'neutral' | 'success' | 'warn' | 'danger' | 'inf
   high: 'danger',
 };
 
+const PLANNER_DECISION_TYPES = new Set(['planner_step', 'planner_action', 'planner_decision']);
+
 function PlannerInfoTab({ entity, steps }: { entity: TraceEntity; steps: RunStep[] }) {
   const data = isPlannerData(entity.data) ? entity.data : null;
   const source = steps.filter((s) => entity.sourceEventIds.includes(s.id));
 
   const thinking = source.find((s) => s.type === 'status' && String((s.data as Record<string, unknown>).stage ?? '') === 'planner_thinking');
-  const decision = source.find((s) => s.type === 'planner_step');
+  const decision = source.find((s) => PLANNER_DECISION_TYPES.has(s.type));
   const decisionData = (decision?.data ?? {}) as Record<string, unknown>;
   const envelope = (decisionData._envelope ?? {}) as Record<string, unknown>;
 
-  const actionKey = String(data?.stepKind ?? decisionData.kind ?? 'planner_step');
+  const actionKey = String(data?.stepKind ?? decisionData.kind ?? 'planner_decision');
   const actionLabel = PLANNER_ACTION_LABELS[actionKey] ?? actionKey;
   const risk = String(decisionData.risk ?? 'unknown');
   const plannerIterationId = String(decisionData.planner_iteration_id ?? (thinking?.data as Record<string, unknown> | undefined)?.planner_iteration_id ?? '—');
@@ -55,9 +57,9 @@ function PlannerInfoTab({ entity, steps }: { entity: TraceEntity; steps: RunStep
 function PlannerDecisionTab({ entity, steps }: { entity: TraceEntity; steps: RunStep[] }) {
   const data = isPlannerData(entity.data) ? entity.data : null;
   const source = steps.filter((s) => entity.sourceEventIds.includes(s.id));
-  const decision = source.find((s) => s.type === 'planner_step');
+  const decision = source.find((s) => PLANNER_DECISION_TYPES.has(s.type));
   const decisionData = (decision?.data ?? {}) as Record<string, unknown>;
-  const actionKey = String(data?.stepKind ?? decisionData.kind ?? 'planner_step');
+  const actionKey = String(data?.stepKind ?? decisionData.kind ?? 'planner_decision');
   const actionLabel = PLANNER_ACTION_LABELS[actionKey] ?? actionKey;
   const agentSlug = String(decisionData.agent_slug ?? data?.decision?.chosenAgentSlug ?? '—');
   const phaseId = String(decisionData.phase_id ?? '—');
@@ -75,7 +77,7 @@ function PlannerDecisionTab({ entity, steps }: { entity: TraceEntity; steps: Run
 function PlannerRationaleTab({ entity, steps }: { entity: TraceEntity; steps: RunStep[] }) {
   const data = isPlannerData(entity.data) ? entity.data : null;
   const source = steps.filter((s) => entity.sourceEventIds.includes(s.id));
-  const decision = source.find((s) => s.type === 'planner_step');
+  const decision = source.find((s) => PLANNER_DECISION_TYPES.has(s.type));
   const decisionData = (decision?.data ?? {}) as Record<string, unknown>;
   const rationale = String(data?.rationale ?? decisionData.rationale ?? '').trim();
 

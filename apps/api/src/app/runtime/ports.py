@@ -78,6 +78,7 @@ class AgentExecutionPort(Protocol):
         self,
         *,
         step: NextStep,
+        lifecycle_agent_run_id: str,
         runtime_state: RuntimeTurnState,
         messages: List[Dict[str, Any]],
         ctx: ToolContext,
@@ -85,6 +86,7 @@ class AgentExecutionPort(Protocol):
         tenant_id: UUID,
         platform_config: Dict[str, Any],
         model: Optional[str] = None,
+        agent_version_id: Optional[UUID] = None,
     ) -> AsyncIterator[RuntimeEvent]: ...
 
 
