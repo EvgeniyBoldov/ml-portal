@@ -30,12 +30,13 @@ export function UsersListPage() {
     () => ({
       query: debouncedQ || undefined,
       limit: 100,
+      include_deprecated: true,
     }),
     [debouncedQ]
   );
 
   const { data, isLoading, error } = useUsers(queryParams);
-  const { tenants = [] } = useTenants();
+  const { tenants = [] } = useTenants(true);
 
   const users = (data as UserListResponse | undefined)?.users ?? [];
 
@@ -127,9 +128,12 @@ export function UsersListPage() {
         getValue: (user) => String(user.is_active),
       },
       render: (user) => (
-        <Badge tone={user.is_active ? 'success' : 'neutral'}>
-          {user.is_active ? 'Активен' : 'Неактивен'}
-        </Badge>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          <Badge tone={user.is_active ? 'success' : 'neutral'}>
+            {user.is_active ? 'Активен' : 'Неактивен'}
+          </Badge>
+          {user.lifecycle_status === 'deprecated' && <Badge tone="warn">Deprecated</Badge>}
+        </div>
       ),
     },
     {
@@ -150,11 +154,13 @@ export function UsersListPage() {
       title="Пользователи"
       mode="view"
       headerActions={
-        <Input
-          placeholder="Поиск пользователей..."
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-        />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <Input
+            placeholder="Поиск пользователей..."
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+          />
+        </div>
       }
       actionButtons={
         <Button onClick={() => navigate('/admin/users/new')}>

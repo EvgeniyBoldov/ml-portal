@@ -43,6 +43,7 @@ class CollectionQueryService:
             .where(
                 Collection.tenant_id == tenant_id,
                 Collection.slug == slug,
+                Collection.lifecycle_status != "deprecated",
             )
         )
         return result.scalar_one_or_none()
@@ -55,7 +56,10 @@ class CollectionQueryService:
             selectinload(Collection.data_instance),
         )
         if active_only:
-            query = query.where(Collection.is_active == True)
+            query = query.where(
+                Collection.is_active == True,
+                Collection.lifecycle_status != "deprecated",
+            )
         query = query.order_by(Collection.created_at.desc())
 
         result = await self.session.execute(query)

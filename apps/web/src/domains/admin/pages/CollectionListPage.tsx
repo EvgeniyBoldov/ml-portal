@@ -30,8 +30,8 @@ export function CollectionListPage() {
   const [search, setSearch] = useState('');
 
   const { data, isLoading } = useQuery({
-    queryKey: qk.collections.adminList({ page: 1, size: 100 }),
-    queryFn: () => collectionsApi.listAll({ size: 100 }),
+    queryKey: qk.collections.adminList({ page: 1, size: 100, is_active: undefined }),
+    queryFn: () => collectionsApi.listAll({ size: 100, include_deprecated: true }),
   });
 
   const collections = data?.items ?? [];
@@ -108,9 +108,12 @@ export function CollectionListPage() {
       label: 'СТАТУС',
       width: 100,
       render: (row) => (
-        <Badge tone={row.is_active ? 'success' : 'danger'}>
-          {row.is_active ? 'Активна' : 'Неактивна'}
-        </Badge>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          <Badge tone={row.is_active ? 'success' : 'danger'}>
+            {row.is_active ? 'Активна' : 'Неактивна'}
+          </Badge>
+          {row.lifecycle_status === 'deprecated' && <Badge tone="warn">Deprecated</Badge>}
+        </div>
       ),
     },
   ];
@@ -120,11 +123,13 @@ export function CollectionListPage() {
       title="Коллекции"
       mode="view"
       headerActions={
-        <Input
-          placeholder="Поиск коллекций..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-        />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <Input
+            placeholder="Поиск коллекций..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </div>
       }
       actionButtons={
         <Button variant="primary" onClick={() => navigate('/admin/collections/new')}>

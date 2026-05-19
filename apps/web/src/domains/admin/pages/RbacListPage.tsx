@@ -41,8 +41,8 @@ export function RbacListPage() {
   const [draftEffect, setDraftEffect] = useState<RbacEffect>('deny');
 
   const { data: rules = [], isLoading, error } = useQuery({
-    queryKey: qk.rbac.enrichedRules({}),
-    queryFn: () => rbacApi.listEnrichedRules(),
+    queryKey: qk.rbac.enrichedRules({ include_deprecated: true }),
+    queryFn: () => rbacApi.listEnrichedRules({ include_deprecated: true }),
     staleTime: 30_000,
   });
 
@@ -226,11 +226,13 @@ export function RbacListPage() {
         mode="view"
         breadcrumbs={[{ label: 'Права доступа' }]}
         headerActions={
-          <Input
-            placeholder="Поиск по владельцу, ресурсу или уровню..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <Input
+              placeholder="Поиск по владельцу, ресурсу или уровню..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </div>
         }
       >
         <Tab

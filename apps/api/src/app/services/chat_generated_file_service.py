@@ -84,7 +84,6 @@ class ChatGeneratedFileService:
         attachments: list[dict] = []
         for item in extracted:
             created = await self.attachment_service.create_generated_attachment(
-                tenant_id=tenant_id,
                 chat_id=chat_id,
                 owner_id=owner_id,
                 filename=item.filename,

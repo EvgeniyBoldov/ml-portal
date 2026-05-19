@@ -134,6 +134,7 @@ export interface Collection {
   is_fully_vectorized: boolean;
   
   is_active: boolean;
+  lifecycle_status?: string;
   current_version_id?: string | null;
   current_version?: CollectionVersion | null;
   created_at: string;
@@ -342,6 +343,7 @@ export const collectionsApi = {
     size?: number;
     tenant_id?: string;
     is_active?: boolean;
+    include_deprecated?: boolean;
   }): Promise<CollectionListResponse> => {
     const searchParams = new URLSearchParams();
     if (params?.page) searchParams.set('page', String(params.page));
@@ -349,6 +351,8 @@ export const collectionsApi = {
     if (params?.tenant_id) searchParams.set('tenant_id', params.tenant_id);
     if (params?.is_active !== undefined)
       searchParams.set('is_active', String(params.is_active));
+    if (params?.include_deprecated !== undefined)
+      searchParams.set('include_deprecated', String(params.include_deprecated));
 
     const query = searchParams.toString();
     const response = await apiRequest<CollectionListResponse>(

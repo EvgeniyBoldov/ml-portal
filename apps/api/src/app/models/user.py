@@ -9,8 +9,9 @@ from datetime import datetime
 import uuid
 
 from .base import Base
+from .mixins.lifecycle import LifecycleMixin
 
-class Users(Base):
+class Users(Base, LifecycleMixin):
     """Users table model"""
     __tablename__ = "users"
     
@@ -38,3 +39,9 @@ class Users(Base):
         Index("ix_users_auth_provider_external_id", "auth_provider", "external_id", unique=True, postgresql_where="external_id IS NOT NULL"),
     )
 
+    @property
+    def is_enabled(self) -> bool:
+        """Effective auth status for user-facing operations."""
+        if getattr(self, "lifecycle_status", "active") == "deprecated":
+            return False
+        return bool(getattr(self, "is_active", True))

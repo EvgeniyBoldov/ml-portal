@@ -9,6 +9,10 @@ export interface Tenant {
   name: string;
   description?: string;
   is_active: boolean;
+  is_default?: boolean;
+  lifecycle_status?: string;
+  deprecated_at?: string | null;
+  retention_days?: number;
   embed_models?: string[];
   rerank_model?: string;
   ocr?: boolean;
@@ -32,6 +36,7 @@ export interface TenantUpdate {
   name?: string;
   description?: string;
   is_active?: boolean;
+  is_default?: boolean;
   extra_embed_model?: string | null;
   ocr?: boolean;
   layout?: boolean;
@@ -54,6 +59,7 @@ export const tenantApi = {
       size?: number;
       search?: string;
       is_active?: boolean;
+      include_deprecated?: boolean;
     } = {}
   ): Promise<TenantListResponse> {
     const searchParams = new URLSearchParams();
@@ -62,6 +68,8 @@ export const tenantApi = {
     if (params.search) searchParams.set('search', params.search);
     if (params.is_active !== undefined)
       searchParams.set('is_active', String(params.is_active));
+    if (params.include_deprecated !== undefined)
+      searchParams.set('include_deprecated', String(params.include_deprecated));
 
     return apiRequest(`/admin/tenants?${searchParams.toString()}`);
   },

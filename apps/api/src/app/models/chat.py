@@ -17,7 +17,6 @@ class Chats(Base):
     __tablename__ = "chats"
     
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
     owner_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     tags: Mapped[List[str] | None] = mapped_column(ARRAY(String), nullable=True)
@@ -30,10 +29,8 @@ class Chats(Base):
     summaries = relationship("ChatSummary", back_populates="chat", cascade="all, delete-orphan")
     
     __table_args__ = (
-        Index("ix_chats_tenant_id", "tenant_id"),
-        Index("ix_chats_tenant_created", "tenant_id", "created_at"),
-        Index("ix_chats_tenant_owner", "tenant_id", "owner_id"),
-        Index("ix_chats_tenant_name", "tenant_id", "name"),
+        Index("ix_chats_owner_created", "owner_id", "created_at"),
+        Index("ix_chats_owner_name", "owner_id", "name"),
     )
 
 class ChatMessages(Base):
@@ -48,7 +45,6 @@ class ChatMessages(Base):
     __tablename__ = "chatmessages"
     
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
     chat_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("chats.id", ondelete="CASCADE"), nullable=False)
     role: Mapped[str] = mapped_column(SQLEnum('system', 'user', 'assistant', 'tool', name='chat_role_enum', create_type=False), nullable=False)
     content: Mapped[Dict[str, Any]] = mapped_column(JSON, nullable=False)
@@ -65,8 +61,5 @@ class ChatMessages(Base):
     
     __table_args__ = (
         Index("ix_chatmessages_chat_id_created_at", "chat_id", "created_at"),
-        Index("ix_chatmessages_tenant_id", "tenant_id"),
-        Index("ix_chatmessages_tenant_created", "tenant_id", "created_at"),
-        Index("ix_chatmessages_tenant_chat", "tenant_id", "chat_id"),
+        Index("ix_chatmessages_chat_created", "chat_id", "created_at"),
     )
-

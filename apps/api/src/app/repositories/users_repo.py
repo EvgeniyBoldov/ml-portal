@@ -218,6 +218,7 @@ class AsyncUsersRepository:
         query: Optional[str] = None,
         role: Optional[str] = None,
         is_active: Optional[bool] = None,
+        include_deprecated: bool = False,
     ) -> tuple[list[Users], Optional[str], bool, int]:
         """List all users with pagination"""
         if limit <= 0 or limit > 100:
@@ -241,6 +242,8 @@ class AsyncUsersRepository:
             filters.append(Users.role == role)
         if is_active is not None:
             filters.append(Users.is_active == is_active)
+        if not include_deprecated:
+            filters.append(Users.lifecycle_status != "deprecated")
         if query:
             pattern = f"%{query.lower()}%"
             filters.append(

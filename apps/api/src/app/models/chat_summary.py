@@ -26,12 +26,6 @@ class ChatSummary(Base):
         nullable=False,
         index=True
     )
-    tenant_id: Mapped[Optional[UUID]] = mapped_column(
-        PGUUID(as_uuid=True),
-        ForeignKey("tenants.id", ondelete="CASCADE"),
-        nullable=True,
-        index=True
-    )
     summary_text: Mapped[str] = mapped_column(Text, nullable=False)
     message_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     last_message_id: Mapped[Optional[UUID]] = mapped_column(

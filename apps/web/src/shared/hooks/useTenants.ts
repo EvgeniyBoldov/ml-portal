@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { tenantApi, type Tenant } from '@shared/api/tenant';
 
-export function useTenants() {
+export function useTenants(includeDeprecated = false) {
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -10,7 +10,7 @@ export function useTenants() {
     try {
       setLoading(true);
       setError(null);
-      const response = await tenantApi.getTenants({ size: 100 });
+      const response = await tenantApi.getTenants({ size: 100, include_deprecated: includeDeprecated });
       setTenants(response.items);
     } catch (err) {
       console.error('Failed to load tenants:', err);
@@ -18,7 +18,7 @@ export function useTenants() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [includeDeprecated]);
 
   const hasFetchedRef = useRef(false);
 

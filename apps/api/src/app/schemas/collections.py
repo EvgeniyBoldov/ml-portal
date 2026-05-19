@@ -160,6 +160,7 @@ class CollectionResponse(BaseModel):
     fields: List[dict]
     source_contract: Optional[dict] = None
     status: str
+    lifecycle_status: str = "active"
     status_details: Optional[dict] = None
     runtime_readiness: Optional[dict] = None
     table_name: Optional[str] = None

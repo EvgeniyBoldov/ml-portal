@@ -17,11 +17,6 @@ class ChatTurn(Base):
     __tablename__ = "chat_turns"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    tenant_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("tenants.id", ondelete="CASCADE"),
-        nullable=False,
-    )
     chat_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("chats.id", ondelete="CASCADE"),
@@ -64,7 +59,6 @@ class ChatTurn(Base):
 
     __table_args__ = (
         Index("ix_chat_turns_chat_id_started_at", "chat_id", "started_at"),
-        Index("ix_chat_turns_tenant_id", "tenant_id"),
         Index("ix_chat_turns_user_id", "user_id"),
         Index("ix_chat_turns_idempotency_key", "idempotency_key"),
         Index("ix_chat_turns_request_hash", "request_hash"),

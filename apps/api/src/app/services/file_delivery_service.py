@@ -110,7 +110,6 @@ class FileDeliveryService:
         result = await self.session.execute(
             select(ChatAttachment).where(
                 ChatAttachment.id == att_uuid,
-                ChatAttachment.tenant_id == self.repo_factory.tenant_id,
                 ChatAttachment.owner_id == owner_uuid,
             )
         )

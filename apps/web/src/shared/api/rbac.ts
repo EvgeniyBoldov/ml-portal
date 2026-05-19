@@ -19,6 +19,9 @@ export interface RbacRule {
   effect: RbacEffect;
   created_at: string;
   created_by_user_id?: string | null;
+  lifecycle_status?: string;
+  deprecated_at?: string | null;
+  retention_days?: number;
 }
 
 export interface RbacRuleCreate {
@@ -75,6 +78,9 @@ export interface EnrichedRule {
   created_at: string;
   created_by_user_id?: string | null;
   created_by_name?: string | null;
+  lifecycle_status?: string;
+  deprecated_at?: string | null;
+  retention_days?: number;
 }
 
 export interface EnrichedRulesFilters {
@@ -87,6 +93,7 @@ export interface EnrichedRulesFilters {
   effect?: RbacEffect;
   skip?: number;
   limit?: number;
+  include_deprecated?: boolean;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -106,6 +113,7 @@ export const rbacApi = {
     if (params.effect) sp.set('effect', params.effect);
     if (params.skip) sp.set('skip', String(params.skip));
     if (params.limit) sp.set('limit', String(params.limit));
+    if (params.include_deprecated !== undefined) sp.set('include_deprecated', String(params.include_deprecated));
     return apiRequest(`/admin/rbac?${sp.toString()}`);
   },
 
@@ -153,6 +161,7 @@ export const rbacApi = {
     if (params.effect) sp.set('effect', params.effect);
     if (params.skip) sp.set('skip', String(params.skip));
     if (params.limit) sp.set('limit', String(params.limit));
+    if (params.include_deprecated !== undefined) sp.set('include_deprecated', String(params.include_deprecated));
     return apiRequest(`/admin/rbac/rules?${sp.toString()}`);
   },
 };

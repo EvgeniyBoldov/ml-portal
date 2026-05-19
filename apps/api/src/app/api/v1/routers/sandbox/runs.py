@@ -55,7 +55,6 @@ SANDBOX_UPLOAD_CHAT_PREFIX = "__sandbox_uploads__:"
 async def _ensure_sandbox_upload_chat(
     db: AsyncSession,
     *,
-    tenant_id: uuid.UUID,
     owner_id: uuid.UUID,
     session_id: uuid.UUID,
 ) -> uuid.UUID:
@@ -63,7 +62,6 @@ async def _ensure_sandbox_upload_chat(
     row = await db.scalar(
         select(Chats).where(
             and_(
-                Chats.tenant_id == tenant_id,
                 Chats.owner_id == owner_id,
                 Chats.name == name,
             )
@@ -72,7 +70,6 @@ async def _ensure_sandbox_upload_chat(
     if row:
         return row.id
     row = Chats(
-        tenant_id=tenant_id,
         owner_id=owner_id,
         name=name,
         tags=["sandbox", "system", f"sandbox_session:{session_id}"],
@@ -242,7 +239,6 @@ async def run_sandbox(
         attachment_service = ChatAttachmentService(db)
         try:
             rows = await attachment_service.get_owned_attachments_any_chat(
-                tenant_id=str(t_uuid),
                 owner_id=str(u_uuid),
                 attachment_ids=[str(item) for item in data.attachment_ids],
             )
@@ -464,18 +460,15 @@ async def upload_sandbox_attachment(
     if not session_obj or session_obj.status != "active":
         raise HTTPException(status_code=400, detail="Session is not active")
 
-    t_uuid = await tenant_uuid(db, user)
     u_uuid = user_uuid(user)
     chat_id = await _ensure_sandbox_upload_chat(
         db,
-        tenant_id=t_uuid,
         owner_id=u_uuid,
         session_id=session_id,
     )
     attachment_service = ChatAttachmentService(db)
     try:
         uploaded = await attachment_service.upload_attachment(
-            tenant_id=str(t_uuid),
             chat_id=str(chat_id),
             owner_id=str(u_uuid),
             file=file,

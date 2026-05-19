@@ -1,6 +1,7 @@
 /**
  * AgentListPage - Список агентов (контейнеры)
  */
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAgentList } from '@/shared/api/hooks';
 import { type Agent } from '@/shared/api/agents';
@@ -9,7 +10,7 @@ import { DataTable, type DataTableColumn, Badge, Button, Input } from '@/shared/
 
 export function AgentListPage() {
   const navigate = useNavigate();
-  const { filtered: filteredAgents, isLoading, search, setSearch, goToCreate, goToDetail } = useAgentList();
+  const { filtered: filteredAgents, isLoading, search, setSearch, goToCreate, goToDetail } = useAgentList(true);
 
   const columns: DataTableColumn<Agent>[] = [
     {
@@ -42,9 +43,15 @@ export function AgentListPage() {
         getValue: (agent) => (agent.current_version_id ? 'has_version' : 'no_version'),
       },
       render: (agent) => agent.current_version_id ? (
-        <Badge tone="success">Активна</Badge>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          <Badge tone="success">Активна</Badge>
+          {agent.lifecycle_status === 'deprecated' && <Badge tone="warn">Deprecated</Badge>}
+        </div>
       ) : (
-        <Badge tone="neutral">Нет версии</Badge>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          <Badge tone="neutral">Нет версии</Badge>
+          {agent.lifecycle_status === 'deprecated' && <Badge tone="warn">Deprecated</Badge>}
+        </div>
       ),
     },
     {
@@ -88,11 +95,13 @@ export function AgentListPage() {
         { label: 'Агенты' },
       ]}
       headerActions={
-        <Input
-          placeholder="Поиск агентов..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-        />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <Input
+            placeholder="Поиск агентов..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </div>
       }
     >
       <Tab 

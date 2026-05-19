@@ -65,6 +65,7 @@ class AgentResponse(BaseModel):
     timeout_s: Optional[int] = None
     max_retries: Optional[int] = None
     allowed_collection_ids: Optional[List[UUID]] = None
+    lifecycle_status: str = "active"
     created_at: datetime
     updated_at: datetime
 
@@ -89,6 +90,7 @@ class AgentListItem(BaseModel):
     timeout_s: Optional[int] = None
     max_retries: Optional[int] = None
     allowed_collection_ids: Optional[List[UUID]] = None
+    lifecycle_status: str = "active"
     versions_count: int = 0
     created_at: datetime
     updated_at: datetime

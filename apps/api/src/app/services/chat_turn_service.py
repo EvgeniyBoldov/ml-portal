@@ -27,14 +27,13 @@ class ChatTurnService:
     async def start_turn(
         self,
         *,
-        tenant_id: str | uuid.UUID,
         chat_id: str | uuid.UUID,
         user_id: str | uuid.UUID,
+        tenant_id: str | uuid.UUID | None = None,
         idempotency_key: Optional[str] = None,
         request_hash: Optional[str] = None,
     ) -> ChatTurn:
         turn = ChatTurn(
-            tenant_id=uuid.UUID(str(tenant_id)),
             chat_id=uuid.UUID(str(chat_id)),
             user_id=uuid.UUID(str(user_id)),
             idempotency_key=idempotency_key,

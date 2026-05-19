@@ -1,8 +1,10 @@
 
 from fastapi import APIRouter, Depends, HTTPException, status, Response, Request
 from pydantic import BaseModel, EmailStr
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import db_session, get_current_user, rate_limit_dependency
+from app.models.tenant import Tenants, UserTenants
 from app.repositories.users_repo import AsyncUsersRepository
 from app.services.users_service import AsyncUsersService
 from app.services.ldap_user_service import LDAPUserService
@@ -10,6 +12,20 @@ from app.core.security import create_access_token, create_refresh_token, decode_
 from app.core.config import get_settings, Settings
 
 router = APIRouter(tags=["security"])
+
+
+async def _load_active_tenant_ids(session: AsyncSession, user_id) -> list[str]:
+    result = await session.execute(
+        select(UserTenants.tenant_id)
+        .join(Tenants, Tenants.id == UserTenants.tenant_id)
+        .where(
+            UserTenants.user_id == user_id,
+            Tenants.is_active.is_(True),
+            Tenants.lifecycle_status != "deprecated",
+        )
+        .order_by(UserTenants.is_default.desc(), Tenants.created_at.asc())
+    )
+    return [str(row[0]) for row in result.fetchall()]
 
 class LoginRequest(BaseModel):
     login: str
@@ -42,7 +58,12 @@ async def login(
     local_service = AsyncUsersService(users_repo)
     
     # Try local authentication first
-    user = await local_service.authenticate_user(payload.login, payload.password)
+    try:
+        user = await local_service.authenticate_user(payload.login, payload.password)
+    except ValueError as exc:
+        if str(exc) == "account_deprecated":
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="account_deprecated") from exc
+        raise
     
     # If local auth failed and LDAP is enabled, try LDAP
     ldap_provisioned = False
@@ -68,13 +89,7 @@ async def login(
     if ldap_provisioned:
         await session.commit()
     
-    # Get user's tenant IDs from database
-    from sqlalchemy import text
-    result = await session.execute(
-        text("SELECT tenant_id FROM user_tenants WHERE user_id = :user_id"),
-        {"user_id": user.id}
-    )
-    tenant_ids = [str(row[0]) for row in result.fetchall()]
+    tenant_ids = await _load_active_tenant_ids(session, user.id)
     
     # Create JWT tokens
     access_token = create_access_token(
@@ -153,14 +168,13 @@ async def refresh(request: Request, response: Response, session: AsyncSession = 
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="User not found"
             )
+        if not bool(getattr(user, "is_enabled", True)):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="User inactive",
+            )
 
-        # Load tenant mapping from DB (same source as login).
-        from sqlalchemy import text
-        tenant_rows = await session.execute(
-            text("SELECT tenant_id FROM user_tenants WHERE user_id = :user_id"),
-            {"user_id": user.id},
-        )
-        tenant_ids = [str(row[0]) for row in tenant_rows.fetchall()]
+        tenant_ids = await _load_active_tenant_ids(session, user.id)
         
         # Create new access token
         access_token = create_access_token(

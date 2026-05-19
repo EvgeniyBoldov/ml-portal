@@ -17,6 +17,7 @@ from sqlalchemy.dialects.postgresql import UUID, ARRAY
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
+from app.models.mixins.lifecycle import LifecycleMixin
 
 
 class LoggingLevel(str, enum.Enum):
@@ -26,7 +27,7 @@ class LoggingLevel(str, enum.Enum):
     FULL = "full"
 
 
-class Agent(Base):
+class Agent(Base, LifecycleMixin):
     """
     Agent container - holds human-readable metadata.
 

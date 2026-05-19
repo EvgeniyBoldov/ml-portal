@@ -12,12 +12,15 @@ import { useTenant, useModels } from '@shared/api/hooks/useAdmin';
 import { tenantApi } from '@shared/api/tenant';
 import { agentsApi, type Agent } from '@shared/api/agents';
 import { qk } from '@shared/api/keys';
+import { lifecycleApi } from '@shared/api/lifecycle';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
 import { EntityPageV2, Tab, type BreadcrumbItem, type EntityPageMode } from '@/shared/ui/EntityPage';
 import { Block, type FieldConfig } from '@/shared/ui/GridLayout';
-import { Button, ConfirmDialog } from '@/shared/ui';
+import { Button, LifecycleDeleteDialog } from '@/shared/ui';
 import { RBACRulesTable } from '@/shared/ui/RBACRulesTable';
 import type { Tenant, TenantCreate, TenantUpdate } from '@shared/api/tenant';
+
+type TenantFormData = Partial<TenantCreate & { is_default?: boolean }>;
 
 /* ─── Field configs ─── */
 
@@ -76,6 +79,7 @@ const AGENT_FIELDS: FieldConfig[] = [
 
 const META_FIELDS: FieldConfig[] = [
   { key: 'id', type: 'code', label: 'ID', editable: false },
+  { key: 'is_default', type: 'boolean', label: 'Default tenant', editable: false },
   { key: 'created_at', type: 'date', label: 'Создан', editable: false },
   { key: 'updated_at', type: 'date', label: 'Обновлен', editable: false },
 ];
@@ -94,10 +98,11 @@ export function TenantPage() {
   const modeParam = searchParams.get('mode');
   const mode: EntityPageMode = isNew ? 'create' : (modeParam as EntityPageMode) || 'view';
 
-  const [formData, setFormData] = useState<Partial<TenantCreate>>({
+  const [formData, setFormData] = useState<TenantFormData>({
     name: '',
     description: '',
     is_active: true,
+    is_default: false,
     extra_embed_model: '',
     ocr: false,
     layout: false,
@@ -121,6 +126,7 @@ export function TenantPage() {
         name: tenant.name || '',
         description: tenant.description || '',
         is_active: tenant.is_active,
+        is_default: Boolean(tenant.is_default),
         extra_embed_model: tenant.extra_embed_model || '',
         ocr: tenant.ocr || false,
         layout: tenant.layout || false,
@@ -152,15 +158,16 @@ export function TenantPage() {
     onError: (err: Error) => showError(err.message),
   });
 
-  const deleteMutation = useMutation({
-    mutationFn: () => tenantApi.deleteTenant(id!),
+  const restoreMutation = useMutation({
+    mutationFn: () => lifecycleApi.restoreEntity('tenant', id!),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: qk.admin.tenants.all() });
-      showSuccess('Тенант удалён');
-      navigate('/admin/tenants');
+      queryClient.invalidateQueries({ queryKey: qk.admin.tenants.detail(id!) });
+      showSuccess('Тенант восстановлен');
     },
     onError: (err: Error) => showError(err.message),
   });
+
 
   // ─── Handlers ───
   const handleFieldChange = (key: string, value: any) => {
@@ -193,6 +200,7 @@ export function TenantPage() {
           name: tenant.name || '',
           description: tenant.description || '',
           is_active: tenant.is_active,
+          is_default: Boolean(tenant.is_default),
           extra_embed_model: tenant.extra_embed_model || '',
           ocr: tenant.ocr || false,
           layout: tenant.layout || false,
@@ -205,15 +213,6 @@ export function TenantPage() {
 
   const handleDelete = () => setShowDeleteConfirm(true);
 
-  const handleDeleteConfirm = async () => {
-    try {
-      await deleteMutation.mutateAsync();
-      setShowDeleteConfirm(false);
-    } finally {
-      setSaving(false);
-    }
-  };
-
   const breadcrumbs: BreadcrumbItem[] = [
     { label: 'Тенанты', href: '/admin/tenants' },
     { label: tenant?.name || 'Новый тенант' },
@@ -223,6 +222,7 @@ export function TenantPage() {
   const infoData = mode === 'edit' ? formData : {
     name: tenant?.name || '',
     description: tenant?.description || '',
+    is_default: Boolean(tenant?.is_default),
   };
 
   const embeddingData = mode === 'edit' ? formData : {
@@ -242,6 +242,7 @@ export function TenantPage() {
 
   const metaData = {
     id: tenant?.id || '',
+    is_default: Boolean(tenant?.is_default),
     created_at: tenant?.created_at || '',
     updated_at: tenant?.updated_at || '',
   };
@@ -267,7 +268,14 @@ export function TenantPage() {
       label: 'Активен',
       description: 'Тенант доступен для использования',
     },
+    {
+      key: 'is_default',
+      type: 'boolean',
+      label: 'Default tenant',
+      description: 'Платформенный тенант по умолчанию',
+    },
   ];
+  const infoFieldsCreate: FieldConfig[] = infoFieldsWithStatus.filter((f) => f.key !== 'is_default');
   const embeddingFieldsFull: FieldConfig[] = [
     { ...EMBEDDING_FIELDS[0], options: embeddingOptions },
     ...PROCESSING_FIELDS,
@@ -292,7 +300,7 @@ export function TenantPage() {
             icon="building"
             iconVariant="info"
             width="1/2"
-            fields={infoFieldsWithStatus}
+            fields={infoFieldsCreate}
             data={formData}
             editable={true}
             onChange={handleFieldChange}
@@ -332,7 +340,11 @@ export function TenantPage() {
           id="overview"
           actions={
             mode === 'view' ? [
+              ...(tenant?.lifecycle_status === 'deprecated'
+                ? [<Button key="restore" variant="outline" onClick={() => restoreMutation.mutate()} disabled={restoreMutation.isPending}>Восстановить</Button>]
+                : []),
               <Button key="edit" onClick={handleEdit}>Редактировать</Button>,
+              <Button key="delete" variant="danger" onClick={handleDelete}>Удалить</Button>,
             ] : mode === 'edit' ? [
               <Button key="save" onClick={handleSave} disabled={saving}>
                 {saving ? 'Сохранение...' : 'Сохранить'}
@@ -384,20 +396,19 @@ export function TenantPage() {
         )}
       </EntityPageV2>
 
-      <ConfirmDialog
+      <LifecycleDeleteDialog
         open={showDeleteConfirm}
-        title="Удалить тенант?"
-        message={
-          <div>
-            <p>Вы уверены, что хотите удалить тенант <strong>{tenant?.name}</strong>?</p>
-            <p>Это действие нельзя отменить.</p>
-          </div>
-        }
-        confirmLabel="Удалить"
-        cancelLabel="Отмена"
-        variant="danger"
-        onConfirm={handleDeleteConfirm}
+        kind="tenant"
+        entityId={id || ''}
+        entityLabel={tenant?.name || 'Тенант'}
         onCancel={() => setShowDeleteConfirm(false)}
+        onSuccess={() => {
+          queryClient.invalidateQueries({ queryKey: qk.admin.tenants.all() });
+          queryClient.invalidateQueries({ queryKey: qk.admin.tenants.detail(id || '') });
+          showSuccess('Операция удаления выполнена');
+          setShowDeleteConfirm(false);
+          navigate('/admin/tenants');
+        }}
       />
     </>
   );

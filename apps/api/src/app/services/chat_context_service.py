@@ -81,8 +81,8 @@ class ChatContextService:
         self,
         chat_id: uuid.UUID,
         summary: str,
-        summary_metadata: dict | None = None,
         tenant_id: uuid.UUID | None = None,
+        summary_metadata: dict | None = None,
     ) -> None:
         """Store summary for chat."""
         messages = await self.load_chat_context(chat_id, limit=100)

@@ -19,17 +19,13 @@ class AsyncChatsRepository(AsyncTenantRepository[Chats]):
     def __init__(self, session: AsyncSession, tenant_id: Optional[uuid.UUID], user_id: Optional[uuid.UUID] = None):
         super().__init__(session, Chats, tenant_id, user_id)
     
-    async def create_chat(self, owner_id: str, name: Optional[str] = None, 
+    async def create_chat(self, owner_id: str, name: Optional[str] = None,
                          tags: Optional[List[str]] = None) -> Chats:
         """Create a new chat"""
-        if not self.tenant_id:
-            raise ValueError("tenant_id is required to create chat")
-        return await self.create(
-            self.tenant_id,
-            owner_id=owner_id,
-            name=name,
-            tags=tags or []
-        )
+        chat = Chats(owner_id=owner_id, name=name, tags=tags or [])
+        self.session.add(chat)
+        await self.session.flush()
+        return chat
     
     async def get_user_chats(self, user_id: str, query: Optional[str] = None, 
                             limit: int = 50, offset: int = 0) -> List[Chats]:
@@ -37,8 +33,6 @@ class AsyncChatsRepository(AsyncTenantRepository[Chats]):
         stmt = select(Chats).where(
             Chats.owner_id == user_id
         ).order_by(desc(Chats.created_at))
-        if self.tenant_id:
-            stmt = stmt.where(Chats.tenant_id == self.tenant_id)
         
         if query:
             search_term = f"%{query}%"
@@ -61,8 +55,6 @@ class AsyncChatsRepository(AsyncTenantRepository[Chats]):
         )
         chat = result.scalar_one_or_none()
         if not chat:
-            return None
-        if self.tenant_id and chat.tenant_id != self.tenant_id:
             return None
         if self.user_id and chat.owner_id != self.user_id:
             return None
@@ -98,16 +90,16 @@ class AsyncChatMessagesRepository(AsyncTenantRepository[ChatMessages]):
     async def create_message(self, chat_id: str, role: str, content: Dict[str, Any], 
                            meta: Optional[Dict[str, Any]] = None, **kwargs) -> ChatMessages:
         """Create a new chat message"""
-        if not self.tenant_id:
-            raise ValueError("tenant_id is required to create chat message")
-        return await self.create(
-            self.tenant_id,
+        message = ChatMessages(
             chat_id=chat_id,
             role=role,
             content=content,
             meta=meta or {},
-            **kwargs
+            **kwargs,
         )
+        self.session.add(message)
+        await self.session.flush()
+        return message
     
     async def get_chat_messages(
         self, 
@@ -128,8 +120,6 @@ class AsyncChatMessagesRepository(AsyncTenantRepository[ChatMessages]):
         query = select(ChatMessages).where(
             ChatMessages.chat_id == chat_id
         )
-        if self.tenant_id:
-            query = query.where(ChatMessages.tenant_id == self.tenant_id)
         
         # Use keyset pagination if cursor provided
         if cursor:
@@ -159,8 +149,6 @@ class AsyncChatMessagesRepository(AsyncTenantRepository[ChatMessages]):
             .order_by(desc(ChatMessages.created_at))
             .limit(limit)
         )
-        if self.tenant_id:
-            query = query.where(ChatMessages.tenant_id == self.tenant_id)
         result = await self.session.execute(query)
         latest_desc = list(result.scalars().all())
         latest_desc.reverse()
@@ -173,8 +161,6 @@ class AsyncChatMessagesRepository(AsyncTenantRepository[ChatMessages]):
         )
         message = result.scalar_one_or_none()
         if not message:
-            return None
-        if self.tenant_id and message.tenant_id != self.tenant_id:
             return None
         return message
     

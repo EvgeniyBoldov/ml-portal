@@ -111,8 +111,9 @@ class RbacService:
         effect: Optional[str] = None,
         skip: int = 0,
         limit: int = 500,
+        include_deprecated: bool = False,
     ) -> List[RbacRule]:
-        return await self.rule_repo.list_all_rules(
+        rules = await self.rule_repo.list_all_rules(
             level=level,
             owner_user_id=owner_user_id,
             owner_tenant_id=owner_tenant_id,
@@ -123,6 +124,9 @@ class RbacService:
             skip=skip,
             limit=limit,
         )
+        if include_deprecated:
+            return rules
+        return [r for r in rules if getattr(r, "lifecycle_status", "active") != "deprecated"]
 
     # ─── Access Check ─────────────────────────────────────────────────
 
@@ -206,6 +210,7 @@ class RbacService:
         effect: Optional[str] = None,
         skip: int = 0,
         limit: int = 500,
+        include_deprecated: bool = False,
     ) -> List[Dict[str, Any]]:
         """
         List rules with enriched data: owner info + resource names.
@@ -228,6 +233,8 @@ class RbacService:
             skip=skip,
             limit=limit,
         )
+        if not include_deprecated:
+            rules = [r for r in rules if getattr(r, "lifecycle_status", "active") != "deprecated"]
 
         if not rules:
             return []

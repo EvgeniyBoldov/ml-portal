@@ -371,6 +371,7 @@ async def list_all_collections(
     size: int = 20,
     tenant_id: uuid.UUID | None = None,
     is_active: bool | None = None,
+    include_deprecated: bool = False,
     session: AsyncSession = Depends(db_uow),
     admin_user=Depends(require_admin),
 ):
@@ -383,6 +384,8 @@ async def list_all_collections(
         query = query.where(Collection.tenant_id == tenant_id)
     if is_active is not None:
         query = query.where(Collection.is_active == is_active)
+    if not include_deprecated:
+        query = query.where(Collection.lifecycle_status != "deprecated")
     query = query.order_by(Collection.created_at.desc())
 
     result = await session.execute(query)

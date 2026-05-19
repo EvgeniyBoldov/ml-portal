@@ -16,12 +16,13 @@ import {
   type ToolInstanceDetail,
   type CollectionType,
 } from '@/shared/api';
+import { lifecycleApi } from '@/shared/api/lifecycle';
 import { qk } from '@/shared/api/keys';
 import { useEntityEditor } from '@/shared/hooks/useEntityEditor';
 import { EntityPageV2, Tab } from '@/shared/ui';
 import { Block, type FieldConfig } from '@/shared/ui/GridLayout';
 import { VersionsBlock } from '@/shared/ui/VersionsBlock';
-import { Button, ConfirmDialog } from '@/shared/ui';
+import { Button, LifecycleDeleteDialog } from '@/shared/ui';
 import { Select } from '@/shared/ui/Select';
 import DataTable, { type DataTableColumn } from '@/shared/ui/DataTable/DataTable';
 import { SqlCatalogDataTable } from './collection/SqlCatalogDataTable';
@@ -122,7 +123,6 @@ export function CollectionPage() {
     handleEdit,
     handleCancel,
     handleDelete,
-    handleDeleteConfirm,
   } = useEntityEditor<Collection, CreateCollectionRequest, Partial<CreateCollectionRequest>>({
     entityType: 'collection',
     entityNameLabel: 'Коллекции',
@@ -414,6 +414,13 @@ export function CollectionPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useReactState(false);
   const queryClient = useQueryClient();
+  const restoreMutation = useMutation({
+    mutationFn: () => lifecycleApi.restoreEntity('collection', String(collection!.id)),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: qk.collections.adminList() });
+      queryClient.invalidateQueries({ queryKey: qk.collections.detail(String(collection!.id)) });
+    },
+  });
 
   const isDocumentCollection = collection?.collection_type === 'document';
 
@@ -528,6 +535,12 @@ export function CollectionPage() {
                   </Button>,
                 ]
               : [
+                  ...(collection?.lifecycle_status === 'deprecated'
+                    ? [(
+                      <Button key="restore" variant="outline" onClick={() => restoreMutation.mutate()} disabled={restoreMutation.isPending}>
+                        Восстановить
+                      </Button>
+                    )] : []),
                   <Button key="edit" variant="primary" onClick={handleEdit}>Редактировать</Button>,
                   ...(isDocumentCollection ? [(
                     <Button
@@ -737,15 +750,20 @@ export function CollectionPage() {
         onSubmit={addDiscoveredSqlTables}
       />
 
-      <ConfirmDialog
+      <LifecycleDeleteDialog
         open={showDeleteConfirm}
-        title="Удалить коллекцию?"
-        message={`Удаление коллекции "${collection?.name}" удалит все данные и векторные индексы. Это действие необратимо.`}
-        confirmLabel="Удалить"
-        cancelLabel="Отмена"
-        variant="danger"
-        onConfirm={handleDeleteConfirm}
+        kind="collection"
+        entityId={String(collection?.id || '')}
+        entityLabel={collection?.name || 'Коллекция'}
         onCancel={() => setShowDeleteConfirm(false)}
+        onSuccess={() => {
+          queryClient.invalidateQueries({ queryKey: qk.collections.adminList() });
+          if (collection?.id) {
+            queryClient.invalidateQueries({ queryKey: qk.collections.detail(collection.id) });
+          }
+          setShowDeleteConfirm(false);
+          navigate('/admin/collections');
+        }}
       />
     </>
   );

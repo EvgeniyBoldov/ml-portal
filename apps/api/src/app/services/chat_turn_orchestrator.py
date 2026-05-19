@@ -43,6 +43,7 @@ class ChatTurnOrchestrator:
         chat,
         chat_id: str,
         user_id: str,
+        tenant_id: Optional[str] = None,
         content: str,
         attachment_ids: list[str],
         confirmation_tokens: Optional[list[str]] = None,
@@ -58,10 +59,8 @@ class ChatTurnOrchestrator:
         process_generated_files,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         turn = ChatTurnState(chat_id=chat_id, request_id=idempotency_key)
-        tenant_id = str(chat.tenant_id)
         hash_payload = content if not attachment_ids else f"{content}||attachments:{','.join(sorted(attachment_ids))}"
         persisted_turn = await self.turn_service.start_turn(
-            tenant_id=tenant_id,
             chat_id=chat_id,
             user_id=user_id,
             idempotency_key=idempotency_key,
@@ -80,7 +79,6 @@ class ChatTurnOrchestrator:
         user_message_created_at = user_message.created_at
         if attachment_ids:
             await bind_attachments(
-                tenant_id=tenant_id,
                 chat_id=chat_id,
                 owner_id=user_id,
                 attachment_ids=attachment_ids,
@@ -121,7 +119,7 @@ class ChatTurnOrchestrator:
                 logger.warning("Failed to generate chat title")
 
         tool_ctx = ToolContext(
-            tenant_id=tenant_id,
+            tenant_id=tenant_id or "",
             user_id=user_id,
             chat_id=chat_id,
             request_id=idempotency_key or str(uuid.uuid4()),
@@ -149,7 +147,7 @@ class ChatTurnOrchestrator:
             async for event_data in run_with_router(
                 agent_slug=agent_slug,
                 user_id=user_id,
-                tenant_id=tenant_id,
+                tenant_id=tenant_id or "",
                 llm_messages=llm_messages,
                 tool_ctx=tool_ctx,
                 model=model,

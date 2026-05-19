@@ -25,6 +25,8 @@ class TestAsyncUsersService:
         repo.get_by_email = AsyncMock(return_value=None)
         repo.create = AsyncMock()
         repo.add_to_tenant = AsyncMock()
+        repo.remove_from_tenant = AsyncMock()
+        repo.set_default_tenant = AsyncMock()
         return repo
     
     @pytest.fixture
@@ -301,6 +303,27 @@ class TestUpdateUser(TestAsyncUsersService):
             )
         
         assert "taken" in str(exc_info.value).lower()
+
+    @pytest.mark.asyncio
+    async def test_update_user_tenant_ids_sets_selected_default(self, users_service, mock_users_repo, sample_user):
+        """Should keep memberships in sync and set default tenant to the first selected tenant."""
+        mock_users_repo.get_by_id.return_value = sample_user
+
+        current_tenant_id = uuid4()
+        selected_tenant_id = uuid4()
+
+        execute_result = MagicMock()
+        execute_result.fetchall.return_value = [(current_tenant_id,)]
+        mock_users_repo.session.execute = AsyncMock(return_value=execute_result)
+
+        await users_service.update_user(
+            str(sample_user.id),
+            {"tenant_ids": [str(selected_tenant_id)]}
+        )
+
+        mock_users_repo.remove_from_tenant.assert_awaited_once()
+        mock_users_repo.add_to_tenant.assert_awaited_once()
+        mock_users_repo.set_default_tenant.assert_awaited_once_with(sample_user.id, selected_tenant_id)
 
 
 class TestDeleteUser(TestAsyncUsersService):

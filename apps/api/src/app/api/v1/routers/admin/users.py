@@ -24,6 +24,7 @@ async def _user_response(user, repo: AsyncUsersRepository) -> dict:
         "is_active": getattr(user, "is_active", True),
         "auth_provider": getattr(user, "auth_provider", "local"),
         "tenant_id": str(default_tid) if default_tid else None,
+        "lifecycle_status": getattr(user, "lifecycle_status", "active"),
         "created_at": user.created_at.isoformat() if getattr(user, "created_at", None) else "",
         "updated_at": user.updated_at.isoformat() if getattr(user, "updated_at", None) else None,
     }
@@ -35,6 +36,7 @@ async def list_users(
     query: str | None = None,
     role: str | None = None,
     is_active: bool | None = None,
+    include_deprecated: bool = Query(False),
     session: AsyncSession = Depends(db_uow),
     admin_user = Depends(require_admin),
 ):
@@ -46,6 +48,7 @@ async def list_users(
         query=query,
         role=role,
         is_active=is_active,
+        include_deprecated=include_deprecated,
     )
     items = []
     for u in users:
@@ -60,6 +63,7 @@ async def list_users(
             "role": u.role,
             "is_active": getattr(u, "is_active", True),
             "tenant_id": default_tid,
+            "lifecycle_status": getattr(u, "lifecycle_status", "active"),
             "created_at": u.created_at.isoformat() if getattr(u, "created_at", None) else "",
             "updated_at": getattr(u, "updated_at", None).isoformat() if getattr(u, "updated_at", None) else None,
         })
@@ -275,6 +279,18 @@ async def delete_user(
             ).model_dump()
         )
     
-    await service.delete_user(user_id)
+    try:
+        await service.delete_user(user_id)
+    except ValueError as exc:
+        if str(exc) == "last_admin":
+            raise HTTPException(
+                status_code=409,
+                detail=ProblemDetails(
+                    title="Conflict",
+                    status=409,
+                    detail="last_admin",
+                ).model_dump(),
+            ) from exc
+        raise
     from fastapi import Response
     return Response(status_code=204)

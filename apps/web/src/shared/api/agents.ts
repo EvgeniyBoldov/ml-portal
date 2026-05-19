@@ -25,6 +25,7 @@ export interface Agent {
   logging_level?: string;
   allowed_collection_ids?: string[] | null;
   versions_count?: number;
+  lifecycle_status?: string;
   created_at: string;
   updated_at: string;
 }
@@ -185,10 +186,11 @@ export interface AgentVersionUpdate {
 
 export const agentsApi = {
   // Container CRUD
-  async list(params: { skip?: number; limit?: number } = {}): Promise<Agent[]> {
+  async list(params: { skip?: number; limit?: number; include_deprecated?: boolean } = {}): Promise<Agent[]> {
     const sp = new URLSearchParams();
     if (params.skip) sp.set('skip', String(params.skip));
     if (params.limit) sp.set('limit', String(params.limit));
+    if (params.include_deprecated !== undefined) sp.set('include_deprecated', String(params.include_deprecated));
     return apiRequest(`/admin/agents?${sp.toString()}`);
   },
 

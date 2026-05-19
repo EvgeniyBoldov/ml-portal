@@ -47,6 +47,7 @@ def _map_version_payload(data: dict) -> dict:
 async def list_agents(
     skip: int = 0,
     limit: int = 100,
+    include_deprecated: bool = Query(False),
     db: AsyncSession = Depends(db_session),
     _: UserCtx = Depends(require_admin),
 ):
@@ -61,6 +62,8 @@ async def list_agents(
         .offset(skip)
         .limit(limit)
     )
+    if not include_deprecated:
+        stmt = stmt.where(Agent.lifecycle_status != "deprecated")
     result = await db.execute(stmt)
     agents = result.scalars().all()
 
@@ -74,6 +77,7 @@ async def list_agents(
             current_version_id=a.current_version_id,
             logging_level=a.logging_level,
             allowed_collection_ids=a.allowed_collection_ids,
+            lifecycle_status=getattr(a, "lifecycle_status", "active"),
             versions_count=len(a.versions),
             created_at=a.created_at,
             updated_at=a.updated_at,

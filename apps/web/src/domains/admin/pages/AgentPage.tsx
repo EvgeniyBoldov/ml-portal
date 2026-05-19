@@ -21,6 +21,7 @@ import {
   type Collection,
   type Model,
 } from '@/shared/api';
+import { lifecycleApi } from '@/shared/api/lifecycle';
 import { qk } from '@/shared/api/keys';
 import { useAgentDetail } from '@/shared/api/hooks/useAgents';
 import type { QueryKey } from '@tanstack/react-query';
@@ -29,7 +30,7 @@ import { Block, type FieldConfig } from '@/shared/ui/GridLayout';
 import { VersionsBlock } from '@/shared/ui/VersionsBlock';
 import DataTable, { type DataTableColumn } from '@/shared/ui/DataTable';
 import Button from '@/shared/ui/Button';
-import ConfirmDialog from '@/shared/ui/ConfirmDialog';
+import LifecycleDeleteDialog from '@/shared/ui/LifecycleDeleteDialog';
 import FormModal from '@/shared/ui/FormModal';
 import { Select } from '@/shared/ui/Select';
 
@@ -218,11 +219,20 @@ export function AgentPage() {
 
   const {
     mode, isNew, entity: agent, isLoading, saving,
-    formData, handleFieldChange, handleSave, handleEdit, handleCancel, handleDeleteConfirm,
+    formData, handleFieldChange, handleSave, handleEdit, handleCancel,
     breadcrumbs,
   } = useAgentDetail(id ?? 'new');
 
   const handleDelete = () => setShowDeleteConfirm(true);
+  const restoreMutation = useMutation({
+    mutationFn: () => lifecycleApi.restoreEntity('agent', id!),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: qk.agents.list({}) });
+      if (id) {
+        queryClient.invalidateQueries({ queryKey: qk.agents.detail(id) });
+      }
+    },
+  });
 
   // Load LLM models for dropdown
   const { data: modelsData } = useQuery({
@@ -411,6 +421,11 @@ export function AgentPage() {
         onSave={handleSave}
         onCancel={handleCancel}
         onDelete={handleDelete}
+        actionButtons={
+          mode === 'view' && agent?.lifecycle_status === 'deprecated'
+            ? [<Button key="restore" variant="outline" onClick={() => restoreMutation.mutate()} disabled={restoreMutation.isPending}>Восстановить</Button>]
+            : undefined
+        }
       >
         <Tab
           title="Обзор"
@@ -569,21 +584,21 @@ export function AgentPage() {
 
       </EntityPageV2>
 
-      {/* Delete confirmation dialog */}
-      {showDeleteConfirm && (
-        <ConfirmDialog
-          open={true}
-          title="Удалить агента?"
-          message={`Вы уверены, что хотите удалить агента "${agent?.name}"? Это действие нельзя отменить.`}
-          confirmLabel="Удалить"
-          cancelLabel="Отмена"
-          onConfirm={() => {
-            handleDeleteConfirm();
-            setShowDeleteConfirm(false);
-          }}
-          onCancel={() => setShowDeleteConfirm(false)}
-        />
-      )}
+      <LifecycleDeleteDialog
+        open={showDeleteConfirm}
+        kind="agent"
+        entityId={id || ''}
+        entityLabel={agent?.name || 'Агент'}
+        onCancel={() => setShowDeleteConfirm(false)}
+        onSuccess={() => {
+          queryClient.invalidateQueries({ queryKey: qk.agents.list({}) });
+          if (id) {
+            queryClient.invalidateQueries({ queryKey: qk.agents.detail(id) });
+          }
+          setShowDeleteConfirm(false);
+          navigate('/admin/agents');
+        }}
+      />
 
       <FormModal
         open={isAddDataModalOpen}

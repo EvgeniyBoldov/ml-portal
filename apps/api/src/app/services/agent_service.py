@@ -30,6 +30,7 @@ from app.models.agent import Agent
 from app.models.agent_version import AgentVersion, AgentVersionStatus
 from app.models.tool_instance import ToolInstance
 from app.services.rbac_service import RbacService
+from app.services.rbac_cleanup_service import RbacCleanupService
 from app.models.tenant import Tenants
 from app.repositories.agent_repository import AgentRepository, AgentVersionRepository
 
@@ -91,7 +92,7 @@ class AgentService:
 
     async def get_agent(self, agent_id: UUID) -> Agent:
         agent = await self.agent_repo.get_by_id(agent_id)
-        if not agent:
+        if not agent or getattr(agent, "lifecycle_status", "active") == "deprecated":
             raise AgentNotFoundError(f"Agent '{agent_id}' not found")
         return agent
 
@@ -100,7 +101,7 @@ class AgentService:
         agent = await self.agent_repo.get_by_slug(normalized_slug)
         if not agent and normalized_slug != slug:
             agent = await self.agent_repo.get_by_slug(slug)
-        if not agent:
+        if not agent or getattr(agent, "lifecycle_status", "active") == "deprecated":
             raise AgentNotFoundError(slug)
         return agent
 
@@ -109,13 +110,13 @@ class AgentService:
         agent = await self.agent_repo.get_by_slug_with_versions(normalized_slug)
         if not agent and normalized_slug != slug:
             agent = await self.agent_repo.get_by_slug_with_versions(slug)
-        if not agent:
+        if not agent or getattr(agent, "lifecycle_status", "active") == "deprecated":
             raise AgentNotFoundError(slug)
         return agent
 
     async def get_agent_with_versions_by_id(self, agent_id: UUID) -> Agent:
         agent = await self.agent_repo.get_by_id_with_versions(agent_id)
-        if not agent:
+        if not agent or getattr(agent, "lifecycle_status", "active") == "deprecated":
             raise AgentNotFoundError(agent_id)
         return agent
 
@@ -223,6 +224,11 @@ class AgentService:
 
     async def delete_agent(self, agent_id: UUID) -> None:
         agent = await self.get_agent(agent_id)
+        rbac_cleanup = RbacCleanupService(self.session)
+        await rbac_cleanup.remove_rules_for_resource(
+            resource_type="agent",
+            resource_id=agent_id,
+        )
         await self.agent_repo.delete(agent)
 
     async def list_agents(

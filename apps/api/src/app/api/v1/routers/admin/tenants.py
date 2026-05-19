@@ -18,6 +18,7 @@ async def list_tenants(
     size: int = Query(20, ge=1, le=100),
     search: Optional[str] = Query(None),
     is_active: Optional[bool] = Query(None),
+    include_deprecated: bool = Query(False),
     session: AsyncSession = Depends(db_uow),
     admin_user = Depends(require_admin),
 ):
@@ -36,6 +37,8 @@ async def list_tenants(
         
         if is_active is not None:
             filtered_tenants = [t for t in filtered_tenants if t["is_active"] == is_active]
+        if not include_deprecated:
+            filtered_tenants = [t for t in filtered_tenants if t.get("lifecycle_status", "active") != "deprecated"]
         
         # Calculate pagination
         total = len(filtered_tenants)
@@ -74,6 +77,8 @@ async def create_tenant(
         return Tenant(**tenant)
         
     except ValueError as e:
+        if str(e) == "cannot_unset_default_tenant_directly":
+            raise HTTPException(status_code=409, detail="cannot_unset_default_tenant_directly")
         raise HTTPException(status_code=400, detail=str(e))
     except HTTPException:
         raise
@@ -165,7 +170,10 @@ async def delete_tenant(
         
         return {"message": "Tenant deleted successfully"}
         
-    except ValueError:
+    except ValueError as e:
+        code = str(e)
+        if code in {"cannot_delete_default_tenant", "platform_default_tenant_not_found"}:
+            raise HTTPException(status_code=409, detail=code)
         raise HTTPException(status_code=400, detail="Invalid tenant ID format")
     except HTTPException:
         raise

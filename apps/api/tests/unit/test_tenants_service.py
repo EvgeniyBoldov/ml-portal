@@ -211,6 +211,7 @@ class TestUpdateTenant(TestAsyncTenantsService):
         sample_tenant, sample_embed_model, sample_rerank_model
     ):
         """Should update tenant successfully"""
+        mock_tenants_repo.get_by_id.return_value = sample_tenant
         mock_tenants_repo.update.return_value = sample_tenant
         mock_model_repo.get_global_by_type.side_effect = [sample_embed_model, sample_rerank_model]
         
@@ -225,7 +226,7 @@ class TestUpdateTenant(TestAsyncTenantsService):
     @pytest.mark.asyncio
     async def test_update_tenant_not_found(self, tenants_service, mock_tenants_repo):
         """Should return None when tenant not found"""
-        mock_tenants_repo.update.return_value = None
+        mock_tenants_repo.get_by_id.return_value = None
         
         result = await tenants_service.update_tenant(str(uuid4()), {"name": "New"})
         
@@ -237,6 +238,7 @@ class TestUpdateTenant(TestAsyncTenantsService):
         sample_tenant, sample_embed_model, sample_rerank_model
     ):
         """Should map extra_embed_model to embedding_model_alias"""
+        mock_tenants_repo.get_by_id.return_value = sample_tenant
         extra_model = MagicMock()
         extra_model.type = ModelType.EMBEDDING
         extra_model.status = ModelStatus.AVAILABLE
@@ -252,6 +254,43 @@ class TestUpdateTenant(TestAsyncTenantsService):
         
         call_kwargs = mock_tenants_repo.update.call_args.kwargs
         assert "embedding_model_alias" in call_kwargs
+
+    @pytest.mark.asyncio
+    async def test_update_tenant_set_default_true(
+        self, tenants_service, mock_tenants_repo, mock_model_repo,
+        sample_tenant, sample_embed_model, sample_rerank_model
+    ):
+        """Should atomically move platform default flag when is_default=True."""
+        sample_tenant.is_platform_default = False
+        mock_tenants_repo.get_by_id.return_value = sample_tenant
+        mock_tenants_repo.update.return_value = sample_tenant
+        mock_tenants_repo.set_platform_default.return_value = sample_tenant
+        mock_model_repo.get_global_by_type.side_effect = [sample_embed_model, sample_rerank_model]
+
+        result = await tenants_service.update_tenant(
+            str(sample_tenant.id),
+            {"is_default": True}
+        )
+
+        assert result is not None
+        mock_tenants_repo.set_platform_default.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_update_tenant_unset_default_directly_blocked(
+        self, tenants_service, mock_tenants_repo, sample_tenant
+    ):
+        """Should block unsetting current default tenant without reassignment."""
+        sample_tenant.is_platform_default = True
+        mock_tenants_repo.get_by_id.return_value = sample_tenant
+        mock_tenants_repo.update.return_value = sample_tenant
+
+        with pytest.raises(ValueError) as exc_info:
+            await tenants_service.update_tenant(
+                str(sample_tenant.id),
+                {"is_default": False}
+            )
+
+        assert str(exc_info.value) == "cannot_unset_default_tenant_directly"
 
 
 class TestDeleteTenant(TestAsyncTenantsService):

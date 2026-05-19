@@ -18,6 +18,7 @@ from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base
+from .mixins.lifecycle import LifecycleMixin
 
 
 class CollectionType(str, Enum):
@@ -82,7 +83,7 @@ class FilterOperator(str, Enum):
     IS_NULL = "is_null"    # Is null / is not null
 
 
-class Collection(Base):
+class Collection(Base, LifecycleMixin):
     """
     First-class data asset of the platform.
 

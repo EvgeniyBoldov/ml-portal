@@ -22,6 +22,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
+from app.models.mixins.lifecycle import LifecycleMixin
 
 
 class RbacLevel(str, Enum):
@@ -46,7 +47,7 @@ class RbacEffect(str, Enum):
     DENY = "deny"
 
 
-class RbacRule(Base):
+class RbacRule(Base, LifecycleMixin):
     """
     Single RBAC rule — defines access to a specific resource.
     

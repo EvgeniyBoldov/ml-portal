@@ -38,8 +38,8 @@ class ChatSummaryService:
         chat_id: UUID,
         summary_text: str,
         message_count: int,
-        last_message_id: Optional[UUID] = None,
         tenant_id: Optional[UUID] = None,
+        last_message_id: Optional[UUID] = None,
         summary_metadata: Optional[dict] = None,
     ) -> ChatSummary:
         """Create or update summary for a chat."""
@@ -56,7 +56,6 @@ class ChatSummaryService:
         
         summary = ChatSummary(
             chat_id=chat_id,
-            tenant_id=tenant_id,
             summary_text=summary_text,
             message_count=message_count,
             last_message_id=last_message_id,

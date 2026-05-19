@@ -14,6 +14,7 @@ from app.core.di import get_llm_client
 from app.core.redis import get_redis
 from app.core.security import UserCtx
 from app.models.chat import Chats
+from app.models.tenant import UserTenants, Tenants
 
 # Re-export for routers/services
 async def db_session() -> AsyncGenerator[AsyncSession, None]:
@@ -236,7 +237,7 @@ def require_tenant(request: Request) -> str:
 class ChatContext:
     """Resolved chat context: validated chat record + tenant access."""
     chat_id: str
-    tenant_id: str  # str(UUID) — ready for service layer
+    tenant_id: str
     user_id: str
 
 
@@ -250,7 +251,6 @@ async def resolve_chat_context(
     Raises HTTPException on:
     - Invalid chat_id UUID
     - Chat not found
-    - Chat has no tenant
     - Chat does not belong to current user
     """
     try:
@@ -264,11 +264,42 @@ async def resolve_chat_context(
         raise HTTPException(status_code=404, detail="Chat not found")
     if str(chat_row.owner_id) != str(current_user.id):
         raise HTTPException(status_code=404, detail="Chat not found")
-    if not chat_row.tenant_id:
-        raise HTTPException(status_code=400, detail="Chat has no tenant assigned")
+    tenant_id = None
+    candidate_ids: list[_uuid.UUID] = []
+    for raw_tid in (current_user.tenant_ids or []):
+        try:
+            candidate_ids.append(_uuid.UUID(str(raw_tid)))
+        except (TypeError, ValueError):
+            continue
 
-    tenant_id = _uuid.UUID(str(chat_row.tenant_id))
+    if candidate_ids:
+        tenant_result = await session.execute(
+            select(Tenants.id)
+            .where(
+                Tenants.id.in_(candidate_ids),
+                Tenants.is_active.is_(True),
+                Tenants.lifecycle_status != "deprecated",
+            )
+            .order_by(Tenants.created_at.asc())
+            .limit(1)
+        )
+        tenant_id = tenant_result.scalar_one_or_none()
 
+    if not tenant_id:
+        tenant_result = await session.execute(
+            select(UserTenants.tenant_id)
+            .join(Tenants, Tenants.id == UserTenants.tenant_id)
+            .where(
+                UserTenants.user_id == _uuid.UUID(str(current_user.id)),
+                Tenants.is_active.is_(True),
+                Tenants.lifecycle_status != "deprecated",
+            )
+            .order_by(UserTenants.is_default.desc(), Tenants.created_at.asc())
+            .limit(1)
+        )
+        tenant_id = tenant_result.scalar_one_or_none()
+    if not tenant_id:
+        raise HTTPException(status_code=400, detail="User has no tenant assigned")
     return ChatContext(
         chat_id=str(chat_uuid),
         tenant_id=str(tenant_id),

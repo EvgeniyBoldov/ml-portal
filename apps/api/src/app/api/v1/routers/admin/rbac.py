@@ -39,6 +39,7 @@ async def list_enriched_rules(
     effect: Optional[str] = Query(None, description="Filter: allow|deny"),
     skip: int = Query(0, ge=0),
     limit: int = Query(500, ge=1, le=1000),
+    include_deprecated: bool = Query(False),
     db: AsyncSession = Depends(db_session),
     _: UserCtx = Depends(require_admin),
 ):
@@ -56,6 +57,7 @@ async def list_enriched_rules(
         effect=effect,
         skip=skip,
         limit=limit,
+        include_deprecated=include_deprecated,
     )
 
 
@@ -70,6 +72,7 @@ async def list_rules(
     effect: Optional[str] = Query(None),
     skip: int = Query(0, ge=0),
     limit: int = Query(500, ge=1, le=1000),
+    include_deprecated: bool = Query(False),
     db: AsyncSession = Depends(db_session),
     _: UserCtx = Depends(require_admin),
 ):
@@ -85,6 +88,7 @@ async def list_rules(
         effect=effect,
         skip=skip,
         limit=limit,
+        include_deprecated=include_deprecated,
     )
     return [RbacRuleResponse.model_validate(r) for r in rules]
 

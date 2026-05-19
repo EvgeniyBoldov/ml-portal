@@ -239,13 +239,6 @@ function StepBody({ step }: { step: RunStep }) {
         </div>
       );
 
-    case 'thinking':
-      return (
-        <div className={styles.body}>
-          <span className={styles.value}>Шаг {stringifyValue(d.step)}</span>
-        </div>
-      );
-
     default:
       return (
         <div className={styles.body}>
@@ -264,7 +257,7 @@ export default function ChatStepItem({ step, index }: Props) {
     duration_ms: typeof step.data.duration_ms === 'number' ? step.data.duration_ms : undefined,
   });
   const meta = STEP_META[semantic.category] ?? STEP_META.system;
-  const isMinor = step.type === 'status' || step.type === 'thinking' || step.type === 'delta';
+  const isMinor = step.type === 'status' || step.type === 'delta';
   const [isOpen, setIsOpen] = useState(!isMinor);
 
   return (

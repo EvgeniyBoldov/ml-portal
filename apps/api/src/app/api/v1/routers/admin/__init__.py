@@ -22,6 +22,7 @@ from .orchestration import router as orchestration_router
 from .ai_generate import router as ai_generate_router
 from .system_llm_roles import router as system_llm_roles_router
 from .discovered_tools import router as discovered_tools_router
+from .lifecycle import router as lifecycle_router
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -44,5 +45,6 @@ router.include_router(orchestration_router, prefix="/orchestration", tags=["orch
 router.include_router(ai_generate_router, tags=["ai-generate"])
 router.include_router(system_llm_roles_router, tags=["system-llm-roles"])
 router.include_router(discovered_tools_router, prefix="/discovered-tools", tags=["discovered-tools"])
+router.include_router(lifecycle_router, prefix="/lifecycle", tags=["lifecycle"])
 
 __all__ = ["router"]

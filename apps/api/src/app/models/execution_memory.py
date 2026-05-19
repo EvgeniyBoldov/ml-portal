@@ -36,12 +36,6 @@ class ExecutionMemory(Base):
         nullable=True,
         index=True,
     )
-    tenant_id: Mapped[Optional[UUID]] = mapped_column(
-        PGUUID(as_uuid=True),
-        ForeignKey("tenants.id", ondelete="CASCADE"),
-        nullable=True,
-        index=True,
-    )
 
     goal: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     question: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

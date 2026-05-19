@@ -32,6 +32,7 @@ class RbacRuleResponse(BaseModel):
     resource_type: str
     resource_id: UUID
     effect: str
+    lifecycle_status: str = "active"
     created_at: datetime
     created_by_user_id: Optional[UUID]
 

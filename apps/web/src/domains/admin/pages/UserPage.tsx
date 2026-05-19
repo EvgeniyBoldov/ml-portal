@@ -7,14 +7,15 @@
  */
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { useQueryClient } from '@tanstack/react-query';
-import { useUser, useUpdateUser, useDeleteUser, useCreateUser, useSetUserPassword } from '@shared/api/hooks/useAdmin';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useUser, useUpdateUser, useCreateUser, useSetUserPassword } from '@shared/api/hooks/useAdmin';
 import { useTenants } from '@shared/hooks/useTenants';
 import { qk } from '@shared/api/keys';
+import { lifecycleApi } from '@shared/api/lifecycle';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
 import { EntityPageV2, Tab, type BreadcrumbItem, type EntityPageMode } from '@/shared/ui/EntityPage';
 import { Block, type FieldConfig } from '@/shared/ui/GridLayout';
-import { Button, ConfirmDialog, Modal } from '@/shared/ui';
+import { Button, LifecycleDeleteDialog, Modal } from '@/shared/ui';
 import Input from '@/shared/ui/Input';
 import { RBACRulesTable } from '@/shared/ui/RBACRulesTable';
 import type { User, Tenant } from '@shared/api/admin';
@@ -169,6 +170,13 @@ const STATUS_FIELDS: FieldConfig[] = [
     description: 'Уровень доступа пользователя',
     options: ROLES.map(r => ({ value: r.value, label: r.label })),
   },
+  {
+    key: 'lifecycle_status',
+    type: 'text',
+    label: 'Lifecycle',
+    description: 'Состояние lifecycle сущности',
+    editable: false,
+  },
 ];
 
 const META_FIELDS: FieldConfig[] = [
@@ -206,7 +214,7 @@ export function UserPage() {
 
   // ─── Queries ───
   const { data: user, isLoading, refetch } = useUser(id);
-  const { tenants } = useTenants();
+  const { tenants } = useTenants(true);
 
   // ─── Sync form ←→ API ───
   useEffect(() => {
@@ -231,8 +239,16 @@ export function UserPage() {
   // ─── Mutations ───
   const createMutation = useCreateUser();
   const updateMutation = useUpdateUser();
-  const deleteMutation = useDeleteUser();
   const setPasswordMutation = useSetUserPassword();
+  const restoreMutation = useMutation({
+    mutationFn: () => lifecycleApi.restoreEntity('user', id!),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: qk.admin.users.all() });
+      queryClient.invalidateQueries({ queryKey: qk.admin.users.detail(id!) });
+      showSuccess('Пользователь восстановлен');
+    },
+    onError: (err: Error) => showError(err.message),
+  });
 
   // ─── Handlers ───
   const handleFieldChange = (key: string, value: any) => {
@@ -302,17 +318,6 @@ export function UserPage() {
 
   const handleDelete = () => setShowDeleteConfirm(true);
 
-  const handleDeleteConfirm = async () => {
-    try {
-      await deleteMutation.mutateAsync(id!);
-      showSuccess('Пользователь удалён');
-      navigate('/admin/users');
-      setShowDeleteConfirm(false);
-    } catch (err) {
-      showError(err instanceof Error ? err.message : 'Ошибка удаления');
-    }
-  };
-
   const handleSetPassword = async (newPassword: string) => {
     if (!id) return;
     setSetPasswordSaving(true);
@@ -342,10 +347,16 @@ export function UserPage() {
         tenant_id: user?.tenant_id || '',
       };
 
-  const statusData = mode === 'edit' ? formData : {
-    is_active: user?.is_active || false,
-    role: user?.role || 'reader',
-  };
+  const statusData = mode === 'edit'
+    ? {
+        ...formData,
+        lifecycle_status: user?.lifecycle_status || 'active',
+      }
+    : {
+        is_active: user?.is_active || false,
+        role: user?.role || 'reader',
+        lifecycle_status: user?.lifecycle_status || 'active',
+      };
 
   const metaData = {
     id: user?.id || '',
@@ -442,7 +453,11 @@ export function UserPage() {
           id="overview"
           actions={
             mode === 'view' ? [
+              ...(user?.lifecycle_status === 'deprecated'
+                ? [<Button key="restore" variant="outline" onClick={() => restoreMutation.mutate()} disabled={restoreMutation.isPending}>Восстановить</Button>]
+                : []),
               <Button key="edit" onClick={handleEdit}>Редактировать</Button>,
+              <Button key="delete" variant="danger" onClick={handleDelete}>Удалить</Button>,
               ...(isLocalAccount ? [
                 <Button key="set-pwd" variant="outline" onClick={() => setShowSetPassword(true)}>
                   Установить пароль
@@ -507,20 +522,19 @@ export function UserPage() {
         saving={setPasswordSaving}
       />
 
-      <ConfirmDialog
+      <LifecycleDeleteDialog
         open={showDeleteConfirm}
-        title="Удалить пользователя?"
-        message={
-          <div>
-            <p>Вы уверены, что хотите удалить пользователя <strong>{user?.login}</strong>?</p>
-            <p>Это действие нельзя отменить.</p>
-          </div>
-        }
-        confirmLabel="Удалить"
-        cancelLabel="Отмена"
-        variant="danger"
-        onConfirm={handleDeleteConfirm}
+        kind="user"
+        entityId={id || ''}
+        entityLabel={user?.login || 'Пользователь'}
         onCancel={() => setShowDeleteConfirm(false)}
+        onSuccess={() => {
+          queryClient.invalidateQueries({ queryKey: qk.admin.users.all() });
+          queryClient.invalidateQueries({ queryKey: qk.admin.users.detail(id || '') });
+          showSuccess('Операция удаления выполнена');
+          setShowDeleteConfirm(false);
+          navigate('/admin/users');
+        }}
       />
     </>
   );

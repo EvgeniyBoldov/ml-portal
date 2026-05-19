@@ -3,15 +3,12 @@ import uuid
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import db_uow, get_current_user
 from app.core.security import UserCtx
-from app.core.config import is_local
-from app.models.tenant import Tenants
-from app.models.tenant import UserTenants
 from app.repositories.chats_repo import AsyncChatsRepository
+from app.services.chats_service import ChatsService
 
 router = APIRouter()
 
@@ -56,32 +53,7 @@ async def create_chat(
     name = body.get("name", "New Chat")
     tags = body.get("tags", [])
 
-    tenant_id = None
-    for raw_tid in (current_user.tenant_ids or []):
-        try:
-            tenant_id = uuid.UUID(str(raw_tid))
-            break
-        except Exception:
-            continue
-    if not tenant_id:
-        tenant_row = await session.execute(
-            select(UserTenants.tenant_id)
-            .where(UserTenants.user_id == uuid.UUID(str(current_user.id)))
-            .order_by(UserTenants.is_default.desc())
-            .limit(1)
-        )
-        tenant_id = tenant_row.scalar_one_or_none()
-    if not tenant_id and is_local():
-        fallback = await session.execute(
-            select(Tenants.id)
-            .where(Tenants.is_active.is_(True))
-            .order_by(Tenants.created_at.asc())
-            .limit(1)
-        )
-        tenant_id = fallback.scalar_one_or_none()
-    if not tenant_id:
-        raise HTTPException(status_code=400, detail="User has no tenant assigned")
-    chats_repo = AsyncChatsRepository(session, tenant_id=tenant_id, user_id=uuid.UUID(str(current_user.id)))
+    chats_repo = AsyncChatsRepository(session, tenant_id=None, user_id=uuid.UUID(str(current_user.id)))
     chat = await chats_repo.create_chat(
         owner_id=uuid.UUID(current_user.id),
         name=name,
@@ -152,8 +124,11 @@ async def delete_chat(
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid chat ID")
 
-    chats_repo = AsyncChatsRepository(session, tenant_id=None, user_id=uuid.UUID(str(current_user.id)))
-    success = await chats_repo.delete_chat(chat_uuid)
+    chats_service = ChatsService(session)
+    success = await chats_service.delete_chat(
+        chat_id=chat_uuid,
+        owner_id=uuid.UUID(str(current_user.id)),
+    )
     if not success:
         raise HTTPException(status_code=404, detail="Chat not found")
 

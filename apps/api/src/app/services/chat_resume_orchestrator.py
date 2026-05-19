@@ -22,6 +22,7 @@ class ChatResumeOrchestrator:
         run_id: str,
         chat_id: str,
         user_id: str,
+        tenant_id: Optional[str] = None,
         agent_slug: Optional[str],
         resume_content: str,
         checkpoint: Dict[str, Any],
@@ -41,6 +42,7 @@ class ChatResumeOrchestrator:
         async for event in self.chat_stream_service.send_message_stream(
             chat_id=chat_id,
             user_id=user_id,
+            tenant_id=tenant_id,
             content=resume_content,
             attachment_ids=[],
             idempotency_key=None,

@@ -66,7 +66,7 @@ async def list_messages(
 
     messages_repo = AsyncChatMessagesRepository(
         session=session,
-        tenant_id=uuid.UUID(chat_ctx.tenant_id),
+        tenant_id=None,
         user_id=uuid.UUID(chat_ctx.user_id),
     )
     messages = await messages_repo.get_chat_messages(
@@ -147,6 +147,7 @@ async def send_message_stream(
             async for event in service.send_message_stream(
                 chat_id=chat_ctx.chat_id,
                 user_id=chat_ctx.user_id,
+                tenant_id=chat_ctx.tenant_id,
                 content=content,
                 attachment_ids=attachment_ids,
                 confirmation_tokens=confirmation_tokens,
@@ -340,6 +341,7 @@ async def resume_run(
         run_id=run_id,
         chat_id=str(run.chat_id),
         user_id=str(current_user.id),
+        tenant_id=str(run.tenant_id),
         agent_slug=run.agent_slug,
         resume_content=resume_content,
         checkpoint=checkpoint,

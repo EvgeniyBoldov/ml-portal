@@ -39,7 +39,6 @@ async def upload_chat_attachment(
     service = ChatAttachmentService(session)
     try:
         uploaded = await service.upload_attachment(
-            tenant_id=chat_ctx.tenant_id,
             chat_id=chat_ctx.chat_id,
             owner_id=chat_ctx.user_id,
             file=file,
@@ -61,11 +60,7 @@ async def download_chat_attachment(
     current_user: UserCtx = Depends(get_current_user),
 ):
     service = ChatAttachmentService(session)
-    tenant_ids = current_user.tenant_ids or []
-    if not tenant_ids:
-        raise HTTPException(status_code=400, detail="User has no tenant assigned")
     download_info = await service.get_download_link(
-        tenant_id=str(tenant_ids[0]),
         owner_id=str(current_user.id),
         attachment_id=attachment_id,
     )

@@ -36,10 +36,10 @@ function toNullableStringArray(value: unknown): string[] | null {
 }
 
 /* ─── List Hook ─── */
-export function useAgentList() {
+export function useAgentList(includeDeprecated = false) {
   return useEntityList<Agent>({
-    queryKey: qk.agents.list({}) as QueryKey,
-    queryFn: () => agentsApi.list(),
+    queryKey: qk.agents.list({ q: includeDeprecated ? 'with_deprecated' : 'active_only' }) as QueryKey,
+    queryFn: () => agentsApi.list({ include_deprecated: includeDeprecated }),
     deleteFn: (id) => agentsApi.delete(id),
     invalidateKeys: [qk.agents.all() as QueryKey],
     searchFields: ['name', 'slug', 'description'],

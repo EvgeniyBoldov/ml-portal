@@ -67,7 +67,6 @@ class ChatAttachmentService:
     async def upload_attachment(
         self,
         *,
-        tenant_id: str,
         chat_id: str,
         owner_id: str,
         file: UploadFile,
@@ -86,7 +85,7 @@ class ChatAttachmentService:
         checksum = calculate_file_checksum(content)
         safe_name = self._sanitize_filename(descriptor.filename)
         key = (
-            f"tenants/{tenant_id}/chats/{chat_id}/attachments/{attachment_id}/"
+            f"chats/{chat_id}/attachments/{attachment_id}/"
             f"{checksum}_{safe_name}"
         )
         bucket = self.settings.S3_BUCKET_CHAT_UPLOADS
@@ -103,7 +102,6 @@ class ChatAttachmentService:
 
         row = await self._create_attachment_row(
             attachment_id=attachment_id,
-            tenant_id=tenant_id,
             chat_id=chat_id,
             owner_id=owner_id,
             file_name=descriptor.filename,
@@ -120,7 +118,6 @@ class ChatAttachmentService:
     async def create_generated_attachment(
         self,
         *,
-        tenant_id: str,
         chat_id: str,
         owner_id: str,
         filename: str,
@@ -132,7 +129,7 @@ class ChatAttachmentService:
         attachment_id = uuid.uuid4()
         checksum = calculate_file_checksum(content)
         key = (
-            f"tenants/{tenant_id}/chats/{chat_id}/generated/{attachment_id}/"
+            f"chats/{chat_id}/generated/{attachment_id}/"
             f"{checksum}_{safe_name}"
         )
         bucket = self.settings.S3_BUCKET_CHAT_UPLOADS
@@ -148,7 +145,6 @@ class ChatAttachmentService:
 
         row = await self._create_attachment_row(
             attachment_id=attachment_id,
-            tenant_id=tenant_id,
             chat_id=chat_id,
             owner_id=owner_id,
             file_name=safe_name,
@@ -165,7 +161,6 @@ class ChatAttachmentService:
     async def get_owned_attachments(
         self,
         *,
-        tenant_id: str,
         chat_id: str,
         owner_id: str,
         attachment_ids: Iterable[str],
@@ -183,7 +178,6 @@ class ChatAttachmentService:
             select(ChatAttachment).where(
                 and_(
                     ChatAttachment.id.in_(normalized),
-                    ChatAttachment.tenant_id == uuid.UUID(tenant_id),
                     ChatAttachment.chat_id == uuid.UUID(chat_id),
                     ChatAttachment.owner_id == uuid.UUID(owner_id),
                 )
@@ -196,7 +190,6 @@ class ChatAttachmentService:
     async def get_owned_attachments_any_chat(
         self,
         *,
-        tenant_id: str,
         owner_id: str,
         attachment_ids: Iterable[str],
     ) -> list[ChatAttachment]:
@@ -213,7 +206,6 @@ class ChatAttachmentService:
             select(ChatAttachment).where(
                 and_(
                     ChatAttachment.id.in_(normalized),
-                    ChatAttachment.tenant_id == uuid.UUID(tenant_id),
                     ChatAttachment.owner_id == uuid.UUID(owner_id),
                 )
             )
@@ -225,14 +217,12 @@ class ChatAttachmentService:
     async def bind_to_message(
         self,
         *,
-        tenant_id: str,
         chat_id: str,
         owner_id: str,
         attachment_ids: Iterable[str],
         message_id: str,
     ) -> list[ChatAttachment]:
         rows = await self.get_owned_attachments(
-            tenant_id=tenant_id,
             chat_id=chat_id,
             owner_id=owner_id,
             attachment_ids=attachment_ids,
@@ -248,7 +238,6 @@ class ChatAttachmentService:
     async def get_download_link(
         self,
         *,
-        tenant_id: str,
         owner_id: str,
         attachment_id: str,
     ) -> dict[str, Any]:
@@ -261,7 +250,6 @@ class ChatAttachmentService:
             select(ChatAttachment).where(
                 and_(
                     ChatAttachment.id == att_id,
-                    ChatAttachment.tenant_id == uuid.UUID(tenant_id),
                     ChatAttachment.owner_id == uuid.UUID(owner_id),
                 )
             )
@@ -348,7 +336,6 @@ class ChatAttachmentService:
         self,
         *,
         attachment_id: uuid.UUID,
-        tenant_id: str,
         chat_id: str,
         owner_id: str,
         file_name: str,
@@ -362,7 +349,6 @@ class ChatAttachmentService:
     ) -> ChatAttachment:
         row = ChatAttachment(
             id=attachment_id,
-            tenant_id=uuid.UUID(tenant_id),
             chat_id=uuid.UUID(chat_id),
             owner_id=uuid.UUID(owner_id),
             file_name=file_name,

@@ -31,13 +31,14 @@ export interface UseUsersParams {
   query?: string;
   role?: string;
   is_active?: boolean;
+  include_deprecated?: boolean;
   limit?: number;
   cursor?: string;
 }
 
 export function useUsers(params: UseUsersParams = {}) {
   return useQuery({
-    queryKey: qk.admin.users.list({ page: params.cursor ? undefined : 1, q: params.query }),
+    queryKey: qk.admin.users.list({ page: params.cursor ? undefined : 1, q: params.query, limit: params.limit }),
     queryFn: () => adminApi.getUsers(params),
     staleTime: 60000, // 1 minute for lists
     placeholderData: keepPreviousData,

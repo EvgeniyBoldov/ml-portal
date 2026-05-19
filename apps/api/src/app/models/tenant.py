@@ -5,13 +5,15 @@ from sqlalchemy.dialects.postgresql import UUID
 import uuid
 from datetime import datetime
 from .base import Base
+from .mixins.lifecycle import LifecycleMixin
 
-class Tenants(Base):
+class Tenants(Base, LifecycleMixin):
     __tablename__ = "tenants"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name: Mapped[str] = mapped_column(String, unique=True, index=True)
     description: Mapped[str | None] = mapped_column(String(500), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_platform_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     # Model-related fields
     embedding_model_alias: Mapped[str | None] = mapped_column(String(100), ForeignKey("models.alias"), nullable=True)
     chunk_profile: Mapped[str | None] = mapped_column(String(50), nullable=True, comment="Default chunking profile (by_tokens, by_paragraphs, etc.)")
@@ -26,6 +28,6 @@ class Tenants(Base):
 class UserTenants(Base):
     __tablename__ = "user_tenants"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
-    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.id"))
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"))
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"))
     is_default: Mapped[bool] = mapped_column(Boolean, default=False)

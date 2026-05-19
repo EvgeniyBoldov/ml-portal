@@ -36,6 +36,12 @@ class AsyncTenantsRepository:
         )
         return result.scalar_one_or_none()
 
+    async def get_platform_default(self) -> Optional[Tenants]:
+        result = await self.session.execute(
+            select(Tenants).where(Tenants.is_platform_default.is_(True)).limit(1)
+        )
+        return result.scalar_one_or_none()
+
     async def list(self, limit: int = 100) -> List[Tenants]:
         """List all tenants"""
         result = await self.session.execute(
@@ -70,6 +76,20 @@ class AsyncTenantsRepository:
             .values(**update_data)
         )
 
+        return await self.get_by_id(tenant_id)
+
+    async def set_platform_default(self, tenant_id: uuid.UUID) -> Optional[Tenants]:
+        tenant = await self.get_by_id(tenant_id)
+        if not tenant:
+            return None
+
+        await self.session.execute(update(Tenants).values(is_platform_default=False))
+        await self.session.execute(
+            update(Tenants)
+            .where(Tenants.id == tenant_id)
+            .values(is_platform_default=True)
+        )
+        await self.session.flush()
         return await self.get_by_id(tenant_id)
 
     async def delete(self, tenant_id: uuid.UUID) -> bool:

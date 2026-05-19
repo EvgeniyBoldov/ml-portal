@@ -13,6 +13,9 @@ export interface User {
   is_active: boolean;
   auth_provider?: string;
   tenant_id: string;
+  lifecycle_status?: string;
+  deprecated_at?: string | null;
+  retention_days?: number;
   created_at: string;
   updated_at: string;
 }
@@ -248,12 +251,16 @@ export interface Tenant {
   name: string;
   description?: string;
   is_active: boolean;
+  is_default?: boolean;
   extra_embed_model?: string | null;
   embed_models?: string[];
   rerank_model?: string | null;
   ocr?: boolean;
   layout?: boolean;
   default_agent_slug?: string;
+  lifecycle_status?: string;
+  deprecated_at?: string | null;
+  retention_days?: number;
   created_at: string;
   updated_at: string;
 }
@@ -422,6 +429,7 @@ export const adminApi = {
       query?: string;
       role?: string;
       is_active?: boolean;
+      include_deprecated?: boolean;
       limit?: number;
       cursor?: string;
     } = {}
@@ -431,6 +439,8 @@ export const adminApi = {
     if (params.role) searchParams.set('role', params.role);
     if (params.is_active !== undefined)
       searchParams.set('is_active', String(params.is_active));
+    if (params.include_deprecated !== undefined)
+      searchParams.set('include_deprecated', String(params.include_deprecated));
     if (params.limit) searchParams.set('limit', String(params.limit));
     if (params.cursor) searchParams.set('cursor', params.cursor);
 
@@ -631,12 +641,14 @@ export const adminApi = {
     size?: number;
     search?: string;
     is_active?: boolean;
+    include_deprecated?: boolean;
   } = {}): Promise<TenantListResponse> {
     const searchParams = new URLSearchParams();
     if (params.page) searchParams.set('page', String(params.page));
     if (params.size) searchParams.set('size', String(params.size));
     if (params.search) searchParams.set('search', params.search);
     if (params.is_active !== undefined) searchParams.set('is_active', String(params.is_active));
+    if (params.include_deprecated !== undefined) searchParams.set('include_deprecated', String(params.include_deprecated));
     return apiRequest(`/admin/tenants${searchParams.toString() ? `?${searchParams.toString()}` : ''}`);
   },
 

@@ -51,6 +51,28 @@ import {
   plannerStepToAgentWindowStatus,
   shouldCloseAgentWindowForPlannerStep,
 } from './containerRules';
+import type { EntityBudget, EntityUsed } from './entityTypes';
+
+function llmBudgetFromEvents(events: SemanticEvent[]): EntityBudget | undefined {
+  const used: EntityUsed = {};
+  for (const event of events) {
+    if (event.raw_type !== 'llm_call') continue;
+    const raw = (event.raw?.raw ?? {}) as Record<string, unknown>;
+    const toNum = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
+    const inTokens = toNum(raw.tokens_in);
+    const outTokens = toNum(raw.tokens_out);
+    const totalTokens = toNum(raw.tokens_total);
+    if (inTokens !== undefined) used.tokens_in = inTokens;
+    if (outTokens !== undefined) used.tokens_out = outTokens;
+    if (totalTokens !== undefined) used.tokens_total = totalTokens;
+  }
+  if (Object.keys(used).length === 0) return undefined;
+  return {
+    own: used,
+    aggregated: { ...used },
+    limits: null,
+  };
+}
 
 function indexEntitiesById(root: TraceEntity): Map<string, TraceEntity> {
   const map = new Map<string, TraceEntity>();
@@ -337,6 +359,8 @@ function _buildEntityTree3Pass(
         }
         existing.status = event.status;
         existing.data = buildLLMData(pairEvents);
+        const llmBudget = llmBudgetFromEvents(pairEvents);
+        if (llmBudget) existing.budget = llmBudget;
       } else {
         const llmEntity: TraceEntity = {
           id: hashIds([llmCallId, ...pairEvents.map(e => e.id)]),
@@ -350,6 +374,7 @@ function _buildEntityTree3Pass(
           durationMs: pairEvents.reduce((acc, cur) => acc + (cur.duration_ms ?? 0), 0),
           sourceEventIds: pairEvents.map(e => e.id),
           budgetSnapshot: extractBudgetSnapshot(event),
+          budget: llmBudgetFromEvents(pairEvents),
           data: buildLLMData(pairEvents),
         };
         resolvedParent.children.push(llmEntity);
@@ -886,6 +911,8 @@ export function buildEntityTree(
         existingEntity.status = event.status;
         existingEntity.durationMs = pairEvents.reduce((acc, current) => acc + (current.duration_ms ?? 0), 0);
         existingEntity.data = buildLLMData(pairEvents);
+        const llmBudget = llmBudgetFromEvents(pairEvents);
+        if (llmBudget) existingEntity.budget = llmBudget;
       } else {
         const llmEntity: TraceEntity = {
           id: hashIds([llmCallId, ...pairEvents.map(e => e.id)]),
@@ -899,6 +926,7 @@ export function buildEntityTree(
           durationMs: pairEvents.reduce((acc, current) => acc + (current.duration_ms ?? 0), 0),
           sourceEventIds: pairEvents.map(e => e.id),
           budgetSnapshot: extractBudgetSnapshot(event),
+          budget: llmBudgetFromEvents(pairEvents),
           data: buildLLMData(pairEvents),
         };
 

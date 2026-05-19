@@ -21,7 +21,7 @@ export function TenantsListPage() {
     return () => clearTimeout(timer);
   }, [q]);
 
-  const { tenants, loading: isLoading, error } = useTenants();
+  const { tenants, loading: isLoading, error } = useTenants(true);
 
   const filteredTenants = useMemo(() => {
     if (!debouncedQ.trim()) return tenants;
@@ -48,7 +48,10 @@ export function TenantsListPage() {
         getValue: (tenant) => tenant.name,
       },
       render: (tenant) => (
-        <span style={{ fontWeight: 500 }}>{tenant.name}</span>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          <span style={{ fontWeight: 500 }}>{tenant.name}</span>
+          {tenant.is_default && <Badge tone="info">Default</Badge>}
+        </div>
       ),
     },
     {
@@ -80,9 +83,12 @@ export function TenantsListPage() {
         getValue: (tenant) => String(tenant.is_active),
       },
       render: (tenant) => (
-        <Badge tone={tenant.is_active ? 'success' : 'neutral'}>
-          {tenant.is_active ? 'Активен' : 'Неактивен'}
-        </Badge>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          <Badge tone={tenant.is_active ? 'success' : 'neutral'}>
+            {tenant.is_active ? 'Активен' : 'Неактивен'}
+          </Badge>
+          {tenant.lifecycle_status === 'deprecated' && <Badge tone="warn">Deprecated</Badge>}
+        </div>
       ),
     },
     {
@@ -103,11 +109,13 @@ export function TenantsListPage() {
       title="Тенанты"
       mode="view"
       headerActions={
-        <Input
-          placeholder="Поиск тенантов..."
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-        />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <Input
+            placeholder="Поиск тенантов..."
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+          />
+        </div>
       }
       actionButtons={
         <Button onClick={() => navigate('/admin/tenants/new')}>

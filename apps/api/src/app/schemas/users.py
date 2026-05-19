@@ -54,5 +54,6 @@ class UserResponse(UserBase):
     id: uuid.UUID
     full_name: Optional[str] = None
     tenant_id: Optional[str] = None
+    lifecycle_status: str = "active"
     created_at: str
     updated_at: Optional[str] = None

@@ -167,6 +167,7 @@ class ChatStreamService:
         chat_id: str,
         user_id: str,
         content: str,
+        tenant_id: Optional[str] = None,
         attachment_ids: Optional[list[str]] = None,
         confirmation_tokens: Optional[list[str]] = None,
         idempotency_key: Optional[str] = None,
@@ -244,7 +245,6 @@ class ChatStreamService:
             if attachment_ids:
                 try:
                     attachment_rows = await self.attachment_service.get_owned_attachments(
-                        tenant_id=str(chat.tenant_id),
                         chat_id=chat_id,
                         owner_id=user_id,
                         attachment_ids=attachment_ids,
@@ -261,6 +261,7 @@ class ChatStreamService:
                 chat=chat,
                 chat_id=chat_id,
                 user_id=user_id,
+                tenant_id=tenant_id,
                 content=content,
                 attachment_ids=attachment_ids,
                 confirmation_tokens=confirmation_tokens or [],

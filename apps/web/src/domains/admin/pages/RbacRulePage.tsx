@@ -6,16 +6,18 @@
  * and renders only human-readable names in the UI.
  */
 import { useMemo } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { adminApi } from '@/shared/api/admin';
 import { agentsApi } from '@/shared/api/agents';
 import collectionsApi from '@/shared/api/collections';
 import { rbacApi, type RbacEffect } from '@/shared/api/rbac';
+import { lifecycleApi } from '@/shared/api/lifecycle';
 import { qk } from '@/shared/api/keys';
 import { useRbacRuleEditor } from '@/shared/hooks/useRbacRuleEditor';
 import { EntityPageV2, Tab, type BreadcrumbItem } from '@/shared/ui/EntityPage';
 import { Block } from '@/shared/ui/GridLayout';
-import { Badge, Button, ConfirmDialog, Select } from '@/shared/ui';
+import { Badge, Button, LifecycleDeleteDialog, Select } from '@/shared/ui';
+import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
 import {
   RBAC_EFFECT_LABELS,
   RBAC_EFFECT_TONES,
@@ -55,6 +57,9 @@ function layerTone(layerKey: InheritanceLayerKey) {
 }
 
 export function RbacRulePage() {
+  const queryClient = useQueryClient();
+  const showSuccess = useSuccessToast();
+  const showError = useErrorToast();
   const {
     id,
     rule,
@@ -73,8 +78,16 @@ export function RbacRulePage() {
     handleSave,
     handleCancel,
     handleDelete,
-    handleDeleteConfirm,
   } = useRbacRuleEditor();
+  const restoreMutation = useMutation({
+    mutationFn: () => lifecycleApi.restoreEntity('rbac_rule', id!),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: qk.rbac.all() });
+      queryClient.invalidateQueries({ queryKey: qk.rbac.detail(id!) });
+      showSuccess('RBAC правило восстановлено');
+    },
+    onError: (err: Error) => showError(err.message),
+  });
 
   const { data: resourceRules = [] } = useQuery({
     queryKey: qk.rbac.enrichedRules({ resource_type: resourceType, resource_id: resourceId ?? undefined }),
@@ -230,7 +243,7 @@ export function RbacRulePage() {
     : '';
 
   const { data: agents = [] } = useQuery({
-    queryKey: qk.agents.list({ limit: 1000 }),
+    queryKey: qk.agents.list(),
     queryFn: () => agentsApi.list({ limit: 1000 }),
     enabled: mode === 'edit',
     staleTime: 30_000,
@@ -281,6 +294,11 @@ export function RbacRulePage() {
         actionButtons={
           mode === 'view' ? (
             <div style={{ display: 'flex', gap: 8 }}>
+              {rule?.lifecycle_status === 'deprecated' && (
+                <Button variant="outline" onClick={() => restoreMutation.mutate()} disabled={restoreMutation.isPending}>
+                  Восстановить
+                </Button>
+              )}
               <Button variant="outline" onClick={handleEdit}>Редактировать</Button>
               <Button variant="danger" onClick={handleDelete}>Удалить</Button>
             </div>
@@ -415,12 +433,16 @@ export function RbacRulePage() {
         </Tab>
       </EntityPageV2>
 
-      <ConfirmDialog
+      <LifecycleDeleteDialog
         open={showDeleteConfirm}
-        title="Удалить RBAC правило?"
-        message="Это действие необратимо. Правило будет удалено навсегда."
-        onConfirm={handleDeleteConfirm}
+        kind="rbac_rule"
+        entityId={id || ''}
+        entityLabel="RBAC правило"
         onCancel={() => setShowDeleteConfirm(false)}
+        onSuccess={() => {
+          setShowDeleteConfirm(false);
+          handleCancel();
+        }}
       />
     </>
   );

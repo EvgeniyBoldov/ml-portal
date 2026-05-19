@@ -8,6 +8,8 @@ from app.repositories.tenants_repo import AsyncTenantsRepository
 from app.repositories.model_registry_repo import AsyncModelRegistryRepository
 from app.models.model_registry import ModelType, ModelStatus
 from app.core.logging import get_logger
+from app.services.rbac_cleanup_service import RbacCleanupService
+from app.services.tenant_migration_service import TenantMigrationService
 import uuid
 
 logger = get_logger(__name__)
@@ -70,7 +72,10 @@ class AsyncTenantsService:
     async def update_tenant(self, tenant_id: str, update_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Update tenant"""
         existing = await self.repo.get_by_id(uuid.UUID(tenant_id))
+        if not existing:
+            return None
         prev_alias = getattr(existing, "embedding_model_alias", None) if existing else None
+        default_flag = update_data.pop("is_default", None)
 
         # Map extra_embed_model to embedding_model_alias for backward compatibility
         if "extra_embed_model" in update_data:
@@ -80,9 +85,17 @@ class AsyncTenantsService:
         if "embedding_model_alias" in update_data:
             await self.validate_tenant_models(update_data.get("embedding_model_alias"))
         
-        tenant = await self.repo.update(uuid.UUID(tenant_id), **update_data)
+        tenant_uuid = uuid.UUID(tenant_id)
+        tenant = await self.repo.update(tenant_uuid, **update_data)
         if not tenant:
             return None
+
+        if default_flag is True:
+            updated_default = await self.repo.set_platform_default(tenant_uuid)
+            if updated_default:
+                tenant = updated_default
+        elif default_flag is False and bool(getattr(existing, "is_platform_default", False)):
+            raise ValueError("cannot_unset_default_tenant_directly")
 
         new_alias = getattr(tenant, "embedding_model_alias", None)
         if prev_alias != new_alias:
@@ -91,8 +104,28 @@ class AsyncTenantsService:
         return await self._build_tenant_response(tenant)
     
     async def delete_tenant(self, tenant_id: str) -> bool:
-        """Delete tenant"""
-        return await self.repo.delete(uuid.UUID(tenant_id))
+        """Delete tenant with migration to platform-default tenant."""
+        tenant_uuid = uuid.UUID(tenant_id)
+        tenant = await self.repo.get_by_id(tenant_uuid)
+        if not tenant:
+            # Backward-compat for older paths/tests that relied on direct repository deletion.
+            return await self.repo.delete(tenant_uuid)
+        if getattr(tenant, "is_platform_default", False):
+            raise ValueError("cannot_delete_default_tenant")
+
+        default_tenant = await self.repo.get_platform_default()
+        if not default_tenant:
+            raise ValueError("platform_default_tenant_not_found")
+
+        migration = TenantMigrationService(self.session)
+        await migration.migrate_tenant_data(
+            from_tenant_id=tenant_uuid,
+            to_tenant_id=default_tenant.id,
+        )
+
+        rbac_cleanup = RbacCleanupService(self.session)
+        await rbac_cleanup.remove_rules_for_owner(owner_tenant_id=tenant_uuid)
+        return await self.repo.delete(tenant_uuid)
     
     async def validate_tenant_models(self, embedding_model_alias: Optional[str]) -> None:
         """Validate tenant's extra embedding model"""
@@ -181,6 +214,10 @@ class AsyncTenantsService:
             "name": tenant.name,
             "description": tenant.description,
             "is_active": tenant.is_active,
+            "is_default": bool(getattr(tenant, "is_platform_default", False)),
+            "lifecycle_status": getattr(tenant, "lifecycle_status", "active"),
+            "deprecated_at": getattr(tenant, "deprecated_at", None),
+            "retention_days": getattr(tenant, "retention_days", 14),
             "embed_models": embed_models,
             "embed_models_info": embed_models_info,
             "rerank_model": rerank_model,

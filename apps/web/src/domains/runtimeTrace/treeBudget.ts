@@ -15,7 +15,7 @@ const METRICS: BudgetMetric[] = [
 
 function toLegacyMetric(used: number, limit?: number): { used: number; limit?: number } {
   if (limit === undefined) return { used };
-  return { used, limit, remaining: limit - used };
+  return { used, limit };
 }
 
 function toLegacySnapshot(used: EntityUsed, limits: Record<string, number> = {}): BudgetSnapshot {
