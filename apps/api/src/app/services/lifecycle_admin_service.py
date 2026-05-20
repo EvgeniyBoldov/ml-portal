@@ -63,18 +63,82 @@ class LifecycleAdminService:
     def __init__(self, session: AsyncSession):
         self.session = session
 
-    async def get_dependencies(self, kind: LifecycleKind, entity_id: uuid.UUID) -> list[dict[str, Any]]:
+    async def get_dependencies(
+        self,
+        kind: LifecycleKind,
+        entity_id: uuid.UUID,
+        *,
+        cascade: bool = False,
+        full_entities: bool = False,
+    ) -> list[dict[str, Any]]:
+        direct = await self._get_direct_dependencies(kind, entity_id, full_entities=full_entities)
+        if not cascade:
+            return direct
+
+        visited: set[tuple[str, str]] = {(kind, str(entity_id))}
+        expanded = await self._expand_cascade_dependencies(direct, visited=visited, full_entities=full_entities)
+        return direct + expanded
+
+    async def _get_direct_dependencies(self, kind: LifecycleKind, entity_id: uuid.UUID, *, full_entities: bool = False) -> list[dict[str, Any]]:
         if kind == "tenant":
-            return await self._tenant_dependencies(entity_id)
+            return await self._tenant_dependencies(entity_id, full_entities=full_entities)
         if kind == "user":
-            return await self._user_dependencies(entity_id)
+            return await self._user_dependencies(entity_id, full_entities=full_entities)
         if kind == "collection":
-            return await self._collection_dependencies(entity_id)
+            return await self._collection_dependencies(entity_id, full_entities=full_entities)
         if kind == "agent":
-            return await self._agent_dependencies(entity_id)
+            return await self._agent_dependencies(entity_id, full_entities=full_entities)
         if kind == "rbac_rule":
             return []
         raise ValueError(f"Unsupported lifecycle kind: {kind}")
+
+    async def _expand_cascade_dependencies(
+        self,
+        direct: list[dict[str, Any]],
+        *,
+        visited: set[tuple[str, str]],
+        full_entities: bool = False,
+    ) -> list[dict[str, Any]]:
+        expanded: list[dict[str, Any]] = []
+        resource_kind_map: dict[str, LifecycleKind] = {
+            "users": "user",
+            "collections": "collection",
+            "agents": "agent",
+            "rbac_rules": "rbac_rule",
+        }
+
+        for dep in direct:
+            resource_type = str(dep.get("resource_type") or "")
+            child_kind = resource_kind_map.get(resource_type)
+            if child_kind is None:
+                continue
+            entities = dep.get("entities") or []
+            for entity in entities:
+                entity_id = str(entity.get("uuid") or "")
+                if not entity_id:
+                    continue
+                key = (child_kind, entity_id)
+                if key in visited:
+                    continue
+                visited.add(key)
+                try:
+                    child_uuid = uuid.UUID(entity_id)
+                except ValueError:
+                    continue
+                child_direct = await self._get_direct_dependencies(child_kind, child_uuid, full_entities=full_entities)
+                for child_dep in child_direct:
+                    details = dict(child_dep.get("details") or {})
+                    details["cascade_parent"] = {
+                        "kind": child_kind,
+                        "id": entity_id,
+                        "name": entity.get("name"),
+                        "resource_type": resource_type,
+                    }
+                    child_dep["details"] = details
+                    expanded.append(child_dep)
+                nested = await self._expand_cascade_dependencies(child_direct, visited=visited, full_entities=full_entities)
+                expanded.extend(nested)
+        return expanded
 
     async def soft_delete(
         self,
@@ -84,6 +148,7 @@ class LifecycleAdminService:
         actor_id: uuid.UUID | None,
         reason: str | None,
         retention_days: int | None,
+        cascade: bool = False,
     ) -> LifecycleReport:
         entity = await self._get_entity(kind, entity_id)
         if entity is None:
@@ -140,7 +205,7 @@ class LifecycleAdminService:
             renamed=[],
         )
 
-    async def hard_delete(self, kind: LifecycleKind, entity_id: uuid.UUID) -> LifecycleReport:
+    async def hard_delete(self, kind: LifecycleKind, entity_id: uuid.UUID, *, cascade: bool = False) -> LifecycleReport:
         if kind == "tenant":
             entity = await self.session.get(Tenants, entity_id)
             if entity is None:
@@ -151,11 +216,51 @@ class LifecycleAdminService:
             default_tenant = await tenant_repo.get_platform_default()
             if not default_tenant:
                 raise ValueError("platform_default_tenant_not_found")
-            migration = TenantMigrationService(self.session)
-            migration_report = await migration.migrate_tenant_data(
-                from_tenant_id=entity_id,
-                to_tenant_id=default_tenant.id,
-            )
+
+            cascaded_counts: dict[str, int] = {}
+            migrated_counts: dict[str, int] = {}
+            renamed_collections: list[tuple[str, str]] = []
+
+            if cascade:
+                # Cascade delete: delete all users and their dependencies
+                user_ids_result = await self.session.execute(
+                    select(Users.id).join(UserTenants, UserTenants.user_id == Users.id)
+                    .where(UserTenants.tenant_id == entity_id)
+                )
+                user_ids = [r for r in user_ids_result.scalars()]
+                for user_id in user_ids:
+                    try:
+                        user_report = await self.hard_delete("user", user_id, cascade=True)
+                        for resource, count in (user_report.cascaded or {}).items():
+                            cascaded_counts[resource] = cascaded_counts.get(resource, 0) + count
+                        cascaded_counts["users"] = cascaded_counts.get("users", 0) + 1
+                    except ValueError:
+                        # Skip users that can't be deleted (e.g., last admin)
+                        pass
+
+                # Delete collections directly (no migration)
+                collection_ids_result = await self.session.execute(
+                    select(Collection.id).where(Collection.tenant_id == entity_id)
+                )
+                collection_ids = [r for r in collection_ids_result.scalars()]
+                collection_service = CollectionService(self.session)
+                for coll_id in collection_ids:
+                    try:
+                        await collection_service.delete_collection(coll_id)
+                        cascaded_counts["collections"] = cascaded_counts.get("collections", 0) + 1
+                    except Exception:
+                        pass
+            else:
+                # Non-cascade: migrate data to default tenant
+                migration = TenantMigrationService(self.session)
+                migration_report = await migration.migrate_tenant_data(
+                    from_tenant_id=entity_id,
+                    to_tenant_id=default_tenant.id,
+                )
+                migrated_counts = dict(migration_report.migrated or {})
+                renamed_collections = migration_report.renamed_collections or []
+
+            # Always delete sandbox sessions and RBAC rules for the tenant
             sandbox_ids = await self._sample_ids(
                 select(SandboxSession.id).where(SandboxSession.tenant_id == entity_id),
                 limit=10000,
@@ -165,24 +270,31 @@ class LifecycleAdminService:
             for sandbox_id in sandbox_ids:
                 if await sandbox_service.delete_session(uuid.UUID(sandbox_id)):
                     sandbox_deleted += 1
+            if sandbox_deleted > 0:
+                cascaded_counts["sandbox_sessions"] = cascaded_counts.get("sandbox_sessions", 0) + sandbox_deleted
+
             rbac_cleanup = RbacCleanupService(self.session)
             removed_rules = await rbac_cleanup.remove_rules_for_owner(owner_tenant_id=entity_id)
+
+            # Delete tenant bindings
+            await self.session.execute(
+                UserTenants.__table__.delete().where(UserTenants.tenant_id == entity_id)
+            )
+
             await self.session.delete(entity)
             await self.session.flush()
+
             return LifecycleReport(
                 kind=kind,
                 entity_id=str(entity_id),
                 mode="hard",
                 lifecycle_status="deleted",
-                details={"migrated_to_tenant_id": str(default_tenant.id)},
-                migrated=dict(migration_report.migrated or {}),
-                cascaded={"sandbox_sessions": sandbox_deleted},
+                details={} if cascade else {"migrated_to_tenant_id": str(default_tenant.id)},
+                migrated=migrated_counts,
+                cascaded=cascaded_counts,
                 set_null={},
                 rbac_rules_removed=removed_rules,
-                renamed=[
-                    {"old": old, "new": new}
-                    for (old, new) in (migration_report.renamed_collections or [])
-                ],
+                renamed=[{"old": old, "new": new} for (old, new) in renamed_collections],
             )
 
         if kind == "user":
@@ -305,22 +417,27 @@ class LifecycleAdminService:
             return None
         return await self.session.get(model, entity_id)
 
-    async def _tenant_dependencies(self, tenant_id: uuid.UUID) -> list[dict[str, Any]]:
+    async def _tenant_dependencies(self, tenant_id: uuid.UUID, *, full_entities: bool = False) -> list[dict[str, Any]]:
+        limit = None if full_entities else 5
         user_entities = await self._sample_entities(
             select(Users.id, Users.login).join(UserTenants, UserTenants.user_id == Users.id).where(UserTenants.tenant_id == tenant_id),
             resource_type="users",
+            limit=limit,
         )
         collection_entities = await self._sample_entities(
             select(Collection.id, Collection.name).where(Collection.tenant_id == tenant_id),
             resource_type="collections",
+            limit=limit,
         )
         sandbox_entities = await self._sample_entities(
             select(SandboxSession.id, SandboxSession.name).where(SandboxSession.tenant_id == tenant_id),
             resource_type="sandbox_sessions",
+            limit=limit,
         )
         rbac_entities = await self._sample_entities(
             select(RbacRule.id, RbacRule.resource_type).where(RbacRule.owner_tenant_id == tenant_id),
             resource_type="rbac_rules",
+            limit=limit,
         )
         counts = {
             "users": await self._count(select(func.count()).select_from(UserTenants).where(UserTenants.tenant_id == tenant_id)),
@@ -335,7 +452,7 @@ class LifecycleAdminService:
                     counts["users"],
                     "migrate_to_default_tenant",
                     will_be="migrated",
-                    entities=user_entities[:5],
+                    entities=user_entities,
                     migration_target="platform_default_tenant",
                 )
             ),
@@ -345,7 +462,7 @@ class LifecycleAdminService:
                     counts["collections"],
                     "migrate_to_default_tenant",
                     will_be="migrated",
-                    entities=collection_entities[:5],
+                    entities=collection_entities,
                     migration_target="platform_default_tenant",
                 )
             ),
@@ -364,7 +481,7 @@ class LifecycleAdminService:
                     counts["sandbox_sessions"],
                     "cascade",
                     will_be="cascade_deleted",
-                    entities=sandbox_entities[:5],
+                    entities=sandbox_entities,
                 )
             ),
             asdict(
@@ -373,27 +490,32 @@ class LifecycleAdminService:
                     counts["rbac_rules"],
                     "cascade",
                     will_be="cascade_deleted",
-                    entities=rbac_entities[:5],
+                    entities=rbac_entities,
                 )
             ),
         ]
 
-    async def _user_dependencies(self, user_id: uuid.UUID) -> list[dict[str, Any]]:
+    async def _user_dependencies(self, user_id: uuid.UUID, *, full_entities: bool = False) -> list[dict[str, Any]]:
+        limit = None if full_entities else 5
         tenant_binding_entities = await self._sample_entities(
             select(Tenants.id, Tenants.name).join(UserTenants, UserTenants.tenant_id == Tenants.id).where(UserTenants.user_id == user_id),
             resource_type="tenants",
+            limit=limit,
         )
         chat_entities = await self._sample_entities(
             select(Chats.id, Chats.name).where(Chats.owner_id == user_id),
             resource_type="chats",
+            limit=limit,
         )
         sandbox_entities = await self._sample_entities(
             select(SandboxSession.id, SandboxSession.name).where(SandboxSession.owner_id == user_id),
             resource_type="sandbox_sessions",
+            limit=limit,
         )
         rbac_entities = await self._sample_entities(
             select(RbacRule.id, RbacRule.resource_type).where(RbacRule.owner_user_id == user_id),
             resource_type="rbac_rules",
+            limit=limit,
         )
         is_last_admin = await self._is_last_active_admin(user_id)
         blocker_entry = []
@@ -416,7 +538,7 @@ class LifecycleAdminService:
                     await self._count(select(func.count()).select_from(UserTenants).where(UserTenants.user_id == user_id)),
                     "cascade",
                     will_be="cascade_deleted",
-                    entities=tenant_binding_entities[:5],
+                    entities=tenant_binding_entities,
                 )
             ),
             asdict(
@@ -425,7 +547,7 @@ class LifecycleAdminService:
                     await self._count(select(func.count()).select_from(Chats).where(Chats.owner_id == user_id)),
                     "cascade",
                     will_be="cascade_deleted",
-                    entities=chat_entities[:5],
+                    entities=chat_entities,
                 )
             ),
             asdict(
@@ -434,7 +556,7 @@ class LifecycleAdminService:
                     await self._count(select(func.count()).select_from(SandboxSession).where(SandboxSession.owner_id == user_id)),
                     "cascade",
                     will_be="cascade_deleted",
-                    entities=sandbox_entities[:5],
+                    entities=sandbox_entities,
                 )
             ),
             asdict(
@@ -443,13 +565,14 @@ class LifecycleAdminService:
                     await self._count(select(func.count()).select_from(RbacRule).where(RbacRule.owner_user_id == user_id)),
                     "cascade",
                     will_be="cascade_deleted",
-                    entities=rbac_entities[:5],
+                    entities=rbac_entities,
                 )
             ),
             *blocker_entry,
         ]
 
-    async def _collection_dependencies(self, collection_id: uuid.UUID) -> list[dict[str, Any]]:
+    async def _collection_dependencies(self, collection_id: uuid.UUID, *, full_entities: bool = False) -> list[dict[str, Any]]:
+        limit = None if full_entities else 5
         rule_count = await self._count(
             select(func.count()).select_from(RbacRule).where(
                 RbacRule.resource_type == "instance",
@@ -462,6 +585,7 @@ class LifecycleAdminService:
                 RbacRule.resource_id == collection_id,
             ),
             resource_type="rbac_rules",
+            limit=limit,
         )
         return [
             asdict(
@@ -470,18 +594,20 @@ class LifecycleAdminService:
                     rule_count,
                     "cascade",
                     will_be="cascade_deleted",
-                    entities=rule_entities[:5],
+                    entities=rule_entities,
                 )
             )
         ]
 
-    async def _agent_dependencies(self, agent_id: uuid.UUID) -> list[dict[str, Any]]:
+    async def _agent_dependencies(self, agent_id: uuid.UUID, *, full_entities: bool = False) -> list[dict[str, Any]]:
+        limit = None if full_entities else 5
         rule_count = await self._count(
             select(func.count()).select_from(RbacRule).where(RbacRule.resource_type == "agent", RbacRule.resource_id == agent_id)
         )
         rule_entities = await self._sample_entities(
             select(RbacRule.id, RbacRule.resource_type).where(RbacRule.resource_type == "agent", RbacRule.resource_id == agent_id),
             resource_type="rbac_rules",
+            limit=limit,
         )
         return [
             asdict(
@@ -490,7 +616,7 @@ class LifecycleAdminService:
                     rule_count,
                     "cascade",
                     will_be="cascade_deleted",
-                    entities=rule_entities[:5],
+                    entities=rule_entities,
                 )
             )
         ]
@@ -502,8 +628,10 @@ class LifecycleAdminService:
         rows = (await self.session.execute(query.limit(limit))).scalars().all()
         return [str(row) for row in rows]
 
-    async def _sample_entities(self, query, *, resource_type: str, limit: int = 5) -> list[DependencyEntry.DependencyEntity]:
-        rows = (await self.session.execute(query.limit(limit))).all()
+    async def _sample_entities(self, query, *, resource_type: str, limit: int | None = 5) -> list[DependencyEntry.DependencyEntity]:
+        if limit is not None:
+            query = query.limit(limit)
+        rows = (await self.session.execute(query)).all()
         items: list[DependencyEntry.DependencyEntity] = []
         for row in rows:
             row_uuid = str(row[0])

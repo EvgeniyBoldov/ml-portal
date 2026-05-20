@@ -45,8 +45,14 @@ export interface LifecycleReportResponse {
 }
 
 export const lifecycleApi = {
-  async getDependencies(kind: LifecycleKind, entityId: string): Promise<DependencyGraphResponse> {
-    return apiRequest(`/admin/lifecycle/${kind}/${entityId}/dependencies`);
+  async getDependencies(
+    kind: LifecycleKind,
+    entityId: string,
+    params?: { cascade?: boolean; fullEntities?: boolean },
+  ): Promise<DependencyGraphResponse> {
+    const cascade = Boolean(params?.cascade);
+    const fullEntities = Boolean(params?.fullEntities);
+    return apiRequest(`/admin/lifecycle/${kind}/${entityId}/dependencies?cascade=${cascade}&full_entities=${fullEntities}`);
   },
 
   async deleteEntity(
@@ -55,13 +61,15 @@ export const lifecycleApi = {
     params: {
       mode: LifecycleMode;
       force?: boolean;
+      cascade?: boolean;
       reason?: string;
       retention_days?: number;
     },
   ): Promise<LifecycleReportResponse> {
     const mode = params.mode;
     const force = Boolean(params.force);
-    return apiRequest(`/admin/lifecycle/${kind}/${entityId}?mode=${mode}&force=${force}`, {
+    const cascade = Boolean(params.cascade);
+    return apiRequest(`/admin/lifecycle/${kind}/${entityId}?mode=${mode}&force=${force}&cascade=${cascade}`, {
       method: 'DELETE',
       body:
         mode === 'soft'
@@ -79,4 +87,3 @@ export const lifecycleApi = {
     });
   },
 };
-

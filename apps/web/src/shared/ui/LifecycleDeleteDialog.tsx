@@ -59,6 +59,70 @@ function groupAckLabel(groupType: string): string {
   return 'Подтверждаю';
 }
 
+type TreeNode = {
+  id: string;
+  title: string;
+  count?: number;
+  entities?: DependencyEntity[];
+  children?: TreeNode[];
+};
+
+function AccordionTree({ nodes, level = 0 }: { nodes: TreeNode[]; level?: number }) {
+  if (!nodes.length) return null;
+  return (
+    <>
+      {nodes.map((node) => {
+        const hasChildren = Boolean((node.children && node.children.length) || (node.entities && node.entities.length));
+        if (!hasChildren) return null;
+        return (
+          <details key={node.id} className={level === 0 ? styles.accordion : styles.nestedAccordion}>
+            <summary className={level === 0 ? styles.accordionSummary : styles.nestedAccordionSummary}>
+              <span>{node.title}</span>
+              <span>{node.count ?? (node.entities?.length || node.children?.length || 0)}</span>
+            </summary>
+            <div className={styles.entityList}>
+              {node.entities?.map((entity) => (
+                <a
+                  key={entity.uuid}
+                  className={styles.entityLink}
+                  href={entity.url || '#'}
+                  onClick={(e) => {
+                    if (!entity.url) e.preventDefault();
+                  }}
+                  title={entity.uuid}
+                >
+                  {entity.name}
+                </a>
+              ))}
+              {node.children && <AccordionTree nodes={node.children} level={level + 1} />}
+            </div>
+          </details>
+        );
+      })}
+    </>
+  );
+}
+
+function buildGroupTree(entries: DependencyEntry[]): TreeNode[] {
+  const byResource = new Map<string, { count: number; entities: DependencyEntity[] }>();
+  for (const entry of entries) {
+    // Skip technical join tables
+    if (entry.resource_type === 'tenant_bindings') continue;
+    const curr = byResource.get(entry.resource_type) ?? { count: 0, entities: [] };
+    curr.count += entry.count || 0;
+    curr.entities.push(...(entry.entities ?? []));
+    byResource.set(entry.resource_type, curr);
+  }
+  return Array.from(byResource.entries())
+    .filter(([, data]) => data.count > 0)
+    .map(([resourceType, data]) => ({
+      id: `resource-${resourceType}`,
+      title: resourceLabel(resourceType),
+      count: data.count,
+      entities: data.entities,
+    }));
+}
+
 export default function LifecycleDeleteDialog({
   open,
   kind,
@@ -68,11 +132,10 @@ export default function LifecycleDeleteDialog({
   onCancel,
   onSuccess,
 }: Props) {
-  const [mode, setMode] = useState<'soft' | 'hard'>('soft');
-  const [reason, setReason] = useState('');
+  const [deleteNow, setDeleteNow] = useState(false);
   const [retentionDays, setRetentionDays] = useState<number>(14);
   const [deps, setDeps] = useState<DependencyEntry[]>([]);
-  const [cascadeMode, setCascadeMode] = useState(false);
+  const [deleteDependents, setDeleteDependents] = useState(false);
   const [loadingDeps, setLoadingDeps] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -82,14 +145,16 @@ export default function LifecycleDeleteDialog({
     if (!open) return;
     setError('');
     setAck({});
+    setDeleteNow(false);
+    setDeleteDependents(false);
   }, [open]);
 
   useEffect(() => {
-    if (!open || mode !== 'hard') return;
+    if (!open) return;
     let cancelled = false;
     setLoadingDeps(true);
     lifecycleApi
-      .getDependencies(kind, entityId)
+      .getDependencies(kind, entityId, { cascade: deleteDependents, fullEntities: true })
       .then((res) => {
         if (!cancelled) setDeps(res.dependencies || []);
       })
@@ -102,35 +167,31 @@ export default function LifecycleDeleteDialog({
     return () => {
       cancelled = true;
     };
-  }, [open, mode, kind, entityId]);
-
-  const groupedDeps = useMemo(() => {
-    const byType = new Map<DependencyEntry['will_be'], DependencyEntry[]>();
-    for (const item of deps) {
-      const arr = byType.get(item.will_be) ?? [];
-      arr.push(item);
-      byType.set(item.will_be, arr);
-    }
-    return byType;
-  }, [deps]);
-
-  const visibleGroups = useMemo(() => {
-    return GROUP_ORDER
-      .map((groupType) => {
-        const entries = groupedDeps.get(groupType) ?? [];
-        const total = entries.reduce((acc, i) => acc + Number(i.count || 0), 0);
-        return { groupType, entries, total };
-      })
-      .filter((g) => g.entries.length > 0 && g.total > 0);
-  }, [groupedDeps]);
+  }, [open, kind, entityId, deleteDependents]);
 
   const renderGroups = useMemo(() => {
-    if (!cascadeMode) return visibleGroups;
-    const allEntries = visibleGroups.flatMap((g) => g.entries);
-    const total = visibleGroups.reduce((acc, g) => acc + g.total, 0);
-    if (!allEntries.length || total <= 0) return [];
-    return [{ groupType: 'cascade_deleted' as const, entries: allEntries, total }];
-  }, [cascadeMode, visibleGroups]);
+    // Filter out technical join tables that shouldn't be shown in UI
+    const visibleDeps = deps.filter((d) => d.resource_type !== 'tenant_bindings');
+    const byType = new Map<DependencyEntry['will_be'], DependencyEntry[]>();
+    visibleDeps.forEach((item) => {
+      // Skip technical join tables from processing
+      if (item.resource_type === 'tenant_bindings') return;
+      const isDirect = !item.details?.cascade_parent;
+      const targetType = deleteDependents && isDirect ? 'cascade_deleted' : item.will_be;
+      const arr = byType.get(targetType) ?? [];
+      arr.push(item);
+      byType.set(targetType, arr);
+    });
+    return GROUP_ORDER
+      .map((groupType) => {
+        const entries = byType.get(groupType) ?? [];
+        // Filter out any remaining tenant_bindings just in case
+        const filteredEntries = entries.filter((e) => e.resource_type !== 'tenant_bindings');
+        const total = filteredEntries.reduce((acc, i) => acc + Number(i.count || 0), 0);
+        return { groupType, entries: filteredEntries, total };
+      })
+      .filter((g) => g.entries.length > 0 && g.total > 0);
+  }, [deps, deleteDependents]);
 
   const requiresAckKeys = useMemo(() => {
     return renderGroups
@@ -139,25 +200,25 @@ export default function LifecycleDeleteDialog({
   }, [renderGroups]);
 
   const hasBlockers = useMemo(
-    () => visibleGroups.some((g) => g.groupType === 'blocker' && g.total > 0),
-    [visibleGroups],
+    () => renderGroups.some((g) => g.groupType === 'blocker' && g.total > 0),
+    [renderGroups],
   );
 
   const hasAllAcks = useMemo(() => requiresAckKeys.every((k) => ack[k] === true), [requiresAckKeys, ack]);
 
-  const confirmLabel = mode === 'soft' ? 'Пометить на удаление' : 'Удалить сейчас';
-  const isDeleteDisabled = isPlatformDefault || saving || (mode === 'hard' && (hasBlockers || !hasAllAcks));
-  const dialogSize: 'md' | 'half' | 'lg' | 'xl' = mode === 'hard' ? 'lg' : 'md';
+  const confirmLabel = deleteNow ? 'Удалить сейчас' : 'Пометить на удаление';
+  const isDeleteDisabled = isPlatformDefault || saving || (deleteNow && (hasBlockers || !hasAllAcks));
+  const dialogSize: 'md' | 'half' | 'lg' | 'xl' = 'lg';
 
   const handleConfirm = async () => {
     setSaving(true);
     setError('');
     try {
       const report = await lifecycleApi.deleteEntity(kind, entityId, {
-        mode,
-        force: mode === 'hard',
-        reason: mode === 'soft' ? reason : undefined,
-        retention_days: mode === 'soft' ? retentionDays : undefined,
+        mode: deleteNow ? 'hard' : 'soft',
+        force: deleteNow,
+        cascade: deleteDependents,
+        retention_days: !deleteNow ? retentionDays : undefined,
       });
       onSuccess(report);
     } catch (e) {
@@ -188,40 +249,15 @@ export default function LifecycleDeleteDialog({
       <div className={styles.stack}>
         <div className={styles.section}>
           <div className={styles.sectionTitle}>Режим удаления</div>
-          <div className={styles.modeRow}>
-            <button
-              className={`${styles.modeBtn} ${mode === 'soft' ? styles.modeBtnActive : ''}`}
-              type="button"
-              onClick={() => setMode('soft')}
-            >
-              Пометить на удаление
-            </button>
-            <button
-              className={`${styles.modeBtn} ${mode === 'hard' ? styles.modeBtnActive : ''}`}
-              type="button"
-              onClick={() => setMode('hard')}
-            >
-              Удалить сейчас
-            </button>
-          </div>
-        </div>
-
-        {isPlatformDefault && (
-          <div className={styles.warningBox}>Нельзя удалить платформенный тенант по умолчанию</div>
-        )}
-
-        {mode === 'soft' ? (
-          <div className={styles.section}>
-            <div className={styles.sectionTitle}>Параметры пометки на удаление</div>
-            <label className={styles.fieldRow}>
-              <span className={styles.label}>Причина</span>
-              <textarea
-                className={styles.textarea}
-                value={reason}
-                onChange={(e) => setReason(e.target.value)}
-                placeholder="Коротко: зачем помечаем на удаление"
-              />
-            </label>
+          <label className={styles.modeCheckbox}>
+            <input
+              type="checkbox"
+              checked={deleteNow}
+              onChange={(e) => setDeleteNow(e.target.checked)}
+            />
+            <span>Удалить сейчас</span>
+          </label>
+          {!deleteNow && (
             <label className={`${styles.fieldRow} ${styles.fieldRowInline}`}>
               <span className={styles.label}>Срок хранения (дней)</span>
               <input
@@ -234,31 +270,31 @@ export default function LifecycleDeleteDialog({
               />
               <span className={styles.hint}>Через сколько дней GC удалит запись окончательно</span>
             </label>
+          )}
+          <label className={styles.modeCheckbox}>
+            <input
+              type="checkbox"
+              checked={deleteDependents}
+              onChange={(e) => setDeleteDependents(e.target.checked)}
+            />
+            <span>Удалить зависимые</span>
+          </label>
+        </div>
+
+        {isPlatformDefault && (
+          <div className={styles.warningBox}>Нельзя удалить платформенный тенант по умолчанию</div>
+        )}
+
+        <div className={`${styles.section} ${styles.depsSection}`}>
+          <div className={styles.hardHeaderRow}>
+            <div className={styles.sectionTitle}>Последствия удаления сейчас</div>
           </div>
-        ) : (
-          <div className={`${styles.section} ${styles.depsSection}`}>
-            <div className={styles.hardHeaderRow}>
-              <div className={styles.sectionTitle}>Последствия удаления сейчас</div>
-              <label className={styles.cascadeToggle}>
-                <input
-                  type="checkbox"
-                  checked={cascadeMode}
-                  onChange={(e) => setCascadeMode(e.target.checked)}
-                />
-                <span>Каскадное удаление</span>
-              </label>
-            </div>
-            {loadingDeps && <div className={styles.depMeta}>Загрузка зависимостей...</div>}
-            {!loadingDeps && visibleGroups.length === 0 && <div className={styles.depMeta}>Зависимости не найдены</div>}
-            {!loadingDeps && visibleGroups.length > 0 && (
-              <div className={styles.groupsRow}>
-                {renderGroups.map(({ groupType, entries, total }) => {
-                  const byResource = new Map<string, DependencyEntity[]>();
-                  entries.forEach((entry) => {
-                    const curr = byResource.get(entry.resource_type) ?? [];
-                    curr.push(...(entry.entities ?? []));
-                    byResource.set(entry.resource_type, curr);
-                  });
+          {loadingDeps && <div className={styles.depMeta}>Загрузка зависимостей...</div>}
+          {!loadingDeps && renderGroups.length === 0 && <div className={styles.depMeta}>Зависимости не найдены</div>}
+          {!loadingDeps && renderGroups.length > 0 && (
+            <div className={styles.groupsRow}>
+              {renderGroups.map(({ groupType, entries, total }) => {
+                  const tree = buildGroupTree(entries);
 
                   return (
                     <div key={groupType} className={styles.groupWrap}>
@@ -268,29 +304,7 @@ export default function LifecycleDeleteDialog({
                           <strong className={styles.groupTotal}>{total}</strong>
                         </div>
                         <div className={styles.groupBody}>
-                          {Array.from(byResource.entries()).map(([resourceType, entities]) => (
-                            <details key={`${groupType}-${resourceType}`} className={styles.accordion} open>
-                              <summary className={styles.accordionSummary}>
-                                <span>{resourceLabel(resourceType)}</span>
-                                <span>{entities.length}</span>
-                              </summary>
-                              <div className={styles.entityList}>
-                                {entities.map((entity) => (
-                                  <a
-                                    key={entity.uuid}
-                                    className={styles.entityLink}
-                                    href={entity.url || '#'}
-                                    onClick={(e) => {
-                                      if (!entity.url) e.preventDefault();
-                                    }}
-                                    title={entity.uuid}
-                                  >
-                                    {entity.name}
-                                  </a>
-                                ))}
-                              </div>
-                            </details>
-                          ))}
+                          <AccordionTree nodes={tree} />
                         </div>
                       </div>
                       <label className={styles.groupAck}>
@@ -307,11 +321,10 @@ export default function LifecycleDeleteDialog({
                       </label>
                     </div>
                   );
-                })}
-              </div>
-            )}
-          </div>
-        )}
+              })}
+            </div>
+          )}
+        </div>
 
         {error && <div className={styles.error}>{error}</div>}
       </div>

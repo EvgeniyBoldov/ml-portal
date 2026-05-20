@@ -27,6 +27,19 @@
   gap: 10px;
 }
 
+.modeCheckbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.modeCheckbox input[type='checkbox'] {
+  width: 16px;
+  height: 16px;
+}
+
 .modeBtn {
   flex: 1 1 0;
   border: 1px solid var(--border);
@@ -110,6 +123,10 @@
   white-space: nowrap;
 }
 
+.depsSection .sectionTitle {
+  margin: 0;
+}
+
 .cascadeToggle input[type='checkbox'] {
   width: 16px;
   height: 16px;
@@ -124,9 +141,9 @@
   display: flex;
   flex-direction: row;
   flex-wrap: nowrap;
-  gap: 12px;
+  gap: 8px;
   overflow-x: auto;
-  padding-bottom: 4px;
+  padding-bottom: 2px;
 }
 
 .groupWrap {
@@ -134,17 +151,18 @@
   max-width: 300px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
 }
 
 .groupCard {
-  height: 320px;
+  height: 256px;
   border: 1px solid var(--border);
   border-left: 3px solid transparent;
   border-radius: var(--radius-md);
   background: var(--surface-soft);
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 .group_cascade_deleted {
@@ -199,15 +217,29 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 8px 10px 10px;
-  display: grid;
-  gap: 8px;
+  padding: 2px 4px 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.groupBody::-webkit-scrollbar {
+  width: 6px;
+}
+
+.groupBody::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.groupBody::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--text-secondary) 40%, transparent);
+  border-radius: 3px;
 }
 
 .accordion {
-  border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 
 .accordionSummary {
@@ -219,17 +251,73 @@
   cursor: pointer;
   font-size: 12px;
   font-weight: 600;
-  padding: 8px 10px;
+  padding: 4px 8px;
+  position: relative;
+  padding-left: 24px;
 }
 
 .accordionSummary::-webkit-details-marker {
   display: none;
 }
 
+.accordionSummary::before {
+  content: '▶';
+  position: absolute;
+  left: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+details[open] > .accordionSummary::before {
+  content: '▼';
+}
+
+.nestedAccordion {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.nestedAccordionSummary {
+  list-style: none;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 2px 8px;
+  position: relative;
+  padding-left: 22px;
+}
+
+.nestedAccordionSummary::-webkit-details-marker {
+  display: none;
+}
+
+.nestedAccordionSummary::before {
+  content: '▶';
+  position: absolute;
+  left: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+details[open] > .nestedAccordionSummary::before {
+  content: '▼';
+}
+
 .entityList {
   display: grid;
-  gap: 6px;
-  padding: 0 10px 10px;
+  gap: 2px;
+  padding: 0 8px 4px 28px;
 }
 
 .resourceGroup {
@@ -245,8 +333,8 @@
 
 .resourceEntities {
   display: grid;
-  gap: 5px;
-  padding-left: 8px;
+  gap: 4px;
+  padding-left: 20px;
 }
 
 .entityLink {
@@ -256,6 +344,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  padding-left: 6px;
 }
 
 .entityLink:hover {

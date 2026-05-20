@@ -25,12 +25,14 @@ class SoftDeleteBody(BaseModel):
 async def get_dependencies(
     kind: LifecycleKind,
     entity_id: uuid.UUID,
+    cascade: bool = Query(False),
+    full_entities: bool = Query(False, description="Return full entity list instead of sample"),
     session: AsyncSession = Depends(db_uow),
     _: UserCtx = Depends(require_admin),
 ):
     svc = LifecycleAdminService(session)
     try:
-        dependencies = await svc.get_dependencies(kind, entity_id)
+        dependencies = await svc.get_dependencies(kind, entity_id, cascade=cascade, full_entities=full_entities)
         return {"kind": kind, "entity_id": str(entity_id), "dependencies": dependencies}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -42,6 +44,7 @@ async def delete_entity(
     entity_id: uuid.UUID,
     mode: Literal["soft", "hard"] = Query(default="soft"),
     force: bool = Query(default=False),
+    cascade: bool = Query(default=False, description="Delete dependent entities recursively"),
     body: SoftDeleteBody | None = None,
     session: AsyncSession = Depends(db_uow),
     admin_user: UserCtx = Depends(require_admin),
@@ -55,6 +58,7 @@ async def delete_entity(
                 actor_id=uuid.UUID(str(admin_user.id)) if admin_user.id else None,
                 reason=(body.reason if body else None),
                 retention_days=(body.retention_days if body else None),
+                cascade=cascade,
             )
         else:
             deps = await svc.get_dependencies(kind, entity_id)
@@ -67,7 +71,7 @@ async def delete_entity(
                         "dependencies": blocking,
                     },
                 )
-            report = await svc.hard_delete(kind, entity_id)
+            report = await svc.hard_delete(kind, entity_id, cascade=cascade)
     except ValueError as exc:
         if str(exc) == "not_found":
             raise HTTPException(status_code=404, detail="not_found") from exc
