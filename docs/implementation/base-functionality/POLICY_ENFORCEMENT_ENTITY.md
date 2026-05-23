@@ -27,7 +27,8 @@ It consumes normalized metadata and produces a deterministic decision:
 
 Policy is not only text.
 Policy enforcement must use structured inputs:
-- platform gates/caps,
+- platform gates,
+- execution limits (unified model),
 - agent-level constraints,
 - operation safety metadata,
 - execution context state.

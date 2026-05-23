@@ -131,6 +131,7 @@ export { AIGenerateButton } from './AIGenerateButton';
 export { ResponseContractCard } from './ResponseContractCard';
 
 // Contract Components (new contract-aware role editor)
+export { ContractAwareEditor } from './ContractAwareEditor';
 export { ContractFieldsBlock } from './ContractFieldsBlock';
 export type { ContractFieldsBlockProps } from './ContractFieldsBlock';
 export { ContractCriteriaBlock } from './ContractCriteriaBlock';

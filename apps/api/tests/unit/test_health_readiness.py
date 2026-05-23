@@ -22,7 +22,7 @@ class TestHealthReadiness:
             (),
             {
                 "__init__": lambda self, session: None,
-                "get_default_agent_slug": AsyncMock(return_value="rag-search"),
+                "list_routable_agents_for_planner": AsyncMock(return_value=[{"slug": "viewer"}]),
             },
         )
 
@@ -80,7 +80,7 @@ class TestHealthReadiness:
             (),
             {
                 "__init__": lambda self, session: None,
-                "get_default_agent_slug": AsyncMock(return_value=None),
+                "list_routable_agents_for_planner": AsyncMock(return_value=[]),
             },
         )
 

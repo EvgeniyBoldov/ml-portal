@@ -1,4 +1,5 @@
 import { Badge, Button, Checkbox, Input, Select } from '@/shared/ui';
+import { ADMIN_ACTION_LABELS, ADMIN_ENTITY_LABELS } from '@/shared/constants/adminLabels';
 import type { CollectionField, CollectionType, SearchMode } from '@/shared/api';
 import { DOCUMENT_FULLY_LOCKED_FIELD_NAMES, SQL_SPECIFIC_FIELD_NAMES } from './collectionFieldPresets';
 
@@ -84,7 +85,7 @@ export function FieldsEditor({ fields, onChange, collectionType }: FieldsEditorP
         </div>
       ))}
       <div>
-        <Button variant="outline" size="sm" onClick={add}>+ Добавить поле</Button>
+        <Button variant="outline" size="sm" onClick={add}>{`${ADMIN_ACTION_LABELS.add} ${ADMIN_ENTITY_LABELS.field}`}</Button>
       </div>
     </div>
   );

@@ -42,8 +42,6 @@ class OrchestrationSettingsProvider:
         self._settings_cache = {
             "executor_model": settings.executor_model,
             "executor_temperature": settings.executor_temperature,
-            "executor_timeout_s": settings.executor_timeout_s,
-            "executor_max_steps": settings.executor_max_steps,
         }
         return self._settings_cache
 
@@ -65,9 +63,6 @@ class OrchestrationSettingsProvider:
         return {
             "executor_model": settings.get("executor_model"),
             "executor_temperature": settings.get("executor_temperature") if settings.get("executor_temperature") is not None else 0.7,
-            "executor_timeout_s": settings.get("executor_timeout_s") if settings.get("executor_timeout_s") is not None else 60,
-            "executor_max_steps": settings.get("executor_max_steps") if settings.get("executor_max_steps") is not None else 10,
-            "executor_max_retries": settings.get("executor_max_retries") if settings.get("executor_max_retries") is not None else 3,
         }
 
 

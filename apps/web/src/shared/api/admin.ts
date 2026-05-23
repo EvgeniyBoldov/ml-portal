@@ -24,9 +24,6 @@ export interface OrchestrationSettings {
   id: string;
   executor_model?: string | null;
   executor_temperature?: number | null;
-  executor_timeout_s?: number | null;
-  executor_max_steps?: number | null;
-  executor_max_retries?: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -35,9 +32,6 @@ export type ExecutorSettingsUpdate = Partial<Pick<
   OrchestrationSettings,
   | 'executor_model'
   | 'executor_temperature'
-  | 'executor_timeout_s'
-  | 'executor_max_steps'
-  | 'executor_max_retries'
 >>;
 
 // === SystemLLMRole Types ===
@@ -97,10 +91,6 @@ export interface SystemLLMRole {
   output_requirements?: string | null;
   model?: string | null;
   temperature?: number | null;
-  max_tokens?: number | null;
-  timeout_s?: number | null;
-  max_retries?: number | null;
-  retry_backoff?: RetryBackoffType | null;
   response_contract?: ResponseContract | null;
   is_active?: boolean | null;
   created_at: string;
@@ -116,10 +106,6 @@ export interface SystemLLMRoleCreate {
   output_requirements?: string | null;
   model?: string | null;
   temperature?: number | null;
-  max_tokens?: number | null;
-  timeout_s?: number | null;
-  max_retries?: number | null;
-  retry_backoff?: RetryBackoffType | null;
   is_active?: boolean | null;
 }
 
@@ -131,10 +117,6 @@ export interface SystemLLMRoleUpdate {
   output_requirements?: string | null;
   model?: string | null;
   temperature?: number | null;
-  max_tokens?: number | null;
-  timeout_s?: number | null;
-  max_retries?: number | null;
-  retry_backoff?: RetryBackoffType | null;
   is_active?: boolean | null;
 }
 
@@ -257,12 +239,20 @@ export interface Tenant {
   rerank_model?: string | null;
   ocr?: boolean;
   layout?: boolean;
-  default_agent_slug?: string;
   lifecycle_status?: string;
   deprecated_at?: string | null;
   retention_days?: number;
   created_at: string;
   updated_at: string;
+}
+
+export interface RagReindexBatchResponse {
+  scanned: number;
+  queued: number;
+  skipped: number;
+  failed: number;
+  items: Array<Record<string, string>>;
+  dry_run: boolean;
 }
 
 export type TenantCreate = {
@@ -272,7 +262,6 @@ export type TenantCreate = {
   extra_embed_model?: string | null;
   ocr?: boolean;
   layout?: boolean;
-  default_agent_slug?: string;
 };
 
 export type TenantUpdate = Partial<TenantCreate>;
@@ -683,6 +672,23 @@ export const adminApi = {
     return apiRequest(`/admin/tenants/${id}/models/resolve`);
   },
 
+  async runRagReindexBatch(params: {
+    tenant_id?: string;
+    model_alias?: string;
+    limit?: number;
+    dry_run?: boolean;
+  } = {}): Promise<RagReindexBatchResponse> {
+    const searchParams = new URLSearchParams();
+    if (params.tenant_id) searchParams.set('tenant_id', params.tenant_id);
+    if (params.model_alias) searchParams.set('model_alias', params.model_alias);
+    if (params.limit !== undefined) searchParams.set('limit', String(params.limit));
+    if (params.dry_run !== undefined) searchParams.set('dry_run', String(params.dry_run));
+    const query = searchParams.toString();
+    return apiRequest(`/admin/rag/reindex/run${query ? `?${query}` : ''}`, {
+      method: 'POST',
+    });
+  },
+
 };
 
 // Token scopes configuration
@@ -735,9 +741,6 @@ export interface PlatformSettings {
   forbid_write_in_prod?: boolean;
   require_backup_before_write?: boolean;
   // Global Caps / Rails
-  abs_max_timeout_s?: number;
-  abs_max_retries?: number;
-  abs_max_steps?: number;
   abs_max_plan_steps?: number;
   abs_max_concurrency?: number;
   abs_max_task_runtime_s?: number;
@@ -755,9 +758,6 @@ export interface PlatformSettingsUpdate {
   forbid_destructive?: boolean;
   forbid_write_in_prod?: boolean;
   require_backup_before_write?: boolean;
-  abs_max_timeout_s?: number;
-  abs_max_retries?: number;
-  abs_max_steps?: number;
   abs_max_plan_steps?: number;
   abs_max_concurrency?: number;
   abs_max_task_runtime_s?: number;
@@ -776,6 +776,49 @@ export const platformSettingsApi = {
       method: 'PATCH', 
       body: JSON.stringify(data),
     }),
+};
+
+export interface ExecutionLimits {
+  id?: string | null;
+  scope_type: 'platform' | 'agent' | 'orchestrator_role';
+  scope_ref: string;
+  llm_input_tokens_max?: number | null;
+  llm_output_tokens_max?: number | null;
+  llm_context_window_max?: number | null;
+  runtime_steps_max?: number | null;
+  runtime_tool_calls_max?: number | null;
+  runtime_retries_max?: number | null;
+  runtime_wall_time_ms_max?: number | null;
+  runtime_tokens_total_max?: number | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export type ExecutionLimitsUpdate = Partial<Pick<
+  ExecutionLimits,
+  | 'llm_input_tokens_max'
+  | 'llm_output_tokens_max'
+  | 'llm_context_window_max'
+  | 'runtime_steps_max'
+  | 'runtime_tool_calls_max'
+  | 'runtime_retries_max'
+  | 'runtime_wall_time_ms_max'
+  | 'runtime_tokens_total_max'
+>>;
+
+export const executionLimitsApi = {
+  getPlatform: (): Promise<ExecutionLimits> =>
+    apiRequest('/admin/execution-limits/platform', { method: 'GET' }),
+  updatePlatform: (data: ExecutionLimitsUpdate): Promise<ExecutionLimits> =>
+    apiRequest('/admin/execution-limits/platform', { method: 'PATCH', body: JSON.stringify(data) }),
+  getAgent: (agentSlug: string): Promise<ExecutionLimits> =>
+    apiRequest(`/admin/execution-limits/agents/${encodeURIComponent(agentSlug)}`, { method: 'GET' }),
+  updateAgent: (agentSlug: string, data: ExecutionLimitsUpdate): Promise<ExecutionLimits> =>
+    apiRequest(`/admin/execution-limits/agents/${encodeURIComponent(agentSlug)}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  getOrchestrator: (role: string): Promise<ExecutionLimits> =>
+    apiRequest(`/admin/execution-limits/orchestrators/${encodeURIComponent(role)}`, { method: 'GET' }),
+  updateOrchestrator: (role: string, data: ExecutionLimitsUpdate): Promise<ExecutionLimits> =>
+    apiRequest(`/admin/execution-limits/orchestrators/${encodeURIComponent(role)}`, { method: 'PATCH', body: JSON.stringify(data) }),
 };
 
 export const orchestrationApi = {

@@ -19,6 +19,7 @@ import { toolInstancesApi } from '@/shared/api/toolInstances';
 import { qk } from '@/shared/api/keys';
 import { useEntityEditor } from '@/shared/hooks/useEntityEditor';
 import { EntityPageV2, Tab } from '@/shared/ui/EntityPage';
+import { buildEntityCrudActions } from '@/shared/ui/EntityPage/entityCrudActions';
 import { Block, type FieldConfig } from '@/shared/ui/GridLayout';
 import { Badge, Button, ConfirmDialog, Modal, Select, useToast } from '@/shared/ui';
 import styles from './ModelPage.module.css';
@@ -643,12 +644,12 @@ export function ModelPage() {
         headerActions={(
           <div className={styles.headerActions}>
             {model?.type === 'embedding' && (
-              <Button variant="outline" onClick={() => setShowMigrationModal(true)}>
+              <Button variant="success" onClick={() => setShowMigrationModal(true)}>
                 Миграции
               </Button>
             )}
             {isEditable && (
-              <Button variant="outline" onClick={handleProbeModelInfo} disabled={probingInfo}>
+              <Button variant="success" onClick={handleProbeModelInfo} disabled={probingInfo}>
                 {probingInfo ? 'Проверяем...' : 'Проверить'}
               </Button>
             )}
@@ -664,7 +665,21 @@ export function ModelPage() {
         onDelete={!model?.is_system ? handleDelete : undefined}
         showDelete={!model?.is_system}
       >
-        <Tab title="Обзор" layout="grid" id="overview">
+        <Tab
+          title="Обзор"
+          layout="grid"
+          id="overview"
+          actions={buildEntityCrudActions({
+            mode,
+            saving,
+            tone: 'default',
+            onEdit: handleEdit,
+            onSave: handleSave,
+            onCancel: handleCancel,
+            onDelete: !model?.is_system ? handleDelete : undefined,
+            showDeleteInView: !model?.is_system,
+          })}
+        >
           <Block
             title="Основная информация"
             icon="cpu"

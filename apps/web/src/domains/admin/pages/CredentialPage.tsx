@@ -11,6 +11,7 @@ import { toolInstancesApi, type ToolInstance } from '@/shared/api/toolInstances'
 import { qk } from '@/shared/api/keys';
 import { useEntityEditor } from '@/shared/hooks/useEntityEditor';
 import { EntityPageV2, Tab, type BreadcrumbItem } from '@/shared/ui';
+import { buildEntityCrudActions } from '@/shared/ui/EntityPage/entityCrudActions';
 import { Block, type FieldConfig } from '@/shared/ui/GridLayout';
 import { Badge, Button, ConfirmDialog } from '@/shared/ui';
 
@@ -291,16 +292,21 @@ export default function CredentialPage() {
         onEdit={handleEdit}
         onSave={handleSave}
         onCancel={handleCancel}
-        actionButtons={
-          mode === 'view' ? (
-            <>
-              <Button onClick={handleEdit}>Редактировать</Button>
-              <Button variant="danger" onClick={handleDelete}>Удалить</Button>
-            </>
-          ) : undefined
-        }
       >
-        <Tab title="Обзор" layout="grid" id="overview">
+        <Tab
+          title="Обзор"
+          layout="grid"
+          id="overview"
+          actions={buildEntityCrudActions({
+            mode,
+            saving,
+            tone: 'default',
+            onEdit: handleEdit,
+            onSave: handleSave,
+            onCancel: handleCancel,
+            onDelete: handleDelete,
+          })}
+        >
           <Block
             title="Основные настройки"
             icon="key"

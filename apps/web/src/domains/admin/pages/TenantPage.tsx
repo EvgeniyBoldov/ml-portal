@@ -7,16 +7,16 @@
  */
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTenant, useModels } from '@shared/api/hooks/useAdmin';
 import { tenantApi } from '@shared/api/tenant';
-import { agentsApi, type Agent } from '@shared/api/agents';
 import { qk } from '@shared/api/keys';
 import { lifecycleApi } from '@shared/api/lifecycle';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
 import { EntityPageV2, Tab, type BreadcrumbItem, type EntityPageMode } from '@/shared/ui/EntityPage';
+import { buildEntityCrudActions } from '@/shared/ui/EntityPage/entityCrudActions';
 import { Block, type FieldConfig } from '@/shared/ui/GridLayout';
-import { Button, LifecycleDeleteDialog } from '@/shared/ui';
+import { LifecycleDeleteDialog } from '@/shared/ui';
 import { RBACRulesTable } from '@/shared/ui/RBACRulesTable';
 import type { Tenant, TenantCreate, TenantUpdate } from '@shared/api/tenant';
 
@@ -67,16 +67,6 @@ const PROCESSING_FIELDS: FieldConfig[] = [
   },
 ];
 
-const AGENT_FIELDS: FieldConfig[] = [
-  {
-    key: 'default_agent_slug',
-    type: 'select',
-    label: 'Агент по умолчанию',
-    description: 'Агент, используемый при отсутствии явного выбора',
-    options: [],
-  },
-];
-
 const META_FIELDS: FieldConfig[] = [
   { key: 'id', type: 'code', label: 'ID', editable: false },
   { key: 'is_default', type: 'boolean', label: 'Default tenant', editable: false },
@@ -106,7 +96,6 @@ export function TenantPage() {
     extra_embed_model: '',
     ocr: false,
     layout: false,
-    default_agent_slug: '',
   });
   const [saving, setSaving] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -114,10 +103,6 @@ export function TenantPage() {
   // ─── Queries ───
   const { data: tenant, isLoading, refetch } = useTenant(id);
   const { data: modelsData } = useModels({ size: 100 });
-  const { data: agentsList } = useQuery({
-    queryKey: qk.agents.list({}),
-    queryFn: () => agentsApi.list(),
-  });
 
   // ─── Sync form ←→ API ───
   useEffect(() => {
@@ -130,7 +115,6 @@ export function TenantPage() {
         extra_embed_model: tenant.extra_embed_model || '',
         ocr: tenant.ocr || false,
         layout: tenant.layout || false,
-        default_agent_slug: tenant.default_agent_slug || '',
       });
     }
   }, [tenant]);
@@ -204,7 +188,6 @@ export function TenantPage() {
           extra_embed_model: tenant.extra_embed_model || '',
           ocr: tenant.ocr || false,
           layout: tenant.layout || false,
-          default_agent_slug: tenant.default_agent_slug || '',
         });
       }
       setSearchParams({});
@@ -229,16 +212,7 @@ export function TenantPage() {
     extra_embed_model: tenant?.extra_embed_model || '',
     ocr: tenant?.ocr || false,
     layout: tenant?.layout || false,
-    default_agent_slug: tenant?.default_agent_slug || '',
   };
-
-  const agentOptions = [
-    { value: '', label: '— Не выбран (fallback: rag-search) —' },
-    ...(agentsList ?? []).map((a: Agent) => ({
-      value: a.slug,
-      label: `${a.name} (${a.slug})`,
-    })),
-  ];
 
   const metaData = {
     id: tenant?.id || '',
@@ -279,7 +253,6 @@ export function TenantPage() {
   const embeddingFieldsFull: FieldConfig[] = [
     { ...EMBEDDING_FIELDS[0], options: embeddingOptions },
     ...PROCESSING_FIELDS,
-    { ...AGENT_FIELDS[0], options: agentOptions },
   ];
 
   // ─── Create mode ───
@@ -338,20 +311,22 @@ export function TenantPage() {
           title="Обзор"
           layout="grid"
           id="overview"
-          actions={
-            mode === 'view' ? [
-              ...(tenant?.lifecycle_status === 'deprecated'
-                ? [<Button key="restore" variant="outline" onClick={() => restoreMutation.mutate()} disabled={restoreMutation.isPending}>Восстановить</Button>]
-                : []),
-              <Button key="edit" onClick={handleEdit}>Редактировать</Button>,
-              <Button key="delete" variant="danger" onClick={handleDelete}>Удалить</Button>,
-            ] : mode === 'edit' ? [
-              <Button key="save" onClick={handleSave} disabled={saving}>
-                {saving ? 'Сохранение...' : 'Сохранить'}
-              </Button>,
-              <Button key="cancel" variant="outline" onClick={handleCancel}>Отмена</Button>,
-            ] : []
-          }
+          actions={buildEntityCrudActions({
+            mode,
+            saving,
+            tone: 'default',
+            labels: {
+              edit: 'Изменить',
+              delete: 'Удалить',
+            },
+            lifecycleStatus: tenant?.lifecycle_status,
+            onEdit: handleEdit,
+            onSave: handleSave,
+            onCancel: handleCancel,
+            onDelete: handleDelete,
+            onRestore: () => restoreMutation.mutate(),
+            restorePending: restoreMutation.isPending,
+          })}
         >
           <Block
             title="Основная информация"

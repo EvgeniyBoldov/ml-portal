@@ -8,6 +8,7 @@ import { toolInstancesApi, type ToolInstance } from '@/shared/api';
 import { qk } from '@/shared/api/keys';
 import { EntityPageV2, Tab } from '@/shared/ui/EntityPage';
 import { DataTable, type DataTableColumn, Badge, Button, Input } from '@/shared/ui';
+import { ADMIN_ACTION_LABELS, ADMIN_ENTITY_LABELS } from '@/shared/constants/adminLabels';
 
 const CONNECTOR_LABELS: Record<string, { label: string; tone: 'info' | 'neutral' }> = {
   data: { label: 'Data', tone: 'info' },
@@ -187,7 +188,7 @@ export function InstancesListPage() {
         />
       }
       actionButtons={
-        <Button onClick={() => navigate('/admin/connectors/new')}>Создать коннектор</Button>
+        <Button onClick={() => navigate('/admin/connectors/new')}>{`${ADMIN_ACTION_LABELS.create} ${ADMIN_ENTITY_LABELS.connection}`}</Button>
       }
     >
       <Tab title="Коннекторы" layout="full">
@@ -201,7 +202,7 @@ export function InstancesListPage() {
           data={filteredInstances}
           keyField="id"
           loading={isLoading}
-          emptyText="Коннекторы не найдены. Нажмите «Создать коннектор» для добавления."
+          emptyText={`Подключения не найдены. Нажмите «${ADMIN_ACTION_LABELS.create} ${ADMIN_ENTITY_LABELS.connection}» для добавления.`}
           paginated
           pageSize={20}
           onRowClick={(inst: ToolInstance) => navigate(`/admin/connectors/${inst.id}`)}

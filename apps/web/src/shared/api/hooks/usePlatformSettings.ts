@@ -4,6 +4,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   platformSettingsApi,
+  executionLimitsApi,
   orchestrationApi,
   systemLLMRolesApi,
   type PlatformSettings,
@@ -14,6 +15,8 @@ import {
   type SynthesizerRoleUpdate,
   type FactExtractorRoleUpdate,
   type SummaryCompactorRoleUpdate,
+  type ExecutionLimits,
+  type ExecutionLimitsUpdate,
 } from '@/shared/api/admin';
 import { qk } from '@/shared/api/keys';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
@@ -60,6 +63,88 @@ export function useUpdatePlatformSettings() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: qk.platform.settings() });
       showSuccess('Настройки платформы обновлены');
+    },
+    onError: (err: Error) => showError(err.message),
+  });
+}
+
+export function usePlatformExecutionLimits() {
+  return useQuery({
+    queryKey: ['admin', 'execution-limits', 'platform'],
+    queryFn: () => executionLimitsApi.getPlatform(),
+    staleTime: 30_000,
+  });
+}
+
+export function useUpdatePlatformExecutionLimits() {
+  const queryClient = useQueryClient();
+  const showError = useErrorToast();
+  const showSuccess = useSuccessToast();
+
+  return useMutation({
+    mutationFn: (data: ExecutionLimitsUpdate): Promise<ExecutionLimits> =>
+      executionLimitsApi.updatePlatform(data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['admin', 'execution-limits', 'platform'] });
+      showSuccess('Лимиты платформы обновлены');
+    },
+    onError: (err: Error) => showError(err.message),
+  });
+}
+
+export function useAgentExecutionLimits(agentSlug?: string) {
+  return useQuery({
+    queryKey: ['admin', 'execution-limits', 'agent', agentSlug ?? ''],
+    queryFn: () => executionLimitsApi.getAgent(agentSlug || ''),
+    enabled: Boolean(agentSlug),
+    staleTime: 30_000,
+  });
+}
+
+export function useUpdateAgentExecutionLimits(agentSlug?: string) {
+  const queryClient = useQueryClient();
+  const showError = useErrorToast();
+  const showSuccess = useSuccessToast();
+
+  return useMutation({
+    mutationFn: (data: ExecutionLimitsUpdate): Promise<ExecutionLimits> => {
+      if (!agentSlug) {
+        return Promise.reject(new Error('agent slug is required'));
+      }
+      return executionLimitsApi.updateAgent(agentSlug, data);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['admin', 'execution-limits', 'agent', agentSlug ?? ''] });
+      showSuccess('Лимиты агента обновлены');
+    },
+    onError: (err: Error) => showError(err.message),
+  });
+}
+
+export function useOrchestratorExecutionLimits(role?: string) {
+  return useQuery({
+    queryKey: ['admin', 'execution-limits', 'orchestrator', role ?? ''],
+    queryFn: () => executionLimitsApi.getOrchestrator(role || ''),
+    enabled: Boolean(role),
+    staleTime: 30_000,
+  });
+}
+
+export function useUpdateOrchestratorExecutionLimits(role?: string) {
+  const queryClient = useQueryClient();
+  const showError = useErrorToast();
+  const showSuccess = useSuccessToast();
+
+  return useMutation({
+    mutationFn: (data: ExecutionLimitsUpdate): Promise<ExecutionLimits> => {
+      if (!role) {
+        return Promise.reject(new Error('orchestrator role is required'));
+      }
+      return executionLimitsApi.updateOrchestrator(role, data);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['admin', 'execution-limits', 'orchestrator', role ?? ''] });
+      showSuccess('Лимиты оркестратора обновлены');
     },
     onError: (err: Error) => showError(err.message),
   });

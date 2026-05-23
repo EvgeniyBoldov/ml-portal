@@ -6,7 +6,7 @@ from datetime import datetime
 from uuid import UUID
 from pydantic import BaseModel, Field, ConfigDict
 
-from app.models.system_llm_role import SystemLLMRoleType, RetryBackoffType
+from app.models.system_llm_role import SystemLLMRoleType
 from app.agents.contracts import ExecutionModeType
 
 
@@ -29,10 +29,6 @@ class SystemLLMRoleBase(BaseModel):
     # === Execution Configuration ===
     model: Optional[str] = Field(None, description="Model alias for this role")
     temperature: Optional[float] = Field(None, ge=0.0, le=2.0, description="Temperature for LLM calls")
-    max_tokens: Optional[int] = Field(None, gt=0, description="Maximum tokens for LLM response")
-    timeout_s: Optional[int] = Field(None, gt=0, description="Timeout in seconds")
-    max_retries: Optional[int] = Field(None, ge=0, description="Maximum retry attempts")
-    retry_backoff: Optional[RetryBackoffType] = Field(None, description="Retry backoff strategy")
     
     # === Status ===
     is_active: Optional[bool] = Field(True, description="Whether this role configuration is active")
@@ -91,10 +87,6 @@ class SystemLLMRoleUpdate(BaseModel):
     
     model: Optional[str] = Field(None, description="Model alias for this role")
     temperature: Optional[float] = Field(None, ge=0.0, le=2.0, description="Temperature for LLM calls")
-    max_tokens: Optional[int] = Field(None, gt=0, description="Maximum tokens for LLM response")
-    timeout_s: Optional[int] = Field(None, gt=0, description="Timeout in seconds")
-    max_retries: Optional[int] = Field(None, ge=0, description="Maximum retry attempts")
-    retry_backoff: Optional[RetryBackoffType] = Field(None, description="Retry backoff strategy")
     
     is_active: Optional[bool] = Field(None, description="Whether this role configuration is active")
 

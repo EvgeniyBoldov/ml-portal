@@ -22,6 +22,9 @@ class RuntimeErrorCode(str, Enum):
     AGENT_PRECHECK_FAILED = "agent_precheck_failed"
     AGENT_UNAVAILABLE = "agent_unavailable"
     AGENT_NO_OPERATIONS = "agent_no_operations"
+    LLM_INPUT_LIMIT_EXCEEDED = "llm_input_limit_exceeded"
+    LLM_OUTPUT_LIMIT_EXCEEDED = "llm_output_limit_exceeded"
+    LLM_CONTEXT_WINDOW_EXCEEDED = "llm_context_window_exceeded"
 
 
 @dataclass(frozen=True)

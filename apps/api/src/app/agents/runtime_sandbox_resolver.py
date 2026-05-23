@@ -27,8 +27,6 @@ class RuntimeSandboxResolver:
     def sandbox_agent_slug(effective_config: Dict[str, Any]) -> Optional[str]:
         resolver = SandboxOverrideResolver(effective_config)
         # Only explicit sandbox override should pin agent_slug.
-        # Base tenant.default_agent_slug must not force every sandbox run
-        # to one agent; otherwise planner cannot route by context.
         raw = resolver.agent_slug_override
         if raw is None:
             return None

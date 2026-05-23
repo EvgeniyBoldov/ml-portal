@@ -27,10 +27,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.http.clients import LLMClientProtocol
 from app.core.logging import get_logger
+from app.models.execution_limit import ExecutionLimitScope
 from app.models.system_llm_role import SystemLLMRoleType
 from app.runtime.events import RuntimeEvent
 from app.runtime.input_builders import SynthesizerInputBuilder
+from app.runtime.llm.limits import LLMLimitExceededError, apply_llm_limits, estimate_tokens
 from app.runtime.turn_state import RuntimeTurnState
+from app.services.execution_limits_service import ExecutionLimitsPayload, ExecutionLimitsService
 from app.services.system_llm_role_service import SystemLLMRoleService
 
 logger = get_logger(__name__)
@@ -61,6 +64,7 @@ class Synthesizer:
         self.session = session
         self.llm_client = llm_client
         self._input_builder = SynthesizerInputBuilder()
+        self._limits_service = ExecutionLimitsService(session)
 
     async def stream(
         self,
@@ -111,6 +115,33 @@ class Synthesizer:
         )
         llm_call_id = f"{run_id}:synthesis-llm:1"
         synthesis_run_id = f"{run_id}:synthesis:1"
+        try:
+            limits = await self._limits_service.get_effective(
+                scope_type=ExecutionLimitScope.ORCHESTRATOR_ROLE,
+                scope_ref="synthesizer",
+            )
+        except Exception:
+            limits = ExecutionLimitsPayload()
+        input_tokens = estimate_tokens(str(messages))
+        requested_output_tokens = int(params["max_tokens"]) if params.get("max_tokens") is not None else None
+        try:
+            boundary = apply_llm_limits(
+                limits=limits,
+                input_tokens=input_tokens,
+                requested_output_tokens=requested_output_tokens,
+            )
+        except LLMLimitExceededError as exc:
+            yield RuntimeEvent.error(
+                str(exc),
+                recoverable=False,
+                error_code=exc.code,
+                parent_entity_type="synthesis_run",
+                parent_entity_id=synthesis_run_id,
+            )
+            runtime_state.final_error = str(exc)
+            return
+        if boundary.output_tokens is not None:
+            params["max_tokens"] = int(boundary.output_tokens)
         yield RuntimeEvent.llm_request(
             llm_call_id=llm_call_id,
             model=effective_model or "unknown",

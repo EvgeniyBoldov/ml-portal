@@ -93,13 +93,14 @@
 }
 
 .success {
-  background: var(--success, #10b981);
+  background: var(--success, #2f9e79);
   color: var(--text-inverse, #ffffff);
-  border-color: var(--success, #10b981);
+  border-color: var(--success, #2f9e79);
 }
 
 .success:hover {
-  opacity: 0.9;
+  background: var(--success-hover, #287f62);
+  border-color: var(--success-hover, #287f62);
 }
 
 /* Sizes */

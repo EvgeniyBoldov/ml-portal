@@ -24,6 +24,8 @@ app = Celery(
         "app.workers.tasks_membership_reconcile",
         # RAG model/status reconcile tasks
         "app.workers.tasks_rag_model_reconcile",
+        # RAG stale reindex batch tasks
+        "app.workers.tasks_rag_reindex",
         # Periodic model health checks (legacy)
         "app.workers.tasks_health_check",
         # Health monitoring tasks (new)
@@ -107,8 +109,7 @@ app.conf.task_routes = {
     "app.workers.tasks_cleanup.cleanup_deprecated_entities": {"queue": "cleanup_low", "priority": 1},
 
     # Reindex tasks
-    "app.workers.tasks_reindex.reindex_source": {"queue": "reindex.default", "priority": 2},
-    "app.workers.tasks_reindex.reindex_by_model": {"queue": "reindex.default", "priority": 2},
+    "app.workers.tasks_rag_reindex.reconcile_stale_rag_reindex": {"queue": "maintenance.default", "priority": 1},
 }
 
 app.conf.update(
@@ -188,6 +189,10 @@ if settings.BEAT == 1:
         "document-membership-reconcile": {
             "task": "app.workers.tasks_membership_reconcile.reconcile_document_collection_memberships",
             "schedule": 600.0,  # 10 minutes
+        },
+        "rag-stale-reindex-reconcile": {
+            "task": "app.workers.tasks_rag_reindex.reconcile_stale_rag_reindex",
+            "schedule": 900.0,  # 15 minutes
         },
         
         # LDAP sync (daily at 03:30 UTC by default, configurable via AUTH_LDAP_SYNC_CRON)

@@ -16,7 +16,6 @@ from typing import List, Optional, Tuple, Dict, Any
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import asc
 from sqlalchemy.future import select
 
 from app.core.exceptions import (
@@ -31,7 +30,6 @@ from app.models.agent_version import AgentVersion, AgentVersionStatus
 from app.models.tool_instance import ToolInstance
 from app.services.rbac_service import RbacService
 from app.services.rbac_cleanup_service import RbacCleanupService
-from app.models.tenant import Tenants
 from app.repositories.agent_repository import AgentRepository, AgentVersionRepository
 
 logger = logging.getLogger(__name__)
@@ -161,12 +159,8 @@ class AgentService:
             "logging_level": agent.logging_level,
             "model": agent.model,
             "temperature": agent.temperature,
-            "max_tokens": agent.max_tokens,
             "requires_confirmation_for_write": agent.requires_confirmation_for_write,
             "risk_level": agent.risk_level,
-            "max_steps": agent.max_steps,
-            "timeout_s": agent.timeout_s,
-            "max_retries": agent.max_retries,
             "allowed_collection_ids": agent.allowed_collection_ids,
             "created_at": agent.created_at,
             "updated_at": agent.updated_at,
@@ -182,12 +176,8 @@ class AgentService:
         logging_level: Optional[str] = None,
         model: Optional[str] = None,
         temperature: Optional[float] = None,
-        max_tokens: Optional[int] = None,
         requires_confirmation_for_write: Optional[bool] = None,
         risk_level: Optional[str] = None,
-        max_steps: Optional[int] = None,
-        timeout_s: Optional[int] = None,
-        max_retries: Optional[int] = None,
         allowed_collection_ids: Optional[List[UUID]] = None,
     ) -> Agent:
         agent = await self.get_agent(agent_id)
@@ -204,18 +194,10 @@ class AgentService:
             update_data['model'] = model
         if temperature is not None:
             update_data['temperature'] = temperature
-        if max_tokens is not None:
-            update_data['max_tokens'] = max_tokens
         if requires_confirmation_for_write is not None:
             update_data['requires_confirmation_for_write'] = requires_confirmation_for_write
         if risk_level is not None:
             update_data['risk_level'] = risk_level
-        if max_steps is not None:
-            update_data['max_steps'] = max_steps
-        if timeout_s is not None:
-            update_data['timeout_s'] = timeout_s
-        if max_retries is not None:
-            update_data['max_retries'] = max_retries
         if allowed_collection_ids is not None:
             update_data['allowed_collection_ids'] = allowed_collection_ids
         if update_data:
@@ -314,8 +296,7 @@ class AgentService:
     _VERSION_FIELDS = [
         "identity", "mission", "scope", "rules", "tool_use_rules",
         "output_format", "examples", "short_info",
-        "model", "timeout_s", "max_steps", "max_retries", "max_tokens", "temperature",
-        "requires_confirmation_for_write", "risk_level", "never_do", "allowed_ops",
+        "never_do", "allowed_ops",
         "tags",
     ]
 
@@ -431,46 +412,6 @@ class AgentService:
     # RUNTIME helpers
     # ─────────────────────────────────────────────────────────────────────────
 
-    async def get_default_agent_slug(self, tenant_id: Optional[UUID] = None) -> str:
-        """
-        Resolve default agent slug for a tenant.
-        Priority:
-        1) tenant.default_agent_slug (if exists in DB)
-        2) first agent with any published version
-        """
-        tenant_default: Optional[str] = None
-        if tenant_id:
-            result = await self.session.execute(
-                select(Tenants.default_agent_slug).where(Tenants.id == tenant_id)
-            )
-            tenant_default = result.scalar_one_or_none()
-
-        candidate_slugs: List[str] = []
-        normalized_tenant_default = self._normalize_agent_slug(tenant_default)
-        if normalized_tenant_default:
-            candidate_slugs.append(normalized_tenant_default)
-        if tenant_default and tenant_default not in candidate_slugs:
-            candidate_slugs.append(tenant_default)
-        for candidate in candidate_slugs:
-            if not candidate:
-                continue
-            if await self.agent_repo.get_by_slug(candidate):
-                return candidate
-
-        # Any agent with a published version.
-        published_stmt = (
-            select(Agent.slug)
-            .join(AgentVersion, Agent.id == AgentVersion.agent_id)
-            .where(AgentVersion.status == AgentVersionStatus.PUBLISHED.value)
-            .order_by(asc(Agent.created_at))
-            .limit(1)
-        )
-        published_slug = (await self.session.execute(published_stmt)).scalar_one_or_none()
-        if published_slug:
-            return published_slug
-
-        raise AgentNotFoundError("no_published_agent_available")
-
     async def list_routable_agents(self) -> List[Agent]:
         """
         Legacy method name retained: returns agents with published versions.
@@ -520,18 +461,15 @@ class AgentService:
     ) -> AgentVersion:
         """
         Resolve the published AgentVersion for runtime.
-        Falls back to tenant default agent if slug not found.
         """
+        del tenant_id
         selected_slug = self._normalize_agent_slug(agent_slug) if agent_slug is not None else None
         if selected_slug is None:
-            selected_slug = await self.get_default_agent_slug(tenant_id)
+            raise AgentNotFoundError("agent_slug_required")
 
         agent = await self.agent_repo.get_by_slug(selected_slug)
         if not agent:
-            fallback = await self.get_default_agent_slug(tenant_id)
-            agent = await self.agent_repo.get_by_slug(fallback)
-            if not agent:
-                raise AgentNotFoundError(fallback)
+            raise AgentNotFoundError(selected_slug)
 
         version = None
         if agent.current_version_id:
@@ -564,10 +502,7 @@ class AgentService:
             {
                 "agent_slug": agent.slug,
                 "agent_version": version.version,
-                "model": version.model,
-                "max_steps": version.max_steps,
-                "timeout_s": version.timeout_s,
-                "max_tokens": version.max_tokens,
-                "temperature": version.temperature,
+                "model": agent.model,
+                "temperature": agent.temperature,
             }
         )

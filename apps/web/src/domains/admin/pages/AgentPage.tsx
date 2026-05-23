@@ -24,8 +24,10 @@ import {
 import { lifecycleApi } from '@/shared/api/lifecycle';
 import { qk } from '@/shared/api/keys';
 import { useAgentDetail } from '@/shared/api/hooks/useAgents';
+import { useAgentExecutionLimits, useUpdateAgentExecutionLimits } from '@/shared/api/hooks/usePlatformSettings';
 import type { QueryKey } from '@tanstack/react-query';
 import { EntityPageV2, Tab, type BreadcrumbItem } from '@/shared/ui';
+import { buildEntityCrudActions } from '@/shared/ui/EntityPage/entityCrudActions';
 import { Block, type FieldConfig } from '@/shared/ui/GridLayout';
 import { VersionsBlock } from '@/shared/ui/VersionsBlock';
 import DataTable, { type DataTableColumn } from '@/shared/ui/DataTable';
@@ -122,34 +124,6 @@ const AGENT_EXEC_FIELDS: FieldConfig[] = [
     max: 1,
   },
   {
-    key: 'max_tokens',
-    type: 'number',
-    label: 'Макс. токенов',
-    description: 'Лимит токенов в ответе',
-    placeholder: '4096',
-  },
-  {
-    key: 'max_steps',
-    type: 'number',
-    label: 'Макс. шагов',
-    description: 'Лимит шагов агента за один запуск (из оркестрации если пусто)',
-    placeholder: '10',
-  },
-  {
-    key: 'timeout_s',
-    type: 'number',
-    label: 'Таймаут (сек)',
-    description: 'Лимит времени выполнения в секундах (из оркестрации если пусто)',
-    placeholder: '60',
-  },
-  {
-    key: 'max_retries',
-    type: 'number',
-    label: 'Макс. попыток',
-    description: 'Количество ретраев при ошибке инструмента (из оркестрации если пусто)',
-    placeholder: '3',
-  },
-  {
     key: 'requires_confirmation_for_write',
     type: 'boolean',
     label: 'Подтверждение write-операций',
@@ -178,6 +152,17 @@ const AGENT_EXEC_FIELDS: FieldConfig[] = [
       { value: 'full', label: 'Full — всё включая промты и ответы' },
     ],
   },
+];
+
+const AGENT_LIMIT_FIELDS: FieldConfig[] = [
+  { key: 'llm_input_tokens_max', type: 'number', label: 'LLM input токены', description: 'Лимит токенов входного промпта для одного LLM-вызова.' },
+  { key: 'llm_output_tokens_max', type: 'number', label: 'LLM output токены', description: 'Лимит токенов ответа для одного LLM-вызова.' },
+  { key: 'llm_context_window_max', type: 'number', label: 'LLM context window', description: 'Лимит input+output токенов в одном LLM-вызове.' },
+  { key: 'runtime_steps_max', type: 'number', label: 'Runtime шаги', description: 'Лимит шагов агентского рантайма.' },
+  { key: 'runtime_tool_calls_max', type: 'number', label: 'Runtime вызовы инструментов', description: 'Лимит числа tool-вызовов за ран.' },
+  { key: 'runtime_retries_max', type: 'number', label: 'Runtime ретраи', description: 'Лимит повторных попыток.' },
+  { key: 'runtime_wall_time_ms_max', type: 'number', label: 'Runtime wall time (ms)', description: 'Лимит общего времени выполнения в мс.' },
+  { key: 'runtime_tokens_total_max', type: 'number', label: 'Runtime total токены', description: 'Лимит суммарных токенов рантайма.' },
 ];
 
 const INFO_FIELDS: FieldConfig[] = [
@@ -213,6 +198,8 @@ export function AgentPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [limitsMode, setLimitsMode] = useState<'view' | 'edit'>('view');
+  const [limitsForm, setLimitsForm] = useState<Record<string, unknown>>({});
   const [isAddDataModalOpen, setIsAddDataModalOpen] = useState(false);
   const [selectedCollectionId, setSelectedCollectionId] = useState('');
   const [selectedCollectionIds, setSelectedCollectionIds] = useState<Set<string>>(new Set());
@@ -248,6 +235,9 @@ export function AgentPage() {
       .filter(m => m.type === 'llm_chat' && m.enabled)
       .map(m => ({ value: m.alias, label: `${m.name} (${m.alias})` })),
   ];
+
+  const { data: agentLimits } = useAgentExecutionLimits(agent?.slug);
+  const updateAgentLimits = useUpdateAgentExecutionLimits(agent?.slug);
 
   // Update INFO_FIELDS: slug editable only on create
   const infoFieldsWithModels = INFO_FIELDS.map((field) => {
@@ -296,10 +286,6 @@ export function AgentPage() {
   const execData = mode === 'edit' || mode === 'create' ? formData : {
     model: agent?.model || '',
     temperature: agent?.temperature ?? null,
-    max_tokens: agent?.max_tokens ?? null,
-    max_steps: agent?.max_steps ?? null,
-    timeout_s: agent?.timeout_s ?? null,
-    max_retries: agent?.max_retries ?? null,
     requires_confirmation_for_write: agent?.requires_confirmation_for_write ?? false,
     risk_level: agent?.risk_level || '',
     logging_level: agent?.logging_level || 'brief',
@@ -421,36 +407,23 @@ export function AgentPage() {
         onSave={handleSave}
         onCancel={handleCancel}
         onDelete={handleDelete}
-        actionButtons={
-          mode === 'view' && agent?.lifecycle_status === 'deprecated'
-            ? [<Button key="restore" variant="outline" onClick={() => restoreMutation.mutate()} disabled={restoreMutation.isPending}>Восстановить</Button>]
-            : undefined
-        }
       >
-        <Tab
-          title="Обзор"
+      <Tab
+        title="Обзор"
           layout="grid"
           id="overview"
-          actions={
-            mode === 'view' ? [
-              <Button key="edit" onClick={handleEdit}>Редактировать</Button>,
-              <Button key="delete" variant="danger" onClick={() => setShowDeleteConfirm(true)}>
-                Удалить
-              </Button>,
-            ] : mode === 'edit' ? [
-              <Button key="save" onClick={handleSave} disabled={saving}>
-                {saving ? 'Сохранение...' : 'Сохранить'}
-              </Button>,
-              <Button key="cancel" variant="outline" onClick={handleCancel}>Отмена</Button>,
-            ] : mode === 'create' ? [
-              <Button key="cancel" variant="outline" onClick={handleCancel} disabled={saving}>
-                Отмена
-              </Button>,
-              <Button key="create" onClick={handleSave} disabled={saving}>
-                {saving ? 'Создание...' : 'Создать'}
-              </Button>,
-            ] : []
-          }
+          actions={buildEntityCrudActions({
+            mode,
+            saving,
+            tone: 'default',
+            lifecycleStatus: agent?.lifecycle_status,
+            onEdit: handleEdit,
+            onSave: handleSave,
+            onCancel: handleCancel,
+            onDelete: () => setShowDeleteConfirm(true),
+            onRestore: () => restoreMutation.mutate(),
+            restorePending: restoreMutation.isPending,
+          })}
         >
           {/* Row 1: Basic Info (1/2) + Routing (1/2) */}
           <Block
@@ -474,8 +447,43 @@ export function AgentPage() {
             data={execData}
             editable={mode === 'edit' || mode === 'create'}
             onChange={handleFieldChange}
+        />
+      </Tab>
+
+      {!isNew && (
+        <Tab
+          title="Лимиты"
+          layout="grid"
+          actions={buildEntityCrudActions({
+            mode: limitsMode,
+            saving: updateAgentLimits.isPending,
+            tone: 'default',
+            onEdit: () => {
+              setLimitsForm({ ...(agentLimits || {}) });
+              setLimitsMode('edit');
+            },
+            onSave: async () => {
+              await updateAgentLimits.mutateAsync(limitsForm);
+              setLimitsMode('view');
+            },
+            onCancel: () => {
+              setLimitsMode('view');
+              setLimitsForm({});
+            },
+          })}
+        >
+          <Block
+            title="Лимиты агента"
+            icon="gauge"
+            iconVariant="warning"
+            width="full"
+            fields={AGENT_LIMIT_FIELDS}
+            data={limitsMode === 'edit' ? limitsForm : (agentLimits || {})}
+            editable={limitsMode === 'edit'}
+            onChange={limitsMode === 'edit' ? (key, value) => setLimitsForm((prev) => ({ ...prev, [key]: value })) : undefined}
           />
         </Tab>
+      )}
 
         {/* ── Tab 2: Промпт (только для просмотра) ── */}
         {!isNew && currentVersionInfo && (
@@ -540,7 +548,7 @@ export function AgentPage() {
               onClick={openAddDataModal}
               disabled={availableCollectionOptions.length === 0 || updateBindingsMutation.isPending}
             >
-                Добавить
+                Добавить коллекцию
               </Button>,
               <Button
                 key="remove-data-binding"

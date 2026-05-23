@@ -4,7 +4,7 @@ SandboxOverrideResolver — applies branch overrides to runtime entities.
 Takes effective_config (from snapshot) and applies overrides to:
 - AgentVersion fields (prompt parts, execution config, safety knobs)
 - OrchestrationSettings (model, temperature, timeout, max_steps)
-- PlatformSettings (caps, gates, policies_text)
+- PlatformSettings (gates, policies_text)
 - SystemLLMRole configs (orchestrator prompt fields)
 
 Does NOT mutate DB objects — creates shadow copies or override dicts.
@@ -21,7 +21,6 @@ from app.services.sandbox_override_blueprints import (
     AGENT_VERSION_EXEC_FIELDS as _AGENT_VERSION_EXEC_FIELDS,
     AGENT_VERSION_PROMPT_FIELDS as _AGENT_VERSION_PROMPT_FIELDS,
     AGENT_VERSION_ALL_FIELDS as _AGENT_VERSION_ALL_FIELDS,
-    PLATFORM_CAP_FIELDS as _PLATFORM_CAP_FIELDS,
     PLATFORM_GATE_FIELDS as _PLATFORM_GATE_FIELDS,
     PLATFORM_POLICY_FIELDS as _PLATFORM_POLICY_FIELDS,
     SANDBOX_BLUEPRINTS as _SANDBOX_BLUEPRINTS,
@@ -175,9 +174,9 @@ class SandboxOverrideResolver:
 
     @property
     def agent_slug_override(self) -> Optional[str]:
-        """Check if there's an override for tenant.default_agent_slug."""
+        """Check if there's an override for runtime agent slug pin."""
         for ov in self._iter_overrides("orchestration"):
-            if ov.get("field_path") == "tenant.default_agent_slug":
+            if ov.get("field_path") == "agent.slug":
                 return ov.get("value_json")
         return None
 
@@ -398,7 +397,7 @@ class SandboxOverrideResolver:
         """
         Get orchestration overrides as a flat dict.
 
-        Keys: executor_model, executor_temperature, executor_timeout_s, executor_max_steps.
+        Keys: executor_model, executor_temperature.
         These are applied on top of OrchestrationSettingsProvider.get_effective_config().
         """
         result: Dict[str, Any] = {}
@@ -413,10 +412,6 @@ class SandboxOverrideResolver:
                 result["executor_model"] = value
             elif field_path == "temperature" or field_path == "executor_temperature":
                 result["executor_temperature"] = value
-            elif field_path == "timeout_s" or field_path == "executor_timeout_s":
-                result["executor_timeout_s"] = value
-            elif field_path == "max_steps" or field_path == "executor_max_steps":
-                result["executor_max_steps"] = value
 
         return result
 
@@ -424,7 +419,7 @@ class SandboxOverrideResolver:
 
     def get_platform_overrides(self) -> Dict[str, Any]:
         """
-        Get platform settings overrides (caps, gates, policies).
+        Get platform settings overrides (gates, policies).
 
         Applied on top of PlatformSettingsProvider.get_config().
         """
@@ -436,7 +431,7 @@ class SandboxOverrideResolver:
             # platform.* prefix from frontend
             if field_path.startswith("platform."):
                 key = field_path[len("platform."):]
-                if key in _PLATFORM_CAP_FIELDS | _PLATFORM_GATE_FIELDS | _PLATFORM_POLICY_FIELDS:
+                if key in _PLATFORM_GATE_FIELDS | _PLATFORM_POLICY_FIELDS:
                     result[key] = value
 
         return result
@@ -444,7 +439,7 @@ class SandboxOverrideResolver:
     # ── Tenant overrides ─────────────────────────────────────────────────
 
     def get_tenant_overrides(self) -> Dict[str, Any]:
-        """Get tenant-level overrides (default_agent_slug, etc.)."""
+        """Get tenant-level overrides."""
         result: Dict[str, Any] = {}
         for ov in self._iter_overrides("orchestration"):
             field_path = ov.get("field_path", "")

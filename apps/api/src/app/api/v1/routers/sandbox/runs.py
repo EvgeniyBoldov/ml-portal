@@ -266,42 +266,50 @@ async def run_sandbox(
         session_factory = get_session_factory()
         async with session_factory() as stream_db:
             runtime_sandbox_resolver = RuntimeSandboxResolver(session=stream_db)
-            try:
-                resolved_agent_state = await runtime_sandbox_resolver.resolve_sandbox_agent(
-                    agent_slug=agent_slug,
-                    tenant_id=t_uuid,
-                    agent_version_id=agent_version_id,
-                )
-            except Exception as agent_err:
-                runtime_trace = RuntimeTraceLogger(
-                    session=stream_db,
-                    session_factory=session_factory,
-                    run_store=RunStore(session_factory=session_factory),
-                )
-                await runtime_trace.log_error(
-                    run_id,
-                    stage="sandbox_agent_resolve",
-                    error=agent_err,
-                    data={
-                        "run_id": str(run_id),
-                        "agent_slug": agent_slug,
-                        "tenant_id": str(t_uuid),
-                    },
-                )
+            resolved_agent_state = None
+            if agent_slug or agent_version_id:
                 try:
-                    svc_err = SandboxService(stream_db)
-                    await svc_err.finish_run(run_id, "failed", str(agent_err))
-                    await stream_db.commit()
-                except Exception:
-                    pass
-                yield f"data: {json.dumps({'type': 'error', 'error': str(agent_err), 'run_id': str(run_id)})}\n\n"
-                yield f"data: {json.dumps({'type': 'done', 'run_id': str(run_id)})}\n\n"
-                return
+                    resolved_agent_state = await runtime_sandbox_resolver.resolve_sandbox_agent(
+                        agent_slug=agent_slug,
+                        tenant_id=t_uuid,
+                        agent_version_id=agent_version_id,
+                    )
+                except Exception as agent_err:
+                    runtime_trace = RuntimeTraceLogger(
+                        session=stream_db,
+                        session_factory=session_factory,
+                        run_store=RunStore(session_factory=session_factory),
+                    )
+                    await runtime_trace.log_error(
+                        run_id,
+                        stage="sandbox_agent_resolve",
+                        error=agent_err,
+                        data={
+                            "run_id": str(run_id),
+                            "agent_slug": agent_slug,
+                            "tenant_id": str(t_uuid),
+                        },
+                    )
+                    try:
+                        svc_err = SandboxService(stream_db)
+                        await svc_err.finish_run(run_id, "failed", str(agent_err))
+                        await stream_db.commit()
+                    except Exception:
+                        pass
+                    yield f"data: {json.dumps({'type': 'error', 'error': str(agent_err), 'run_id': str(run_id)})}\n\n"
+                    yield f"data: {json.dumps({'type': 'done', 'run_id': str(run_id)})}\n\n"
+                    return
 
-            sandbox_overrides = runtime_sandbox_resolver.sandbox_runtime_overrides(
-                effective_config,
-                agent_version=resolved_agent_state.agent_version,
-            )
+            if resolved_agent_state is not None:
+                sandbox_overrides = runtime_sandbox_resolver.sandbox_runtime_overrides(
+                    effective_config,
+                    agent_version=resolved_agent_state.agent_version,
+                )
+            else:
+                sandbox_overrides = runtime_sandbox_resolver.sandbox_runtime_overrides(
+                    effective_config,
+                    agent_version=None,
+                )
             sandbox_overrides["logging_level"] = "full"
             runtime_trace = RuntimeTraceLogger(
                 session=stream_db,

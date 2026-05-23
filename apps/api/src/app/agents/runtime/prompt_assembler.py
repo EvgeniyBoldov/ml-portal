@@ -191,10 +191,6 @@ class PromptAssembler:
             policies_text = _text(platform_config.get("policies_text"))
             if policies_text:
                 platform_lines.append(f"- Policies: {policies_text}")
-            for key in ("abs_max_steps", "abs_max_timeout_s", "abs_max_retries", "abs_max_tool_calls_per_step"):
-                value = platform_config.get(key)
-                if value is not None:
-                    platform_lines.append(f"- {key}: {value}")
         if platform_lines:
             blocks.append("### Platform Constraints\n" + "\n".join(platform_lines))
 

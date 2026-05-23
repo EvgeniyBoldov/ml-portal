@@ -43,6 +43,7 @@ from .chat_turn import ChatTurn
 from .sandbox import SandboxSession, SandboxOverride, SandboxRun, SandboxRunStep
 from .discovered_tool import DiscoveredTool
 from .memory import Fact, FactScope, FactSource, DialogueSummary
+from .execution_limit import ExecutionLimit, ExecutionLimitScope
 
 __all__ = [
     "Base",
@@ -114,4 +115,6 @@ __all__ = [
     "FactScope",
     "FactSource",
     "DialogueSummary",
+    "ExecutionLimit",
+    "ExecutionLimitScope",
 ]

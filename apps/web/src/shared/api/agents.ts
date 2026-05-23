@@ -16,12 +16,8 @@ export interface Agent {
   current_version_id?: string | null;
   model?: string | null;
   temperature?: number | null;
-  max_tokens?: number | null;
   requires_confirmation_for_write?: boolean | null;
   risk_level?: string | null;
-  max_steps?: number | null;
-  timeout_s?: number | null;
-  max_retries?: number | null;
   logging_level?: string;
   allowed_collection_ids?: string[] | null;
   versions_count?: number;
@@ -72,16 +68,6 @@ export interface AgentVersion {
   output_format?: string | null;
   examples?: string | null;
   planner_short_info?: string | null;
-  // Execution config
-  model?: string | null;
-  timeout_s?: number | null;
-  max_steps?: number | null;
-  max_retries?: number | null;
-  max_tokens?: number | null;
-  temperature?: number | null;
-  // Safety knobs
-  requires_confirmation_for_write?: boolean | null;
-  risk_level?: string | null;
   never_do?: string | null;
   allowed_ops?: string | null;
   tags?: string[] | null;
@@ -98,12 +84,8 @@ export interface AgentCreate {
   description?: string;
   model?: string | null;
   temperature?: number | null;
-  max_tokens?: number | null;
   requires_confirmation_for_write?: boolean | null;
   risk_level?: string | null;
-  max_steps?: number | null;
-  timeout_s?: number | null;
-  max_retries?: number | null;
   tags?: string[];
   logging_level?: string;
   allowed_collection_ids?: string[] | null;
@@ -114,12 +96,8 @@ export interface AgentUpdate {
   description?: string;
   model?: string | null;
   temperature?: number | null;
-  max_tokens?: number | null;
   requires_confirmation_for_write?: boolean | null;
   risk_level?: string | null;
-  max_steps?: number | null;
-  timeout_s?: number | null;
-  max_retries?: number | null;
   tags?: string[];
   logging_level?: string;
   allowed_collection_ids?: string[] | null;
@@ -135,16 +113,6 @@ export interface AgentVersionCreate {
   output_format?: string | null;
   examples?: string | null;
   planner_short_info?: string | null;
-  // Execution config
-  model?: string | null;
-  timeout_s?: number | null;
-  max_steps?: number | null;
-  max_retries?: number | null;
-  max_tokens?: number | null;
-  temperature?: number | null;
-  // Safety knobs
-  requires_confirmation_for_write?: boolean | null;
-  risk_level?: string | null;
   never_do?: string | null;
   allowed_ops?: string | null;
   tags?: string[] | null;
@@ -163,16 +131,6 @@ export interface AgentVersionUpdate {
   output_format?: string | null;
   examples?: string | null;
   planner_short_info?: string | null;
-  // Execution config
-  model?: string | null;
-  timeout_s?: number | null;
-  max_steps?: number | null;
-  max_retries?: number | null;
-  max_tokens?: number | null;
-  temperature?: number | null;
-  // Safety knobs
-  requires_confirmation_for_write?: boolean | null;
-  risk_level?: string | null;
   never_do?: string | null;
   allowed_ops?: string | null;
   tags?: string[] | null;

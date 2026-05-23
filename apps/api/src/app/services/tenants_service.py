@@ -225,7 +225,6 @@ class AsyncTenantsService:
             "extra_embed_model": tenant.embedding_model_alias,
             "ocr": tenant.ocr,
             "layout": tenant.layout,
-            "default_agent_slug": tenant.default_agent_slug,
             "created_at": tenant.created_at,
             "updated_at": tenant.updated_at,
         }

@@ -32,6 +32,7 @@ from app.runtime.contracts import (
 )
 from app.runtime.envelope import PhasedEvent
 from app.runtime.events import OrchestrationPhase, RuntimeEvent, RuntimeEventType
+from app.runtime.llm.limits import LLMLimitExceededError
 from app.runtime.operation_errors import RuntimeErrorCode
 from app.runtime.ports import (
     AgentExecutionPort,
@@ -208,10 +209,14 @@ class PlanningStage:
                 logger.error(
                     "Planner failure on iter=%s: %s", runtime_state.iter_count, exc, exc_info=True
                 )
+                error_code = None
+                if isinstance(exc, LLMLimitExceededError):
+                    error_code = exc.code
                 runtime_state.status = PipelineStopReason.FAILED.value
                 runtime_state.final_error = f"planner_exception: {exc}"
                 yield PhasedEvent(
                     RuntimeEvent.error(f"Planner failed: {exc}", recoverable=False,
+                                       error_code=error_code,
                                        parent_entity_type="planner_iteration",
                                        parent_entity_id=planner_iteration_id),
                     OrchestrationPhase.PLANNER,

@@ -16,18 +16,12 @@ class OrchestrationBase(BaseModel):
     # === Executor Settings (used by AgentRuntime) ===
     executor_model: Optional[str] = Field(None, description="Default model alias for execution/generation")
     executor_temperature: Optional[float] = Field(0.7, description="Default temperature for execution/generation")
-    executor_timeout_s: Optional[int] = Field(None, description="Default executor timeout in seconds")
-    executor_max_steps: Optional[int] = Field(None, description="Default max planner loop iterations")
-    executor_max_retries: Optional[int] = Field(None, description="Default max tool call retries")
 
 
 class ExecutorSettingsUpdate(BaseModel):
     """Schema for updating executor settings."""
     executor_model: Optional[str] = Field(None, description="Default model alias for execution/generation")
     executor_temperature: Optional[float] = Field(None, description="Default temperature for execution/generation")
-    executor_timeout_s: Optional[int] = Field(None, description="Default executor timeout in seconds")
-    executor_max_steps: Optional[int] = Field(None, description="Default max planner loop iterations")
-    executor_max_retries: Optional[int] = Field(None, description="Default max tool call retries")
 
 
 class OrchestrationSettingsResponse(OrchestrationBase):

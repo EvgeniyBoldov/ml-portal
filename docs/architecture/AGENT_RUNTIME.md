@@ -140,9 +140,10 @@ LLM-facing contract provider-agnostic и использует MCP-compatible des
 | `partial` | Часть операций недоступна | supports_partial_mode=true |
 | `unavailable` | Агент недоступен | Required operation unavailable, partial=false |
 
-## Policy Limits
+## Policy Gates и Execution Limits
 
-Ограничения из Policy модели:
+Ограничения исполнения теперь задаются через `execution_limits` (а не через platform caps).
+Policy gates остаются отдельным runtime enforcement-слоем.
 
 | Параметр | Описание |
 |----------|----------|
@@ -153,6 +154,14 @@ LLM-facing contract provider-agnostic и использует MCP-compatible des
 | `max_retries` | Повторы при ошибке |
 | `streaming_enabled` | Разрешить стриминг |
 | `citations_required` | Требовать цитаты |
+
+Источник значений лимитов:
+- `platform` scope — базовые лимиты по умолчанию;
+- `orchestrator_role` scope — лимиты системных ролей (`planner`, `synthesizer`, `fact_extractor`, `summary_compactor`);
+- `agent` scope — лимиты конкретного агента.
+
+Policy gates (`require_confirmation_*`, `forbid_*`) применяются в `PolicyEngine` перед выполнением действия.
+`require_backup_before_write` сейчас хранится как конфиг-флаг, но в enforcement-решениях runtime не участвует.
 
 ## Collection resolution
 

@@ -13,10 +13,11 @@ import collectionsApi from '@/shared/api/collections';
 import { rbacApi, type RbacEffect } from '@/shared/api/rbac';
 import { lifecycleApi } from '@/shared/api/lifecycle';
 import { qk } from '@/shared/api/keys';
+import { buildEntityCrudActions } from '@/shared/ui/EntityPage/entityCrudActions';
 import { useRbacRuleEditor } from '@/shared/hooks/useRbacRuleEditor';
 import { EntityPageV2, Tab, type BreadcrumbItem } from '@/shared/ui/EntityPage';
 import { Block } from '@/shared/ui/GridLayout';
-import { Badge, Button, LifecycleDeleteDialog, Select } from '@/shared/ui';
+import { Badge, LifecycleDeleteDialog, Select } from '@/shared/ui';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
 import {
   RBAC_EFFECT_LABELS,
@@ -292,17 +293,17 @@ export function RbacRulePage() {
         onSave={handleSave}
         onCancel={handleCancel}
         actionButtons={
-          mode === 'view' ? (
-            <div style={{ display: 'flex', gap: 8 }}>
-              {rule?.lifecycle_status === 'deprecated' && (
-                <Button variant="outline" onClick={() => restoreMutation.mutate()} disabled={restoreMutation.isPending}>
-                  Восстановить
-                </Button>
-              )}
-              <Button variant="outline" onClick={handleEdit}>Редактировать</Button>
-              <Button variant="danger" onClick={handleDelete}>Удалить</Button>
-            </div>
-          ) : undefined
+          mode === 'view'
+            ? buildEntityCrudActions({
+                mode: 'view',
+                tone: 'default',
+                lifecycleStatus: rule?.lifecycle_status,
+                onEdit: handleEdit,
+                onDelete: handleDelete,
+                onRestore: () => restoreMutation.mutate(),
+                restorePending: restoreMutation.isPending,
+              })
+            : undefined
         }
       >
         <Tab title="Обзор" layout="grid">

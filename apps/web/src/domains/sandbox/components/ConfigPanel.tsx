@@ -489,7 +489,7 @@ export function ConfigPanel({
       return field.options.map((value) => ({ value, label: value }));
     }
 
-    if (field.name.endsWith('default_agent_slug')) {
+    if (field.name.endsWith('agent.slug')) {
       const agentOptions = catalog?.agents.map((agent) => ({ value: agent.slug, label: agent.name })) ?? [];
       if (agentOptions.length > 0) {
         return agentOptions;

@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import String, DateTime, Integer, Float
+from sqlalchemy import String, DateTime, Float
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -32,12 +32,7 @@ class OrchestrationSettings(Base):
     # === Executor Settings ===
     executor_model: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, comment="Default model alias for execution/generation")
     executor_temperature: Mapped[Optional[float]] = mapped_column(Float, nullable=True, default=0.7)
-    executor_timeout_s: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, comment="Default timeout for executor in seconds")
-    executor_max_steps: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, comment="Default max planner loop iterations")
-    executor_max_retries: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, comment="Default max tool call retries per step")
-
-    # Legacy DB columns may still exist physically (historical migrations),
-    # but they are intentionally not mapped/used by runtime anymore.
+    # Legacy DB columns may still exist physically until cleanup migration.
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False

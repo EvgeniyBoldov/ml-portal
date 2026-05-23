@@ -23,12 +23,8 @@ class AgentCreate(BaseModel):
     logging_level: str = Field(default="brief", description="none | errors | brief | full")
     model: Optional[str] = Field(default=None, description="LLM model alias")
     temperature: Optional[float] = Field(default=None, description="LLM temperature (orchestration default if None)")
-    max_tokens: Optional[int] = Field(default=None, description="Max output tokens (orchestration default if None)")
     requires_confirmation_for_write: Optional[bool] = Field(default=None, description="Require confirmation for write ops")
     risk_level: Optional[str] = Field(default=None, description="low, medium, high")
-    max_steps: Optional[int] = Field(default=None, description="Max agent loop steps (orchestration default if None)")
-    timeout_s: Optional[int] = Field(default=None, description="Per-run timeout in seconds (orchestration default if None)")
-    max_retries: Optional[int] = Field(default=None, description="Max tool call retries (orchestration default if None)")
     allowed_collection_ids: Optional[List[UUID]] = Field(default=None, description="Whitelist of Collection IDs bound to agent. NULL = all collections.")
 
 
@@ -39,12 +35,8 @@ class AgentUpdate(BaseModel):
     logging_level: Optional[str] = Field(default=None, description="none, brief, full")
     model: Optional[str] = Field(default=None, description="LLM model alias")
     temperature: Optional[float] = None
-    max_tokens: Optional[int] = None
     requires_confirmation_for_write: Optional[bool] = None
     risk_level: Optional[str] = None
-    max_steps: Optional[int] = None
-    timeout_s: Optional[int] = None
-    max_retries: Optional[int] = None
     allowed_collection_ids: Optional[List[UUID]] = None
 
 
@@ -58,12 +50,8 @@ class AgentResponse(BaseModel):
     logging_level: str = Field(default="brief", description="none | errors | brief | full")
     model: Optional[str] = None
     temperature: Optional[float] = None
-    max_tokens: Optional[int] = None
     requires_confirmation_for_write: Optional[bool] = None
     risk_level: Optional[str] = None
-    max_steps: Optional[int] = None
-    timeout_s: Optional[int] = None
-    max_retries: Optional[int] = None
     allowed_collection_ids: Optional[List[UUID]] = None
     lifecycle_status: str = "active"
     created_at: datetime
@@ -83,12 +71,8 @@ class AgentListItem(BaseModel):
     logging_level: str = "brief"
     model: Optional[str] = None
     temperature: Optional[float] = None
-    max_tokens: Optional[int] = None
     requires_confirmation_for_write: Optional[bool] = None
     risk_level: Optional[str] = None
-    max_steps: Optional[int] = None
-    timeout_s: Optional[int] = None
-    max_retries: Optional[int] = None
     allowed_collection_ids: Optional[List[UUID]] = None
     lifecycle_status: str = "active"
     versions_count: int = 0

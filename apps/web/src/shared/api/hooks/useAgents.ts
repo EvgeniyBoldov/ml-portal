@@ -17,16 +17,6 @@ function toNullableString(value: unknown): string | null {
   return trimmed.length ? trimmed : null;
 }
 
-function toNullableNumber(value: unknown): number | null {
-  if (typeof value !== 'number' || Number.isNaN(value)) return null;
-  return value;
-}
-
-function toNullableBoolean(value: unknown): boolean | null {
-  if (typeof value !== 'boolean') return null;
-  return value;
-}
-
 function toNullableStringArray(value: unknown): string[] | null {
   if (!Array.isArray(value)) return null;
   const normalized = value
@@ -73,10 +63,6 @@ export function useAgentDetail(id: string) {
       description: entity?.description ?? '',
       model: entity?.model ?? '',
       temperature: entity?.temperature ?? null,
-      max_tokens: entity?.max_tokens ?? null,
-      max_steps: entity?.max_steps ?? null,
-      timeout_s: entity?.timeout_s ?? null,
-      max_retries: entity?.max_retries ?? null,
       requires_confirmation_for_write: entity?.requires_confirmation_for_write ?? null,
       risk_level: entity?.risk_level ?? '',
       logging_level: entity?.logging_level ?? 'brief',
@@ -130,16 +116,6 @@ export function useAgentVersionEditor(agentId: string, versionParam: string | un
       tool_use_rules: version?.tool_use_rules ?? '',
       output_format: version?.output_format ?? '',
       examples: version?.examples ?? '',
-      // Execution config
-      model: version?.model ?? '',
-      timeout_s: version?.timeout_s ?? null,
-      max_steps: version?.max_steps ?? null,
-      max_retries: version?.max_retries ?? null,
-      max_tokens: version?.max_tokens ?? null,
-      temperature: version?.temperature ?? null,
-      // Safety knobs
-      requires_confirmation_for_write: version?.requires_confirmation_for_write ?? false,
-      risk_level: version?.risk_level ?? '',
       never_do: version?.never_do ?? '',
       allowed_ops: version?.allowed_ops ?? '',
       tags: version?.tags ?? [],
@@ -157,14 +133,6 @@ export function useAgentVersionEditor(agentId: string, versionParam: string | un
         typeof formData.examples === 'string'
           ? toNullableString(formData.examples)
           : (formData.examples ? JSON.stringify(formData.examples) : null),
-      model: toNullableString(formData.model),
-      timeout_s: toNullableNumber(formData.timeout_s),
-      max_steps: toNullableNumber(formData.max_steps),
-      max_retries: toNullableNumber(formData.max_retries),
-      max_tokens: toNullableNumber(formData.max_tokens),
-      temperature: toNullableNumber(formData.temperature),
-      requires_confirmation_for_write: toNullableBoolean(formData.requires_confirmation_for_write),
-      risk_level: toNullableString(formData.risk_level),
       never_do: toNullableString(formData.never_do),
       allowed_ops: toNullableString(formData.allowed_ops),
       tags: toNullableStringArray(formData.tags),

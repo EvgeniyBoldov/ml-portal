@@ -14,6 +14,8 @@ from typing import Any, Dict, Optional, TYPE_CHECKING
 from app.agents.runtime.policy import GenerationParams, PolicyLimits
 from app.core.logging import get_logger
 from app.core.db import get_session_factory
+from app.models.execution_limit import ExecutionLimitScope
+from app.services.execution_limits_service import ExecutionLimitsService
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -71,20 +73,20 @@ class ExecutionConfigResolver:
                     )
 
                 agent = exec_request.agent
-
-                # Orchestration defaults
-                orch_max_steps = config.get("executor_max_steps", policy.max_steps)
-                orch_timeout_s = config.get("executor_timeout_s", 600)
-                orch_max_retries = config.get("executor_max_retries", policy.max_retries)
-
-                # Agent-level overrides (NULL = use orchestration default)
-                agent_max_steps = getattr(agent, "max_steps", None) if agent else None
-                agent_timeout_s = getattr(agent, "timeout_s", None) if agent else None
-                agent_max_retries = getattr(agent, "max_retries", None) if agent else None
-
-                policy.max_steps = agent_max_steps if agent_max_steps is not None else orch_max_steps
-                policy.max_wall_time_ms = (agent_timeout_s if agent_timeout_s is not None else orch_timeout_s) * 1000
-                policy.max_retries = agent_max_retries if agent_max_retries is not None else orch_max_retries
+                limits_service = ExecutionLimitsService(session)
+                agent_slug = str(getattr(agent, "slug", "") or "").strip() if agent else ""
+                limits = await limits_service.get_effective(
+                    scope_type=ExecutionLimitScope.AGENT,
+                    scope_ref=agent_slug or None,
+                )
+                if limits.runtime_steps_max is not None:
+                    policy.max_steps = int(limits.runtime_steps_max)
+                if limits.runtime_wall_time_ms_max is not None:
+                    policy.max_wall_time_ms = int(limits.runtime_wall_time_ms_max)
+                if limits.runtime_retries_max is not None:
+                    policy.max_retries = int(limits.runtime_retries_max)
+                if limits.runtime_tool_calls_max is not None:
+                    policy.max_tool_calls_total = int(limits.runtime_tool_calls_max)
 
                 # temperature: Agent -> orchestration default
                 agent_temperature = getattr(agent, "temperature", None) if agent else None
@@ -93,12 +95,8 @@ class ExecutionConfigResolver:
                 else:
                     gen.temperature = config.get("executor_temperature", gen.temperature)
 
-                # max_tokens: Agent only
-                agent_max_tokens = getattr(agent, "max_tokens", None) if agent else None
-                if agent_max_tokens is not None:
-                    gen.max_tokens = agent_max_tokens
-
-                self._apply_platform_caps(policy, platform_config)
+                if limits.llm_output_tokens_max is not None:
+                    gen.max_tokens = int(limits.llm_output_tokens_max)
 
                 # model: runtime override -> Agent.model -> orchestration default
                 resolved_model = model
@@ -156,7 +154,13 @@ class ExecutionConfigResolver:
                 if temperature is None:
                     gen.temperature = config.get("executor_temperature", 0.7)
                 if gen.max_tokens is None and exec_request.agent:
-                    gen.max_tokens = getattr(exec_request.agent, "max_tokens", None)
+                    limits_service = ExecutionLimitsService(session)
+                    limits = await limits_service.get_effective(
+                        scope_type=ExecutionLimitScope.AGENT,
+                        scope_ref=str(getattr(exec_request.agent, "slug", "") or "").strip() or None,
+                    )
+                    if limits.llm_output_tokens_max is not None:
+                        gen.max_tokens = int(limits.llm_output_tokens_max)
 
                 gen.model = await self._resolve_model_alias(
                     session,
@@ -165,18 +169,6 @@ class ExecutionConfigResolver:
                 )
 
         return gen
-
-    @staticmethod
-    def _apply_platform_caps(policy: PolicyLimits, platform_config: dict) -> None:
-        abs_max_steps = platform_config.get("abs_max_steps")
-        if abs_max_steps is not None and policy.max_steps > abs_max_steps:
-            policy.max_steps = abs_max_steps
-
-        abs_max_timeout_s = platform_config.get("abs_max_timeout_s")
-        if abs_max_timeout_s is not None:
-            max_wall_cap_ms = abs_max_timeout_s * 1000
-            if policy.max_wall_time_ms > max_wall_cap_ms:
-                policy.max_wall_time_ms = max_wall_cap_ms
 
     @staticmethod
     async def _resolve_model_alias(

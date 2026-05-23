@@ -12,7 +12,7 @@
  */
 import { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation } from '@tanstack/react-query';
 import { 
   EntityPageV2,
   Tab,
@@ -20,13 +20,17 @@ import {
   Badge,
   Button,
   Input,
+  useToast,
   type DataTableColumn,
 } from '@/shared/ui';
 import { collectionsApi, type Collection } from '@/shared/api/collections';
+import { adminApi } from '@/shared/api/admin';
 import { qk } from '@/shared/api/keys';
+import { ADMIN_ACTION_LABELS, ADMIN_ENTITY_LABELS } from '@/shared/constants/adminLabels';
 
 export function CollectionListPage() {
   const navigate = useNavigate();
+  const { showToast } = useToast();
   const [search, setSearch] = useState('');
 
   const { data, isLoading } = useQuery({
@@ -35,6 +39,19 @@ export function CollectionListPage() {
   });
 
   const collections = data?.items ?? [];
+
+  const reindexBatchMutation = useMutation({
+    mutationFn: () => adminApi.runRagReindexBatch({ limit: 100, dry_run: false }),
+    onSuccess: (res) => {
+      showToast(
+        `Переиндексация: в очереди ${res.queued}, пропущено ${res.skipped}, ошибок ${res.failed}, проверено ${res.scanned}`,
+        res.failed > 0 ? 'warning' : 'success',
+      );
+    },
+    onError: (err: Error) => {
+      showToast(err.message || 'Не удалось запустить переиндексацию', 'error');
+    },
+  });
 
   const filteredCollections = useMemo(() => {
     if (!search.trim()) return collections;
@@ -129,11 +146,18 @@ export function CollectionListPage() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
+          <Button
+            variant="outline"
+            onClick={() => reindexBatchMutation.mutate()}
+            disabled={reindexBatchMutation.isPending}
+          >
+            {reindexBatchMutation.isPending ? 'Запуск...' : ADMIN_ACTION_LABELS.reindexRag}
+          </Button>
         </div>
       }
       actionButtons={
         <Button variant="primary" onClick={() => navigate('/admin/collections/new')}>
-          Создать коллекцию
+          {`${ADMIN_ACTION_LABELS.create} ${ADMIN_ENTITY_LABELS.collection}`}
         </Button>
       }
     >

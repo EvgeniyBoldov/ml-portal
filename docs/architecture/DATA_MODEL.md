@@ -14,10 +14,14 @@
 │ name        │       │ login       │
 │ description │       │ email       │
 │ is_active   │       │ role        │
+│ lifecycle_  │       │ lifecycle_  │
+│ status      │       │ status      │
 │ ocr         │       │ tenant_id   │
 │ layout      │       │ is_active   │
 └─────────────┘       └─────────────┘
 ```
+
+Lifecycle статусы используются для soft/hard delete процесса (`active` / `deprecated`) и фоновой GC очистки по retention TTL.
 
 ### Agents & Prompts
 
@@ -57,6 +61,30 @@
 - `PolicyVersion` — версионированные данные: лимиты, таймауты, бюджеты
 - `recommended_version_id` — указывает на версию для использования по умолчанию
 - Статусы версий: `draft` (черновик), `active` (активная), `inactive` (неактивная)
+
+### Execution Limits (Unified)
+
+Единая модель лимитов исполнения хранится в таблице `execution_limits`.
+
+```
+┌────────────────────────────┐
+│       ExecutionLimit       │
+├────────────────────────────┤
+│ id                         │
+│ scope_type                 │ # platform | orchestrator_role | agent
+│ scope_ref                  │ # global | planner/... | agent_slug
+│ llm_input_tokens_max       │
+│ llm_output_tokens_max      │
+│ llm_context_window_max     │
+│ runtime_steps_max          │
+│ runtime_tool_calls_max     │
+│ runtime_retries_max        │
+│ runtime_wall_time_ms_max   │
+│ runtime_tokens_total_max   │
+└────────────────────────────┘
+```
+
+Это канонический источник runtime/LLM лимитов.
 
 ### Tools & Instances
 

@@ -14,7 +14,6 @@ class TenantBase(BaseModel):
     extra_embed_model: Optional[str] = Field(None, description="An optional extra embedding model (besides global)")
     ocr: bool = Field(False, description="Enable OCR processing")
     layout: bool = Field(False, description="Enable layout analysis")
-    default_agent_slug: Optional[str] = Field(None, max_length=100, description="Default agent slug for this tenant")
     
     model_config = ConfigDict(extra='ignore')
 
@@ -28,7 +27,6 @@ class TenantUpdate(BaseModel):
     extra_embed_model: Optional[str] = Field(None, description="An optional extra embedding model (besides global)")
     ocr: Optional[bool] = Field(None, description="Enable OCR processing")
     layout: Optional[bool] = Field(None, description="Enable layout analysis")
-    default_agent_slug: Optional[str] = Field(None, max_length=100, description="Default agent slug for this tenant")
     is_default: Optional[bool] = Field(None, description="Set this tenant as platform default")
     
     model_config = ConfigDict(extra='ignore')
@@ -37,7 +35,6 @@ class Tenant(TenantBase):
     is_default: bool = Field(False, description="Platform default tenant flag")
     embed_models: List[str] = Field(default_factory=list, description="Resolved embedding models (global + optional extra)")
     rerank_model: Optional[str] = Field(None, description="Resolved global rerank model")
-    default_agent_slug: Optional[str] = Field(None, description="Default agent slug for this tenant")
     id: str = Field(..., description="Tenant ID")
     lifecycle_status: str = Field(default="active")
     deprecated_at: Optional[datetime] = None

@@ -28,6 +28,8 @@ from app.schemas.agent_runs import (
 )
 from app.services.runtime_diagnostics_service import RuntimeDiagnosticsService
 from app.services.platform_settings_service import PlatformSettingsProvider
+from app.services.execution_limits_service import ExecutionLimitsService
+from app.models.execution_limit import ExecutionLimitScope
 from app.services.runtime_capability_graph_service import (
     CollectionGraphInfo,
     RuntimeCapabilityGraphService,
@@ -126,10 +128,12 @@ async def get_runtime_hitl_policy(
         default_collection_allow=True,
     )
     platform_config = await PlatformSettingsProvider.get_instance().get_config(session)
+    limits_service = ExecutionLimitsService(session)
+    limits = await limits_service.get_effective(scope_type=ExecutionLimitScope.PLATFORM, scope_ref="global")
     payload = RuntimeHitlPolicyContractService().build(
         platform_config=platform_config,
         operations=resolved.resolved_operations,
-        max_iters=int(platform_config.get("abs_max_steps") or DEFAULT_MAX_ITERS),
+        max_iters=int(limits.runtime_steps_max or DEFAULT_MAX_ITERS),
     )
     return RuntimeHitlPolicyContractResponse(
         tenant_id=tenant_id,

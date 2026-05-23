@@ -9,6 +9,7 @@ import { useTenants } from '@shared/hooks/useTenants';
 import type { Tenant } from '@shared/api/tenant';
 import { EntityPageV2, Tab } from '@/shared/ui/EntityPage';
 import { DataTable, type DataTableColumn, Badge, Button, Input } from '@/shared/ui';
+import { ADMIN_ACTION_LABELS, ADMIN_ENTITY_LABELS } from '@/shared/constants/adminLabels';
 
 const ROLE_CONFIG: Record<string, { label: string; tone: 'danger' | 'warn' | 'info' | 'neutral' }> = {
   admin: { label: 'Админ', tone: 'danger' },
@@ -164,7 +165,7 @@ export function UsersListPage() {
       }
       actionButtons={
         <Button onClick={() => navigate('/admin/users/new')}>
-          Создать
+          {`${ADMIN_ACTION_LABELS.create} ${ADMIN_ENTITY_LABELS.user}`}
         </Button>
       }
     >
@@ -183,7 +184,7 @@ export function UsersListPage() {
           data={users}
           keyField="id"
           loading={isLoading}
-          emptyText="Пользователи не найдены. Нажмите «Создать» для добавления."
+          emptyText={`Пользователи не найдены. Нажмите «${ADMIN_ACTION_LABELS.create} ${ADMIN_ENTITY_LABELS.user}» для добавления.`}
           paginated
           pageSize={20}
           onRowClick={handleRowClick}

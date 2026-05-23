@@ -12,6 +12,7 @@ import {
   type BreadcrumbItem,
 } from '@/shared/ui';
 import { AIGenerateButton } from '@/shared/ui/AIGenerateButton';
+import { ContractAwareEditor } from '@/shared/ui/ContractAwareEditor';
 import {
   Block,
   type FieldConfig,
@@ -24,120 +25,191 @@ import { useAgentVersionEditor } from '@/shared/api/hooks';
 const IDENTITY_FIELDS: FieldConfig[] = [
   {
     key: 'identity',
-    type: 'textarea',
+    type: 'custom',
     label: 'Identity',
     description: 'Кто по жизни',
-    placeholder: 'Ты — опытный сетевой инженер...',
-    rows: 4,
+    render: (value, editable, onChange) => (
+      <ContractAwareEditor
+        value={String(value ?? '')}
+        onChange={onChange}
+        fieldLabel="Identity"
+        disabled={!editable}
+        rows={4}
+        placeholder="Ты — опытный сетевой инженер..."
+      />
+    ),
   },
   {
     key: 'mission',
-    type: 'textarea',
+    type: 'custom',
     label: 'Mission',
     description: 'Предназначение агента',
-    placeholder: 'Помогаешь диагностировать и решать сетевые проблемы...',
-    rows: 4,
+    render: (value, editable, onChange) => (
+      <ContractAwareEditor
+        value={String(value ?? '')}
+        onChange={onChange}
+        fieldLabel="Mission"
+        disabled={!editable}
+        rows={4}
+        placeholder="Помогаешь диагностировать и решать сетевые проблемы..."
+      />
+    ),
   },
   {
     key: 'scope',
-    type: 'textarea',
+    type: 'custom',
     label: 'Scope',
     description: 'Границы (что делает / что НЕ делает)',
-    placeholder: 'Работаешь только с сетевым оборудованием. НЕ занимаешься серверами...',
-    rows: 4,
+    render: (value, editable, onChange) => (
+      <ContractAwareEditor
+        value={String(value ?? '')}
+        onChange={onChange}
+        fieldLabel="Scope"
+        disabled={!editable}
+        rows={4}
+        placeholder="Работаешь только с сетевым оборудованием. НЕ занимаешься серверами..."
+      />
+    ),
   },
   {
     key: 'planner_short_info',
-    type: 'textarea',
+    type: 'custom',
     label: 'Short Info (Planner)',
     description: 'Используется только планером для выбора агента; в системный промпт агента не входит',
-    placeholder: 'Коротко: когда этот агент должен вызываться планером',
-    rows: 3,
+    render: (value, editable, onChange) => (
+      <ContractAwareEditor
+        value={String(value ?? '')}
+        onChange={onChange}
+        fieldLabel="Short Info (Planner)"
+        disabled={!editable}
+        rows={3}
+        placeholder="Коротко: когда этот агент должен вызываться планером"
+      />
+    ),
   },
 ];
 
 const RULES_FIELDS: FieldConfig[] = [
   {
     key: 'rules',
-    type: 'textarea',
+    type: 'custom',
     label: 'Rules',
     description: 'Алгоритм/гайдлайны',
-    placeholder: '1. Сначала уточни hostname или IP...',
-    rows: 6,
+    render: (value, editable, onChange) => (
+      <ContractAwareEditor
+        value={String(value ?? '')}
+        onChange={onChange}
+        fieldLabel="Rules"
+        disabled={!editable}
+        rows={6}
+        placeholder="1. Сначала уточни hostname или IP..."
+      />
+    ),
   },
   {
     key: 'tool_use_rules',
-    type: 'textarea',
+    type: 'custom',
     label: 'Tool Use Rules',
     description: 'Когда/как вызывать инструменты',
-    placeholder: 'Всегда вызывай netbox_search перед изменениями...',
-    rows: 6,
+    render: (value, editable, onChange) => (
+      <ContractAwareEditor
+        value={String(value ?? '')}
+        onChange={onChange}
+        fieldLabel="Tool Use Rules"
+        disabled={!editable}
+        rows={6}
+        placeholder="Всегда вызывай netbox_search перед изменениями..."
+      />
+    ),
   },
 ];
 
 const OUTPUT_FIELDS: FieldConfig[] = [
   {
     key: 'output_format',
-    type: 'textarea',
+    type: 'custom',
     label: 'Output Format',
     description: 'Структура ответа',
-    placeholder: 'Отвечай в формате:\n## Диагноз\n## Шаги\n## Результат',
-    rows: 5,
+    render: (value, editable, onChange) => (
+      <ContractAwareEditor
+        value={String(value ?? '')}
+        onChange={onChange}
+        fieldLabel="Output Format"
+        disabled={!editable}
+        rows={5}
+        placeholder={'Отвечай в формате:\n## Диагноз\n## Шаги\n## Результат'}
+      />
+    ),
   },
   {
     key: 'examples',
-    type: 'textarea',
+    type: 'custom',
     label: 'Examples',
     description: 'Few-shot примеры ответов',
-    placeholder: 'User: проверь статус свитча...\nAssistant: ...',
-    rows: 5,
+    render: (value, editable, onChange) => (
+      <ContractAwareEditor
+        value={String(value ?? '')}
+        onChange={onChange}
+        fieldLabel="Examples"
+        disabled={!editable}
+        rows={5}
+        placeholder={'User: проверь статус свитча...\nAssistant: ...'}
+      />
+    ),
   },
 ];
 
 
 const SAFETY_FIELDS: FieldConfig[] = [
   {
-    key: 'requires_confirmation_for_write',
-    type: 'boolean',
-    label: 'Write',
-    description: 'Требует подтверждения для write-операций',
-  },
-  {
-    key: 'risk_level',
-    type: 'select',
-    label: 'Уровень риска',
-    options: [
-      { value: 'low', label: 'Low' },
-      { value: 'medium', label: 'Medium' },
-      { value: 'high', label: 'High' },
-      { value: 'destructive', label: 'Destructive' },
-    ],
-  },
-  {
     key: 'never_do',
-    type: 'textarea',
+    type: 'custom',
     label: 'Never Do',
     description: 'Что запрещено делать агенту',
-    placeholder: 'Никогда не удаляй данные без подтверждения...',
-    rows: 3,
+    render: (value, editable, onChange) => (
+      <ContractAwareEditor
+        value={String(value ?? '')}
+        onChange={onChange}
+        fieldLabel="Never Do"
+        disabled={!editable}
+        rows={3}
+        placeholder="Никогда не удаляй данные без подтверждения..."
+      />
+    ),
   },
   {
     key: 'allowed_ops',
-    type: 'textarea',
+    type: 'custom',
     label: 'Allowed Ops',
     description: 'Что можно делать',
-    placeholder: 'read, search, create_ticket...',
-    rows: 3,
+    render: (value, editable, onChange) => (
+      <ContractAwareEditor
+        value={String(value ?? '')}
+        onChange={onChange}
+        fieldLabel="Allowed Ops"
+        disabled={!editable}
+        rows={3}
+        placeholder="read, search, create_ticket..."
+      />
+    ),
   },
 ];
 
 const NOTES_FIELDS: FieldConfig[] = [
   {
     key: 'notes',
-    type: 'textarea',
+    type: 'custom',
     label: 'Заметки к версии',
-    placeholder: 'Описание изменений в этой версии...',
-    rows: 3,
+    render: (value, editable, onChange) => (
+      <ContractAwareEditor
+        value={String(value ?? '')}
+        onChange={onChange}
+        fieldLabel="Заметки к версии"
+        disabled={!editable}
+        rows={3}
+        placeholder="Описание изменений в этой версии..."
+      />
+    ),
   },
 ];
 
@@ -202,8 +274,6 @@ export function AgentVersionPage() {
     tool_use_rules: existingVersion?.tool_use_rules ?? '',
     output_format: existingVersion?.output_format ?? '',
     examples: existingVersion?.examples ?? '',
-    requires_confirmation_for_write: existingVersion?.requires_confirmation_for_write ?? false,
-    risk_level: existingVersion?.risk_level ?? '',
     never_do: existingVersion?.never_do ?? '',
     allowed_ops: existingVersion?.allowed_ops ?? '',
     tags: existingVersion?.tags ?? [],

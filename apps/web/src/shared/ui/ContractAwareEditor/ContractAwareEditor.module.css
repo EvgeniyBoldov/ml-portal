@@ -1,0 +1,303 @@
+.modal {
+  max-width: min(1280px, 96vw);
+  width: min(1280px, 96vw);
+}
+
+.modalBodyPlain {
+  padding: 0;
+}
+
+.modalBodySplit {
+  padding: 0;
+}
+
+.inlineEditorShell {
+  position: relative;
+}
+
+.inlineTextarea {
+  padding-right: 3rem;
+  min-height: 120px;
+  resize: vertical;
+}
+
+.expandButton {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  min-width: 36px;
+  min-height: 32px;
+  padding: 0;
+  z-index: 1;
+}
+
+.modalSplit {
+  display: flex;
+  align-items: stretch;
+  min-height: min(78vh, 900px);
+}
+
+.modalSingle {
+  min-height: min(78vh, 900px);
+  padding: var(--space-5);
+}
+
+.editorPane {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-5);
+}
+
+.editorHeader {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.editorTitle {
+  font-size: var(--text-lg);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.editorHint {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.modalTextarea {
+  flex: 1 1 auto;
+  min-height: 100%;
+  min-height: 520px;
+  resize: none;
+}
+
+.legendPane {
+  width: min(420px, 40vw);
+  min-width: 340px;
+  border-left: 1px solid var(--border);
+  background: var(--bg-secondary);
+  padding: var(--space-5);
+  overflow: auto;
+}
+
+.legendRoot {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.legendSection {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.legendSectionTitle {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.legendDetails,
+.variantCard {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+  overflow: hidden;
+}
+
+.legendSummary,
+.variantSummary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  font-weight: 600;
+}
+
+.legendSummary::-webkit-details-marker,
+.variantSummary::-webkit-details-marker {
+  display: none;
+}
+
+.legendBody,
+.variantBody {
+  padding: 0 var(--space-4) var(--space-4);
+}
+
+.legendList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.legendFieldButton {
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 6px 10px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.legendFieldButton:hover {
+  border-color: var(--primary);
+  background: var(--bg-hover);
+}
+
+.legendGroup {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.legendGroupTitle {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.legendChecklist {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.legendChecklistItem {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.schemaTree {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.schemaNode {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.schemaSummary {
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 6px 8px;
+  border-radius: 10px;
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+}
+
+.schemaSummary:hover {
+  background: var(--bg-hover);
+}
+
+.schemaName {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.schemaName code {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.schemaMeta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.schemaDescription {
+  font-size: 12px;
+  color: var(--text-secondary);
+  padding-left: 10px;
+}
+
+.schemaEnum {
+  font-size: 12px;
+  color: var(--text-secondary);
+  padding-left: 10px;
+  font-family: var(--font-mono, monospace);
+}
+
+.schemaChildren {
+  margin-left: 6px;
+  padding-left: 12px;
+  border-left: 1px dashed var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rawSchema {
+  margin: 0;
+  padding: var(--space-4);
+  background: var(--bg-secondary);
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  overflow: auto;
+  font-size: 12px;
+}
+
+.legendFooter {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border);
+}
+
+.legendFooterSummary {
+  display: flex;
+  align-items: center;
+}
+
+.legendMissing {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.legendMissingBadge {
+  max-width: 100%;
+}
+
+@media (max-width: 900px) {
+  .modalSplit {
+    flex-direction: column;
+    min-height: auto;
+  }
+
+  .legendPane {
+    width: 100%;
+    min-width: 0;
+    border-left: 0;
+    border-top: 1px solid var(--border);
+  }
+}

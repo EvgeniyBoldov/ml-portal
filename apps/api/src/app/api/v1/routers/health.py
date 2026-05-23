@@ -146,14 +146,14 @@ async def readiness_check_endpoint(session: AsyncSession = Depends(db_session)):
             logger.warning(f"Agent runtime health check failed: {e}")
             app_services["agent_runtime"] = "not_ready"
         
-        # Default agent resolution
+        # Published agents availability
         try:
             from app.services.agent_service import AgentService
-            default_agent = await AgentService(session).get_default_agent_slug(None)
-            app_services["default_agent"] = "ready" if default_agent else "not_ready"
+            routable_agents = await AgentService(session).list_routable_agents_for_planner()
+            app_services["published_agents"] = "ready" if routable_agents else "not_ready"
         except Exception as e:
-            logger.warning(f"Default agent health check failed: {e}")
-            app_services["default_agent"] = "not_ready"
+            logger.warning(f"Published agents health check failed: {e}")
+            app_services["published_agents"] = "not_ready"
         
         # Celery worker
         try:

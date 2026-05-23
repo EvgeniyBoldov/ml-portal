@@ -14,6 +14,7 @@ import { qk } from '@shared/api/keys';
 import { lifecycleApi } from '@shared/api/lifecycle';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
 import { EntityPageV2, Tab, type BreadcrumbItem, type EntityPageMode } from '@/shared/ui/EntityPage';
+import { buildEntityCrudActions, composeEntityActions } from '@/shared/ui/EntityPage/entityCrudActions';
 import { Block, type FieldConfig } from '@/shared/ui/GridLayout';
 import { Button, LifecycleDeleteDialog, Modal } from '@/shared/ui';
 import Input from '@/shared/ui/Input';
@@ -451,25 +452,28 @@ export function UserPage() {
           title="Обзор"
           layout="grid"
           id="overview"
-          actions={
-            mode === 'view' ? [
-              ...(user?.lifecycle_status === 'deprecated'
-                ? [<Button key="restore" variant="outline" onClick={() => restoreMutation.mutate()} disabled={restoreMutation.isPending}>Восстановить</Button>]
-                : []),
-              <Button key="edit" onClick={handleEdit}>Редактировать</Button>,
-              <Button key="delete" variant="danger" onClick={handleDelete}>Удалить</Button>,
-              ...(isLocalAccount ? [
-                <Button key="set-pwd" variant="outline" onClick={() => setShowSetPassword(true)}>
-                  Установить пароль
-                </Button>,
-              ] : []),
-            ] : mode === 'edit' ? [
-              <Button key="save" onClick={handleSave} disabled={saving}>
-                {saving ? 'Сохранение...' : 'Сохранить'}
-              </Button>,
-              <Button key="cancel" variant="outline" onClick={handleCancel}>Отмена</Button>,
-            ] : []
-          }
+          actions={composeEntityActions({
+            crud: buildEntityCrudActions({
+              mode,
+              saving,
+              tone: 'default',
+              lifecycleStatus: user?.lifecycle_status,
+              onEdit: handleEdit,
+              onSave: handleSave,
+              onCancel: handleCancel,
+              onDelete: handleDelete,
+              onRestore: () => restoreMutation.mutate(),
+              restorePending: restoreMutation.isPending,
+            }),
+            extra: mode === 'view' && isLocalAccount
+              ? [
+                  <Button key="set-pwd" variant="success" onClick={() => setShowSetPassword(true)}>
+                    Установить пароль
+                  </Button>,
+                ]
+              : [],
+            extraPosition: 'beforeCrud',
+          })}
         >
           {/* Row 1: Info (1/2) + Tenant (1/2) */}
           <Block

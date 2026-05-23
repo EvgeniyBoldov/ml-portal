@@ -23,6 +23,7 @@ import { EntityPageV2, Tab } from '@/shared/ui';
 import { Block, type FieldConfig } from '@/shared/ui/GridLayout';
 import { VersionsBlock } from '@/shared/ui/VersionsBlock';
 import { Button, LifecycleDeleteDialog } from '@/shared/ui';
+import { buildEntityCrudActions, composeEntityActions } from '@/shared/ui/EntityPage/entityCrudActions';
 import { Select } from '@/shared/ui/Select';
 import DataTable, { type DataTableColumn } from '@/shared/ui/DataTable/DataTable';
 import { SqlCatalogDataTable } from './collection/SqlCatalogDataTable';
@@ -526,35 +527,37 @@ export function CollectionPage() {
           title="Обзор"
           layout="grid"
           id="overview"
-          actions={
-            mode === 'edit'
+          actions={composeEntityActions({
+            crud: buildEntityCrudActions({
+              mode,
+              saving,
+              tone: 'default',
+              labels: {
+                edit: 'Изменить',
+                delete: 'Удалить',
+              },
+              lifecycleStatus: collection?.lifecycle_status,
+              onEdit: handleEdit,
+              onSave: handleSave,
+              onCancel: handleCancel,
+              onDelete: handleDelete,
+              onRestore: () => restoreMutation.mutate(),
+              restorePending: restoreMutation.isPending,
+            }),
+            extra: mode === 'view' && isDocumentCollection
               ? [
-                  <Button key="cancel" variant="outline" onClick={handleCancel} disabled={saving}>Отмена</Button>,
-                  <Button key="save" variant="primary" onClick={handleSave} disabled={saving}>
-                    {saving ? 'Сохранение...' : 'Сохранить'}
+                  <Button
+                    key="upload"
+                    variant="success"
+                    onClick={handleUploadClick}
+                    disabled={uploading}
+                  >
+                    {uploading ? 'Загрузка...' : 'Загрузить файл'}
                   </Button>,
                 ]
-              : [
-                  ...(collection?.lifecycle_status === 'deprecated'
-                    ? [(
-                      <Button key="restore" variant="outline" onClick={() => restoreMutation.mutate()} disabled={restoreMutation.isPending}>
-                        Восстановить
-                      </Button>
-                    )] : []),
-                  <Button key="edit" variant="primary" onClick={handleEdit}>Редактировать</Button>,
-                  ...(isDocumentCollection ? [(
-                    <Button
-                      key="upload"
-                      variant="primary"
-                      onClick={handleUploadClick}
-                      disabled={uploading}
-                    >
-                      {uploading ? 'Загрузка...' : 'Загрузить файл'}
-                    </Button>
-                  )] : []),
-                  <Button key="delete" variant="danger" onClick={handleDelete}>Удалить</Button>,
-                ]
-          }
+              : [],
+            extraPosition: 'beforeCrud',
+          })}
         >
           <Block
             title="Основная информация"

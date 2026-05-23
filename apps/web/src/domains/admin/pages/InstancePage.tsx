@@ -17,7 +17,9 @@ import {
 import { qk } from '@/shared/api/keys';
 import { useEntityEditor } from '@/shared/hooks/useEntityEditor';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
+import { ADMIN_ACTION_LABELS, ADMIN_ENTITY_LABELS } from '@/shared/constants/adminLabels';
 import { EntityPageV2, Tab } from '@/shared/ui/EntityPage';
+import { buildEntityCrudActions, composeEntityActions } from '@/shared/ui/EntityPage/entityCrudActions';
 import { Block, type FieldConfig } from '@/shared/ui/GridLayout';
 import { Button, ConfirmDialog, Badge, HealthIndicator } from '@/shared/ui';
 import DataTable, { type DataTableColumn } from '@/shared/ui/DataTable/DataTable';
@@ -512,31 +514,31 @@ export function InstancePage() {
           title="Обзор"
           layout="grid"
           id="overview"
-        actions={
-          mode === 'view' ? [
-              !isSystemInstance && (
-                <Button key="edit" onClick={handleEdit}>Редактировать</Button>
-              ),
-              <Button
-                key="health"
-                variant="outline"
-                onClick={() => healthCheckMutation.mutate()}
-                disabled={healthCheckMutation.isPending}
-              >
-                {healthCheckMutation.isPending ? '...' : 'Health Check'}
-              </Button>,
-              !isSystemInstance && (
-                <Button key="delete" variant="danger" onClick={handleDelete}>Удалить</Button>
-              ),
-            ].filter(Boolean) : mode === 'edit' ? [
-              <Button key="save" onClick={handleSave} disabled={saving}>
-                {saving ? 'Сохранение...' : 'Сохранить'}
-              </Button>,
-              <Button key="cancel" variant="outline" onClick={handleCancel} disabled={saving}>
-                Отмена
-              </Button>,
-            ] : undefined
-          }
+        actions={composeEntityActions({
+          crud: buildEntityCrudActions({
+            mode,
+            saving,
+            tone: 'default',
+            onEdit: isSystemInstance ? undefined : handleEdit,
+            onSave: handleSave,
+            onCancel: handleCancel,
+            onDelete: isSystemInstance ? undefined : handleDelete,
+            showDeleteInView: !isSystemInstance,
+          }),
+          extra: mode === 'view'
+            ? [
+                <Button
+                  key="health"
+                  variant="success"
+                  onClick={() => healthCheckMutation.mutate()}
+                  disabled={healthCheckMutation.isPending}
+                >
+                  {healthCheckMutation.isPending ? 'Проверка...' : ADMIN_ACTION_LABELS.check}
+                </Button>,
+              ]
+            : [],
+          extraPosition: 'beforeCrud',
+        })}
         >
           <Block
             title="Основная информация"
@@ -610,7 +612,7 @@ export function InstancePage() {
           badge={credentials.length}
           actions={[
             <Button key="add" onClick={() => navigate(`/admin/credentials/new?instance_id=${id}`)}>
-              Добавить креденшал
+              {`${ADMIN_ACTION_LABELS.add} ${ADMIN_ENTITY_LABELS.access}`}
             </Button>,
           ]}
         >
@@ -618,7 +620,7 @@ export function InstancePage() {
             columns={credentialColumns}
             data={credentials}
             keyField="id"
-            emptyText="Нет credentials. Нажмите 'Добавить креденшал'."
+            emptyText="Нет доступов. Нажмите «Добавить доступ»."
             onRowClick={(c) => navigate(`/admin/credentials/${c.id}`)}
           />
         </Tab>
@@ -627,7 +629,7 @@ export function InstancePage() {
       <ConfirmDialog
         open={showDeleteConfirm}
         title="Удалить коннектор?"
-        message={`Удаление коннектора "${instance?.name}" также удалит все привязанные креденшалы. Это действие необратимо.`}
+        message={`Удаление коннектора "${instance?.name}" также удалит все привязанные доступы. Это действие необратимо.`}
         confirmLabel="Удалить"
         cancelLabel="Отмена"
         variant="danger"

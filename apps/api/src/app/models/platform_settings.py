@@ -1,7 +1,7 @@
 """
 PlatformSettings model — singleton table for global platform configuration.
 
-Stores global policy text, safety gates, and platform caps.
+Stores global policy text and safety gates.
 Only one row should exist (enforced by application logic + seed).
 """
 import uuid
@@ -19,8 +19,7 @@ class PlatformSettings(Base):
     """
     Global platform settings (singleton).
     
-    Stores global policy text, safety gates, and absolute platform caps.
-    These settings apply to all tenants/users as the maximum allowed values.
+    Stores global policy text and safety gates.
     """
     __tablename__ = "platform_settings"
 
@@ -40,27 +39,6 @@ class PlatformSettings(Base):
     forbid_write_in_prod: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True, default=False)
     require_backup_before_write: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True, default=False)
     
-    # === Global Caps / Rails ===
-    
-    # Absolute maximum limits (platform ceilings)
-    abs_max_timeout_s: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    abs_max_retries: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    abs_max_steps: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    abs_max_plan_steps: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    abs_max_concurrency: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    abs_max_task_runtime_s: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    abs_max_tool_calls_per_step: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    # Runtime budget defaults (used by RuntimePipeline budget resolver)
-    budget_max_planner_iterations: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    budget_max_agent_steps: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    budget_max_tool_calls_total: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    budget_max_wall_time_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    budget_per_tool_timeout_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    budget_max_steps_without_success: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    budget_loop_threshold: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    budget_max_retries: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    budget_max_tokens_total: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-
     # === Chat File Upload ===
     chat_upload_max_bytes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     chat_upload_allowed_extensions: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

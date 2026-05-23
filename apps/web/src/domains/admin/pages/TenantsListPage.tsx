@@ -9,6 +9,7 @@ import { useNavigate } from 'react-router-dom';
 import { useTenants } from '@shared/hooks/useTenants';
 import { EntityPageV2, Tab } from '@/shared/ui/EntityPage';
 import { DataTable, type DataTableColumn, Badge, Button, Input } from '@/shared/ui';
+import { ADMIN_ACTION_LABELS, ADMIN_ENTITY_LABELS } from '@/shared/constants/adminLabels';
 import type { Tenant } from '@shared/api/admin';
 
 export function TenantsListPage() {
@@ -119,7 +120,7 @@ export function TenantsListPage() {
       }
       actionButtons={
         <Button onClick={() => navigate('/admin/tenants/new')}>
-          Создать
+          {`${ADMIN_ACTION_LABELS.create} ${ADMIN_ENTITY_LABELS.tenant}`}
         </Button>
       }
     >
@@ -138,7 +139,7 @@ export function TenantsListPage() {
           data={filteredTenants}
           keyField="id"
           loading={isLoading}
-          emptyText="Тенанты не найдены. Нажмите «Создать» для добавления."
+          emptyText={`Тенанты не найдены. Нажмите «${ADMIN_ACTION_LABELS.create} ${ADMIN_ENTITY_LABELS.tenant}» для добавления.`}
           paginated
           pageSize={20}
           onRowClick={handleRowClick}

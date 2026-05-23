@@ -26,7 +26,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.http.clients import LLMClientProtocol
 from app.core.logging import get_logger
+from app.models.execution_limit import ExecutionLimitScope
 from app.models.system_llm_role import SystemLLMRoleType
+from app.runtime.llm.limits import LLMLimitExceededError, apply_llm_limits, estimate_tokens
+from app.services.execution_limits_service import ExecutionLimitsPayload, ExecutionLimitsService
 from app.services.system_llm_role_service import SystemLLMRoleService
 
 logger = get_logger(__name__)
@@ -63,6 +66,7 @@ class StructuredLLMCall:
         self.session = session
         self.llm_client = llm_client
         self.role_service = SystemLLMRoleService(session)
+        self.limits_service = ExecutionLimitsService(session)
         # Trace logging deferred: v3 pipeline will use a dedicated RuntimeTrace
         # service (see TODO in runtime/__init__.py). For now traces are skipped
         # and trace_id is returned as None.
@@ -111,6 +115,21 @@ class StructuredLLMCall:
             params["temperature"] = temperature
         if max_tokens is not None:
             params["max_tokens"] = max_tokens
+        try:
+            limits = await self.limits_service.get_effective(
+                scope_type=ExecutionLimitScope.ORCHESTRATOR_ROLE,
+                scope_ref=str(role.value).strip().lower(),
+            )
+        except Exception:
+            limits = ExecutionLimitsPayload()
+        input_tokens = estimate_tokens(system_prompt) + estimate_tokens(user_message)
+        boundary = apply_llm_limits(
+            limits=limits,
+            input_tokens=input_tokens,
+            requested_output_tokens=(int(max_tokens) if max_tokens is not None else None),
+        )
+        if boundary.output_tokens is not None:
+            params["max_tokens"] = int(boundary.output_tokens)
 
         last_error: Optional[str] = None
         raw_response = ""
@@ -126,6 +145,8 @@ class StructuredLLMCall:
                 last_error = f"llm_timeout after {timeout_s}s (attempt {attempt + 1})"
                 logger.warning("StructuredLLMCall timeout role=%s attempt=%s", role, attempt + 1)
                 continue
+            except LLMLimitExceededError:
+                raise
             except Exception as exc:  # network / upstream failure
                 last_error = f"llm_error: {exc}"
                 logger.warning("StructuredLLMCall error role=%s attempt=%s: %s", role, attempt + 1, exc)

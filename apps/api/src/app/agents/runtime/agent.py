@@ -45,8 +45,11 @@ from app.agents.runtime.base import BaseRuntime
 from app.agents.runtime.events import RuntimeEvent, RuntimeEventType
 from app.agents.runtime.policy import GenerationParams, PolicyLimits
 from app.core.logging import get_logger
+from app.models.execution_limit import ExecutionLimitScope
 from app.runtime.budgets import RunBudgetLedger
+from app.runtime.llm.limits import LLMLimitExceededError, apply_llm_limits
 from app.runtime.operation_errors import OperationResultEnvelope, RuntimeErrorCode
+from app.services.execution_limits_service import ExecutionLimitsPayload, ExecutionLimitsService
 
 if TYPE_CHECKING:
     from app.agents.context import ToolContext
@@ -225,6 +228,7 @@ class AgentToolRuntime(BaseRuntime):
         llm_messages: List[Dict[str, Any]] = [
             {"role": "system", "content": system_prompt},
         ] + list(messages)
+        llm_limits = await self._resolve_llm_limits_for_agent(ctx=ctx, agent_slug=agent.slug)
 
         loop_state = AgentLoopState()
         loop_state.start_time = time.time()  # Start clock after all setup is complete
@@ -321,13 +325,29 @@ class AgentToolRuntime(BaseRuntime):
                     purpose="tool_decision_or_answer",
                 )
                 llm_start = time.time()
+                try:
+                    boundary = apply_llm_limits(
+                        limits=llm_limits,
+                        input_tokens=_estimate_tokens(json.dumps(llm_messages, ensure_ascii=False, default=str)),
+                        requested_output_tokens=gen.max_tokens,
+                    )
+                except LLMLimitExceededError as exc:
+                    yield RuntimeEvent.error(
+                        str(exc),
+                        recoverable=False,
+                        error_code=exc.code,
+                        retryable=False,
+                    )
+                    await run_session.finish("failed", str(exc))
+                    return
+                effective_max_tokens = boundary.output_tokens if boundary.output_tokens is not None else gen.max_tokens
                 raw_response_dict: Optional[Dict[str, Any]] = None
                 if native_tool_calling and tools_payload:
                     raw_response_dict = await self.llm.call_raw(
                         messages=llm_messages,
                         model=gen.model,
                         temperature=gen.temperature,
-                        max_tokens=gen.max_tokens,
+                        max_tokens=effective_max_tokens,
                         tools=tools_payload,
                         force_tool_choice=loop_state.force_tool_choice,
                     )
@@ -338,7 +358,7 @@ class AgentToolRuntime(BaseRuntime):
                         messages=llm_messages,
                         model=gen.model,
                         temperature=gen.temperature,
-                        max_tokens=gen.max_tokens,
+                        max_tokens=effective_max_tokens,
                     )
                 llm_duration = int((time.time() - llm_start) * 1000)
                 usage = (raw_response_dict or {}).get("usage") if isinstance(raw_response_dict, dict) else None
@@ -740,6 +760,21 @@ class AgentToolRuntime(BaseRuntime):
                 retryable=False,
             )
             await run_session.finish("failed", str(e))
+
+    async def _resolve_llm_limits_for_agent(self, *, ctx: "ToolContext", agent_slug: str) -> ExecutionLimitsPayload:
+        deps = ctx.get_runtime_deps()
+        session_factory = deps.session_factory
+        if session_factory is None:
+            return ExecutionLimitsPayload()
+        try:
+            async with session_factory() as session:
+                service = ExecutionLimitsService(session)
+                return await service.get_effective(
+                    scope_type=ExecutionLimitScope.AGENT,
+                    scope_ref=agent_slug,
+                )
+        except Exception:
+            return ExecutionLimitsPayload()
 
     async def _execute_single_operation_call(
         self,

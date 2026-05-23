@@ -324,8 +324,7 @@ SEED_AGENTS = [
 _VERSION_FIELDS = [
     "identity", "mission", "scope", "rules", "tool_use_rules",
     "output_format", "examples",
-    "model", "timeout_s", "max_steps", "max_retries", "max_tokens", "temperature",
-    "requires_confirmation_for_write", "risk_level", "never_do", "allowed_ops",
+    "never_do", "allowed_ops",
     "tags",
 ]
 

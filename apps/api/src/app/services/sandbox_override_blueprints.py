@@ -8,11 +8,9 @@ AGENT_VERSION_PROMPT_FIELDS = frozenset({
     "tool_use_rules", "output_format", "examples",
 })
 AGENT_VERSION_EXEC_FIELDS = frozenset({
-    "model", "timeout_s", "max_steps", "max_retries",
-    "max_tokens", "temperature",
+    "model", "temperature",
 })
 AGENT_VERSION_SAFETY_FIELDS = frozenset({
-    "requires_confirmation_for_write", "risk_level",
     "never_do", "allowed_ops",
 })
 AGENT_VERSION_ROUTING_FIELDS = frozenset({"tags"})
@@ -23,11 +21,6 @@ AGENT_VERSION_ALL_FIELDS = (
     | AGENT_VERSION_ROUTING_FIELDS
 )
 
-PLATFORM_CAP_FIELDS = frozenset({
-    "abs_max_timeout_s", "abs_max_retries", "abs_max_steps",
-    "abs_max_plan_steps", "abs_max_concurrency",
-    "abs_max_task_runtime_s", "abs_max_tool_calls_per_step",
-})
 PLATFORM_GATE_FIELDS = frozenset({
     "require_confirmation_for_write", "require_confirmation_for_destructive",
     "forbid_destructive", "forbid_write_in_prod", "require_backup_before_write",
@@ -112,18 +105,12 @@ SANDBOX_BLUEPRINTS: List[Dict[str, Any]] = [
                 "Execution",
                 [
                     _field("model", "Model", "model", field_type="text"),
-                    _field("timeout_s", "Timeout (s)", "timeout_s", field_type="integer"),
-                    _field("max_steps", "Max steps", "max_steps", field_type="integer"),
-                    _field("max_retries", "Max retries", "max_retries", field_type="integer"),
-                    _field("max_tokens", "Max tokens", "max_tokens", field_type="integer"),
                     _field("temperature", "Temperature", "temperature", field_type="float"),
                 ],
             ),
             _section(
                 "Safety",
                 [
-                    _field("requires_confirmation_for_write", "Confirmation for write", "requires_confirmation_for_write", field_type="boolean"),
-                    _field("risk_level", "Risk level", "risk_level", field_type="select", options=["low", "medium", "high"]),
                     _field("never_do", "Never do", "never_do", field_type="text"),
                     _field("allowed_ops", "Allowed ops", "allowed_ops", field_type="text"),
                 ],
@@ -252,7 +239,7 @@ SANDBOX_BLUEPRINTS: List[Dict[str, Any]] = [
             _section(
                 "Тенант",
                 [
-                    _field("default_agent_slug", "Default agent", "tenant.default_agent_slug", field_type="select", source_key="default_agent_slug"),
+                    _field("agent_slug", "Agent slug", "agent.slug", field_type="select", source_key="agent_slug"),
                 ],
             ),
         ],
@@ -276,18 +263,6 @@ SANDBOX_BLUEPRINTS: List[Dict[str, Any]] = [
                     _field("forbid_destructive", "Forbid destructive", "platform.forbid_destructive", field_type="boolean", source_key="forbid_destructive"),
                     _field("forbid_write_in_prod", "Forbid write in prod", "platform.forbid_write_in_prod", field_type="boolean", source_key="forbid_write_in_prod"),
                     _field("require_backup_before_write", "Require backup before write", "platform.require_backup_before_write", field_type="boolean", source_key="require_backup_before_write"),
-                ],
-            ),
-            _section(
-                "Caps",
-                [
-                    _field("abs_max_timeout_s", "Max timeout (s)", "platform.abs_max_timeout_s", field_type="integer", source_key="abs_max_timeout_s"),
-                    _field("abs_max_retries", "Max retries", "platform.abs_max_retries", field_type="integer", source_key="abs_max_retries"),
-                    _field("abs_max_steps", "Max steps", "platform.abs_max_steps", field_type="integer", source_key="abs_max_steps"),
-                    _field("abs_max_plan_steps", "Max plan steps", "platform.abs_max_plan_steps", field_type="integer", source_key="abs_max_plan_steps"),
-                    _field("abs_max_concurrency", "Max concurrency", "platform.abs_max_concurrency", field_type="integer", source_key="abs_max_concurrency"),
-                    _field("abs_max_task_runtime_s", "Max task runtime (s)", "platform.abs_max_task_runtime_s", field_type="integer", source_key="abs_max_task_runtime_s"),
-                    _field("abs_max_tool_calls_per_step", "Max tool calls/step", "platform.abs_max_tool_calls_per_step", field_type="integer", source_key="abs_max_tool_calls_per_step"),
                 ],
             ),
         ],
