@@ -1,3 +1,4 @@
+/* ── Modal size ──────────────────────────────────────────── */
 .modal {
   max-width: min(1280px, 96vw);
   width: min(1280px, 96vw);
@@ -11,6 +12,7 @@
   padding: 0;
 }
 
+/* ── Inline shell (outside modal) ────────────────────────── */
 .inlineEditorShell {
   position: relative;
 }
@@ -31,17 +33,26 @@
   z-index: 1;
 }
 
+/* ── Modal split layout ──────────────────────────────────── */
+/* R1: fixed 85vh, no min-height, both panes fill height */
 .modalSplit {
   display: flex;
   align-items: stretch;
-  min-height: min(78vh, 900px);
+  height: 85vh;
+  max-height: 900px;
+  overflow: hidden;
 }
 
 .modalSingle {
-  min-height: min(78vh, 900px);
+  height: 85vh;
+  max-height: 900px;
   padding: var(--space-5);
+  display: flex;
+  flex-direction: column;
 }
 
+/* ── Editor pane (left) ──────────────────────────────────── */
+/* R2: overflow:hidden so textarea scrolls internally */
 .editorPane {
   flex: 1 1 auto;
   min-width: 0;
@@ -49,9 +60,11 @@
   flex-direction: column;
   gap: var(--space-3);
   padding: var(--space-5);
+  overflow: hidden;
 }
 
 .editorHeader {
+  flex-shrink: 0;
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -68,28 +81,260 @@
   color: var(--text-secondary);
 }
 
+/* R1+R2: textarea fills remaining height, no fixed min-height */
 .modalTextarea {
   flex: 1 1 auto;
-  min-height: 100%;
-  min-height: 520px;
+  min-height: 0;
   resize: none;
+  overflow-y: auto;
 }
 
+.highlightEditorWrap {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.highlightOverlay {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  pointer-events: none;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-md, 6px);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.highlightOverlayPre {
+  margin: 0;
+  padding: 0.625rem 0.75rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
+  font-size: 0.9375rem;
+  line-height: 1.5;
+  color: transparent;
+}
+
+.highlightOverlayPre mark {
+  background: rgba(250, 204, 21, 0.35);
+  border-radius: 3px;
+  color: transparent;
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.modalTextareaHighlight {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  resize: none;
+  background: transparent;
+  color: var(--text-primary);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 0.625rem 0.75rem;
+  border-radius: var(--radius-md, 6px);
+  font-family: inherit;
+  font-size: 0.9375rem;
+  line-height: 1.5;
+  outline: none;
+}
+
+/* ── Legend pane (right) ─────────────────────────────────── */
+/* R1: clamp for adaptive width */
 .legendPane {
-  width: min(420px, 40vw);
-  min-width: 340px;
+  width: clamp(300px, 35%, 420px);
+  flex-shrink: 0;
   border-left: 1px solid var(--border);
   background: var(--bg-secondary);
-  padding: var(--space-5);
-  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
-.legendRoot {
+/* ── Three-zone legend layout ────────────────────────────── */
+.legendThreeZone {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+/* Zone 1: Input — fixed ~25% */
+.legendZoneInput {
+  flex: 0 0 25%;
+  min-height: 0;
+  overflow: hidden;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* Bordered panel wrapping the field list / example pre */
+.inputPanel {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+/* Zone 2: Output (schema/example) — takes remaining space */
+.legendZoneOutput {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.legendZoneHeader {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 14px 0;
+}
+
+.outputTabBar {
+  display: flex;
+  gap: 2px;
+  background: var(--bg-hover);
+  border-radius: 6px;
+  padding: 2px;
+}
+
+.outputTab {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: background 100ms, color 100ms;
+}
+
+.outputTabActive {
+  background: var(--bg-secondary);
+  color: var(--text);
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+}
+
+.outputTabContent {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px 14px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+/* Zone 3: Coverage footer — fixed ~17% */
+.legendZoneCoverage {
+  flex: 0 0 17%;
+  min-height: 0;
+  overflow-y: auto;
+  border-top: 1px solid var(--border);
+  background: var(--bg-secondary);
+  padding: 8px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+/* Zone label — small uppercase heading for each zone */
+.legendZoneLabel {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  flex-shrink: 0;
+}
+
+/* ── Input field list ────────────────────────────────────── */
+.inputFieldList {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 2px;
+}
+
+.inputFieldRow {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  padding: 5px 8px;
+  cursor: pointer;
+  transition: background 100ms;
+}
+
+.inputFieldRow:hover {
+  background: var(--bg-hover);
+}
+
+.inputFieldRowActive {
+  background: rgba(96, 165, 250, 0.10);
+  outline: 1px solid rgba(96, 165, 250, 0.35);
+}
+
+.inputFieldName {
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  flex-shrink: 0;
+}
+
+.inputFieldRequired {
+  color: var(--danger, #e55);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.inputFieldDesc {
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.inputChipType {
+  font-size: 10px;
+  color: var(--text-secondary);
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0 4px;
+  flex-shrink: 0;
+}
+
+/* Scrollable area inside legend — above sticky footer */
+.legendScroll {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: var(--space-5);
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
 }
 
+/* ── Legend content ──────────────────────────────────────── */
 .legendSection {
   display: flex;
   flex-direction: column;
@@ -97,22 +342,22 @@
 }
 
 .legendSectionTitle {
-  font-size: 13px;
+  font-size: 11px;
   font-weight: 700;
-  color: var(--text);
+  color: var(--text-secondary);
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.06em;
+  padding-bottom: var(--space-1);
 }
 
-.legendDetails,
+/* ── Variant cards ───────────────────────────────────────── */
 .variantCard {
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 10px;
   background: var(--panel);
   overflow: hidden;
 }
 
-.legendSummary,
 .variantSummary {
   list-style: none;
   cursor: pointer;
@@ -120,41 +365,190 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--space-2);
-  padding: var(--space-3) var(--space-4);
+  padding: var(--space-2) var(--space-3);
+  font-size: 13px;
   font-weight: 600;
+  color: var(--text);
+  user-select: none;
 }
 
-.legendSummary::-webkit-details-marker,
 .variantSummary::-webkit-details-marker {
   display: none;
 }
 
-.legendBody,
-.variantBody {
-  padding: 0 var(--space-4) var(--space-4);
-}
-
-.legendList {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-}
-
-.legendFieldButton {
-  border: 1px solid var(--border);
-  background: var(--bg-secondary);
-  color: var(--text);
-  border-radius: 999px;
-  padding: 6px 10px;
-  cursor: pointer;
-  text-align: left;
-}
-
-.legendFieldButton:hover {
-  border-color: var(--primary);
+.variantSummary:hover {
   background: var(--bg-hover);
 }
 
+.variantChevron {
+  color: var(--text-secondary);
+  flex-shrink: 0;
+  transition: transform 120ms;
+}
+
+details[open] .variantChevron {
+  transform: rotate(90deg);
+}
+
+.variantBody {
+  padding: var(--space-1) var(--space-3) var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.variantEmpty {
+  font-size: 12px;
+  color: var(--text-tertiary, var(--text-secondary));
+  font-style: italic;
+  padding: var(--space-1) 0;
+}
+
+/* ── Field rows ──────────────────────────────────────────── */
+.fieldRow {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-radius: 6px;
+  padding: 4px 6px;
+  transition: background 100ms;
+}
+
+.fieldRow:hover {
+  background: var(--bg-hover);
+}
+
+.fieldRowActive {
+  background: rgba(96, 165, 250, 0.12);
+  outline: 1px solid rgba(96, 165, 250, 0.35);
+}
+
+.fieldRowMain {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.expandNodeBtn {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  width: 18px;
+  padding: 0;
+  line-height: 1;
+}
+
+.expandNodeSpacer {
+  display: inline-block;
+  width: 18px;
+}
+
+.fieldChildren {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* Field name — clickable chip */
+.fieldName {
+  font-family: var(--font-mono, monospace);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  background: transparent;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+  flex-shrink: 0;
+}
+
+.fieldName:hover {
+  color: var(--primary);
+  text-decoration: underline;
+}
+
+.fieldRequired {
+  color: var(--danger, #e55);
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+/* R4: neutral type label, no color coding */
+.fieldType {
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  flex-shrink: 0;
+}
+
+.fieldCondition {
+  font-size: 10px;
+  color: var(--text-secondary);
+  background: var(--bg-hover);
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+/* R4: only 2 coverage indicators */
+.fieldCoverage {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.fieldCoverageCovered {
+  color: var(--success, #22c55e);
+}
+
+.fieldCoverageUncovered {
+  color: var(--warning, #f59e0b);
+}
+
+/* Field description */
+.fieldDescription {
+  font-size: 12px;
+  color: var(--text-secondary);
+  padding-left: 2px;
+  line-height: 1.4;
+}
+
+/* ── Enum chips ──────────────────────────────────────────── */
+.enumChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding-top: 2px;
+  padding-left: 2px;
+}
+
+.enumChip {
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  color: var(--text);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 7px;
+  cursor: pointer;
+  transition: border-color 100ms, background 100ms;
+}
+
+.enumChip:hover {
+  border-color: var(--primary);
+  background: var(--bg-hover);
+  color: var(--primary);
+}
+
+/* ── Plain text contract (criteria/forbidden) ────────────── */
 .legendGroup {
   display: flex;
   flex-direction: column;
@@ -162,15 +556,17 @@
 }
 
 .legendGroupTitle {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
   color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .legendChecklist {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
 }
 
 .legendChecklistItem {
@@ -179,82 +575,124 @@
   gap: 8px;
   font-size: 13px;
   color: var(--text);
+  line-height: 1.4;
 }
 
-.schemaTree {
+.checkOk {
+  color: var(--success, #22c55e);
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.checkNo {
+  color: var(--danger, #e55);
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+/* ── Safety footer for plain_text contracts ─────────────── */
+.safetyFooter {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: var(--space-3);
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
 
-.schemaNode {
+.safetyGroup {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
 }
 
-.schemaSummary {
-  border: 1px solid transparent;
-  background: transparent;
+.safetyTitle {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--text-secondary);
+  font-weight: 700;
+}
+
+.safetyItem {
+  font-size: 12px;
   color: var(--text);
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: var(--space-2);
-  padding: 6px 8px;
-  border-radius: 10px;
-  cursor: pointer;
-  width: 100%;
-  text-align: left;
 }
 
-.schemaSummary:hover {
+/* ── Examples view ──────────────────────────────────────── */
+.examplesRoot {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  overflow: hidden;
+}
+
+.examplesTabs {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+}
+
+.examplesTab {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 8px 10px;
+}
+
+.examplesTabActive {
+  color: var(--text);
+  font-weight: 600;
   background: var(--bg-hover);
 }
 
-.schemaName {
+.examplesVariants {
   display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-
-.schemaName code {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.schemaMeta {
-  display: flex;
-  align-items: center;
-  gap: 6px;
   flex-wrap: wrap;
-  justify-content: flex-end;
+  gap: 6px;
+  padding: 8px;
+  border-bottom: 1px solid var(--border);
 }
 
-.schemaDescription {
-  font-size: 12px;
+.examplesVariantChip {
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
   color: var(--text-secondary);
-  padding-left: 10px;
+  border-radius: 16px;
+  font-size: 11px;
+  padding: 3px 8px;
+  cursor: pointer;
 }
 
-.schemaEnum {
+.examplesVariantChipActive {
+  border-color: var(--primary);
+  color: var(--primary);
+  background: var(--bg-hover);
+}
+
+.examplesPre {
+  margin: 0;
+  padding: 10px;
+  max-height: 260px;
+  overflow: auto;
   font-size: 12px;
-  color: var(--text-secondary);
-  padding-left: 10px;
+  line-height: 1.35;
   font-family: var(--font-mono, monospace);
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
-.schemaChildren {
-  margin-left: 6px;
-  padding-left: 12px;
-  border-left: 1px dashed var(--border);
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+.examplesPlaceholder {
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
 }
 
+/* ── Raw schema fallback ─────────────────────────────────── */
 .rawSchema {
   margin: 0;
   padding: var(--space-4);
@@ -265,39 +703,58 @@
   font-size: 12px;
 }
 
+/* ── Coverage footer — sticky at bottom of legendPane ───── */
+/* R2: sticky footer always visible */
 .legendFooter {
+  flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding-top: var(--space-2);
+  gap: 6px;
+  padding: var(--space-3) var(--space-5);
   border-top: 1px solid var(--border);
+  background: var(--bg-secondary);
 }
 
 .legendFooterSummary {
-  display: flex;
-  align-items: center;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.legendFooterCovered {
+  color: var(--success, #22c55e);
 }
 
 .legendMissing {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 4px;
 }
 
-.legendMissingBadge {
-  max-width: 100%;
+.legendMissingChip {
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  color: var(--warning, #f59e0b);
+  background: transparent;
+  border: 1px solid var(--warning, #f59e0b);
+  border-radius: 4px;
+  padding: 1px 6px;
+  opacity: 0.85;
 }
 
+/* ── Responsive ─────────────────────────────────────────── */
 @media (max-width: 900px) {
   .modalSplit {
     flex-direction: column;
-    min-height: auto;
+    height: auto;
+    max-height: none;
   }
 
   .legendPane {
     width: 100%;
-    min-width: 0;
+    flex-shrink: 0;
     border-left: 0;
     border-top: 1px solid var(--border);
+    max-height: 40vh;
   }
 }

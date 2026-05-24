@@ -6,6 +6,7 @@ from functools import lru_cache
 from pydantic import BaseModel
 
 from app.models.system_llm_role import SystemLLMRoleType
+from app.services.system_llm_role_examples import get_role_examples
 
 if TYPE_CHECKING:
     from app.runtime.planner.planner import PlannerLLMOutput
@@ -20,6 +21,7 @@ def _json_contract(schema: Dict[str, Any], *, on_invalid: str, format_locked: bo
         "plain_text": None,
         "markdown": None,
         "examples": [],
+        "examples_v2": None,
         "failure_policy": {"on_invalid": on_invalid},
         "format_locked": format_locked,
     }
@@ -35,6 +37,7 @@ def _plain_text_contract(*, on_invalid: str, criteria: list[str], forbidden: lis
         },
         "markdown": None,
         "examples": [],
+        "examples_v2": None,
         "failure_policy": {"on_invalid": on_invalid},
         "format_locked": format_locked,
     }
@@ -133,6 +136,7 @@ def build_response_contract(role_type: SystemLLMRoleType | str) -> Dict[str, Any
     """
     normalized = role_type.value if isinstance(role_type, SystemLLMRoleType) else str(role_type)
     role = SystemLLMRoleType(normalized)
+    examples_v2 = get_role_examples(role)
 
     # Try to get Pydantic model for this role
     output_model = _get_output_model(role)
@@ -142,11 +146,13 @@ def build_response_contract(role_type: SystemLLMRoleType | str) -> Dict[str, Any
         schema = output_model.model_json_schema()
         # Enrich with contract-specific metadata
         schema = _enrich_schema_with_contract_metadata(schema, role)
-        return _json_contract(schema, on_invalid="retry_once_then_fallback", format_locked=True)
+        contract = _json_contract(schema, on_invalid="retry_once_then_fallback", format_locked=True)
+        contract["examples_v2"] = examples_v2
+        return contract
 
     # Fallback: manual contract for roles without Pydantic models
     if role == SystemLLMRoleType.TRIAGE:
-        return _json_contract(
+        contract = _json_contract(
             {
                 "type": "object",
                 "required": ["type", "confidence", "reason"],
@@ -168,9 +174,11 @@ def build_response_contract(role_type: SystemLLMRoleType | str) -> Dict[str, Any
             on_invalid="retry_once_then_fallback",
             format_locked=True,
         )
+        contract["examples_v2"] = examples_v2
+        return contract
 
     if role in (SystemLLMRoleType.SYNTHESIZER, SystemLLMRoleType.SUMMARY, SystemLLMRoleType.MEMORY):
-        return _plain_text_contract(
+        contract = _plain_text_contract(
             on_invalid="accept_with_runtime_safety_filters",
             criteria=[
                 "Answer must be grounded in provided context and facts",
@@ -183,13 +191,17 @@ def build_response_contract(role_type: SystemLLMRoleType | str) -> Dict[str, Any
             ],
             format_locked=True,
         )
+        contract["examples_v2"] = examples_v2
+        return contract
 
-    return _plain_text_contract(
+    contract = _plain_text_contract(
         on_invalid="accept_with_runtime_safety_filters",
         criteria=["Respond in plain text"],
         forbidden=["Secrets or credentials"],
         format_locked=True,
     )
+    contract["examples_v2"] = examples_v2
+    return contract
 
 
 def get_role_output_model(role_type: SystemLLMRoleType | str) -> Type[BaseModel] | None:

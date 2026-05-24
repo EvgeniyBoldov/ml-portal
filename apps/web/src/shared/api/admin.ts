@@ -55,6 +55,10 @@ export interface JsonResponseContract {
   plain_text: null;
   markdown: null;
   examples: Array<Record<string, any>>;
+  examples_v2?: {
+    input?: unknown;
+    outputs?: Record<string, unknown>;
+  } | null;
   failure_policy: ResponseContractFailurePolicy;
   format_locked?: boolean;
 }
@@ -65,6 +69,10 @@ export interface PlainTextResponseContract {
   plain_text: Record<string, any>;
   markdown: null;
   examples: Array<Record<string, any>>;
+  examples_v2?: {
+    input?: unknown;
+    outputs?: Record<string, unknown>;
+  } | null;
   failure_policy: ResponseContractFailurePolicy;
   format_locked?: boolean;
 }
@@ -75,6 +83,10 @@ export interface MarkdownResponseContract {
   plain_text: null;
   markdown: Record<string, any>;
   examples: Array<Record<string, any>>;
+  examples_v2?: {
+    input?: unknown;
+    outputs?: Record<string, unknown>;
+  } | null;
   failure_policy: ResponseContractFailurePolicy;
   format_locked?: boolean;
 }

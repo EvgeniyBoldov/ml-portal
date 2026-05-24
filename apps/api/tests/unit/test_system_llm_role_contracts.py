@@ -194,3 +194,34 @@ def test_triage_contract_is_json_with_expected_fields() -> None:
     assert "type" in schema["required"]
     assert "confidence" in schema["required"]
     assert "reason" in schema["required"]
+
+
+@pytest.mark.parametrize(
+    "role",
+    [
+        SystemLLMRoleType.PLANNER,
+        SystemLLMRoleType.FACT_EXTRACTOR,
+        SystemLLMRoleType.SUMMARY_COMPACTOR,
+    ],
+)
+def test_json_role_examples_v2_match_runtime_schema(role: SystemLLMRoleType) -> None:
+    contract = build_response_contract(role)
+    examples_v2 = contract.get("examples_v2") or {}
+    outputs = examples_v2.get("outputs") or {}
+    model = get_role_output_model(role)
+    assert model is not None
+    assert outputs, f"{role.value} must provide outputs examples"
+
+    for variant_name, payload in outputs.items():
+        try:
+            model.model_validate(payload)
+        except Exception as exc:  # noqa: BLE001
+            raise AssertionError(f"{role.value}:{variant_name} example does not match runtime schema: {exc}") from exc
+
+
+def test_triage_examples_v2_has_all_decision_variants() -> None:
+    contract = build_response_contract(SystemLLMRoleType.TRIAGE)
+    examples_v2 = contract.get("examples_v2") or {}
+    outputs = examples_v2.get("outputs") or {}
+    expected = {"final", "clarify", "orchestrate", "resume"}
+    assert expected.issubset(set(outputs.keys()))

@@ -44,6 +44,7 @@ class JsonResponseContract(BaseModel):
     plain_text: None = None
     markdown: None = None
     examples: List[Dict[str, Any]] = Field(default_factory=list)
+    examples_v2: Optional[Dict[str, Any]] = Field(default=None, description="Role examples grouped by input/outputs")
     failure_policy: ContractFailurePolicy
     format_locked: bool = Field(default=True, description="Whether the response format is locked (uneditable)")
 
@@ -54,6 +55,7 @@ class PlainTextResponseContract(BaseModel):
     plain_text: Dict[str, Any]
     markdown: None = None
     examples: List[Dict[str, Any]] = Field(default_factory=list)
+    examples_v2: Optional[Dict[str, Any]] = Field(default=None, description="Role examples grouped by input/outputs")
     failure_policy: ContractFailurePolicy
     format_locked: bool = Field(default=True, description="Whether the response format is locked (uneditable)")
 
@@ -64,6 +66,7 @@ class MarkdownResponseContract(BaseModel):
     plain_text: None = None
     markdown: Dict[str, Any]
     examples: List[Dict[str, Any]] = Field(default_factory=list)
+    examples_v2: Optional[Dict[str, Any]] = Field(default=None, description="Role examples grouped by input/outputs")
     failure_policy: ContractFailurePolicy
     format_locked: bool = Field(default=True, description="Whether the response format is locked (uneditable)")
 

@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import type { ResponseContract } from '@/shared/api/admin';
 import { Button, Modal, Textarea } from '@/shared/ui';
 import { ContractLegend } from './ContractLegend';
+import { TextareaWithHighlight } from './highlight/TextareaWithHighlight';
 import { useLiveCoverage } from './useLiveCoverage';
 import styles from './ContractAwareEditor.module.css';
 
@@ -28,9 +29,20 @@ export function ContractAwareEditor({
   placeholder,
 }: Props) {
   const [open, setOpen] = useState(false);
+  const [hoveredField, setHoveredField] = useState<string | null>(null);
+  const [activeField, setActiveField] = useState<string | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const coverage = useLiveCoverage(value, outputContract ?? null);
   const hasLegend = Boolean(outputContract || inputContract);
+  const knownFieldNames = useMemo(() => {
+    const names = new Set<string>();
+    for (const path of coverage.coverageMap.keys()) {
+      const leaf = path.split('.').pop() ?? path;
+      names.add(leaf.replace(/\[\]/g, ''));
+    }
+    return [...names];
+  }, [coverage.coverageMap]);
 
   const bodyClassName = useMemo(() => {
     return hasLegend ? styles.modalBodySplit : styles.modalBodyPlain;
@@ -39,20 +51,31 @@ export function ContractAwareEditor({
   useEffect(() => {
     if (!open) return;
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setOpen(false);
-      }
+      if (event.key === 'Escape') setOpen(false);
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [open]);
 
-  const appendLegendToken = (token: string) => {
-    const trimmed = token.trim();
-    if (!trimmed) return;
-    const next = value.trim().length > 0 ? `${value}\n${trimmed}` : trimmed;
-    onChange(next);
-  };
+  // R5: insert token at cursor position in modal textarea
+  const insertAtCursor = useCallback(
+    (token: string) => {
+      const el = textareaRef.current;
+      if (!el) {
+        onChange(value ? `${value}\n${token}` : token);
+        return;
+      }
+      const start = el.selectionStart ?? value.length;
+      const end = el.selectionEnd ?? value.length;
+      const next = value.slice(0, start) + token + value.slice(end);
+      onChange(next);
+      requestAnimationFrame(() => {
+        el.selectionStart = el.selectionEnd = start + token.length;
+        el.focus();
+      });
+    },
+    [value, onChange],
+  );
 
   return (
     <>
@@ -95,13 +118,24 @@ export function ContractAwareEditor({
                 Изменения применяются сразу в форме
               </div>
             </div>
-            <Textarea
+            <TextareaWithHighlight
               value={value}
-              onChange={(e) => onChange(e.target.value)}
-              rows={rows}
+              onChange={onChange}
+              hoveredField={hoveredField}
+              activeField={activeField}
               placeholder={placeholder}
               disabled={disabled}
-              className={styles.modalTextarea}
+              textareaRef={textareaRef}
+              knownFields={knownFieldNames}
+              onMarkClick={(field) => {
+                setActiveField(field);
+                setHoveredField(field);
+              }}
+              onTextFieldSelect={(field) => {
+                if (!field) return;
+                setActiveField(field);
+                setHoveredField(field);
+              }}
             />
           </div>
 
@@ -114,7 +148,9 @@ export function ContractAwareEditor({
                 coveredCount={coverage.coveredCount}
                 totalRequired={coverage.totalRequired}
                 uncoveredFields={coverage.uncoveredFields}
-                onFieldClick={appendLegendToken}
+                onInsert={insertAtCursor}
+                onHoverField={setHoveredField}
+                activeField={activeField}
               />
             </aside>
           )}

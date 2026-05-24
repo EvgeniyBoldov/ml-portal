@@ -200,15 +200,26 @@
   border-bottom: 1px solid var(--border-color);
 }
 
+.section-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .section-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  width: 100%;
+  flex: 1;
   padding: 0;
   border: none;
   background: transparent;
   cursor: pointer;
+}
+
+.section-actions {
+  flex-shrink: 0;
 }
 
 .section-content {
@@ -368,6 +379,81 @@
 .branch-run-title-active {
   color: var(--text-primary);
   background: var(--bg-active);
+}
+
+.branch-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.branch-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.branch-item:hover {
+  background: var(--bg-hover);
+}
+
+.branch-item-active {
+  background: var(--bg-active);
+  border-color: color-mix(in srgb, var(--accent-primary) 45%, var(--border-color));
+}
+
+.branch-name {
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.branch-active-mark {
+  color: var(--accent-primary);
+  font-size: 8px;
+}
+
+.branch-add-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  padding: 8px;
+  margin-top: 4px;
+  border: 1px dashed var(--border-color);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 16px;
+  cursor: pointer;
+}
+
+.branch-add-btn:hover {
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
+  background: var(--bg-hover);
+}
+
+.clear-overrides-btn {
+  padding: 2px 8px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.clear-overrides-btn:hover {
+  background: var(--bg-hover);
+  color: var(--danger-color, #dc2626);
 }
 
 .run-item {

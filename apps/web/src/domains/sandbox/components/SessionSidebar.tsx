@@ -4,9 +4,11 @@
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Badge from '@/shared/ui/Badge';
+import Button from '@/shared/ui/Button';
+import ConfirmDialog from '@/shared/ui/ConfirmDialog';
 import { qk } from '@/shared/api/keys';
 import { sandboxApi } from '../api';
-import type { SandboxBranchListItem, SandboxRunListItem, SandboxSelectedItem, SandboxSessionDetail } from '../types';
+import type { SandboxBranchListItem, SandboxSelectedItem, SandboxSessionDetail } from '../types';
 import { useCatalogData } from '../hooks/useSandboxNavigation';
 import { formatSandboxDomainLabel, formatSandboxDomainTone } from '../shared/domainLabels';
 import AccordionSection from './AccordionSection';
@@ -17,11 +19,12 @@ interface Props {
   session: SandboxSessionDetail;
   branches: SandboxBranchListItem[];
   activeBranchId: string;
-  runs: SandboxRunListItem[];
-  activeRunId: string | null;
   selectedItem: SandboxSelectedItem | null;
   onSelectBranch: (branchId: string) => void;
   onSelectItem: (item: SandboxSelectedItem) => void;
+  onCreateBranch: () => void;
+  onClearBranchOverrides: () => void;
+  isClearingOverrides?: boolean;
 }
 
 const TYPE_LABELS: Record<string, string> = {
@@ -41,13 +44,6 @@ function getOverrideGroupKey(override: { entity_type: string; entity_id: string 
   return `${override.entity_type}:${override.entity_id ?? 'global'}`;
 }
 
-const STATUS_TONE: Record<string, 'success' | 'neutral' | 'warn' | 'danger'> = {
-  running: 'warn',
-  completed: 'success',
-  failed: 'danger',
-  waiting_confirmation: 'warn',
-};
-
 function toVersionStateLabel(versionStatus: string, isCurrent: boolean): string {
   if (isCurrent) return 'Текущая';
   if (versionStatus === 'published' || versionStatus === 'active') return 'Опубликована';
@@ -59,14 +55,16 @@ export default function SessionSidebar({
   session,
   branches,
   activeBranchId,
-  runs,
-  activeRunId,
   selectedItem,
   onSelectBranch,
   onSelectItem,
+  onCreateBranch,
+  onClearBranchOverrides,
+  isClearingOverrides = false,
 }: Props) {
   const { data: catalog, isLoading: isCatalogLoading, isOrchestratorsLoading } = useCatalogData(sessionId);
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
+  const [showClearOverridesModal, setShowClearOverridesModal] = useState(false);
 
   const toolById = useMemo(
     () => new Map(catalog.tools.map((tool) => [tool.id, tool])),
@@ -562,7 +560,22 @@ export default function SessionSidebar({
         </div>
       </AccordionSection>
 
-      <AccordionSection title="Оверрайды" count={branchOverrides.length}>
+      <AccordionSection
+        title="Оверрайды"
+        count={branchOverrides.length}
+        actions={
+          branchOverrides.length > 0 && activeBranchId ? (
+            <button
+              type="button"
+              className={styles['clear-overrides-btn']}
+              onClick={() => setShowClearOverridesModal(true)}
+              title="Очистить все оверрайды ветки"
+            >
+              Очистить
+            </button>
+          ) : null
+        }
+      >
         {groupedOverridesList.length === 0 ? (
           <div className={styles['empty-section']}>Нет оверрайдов</div>
         ) : (
@@ -600,57 +613,51 @@ export default function SessionSidebar({
         )}
       </AccordionSection>
 
-      <AccordionSection title="Запуски" count={runs.length}>
+      <AccordionSection title="Ветки" count={branches.length}>
         {branches.length === 0 ? (
           <div className={styles['empty-section']}>Нет веток</div>
         ) : (
-          <div className={styles['branch-run-tree']}>
+          <div className={styles['branch-list']}>
             {branches.map((branch) => {
               const isBranchActive = branch.id === activeBranchId;
-              const branchRuns = runs.filter((run) => run.branch_id === branch.id);
               return (
-                <div key={branch.id} className={styles['branch-run-group']}>
-                  <button
-                    type="button"
-                    className={`${styles['branch-run-title']} ${isBranchActive ? styles['branch-run-title-active'] : ''}`}
-                    onClick={() => onSelectBranch(branch.id)}
-                  >
-                    {branch.name}
-                  </button>
-                  {isBranchActive && (
-                    <div className={styles['run-list']}>
-                      {branchRuns.length === 0 ? (
-                        <div className={styles['empty-section']}>Нет запусков в ветке</div>
-                      ) : (
-                        branchRuns.map((r) => (
-                          <div
-                            key={r.id}
-                            className={`${styles['run-item']} ${
-                              r.id === activeRunId ? styles['run-item-active'] : ''
-                            }`}
-                          >
-                            <span className={styles['run-text']}>
-                              {r.request_text.slice(0, 60)}
-                              {r.request_text.length > 60 ? '...' : ''}
-                            </span>
-                            <div className={styles['run-meta']}>
-                              <Badge tone={STATUS_TONE[r.status] ?? 'neutral'}>
-                                {r.status}
-                              </Badge>
-                              <span>{r.steps_count} шагов</span>
-                            </div>
-                          </div>
-                        ))
-                      )}
-                    </div>
-                  )}
-                </div>
+                <button
+                  key={branch.id}
+                  type="button"
+                  className={`${styles['branch-item']} ${isBranchActive ? styles['branch-item-active'] : ''}`}
+                  onClick={() => onSelectBranch(branch.id)}
+                >
+                  <span className={styles['branch-name']}>{branch.name}</span>
+                  {isBranchActive && <span className={styles['branch-active-mark']}>●</span>}
+                </button>
               );
             })}
+            <button
+              type="button"
+              className={styles['branch-add-btn']}
+              onClick={onCreateBranch}
+              title="Создать новую ветку"
+            >
+              ＋
+            </button>
           </div>
         )}
       </AccordionSection>
 
+      <ConfirmDialog
+        open={showClearOverridesModal}
+        title="Очистить оверрайды"
+        message={`Вы уверены, что хотите удалить все ${branchOverrides.length} оверрайдов из текущей ветки?`}
+        variant="warning"
+        confirmLabel="Очистить"
+        cancelLabel="Отмена"
+        confirmLoading={isClearingOverrides}
+        onConfirm={() => {
+          onClearBranchOverrides();
+          setShowClearOverridesModal(false);
+        }}
+        onCancel={() => setShowClearOverridesModal(false)}
+      />
     </div>
   );
 }

@@ -105,6 +105,29 @@ export default function SandboxSessionPage() {
     },
   });
 
+  const createBranchMutation = useMutation({
+    mutationFn: () => {
+      const branchName = `branch-${branches.length + 1}`;
+      return sandboxApi.createBranch(sessionId ?? '', {
+        name: branchName,
+      });
+    },
+    onSuccess: async (newBranch) => {
+      setActiveBranchId(newBranch.id);
+      await queryClient.invalidateQueries({ queryKey: qk.sandbox.branches.list(sessionId ?? '') });
+    },
+  });
+
+  const clearOverridesMutation = useMutation({
+    mutationFn: async () => {
+      if (!activeBranchId) return;
+      await sandboxApi.deleteBranchOverrides(sessionId ?? '', activeBranchId);
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: qk.sandbox.branchOverrides.list(sessionId ?? '', activeBranchId) });
+    },
+  });
+
   const isOwner = user?.id === session?.owner_id;
   const isReadOnly = !isOwner;
 
@@ -250,11 +273,12 @@ export default function SandboxSessionPage() {
           session={session}
           branches={branches}
           activeBranchId={activeBranchId}
-          runs={allRuns}
-          activeRunId={sandboxRun.activeRun.runId}
           selectedItem={selectedItem}
           onSelectBranch={setActiveBranchId}
           onSelectItem={setSelectedItem}
+          onCreateBranch={() => createBranchMutation.mutate()}
+          onClearBranchOverrides={() => clearOverridesMutation.mutate()}
+          isClearingOverrides={clearOverridesMutation.isPending}
         />
       </div>
       {!isCompactLayout && (

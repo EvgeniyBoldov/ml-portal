@@ -11,7 +11,7 @@ type CoverageResult = {
 
 type TrackableField = {
   path: string;
-  label: string;
+  name: string;
 };
 
 const IGNORE_KEYS = new Set(['kind', 'rationale']);
@@ -34,7 +34,9 @@ function collectTrackableFields(
   schema: Record<string, unknown>,
   basePath = '',
   inheritedRequired = false,
+  depth = 0,
 ): TrackableField[] {
+  if (depth > 4) return [];
   const fields: TrackableField[] = [];
   const requiredSet = new Set(asStringArray(schema.required));
   const properties = asRecord(schema.properties);
@@ -48,11 +50,11 @@ function collectTrackableFields(
     const hasChildren = hasTrackableShape(subSchema);
 
     if ((required || conditional) && !IGNORE_KEYS.has(key)) {
-      fields.push({ path, label: key });
+      fields.push({ path, name: key });
     }
 
     if (hasChildren) {
-      fields.push(...collectTrackableFields(subSchema, path, required));
+      fields.push(...collectTrackableFields(subSchema, path, required, depth + 1));
     }
 
     const items = asRecord(subSchema.items);
@@ -62,37 +64,33 @@ function collectTrackableFields(
       const itemConditional = typeof items.x_when === 'string' && items.x_when.trim().length > 0;
 
       if ((itemRequired || itemConditional) && !IGNORE_KEYS.has(key)) {
-        fields.push({ path: itemPath, label: `${key}[]` });
+        fields.push({ path: itemPath, name: key });
       }
 
       if (hasTrackableShape(items)) {
-        fields.push(...collectTrackableFields(items, itemPath, itemRequired));
+        fields.push(...collectTrackableFields(items, itemPath, itemRequired, depth + 1));
       }
     }
   }
 
   for (const variant of oneOf) {
     const variantSchema = asRecord(variant);
-    const title = typeof variantSchema.title === 'string' && variantSchema.title.trim().length > 0
-      ? variantSchema.title.trim()
-      : 'variant';
-    const variantPath = basePath ? `${basePath}.${title}` : title;
     const variantRequiredSet = new Set(asStringArray(variantSchema.required));
     const variantProperties = asRecord(variantSchema.properties);
 
     for (const [key, rawValue] of Object.entries(variantProperties)) {
       const subSchema = asRecord(rawValue);
-      const path = `${variantPath}.${key}`;
+      const path = basePath ? `${basePath}.${key}` : key;
       const required = variantRequiredSet.has(key);
       const conditional = typeof subSchema.x_when === 'string' && subSchema.x_when.trim().length > 0;
       const hasChildren = hasTrackableShape(subSchema);
 
       if ((required || conditional) && !IGNORE_KEYS.has(key)) {
-        fields.push({ path, label: key });
+        fields.push({ path, name: key });
       }
 
       if (hasChildren) {
-        fields.push(...collectTrackableFields(subSchema, path, required));
+        fields.push(...collectTrackableFields(subSchema, path, required, depth + 1));
       }
 
       const items = asRecord(subSchema.items);
@@ -102,11 +100,11 @@ function collectTrackableFields(
         const itemConditional = typeof items.x_when === 'string' && items.x_when.trim().length > 0;
 
         if ((itemRequired || itemConditional) && !IGNORE_KEYS.has(key)) {
-          fields.push({ path: itemPath, label: `${key}[]` });
+          fields.push({ path: itemPath, name: key });
         }
 
         if (hasTrackableShape(items)) {
-          fields.push(...collectTrackableFields(items, itemPath, itemRequired));
+          fields.push(...collectTrackableFields(items, itemPath, itemRequired, depth + 1));
         }
       }
     }
@@ -116,8 +114,9 @@ function collectTrackableFields(
 }
 
 function matchesText(text: string, field: TrackableField): boolean {
-  const needle = field.label.toLowerCase();
+  const needle = field.name.toLowerCase();
   const haystack = text.toLowerCase();
+  if (!needle) return false;
   return haystack.includes(needle) || haystack.includes(field.path.toLowerCase());
 }
 
