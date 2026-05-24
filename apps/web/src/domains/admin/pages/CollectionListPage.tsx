@@ -121,16 +121,23 @@ export function CollectionListPage() {
       ),
     },
     {
-      key: 'status',
-      label: 'СТАТУС',
-      width: 100,
+      key: 'is_active',
+      label: 'АКТИВНОСТЬ',
+      width: 120,
       render: (row) => (
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-          <Badge tone={row.is_active ? 'success' : 'danger'}>
-            {row.is_active ? 'Активна' : 'Неактивна'}
-          </Badge>
-          {row.lifecycle_status === 'deprecated' && <Badge tone="warn">Deprecated</Badge>}
-        </div>
+        <Badge tone={row.is_active ? 'success' : 'danger'}>
+          {row.is_active ? 'Активна' : 'Неактивна'}
+        </Badge>
+      ),
+    },
+    {
+      key: 'lifecycle_status',
+      label: 'LIFECYCLE',
+      width: 130,
+      render: (row) => (
+        <Badge tone={row.lifecycle_status === 'deprecated' ? 'warn' : 'neutral'}>
+          {row.lifecycle_status === 'deprecated' ? 'Deprecated' : 'Active'}
+        </Badge>
       ),
     },
   ];

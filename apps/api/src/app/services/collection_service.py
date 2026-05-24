@@ -492,6 +492,9 @@ class CollectionService:
     ) -> Optional[Collection]:
         return await self.query.get_by_slug(tenant_id, slug)
 
+    async def get_by_slug_any_tenant(self, slug: str) -> Optional[Collection]:
+        return await self.query.get_by_slug_any_tenant(slug)
+
     async def list_collections(
         self,
         tenant_id: uuid.UUID,

@@ -10,6 +10,7 @@ interface ChatMessageProps {
   content: string;
   createdAt?: string;
   isStreaming?: boolean;
+  runtimeStages?: string[];
   meta?: Record<string, unknown>;
 }
 
@@ -18,6 +19,7 @@ function ChatMessageComponent({
   content,
   createdAt,
   isStreaming,
+  runtimeStages,
   meta,
 }: ChatMessageProps) {
   const [copied, setCopied] = useState(false);
@@ -214,8 +216,19 @@ function ChatMessageComponent({
       {/* Content */}
       <div className={styles.content}>
         <div className={styles.header}>
-          <span className={styles.role}>{isUser ? 'Вы' : 'Ассистент'}</span>
-          {createdAt && <span className={styles.time}>{formatTime(createdAt)}</span>}
+          <div className={styles.headerMain}>
+            <span className={styles.role}>{isUser ? 'Вы' : 'Ассистент'}</span>
+            {createdAt && <span className={styles.time}>{formatTime(createdAt)}</span>}
+          </div>
+          {!isUser && isStreaming && runtimeStages && runtimeStages.length > 0 && (
+            <div className={styles.runtimeStages} aria-live="polite">
+              {runtimeStages.map((line, idx) => (
+                <div key={`${idx}:${line}`} className={styles.runtimeStageLine}>
+                  {line}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Attachments */}
@@ -291,6 +304,7 @@ function areChatMessagePropsEqual(prev: ChatMessageProps, next: ChatMessageProps
     && prev.content === next.content
     && prev.createdAt === next.createdAt
     && prev.isStreaming === next.isStreaming
+    && prev.runtimeStages === next.runtimeStages
     && prev.meta === next.meta
   );
 }

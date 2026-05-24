@@ -99,6 +99,7 @@ class RuntimeDataInstanceResolver:
             )
             .where(
                 Collection.is_active.is_(True),
+                Collection.lifecycle_status != "deprecated",
                 ToolInstance.is_active.is_(True),
             )
             .order_by(Collection.created_at.asc())

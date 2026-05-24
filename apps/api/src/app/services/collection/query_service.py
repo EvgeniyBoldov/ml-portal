@@ -48,6 +48,28 @@ class CollectionQueryService:
         )
         return result.scalar_one_or_none()
 
+    async def get_by_slug_any_tenant(self, slug: str) -> Optional[Collection]:
+        result = await self.session.execute(
+            select(Collection)
+            .options(
+                selectinload(Collection.schema),
+                selectinload(Collection.current_version),
+                selectinload(Collection.data_instance),
+            )
+            .where(
+                Collection.slug == slug,
+                Collection.is_active.is_(True),
+                Collection.lifecycle_status != "deprecated",
+            )
+            .order_by(Collection.created_at.desc())
+        )
+        rows = list(result.scalars().all())
+        if not rows:
+            return None
+        if len(rows) > 1:
+            return None
+        return rows[0]
+
     async def list_collections(self, tenant_id: uuid.UUID, active_only: bool = True) -> List[Collection]:
         query = select(Collection).where(Collection.tenant_id == tenant_id)
         query = query.options(

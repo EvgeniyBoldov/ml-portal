@@ -5,7 +5,6 @@ import { useChatActions, useChatMessagesState } from '@/domains/chat/contexts/Ch
 import { ChatMessage } from '@/domains/chat/components/ChatMessage';
 import { ChatComposer } from '@/domains/chat/components/ChatComposer';
 import { ConfirmationPrompt } from '@/domains/chat/components/ConfirmationPrompt/ConfirmationPrompt';
-import { ChatProgressBlock } from '@/domains/chat/components/ChatProgressBlock';
 import { Icon } from '@/shared/ui/Icon';
 
 export default function Chat() {
@@ -239,6 +238,7 @@ export default function Chat() {
 
   const pendingConfirmation = state.pendingConfirmations[0] || null;
   const isWaitingInput = Boolean(state.pendingInput && !pendingConfirmation);
+  const runtimeAlive = state.isStreaming && !streamError;
   // Get last message for streaming indicator
   const lastMessage = messages[messages.length - 1];
   const isStreaming = lastMessage?.role === 'assistant' && lastMessage?.isOptimistic;
@@ -267,11 +267,15 @@ export default function Chat() {
               content={normalizeContent(m.content)}
               createdAt={m.created_at}
               isStreaming={m.role === 'assistant' && idx === messages.length - 1 && isStreaming}
+              runtimeStages={
+                m.role === 'assistant' && idx === messages.length - 1 && runtimeAlive
+                  ? state.progressEvents.slice(-4).map((item) => item.text)
+                  : undefined
+              }
               meta={m.meta as Record<string, unknown> | undefined}
             />
           ))
         )}
-        {state.isStreaming && <ChatProgressBlock lines={state.progressEvents} />}
 
         {/* Error message */}
         {streamError && (

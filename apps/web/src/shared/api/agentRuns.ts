@@ -7,7 +7,30 @@ import type { RunTrace } from '@/domains/runtimeTrace/types';
 export interface AgentRunStep {
   id: string;
   step_number: number;
-  step_type: 'user_request' | 'routing' | 'llm_request' | 'llm_response' | 'tool_call' | 'tool_result' | 'final_response' | 'error';
+  step_type:
+    | 'user_request'
+    | 'routing'
+    | 'llm_request'
+    | 'llm_response'
+    | 'llm_call'
+    | 'tool_call'
+    | 'tool_result'
+    | 'operation_call'
+    | 'operation_result'
+    | 'protocol_retry'
+    | 'budget_snapshot'
+    | 'final'
+    | 'final_response'
+    | 'error'
+    | 'run_start'
+    | 'run_end'
+    | 'orchestrator_start'
+    | 'orchestrator_end'
+    | 'agent_start'
+    | 'agent_end'
+    | 'synthesis_start'
+    | 'synthesis_end'
+    | string;
   data: Record<string, unknown>;
   tokens_in?: number;
   tokens_out?: number;

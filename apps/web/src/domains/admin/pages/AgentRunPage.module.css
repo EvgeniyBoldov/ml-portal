@@ -352,3 +352,30 @@
 .phase-timeline-duration {
   color: var(--text-muted, #9ca3af);
 }
+
+.trace-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.8fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.trace-tree-pane {
+  min-width: 0;
+}
+
+.trace-inspector-pane {
+  min-width: 0;
+  position: sticky;
+  top: 12px;
+}
+
+@media (max-width: 1200px) {
+  .trace-workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .trace-inspector-pane {
+    position: static;
+  }
+}

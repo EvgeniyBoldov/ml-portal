@@ -170,6 +170,14 @@ export function createLegacyContainerAssembler(
   }
 
   function resolveParentForEvent(event: SemanticEvent): TraceEntity {
+    const raw = (event.raw?.raw ?? {}) as Record<string, unknown>;
+    const runId = typeof raw.agent_run_id === 'string' ? raw.agent_run_id : undefined;
+    if (runId) {
+      const byRun = agentByRunId.get(runId);
+      if (byRun) return byRun;
+      const byEvent = resolveAgentForEvent(event);
+      if (byEvent) return byEvent;
+    }
     if (event.phase === 'planner') return ensurePlannerIterationEntity(event);
     if (event.phase === 'synthesis') return ensureSynthesisEntity(event);
     if (event.phase === 'agent') {

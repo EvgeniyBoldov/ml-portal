@@ -6,6 +6,14 @@ import { InspectorFieldGroup, InspectorFieldRow, InspectorJsonBlock } from '@/sh
 
 export function ToolInspectorTabs({ entity, steps }: { entity: TraceEntity; steps: RunStep[] }) {
   const data = isToolData(entity.data) ? entity.data : null;
+  const outputValue = data?.result?.success
+    ? (data?.result?.data ?? { success: true })
+    : {
+        success: false,
+        error: data?.result?.error ?? 'Operation failed',
+        errorCode: data?.result?.errorCode,
+        retryable: data?.result?.retryable,
+      };
   const tabs = [{ key: 'info', label: 'Info' }, { key: 'input', label: 'Input' }, { key: 'output', label: 'Output' }, { key: 'budgets', label: 'Budgets' }, { key: 'errors', label: 'Errors' }, { key: 'raw', label: 'Raw' }];
 
   return <InspectorTabs entityId={entity.id} tabs={tabs} render={(tab) => {
@@ -22,9 +30,9 @@ export function ToolInspectorTabs({ entity, steps }: { entity: TraceEntity; step
       </>
     );
     if (tab === 'input') return <InspectorJsonBlock value={data?.arguments ?? '—'} />;
-    if (tab === 'output') return <InspectorJsonBlock value={data?.result?.data ?? { success: data?.result?.success ?? false }} />;
+    if (tab === 'output') return <InspectorJsonBlock value={outputValue} />;
     if (tab === 'budgets') return <BudgetsTab entity={entity} steps={steps} />;
-    if (tab === 'errors') return <InspectorJsonBlock value={{ error: data?.result?.error, retries: data?.retries ?? [] }} />;
+    if (tab === 'errors') return <InspectorJsonBlock value={{ error: data?.result?.error ?? null, errorCode: data?.result?.errorCode ?? null, retryable: data?.result?.retryable ?? null, retries: data?.retries ?? [] }} />;
     return <RawTab value={entity.data} entity={entity} steps={steps} />;
   }} />;
 }

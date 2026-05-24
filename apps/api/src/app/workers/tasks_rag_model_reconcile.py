@@ -39,15 +39,16 @@ def reconcile_rag_statuses_for_embedding_model(
     async def _run() -> Dict[str, Any]:
         checked = 0
         updated = 0
+        requested_tenant_id = tenant_id
 
         async with get_worker_session() as session:
             stmt = select(RAGDocument.id, RAGDocument.tenant_id)
-            if tenant_id:
+            if requested_tenant_id:
                 try:
-                    tenant_uuid = uuid.UUID(str(tenant_id))
+                    tenant_uuid = uuid.UUID(str(requested_tenant_id))
                     stmt = stmt.where(RAGDocument.tenant_id == tenant_uuid)
                 except Exception:
-                    logger.warning("invalid_tenant_id_for_reconcile", extra={"tenant_id": tenant_id})
+                    logger.warning("invalid_tenant_id_for_reconcile", extra={"tenant_id": requested_tenant_id})
             if model_alias:
                 stmt = (
                     stmt.join(RAGStatus, RAGStatus.doc_id == RAGDocument.id)
@@ -59,12 +60,12 @@ def reconcile_rag_statuses_for_embedding_model(
                 )
             rows = (await session.execute(stmt)).all()
 
-            for doc_id, tenant_id in rows:
+            for doc_id, row_tenant_id in rows:
                 checked += 1
-                if not doc_id or not tenant_id:
+                if not doc_id or not row_tenant_id:
                     continue
                 try:
-                    repo_factory = AsyncRepositoryFactory(session, tenant_id=tenant_id)
+                    repo_factory = AsyncRepositoryFactory(session, tenant_id=row_tenant_id)
                     manager = RAGStatusManager(session, repo_factory)
                     await manager._update_aggregate_status(doc_id)  # noqa: SLF001
                     updated += 1
@@ -73,7 +74,7 @@ def reconcile_rag_statuses_for_embedding_model(
                         "reconcile_rag_statuses_failed_for_document",
                         extra={
                             "doc_id": str(doc_id),
-                            "tenant_id": str(tenant_id),
+                            "tenant_id": str(row_tenant_id),
                             "model_alias": model_alias,
                             "error": str(exc),
                         },
@@ -82,8 +83,8 @@ def reconcile_rag_statuses_for_embedding_model(
 
         logger.info(
             "reconcile_rag_statuses_for_embedding_model_done",
-            extra={"model_alias": model_alias, "tenant_id": tenant_id, "checked": checked, "updated": updated},
+            extra={"model_alias": model_alias, "tenant_id": requested_tenant_id, "checked": checked, "updated": updated},
         )
-        return {"model_alias": model_alias, "tenant_id": tenant_id, "checked": checked, "updated": updated}
+        return {"model_alias": model_alias, "tenant_id": requested_tenant_id, "checked": checked, "updated": updated}
 
     return asyncio.run(_run())

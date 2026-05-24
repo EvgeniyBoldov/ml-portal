@@ -643,6 +643,42 @@ export function buildEntityTree(
     assembler.closeCurrentAgentWindow(endEvent, status);
   }
 
+  // Agent-runs page often has no lifecycle events; synthesize agent container by agent_run_id.
+  const firstAgentEvent = events.find((e) => {
+    const raw = (e.raw?.raw ?? {}) as Record<string, unknown>;
+    return typeof raw.agent_run_id === 'string' && raw.agent_run_id.length > 0;
+  });
+  if (firstAgentEvent) {
+    const raw = (firstAgentEvent.raw?.raw ?? {}) as Record<string, unknown>;
+    const syntheticRunId = typeof raw.agent_run_id === 'string' && raw.agent_run_id
+      ? raw.agent_run_id
+      : undefined;
+    const syntheticSlug = typeof raw.agent_slug === 'string' && raw.agent_slug
+      ? raw.agent_slug
+      : 'agent';
+    if (syntheticRunId) {
+      const syntheticAgent: TraceEntity = {
+        id: hashIds([syntheticRunId, 'synthetic-agent']),
+        kind: 'agent',
+        parentId: root.id,
+        depth: 1,
+        children: [],
+        title: syntheticSlug,
+        status: 'info',
+        startedAt: firstAgentEvent.started_at,
+        sourceEventIds: [],
+        data: {
+          kind: 'agent',
+          slug: syntheticSlug,
+          prompt: { isBriefMode: false },
+        } as AgentData,
+      };
+      root.children.push(syntheticAgent);
+      assembler.linkAgentRunId(syntheticRunId, syntheticAgent);
+      queuePendingAgent(syntheticSlug, syntheticAgent);
+    }
+  }
+
   // Process each event
   for (let i = 0; i < events.length; i++) {
     const event = events[i];
@@ -860,6 +896,27 @@ export function buildEntityTree(
           synthesisParent.data.intent = String(event.outputs?.content ?? '');
         }
         emitDebug(event, 'route_final_to_synthesis', synthesisParent);
+      } else if (event.phase === 'agent') {
+        const parent = resolveParentForEvent(event);
+        const finalEntity: TraceEntity = {
+          id: hashIds([event.id]),
+          kind: 'planner',
+          parentId: parent.id,
+          depth: parent.depth + 1,
+          children: [],
+          title: 'Final response',
+          status: event.status,
+          startedAt: event.started_at,
+          durationMs: event.duration_ms,
+          sourceEventIds: [event.id],
+          data: {
+            kind: 'planner',
+            stepKind: 'final',
+            rationale: String(event.outputs?.content ?? ''),
+          },
+        };
+        parent.children.push(finalEntity);
+        emitDebug(event, 'route_final_to_agent', parent);
       } else {
         const finalEntity: TraceEntity = {
           id: hashIds([event.id]),
@@ -993,17 +1050,17 @@ export function buildEntityTree(
         explicitAgent.children.push(toolEntity);
         emitDebug(event, 'create_tool_entity', toolEntity, 'explicit_agent');
       } else {
-        const parent = stack[stack.length - 1];
-        toolEntity.parentId = parent.entity.id;
-        toolEntity.depth = parent.entity.depth + 1;
-        parent.entity.children.push(toolEntity);
+        const parent = resolveParentForEvent(event);
+        toolEntity.parentId = parent.id;
+        toolEntity.depth = parent.depth + 1;
+        parent.children.push(toolEntity);
         emitDebug(event, 'create_tool_entity', toolEntity, 'stack_parent');
-        if (parent.entity.kind === 'agent' && explicitAgentRunId) {
-          assembler.linkAgentRunId(explicitAgentRunId, parent.entity);
-        } else if (parent.entity.kind === 'agent' && explicitAgentSlug) {
-          const parentData = parent.entity.data;
+        if (parent.kind === 'agent' && explicitAgentRunId) {
+          assembler.linkAgentRunId(explicitAgentRunId, parent);
+        } else if (parent.kind === 'agent' && explicitAgentSlug) {
+          const parentData = parent.data;
           if (parentData.kind === 'agent' && parentData.slug === explicitAgentSlug && explicitAgentRunId) {
-            assembler.linkAgentRunId(explicitAgentRunId, parent.entity);
+            assembler.linkAgentRunId(explicitAgentRunId, parent);
           }
         }
       }

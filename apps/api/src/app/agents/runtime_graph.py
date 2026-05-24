@@ -10,6 +10,8 @@ from app.agents.contracts import OperationCredentialContext, ProviderExecutionTa
 class OperationRuntimeContext(BaseModel):
     instance_id: str = Field(..., min_length=1)
     instance_slug: str = Field(..., min_length=1)
+    collection_id: Optional[str] = None
+    collection_slug: Optional[str] = None
     provider_instance_id: str = Field(..., min_length=1)
     provider_instance_slug: str = Field(..., min_length=1)
     has_credentials: bool = False

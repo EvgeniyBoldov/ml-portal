@@ -88,9 +88,23 @@ export function buildToolData(events: SemanticEvent[]): ToolData {
   const calledByAgentSlug = (callInputs.agent_slug ?? rawCall.agent_slug ?? resultOutputs.agent_slug ?? rawResult.agent_slug) as string | undefined;
   const calledByAgentRunId = (callInputs.agent_run_id ?? rawCall.agent_run_id ?? resultOutputs.agent_run_id ?? rawResult.agent_run_id) as string | undefined;
   const args = (callInputs.arguments ?? callInputs.parameters ?? callInputs.input ?? callInputs.payload ?? rawCall.arguments ?? rawCall.parameters ?? rawCall.input ?? rawCall.payload ?? {}) as Record<string, unknown>;
-  const success = (resultOutputs.success ?? rawResult.success) === true;
+  const successRaw = (resultOutputs.success ?? rawResult.success);
+  const success = successRaw === true;
   const resultData = success ? (resultOutputs.result ?? resultOutputs.output ?? resultOutputs.data ?? rawResult.result ?? rawResult.output ?? rawResult.data) : undefined;
-  const errorMessage = !success ? String(resultOutputs.error ?? resultOutputs.message ?? rawResult.error ?? rawResult.message ?? 'Failed') : undefined;
+  const fallbackFailure = resultOutputs.result ?? resultOutputs.output ?? resultOutputs.data ?? rawResult.result ?? rawResult.output ?? rawResult.data;
+  const errorMessage = !success
+    ? String(
+        resultOutputs.error
+        ?? resultOutputs.message
+        ?? rawResult.error
+        ?? rawResult.message
+        ?? (typeof fallbackFailure === 'string' ? fallbackFailure : undefined)
+        ?? (typeof (fallbackFailure as Record<string, unknown> | undefined)?.error === 'string'
+          ? (fallbackFailure as Record<string, unknown>).error
+          : undefined)
+        ?? 'Failed'
+      )
+    : undefined;
   const errorCodeRaw = resultOutputs.error_code ?? rawResult.error_code;
   const retryableRaw = resultOutputs.retryable ?? rawResult.retryable;
   return {

@@ -15,7 +15,11 @@ import { getStatusProps } from '@/shared/lib/statusConfig';
 import ConfirmDialog from '@/shared/ui/ConfirmDialog';
 import { buildRunTrace } from '@/domains/runtimeTrace/normalize';
 import { buildTraceDiagnostics } from '@/domains/runtimeTrace/components/TraceDiagnosticsSummary';
-import { RuntimeTraceTree } from '@/domains/runtimeTrace/components/RuntimeTraceTree';
+import { buildEntityTree, findEntityById } from '@/domains/runtimeTrace/buildEntityTree';
+import type { TraceEntity } from '@/domains/runtimeTrace/entityTypes';
+import { TraceTree } from '@/domains/sandbox/components/TraceTree';
+import { EntityInspector } from '@/domains/sandbox/components/EntityInspector';
+import type { RunStep } from '@/domains/sandbox/hooks/useSandboxRun';
 import styles from './AgentRunPage.module.css';
 
 function formatDuration(ms?: number): string {
@@ -112,6 +116,8 @@ export function AgentRunPage() {
   const showError = useErrorToast();
   const showSuccess = useSuccessToast();
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
 
   const { data: run, isLoading } = useQuery({
     queryKey: qk.agentRuns.detail(id!),
@@ -140,7 +146,6 @@ export function AgentRunPage() {
 
   const steps = run?.steps || [];
   const trace = useMemo(() => {
-    if (run?.trace) return run.trace;
     return buildRunTrace(steps.map((step) => ({
       id: step.id,
       raw_type: step.step_type,
@@ -149,8 +154,26 @@ export function AgentRunPage() {
       created_at: step.created_at,
       duration_ms: step.duration_ms,
     })));
-  }, [run?.trace, steps]);
+  }, [steps]);
   const diagnostics = useMemo(() => buildTraceDiagnostics(trace.iterations.flatMap((item) => item.events)), [trace]);
+  const traceTree = useMemo(
+    () => buildEntityTree(trace.iterations.flatMap((it) => it.events)),
+    [trace],
+  );
+  const selectedEntity = useMemo(
+    () => (selectedEntityId ? findEntityById(traceTree, selectedEntityId) ?? null : null),
+    [traceTree, selectedEntityId],
+  );
+  const inspectorSteps = useMemo<RunStep[]>(
+    () =>
+      steps.map((step) => ({
+        id: step.id,
+        type: step.step_type as RunStep['type'],
+        data: step.data,
+        timestamp: Date.parse(step.created_at) || 0,
+      })),
+    [steps],
+  );
   const OVERVIEW_FIELDS: FieldConfig[] = [
     { key: 'id', type: 'code', label: 'ID', editable: false },
     { key: 'agent_slug', type: 'text', label: 'Агент', editable: false },
@@ -339,7 +362,27 @@ export function AgentRunPage() {
 
         <Tab title="Трейс" layout="full" id="steps" badge={trace.total_events}>
           {trace.total_events > 0 ? (
-            <RuntimeTraceTree events={trace.iterations.flatMap((it) => it.events)} />
+            <div className={styles['trace-workspace']}>
+              <div className={styles['trace-tree-pane']}>
+                <TraceTree
+                  root={traceTree}
+                  selectedId={selectedEntityId}
+                  onSelect={(entity: TraceEntity) => setSelectedEntityId(entity.id)}
+                  expandedIds={expandedIds}
+                  onToggleExpand={(id: string) => {
+                    setExpandedIds((prev) => {
+                      const next = new Set(prev);
+                      if (next.has(id)) next.delete(id);
+                      else next.add(id);
+                      return next;
+                    });
+                  }}
+                />
+              </div>
+              <aside className={styles['trace-inspector-pane']}>
+                <EntityInspector entity={selectedEntity} steps={inspectorSteps} />
+              </aside>
+            </div>
           ) : (
             <div className={styles['empty-steps']}>Нет записанных шагов. Возможно, уровень логирования агента — «none».</div>
           )}

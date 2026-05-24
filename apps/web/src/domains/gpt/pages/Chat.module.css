@@ -35,6 +35,67 @@
   margin: 0;
 }
 
+.headerRuntime {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-height: 24px;
+  max-width: 65%;
+}
+
+.headerStages {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.headerStage {
+  font-size: 11px;
+  color: var(--text-secondary);
+  padding: 2px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  background: var(--bg-primary);
+  max-width: 320px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.headerTyping {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.headerTyping span {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--primary);
+  animation: header-typing 1.2s ease-in-out infinite;
+}
+
+.headerTyping span:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.headerTyping span:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes header-typing {
+  0%, 80%, 100% {
+    opacity: 0.3;
+    transform: scale(0.8);
+  }
+  40% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
 .streamStatus {
   font-size: var(--font-size-xs);
   color: var(--primary);

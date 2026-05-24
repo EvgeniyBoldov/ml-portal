@@ -86,17 +86,28 @@ class CollectionGetTool(VersionedTool):
                  id_field=id_field)
         
         try:
-            tenant_uuid = uuid.UUID(ctx.tenant_id) if isinstance(ctx.tenant_id, str) else ctx.tenant_id
-            
             session_factory = get_session_factory()
             async with session_factory() as session:
                 service = CollectionService(session)
-                
-                collection = await service.get_by_slug(tenant_uuid, collection_slug)
+
+                collection = None
+                collection_id_raw = args.get("collection_id")
+                if collection_id_raw:
+                    try:
+                        collection = await service.get_by_id(uuid.UUID(str(collection_id_raw)))
+                    except (TypeError, ValueError):
+                        collection = None
+                if collection is None:
+                    collection = await service.get_by_slug_any_tenant(collection_slug)
                 if not collection:
                     log.error("Collection not found", collection=collection_slug)
                     return ToolResult.fail(
                         f"Collection '{collection_slug}' not found",
+                        logs=log.entries_dict(),
+                    )
+                if collection_slug and str(collection.slug) != collection_slug:
+                    return ToolResult.fail(
+                        f"Collection slug mismatch: expected '{collection_slug}', got '{collection.slug}'",
                         logs=log.entries_dict(),
                     )
                 

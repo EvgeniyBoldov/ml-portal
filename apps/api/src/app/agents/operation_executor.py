@@ -202,6 +202,9 @@ class DirectOperationExecutor:
             return merged_args
         instance_info = binding.context.model_dump()
         config = instance_info.get("config") or {}
+        binding_collection_id = instance_info.get("collection_id")
+        if binding_collection_id and merged_args.get("collection_id") is None:
+            merged_args["collection_id"] = binding_collection_id
         config_collection_slug = config.get("collection_slug")
         instance_slug = instance_info.get("instance_slug")
         requested_collection_slug = merged_args.get("collection_slug")
