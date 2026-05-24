@@ -13,7 +13,7 @@ import { Block, type FieldConfig } from '@/shared/ui/GridLayout';
 import { Badge, Button } from '@/shared/ui';
 import { getStatusProps } from '@/shared/lib/statusConfig';
 import ConfirmDialog from '@/shared/ui/ConfirmDialog';
-import { buildRunTrace } from '@/domains/runtimeTrace/normalize';
+import { buildRunTrace, normalizeTraceEvent } from '@/domains/runtimeTrace/normalize';
 import { buildTraceDiagnostics } from '@/domains/runtimeTrace/components/TraceDiagnosticsSummary';
 import { buildEntityTree, findEntityById } from '@/domains/runtimeTrace/buildEntityTree';
 import type { TraceEntity } from '@/domains/runtimeTrace/entityTypes';
@@ -156,9 +156,23 @@ export function AgentRunPage() {
     })));
   }, [steps]);
   const diagnostics = useMemo(() => buildTraceDiagnostics(trace.iterations.flatMap((item) => item.events)), [trace]);
+  const orderedEvents = useMemo(
+    () =>
+      steps.map((step) =>
+        normalizeTraceEvent({
+          id: step.id,
+          raw_type: step.step_type,
+          data: step.data,
+          step_number: step.step_number,
+          created_at: step.created_at,
+          duration_ms: step.duration_ms,
+        }),
+      ),
+    [steps],
+  );
   const traceTree = useMemo(
-    () => buildEntityTree(trace.iterations.flatMap((it) => it.events)),
-    [trace],
+    () => buildEntityTree(orderedEvents),
+    [orderedEvents],
   );
   const selectedEntity = useMemo(
     () => (selectedEntityId ? findEntityById(traceTree, selectedEntityId) ?? null : null),
