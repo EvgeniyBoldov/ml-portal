@@ -166,6 +166,9 @@ class LifecycleAdminService:
         if kind in {"tenant", "user", "collection"} and hasattr(entity, "is_active"):
             entity.is_active = False
 
+        if kind == "collection":
+            await self._remove_collection_from_agent_bindings(entity_id)
+
         return LifecycleReport(
             kind=kind,
             entity_id=str(entity_id),
@@ -337,6 +340,7 @@ class LifecycleAdminService:
             collection = await self.session.get(Collection, entity_id)
             if collection is None:
                 raise ValueError("not_found")
+            await self._remove_collection_from_agent_bindings(entity_id)
             rbac_cleanup = RbacCleanupService(self.session)
             removed_rules = await rbac_cleanup.remove_rules_for_resource(
                 resource_type="instance",
@@ -403,6 +407,22 @@ class LifecycleAdminService:
             )
 
         raise ValueError(f"Unsupported lifecycle kind: {kind}")
+
+    async def _remove_collection_from_agent_bindings(self, collection_id: uuid.UUID) -> None:
+        agents_result = await self.session.execute(
+            select(Agent).where(Agent.allowed_collection_ids.isnot(None))
+        )
+        agents = agents_result.scalars().all()
+        collection_id_str = str(collection_id)
+        for agent in agents:
+            allowed = list(getattr(agent, "allowed_collection_ids", None) or [])
+            if not allowed:
+                continue
+            filtered = [cid for cid in allowed if str(cid) != collection_id_str]
+            if len(filtered) == len(allowed):
+                continue
+            agent.allowed_collection_ids = filtered or None
+            self.session.add(agent)
 
     async def _get_entity(self, kind: LifecycleKind, entity_id: uuid.UUID):
         model_map = {

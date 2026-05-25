@@ -203,20 +203,14 @@ class DirectOperationExecutor:
         instance_info = binding.context.model_dump()
         config = instance_info.get("config") or {}
         binding_collection_id = instance_info.get("collection_id")
-        if binding_collection_id and merged_args.get("collection_id") is None:
+        # Enforce bound collection to prevent cross-collection access via crafted args.
+        if binding_collection_id:
             merged_args["collection_id"] = binding_collection_id
+        binding_collection_slug = instance_info.get("collection_slug")
+        if binding_collection_slug:
+            merged_args["collection_slug"] = binding_collection_slug
         config_collection_slug = config.get("collection_slug")
-        instance_slug = instance_info.get("instance_slug")
-        requested_collection_slug = merged_args.get("collection_slug")
-        if config_collection_slug and (
-            requested_collection_slug is None
-            or requested_collection_slug == instance_slug
-            or (
-                isinstance(requested_collection_slug, str)
-                and requested_collection_slug.startswith("collection-")
-                and requested_collection_slug.removeprefix("collection-") == config_collection_slug
-            )
-        ):
+        if config_collection_slug and not merged_args.get("collection_slug"):
             merged_args["collection_slug"] = config_collection_slug
         return merged_args
 
@@ -234,6 +228,15 @@ class DirectOperationExecutor:
         instance_info = binding.context.model_dump()
         data_config = binding.context.config or {}
         credential_context = binding.credential
+
+        # Enforce bound collection for remote MCP calls as well.
+        binding_collection_id = instance_info.get("collection_id")
+        if binding_collection_id:
+            merged_args["collection_id"] = binding_collection_id
+        binding_collection_slug = instance_info.get("collection_slug")
+        if binding_collection_slug:
+            merged_args["collection_slug"] = binding_collection_slug
+
         merged_args.setdefault("instance_context", {})
         if isinstance(merged_args["instance_context"], dict):
             merged_args["instance_context"].update(

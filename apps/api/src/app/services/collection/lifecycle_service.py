@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ConflictError, InvalidSchemaError
 from app.models.collection import Collection, CollectionStatus, CollectionType, FieldType
+from app.models.agent import Agent
 from app.models.rbac import ResourceType
 from app.models.tool_instance import ToolInstance
 from app.services.rbac_cleanup_service import RbacCleanupService
@@ -355,6 +356,9 @@ class CollectionLifecycleService:
             resource_id=collection_id,
         )
 
+        # Remove deleted collection from agent collection bindings.
+        await self._remove_collection_from_agent_bindings(collection_id)
+
         await self.session.delete(collection)
         await self.session.flush()
 
@@ -369,3 +373,18 @@ class CollectionLifecycleService:
                 await vector_store.delete_collection(qdrant_collection_name)
 
         return True
+
+    async def _remove_collection_from_agent_bindings(self, collection_id: uuid.UUID) -> None:
+        result = await self.session.execute(
+            select(Agent).where(Agent.allowed_collection_ids.isnot(None))
+        )
+        agents = result.scalars().all()
+        for agent in agents:
+            allowed = list(getattr(agent, "allowed_collection_ids", None) or [])
+            if not allowed:
+                continue
+            filtered = [cid for cid in allowed if str(cid) != str(collection_id)]
+            if len(filtered) == len(allowed):
+                continue
+            agent.allowed_collection_ids = filtered or None
+            self.session.add(agent)

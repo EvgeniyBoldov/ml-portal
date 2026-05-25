@@ -684,6 +684,12 @@ details[open] .variantChevron {
   word-break: break-word;
 }
 
+/* In input legend zone we keep a single scroll container (inputPanel). */
+.inputPanel .examplesPre {
+  max-height: none;
+  overflow: visible;
+}
+
 .examplesPlaceholder {
   border: 1px dashed var(--border);
   border-radius: 8px;
