@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Type, TypeVar, Union
 from uuid import UUID
 
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -136,7 +136,7 @@ class HealthCheckEngine:
         # Build query for candidates
         stmt = select(Model).where(
             Model.status == "AVAILABLE",  # Only check available models
-            Model.next_check_at <= now,
+            or_(Model.next_check_at.is_(None), Model.next_check_at <= now),
         )
         
         if model_type:

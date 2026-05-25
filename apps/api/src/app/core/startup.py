@@ -300,6 +300,16 @@ async def validate_role_contracts_task(session_factory: async_sessionmaker[Async
     logger.info("Role contracts validated successfully")
 
 
+async def sync_periodic_tasks(session_factory: async_sessionmaker[AsyncSession]) -> None:
+    """Sync celery beat schedule into periodic_tasks registry."""
+    from app.services.periodic_task_sync_service import PeriodicTaskSyncService
+
+    async with session_factory() as session:
+        await PeriodicTaskSyncService(session).sync_from_beat()
+        await session.commit()
+    logger.info("Periodic tasks synced from beat schedule")
+
+
 async def run_all(session_factory: async_sessionmaker[AsyncSession]) -> None:
     """Run all startup tasks in order. Each failure is isolated."""
     tasks: list[tuple[str, Callable]] = [
@@ -310,6 +320,7 @@ async def run_all(session_factory: async_sessionmaker[AsyncSession]) -> None:
         ("sync_tool_backend_releases", sync_tool_backend_releases),
         ("rescan_local_instances", rescan_local_instances),
         ("validate_connectors", validate_connectors),
+        ("sync_periodic_tasks", sync_periodic_tasks),
     ]
     for name, task in tasks:
         logger.info(f"[startup] Running {name}...")

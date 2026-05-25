@@ -52,7 +52,6 @@ def audit_collection_vector_indexes(self) -> Dict[str, Any]:
                     select(Collection).where(
                         Collection.collection_type == "document",
                         Collection.is_active.is_(True),
-                        Collection.has_vector_search.is_(True),
                         Collection.qdrant_collection_name.is_not(None),
                     )
                 )
@@ -192,4 +191,3 @@ def audit_collection_vector_indexes(self) -> Dict[str, Any]:
             return payload
 
     return asyncio.run(_run())
-

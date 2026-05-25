@@ -33,6 +33,7 @@ const navigation: NavGroup[] = [
     items: [
       { path: '/admin/platform', label: 'Настройки', icon: 'sliders' },
       { path: '/admin/rbac', label: 'RBAC', icon: 'shield' },
+      { path: '/admin/periodic-tasks', label: 'Периодические задачи', icon: 'activity' },
     ],
   },
   {

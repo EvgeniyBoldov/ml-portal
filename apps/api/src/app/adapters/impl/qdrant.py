@@ -1,8 +1,6 @@
 from __future__ import annotations
-import asyncio
 from typing import Sequence, Mapping, Any
-import httpx
-from qdrant_client import AsyncQdrantClient, QdrantClient
+from qdrant_client import AsyncQdrantClient
 from qdrant_client.http import models as qm
 from app.core.config import get_settings
 from app.core.logging import get_logger
@@ -14,19 +12,6 @@ def _is_not_found_error(exc: Exception) -> bool:
     msg = str(exc).lower()
     return "404" in msg or "not found" in msg
 
-
-def _is_query_endpoint_unsupported(exc: Exception) -> bool:
-    msg = str(exc).lower()
-    return (
-        ("404" in msg and "/points/query" in msg)
-        or "unknown endpoint" in msg
-        or "method not allowed" in msg
-    )
-
-
-def _should_try_legacy_search(exc: Exception) -> bool:
-    # Qdrant < 1.10 may return plain 404 for /points/query with no endpoint hint.
-    return _is_query_endpoint_unsupported(exc) or _is_not_found_error(exc)
 
 def _match_condition(key: str, value: Any) -> qm.FieldCondition:
     if isinstance(value, (list, tuple, set)):
@@ -55,62 +40,7 @@ class QdrantVectorStore:
         s = get_settings()
         base_url = url or s.QDRANT_URL
         timeout_value = timeout or s.TIMEOUT_SECONDS
-        self._base_url = base_url.rstrip("/")
-        self._timeout = timeout_value
         self._client = AsyncQdrantClient(base_url, timeout=timeout_value)
-        # Keep sync client for compatibility paths where available.
-        self._sync_client = QdrantClient(base_url, timeout=timeout_value)
-
-    async def _legacy_search(
-        self,
-        collection: str,
-        query: Sequence[float],
-        top_k: int,
-        query_filter: qm.Filter | None,
-    ) -> list[dict]:
-        # Prefer client method when available.
-        sync_search = getattr(self._sync_client, "search", None)
-        if sync_search is not None:
-            points = await asyncio.to_thread(
-                sync_search,
-                collection_name=collection,
-                query_vector=list(query),
-                limit=top_k,
-                query_filter=query_filter,
-                with_payload=True,
-            )
-            return [
-                {"id": point.id, "score": point.score, "payload": point.payload or {}}
-                for point in (points or [])
-            ]
-
-        # Fallback to direct REST for older server API: /points/search
-        filter_payload = query_filter.model_dump(exclude_none=True) if query_filter else None
-        payload: dict[str, Any] = {
-            "vector": list(query),
-            "limit": top_k,
-            "with_payload": True,
-        }
-        if filter_payload:
-            payload["filter"] = filter_payload
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
-            resp = await client.post(
-                f"{self._base_url}/collections/{collection}/points/search",
-                json=payload,
-            )
-        if resp.status_code == 404:
-            raise RuntimeError("404 Not Found")
-        resp.raise_for_status()
-        body = resp.json() or {}
-        result = body.get("result") or []
-        return [
-            {
-                "id": point.get("id"),
-                "score": point.get("score"),
-                "payload": point.get("payload") or {},
-            }
-            for point in result
-        ]
 
     async def ensure_collection(self, name: str, dim: int, distance: str = "Cosine") -> None:
         """Create collection if it doesn't exist"""
@@ -195,20 +125,9 @@ class QdrantVectorStore:
                 for point in points
             ]
         except Exception as exc:
-            if _should_try_legacy_search(exc):
-                logger.info("Qdrant query_points failed, fallback to legacy search for %s", collection)
-                try:
-                    return await self._legacy_search(
-                        collection=collection,
-                        query=query,
-                        top_k=top_k,
-                        query_filter=query_filter,
-                    )
-                except Exception as legacy_exc:
-                    if _is_not_found_error(legacy_exc):
-                        logger.warning("Qdrant collection not found during legacy search: %s", collection)
-                        return []
-                    raise
+            if _is_not_found_error(exc):
+                logger.warning("Qdrant collection not found during search: %s", collection)
+                return []
             raise
 
     async def delete_by_filter(self, collection: str, filter: Mapping[str, Any] | qm.Filter) -> None:

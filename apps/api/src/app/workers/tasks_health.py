@@ -196,7 +196,7 @@ def probe_data_connectors(self: Task) -> Dict[str, Any]:
 
                 for instance in instances:
                     try:
-                        check = await service.health_service.check_health(instance.id)
+                        check = await service.health.check_health(instance.id)
                         if check.status == "healthy":
                             healthy += 1
                         else:
@@ -307,12 +307,12 @@ def probe_rerank_models(self: Task) -> Dict[str, Any]:
             try:
                 engine = HealthCheckEngine(session)
                 engine.register_adapter(
-                    "rerank_model",
+                    "reranker_model",
                     RerankHealthAdapter(),
                     BACKOFF_POLICY_1M
                 )
-                
-                results = await engine.check_models(model_type="rerank", limit=10)
+
+                results = await engine.check_models(model_type="reranker", limit=10)
                 
                 await session.commit()
                 
@@ -362,12 +362,12 @@ def probe_llm_models(self: Task) -> Dict[str, Any]:
             try:
                 engine = HealthCheckEngine(session)
                 engine.register_adapter(
-                    "llm_model",
+                    "llm_chat_model",
                     LLMHealthAdapter(),
                     BACKOFF_POLICY_10M
                 )
-                
-                results = await engine.check_models(model_type="llm", limit=10)
+
+                results = await engine.check_models(model_type="llm_chat", limit=10)
                 
                 await session.commit()
                 
@@ -423,7 +423,8 @@ def rescan_discovery(self: Task) -> Dict[str, Any]:
                 
                 stmt = select(ToolInstance).where(
                     ToolInstance.is_active == True,
-                    ToolInstance.connector_type == "mcp"
+                    ToolInstance.connector_type == "mcp",
+                    ToolInstance.placement == "remote",
                 )
                 result = await session.execute(stmt)
                 mcp_instances = result.scalars().all()

@@ -40,6 +40,7 @@ const RbacListPage = lazy(() => import('@/domains/admin/pages/RbacListPage').the
 const RbacRulePage = lazy(() => import('@/domains/admin/pages/RbacRulePage').then(m => ({ default: m.RbacRulePage })));
 const PlatformSettingsPage = lazy(() => import('@/domains/admin/pages/PlatformSettingsPage').then(m => ({ default: m.PlatformSettingsPage })));
 const OrchestrationPage = lazy(() => import('@/domains/admin/pages/OrchestrationPage').then(m => ({ default: m.OrchestrationPage })));
+const PeriodicTasksPage = lazy(() => import('@/domains/admin/pages/PeriodicTasksPage'));
 const CredentialPage = lazy(() => import('@/domains/admin/pages/CredentialPage').then(m => ({ default: m.default })));
 
 // Sandbox pages
@@ -127,6 +128,7 @@ const router = createBrowserRouter([
       { path: 'credentials/new', element: withSuspense(<CredentialPage />) },
       { path: 'credentials/:id', element: withSuspense(<CredentialPage />) },
       { path: 'orchestration', element: withSuspense(<OrchestrationPage />) },
+      { path: 'periodic-tasks', element: withSuspense(<PeriodicTasksPage />) },
       { path: 'sandbox', element: withSuspense(<SandboxListPage />) },
     ],
   },

@@ -129,6 +129,11 @@ export const qk = {
     all: () => ['platform'] as const,
     settings: () => ['platform', 'settings'] as const,
   },
+  periodicTasks: {
+    all: () => ['periodic-tasks'] as const,
+    list: (params?: { category?: string; is_enabled?: boolean }) =>
+      ['periodic-tasks', 'list', params] as const,
+  },
   chats: {
     all: () => ['chats'] as const,
     list: (q?: string) => ['chats', 'list', q] as const,

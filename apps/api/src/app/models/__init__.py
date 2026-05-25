@@ -44,6 +44,7 @@ from .sandbox import SandboxSession, SandboxOverride, SandboxRun, SandboxRunStep
 from .discovered_tool import DiscoveredTool
 from .memory import Fact, FactScope, FactSource, DialogueSummary
 from .execution_limit import ExecutionLimit, ExecutionLimitScope
+from .periodic_task import PeriodicTask
 
 __all__ = [
     "Base",
@@ -117,4 +118,5 @@ __all__ = [
     "DialogueSummary",
     "ExecutionLimit",
     "ExecutionLimitScope",
+    "PeriodicTask",
 ]

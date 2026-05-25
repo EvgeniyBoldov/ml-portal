@@ -163,16 +163,7 @@ class RAGStatusManager:
             try:
                 current_status = StageStatus(current_node.status)
             except Exception:
-                legacy_map = {
-                    'running': StageStatus.PROCESSING,
-                    'ok': StageStatus.COMPLETED,
-                    'error': StageStatus.FAILED,
-                }
-                mapped = legacy_map.get(str(current_node.status))
-                if mapped is None:
-                    current_status = None
-                else:
-                    current_status = mapped
+                current_status = None
             
             if current_status is not None:
                 if new_status not in VALID_TRANSITIONS.get(current_status, set()):
@@ -413,7 +404,6 @@ class RAGStatusManager:
         active_statuses = {
             StageStatus.QUEUED.value,
             StageStatus.PROCESSING.value,
-            "running",  # legacy
         }
 
         for node in nodes:

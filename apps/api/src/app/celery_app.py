@@ -20,16 +20,12 @@ app = Celery(
         "app.workers.tasks_collection_vectorize",
         # Collection export tasks
         "app.workers.tasks_collection_export",
-        # Membership reconcile tasks
-        "app.workers.tasks_membership_reconcile",
         # RAG model/status reconcile tasks
         "app.workers.tasks_rag_model_reconcile",
         # RAG stale reindex batch tasks
         "app.workers.tasks_rag_reindex",
         # Vector index consistency audit tasks
         "app.workers.tasks_vector_index_audit",
-        # Periodic model health checks (legacy)
-        "app.workers.tasks_health_check",
         # Health monitoring tasks (new)
         "app.workers.tasks_health",
         # Cleanup tasks for retention policies
@@ -42,6 +38,79 @@ app = Celery(
 
 # Alias for compatibility
 celery_app = app
+
+
+def build_default_beat_schedule() -> dict:
+    """Return canonical periodic task schedule for the platform."""
+    return {
+        # New health monitoring tasks
+        "mcp-connectors-health-check": {
+            "task": "app.workers.tasks_health.probe_mcp_connectors",
+            "schedule": 60.0,  # 1 minute
+        },
+        "data-connectors-health-check": {
+            "task": "app.workers.tasks_health.probe_data_connectors",
+            "schedule": 60.0,  # 1 minute
+        },
+        "embedding-models-health-check": {
+            "task": "app.workers.tasks_health.probe_embedding_models",
+            "schedule": 60.0,  # 1 minute
+        },
+        "rerank-models-health-check": {
+            "task": "app.workers.tasks_health.probe_rerank_models",
+            "schedule": 60.0,  # 1 minute
+        },
+        "llm-models-health-check": {
+            "task": "app.workers.tasks_health.probe_llm_models",
+            "schedule": 600.0,  # 10 minutes
+        },
+        "discovery-rescan": {
+            "task": "app.workers.tasks_health.rescan_discovery",
+            "schedule": 600.0,  # 10 minutes
+        },
+        # Existing maintenance tasks
+        "collections-vectorization-reconcile": {
+            "task": "app.workers.tasks_collection_vectorize.reconcile_collection_vectorization",
+            "schedule": 120.0,  # 2 minutes
+        },
+        "rag-stale-reindex-reconcile": {
+            "task": "app.workers.tasks_rag_reindex.reconcile_stale_rag_reindex",
+            "schedule": 900.0,  # 15 minutes
+        },
+        "collection-vector-index-audit": {
+            "task": "app.workers.tasks_vector_index_audit.audit_collection_vector_indexes",
+            "schedule": 3600.0,  # 1 hour
+        },
+        # LDAP sync (daily at 03:30 UTC by default, configurable via AUTH_LDAP_SYNC_CRON)
+        "ldap-users-sync": {
+            "task": "app.workers.tasks_ldap_sync.sync_ldap_users",
+            "schedule": crontab(
+                minute=settings.AUTH_LDAP_SYNC_CRON.split()[0],
+                hour=settings.AUTH_LDAP_SYNC_CRON.split()[1],
+                day_of_week=settings.AUTH_LDAP_SYNC_CRON.split()[4] if len(settings.AUTH_LDAP_SYNC_CRON.split()) > 4 else "*",
+                day_of_month=settings.AUTH_LDAP_SYNC_CRON.split()[2] if len(settings.AUTH_LDAP_SYNC_CRON.split()) > 2 else "*",
+                month_of_year=settings.AUTH_LDAP_SYNC_CRON.split()[3] if len(settings.AUTH_LDAP_SYNC_CRON.split()) > 3 else "*",
+            ),
+        },
+        # LDAP health check (every 5 minutes)
+        "ldap-health-check": {
+            "task": "app.workers.tasks_ldap_sync.ldap_health_check",
+            "schedule": 300.0,  # 5 minutes
+        },
+        "sandbox-sessions-expired-cleanup": {
+            "task": "app.workers.tasks_cleanup.cleanup_expired_sandbox_sessions",
+            "schedule": 600.0,  # 10 minutes
+        },
+        "deprecated-entities-cleanup": {
+            "task": "app.workers.tasks_cleanup.cleanup_deprecated_entities",
+            "schedule": 3600.0,  # 1 hour
+        },
+    }
+
+
+def get_effective_beat_schedule() -> dict:
+    """Read runtime beat schedule with fallback to default declared schedule."""
+    return dict((app.conf.beat_schedule or {}) or build_default_beat_schedule())
 
 # Определение очередей с приоритетами
 app.conf.task_queues = (
@@ -94,9 +163,6 @@ app.conf.task_routes = {
         "queue": "maintenance.default",
         "priority": 1,
     },
-    "app.workers.tasks_health_check.health_check_all_models": {"queue": "maintenance.default", "priority": 1},
-    "app.workers.tasks_health_check.health_check_single_model": {"queue": "maintenance.default", "priority": 1},
-    
     # Health monitoring tasks
     "app.workers.tasks_health.probe_mcp_connectors": {"queue": "health", "priority": 3},
     "app.workers.tasks_health.probe_data_connectors": {"queue": "health", "priority": 3},
@@ -151,83 +217,7 @@ app.conf.update(
 # RAG ingest tasks are now imported from tasks_rag_ingest module
 
 if settings.BEAT == 1:
-    app.conf.beat_schedule = {
-        # Legacy health check (keep for compatibility)
-        "models-health-check": {
-            "task": "app.workers.tasks_health_check.health_check_all_models",
-            "schedule": 300.0,  # 5 minutes
-        },
-        
-        # New health monitoring tasks
-        "mcp-connectors-health-check": {
-            "task": "app.workers.tasks_health.probe_mcp_connectors",
-            "schedule": 60.0,  # 1 minute
-        },
-        "data-connectors-health-check": {
-            "task": "app.workers.tasks_health.probe_data_connectors",
-            "schedule": 60.0,  # 1 minute
-        },
-        "embedding-models-health-check": {
-            "task": "app.workers.tasks_health.probe_embedding_models",
-            "schedule": 60.0,  # 1 minute
-        },
-        "rerank-models-health-check": {
-            "task": "app.workers.tasks_health.probe_rerank_models",
-            "schedule": 60.0,  # 1 minute
-        },
-        "llm-models-health-check": {
-            "task": "app.workers.tasks_health.probe_llm_models",
-            "schedule": 600.0,  # 10 minutes
-        },
-        "discovery-rescan": {
-            "task": "app.workers.tasks_health.rescan_discovery",
-            "schedule": 600.0,  # 10 minutes
-        },
-        
-        # Existing maintenance tasks
-        "collections-vectorization-reconcile": {
-            "task": "app.workers.tasks_collection_vectorize.reconcile_collection_vectorization",
-            "schedule": 120.0,  # 2 minutes
-        },
-        "document-membership-reconcile": {
-            "task": "app.workers.tasks_membership_reconcile.reconcile_document_collection_memberships",
-            "schedule": 600.0,  # 10 minutes
-        },
-        "rag-stale-reindex-reconcile": {
-            "task": "app.workers.tasks_rag_reindex.reconcile_stale_rag_reindex",
-            "schedule": 900.0,  # 15 minutes
-        },
-        "collection-vector-index-audit": {
-            "task": "app.workers.tasks_vector_index_audit.audit_collection_vector_indexes",
-            "schedule": 3600.0,  # 1 hour
-        },
-        
-        # LDAP sync (daily at 03:30 UTC by default, configurable via AUTH_LDAP_SYNC_CRON)
-        # Parse "30 3 * * *" -> minute=30, hour=3, day_of_week="*", day_of_month="*", month_of_year="*"
-        "ldap-users-sync": {
-            "task": "app.workers.tasks_ldap_sync.sync_ldap_users",
-            "schedule": crontab(
-                minute=settings.AUTH_LDAP_SYNC_CRON.split()[0],
-                hour=settings.AUTH_LDAP_SYNC_CRON.split()[1],
-                day_of_week=settings.AUTH_LDAP_SYNC_CRON.split()[4] if len(settings.AUTH_LDAP_SYNC_CRON.split()) > 4 else "*",
-                day_of_month=settings.AUTH_LDAP_SYNC_CRON.split()[2] if len(settings.AUTH_LDAP_SYNC_CRON.split()) > 2 else "*",
-                month_of_year=settings.AUTH_LDAP_SYNC_CRON.split()[3] if len(settings.AUTH_LDAP_SYNC_CRON.split()) > 3 else "*",
-            ),
-        },
-        # LDAP health check (every 5 minutes)
-        "ldap-health-check": {
-            "task": "app.workers.tasks_ldap_sync.ldap_health_check",
-            "schedule": 300.0,  # 5 minutes
-        },
-        "sandbox-sessions-expired-cleanup": {
-            "task": "app.workers.tasks_cleanup.cleanup_expired_sandbox_sessions",
-            "schedule": 600.0,  # 10 minutes
-        },
-        "deprecated-entities-cleanup": {
-            "task": "app.workers.tasks_cleanup.cleanup_deprecated_entities",
-            "schedule": 3600.0,  # 1 hour
-        },
-    }
+    app.conf.beat_schedule = build_default_beat_schedule()
 
 # Инициализация задач эмбеддингов
 # Временно отключено из-за зависимости от torch
@@ -239,3 +229,6 @@ if settings.BEAT == 1:
 # create_dispatcher_tasks(app)
 
 # Worker sessions are created lazily per task via get_worker_session().
+
+# Register periodic task tracking and enable/disable enforcement.
+from app.workers import periodic_task_tracker  # noqa: F401,E402

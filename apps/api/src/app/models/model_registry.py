@@ -7,7 +7,7 @@ New architecture:
 - Easy swap to local providers later
 """
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy import String, Boolean, Text, DateTime, func, JSON, Enum as SQLEnum, ForeignKey
+from sqlalchemy import String, Boolean, Text, DateTime, Integer, func, JSON, Enum as SQLEnum, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID
 import uuid
 import enum
@@ -100,6 +100,9 @@ class Model(Base):
     )
     health_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     health_latency_ms: Mapped[int | None] = mapped_column(nullable=True)
+    consecutive_failures: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    next_check_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     
     # Versioning (important for embeddings - reindex if version changes)
     model_version: Mapped[str | None] = mapped_column(String(50), nullable=True, comment="Model version (for tracking changes)")
