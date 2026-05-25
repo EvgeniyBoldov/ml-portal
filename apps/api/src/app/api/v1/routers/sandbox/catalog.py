@@ -25,6 +25,8 @@ from app.schemas.sandbox import (
 from app.services.sandbox_override_resolver import SandboxOverrideResolver
 from app.services.sandbox_service import SandboxService
 from app.services.system_llm_role_contracts import build_response_contract
+from app.services.execution_limits_service import ExecutionLimitsService, PLATFORM_SCOPE_REF
+from app.models.execution_limit import ExecutionLimitScope
 
 from .helpers import tenant_uuid
 
@@ -76,9 +78,15 @@ async def get_sandbox_catalog(
     )
     tool_lookup = {tool.id: tool for tool in tool_lookup_result.scalars().all()}
 
+    seen_tool_ids: set[uuid.UUID] = set()
+    seen_slugs: set[str] = set()
+
     for tool in discovered_tools:
         tool_record = tool_lookup.get(tool.tool_id) if tool.tool_id is not None else None
         tool_id = tool.tool_id
+        if tool_id is not None:
+            seen_tool_ids.add(tool_id)
+        seen_slugs.add(tool.slug)
         current_version_id = tool_record.current_version_id if tool_record is not None else None
         versions = []
         if tool_record is not None:
@@ -108,6 +116,44 @@ async def get_sandbox_catalog(
         tool_items.append(item)
         grouped_tools[domains[0]].append(item)
 
+    # Fallback for published tools that are not present in discovered_tools.
+    # This keeps sandbox "Available Tools" complete for local/publication-only tools.
+    published_tools_result = await db.execute(
+        select(Tool)
+        .options(selectinload(Tool.releases))
+        .where(Tool.current_version_id.isnot(None))
+        .order_by(Tool.slug.asc())
+    )
+    published_tools = published_tools_result.scalars().all()
+    for tool_record in published_tools:
+        if tool_record.id in seen_tool_ids or tool_record.slug in seen_slugs:
+            continue
+        versions = [
+            SandboxCatalogToolVersion(
+                id=release.id,
+                version=release.version,
+                status=release.status,
+            )
+            for release in sorted(tool_record.releases, key=lambda item: item.version, reverse=True)
+        ]
+        domains = _derive_tool_domains(tool_record.slug, list(tool_record.domains or []))
+        item = SandboxCatalogToolItem(
+            id=tool_record.id,
+            tool_id=tool_record.id,
+            slug=tool_record.slug,
+            name=tool_record.name,
+            description=None,
+            source="published",
+            domains=domains,
+            input_schema=None,
+            output_schema=None,
+            published=True,
+            current_version_id=tool_record.current_version_id,
+            versions=versions,
+        )
+        tool_items.append(item)
+        grouped_tools[domains[0]].append(item)
+
     agents_result = await db.execute(
         select(Agent)
         .options(selectinload(Agent.versions))
@@ -132,16 +178,14 @@ async def get_sandbox_catalog(
         for a in agents
     ]
 
-    system_routers = [
-        SandboxCatalogRouterItem(id="default", name="Default Router", description="Стандартный роутер"),
-        SandboxCatalogRouterItem(id="planner", name="Planner Router", description="Маршрутизация через planner"),
-    ]
     role_rows = await db.execute(
         select(SystemLLMRole).where(
             SystemLLMRole.is_active.is_(True),
             SystemLLMRole.role_type.in_([
-                SystemLLMRoleType.TRIAGE.value,
                 SystemLLMRoleType.PLANNER.value,
+                SystemLLMRoleType.SYNTHESIZER.value,
+                SystemLLMRoleType.FACT_EXTRACTOR.value,
+                SystemLLMRoleType.SUMMARY_COMPACTOR.value,
             ]),
         )
     )
@@ -167,20 +211,47 @@ async def get_sandbox_catalog(
             "retry_backoff": role.retry_backoff,
         }
 
+    limits_service = ExecutionLimitsService(db)
+    _platform_limits = await limits_service.get_effective(
+        scope_type=ExecutionLimitScope.PLATFORM,
+        scope_ref=PLATFORM_SCOPE_REF,
+    )
+    role_limits: dict[str, dict] = {}
+    for role_key in ("planner", "synthesizer", "fact_extractor", "summary_compactor"):
+        limits = await limits_service.get_effective(
+            scope_type=ExecutionLimitScope.ORCHESTRATOR_ROLE,
+            scope_ref=role_key,
+        )
+        role_limits[role_key] = limits.__dict__
+
     system_routers = [
         SandboxCatalogRouterItem(
-            id="default",
-            name="Default Router",
-            description="Стандартный роутер",
-            config=_role_snapshot(SystemLLMRoleType.TRIAGE.value),
-            response_contract=build_response_contract(SystemLLMRoleType.TRIAGE),
+            id="planner",
+            name="Planner",
+            description="Оркестратор планирования и маршрутизации",
+            config={**_role_snapshot(SystemLLMRoleType.PLANNER.value), "limits": role_limits.get("planner", {})},
+            response_contract=build_response_contract(SystemLLMRoleType.PLANNER),
         ),
         SandboxCatalogRouterItem(
-            id="planner",
-            name="Planner Router",
-            description="Маршрутизация через planner",
-            config=_role_snapshot(SystemLLMRoleType.PLANNER.value),
-            response_contract=build_response_contract(SystemLLMRoleType.PLANNER),
+            id="synthesizer",
+            name="Synthesizer",
+            description="Оркестратор финального ответа",
+            config={**_role_snapshot(SystemLLMRoleType.SYNTHESIZER.value), "limits": role_limits.get("synthesizer", {})},
+            response_contract=build_response_contract(SystemLLMRoleType.SYNTHESIZER),
+        ),
+        SandboxCatalogRouterItem(
+            id="fact_extractor",
+            name="Fact Extractor",
+            description="Оркестратор извлечения фактов",
+            config={**_role_snapshot(SystemLLMRoleType.FACT_EXTRACTOR.value), "limits": role_limits.get("fact_extractor", {})},
+            response_contract=build_response_contract(SystemLLMRoleType.FACT_EXTRACTOR),
+        ),
+        SandboxCatalogRouterItem(
+            id="summary_compactor",
+            name="Summary Compactor",
+            description="Оркестратор уплотнения summary",
+            config={**_role_snapshot(SystemLLMRoleType.SUMMARY_COMPACTOR.value), "limits": role_limits.get("summary_compactor", {})},
+            response_contract=build_response_contract(SystemLLMRoleType.SUMMARY_COMPACTOR),
         ),
     ]
 

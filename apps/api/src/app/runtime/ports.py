@@ -61,6 +61,7 @@ class PlannerServicePort(Protocol):
         tenant_id: UUID,
         user_id: UUID,
         agent_run_id: UUID,
+        sandbox_overrides: Optional[Dict[str, Any]] = None,
     ) -> NextStep: ...
 
 
@@ -106,4 +107,5 @@ class SynthesizerPort(Protocol):
         run_id: UUID,
         model: Optional[str] = None,
         planner_hint: Optional[str] = None,
+        sandbox_overrides: Optional[Dict[str, Any]] = None,
     ) -> AsyncIterator[RuntimeEvent]: ...

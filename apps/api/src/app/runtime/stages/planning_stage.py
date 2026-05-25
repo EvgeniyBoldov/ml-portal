@@ -98,7 +98,7 @@ class PlanningStage:
         budget_resolver = ctx.extra.get("runtime_budget_resolver")
         planner_limits = None
         if isinstance(budget_resolver, BudgetResolver):
-            planner_limits = await budget_resolver.resolve_orchestrator("planner")
+            planner_limits = await budget_resolver.resolve_orchestrator("planner", request.sandbox_overrides)
         if planner_registry is not None:
             planner_registry.register(
                 entity_type="orchestrator",
@@ -198,6 +198,7 @@ class PlanningStage:
                     user_id=user_id,
                     agent_run_id=run_id,
                     planner_iteration_id=planner_event_ctx["planner_iteration_id"],
+                    sandbox_overrides=request.sandbox_overrides,
                 )
                 if isinstance(planner_result, tuple):
                     step = planner_result[0]

@@ -29,7 +29,7 @@ from app.core.logging import get_logger
 from app.models.execution_limit import ExecutionLimitScope
 from app.models.system_llm_role import SystemLLMRoleType
 from app.runtime.llm.limits import LLMLimitExceededError, apply_llm_limits, estimate_tokens
-from app.services.execution_limits_service import ExecutionLimitsPayload, ExecutionLimitsService
+from app.services.execution_limits_service import ExecutionLimitsPayload, ExecutionLimitsService, apply_limits_override
 from app.services.system_llm_role_service import SystemLLMRoleService
 
 logger = get_logger(__name__)
@@ -83,6 +83,7 @@ class StructuredLLMCall:
         user_id: Optional[UUID] = None,
         agent_run_id: Optional[UUID] = None,
         fallback_factory: Optional[Callable[[str], T]] = None,
+        sandbox_overrides: Optional[Dict[str, Any]] = None,
     ) -> StructuredCallResult[T]:
         """Execute the role with structured JSON payload, validate output against `schema`.
 
@@ -122,6 +123,9 @@ class StructuredLLMCall:
             )
         except Exception:
             limits = ExecutionLimitsPayload()
+        role_key = str(role.value).strip().lower()
+        role_override = ((sandbox_overrides or {}).get("orchestrator_limits") or {}).get(role_key)
+        limits = apply_limits_override(limits, role_override)
         input_tokens = estimate_tokens(system_prompt) + estimate_tokens(user_message)
         boundary = apply_llm_limits(
             limits=limits,

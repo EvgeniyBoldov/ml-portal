@@ -53,6 +53,7 @@ export interface AgentRunContextSnapshot {
     streaming_enabled?: boolean;
   };
   tools?: Array<{ slug: string; instance_id?: string; has_credentials?: boolean }>;
+  available_operations?: Array<string | { operation_slug?: string; operation?: string; tool?: string; name?: string }>;
   routing_duration_ms?: number;
   routing_reasons?: string[];
   request_text?: string;

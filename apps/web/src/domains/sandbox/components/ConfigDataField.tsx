@@ -1,6 +1,8 @@
 import type { ChangeEvent } from 'react';
+import type { ResponseContract } from '@/shared/api/admin';
 import Toggle from '@/shared/ui/Toggle';
 import { Select, type SelectOption } from '@/shared/ui/Select';
+import { ContractAwareEditor } from '@/shared/ui/ContractAwareEditor';
 import styles from './ConfigDataField.module.css';
 
 export type SandboxConfigFieldType = 'tags' | 'select' | 'json' | 'text' | 'integer' | 'float' | 'boolean';
@@ -32,6 +34,10 @@ interface Props {
   showClearOverride: boolean;
   showApply: boolean;
   showCancelDraft: boolean;
+  usePromptEditor?: boolean;
+  editorLabel?: string;
+  outputContract?: ResponseContract | null;
+  inputContract?: Record<string, unknown> | null;
 }
 
 export default function ConfigDataField({
@@ -52,6 +58,10 @@ export default function ConfigDataField({
   showClearOverride,
   showApply,
   showCancelDraft,
+  usePromptEditor = false,
+  editorLabel,
+  outputContract = null,
+  inputContract = null,
 }: Props) {
   const isWide = field.type === 'text' || field.type === 'json';
   const isNumeric = field.type === 'integer' || field.type === 'float';
@@ -112,6 +122,20 @@ export default function ConfigDataField({
     }
 
     if (isWide) {
+      if (usePromptEditor) {
+        return (
+          <ContractAwareEditor
+            value={inputValue}
+            onChange={onChange}
+            outputContract={outputContract}
+            inputContract={inputContract}
+            fieldLabel={editorLabel ?? displayName ?? field.name}
+            disabled={readOnly}
+            rows={field.type === 'json' ? 6 : 4}
+            placeholder={defaultValue}
+          />
+        );
+      }
       return (
         <textarea
           className={styles['value-input-wide']}

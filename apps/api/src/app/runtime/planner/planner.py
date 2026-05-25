@@ -117,6 +117,7 @@ class Planner:
         user_id: Optional[UUID] = None,
         agent_run_id: Optional[UUID] = None,
         planner_iteration_id: Optional[str] = None,
+        sandbox_overrides: Optional[Dict[str, Any]] = None,
     ) -> tuple[NextStep, Optional[PlannerLLMTrace]]:
         allowed_slugs = [a.get("slug") for a in available_agents if a.get("slug")]
         payload_base = self._input_builder.build(
@@ -145,6 +146,7 @@ class Planner:
                     tenant_id=tenant_id,
                     user_id=user_id,
                     agent_run_id=agent_run_id,
+                    sandbox_overrides=sandbox_overrides,
                 )
             except StructuredCallError as exc:
                 last_error = f"schema_error: {exc}"

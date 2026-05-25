@@ -124,6 +124,7 @@ class SchemaOperation(BaseModel):
 
 
 class UpdateCollectionRequest(BaseModel):
+    tenant_id: Optional[uuid.UUID] = None
     name: Optional[str] = Field(default=None, min_length=1, max_length=255)
     description: Optional[str] = None
     is_active: Optional[bool] = None
@@ -143,7 +144,7 @@ class UpdateCollectionRequest(BaseModel):
 
         has_metadata_patch = bool(
             self.model_fields_set
-            & {"name", "description", "is_active", "table_name", "table_schema"}
+            & {"tenant_id", "name", "description", "is_active", "table_name", "table_schema"}
         )
         if not has_metadata_patch and not self.schema_ops:
             raise ValueError("At least one mutable collection property or schema operation is required")

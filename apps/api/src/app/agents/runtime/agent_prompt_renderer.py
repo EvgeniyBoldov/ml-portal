@@ -20,6 +20,16 @@ _HARDCODED_SQL_RULE_PATTERNS = (
     re.compile(r"(?im)^.*значения priority:.*(?:\n|$)"),
 )
 
+_AGENT_VERSION_PROMPT_FIELDS = (
+    "identity",
+    "mission",
+    "scope",
+    "rules",
+    "tool_use_rules",
+    "output_format",
+    "examples",
+)
+
 
 DEFAULT_AGENT_SYSTEM_PROMPT = (
     "Ты — полезный ассистент. Отвечай на языке пользователя. "
@@ -57,11 +67,51 @@ PLANNER_SYNTHESIS_USER_TEMPLATE = (
 
 class AgentPromptRenderer:
     @staticmethod
+    def _compile_prompt_from_parts(parts: Dict[str, Any]) -> str:
+        sections = []
+        labels = {
+            "identity": "Identity",
+            "mission": "Mission",
+            "scope": "Scope",
+            "rules": "Rules",
+            "tool_use_rules": "Tool Use Rules",
+            "output_format": "Output Format",
+            "examples": "Examples",
+        }
+        for key, label in labels.items():
+            value = parts.get(key)
+            if value:
+                sections.append(f"# {label}\n{value}")
+        return "\n\n".join(sections)
+
+    @staticmethod
     def render_base_prompt(
         exec_request: ExecutionRequest,
         system_prompt_override: Optional[str] = None,
         sandbox_overrides: Optional[Dict[str, Any]] = None,
     ) -> str:
+        if sandbox_overrides and getattr(exec_request, "agent_version", None) is not None:
+            av_id = str(getattr(exec_request.agent_version, "id", "") or "")
+            av_overrides_map = sandbox_overrides.get("agent_version_overrides") or {}
+            av_overrides = av_overrides_map.get(av_id)
+            if isinstance(av_overrides, dict):
+                prompt_overrides = {
+                    k: v for k, v in av_overrides.items() if k in _AGENT_VERSION_PROMPT_FIELDS
+                }
+                if prompt_overrides:
+                    prompt_parts = {
+                        field: getattr(exec_request.agent_version, field, None)
+                        for field in _AGENT_VERSION_PROMPT_FIELDS
+                    }
+                    prompt_parts.update(prompt_overrides)
+                    compiled = AgentPromptRenderer._compile_prompt_from_parts(prompt_parts)
+                    if compiled:
+                        logger.info(
+                            "[AgentPromptRenderer] Using per-agent-version sandbox prompt override for %s",
+                            av_id,
+                        )
+                        return compiled
+
         if sandbox_overrides:
             prompt_ov = sandbox_overrides.get("prompt")
             if prompt_ov:

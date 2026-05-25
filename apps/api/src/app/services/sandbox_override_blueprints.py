@@ -71,7 +71,20 @@ def _blueprint(
         "entity_id": entity_id,
         "description": description,
         "sections": sections,
-    }
+}
+
+
+def _limit_fields(prefix: str = "limits") -> List[Dict[str, Any]]:
+    return [
+        _field("llm_input_tokens_max", "LLM input tokens", f"{prefix}.llm_input_tokens_max", field_type="integer", source_key="limits.llm_input_tokens_max"),
+        _field("llm_output_tokens_max", "LLM output tokens", f"{prefix}.llm_output_tokens_max", field_type="integer", source_key="limits.llm_output_tokens_max"),
+        _field("llm_context_window_max", "LLM context window", f"{prefix}.llm_context_window_max", field_type="integer", source_key="limits.llm_context_window_max"),
+        _field("runtime_steps_max", "Runtime steps", f"{prefix}.runtime_steps_max", field_type="integer", source_key="limits.runtime_steps_max"),
+        _field("runtime_tool_calls_max", "Runtime tool calls", f"{prefix}.runtime_tool_calls_max", field_type="integer", source_key="limits.runtime_tool_calls_max"),
+        _field("runtime_retries_max", "Runtime retries", f"{prefix}.runtime_retries_max", field_type="integer", source_key="limits.runtime_retries_max"),
+        _field("runtime_wall_time_ms_max", "Runtime wall time (ms)", f"{prefix}.runtime_wall_time_ms_max", field_type="integer", source_key="limits.runtime_wall_time_ms_max"),
+        _field("runtime_tokens_total_max", "Runtime total tokens", f"{prefix}.runtime_tokens_total_max", field_type="integer", source_key="limits.runtime_tokens_total_max"),
+    ]
 
 
 SANDBOX_BLUEPRINTS: List[Dict[str, Any]] = [
@@ -108,6 +121,7 @@ SANDBOX_BLUEPRINTS: List[Dict[str, Any]] = [
                     _field("temperature", "Temperature", "temperature", field_type="float"),
                 ],
             ),
+            _section("Limits", _limit_fields("limits")),
             _section(
                 "Safety",
                 [
@@ -223,6 +237,7 @@ SANDBOX_BLUEPRINTS: List[Dict[str, Any]] = [
                     _field("retry_backoff", "Retry backoff", "retry_backoff", field_type="text"),
                 ],
             ),
+            _section("Limits", _limit_fields("limits")),
         ],
     ),
     _blueprint(
@@ -265,6 +280,7 @@ SANDBOX_BLUEPRINTS: List[Dict[str, Any]] = [
                     _field("require_backup_before_write", "Require backup before write", "platform.require_backup_before_write", field_type="boolean", source_key="require_backup_before_write"),
                 ],
             ),
+            _section("Limits", _limit_fields("platform_limits")),
         ],
     ),
 ]

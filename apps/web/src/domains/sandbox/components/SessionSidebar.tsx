@@ -201,7 +201,7 @@ export default function SessionSidebar({
       }
       if (first.entity_id) {
         const router = catalog.system_routers.find(
-          (item) => typeof item.config?.id === 'string' && item.config.id === first.entity_id,
+          (item) => item.id === first.entity_id,
         );
         if (router) {
           return { type: 'router', id: router.id, name: router.name };

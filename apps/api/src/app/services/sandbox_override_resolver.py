@@ -415,6 +415,52 @@ class SandboxOverrideResolver:
 
         return result
 
+    @staticmethod
+    def _extract_limit_key(field_path: str, prefix: str) -> Optional[str]:
+        p = f"{prefix}."
+        if not field_path.startswith(p):
+            return None
+        key = field_path[len(p):].strip()
+        return key or None
+
+    def get_platform_limit_overrides(self) -> Dict[str, Any]:
+        result: Dict[str, Any] = {}
+        for ov in self._iter_overrides("orchestration"):
+            field_path = str(ov.get("field_path") or "")
+            key = self._extract_limit_key(field_path, "platform_limits")
+            if key is None:
+                continue
+            result[key] = ov.get("value_json")
+        return result
+
+    def get_orchestrator_limit_overrides(self) -> Dict[str, Dict[str, Any]]:
+        result: Dict[str, Dict[str, Any]] = {}
+        for ov in self._iter_overrides("orchestration"):
+            field_path = str(ov.get("field_path") or "")
+            key = self._extract_limit_key(field_path, "limits")
+            if key is None:
+                continue
+            role_key = str(ov.get("entity_id") or "").strip().lower()
+            if not role_key:
+                continue
+            result.setdefault(role_key, {})[key] = ov.get("value_json")
+        return result
+
+    def get_agent_limit_overrides(self, agent_version_id: Optional[str]) -> Dict[str, Any]:
+        if not agent_version_id:
+            return {}
+        result: Dict[str, Any] = {}
+        for ov in self._iter_entity_field_overrides(
+            entity_type="agent_version",
+            entity_id=agent_version_id,
+        ):
+            field_path = str(ov.get("field_path") or "")
+            key = self._extract_limit_key(field_path, "limits")
+            if key is None:
+                continue
+            result[key] = ov.get("value_json")
+        return result
+
     # ── Platform settings ────────────────────────────────────────────────
 
     def get_platform_overrides(self) -> Dict[str, Any]:
@@ -539,10 +585,20 @@ class SandboxOverrideResolver:
         result: Dict[str, Any] = {
             "orchestration": self.get_orchestration_overrides(),
             "platform": self.get_platform_overrides(),
+            "platform_limits": self.get_platform_limit_overrides(),
+            "orchestrator_limits": self.get_orchestrator_limit_overrides(),
             "logging_level": "full",  # sandbox always full
             "tool_publication": self.get_tool_publication_overrides(),
             "discovered_tool_overrides": self.get_discovered_tool_overrides(),
             "discovered_tool_release_ids": self.get_discovered_tool_release_overrides(),
+            "agent_version_overrides": {
+                str(ov.get("entity_id")): self.get_overrides_for_entity(
+                    "agent_version",
+                    str(ov.get("entity_id")),
+                )
+                for ov in self._iter_overrides("agent_version")
+                if ov.get("entity_id")
+            },
         }
 
         if agent_version is not None:
@@ -552,6 +608,9 @@ class SandboxOverrideResolver:
             agent_exec = self.get_agent_exec_overrides(agent_version)
             if agent_exec:
                 result["agent_exec"] = agent_exec
+            agent_limits = self.get_agent_limit_overrides(str(getattr(agent_version, "id", "") or ""))
+            if agent_limits:
+                result["agent_limits"] = agent_limits
 
         return result
 

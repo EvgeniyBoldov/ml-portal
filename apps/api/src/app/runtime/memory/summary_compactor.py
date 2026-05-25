@@ -65,6 +65,7 @@ class SummaryCompactor:
         chat_id: Optional[UUID] = None,
         user_id: Optional[UUID] = None,
         tenant_id: Optional[UUID] = None,
+        sandbox_overrides: Optional[dict] = None,
     ) -> SummaryDTO:
         """Return a NEW SummaryDTO. On any failure returns a conservative
         fallback that keeps previous structured fields and just bumps
@@ -95,6 +96,7 @@ class SummaryCompactor:
                 chat_id=chat_id,
                 tenant_id=tenant_id,
                 user_id=user_id,
+                sandbox_overrides=sandbox_overrides,
                 fallback_factory=lambda _raw: _LLMSummaryOutput(),
             )
             out = result.value

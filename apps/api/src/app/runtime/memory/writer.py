@@ -39,6 +39,7 @@ class MemoryWriteContext:
     assistant_final: str
     skip_llm_helpers: bool
     terminal_reason: Optional[PipelineStopReason] = None
+    sandbox_overrides: Optional[dict] = None
 
 
 @dataclass(frozen=True)
@@ -97,6 +98,7 @@ class MemoryWriter:
         user_message: str,
         assistant_final: Optional[str],
         terminal_reason: Optional[PipelineStopReason] = None,
+        sandbox_overrides: Optional[dict] = None,
     ) -> None:
         """Write facts + summary with component diagnostics."""
         if memory.chat_id is None:
@@ -110,6 +112,7 @@ class MemoryWriter:
                 memory, assistant_final or "", terminal_reason
             ),
             terminal_reason=terminal_reason,
+            sandbox_overrides=sandbox_overrides,
         )
 
         results: List[MemoryWriteResult] = []
@@ -171,6 +174,7 @@ class MemoryWriter:
         self,
         memory: TurnMemory,
         user_message: str,
+        sandbox_overrides: Optional[dict] = None,
     ) -> int:
         known = [
             KnownFactSnippet(subject=s, value=v)
@@ -183,6 +187,7 @@ class MemoryWriter:
             user_id=memory.user_id,
             tenant_id=memory.tenant_id,
             chat_id=memory.chat_id,
+            sandbox_overrides=sandbox_overrides,
         )
         long_term = LongTermFactsService(
             fact_store=self._fact_store,
@@ -203,6 +208,7 @@ class MemoryWriter:
         memory: TurnMemory,
         user_message: str,
         assistant_final: str,
+        sandbox_overrides: Optional[dict] = None,
     ) -> None:
         assert memory.chat_id is not None  # guarded by caller
 
@@ -215,6 +221,7 @@ class MemoryWriter:
             chat_id=memory.chat_id,
             user_id=memory.user_id,
             tenant_id=memory.tenant_id,
+            sandbox_overrides=sandbox_overrides,
         )
         # Maintain raw_tail locally — the LLM is explicitly told not to
         # touch it. We append user+assistant pair to the existing tail
@@ -267,7 +274,7 @@ class _FactMemoryWriteComponent:
     async def write(self, ctx: MemoryWriteContext) -> MemoryWriteResult:
         if ctx.skip_llm_helpers:
             return MemoryWriteResult(component_name=self.name, status="skipped", skipped_count=1)
-        inserted = await self._owner._write_facts(ctx.memory, ctx.user_message)
+        inserted = await self._owner._write_facts(ctx.memory, ctx.user_message, ctx.sandbox_overrides)
         return MemoryWriteResult(component_name=self.name, status="ok", inserted_count=inserted)
 
 
@@ -290,6 +297,7 @@ class _ConversationMemoryWriteComponent:
             ctx.memory,
             ctx.user_message,
             ctx.assistant_final,
+            ctx.sandbox_overrides,
         )
         return MemoryWriteResult(component_name=self.name, status="ok", updated_count=1)
 

@@ -132,6 +132,7 @@ const CONTEXT_KEYS = [
 ] as const;
 
 const ERROR_KEYS = ['error', 'message', 'traceback', 'stack', 'code', 'details'] as const;
+const HIDDEN_INSPECTOR_KEYS = new Set(['response_contract', 'input_contract', 'contract', 'contracts']);
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -203,6 +204,18 @@ function sanitizeSectionRecord(value: unknown, fallbackKey: string): Record<stri
 function omitKeys(source: Record<string, unknown>, keys: readonly string[]): Record<string, unknown> {
   const dropped = new Set(keys);
   return Object.fromEntries(Object.entries(source).filter(([key]) => !dropped.has(key)));
+}
+
+function sanitizeForInspector(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sanitizeForInspector);
+  if (!value || typeof value !== 'object') return value;
+  const input = value as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const [key, raw] of Object.entries(input)) {
+    if (HIDDEN_INSPECTOR_KEYS.has(key)) continue;
+    out[key] = sanitizeForInspector(raw);
+  }
+  return out;
 }
 
 function resolveHumanReadableRef(record: Record<string, unknown>, key: string, value: string): string | null {
@@ -298,7 +311,9 @@ function toneFromStatus(value: unknown): Tone | undefined {
 }
 
 function mapToFields(record: Record<string, unknown>, refs: Record<string, StepRefValue> = {}): InspectField[] {
-  return Object.entries(record).map(([key, rawValue]) => {
+  return Object.entries(record)
+    .filter(([key]) => !HIDDEN_INSPECTOR_KEYS.has(key))
+    .map(([key, rawValue]) => {
     const normalizedValue = normalizeValueWithRefs(rawValue, refs, key);
     const finalValue =
       typeof normalizedValue === 'string'
@@ -312,7 +327,7 @@ function mapToFields(record: Record<string, unknown>, refs: Record<string, StepR
       type,
       tone: type === 'label' ? toneFromStatus(finalValue) : undefined,
     };
-  });
+    });
 }
 
 function deriveStepStatus(step: RunStep): string {
@@ -971,7 +986,9 @@ export default function RunInspector({ steps, selectedStepId, selectedVirtualSte
 
       <div className={styles.detail}>
         {active.key === 'raw' ? (
-          <pre className={styles.payload}>{JSON.stringify(selectedVirtualStep?.raw ?? selectedStep?.data ?? {}, null, 2)}</pre>
+          <pre className={styles.payload}>
+            {JSON.stringify(sanitizeForInspector(selectedVirtualStep?.raw ?? selectedStep?.data ?? {}), null, 2)}
+          </pre>
         ) : active.key === 'budgets' ? (
           <SectionAccordion title={`Agent budgets: ${budgetTable.agentLabel || 'Agent'}`} defaultOpen>
             {budgetTable.rows.length === 0 ? (

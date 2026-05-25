@@ -100,3 +100,31 @@ class ExecutionLimitsService:
         if own_val is not None:
             return own_val
         return getattr(platform, field, None) if platform is not None else None
+
+
+def apply_limits_override(
+    base: ExecutionLimitsPayload,
+    override: Optional[dict],
+) -> ExecutionLimitsPayload:
+    if not isinstance(override, dict) or not override:
+        return base
+
+    def _coerce(value: object) -> Optional[int]:
+        if value is None:
+            return None
+        try:
+            n = int(value)
+            return n if n > 0 else None
+        except (TypeError, ValueError):
+            return None
+
+    return ExecutionLimitsPayload(
+        llm_input_tokens_max=_coerce(override.get("llm_input_tokens_max")) if "llm_input_tokens_max" in override else base.llm_input_tokens_max,
+        llm_output_tokens_max=_coerce(override.get("llm_output_tokens_max")) if "llm_output_tokens_max" in override else base.llm_output_tokens_max,
+        llm_context_window_max=_coerce(override.get("llm_context_window_max")) if "llm_context_window_max" in override else base.llm_context_window_max,
+        runtime_steps_max=_coerce(override.get("runtime_steps_max")) if "runtime_steps_max" in override else base.runtime_steps_max,
+        runtime_tool_calls_max=_coerce(override.get("runtime_tool_calls_max")) if "runtime_tool_calls_max" in override else base.runtime_tool_calls_max,
+        runtime_retries_max=_coerce(override.get("runtime_retries_max")) if "runtime_retries_max" in override else base.runtime_retries_max,
+        runtime_wall_time_ms_max=_coerce(override.get("runtime_wall_time_ms_max")) if "runtime_wall_time_ms_max" in override else base.runtime_wall_time_ms_max,
+        runtime_tokens_total_max=_coerce(override.get("runtime_tokens_total_max")) if "runtime_tokens_total_max" in override else base.runtime_tokens_total_max,
+    )

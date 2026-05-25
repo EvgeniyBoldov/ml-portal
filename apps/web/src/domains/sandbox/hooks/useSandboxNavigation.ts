@@ -73,13 +73,22 @@ export function useCatalogData(sessionId: string | undefined) {
       summary_compactor: summaryCompactorConfig ?? {},
     };
 
-    return ORCHESTRATOR_META.map((item) => ({
-      id: item.id,
-      name: item.name,
-      description: item.description,
-      config: configById[item.id] ?? {},
-    }));
-  }, [orchestratorQueries]);
+    const catalogRouters = data?.system_routers ?? [];
+    return ORCHESTRATOR_META.map((item) => {
+      const fromCatalog = catalogRouters.find((router) => router.id === item.id);
+      return {
+        id: item.id,
+        name: fromCatalog?.name ?? item.name,
+        description: fromCatalog?.description ?? item.description,
+        config: {
+          ...(fromCatalog?.config ?? {}),
+          ...(configById[item.id] ?? {}),
+        },
+        input_contract: fromCatalog?.input_contract ?? null,
+        response_contract: fromCatalog?.response_contract ?? null,
+      };
+    });
+  }, [data?.system_routers, orchestratorQueries]);
 
   const isOrchestratorsLoading = orchestratorQueries.some((query) => query.isLoading);
 

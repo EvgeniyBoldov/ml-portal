@@ -86,6 +86,7 @@ class FactExtractor:
         user_id: Optional[UUID] = None,
         tenant_id: Optional[UUID] = None,
         chat_id: Optional[UUID] = None,
+        sandbox_overrides: Optional[dict] = None,
     ) -> List[FactDTO]:
         """Run the extractor. On any failure returns [] and logs a warning —
         memory extraction must never break a chat turn.
@@ -104,6 +105,7 @@ class FactExtractor:
                 chat_id=chat_id,
                 tenant_id=tenant_id,
                 user_id=user_id,
+                sandbox_overrides=sandbox_overrides,
                 fallback_factory=lambda _raw: _LLMFactOutput(facts=[]),
             )
         except StructuredCallError as exc:

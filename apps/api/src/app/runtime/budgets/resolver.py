@@ -6,7 +6,7 @@ from typing import Any, Dict, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.execution_limit import ExecutionLimitScope
-from app.services.execution_limits_service import ExecutionLimitsService
+from app.services.execution_limits_service import ExecutionLimitsService, apply_limits_override
 from .schema import BudgetLimits, EntityLimits, RunLimits
 
 
@@ -63,11 +63,12 @@ class BudgetResolver:
         self._session = session
         self._limits_service = ExecutionLimitsService(session)
 
-    async def resolve_run(self, platform_config: Dict[str, Any]) -> RunLimits:
+    async def resolve_run(self, platform_config: Dict[str, Any], sandbox_overrides: Optional[Dict[str, Any]] = None) -> RunLimits:
         limits = await self._limits_service.get_effective(
             scope_type=ExecutionLimitScope.PLATFORM,
             scope_ref="global",
         )
+        limits = apply_limits_override(limits, (sandbox_overrides or {}).get("platform_limits"))
         planner_steps = _as_optional_int(limits.runtime_steps_max)
         wall_time_ms = _as_optional_int(limits.runtime_wall_time_ms_max)
 
@@ -81,11 +82,15 @@ class BudgetResolver:
             wall_time_ms=wall_time_ms,
         )
 
-    async def resolve_orchestrator(self, role: str) -> EntityLimits:
+    async def resolve_orchestrator(self, role: str, sandbox_overrides: Optional[Dict[str, Any]] = None) -> EntityLimits:
         role_key = (role or "").strip().lower()
         limits = await self._limits_service.get_effective(
             scope_type=ExecutionLimitScope.ORCHESTRATOR_ROLE,
             scope_ref=role_key,
+        )
+        limits = apply_limits_override(
+            limits,
+            ((sandbox_overrides or {}).get("orchestrator_limits") or {}).get(role_key),
         )
         runtime_steps = _as_optional_int(limits.runtime_steps_max)
         retries = _as_optional_int(limits.runtime_retries_max)

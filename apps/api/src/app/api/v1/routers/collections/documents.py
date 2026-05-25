@@ -375,3 +375,101 @@ async def delete_collection_documents(
     except Exception as e:
         logger.error(f"Failed to delete collection documents: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/{collection_id}/reindex")
+async def reindex_collection_documents(
+    collection_id: uuid.UUID,
+    session: AsyncSession = Depends(db_uow),
+    user: UserCtx = Depends(get_current_user),
+):
+    from app.models.rag_ingest import DocumentCollectionMembership
+    from app.services.rag_event_publisher import RAGEventPublisher
+
+    try:
+        collection = await _resolve_collection(collection_id, session, user)
+        if collection.collection_type != "document":
+            raise HTTPException(status_code=400, detail="Not a document collection")
+
+        doc_ids = (
+            await session.execute(
+                select(DocumentCollectionMembership.source_id).where(
+                    DocumentCollectionMembership.collection_id == collection_id,
+                    DocumentCollectionMembership.tenant_id == collection.tenant_id,
+                )
+            )
+        ).scalars().all()
+
+        if not doc_ids:
+            return {
+                "status": "ok",
+                "collection_id": str(collection_id),
+                "total": 0,
+                "queued": 0,
+                "skipped": 0,
+                "failed": 0,
+                "items": [],
+            }
+
+        redis = get_redis_client()
+        event_publisher = RAGEventPublisher(redis) if redis else None
+        repo_factory = AsyncRepositoryFactory(session, collection.tenant_id)
+        status_manager = RAGStatusManager(session, repo_factory, event_publisher)
+
+        queued = 0
+        skipped = 0
+        failed = 0
+        items: list[dict] = []
+
+        for doc_id in doc_ids:
+            try:
+                ingest_policy = await status_manager.get_ingest_policy(doc_id)
+                if not ingest_policy.get("start_allowed", False):
+                    skipped += 1
+                    items.append({
+                        "document_id": str(doc_id),
+                        "status": "skipped",
+                        "reason": ingest_policy.get("start_reason") or "ingest_not_allowed",
+                    })
+                    continue
+
+                await status_manager.retry_stage(doc_id, "extract")
+                await status_manager.dispatch_stage_retry(doc_id, collection.tenant_id, "extract")
+                queued += 1
+                items.append({
+                    "document_id": str(doc_id),
+                    "status": "queued",
+                })
+            except Exception as exc:
+                failed += 1
+                items.append({
+                    "document_id": str(doc_id),
+                    "status": "failed",
+                    "error": str(exc),
+                })
+                logger.warning(
+                    "collection_document_reindex_enqueue_failed",
+                    extra={
+                        "collection_id": str(collection_id),
+                        "document_id": str(doc_id),
+                        "error": str(exc),
+                    },
+                )
+
+        await CollectionService(session).sync_collection_status(collection, persist=False)
+        await session.commit()
+
+        return {
+            "status": "ok",
+            "collection_id": str(collection_id),
+            "total": len(doc_ids),
+            "queued": queued,
+            "skipped": skipped,
+            "failed": failed,
+            "items": items,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to start collection reindex: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))

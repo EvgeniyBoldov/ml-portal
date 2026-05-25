@@ -366,6 +366,7 @@ class CollectionService:
         self,
         collection_id: uuid.UUID,
         *,
+        tenant_id: Any = _UNSET,
         name: Any = _UNSET,
         description: Any = _UNSET,
         is_active: Any = _UNSET,
@@ -383,6 +384,9 @@ class CollectionService:
         collection = await self.get_by_id(collection_id)
         if not collection:
             raise CollectionNotFoundError(f"Collection {collection_id} not found")
+
+        if tenant_id is not _UNSET and tenant_id != collection.tenant_id:
+            await self._reassign_collection_tenant(collection, tenant_id)
 
         if name is not _UNSET:
             collection.name = name
@@ -406,6 +410,60 @@ class CollectionService:
         self.session.add(collection)
         await self.session.flush()
         return collection
+
+    async def _reassign_collection_tenant(self, collection: Collection, target_tenant_id: uuid.UUID) -> None:
+        from sqlalchemy import update as sa_update
+        from app.models.rag import RAGDocument
+        from app.models.rag_ingest import DocumentCollectionMembership, Source
+        from app.models.tenant import Tenants
+        from app.core.exceptions import ValidationError
+
+        prev_tenant_id = collection.tenant_id
+        tenant_exists = (
+            await self.session.execute(select(Tenants.id).where(Tenants.id == target_tenant_id))
+        ).scalar_one_or_none()
+        if not tenant_exists:
+            raise ValidationError("target tenant not found")
+        collection.tenant_id = target_tenant_id
+
+        if collection.collection_type != CollectionType.DOCUMENT.value:
+            return
+
+        source_ids = (
+            await self.session.execute(
+                select(DocumentCollectionMembership.source_id).where(
+                    DocumentCollectionMembership.collection_id == collection.id,
+                    DocumentCollectionMembership.tenant_id == prev_tenant_id,
+                )
+            )
+        ).scalars().all()
+
+        await self.session.execute(
+            sa_update(DocumentCollectionMembership)
+            .where(
+                DocumentCollectionMembership.collection_id == collection.id,
+                DocumentCollectionMembership.tenant_id == prev_tenant_id,
+            )
+            .values(tenant_id=target_tenant_id)
+        )
+
+        if source_ids:
+            await self.session.execute(
+                sa_update(Source)
+                .where(
+                    Source.source_id.in_(source_ids),
+                    Source.tenant_id == prev_tenant_id,
+                )
+                .values(tenant_id=target_tenant_id)
+            )
+            await self.session.execute(
+                sa_update(RAGDocument)
+                .where(
+                    RAGDocument.id.in_(source_ids),
+                    RAGDocument.tenant_id == prev_tenant_id,
+                )
+                .values(tenant_id=target_tenant_id)
+            )
 
     async def list_versions(self, collection_id: uuid.UUID) -> List[CollectionVersion]:
         return await self.versions.list_versions(collection_id)

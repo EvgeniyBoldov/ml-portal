@@ -48,6 +48,48 @@ import { collectionFieldColumns } from './collection/fields/fieldColumns';
 
 type RuntimeOperationRow = NonNullable<ToolInstanceDetail['runtime_operations']>[number];
 
+function fallbackOperationsByCollectionType(collectionType: CollectionType): RuntimeOperationRow[] {
+  const base = (operation_slug: string, operation: string, source = 'local'): RuntimeOperationRow => ({
+    operation_slug,
+    operation,
+    source,
+    discovered_tool_slug: operation,
+    provider_instance_slug: null,
+    risk_level: 'low',
+    side_effects: 'none',
+    idempotent: true,
+    requires_confirmation: false,
+  });
+
+  if (collectionType === 'document') {
+    return [
+      base('collection.document.catalog_inspect', 'collection.catalog'),
+      base('collection.document.search', 'collection.doc_search'),
+    ];
+  }
+  if (collectionType === 'table') {
+    return [
+      base('collection.table.catalog_inspect', 'collection.catalog'),
+      base('collection.table.search', 'collection.search'),
+      base('collection.table.aggregate', 'collection.aggregate'),
+      base('collection.table.get', 'collection.get'),
+    ];
+  }
+  if (collectionType === 'sql') {
+    return [
+      base('collection.sql.catalog_inspect', 'collection.catalog'),
+      base('collection.sql.search_objects', 'search_objects'),
+      base('collection.sql.execute', 'execute_sql'),
+    ];
+  }
+  if (collectionType === 'api') {
+    return [
+      base('collection.api.catalog_inspect', 'collection.catalog'),
+    ];
+  }
+  return [];
+}
+
 const ACTIVE_VERSION_CONTENT_FIELDS: FieldConfig[] = [
   {
     key: 'data_description',
@@ -300,6 +342,12 @@ export function CollectionPage() {
     )),
     [infoFieldsWithOptions],
   );
+  const infoFieldsViewEdit = useMemo(
+    () => infoFieldsWithOptions.map((field) => (
+      field.key === 'tenant_id' ? { ...field, editable: true } : field
+    )),
+    [infoFieldsWithOptions],
+  );
 
   const configFieldsCreate = buildConfigFieldsByType(
     (formData.collection_type ?? 'table') as CollectionType,
@@ -345,7 +393,17 @@ export function CollectionPage() {
     };
   });
 
-  const runtimeOperations = dataConnector?.runtime_operations ?? [];
+  const runtimeOperations = useMemo(() => {
+    const fromConnector = dataConnector?.runtime_operations ?? [];
+    const fallback = fallbackOperationsByCollectionType(activeCollectionType);
+    const merged = [...fromConnector, ...fallback];
+    const bySlug = new Map<string, RuntimeOperationRow>();
+    for (const op of merged) {
+      if (!op?.operation_slug) continue;
+      if (!bySlug.has(op.operation_slug)) bySlug.set(op.operation_slug, op);
+    }
+    return Array.from(bySlug.values()).sort((a, b) => a.operation_slug.localeCompare(b.operation_slug));
+  }, [activeCollectionType, dataConnector?.runtime_operations]);
   const activeVersion =
     collection?.current_version
     ?? versions.find((v) => v.status === 'published')
@@ -442,6 +500,17 @@ export function CollectionPage() {
   });
 
   const handleUploadClick = () => fileInputRef.current?.click();
+  const reindexMutation = useMutation({
+    mutationFn: () => collectionsApi.reindexDocuments(collection!.id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: qk.collections.detail(collection!.id) });
+    },
+  });
+
+  const handleReindexClick = () => {
+    if (reindexMutation.isPending) return;
+    reindexMutation.mutate();
+  };
 
   const handleFileSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -547,6 +616,14 @@ export function CollectionPage() {
             extra: mode === 'view' && isDocumentCollection
               ? [
                   <Button
+                    key="reindex"
+                    variant="primary"
+                    onClick={handleReindexClick}
+                    disabled={reindexMutation.isPending}
+                  >
+                    {reindexMutation.isPending ? 'Запуск...' : 'Переиндексировать'}
+                  </Button>,
+                  <Button
                     key="upload"
                     variant="success"
                     onClick={handleUploadClick}
@@ -564,7 +641,7 @@ export function CollectionPage() {
             icon="database"
             iconVariant="info"
             width="1/2"
-            fields={infoFieldsWithOptions}
+            fields={infoFieldsViewEdit}
             data={blockData}
             editable={isEditable}
             onChange={handleFieldChangeWrapped}

@@ -118,15 +118,40 @@ export function BudgetsTab({ entity, steps }: { entity: TraceEntity; steps: RunS
 }
 
 export function RawTab({ value, entity, steps }: { value: unknown; entity?: TraceEntity; steps?: RunStep[] }) {
+  const hiddenContractKeys = new Set([
+    'response_contract',
+    'input_contract',
+    'contract',
+    'contracts',
+  ]);
+
+  const sanitizeForInspector = (input: unknown): unknown => {
+    if (Array.isArray(input)) {
+      return input.map(sanitizeForInspector);
+    }
+    if (!input || typeof input !== 'object') {
+      return input;
+    }
+    const source = input as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    for (const [key, raw] of Object.entries(source)) {
+      if (hiddenContractKeys.has(key)) continue;
+      out[key] = sanitizeForInspector(raw);
+    }
+    return out;
+  };
+
+  const safeValue = sanitizeForInspector(value);
+
   if (!entity || !steps || entity.sourceEventIds.length === 0) {
-    return <InspectorJsonBlock value={value} />;
+    return <InspectorJsonBlock value={safeValue} />;
   }
 
   const sourceIds = new Set(entity.sourceEventIds);
   const rawSteps = steps.filter((step) => sourceIds.has(step.id));
 
   if (rawSteps.length === 0) {
-    return <InspectorJsonBlock value={value} />;
+    return <InspectorJsonBlock value={safeValue} />;
   }
 
   return (
@@ -139,7 +164,7 @@ export function RawTab({ value, entity, steps }: { value: unknown; entity?: Trac
             id: step.id,
             type: step.type,
             timestamp: step.timestamp,
-            data: step.data,
+            data: sanitizeForInspector(step.data),
           }}
         />
       ))}

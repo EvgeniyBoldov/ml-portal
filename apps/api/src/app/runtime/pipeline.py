@@ -21,7 +21,7 @@ rolling summary job is delegated to MemoryWriter + SummaryCompactor.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import AsyncGenerator, List, Optional
+from typing import Any, AsyncGenerator, Dict, List, Optional
 from uuid import UUID, uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -169,7 +169,7 @@ class RuntimePipeline:
 
         # Per-entity budget registry
         budget_resolver = BudgetResolver(self._session)
-        run_limits_v2 = await budget_resolver.resolve_run(platform.config)
+        run_limits_v2 = await budget_resolver.resolve_run(platform.config, request.sandbox_overrides)
         budget_registry = BudgetRegistry(run_limits=run_limits_v2)
         budget_registry.register(
             entity_type="run",
@@ -280,6 +280,7 @@ class RuntimePipeline:
                 stop_reason=planning_outcome.stop_reason,
                 planner_hint=planning_outcome.planner_hint,
                 model=request.model,
+                sandbox_overrides=request.sandbox_overrides,
                 envelope=envelope,
                 run_id=run_id,
                 budget_registry=budget_registry,
@@ -377,6 +378,7 @@ class RuntimePipeline:
         stop_reason: PipelineStopReason,
         planner_hint: Optional[str],
         model: Optional[str],
+        sandbox_overrides: Optional[Dict[str, Any]] = None,
         envelope: EventEnvelopeStamper,
         run_id: Optional[UUID] = None,
         budget_registry: Optional[BudgetRegistry] = None,
@@ -388,7 +390,7 @@ class RuntimePipeline:
             synthesis_limits = None
             if budget_resolver is not None:
                 try:
-                    synthesis_limits = await budget_resolver.resolve_orchestrator("synthesizer")
+                    synthesis_limits = await budget_resolver.resolve_orchestrator("synthesizer", sandbox_overrides)
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("Failed to resolve synthesizer limits: %s", exc)
             budget_registry.register(
@@ -430,6 +432,7 @@ class RuntimePipeline:
             stop_reason=stop_reason,
             planner_hint=planner_hint,
             model=model,
+            sandbox_overrides=sandbox_overrides,
             run_synthesizer=True,
         ):
             ev = phased.event
@@ -616,6 +619,7 @@ class RuntimePipeline:
                 user_message=request.request_text,
                 assistant_final=assistant_final,
                 terminal_reason=stop_reason,
+                sandbox_overrides=request.sandbox_overrides,
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("MemoryWriter.finalize best-effort failed: %s", exc)

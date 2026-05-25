@@ -568,6 +568,7 @@ async def update_collection(
     service = CollectionService(session)
     collection = await service.update_collection(
         collection_id=collection_id,
+        tenant_id=body.tenant_id if "tenant_id" in body.model_fields_set else _UNSET,
         name=body.name if "name" in body.model_fields_set else _UNSET,
         description=body.description if "description" in body.model_fields_set else _UNSET,
         is_active=body.is_active if "is_active" in body.model_fields_set else _UNSET,

@@ -170,6 +170,7 @@ export interface SchemaOperation {
 }
 
 export interface UpdateCollectionRequest {
+  tenant_id?: string | null;
   name?: string;
   description?: string | null;
   is_active?: boolean;
@@ -242,6 +243,21 @@ export interface CollectionDocumentsResponse {
   page: number;
   size: number;
   has_more: boolean;
+}
+
+export interface CollectionReindexResponse {
+  status: string;
+  collection_id: string;
+  total: number;
+  queued: number;
+  skipped: number;
+  failed: number;
+  items: Array<{
+    document_id: string;
+    status: 'queued' | 'skipped' | 'failed';
+    reason?: string;
+    error?: string;
+  }>;
 }
 
 export interface DocumentUploadPolicy {
@@ -654,6 +670,12 @@ export const collectionsApi = {
     docIds.forEach(id => params.append('ids', id));
     return apiRequest(`/collections/${collectionId}/documents?${params.toString()}`, {
       method: 'DELETE',
+    });
+  },
+
+  reindexDocuments: async (collectionId: string): Promise<CollectionReindexResponse> => {
+    return apiRequest<CollectionReindexResponse>(`/collections/${collectionId}/reindex`, {
+      method: 'POST',
     });
   },
 

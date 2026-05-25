@@ -270,6 +270,25 @@ export function AgentRunPage() {
     };
   }, [snap]);
 
+  const availableOperations = useMemo(() => {
+    if (!snap?.available_operations || !Array.isArray(snap.available_operations)) return [] as string[];
+    const normalized = snap.available_operations
+      .map((item) => {
+        if (typeof item === 'string') return item.trim();
+        if (!item || typeof item !== 'object') return '';
+        const record = item as Record<string, unknown>;
+        const slug = record.operation_slug ?? record.operation ?? record.tool ?? record.name;
+        return typeof slug === 'string' ? slug.trim() : '';
+      })
+      .filter((item) => item.length > 0);
+    return Array.from(new Set(normalized)).sort((a, b) => a.localeCompare(b));
+  }, [snap?.available_operations]);
+
+  const snapshotTools = useMemo(() => {
+    const direct = Array.isArray(snap?.tools) ? snap.tools.map((item) => item.slug).filter(Boolean) : [];
+    return Array.from(new Set([...direct, ...availableOperations])).sort((a, b) => a.localeCompare(b));
+  }, [snap?.tools, availableOperations]);
+
   return (
     <>
       <EntityPageV2
@@ -325,12 +344,12 @@ export function AgentRunPage() {
             </>
           )}
 
-          {snap?.tools && snap.tools.length > 0 && (
+          {snapshotTools.length > 0 && (
             <Block title="Инструменты" icon="wrench" iconVariant="primary" width="full">
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                {snap.tools.map((t) => (
-                  <Badge key={t.slug} tone={t.has_credentials ? 'success' : 'warn'}>
-                    {t.slug}
+                {snapshotTools.map((slug) => (
+                  <Badge key={slug} tone="success">
+                    {slug}
                   </Badge>
                 ))}
               </div>

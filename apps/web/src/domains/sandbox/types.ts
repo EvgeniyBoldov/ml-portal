@@ -223,6 +223,7 @@ export interface SandboxCatalogRouter {
   name: string;
   description: string;
   config?: Record<string, unknown>;
+  input_contract?: Record<string, unknown> | null;
   response_contract?: ResponseContract | null;
 }
 

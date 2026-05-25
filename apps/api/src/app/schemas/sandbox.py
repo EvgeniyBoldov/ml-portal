@@ -262,6 +262,7 @@ class SandboxCatalogRouterItem(BaseModel):
     name: str
     description: str
     config: Optional[dict[str, Any]] = None
+    input_contract: Optional[dict[str, Any]] = None
     response_contract: Optional[dict[str, Any]] = None
 
 

@@ -49,7 +49,7 @@ from app.models.execution_limit import ExecutionLimitScope
 from app.runtime.budgets import RunBudgetLedger
 from app.runtime.llm.limits import LLMLimitExceededError, apply_llm_limits
 from app.runtime.operation_errors import OperationResultEnvelope, RuntimeErrorCode
-from app.services.execution_limits_service import ExecutionLimitsPayload, ExecutionLimitsService
+from app.services.execution_limits_service import ExecutionLimitsPayload, ExecutionLimitsService, apply_limits_override
 
 if TYPE_CHECKING:
     from app.agents.context import ToolContext
@@ -769,10 +769,12 @@ class AgentToolRuntime(BaseRuntime):
         try:
             async with session_factory() as session:
                 service = ExecutionLimitsService(session)
-                return await service.get_effective(
+                base = await service.get_effective(
                     scope_type=ExecutionLimitScope.AGENT,
                     scope_ref=agent_slug,
                 )
+                sandbox_ov = deps.sandbox_overrides if isinstance(deps.sandbox_overrides, dict) else {}
+                return apply_limits_override(base, sandbox_ov.get("agent_limits"))
         except Exception:
             return ExecutionLimitsPayload()
 

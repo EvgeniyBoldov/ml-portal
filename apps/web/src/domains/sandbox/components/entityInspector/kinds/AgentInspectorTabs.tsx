@@ -7,7 +7,36 @@ export function AgentInspectorTabs({ entity, steps }: { entity: TraceEntity; ste
   const data = isAgentData(entity.data) ? entity.data : null;
   const llmChild = entity.children?.find((c) => c.kind === 'llm');
   const llmData = llmChild && isLLMData(llmChild.data) ? llmChild.data : null;
-  const tabs = [{ key: 'info', label: 'Info' }, { key: 'prompt', label: 'Prompt' }, { key: 'response', label: 'Response' }, { key: 'budgets', label: 'Budgets' }, { key: 'rbac', label: 'RBAC' }, { key: 'raw', label: 'Raw' }];
+  const tabs = [{ key: 'info', label: 'Info' }, { key: 'prompt', label: 'Prompt' }, { key: 'response', label: 'Response' }, { key: 'tools', label: 'Tools' }, { key: 'budgets', label: 'Budgets' }, { key: 'rbac', label: 'RBAC' }, { key: 'raw', label: 'Raw' }];
+
+  const extractOperationSlug = (value: unknown): string | null => {
+    if (typeof value === 'string' && value.trim().length > 0) return value.trim();
+    if (!value || typeof value !== 'object') return null;
+    const rec = value as Record<string, unknown>;
+    const slug = rec.operation_slug ?? rec.operation ?? rec.tool ?? rec.name;
+    return typeof slug === 'string' && slug.trim().length > 0 ? slug.trim() : null;
+  };
+
+  const stepAvailableOperations = steps.flatMap((step) => {
+    const stepData = (step.data ?? {}) as Record<string, unknown>;
+    const direct = Array.isArray(stepData.available_operations) ? stepData.available_operations : [];
+    const fromSnapshot = ((stepData.context_snapshot as Record<string, unknown> | undefined)?.available_operations);
+    const nested = Array.isArray(fromSnapshot) ? fromSnapshot : [];
+    return [...direct, ...nested]
+      .map(extractOperationSlug)
+      .filter((item): item is string => !!item);
+  });
+
+  const availableOperations = Array.from(new Set([...(data?.toolsAvailable ?? []), ...stepAvailableOperations])).sort((a, b) => a.localeCompare(b));
+  const usedOperations = Array.from(new Set(
+    steps
+      .filter((step) => step.type === 'operation_call' || step.type === 'tool_call')
+      .map((step) => {
+        const stepData = (step.data ?? {}) as Record<string, unknown>;
+        return extractOperationSlug(stepData.operation_slug ?? stepData.operation ?? stepData.tool);
+      })
+      .filter((item): item is string => !!item),
+  )).sort((a, b) => a.localeCompare(b));
 
   const rbacSnapshot = [...steps]
     .reverse()
@@ -27,6 +56,18 @@ export function AgentInspectorTabs({ entity, steps }: { entity: TraceEntity; ste
       return <InspectorJsonBlock value={llmData?.prompt?.messages ?? llmData?.prompt?.systemPrompt ?? data?.prompt?.systemPrompt ?? '—'} />;
     }
     if (tab === 'response') return <InspectorTextBlock text={llmData?.response?.content ?? llmData?.response?.rawResponse ?? '—'} />;
+    if (tab === 'tools') {
+      return (
+        <InspectorFieldGroup>
+          <InspectorFieldRow label="Available">
+            {availableOperations.length > 0 ? availableOperations.join('\n') : '—'}
+          </InspectorFieldRow>
+          <InspectorFieldRow label="Used">
+            {usedOperations.length > 0 ? usedOperations.join('\n') : '—'}
+          </InspectorFieldRow>
+        </InspectorFieldGroup>
+      );
+    }
     if (tab === 'budgets') return <BudgetsTab entity={entity} steps={steps} />;
     if (tab === 'rbac') {
       if (!rbac) {

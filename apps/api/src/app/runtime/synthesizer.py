@@ -33,7 +33,7 @@ from app.runtime.events import RuntimeEvent
 from app.runtime.input_builders import SynthesizerInputBuilder
 from app.runtime.llm.limits import LLMLimitExceededError, apply_llm_limits, estimate_tokens
 from app.runtime.turn_state import RuntimeTurnState
-from app.services.execution_limits_service import ExecutionLimitsPayload, ExecutionLimitsService
+from app.services.execution_limits_service import ExecutionLimitsPayload, ExecutionLimitsService, apply_limits_override
 from app.services.system_llm_role_service import SystemLLMRoleService
 
 logger = get_logger(__name__)
@@ -73,6 +73,7 @@ class Synthesizer:
         run_id: UUID,
         model: Optional[str] = None,
         planner_hint: Optional[str] = None,
+        sandbox_overrides: Optional[Dict[str, object]] = None,
         chunk_size: int = DEFAULT_SYNTH_CHUNK_SIZE,
     ) -> AsyncGenerator[RuntimeEvent, None]:
         # Sources from memory_bundle if available
@@ -122,6 +123,8 @@ class Synthesizer:
             )
         except Exception:
             limits = ExecutionLimitsPayload()
+        synth_override = ((sandbox_overrides or {}).get("orchestrator_limits") or {}).get("synthesizer")
+        limits = apply_limits_override(limits, synth_override if isinstance(synth_override, dict) else None)
         input_tokens = estimate_tokens(str(messages))
         requested_output_tokens = int(params["max_tokens"]) if params.get("max_tokens") is not None else None
         try:

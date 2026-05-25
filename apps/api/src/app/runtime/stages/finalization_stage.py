@@ -42,6 +42,7 @@ class FinalizationStage:
         stop_reason: PipelineStopReason,
         planner_hint: Optional[str],
         model: Optional[str],
+        sandbox_overrides: Optional[dict] = None,
         run_synthesizer: bool = True,
     ) -> AsyncIterator[PhasedEvent]:
         """Drive synthesizer and set the terminal flags."""
@@ -52,6 +53,7 @@ class FinalizationStage:
                 run_id=state.run_id,
                 model=model,
                 planner_hint=planner_hint,
+                sandbox_overrides=sandbox_overrides,
             ):
                 yield PhasedEvent(event, OrchestrationPhase.SYNTHESIS)
 

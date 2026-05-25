@@ -7,10 +7,15 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Select, type SelectOption } from '@/shared/ui/Select';
 import Badge from '@/shared/ui/Badge';
 import Button from '@/shared/ui/Button';
-import { ResponseContractCard } from '@/shared/ui';
 import { agentsApi, type AgentVersion } from '@/shared/api/agents';
 import { qk } from '@/shared/api/keys';
-import { platformSettingsApi } from '@/shared/api/admin';
+import { executionLimitsApi, platformSettingsApi } from '@/shared/api/admin';
+import {
+  FACT_EXTRACTOR_INPUT_CONTRACT,
+  PLANNER_INPUT_CONTRACT,
+  SUMMARY_COMPACTOR_INPUT_CONTRACT,
+  SYNTHESIZER_INPUT_CONTRACT,
+} from '@/shared/constants/orchestratorContracts';
 import { sandboxApi } from '../api';
 import type {
   SandboxCatalog,
@@ -149,6 +154,11 @@ const ORCHESTRATOR_PROMPT_KEYS = new Set([
   'output_requirements',
 ]);
 
+const SANDBOX_PROMPT_EDITOR_KEYS = new Set([
+  ...ORCHESTRATOR_PROMPT_KEYS,
+  ...(AGENT_SECTIONS.find((section) => section.title === 'Prompt')?.keys ?? []),
+]);
+
 const PLATFORM_LIMIT_KEYS = [
   'abs_max_timeout_s',
   'abs_max_retries',
@@ -219,6 +229,21 @@ function getNestedValue(source: Record<string, unknown>, path: string): unknown 
   return source[path];
 }
 
+function shouldUsePromptEditor(field: SandboxConfigField): boolean {
+  if (field.type !== 'text') return false;
+  const leafKey = field.name.split('.').pop() ?? field.name;
+  return SANDBOX_PROMPT_EDITOR_KEYS.has(leafKey);
+}
+
+function getRouterInputContract(routerId?: string): Record<string, unknown> | null {
+  if (!routerId) return null;
+  if (routerId === 'planner') return PLANNER_INPUT_CONTRACT as Record<string, unknown>;
+  if (routerId === 'synthesizer') return SYNTHESIZER_INPUT_CONTRACT as Record<string, unknown>;
+  if (routerId === 'fact_extractor') return FACT_EXTRACTOR_INPUT_CONTRACT as Record<string, unknown>;
+  if (routerId === 'summary_compactor') return SUMMARY_COMPACTOR_INPUT_CONTRACT as Record<string, unknown>;
+  return null;
+}
+
 function resolveBlueprintFieldValue(
   source: Record<string, unknown>,
   field: SandboxResolverFieldSpec,
@@ -284,11 +309,28 @@ export function ConfigPanel({
     queryFn: () => platformSettingsApi.get(),
     staleTime: 30_000,
   });
+  const { data: platformLimits } = useQuery({
+    queryKey: ['admin', 'execution-limits', 'platform'],
+    queryFn: () => executionLimitsApi.getPlatform(),
+    staleTime: 30_000,
+  });
 
   const { data: agentVersions } = useQuery({
     queryKey: qk.agents.versions(selectedAgent?.id ?? ''),
     queryFn: () => agentsApi.listVersions(selectedAgent!.id),
     enabled: !!selectedAgent,
+    staleTime: 30_000,
+  });
+  const { data: agentLimits } = useQuery({
+    queryKey: ['admin', 'execution-limits', 'agent', selectedAgent?.slug ?? ''],
+    queryFn: () => executionLimitsApi.getAgent(selectedAgent?.slug ?? ''),
+    enabled: Boolean(selectedAgent?.slug),
+    staleTime: 30_000,
+  });
+  const { data: orchestratorLimits } = useQuery({
+    queryKey: ['admin', 'execution-limits', 'orchestrator', selectedRouter?.id ?? ''],
+    queryFn: () => executionLimitsApi.getOrchestrator(selectedRouter?.id ?? ''),
+    enabled: Boolean(selectedRouter?.id),
     staleTime: 30_000,
   });
 
@@ -350,7 +392,7 @@ export function ConfigPanel({
       return { entityType: selectedBlueprint?.entity_type ?? 'discovered_tool', entityId: selectedTool?.id ?? null };
     }
     if (selectedItem.type === 'router') {
-      const routerEntityId = typeof selectedRouter?.config?.id === 'string' ? selectedRouter.config.id : null;
+      const routerEntityId = selectedRouter?.id ?? null;
       return { entityType: selectedBlueprint?.entity_type ?? 'orchestration', entityId: routerEntityId };
     }
     return { entityType: selectedBlueprint?.entity_type ?? 'orchestration', entityId: null };
@@ -415,16 +457,19 @@ export function ConfigPanel({
           };
 
     const sourceByKey: Record<string, Record<string, unknown>> = {
-      agent: (selectedAgentVersionData ?? {}) as Record<string, unknown>,
+      agent: ({ ...(selectedAgentVersionData ?? {}), limits: agentLimits ?? {} }) as Record<string, unknown>,
       discovered_tool: selectedToolBase as Record<string, unknown>,
-      router: ((selectedRouter?.config ?? {}) as Record<string, unknown>),
-      platform: (platformSettings ?? {}) as Record<string, unknown>,
+      router: ({ ...(selectedRouter?.config ?? {}), limits: orchestratorLimits ?? {} }) as Record<string, unknown>,
+      platform: ({ ...(platformSettings ?? {}), limits: platformLimits ?? {} }) as Record<string, unknown>,
     };
 
     const source = sourceByKey[selectedBlueprint.key] ?? {};
     return buildSectionsFromBlueprint(source, selectedBlueprint);
   }, [
     activeParameterTab,
+    agentLimits,
+    orchestratorLimits,
+    platformLimits,
     platformSettings,
     selectedItem,
     selectedAgentVersionData,
@@ -549,7 +594,7 @@ export function ConfigPanel({
         (item) =>
           item.entity_type === 'orchestration' &&
           item.entity_id === null &&
-          item.field_path.startsWith('platform.'),
+          (item.field_path.startsWith('platform.') || item.field_path.startsWith('platform_limits.')),
       );
     }
     return overrideMap.hasEntityOverrides(
@@ -652,7 +697,7 @@ export function ConfigPanel({
           (item) =>
             item.entity_type === 'orchestration' &&
             item.entity_id === null &&
-            item.field_path.startsWith('platform.'),
+            (item.field_path.startsWith('platform.') || item.field_path.startsWith('platform_limits.')),
         )
         .map((item) => item.field_path);
       for (const fieldPath of platformFields) {
@@ -822,16 +867,6 @@ export function ConfigPanel({
       <div className={styles.body}>
         {selectedItem && visibleSections.length > 0 ? (
           <div className={styles['sections-list']}>
-            {selectedItem.type === 'router' && selectedRouter?.response_contract ? (
-              <div className={styles.section}>
-                <div className={styles['section-title']}>Response Contract</div>
-                <ResponseContractCard
-                  contract={selectedRouter.response_contract}
-                  rulesText={String((selectedRouter.config?.rules as string | undefined) ?? '')}
-                  outputRequirementsText={String((selectedRouter.config?.output_requirements as string | undefined) ?? '')}
-                />
-              </div>
-            ) : null}
             {visibleSections.map((section) => (
               <div key={section.title} className={styles.section}>
                 <div className={styles['section-title']}>{section.title}</div>
@@ -864,6 +899,10 @@ export function ConfigPanel({
                       showClearOverride={isOverridden(field.name)}
                       showApply={isDirty(field.name)}
                       showCancelDraft={isDirty(field.name)}
+                      usePromptEditor={shouldUsePromptEditor(field)}
+                      editorLabel={field.label ?? toDisplayFieldName(field.name)}
+                      outputContract={selectedItem.type === 'router' ? (selectedRouter?.response_contract ?? null) : null}
+                      inputContract={selectedItem.type === 'router' ? (selectedRouter?.input_contract ?? getRouterInputContract(selectedRouter?.id)) : null}
                     />
                   ))}
                 </div>
