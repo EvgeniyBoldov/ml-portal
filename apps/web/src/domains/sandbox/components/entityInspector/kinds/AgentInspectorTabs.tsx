@@ -1,13 +1,17 @@
-import { InspectorFieldGroup, InspectorFieldRow, InspectorJsonBlock, InspectorNotice, InspectorTabs, InspectorTextBlock } from '@/shared/ui/Inspector';
+import { InspectorFieldGroup, InspectorFieldRow, InspectorJsonBlock, InspectorNotice, InspectorTabs } from '@/shared/ui/Inspector';
 import { isAgentData, isLLMData, type TraceEntity } from '@/domains/runtimeTrace/entityTypes';
 import type { RunStep } from '../../../hooks/useSandboxRun';
 import { BudgetsTab, InfoTab, RawTab } from '../shared';
 
 export function AgentInspectorTabs({ entity, steps }: { entity: TraceEntity; steps: RunStep[] }) {
   const data = isAgentData(entity.data) ? entity.data : null;
-  const llmChild = entity.children?.find((c) => c.kind === 'llm');
-  const llmData = llmChild && isLLMData(llmChild.data) ? llmChild.data : null;
-  const tabs = [{ key: 'info', label: 'Info' }, { key: 'prompt', label: 'Prompt' }, { key: 'response', label: 'Response' }, { key: 'tools', label: 'Tools' }, { key: 'budgets', label: 'Budgets' }, { key: 'rbac', label: 'RBAC' }, { key: 'raw', label: 'Raw' }];
+  const llmChildren = (entity.children ?? []).filter((c) => c.kind === 'llm' && isLLMData(c.data));
+  const llmWithPrompt = llmChildren.find((c) => {
+    const llm = c.data;
+    return !!(llm.prompt?.messages?.length || llm.prompt?.systemPrompt);
+  });
+  const llmPromptData = llmWithPrompt ? llmWithPrompt.data : null;
+  const tabs = [{ key: 'info', label: 'Info' }, { key: 'prompt', label: 'Prompt' }, { key: 'tools', label: 'Tools' }, { key: 'budgets', label: 'Budgets' }, { key: 'rbac', label: 'RBAC' }, { key: 'raw', label: 'Raw' }];
 
   const extractOperationSlug = (value: unknown): string | null => {
     if (typeof value === 'string' && value.trim().length > 0) return value.trim();
@@ -50,12 +54,16 @@ export function AgentInspectorTabs({ entity, steps }: { entity: TraceEntity; ste
   return <InspectorTabs entityId={entity.id} tabs={tabs} render={(tab) => {
     if (tab === 'info') return <InfoTab entity={entity} steps={steps} />;
     if (tab === 'prompt') {
-      if (llmData?.prompt?.isBriefMode) {
+      if (llmPromptData?.prompt?.isBriefMode) {
         return <InspectorNotice tone="info" title="Brief Logging" message="Messages не сохранены" />;
       }
-      return <InspectorJsonBlock value={llmData?.prompt?.messages ?? llmData?.prompt?.systemPrompt ?? data?.prompt?.systemPrompt ?? '—'} />;
+      const systemPromptFromMessages = llmPromptData?.prompt?.messages?.find((msg) => String(msg.role ?? '') === 'system');
+      const promptSnapshot = llmPromptData?.prompt?.systemPrompt
+        ?? (typeof systemPromptFromMessages?.content === 'string' ? systemPromptFromMessages.content : undefined)
+        ?? data?.prompt?.systemPrompt
+        ?? '—';
+      return <InspectorJsonBlock value={promptSnapshot} />;
     }
-    if (tab === 'response') return <InspectorTextBlock text={llmData?.response?.content ?? llmData?.response?.rawResponse ?? '—'} />;
     if (tab === 'tools') {
       return (
         <InspectorFieldGroup>

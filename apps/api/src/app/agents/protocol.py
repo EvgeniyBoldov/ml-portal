@@ -176,7 +176,11 @@ def format_operation_result(operation_call: OperationCall, result_content: str) 
     )
 
 
-def build_operations_prompt(operation_schemas: List[dict]) -> str:
+def build_operations_prompt(
+    operation_schemas: List[dict],
+    *,
+    mandatory_rules_text: Optional[str] = None,
+) -> str:
     """
     Генерирует инструкцию для LLM о доступных operations.
     
@@ -191,14 +195,22 @@ def build_operations_prompt(operation_schemas: List[dict]) -> str:
     
     operations_json = json.dumps(operation_schemas, ensure_ascii=False, indent=2)
     
+    rules_block = (
+        mandatory_rules_text.strip()
+        if isinstance(mandatory_rules_text, str) and mandatory_rules_text.strip()
+        else (
+            "MANDATORY RULES — follow these without exception:\n"
+            "1. If the user asks for REAL DATA (records, values, counts, status, config) — you MUST call an operation first. Never answer from prior knowledge about actual data.\n"
+            "2. EXCEPTION: if the user asks only about what data sources, collections, or operations are available (meta-question about capabilities) — you MAY answer directly using the capability card above without calling any operation.\n"
+            "3. Only after you receive operation results may you compose and deliver the final answer for data questions.\n"
+            "4. Never make up or assume actual data values — collect them via operations."
+        )
+    )
+
     return f"""
 ## Available Operations
 
-MANDATORY RULES — follow these without exception:
-1. If the user asks for REAL DATA (records, values, counts, status, config) — you MUST call an operation first. Never answer from prior knowledge about actual data.
-2. EXCEPTION: if the user asks only about what data sources, collections, or operations are available (meta-question about capabilities) — you MAY answer directly using the capability card above without calling any operation.
-3. Only after you receive operation results may you compose and deliver the final answer for data questions.
-4. Never make up or assume actual data values — collect them via operations.
+{rules_block}
 
 To call an operation, respond with an operation_call block:
 

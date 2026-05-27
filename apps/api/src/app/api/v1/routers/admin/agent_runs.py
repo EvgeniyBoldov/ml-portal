@@ -12,7 +12,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import db_session, require_admin
 from app.agents.operation_router import OperationRouter
-from app.agents.policy_engine import DEFAULT_MAX_ITERS
 from app.models.agent import Agent
 from app.models.collection import Collection
 from app.models.user import Users
@@ -40,6 +39,7 @@ from app.services.runtime_trace_builder import RuntimeTraceBuilder, TraceStep
 from app.services.run_store import RunStore
 
 router = APIRouter(tags=["Agent Runs"])
+DEFAULT_MAX_ITERS = 25
 
 
 def _resolve_runtime_user_id(current_user: Users, user_id: Optional[UUID]) -> UUID:

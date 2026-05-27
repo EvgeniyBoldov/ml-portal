@@ -11,6 +11,28 @@ def _envelope(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 class ChatEventMapper:
     """Map runtime v3 events into chat service SSE payloads."""
+    _ALLOWED_LLM_FIELDS = {
+        "llm_call_id",
+        "step",
+        "model",
+        "temperature",
+        "max_tokens",
+        "response_length",
+        "tokens_in",
+        "tokens_out",
+        "tokens_total",
+        "duration_ms",
+        "native_tool_calling",
+        "purpose",
+        "parent_entity_type",
+        "parent_entity_id",
+        "planner_iteration_id",
+        "planner_run_id",
+        "agent_run_id",
+        "agent_slug",
+        "actor_type",
+        "actor_entity_id",
+    }
 
     @staticmethod
     def _planner_action_type(kind: Any) -> Optional[str]:
@@ -54,10 +76,11 @@ class ChatEventMapper:
                 "orchestration_envelope": env,
             }
 
-        if event.type in {RuntimeEventType.LLM_REQUEST, RuntimeEventType.LLM_RESPONSE, RuntimeEventType.LLM_CALL}:
+        if event.type == RuntimeEventType.LLM_TURN:
+            payload = {k: v for k, v in event.data.items() if k in self._ALLOWED_LLM_FIELDS}
             return {
                 "type": event.type.value,
-                **event.data,
+                **payload,
                 "orchestration_envelope": env,
             }
 

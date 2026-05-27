@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, Iterable, Optional
 
+from app.core.logging import get_logger
+
 from app.schemas.runtime_trace import (
     RawEventRefResponse,
     RunTraceResponse,
@@ -24,26 +26,55 @@ class TraceStep:
 
 
 class RuntimeTraceBuilder:
+    _logger = get_logger(__name__)
+    _LEGACY_RAW_TYPES = {
+        "routing",
+        "triage",
+        "planner_action",
+        "llm_request",
+        "llm_response",
+        "llm_call",
+    }
+
     _CATEGORY_MAP: Dict[str, str] = {
+        # lifecycle
+        "run_start": "lifecycle",
+        "run_end": "lifecycle",
+        "orchestrator_start": "lifecycle",
+        "orchestrator_end": "lifecycle",
+        "planner_iteration_start": "lifecycle",
+        "planner_iteration_end": "lifecycle",
+        "agent_start": "lifecycle",
+        "agent_end": "lifecycle",
+        "synthesis_start": "lifecycle",
+        "synthesis_end": "lifecycle",
+        # input / decisions
         "user_request": "input",
+        "routing_decision": "decision",
+        "triage_complete": "decision",
+        "preflight_complete": "decision",
+        "intent": "intent",
+        "planner_decision": "planner",
+        "policy_decision": "policy",
+        "confirmation_required": "policy",
+        "protocol_retry": "retry",
+        # budget
         "budget_snapshot": "budget",
+        # llm
         "llm_call": "llm",
+        "llm_turn": "llm",
         "llm_request": "llm",
         "llm_response": "llm",
-        "routing": "decision",
-        "triage": "decision",
-        "protocol_retry": "retry",
-        "planner_action": "planner",
-        "planner_decision": "planner",
-        "intent": "planner",
+        "system_llm_trace": "llm",
+        # operations
         "operation_call": "operation",
         "tool_call": "operation",
         "operation_result": "operation",
         "tool_result": "operation",
-        "policy_decision": "policy",
-        "confirmation_required": "policy",
+        # outputs / status
         "final": "final",
         "final_response": "final",
+        "direct_response": "final",
         "error": "error",
         "status": "system",
         "delta": "system",
@@ -51,28 +82,54 @@ class RuntimeTraceBuilder:
         "run_paused": "system",
         "stop": "system",
         "done": "system",
+        # legacy aliases (compat)
+        "routing": "decision",
+        "triage": "decision",
+        "planner_action": "planner",
     }
 
     _TITLES: Dict[str, str] = {
+        "run_start": "Старт рантайма",
+        "run_end": "Завершение рантайма",
+        "orchestrator_start": "Старт оркестратора",
+        "orchestrator_end": "Завершение оркестратора",
+        "planner_iteration_start": "Старт итерации планера",
+        "planner_iteration_end": "Завершение итерации планера",
+        "agent_start": "Старт агента",
+        "agent_end": "Завершение агента",
+        "synthesis_start": "Старт синтеза",
+        "synthesis_end": "Завершение синтеза",
         "user_request": "Запрос",
+        "routing_decision": "Решение маршрутизации",
+        "triage_complete": "Решение триажа",
+        "preflight_complete": "Результат preflight",
+        "intent": "Намерение",
+        "planner_decision": "Решение планировщика",
+        "policy_decision": "Решение политики",
+        "confirmation_required": "Требуется подтверждение",
+        "protocol_retry": "Повтор протокола",
         "budget_snapshot": "Снимок бюджета",
         "llm_call": "LLM вызов",
+        "llm_turn": "LLM турн",
         "llm_request": "LLM запрос",
         "llm_response": "LLM ответ",
-        "routing": "Маршрутизация",
-        "protocol_retry": "Повтор протокола",
+        "system_llm_trace": "System LLM trace",
         "operation_call": "Вызов операции",
         "tool_call": "Вызов операции",
         "operation_result": "Результат операции",
         "tool_result": "Результат операции",
-        "planner_action": "Планировщик",
-        "planner_decision": "Решение планировщика",
-        "intent": "Интент",
-        "policy_decision": "Решение политики",
-        "confirmation_required": "Требуется подтверждение",
         "final": "Финальный ответ",
         "final_response": "Финальный ответ",
+        "direct_response": "Финальный ответ",
         "error": "Ошибка",
+        "status": "Статус",
+        "delta": "Поток ответа",
+        "waiting_input": "Ожидание ввода",
+        "stop": "Остановлено",
+        # legacy aliases (compat)
+        "routing": "Маршрутизация",
+        "triage": "Триаж",
+        "planner_action": "Планировщик",
     }
 
     def build(self, steps: Iterable[TraceStep]) -> RunTraceResponse:
@@ -89,7 +146,15 @@ class RuntimeTraceBuilder:
     def _normalize(self, step: TraceStep) -> SemanticEventResponse:
         raw_type = step.raw_type
         data = step.data or {}
-        category = self._CATEGORY_MAP.get(raw_type, "system")
+        if raw_type in self._LEGACY_RAW_TYPES:
+            self._logger.warning(
+                "RuntimeTraceBuilder legacy raw_type=%s used; expected canonical v3 type",
+                raw_type,
+            )
+        category = self._CATEGORY_MAP.get(raw_type)
+        if category is None:
+            self._logger.warning("RuntimeTraceBuilder unknown raw_type=%s; fallback to system", raw_type)
+            category = "system"
         iteration = self._pick_iteration(step)
         summary = self._summary(raw_type, data)
         status = self._status(raw_type, data)
@@ -105,7 +170,7 @@ class RuntimeTraceBuilder:
             {"result": data.get("result") or data.get("output") or data.get("data")}
             if raw_type in {"operation_result", "tool_result"}
             else {"content": data.get("content") or data.get("answer") or data.get("response")}
-            if raw_type in {"llm_response", "final_response", "final"}
+            if raw_type in {"llm_turn", "llm_response", "final_response", "final"}
             else None
         )
         decision = data if category in {"decision", "planner", "policy", "retry"} else None
@@ -147,13 +212,15 @@ class RuntimeTraceBuilder:
 
     @staticmethod
     def _phase(category: str) -> str:
+        if category == "lifecycle":
+            return "system"
         if category == "input":
             return "input"
         if category == "budget":
             return "budget"
         if category == "llm":
             return "llm"
-        if category in {"decision", "planner", "retry", "policy"}:
+        if category in {"decision", "planner", "retry", "policy", "intent"}:
             return "decision"
         if category == "operation":
             return "operation"
@@ -179,8 +246,12 @@ class RuntimeTraceBuilder:
             return str(data.get("content") or data.get("request") or "User request")
         if raw_type == "protocol_retry":
             return str(data.get("reason") or "Protocol retry")
-        if raw_type == "routing":
+        if raw_type in {"routing", "routing_decision"}:
             return str(data.get("agent_slug") or data.get("mode") or "Routing decision")
+        if raw_type == "triage_complete":
+            return str(data.get("decision") or data.get("status") or "Triage complete")
+        if raw_type == "preflight_complete":
+            return str(data.get("status") or "Preflight complete")
         if raw_type == "intent":
             return str(data.get("description") or "Intent")
         if raw_type in {"operation_call", "tool_call"}:
@@ -189,15 +260,18 @@ class RuntimeTraceBuilder:
             status = "success" if data.get("success") is True else "failed" if data.get("success") is False else "result"
             op = data.get("operation_slug") or data.get("tool") or data.get("operation") or "Operation"
             return f"{op} {status}"
-        if raw_type in {"llm_call", "llm_response"}:
-            return f"response_length={data.get('response_length') or data.get('tokens_out') or 'n/a'}"
+        if raw_type in {"llm_call", "llm_response", "llm_turn"}:
+            metric = data.get("response_length")
+            if metric is None:
+                metric = data.get("tokens_out")
+            return f"response_length={metric if metric is not None else 'n/a'}"
         if raw_type == "budget_snapshot":
             owner = data.get("owner_scope") or data.get("scope") or "unknown"
             return f"{owner}: snapshot"
-        if raw_type == "budget_snapshot":
-            return f"{data.get('owner_scope') or 'unknown'}: snapshot"
         if raw_type in {"final", "final_response"}:
             return str(data.get("content") or data.get("answer") or "Final response")
+        if raw_type == "direct_response":
+            return f"content_length={data.get('content_length') or 0}"
         if raw_type == "error":
             return str(data.get("error") or data.get("message") or "Error")
         return str(data)[:180] if data else raw_type

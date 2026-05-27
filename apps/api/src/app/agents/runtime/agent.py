@@ -58,6 +58,16 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 MAX_STEPS_WITHOUT_SUCCESSFUL_TOOL_RESULT_DEFAULT = 2
+DEFAULT_REQUIRED_OPERATION_RETRY_INSTRUCTION = (
+    "You must call at least one available operation before answering. "
+    "Do not answer from prior knowledge. "
+    "Choose the most relevant operation and return an operation call."
+)
+DEFAULT_INTENT_MESSAGES = {
+    "agent_start": "Запускаю выполнение агента",
+    "final_answer": "Формирую финальный ответ",
+    "operation_call": "Выполняю операцию: {operation_slug}",
+}
 
 
 def _estimate_tokens(text: str) -> int:
@@ -220,7 +230,11 @@ class AgentToolRuntime(BaseRuntime):
         
         # Log high-level intent
         await ctx.log_intent(
-            "Запускаю выполнение агента",
+            self._intent_message(
+                key="agent_start",
+                platform_config=platform_config,
+                sandbox_overrides=sandbox_ov,
+            ),
             {"agent_slug": agent.slug, "operations_count": len(available_operations)}
         )
 
@@ -296,34 +310,6 @@ class AgentToolRuntime(BaseRuntime):
                 yield RuntimeEvent(RuntimeEventType.BUDGET_SNAPSHOT, step_budget_snapshot)
 
                 # Non-streaming LLM call to let agent decide
-                await run_session.log_step("llm_request", {
-                    "step": step + 1,
-                    "model": gen.model,
-                    "temperature": gen.temperature,
-                    "max_tokens": gen.max_tokens,
-                    "messages": llm_messages,
-                    "native_tool_calling": native_tool_calling,
-                    "llm_call_id": llm_call_id,
-                    "parent_entity_type": "agent_run",
-                    "parent_entity_id": str(run_session.run_id) if run_session.run_id else None,
-                    "agent_run_id": str(run_session.run_id) if run_session.run_id else None,
-                    "agent_slug": agent.slug,
-                    "purpose": "tool_decision_or_answer",
-                })
-                yield RuntimeEvent.llm_request(
-                    llm_call_id=llm_call_id,
-                    step=step + 1,
-                    model=gen.model,
-                    temperature=gen.temperature,
-                    max_tokens=gen.max_tokens,
-                    messages=llm_messages,
-                    native_tool_calling=native_tool_calling,
-                    parent_entity_type="agent_run",
-                    parent_entity_id=str(run_session.run_id) if run_session.run_id else None,
-                    agent_run_id=str(run_session.run_id) if run_session.run_id else None,
-                    agent_slug=agent.slug,
-                    purpose="tool_decision_or_answer",
-                )
                 llm_start = time.time()
                 try:
                     boundary = apply_llm_limits(
@@ -385,31 +371,13 @@ class AgentToolRuntime(BaseRuntime):
                         owner_id=budget_owner_id,
                     )
 
-                await run_session.log_step("llm_response", {
+                await run_session.log_step("llm_turn", {
                     "step": step + 1,
                     "model": gen.model,
+                    "temperature": gen.temperature,
+                    "max_tokens": effective_max_tokens,
+                    "messages": llm_messages,
                     "content": raw_response,
-                    "response_length": len(raw_response),
-                    "llm_call_id": llm_call_id,
-                    "parent_entity_type": "agent_run",
-                    "parent_entity_id": str(run_session.run_id) if run_session.run_id else None,
-                    "agent_run_id": str(run_session.run_id) if run_session.run_id else None,
-                    "agent_slug": agent.slug,
-                }, duration_ms=llm_duration)
-                yield RuntimeEvent.llm_response(
-                    llm_call_id=llm_call_id,
-                    step=step + 1,
-                    model=gen.model,
-                    content=raw_response,
-                    response_length=len(raw_response),
-                    parent_entity_type="agent_run",
-                    parent_entity_id=str(run_session.run_id) if run_session.run_id else None,
-                    agent_run_id=str(run_session.run_id) if run_session.run_id else None,
-                    agent_slug=agent.slug,
-                )
-
-                await run_session.log_step("llm_call", {
-                    "step": step + 1,
                     "response_length": len(raw_response),
                     "native_tool_calling": native_tool_calling,
                     "llm_call_id": llm_call_id,
@@ -417,11 +385,21 @@ class AgentToolRuntime(BaseRuntime):
                     "parent_entity_id": str(run_session.run_id) if run_session.run_id else None,
                     "agent_run_id": str(run_session.run_id) if run_session.run_id else None,
                     "agent_slug": agent.slug,
-                }, duration_ms=llm_duration)
-                yield RuntimeEvent.llm_call(
+                    "tokens_in": max(0, prompt_tokens),
+                    "tokens_out": max(0, completion_tokens),
+                    "tokens_total": max(0, total_tokens),
+                    "purpose": "tool_decision_or_answer",
+                    "actor_type": "agent",
+                    "actor_entity_id": str(run_session.run_id) if run_session.run_id else None,
+                }, duration_ms=llm_duration, tokens_in=max(0, prompt_tokens), tokens_out=max(0, completion_tokens))
+                yield RuntimeEvent.llm_turn(
                     llm_call_id=llm_call_id,
                     step=step + 1,
                     model=gen.model,
+                    temperature=gen.temperature,
+                    max_tokens=effective_max_tokens,
+                    messages=llm_messages,
+                    content=raw_response,
                     response_length=len(raw_response),
                     tokens_in=max(0, prompt_tokens),
                     tokens_out=max(0, completion_tokens),
@@ -433,6 +411,8 @@ class AgentToolRuntime(BaseRuntime):
                     agent_run_id=str(run_session.run_id) if run_session.run_id else None,
                     agent_slug=agent.slug,
                     purpose="tool_decision_or_answer",
+                    actor_type="agent",
+                    actor_entity_id=str(run_session.run_id) if run_session.run_id else None,
                 )
 
                 # Parse operation calls — native path first, then text fallback
@@ -484,10 +464,9 @@ class AgentToolRuntime(BaseRuntime):
                         llm_messages.append(
                             {
                                 "role": "user",
-                                "content": (
-                                    "You must call at least one available operation before answering. "
-                                    "Do not answer from prior knowledge. "
-                                    "Choose the most relevant operation and return an operation call."
+                                "content": self._required_operation_retry_instruction(
+                                    platform_config=platform_config,
+                                    sandbox_overrides=sandbox_ov,
                                 ),
                             }
                         )
@@ -510,7 +489,11 @@ class AgentToolRuntime(BaseRuntime):
 
                     # No operation calls — agent decided to answer directly
                     await ctx.log_intent(
-                        "Формирую финальный ответ",
+                        self._intent_message(
+                            key="final_answer",
+                            platform_config=platform_config,
+                            sandbox_overrides=sandbox_ov,
+                        ),
                         {"step": step + 1, "operation_calls_total": len(loop_state.operation_outputs)}
                     )
                     final_answer_content: List[str] = []
@@ -573,7 +556,12 @@ class AgentToolRuntime(BaseRuntime):
                 for operation_call in parsed.operation_calls:
                     # Log intent before executing each operation
                     await ctx.log_intent(
-                        f"Выполняю операцию: {operation_call.operation_slug}",
+                        self._intent_message(
+                            key="operation_call",
+                            platform_config=platform_config,
+                            sandbox_overrides=sandbox_ov,
+                            operation_slug=operation_call.operation_slug,
+                        ),
                         {"arguments": operation_call.arguments}
                     )
                     
@@ -853,18 +841,17 @@ class AgentToolRuntime(BaseRuntime):
             await run_session.finish("failed", limit_message)
             return
 
-        yield RuntimeEvent(
-            RuntimeEventType.OPERATION_CALL,
-            {
-                "operation": operation_call.operation_slug,
-                "call_id": operation_call.id,
-                "arguments": operation_call.arguments,
-                "agent_slug": agent_slug,
-                "agent_run_id": agent_run_id,
-                "llm_call_id": llm_call_id,
-                "parent_entity_type": "agent_run",
-                "parent_entity_id": agent_run_id,
-            },
+        yield RuntimeEvent.operation_call(
+            operation_call.operation_slug,
+            operation_call.id,
+            operation_call.arguments,
+            agent_slug=agent_slug,
+            agent_run_id=agent_run_id,
+            llm_call_id=llm_call_id,
+            parent_entity_type="agent_run",
+            parent_entity_id=agent_run_id,
+            actor_type="agent",
+            actor_entity_id=agent_run_id,
         )
         await run_session.log_step("operation_call", {
             "operation_slug": operation_call.operation_slug,
@@ -874,6 +861,10 @@ class AgentToolRuntime(BaseRuntime):
             "agent_slug": agent_slug,
             "agent_run_id": agent_run_id,
             "llm_call_id": llm_call_id,
+            "parent_entity_type": "agent_run",
+            "parent_entity_id": agent_run_id,
+            "actor_type": "agent",
+            "actor_entity_id": agent_run_id,
         })
 
         try:
@@ -933,6 +924,13 @@ class AgentToolRuntime(BaseRuntime):
             operation_call.id,
             result.success,
             sse_data,
+            agent_slug=agent_slug,
+            agent_run_id=agent_run_id,
+            llm_call_id=llm_call_id,
+            parent_entity_type="agent_run",
+            parent_entity_id=agent_run_id,
+            actor_type="agent",
+            actor_entity_id=agent_run_id,
             reused=bool(result.metadata.get("reused")),
             reused_from_call_id=result.metadata.get("reused_from_call_id"),
             error_code=raw_error_code,
@@ -941,11 +939,6 @@ class AgentToolRuntime(BaseRuntime):
             envelope=envelope.to_metadata(),
             truncated=sse_truncated if sse_truncated else None,
         )
-        operation_result_payload.data["agent_slug"] = agent_slug
-        operation_result_payload.data["agent_run_id"] = agent_run_id
-        operation_result_payload.data["llm_call_id"] = llm_call_id
-        operation_result_payload.data["parent_entity_type"] = "agent_run"
-        operation_result_payload.data["parent_entity_id"] = agent_run_id
         yield operation_result_payload
         await run_session.log_step("operation_result", {
             "operation_slug": operation_call.operation_slug,
@@ -958,6 +951,10 @@ class AgentToolRuntime(BaseRuntime):
             "agent_slug": agent_slug,
             "agent_run_id": agent_run_id,
             "llm_call_id": llm_call_id,
+            "parent_entity_type": "agent_run",
+            "parent_entity_id": agent_run_id,
+            "actor_type": "agent",
+            "actor_entity_id": agent_run_id,
         })
 
         raw_output = result.data or {}
@@ -976,6 +973,56 @@ class AgentToolRuntime(BaseRuntime):
         from app.agents.runtime.tools import OperationExecutionFacade
         operation, _ = OperationExecutionFacade._find_operation(operation_slug, available_operations)
         return operation is not None
+
+    @staticmethod
+    def _required_operation_retry_instruction(
+        *,
+        platform_config: Optional[Dict[str, Any]],
+        sandbox_overrides: Optional[Dict[str, Any]],
+    ) -> str:
+        runtime_override = None
+        if isinstance(sandbox_overrides, dict):
+            runtime_override = sandbox_overrides.get("required_operation_retry_instruction")
+            if runtime_override is None and isinstance(sandbox_overrides.get("agent_runtime"), dict):
+                runtime_override = sandbox_overrides["agent_runtime"].get(
+                    "required_operation_retry_instruction"
+                )
+        if isinstance(runtime_override, str) and runtime_override.strip():
+            return runtime_override.strip()
+
+        policy_text = (platform_config or {}).get("required_operation_retry_instruction")
+        if isinstance(policy_text, str) and policy_text.strip():
+            return policy_text.strip()
+        return DEFAULT_REQUIRED_OPERATION_RETRY_INSTRUCTION
+
+    @staticmethod
+    def _intent_message(
+        *,
+        key: str,
+        platform_config: Optional[Dict[str, Any]],
+        sandbox_overrides: Optional[Dict[str, Any]],
+        operation_slug: Optional[str] = None,
+    ) -> str:
+        templates = dict(DEFAULT_INTENT_MESSAGES)
+
+        platform_templates = (platform_config or {}).get("intent_messages")
+        if isinstance(platform_templates, dict):
+            for template_key, template_value in platform_templates.items():
+                if isinstance(template_value, str) and template_value.strip():
+                    templates[str(template_key)] = template_value.strip()
+
+        if isinstance(sandbox_overrides, dict):
+            sandbox_templates = sandbox_overrides.get("intent_messages")
+            if isinstance(sandbox_templates, dict):
+                for template_key, template_value in sandbox_templates.items():
+                    if isinstance(template_value, str) and template_value.strip():
+                        templates[str(template_key)] = template_value.strip()
+
+        template = templates.get(key) or DEFAULT_INTENT_MESSAGES.get(key, key)
+        try:
+            return template.format(operation_slug=operation_slug or "")
+        except Exception:
+            return template
 
     async def _handle_no_operation_calls(
         self,

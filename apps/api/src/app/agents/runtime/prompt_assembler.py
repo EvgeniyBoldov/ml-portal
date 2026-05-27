@@ -123,7 +123,18 @@ class PromptAssembler:
         )
         if operation_schemas is None and resolved_operations is not None:
             operation_schemas = self.assemble_operation_schemas(resolved_operations)
-        operations_prompt = build_operations_prompt(operation_schemas) if operation_schemas else ""
+        operations_rules_override = self._resolve_operations_rules_override(
+            platform_config=platform_config,
+            sandbox_overrides=sandbox_overrides,
+        )
+        operations_prompt = (
+            build_operations_prompt(
+                operation_schemas,
+                mandatory_rules_text=operations_rules_override,
+            )
+            if operation_schemas
+            else ""
+        )
         sections = [
             section
             for section in [
@@ -194,7 +205,11 @@ class PromptAssembler:
         if platform_lines:
             blocks.append("### Platform Constraints\n" + "\n".join(platform_lines))
 
-        sandbox_lines = self._extract_sandbox_notes(sandbox_overrides)
+        include_sandbox_notes = bool(
+            isinstance(sandbox_overrides, dict)
+            and sandbox_overrides.get("include_sandbox_notes_in_prompt") is True
+        )
+        sandbox_lines = self._extract_sandbox_notes(sandbox_overrides) if include_sandbox_notes else []
         if sandbox_lines:
             blocks.append("### Sandbox Notes\n" + "\n".join(f"- {line}" for line in sandbox_lines))
 
@@ -224,6 +239,22 @@ class PromptAssembler:
         if isinstance(platform, dict) and platform:
             notes.append(f"Platform overrides: {', '.join(sorted(platform.keys()))}")
         return notes
+
+    @staticmethod
+    def _resolve_operations_rules_override(
+        *,
+        platform_config: Optional[Dict[str, Any]],
+        sandbox_overrides: Optional[Dict[str, Any]],
+    ) -> Optional[str]:
+        if isinstance(sandbox_overrides, dict):
+            value = sandbox_overrides.get("operations_rules_text")
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        if isinstance(platform_config, dict):
+            value = platform_config.get("operations_rules_text")
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return None
 
 
 def _text(value: Any) -> str:

@@ -241,37 +241,13 @@ class PlanningStage:
             if planner_llm_trace is not None:
                 llm_parent_id = planner_event_ctx["planner_iteration_id"]
                 yield PhasedEvent(
-                    RuntimeEvent.llm_request(
+                    RuntimeEvent.llm_turn(
                         llm_call_id=planner_llm_trace.llm_call_id,
                         model=planner_llm_trace.model,
                         messages=[
                             {"role": "user", "content": planner_llm_trace.request_payload},
                         ],
-                        parent_entity_type="planner_iteration",
-                        parent_entity_id=llm_parent_id,
-                        planner_iteration_id=llm_parent_id,
-                        planner_run_id=planner_event_ctx["planner_run_id"],
-                        purpose="planning_decision",
-                    ),
-                    OrchestrationPhase.PLANNER,
-                )
-                yield PhasedEvent(
-                    RuntimeEvent.llm_response(
-                        llm_call_id=planner_llm_trace.llm_call_id,
-                        model=planner_llm_trace.model,
                         content=planner_llm_trace.raw_response,
-                        response_length=planner_llm_trace.response_length,
-                        parent_entity_type="planner_iteration",
-                        parent_entity_id=llm_parent_id,
-                        planner_iteration_id=llm_parent_id,
-                        planner_run_id=planner_event_ctx["planner_run_id"],
-                    ),
-                    OrchestrationPhase.PLANNER,
-                )
-                yield PhasedEvent(
-                    RuntimeEvent.llm_call(
-                        llm_call_id=planner_llm_trace.llm_call_id,
-                        model=planner_llm_trace.model,
                         response_length=planner_llm_trace.response_length,
                         tokens_in=planner_llm_trace.tokens_in,
                         tokens_out=planner_llm_trace.tokens_out,
@@ -282,6 +258,8 @@ class PlanningStage:
                         planner_iteration_id=llm_parent_id,
                         planner_run_id=planner_event_ctx["planner_run_id"],
                         purpose="planning_decision",
+                        actor_type="planner",
+                        actor_entity_id=llm_parent_id,
                     ),
                     OrchestrationPhase.PLANNER,
                 )

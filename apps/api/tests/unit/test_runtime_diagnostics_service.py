@@ -26,8 +26,13 @@ def test_runtime_diagnostics_summary_includes_eval_and_memory_sections():
         steps=[
             _step(
                 0,
-                "llm_request",
-                {"model": "gpt-test", "messages": [{"role": "user", "content": "hello"}]},
+                "llm_turn",
+                {
+                    "model": "gpt-test",
+                    "messages": [{"role": "user", "content": "hello"}],
+                    "content": "thinking",
+                    "response_length": 8,
+                },
             ),
             _step(1, "operation_call", {"operation_slug": "collection.document.search", "input": {"query": "doc"}}),
             _step(2, "operation_result", {"operation_slug": "collection.document.search", "output": {"hits": 1}}),

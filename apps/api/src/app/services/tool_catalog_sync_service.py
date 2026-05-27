@@ -68,7 +68,6 @@ class ToolCatalogSyncService:
             slug=handler.slug,
             name=handler.name,
             domains=domains,
-            kind="read",
         )
         self.session.add(tool)
         await self.session.flush()

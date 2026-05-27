@@ -50,6 +50,12 @@ class PlatformSettingsProvider:
             "forbid_destructive": settings.forbid_destructive or False,
             "forbid_write_in_prod": settings.forbid_write_in_prod or False,
             "require_backup_before_write": settings.require_backup_before_write or False,
+            "required_operation_retry_instruction": settings.required_operation_retry_instruction,
+            "operations_rules_text": settings.operations_rules_text,
+            "intent_messages": settings.intent_messages,
+            "runtime": {
+                "synth_chunk_size": settings.synth_chunk_size,
+            },
             # Chat upload settings
             "chat_upload_max_bytes": settings.chat_upload_max_bytes,
             "chat_upload_allowed_extensions": settings.chat_upload_allowed_extensions,
@@ -77,6 +83,10 @@ class PlatformSettingsService:
         forbid_destructive: Optional[bool] = ...,
         forbid_write_in_prod: Optional[bool] = ...,
         require_backup_before_write: Optional[bool] = ...,
+        required_operation_retry_instruction: Optional[str] = ...,
+        operations_rules_text: Optional[str] = ...,
+        intent_messages: Optional[Dict[str, str]] = ...,
+        synth_chunk_size: Optional[int] = ...,
         # === Chat File Upload ===
         chat_upload_max_bytes: Optional[int] = ...,
         chat_upload_allowed_extensions: Optional[str] = ...,
@@ -100,6 +110,14 @@ class PlatformSettingsService:
             settings.forbid_write_in_prod = forbid_write_in_prod
         if require_backup_before_write is not ...:
             settings.require_backup_before_write = require_backup_before_write
+        if required_operation_retry_instruction is not ...:
+            settings.required_operation_retry_instruction = required_operation_retry_instruction
+        if operations_rules_text is not ...:
+            settings.operations_rules_text = operations_rules_text
+        if intent_messages is not ...:
+            settings.intent_messages = intent_messages
+        if synth_chunk_size is not ...:
+            settings.synth_chunk_size = synth_chunk_size
 
         if chat_upload_max_bytes is not ...:
             settings.chat_upload_max_bytes = chat_upload_max_bytes

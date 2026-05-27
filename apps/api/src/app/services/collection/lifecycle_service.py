@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import uuid
 from typing import List, Optional
 
@@ -378,7 +379,12 @@ class CollectionLifecycleService:
         result = await self.session.execute(
             select(Agent).where(Agent.allowed_collection_ids.isnot(None))
         )
-        agents = result.scalars().all()
+        scalars_result = result.scalars()
+        if inspect.isawaitable(scalars_result):
+            scalars_result = await scalars_result
+        agents = scalars_result.all()
+        if inspect.isawaitable(agents):
+            agents = await agents
         for agent in agents:
             allowed = list(getattr(agent, "allowed_collection_ids", None) or [])
             if not allowed:

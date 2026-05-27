@@ -12,8 +12,8 @@ import type {
 import type { SemanticEvent } from './types';
 
 export function buildLLMData(events: SemanticEvent[]): LLMData {
-  const request = events.find(e => e.raw_type === 'llm_request' || e.raw_type === 'llm_call');
-  const response = events.find(e => e.raw_type === 'llm_response');
+  const request = events.find(e => e.raw_type === 'llm_request' || e.raw_type === 'llm_call' || e.raw_type === 'llm_turn');
+  const response = events.find(e => e.raw_type === 'llm_response' || e.raw_type === 'llm_turn');
   const reqRaw = request?.raw?.raw ?? {};
   const reqInputs = request?.inputs ?? {};
   const respRaw = response?.raw?.raw ?? {};
@@ -27,13 +27,13 @@ export function buildLLMData(events: SemanticEvent[]): LLMData {
   const parentEntityType = (reqRaw.parent_entity_type ?? respRaw.parent_entity_type) as string | undefined;
   const parentEntityId = (reqRaw.parent_entity_id ?? respRaw.parent_entity_id) as string | undefined;
   const purpose = (reqRaw.purpose ?? respRaw.purpose) as string | undefined;
-  const messages = toRecordArray(reqInputs.messages ?? reqRaw.messages);
-  const systemPrompt = toString(reqInputs.systemPrompt ?? reqRaw.system_prompt);
+  const messages = toRecordArray(reqInputs.messages ?? reqRaw.messages ?? reqRaw.messages_sent);
+  const systemPrompt = toString(reqInputs.systemPrompt ?? reqInputs.system_prompt ?? reqRaw.system_prompt ?? reqRaw.compiled_prompt ?? reqRaw.prompt);
   const isBriefMode = !!(respRaw.messages_hash || respRaw.system_prompt_hash);
   const messagesHash = typeof respRaw.messages_hash === 'string' ? respRaw.messages_hash : undefined;
   const systemPromptHash = typeof respRaw.system_prompt_hash === 'string' ? respRaw.system_prompt_hash : undefined;
-  const responseContent = (respOutputs.content ?? respOutputs.response ?? respOutputs.text) as string | undefined;
-  const rawResponse = (respRaw.content ?? respRaw.response ?? respRaw.text) as string | undefined;
+  const responseContent = (respOutputs.content ?? respOutputs.response ?? respOutputs.text ?? respRaw.content ?? respRaw.response ?? respRaw.text) as string | undefined;
+  const rawResponse = (respRaw.content ?? respRaw.response ?? respRaw.text ?? respOutputs.content ?? respOutputs.response ?? respOutputs.text) as string | undefined;
   const parsedResponse = (respOutputs.parsed_response ?? respOutputs.parsedResponse ?? respRaw.parsed_response ?? respRaw.parsedResponse) as Record<string, unknown> | undefined;
   const toolCalls: Array<{ tool: string; arguments: Record<string, unknown>; callId?: string }> = [];
   if (parsedResponse?.tool_calls && Array.isArray(parsedResponse.tool_calls)) {

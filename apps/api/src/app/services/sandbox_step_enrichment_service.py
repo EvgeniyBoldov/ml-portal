@@ -33,6 +33,7 @@ _KNOWN_ENTITY_KEYS: frozenset[str] = frozenset({
 
 _STEP_PAYLOAD_MAX_CHARS = 4000
 _HEAVY_RESULT_KEYS: frozenset[str] = frozenset({"result", "data", "output"})
+_LLM_HEAVY_KEYS: frozenset[str] = frozenset({"messages", "content", "system_prompt"})
 
 
 def _as_uuid(value: object) -> Optional[uuid.UUID]:
@@ -80,6 +81,22 @@ class SandboxStepEnrichmentService:
                         }
                 elif isinstance(value, str) and len(value) > max_chars:
                     clipped[key] = value[:max_chars] + "... [truncated]"
+        if step_type == "llm_turn":
+            for key in _LLM_HEAVY_KEYS:
+                value = clipped.get(key)
+                if value is None:
+                    continue
+                if isinstance(value, str) and len(value) > max_chars:
+                    clipped[key] = value[:max_chars] + "... [truncated]"
+                    continue
+                if isinstance(value, (list, dict)):
+                    serialized = json.dumps(value, ensure_ascii=False, default=str)
+                    if len(serialized) > max_chars:
+                        clipped[key] = {
+                            "_truncated": True,
+                            "preview": serialized[:max_chars] + "... [truncated]",
+                            "total_length": len(serialized),
+                        }
         return clipped
 
     def _clip_value(self, value: object, *, max_chars: int) -> object:

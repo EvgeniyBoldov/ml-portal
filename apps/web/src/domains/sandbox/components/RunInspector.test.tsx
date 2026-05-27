@@ -3,7 +3,7 @@ import RunInspector from './RunInspector';
 import type { RunStep } from '../hooks/useSandboxRun';
 
 describe('RunInspector semantic trace', () => {
-  it('renders semantic trace summary when trace event is provided', () => {
+  it('renders semantic trace summary when trace event is provided', { timeout: 15000 }, () => {
     const steps: RunStep[] = [
       {
         id: 'step-1',

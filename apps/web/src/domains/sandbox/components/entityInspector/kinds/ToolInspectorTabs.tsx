@@ -14,7 +14,8 @@ export function ToolInspectorTabs({ entity, steps }: { entity: TraceEntity; step
         errorCode: data?.result?.errorCode,
         retryable: data?.result?.retryable,
       };
-  const tabs = [{ key: 'info', label: 'Info' }, { key: 'input', label: 'Input' }, { key: 'output', label: 'Output' }, { key: 'budgets', label: 'Budgets' }, { key: 'errors', label: 'Errors' }, { key: 'raw', label: 'Raw' }];
+  const hasErrors = !!(data?.result?.error || data?.result?.errorCode || (data?.retries && data.retries.length > 0));
+  const tabs = [{ key: 'info', label: 'Info' }, { key: 'input', label: 'Input' }, { key: 'output', label: 'Output' }, { key: 'budgets', label: 'Budgets' }, ...(hasErrors ? [{ key: 'errors', label: 'Errors' }] : []), { key: 'raw', label: 'Raw' }];
 
   return <InspectorTabs entityId={entity.id} tabs={tabs} render={(tab) => {
     if (tab === 'info') return (

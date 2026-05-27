@@ -148,6 +148,22 @@ class AgentPromptRenderer:
             },
         ]
 
+    @staticmethod
+    def build_planner_synthesis_messages(
+        original_messages: list,
+        facts_text: str,
+    ) -> list:
+        return [
+            {"role": "system", "content": PLANNER_SYNTHESIS_SYSTEM},
+            *original_messages,
+            {
+                "role": "user",
+                "content": PLANNER_SYNTHESIS_USER_TEMPLATE.format(
+                    facts_text=facts_text,
+                ),
+            },
+        ]
+
 
 def _has_sql_runtime_collections(exec_request: "ExecutionRequest") -> bool:
     for item in getattr(exec_request, "resolved_data_instances", []) or []:
@@ -200,19 +216,3 @@ def _build_sql_runtime_guidance(exec_request: "ExecutionRequest") -> str:
         else:
             lines.append(f"- Collection `{slug}` discovered tables: unknown (run search_objects first)")
     return "\n".join(lines)
-
-    @staticmethod
-    def build_planner_synthesis_messages(
-        original_messages: list,
-        facts_text: str,
-    ) -> list:
-        return [
-            {"role": "system", "content": PLANNER_SYNTHESIS_SYSTEM},
-            *original_messages,
-            {
-                "role": "user",
-                "content": PLANNER_SYNTHESIS_USER_TEMPLATE.format(
-                    facts_text=facts_text,
-                ),
-            },
-        ]

@@ -107,5 +107,6 @@ class SynthesizerPort(Protocol):
         run_id: UUID,
         model: Optional[str] = None,
         planner_hint: Optional[str] = None,
+        platform_config: Optional[Dict[str, Any]] = None,
         sandbox_overrides: Optional[Dict[str, Any]] = None,
     ) -> AsyncIterator[RuntimeEvent]: ...

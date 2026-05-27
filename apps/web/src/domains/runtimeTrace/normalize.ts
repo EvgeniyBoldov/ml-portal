@@ -7,6 +7,7 @@ const CATEGORY_MAP: Record<string, TraceCategory> = {
   llm_call: 'llm',
   llm_request: 'llm',
   llm_response: 'llm',
+  llm_turn: 'llm',
   routing: 'decision',
   protocol_retry: 'retry',
   planner_action: 'planner',
@@ -89,7 +90,7 @@ function summarize(rawType: string, data: Record<string, unknown>): string {
     const status = typeof ok === 'boolean' ? (ok ? 'success' : 'failed') : 'result';
     return `${String(data.operation_slug ?? data.tool ?? data.operation ?? 'Operation')} ${status}`;
   }
-  if (rawType === 'llm_call' || rawType === 'llm_response') {
+  if (rawType === 'llm_call' || rawType === 'llm_response' || rawType === 'llm_turn') {
     return `response_length=${String(data.response_length ?? data.tokens_out ?? 'n/a')}`;
   }
   if (rawType === 'llm_request') {
@@ -161,6 +162,7 @@ function titleOf(rawType: string, category: TraceCategory): string {
     llm_call: 'LLM вызов',
     llm_request: 'LLM запрос',
     llm_response: 'LLM ответ',
+    llm_turn: 'LLM турн',
     routing: 'Маршрутизация',
     protocol_retry: 'Повтор протокола',
     operation_call: 'Вызов операции',
@@ -217,16 +219,17 @@ export function normalizeTraceEvent(step: TraceSourceStep): SemanticEvent {
 
   const outputs = rawType === 'operation_result' || rawType === 'tool_result'
     ? { result: step.data.result ?? step.data.output ?? step.data.data }
-    : rawType === 'llm_response'
+    : rawType === 'llm_response' || rawType === 'llm_turn'
       ? { content: step.data.response ?? step.data.raw_response ?? step.data.content, parsed_response: step.data.parsed_response }
-    : rawType === 'llm_response' || rawType === 'final_response' || rawType === 'final'
+    : rawType === 'final_response' || rawType === 'final'
       ? { content: step.data.content ?? step.data.answer ?? step.data.response }
       : undefined;
 
-  const llmRequestInputs = rawType === 'llm_request'
+  const llmRequestInputs = rawType === 'llm_request' || rawType === 'llm_turn'
     ? {
         messages: step.data.messages ?? step.data.messages_sent,
         payload: step.data.payload ?? step.data.request_payload,
+        system_prompt: step.data.system_prompt ?? step.data.compiled_prompt ?? step.data.prompt,
         model: step.data.model ?? step.data.provider_model,
       }
     : undefined;

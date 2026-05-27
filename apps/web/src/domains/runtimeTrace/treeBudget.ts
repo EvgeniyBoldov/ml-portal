@@ -13,9 +13,9 @@ const METRICS: BudgetMetric[] = [
   'wall_time_ms',
 ];
 
-function toLegacyMetric(used: number, limit?: number): { used: number; limit?: number } {
+function toLegacyMetric(used: number, limit?: number): { used: number; limit?: number; remaining?: number } {
   if (limit === undefined) return { used };
-  return { used, limit };
+  return { used, limit, remaining: Math.max(0, limit - used) };
 }
 
 function toLegacySnapshot(used: EntityUsed, limits: Record<string, number> = {}): BudgetSnapshot {

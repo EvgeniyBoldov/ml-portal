@@ -18,6 +18,7 @@ class RuntimeTracePackService:
         "policy_decision",
         "planner_decision",
         "llm_call",
+        "llm_turn",
         "llm_request",
         "llm_response",
         "operation_call",
@@ -108,11 +109,26 @@ class RuntimeTracePackService:
         }
 
     @staticmethod
+    def _collect_llm_steps(steps: Iterable[Any]) -> List[Any]:
+        collected = []
+        has_llm_turn = False
+        for step in steps:
+            step_type = str(getattr(step, "step_type", "") or "")
+            if step_type == "llm_turn":
+                has_llm_turn = True
+                collected.append(step)
+            elif step_type in {"llm_request", "llm_response", "llm_call"}:
+                collected.append(step)
+        if has_llm_turn:
+            return [s for s in collected if str(getattr(s, "step_type", "") or "") == "llm_turn"]
+        return collected
+
+    @staticmethod
     def _collect_planner_io(steps: Iterable[Any]) -> List[Dict[str, Any]]:
         entries: List[Dict[str, Any]] = []
         for step in steps:
             step_type = str(getattr(step, "step_type", "") or "")
-            if step_type not in {"planner_decision", "llm_request", "llm_response"}:
+            if step_type != "planner_decision":
                 continue
             data = getattr(step, "data", None) or {}
             if not isinstance(data, dict):
@@ -121,6 +137,24 @@ class RuntimeTracePackService:
                 {
                     "step_number": getattr(step, "step_number", None),
                     "step_type": step_type,
+                    "actor_type": data.get("actor_type"),
+                    "actor_entity_id": data.get("actor_entity_id"),
+                    "data": data,
+                }
+            )
+        for step in RuntimeTracePackService._collect_llm_steps(steps):
+            step_type = str(getattr(step, "step_type", "") or "")
+            data = getattr(step, "data", None) or {}
+            if not isinstance(data, dict):
+                continue
+            if not RuntimeTracePackService._is_planner_scoped(data):
+                continue
+            entries.append(
+                {
+                    "step_number": getattr(step, "step_number", None),
+                    "step_type": step_type,
+                    "actor_type": data.get("actor_type"),
+                    "actor_entity_id": data.get("actor_entity_id"),
                     "data": data,
                 }
             )
@@ -147,13 +181,15 @@ class RuntimeTracePackService:
 
     @staticmethod
     def _collect_model_config(steps: Iterable[Any]) -> Dict[str, Any]:
-        for step in steps:
-            step_type = str(getattr(step, "step_type", "") or "")
-            if step_type not in {"llm_request", "llm_call"}:
-                continue
+        llm_events: List[Dict[str, Any]] = []
+        for step in RuntimeTracePackService._collect_llm_steps(steps):
             data = getattr(step, "data", None) or {}
             if not isinstance(data, dict):
                 continue
+            llm_events.append(data)
+        planner_first = [item for item in llm_events if RuntimeTracePackService._is_planner_scoped(item)]
+        pool = planner_first or llm_events
+        for data in pool:
             return {
                 "model": data.get("model"),
                 "provider_model": data.get("provider_model") or data.get("model"),
@@ -207,10 +243,8 @@ class RuntimeTracePackService:
 
     def _collect_prompt_surfaces(self, steps: Iterable[Any]) -> List[Dict[str, Any]]:
         surfaces: List[Dict[str, Any]] = []
-        for step in steps:
+        for step in RuntimeTracePackService._collect_llm_steps(steps):
             step_type = str(getattr(step, "step_type", "") or "")
-            if step_type not in {"llm_request", "llm_call"}:
-                continue
             data = getattr(step, "data", None) or {}
             if not isinstance(data, dict):
                 continue
@@ -219,6 +253,8 @@ class RuntimeTracePackService:
                     "step_number": getattr(step, "step_number", None),
                     "step_type": step_type,
                     "model": data.get("model"),
+                    "actor_type": data.get("actor_type"),
+                    "actor_entity_id": data.get("actor_entity_id"),
                     "system_prompt": data.get("system_prompt"),
                     "messages": data.get("messages"),
                     "prompt_preview": data.get("prompt_preview"),
@@ -296,3 +332,17 @@ class RuntimeTracePackService:
                 }
             )
         return timeline
+    @staticmethod
+    def _is_planner_scoped(data: Dict[str, Any]) -> bool:
+        actor_type = str(data.get("actor_type") or "").strip().lower()
+        if actor_type == "planner":
+            return True
+        parent_type = str(data.get("parent_entity_type") or "").strip().lower()
+        if parent_type == "planner_iteration":
+            return True
+        envelope = data.get("_envelope")
+        if isinstance(envelope, dict):
+            phase = str(envelope.get("phase") or "").strip().lower()
+            if phase == "planner":
+                return True
+        return False

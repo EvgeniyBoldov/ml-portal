@@ -223,6 +223,29 @@ async def rescan_local_instances(session_factory: async_sessionmaker[AsyncSessio
         logger.error(f"Failed to rescan local instances: {exc}")
 
 
+async def sync_discovered_tools(session_factory: async_sessionmaker[AsyncSession]) -> None:
+    """
+    Refresh discovered_tools snapshots for local + MCP providers.
+
+    Prevents runtime NO_OPERATIONS drift when local capabilities are not yet
+    present/active in discovered_tools after restart.
+    """
+    try:
+        from app.services.tool_discovery_service import ToolDiscoveryService
+
+        async with session_factory() as session:
+            stats = await ToolDiscoveryService(session).rescan_all()
+            await session.commit()
+            logger.info(
+                "Discovery rescan: local_upserted=%s mcp_upserted=%s marked_inactive=%s",
+                stats.get("local_upserted"),
+                stats.get("mcp_upserted"),
+                stats.get("marked_inactive"),
+            )
+    except Exception as exc:
+        logger.error(f"Failed to sync discovered tools: {exc}")
+
+
 async def seed_default_agents(session_factory: async_sessionmaker[AsyncSession]) -> None:
     """Upsert seed agents (rag-search, data-analyst, …)."""
     try:
@@ -319,6 +342,7 @@ async def run_all(session_factory: async_sessionmaker[AsyncSession]) -> None:
         ("sync_tool_catalog", sync_tool_catalog),
         ("sync_tool_backend_releases", sync_tool_backend_releases),
         ("rescan_local_instances", rescan_local_instances),
+        ("sync_discovered_tools", sync_discovered_tools),
         ("validate_connectors", validate_connectors),
         ("sync_periodic_tasks", sync_periodic_tasks),
     ]

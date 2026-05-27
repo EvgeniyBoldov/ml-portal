@@ -42,6 +42,7 @@ class FinalizationStage:
         stop_reason: PipelineStopReason,
         planner_hint: Optional[str],
         model: Optional[str],
+        platform_config: Optional[dict] = None,
         sandbox_overrides: Optional[dict] = None,
         run_synthesizer: bool = True,
     ) -> AsyncIterator[PhasedEvent]:
@@ -53,6 +54,7 @@ class FinalizationStage:
                 run_id=state.run_id,
                 model=model,
                 planner_hint=planner_hint,
+                platform_config=platform_config,
                 sandbox_overrides=sandbox_overrides,
             ):
                 yield PhasedEvent(event, OrchestrationPhase.SYNTHESIS)

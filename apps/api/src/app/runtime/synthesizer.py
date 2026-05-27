@@ -73,9 +73,15 @@ class Synthesizer:
         run_id: UUID,
         model: Optional[str] = None,
         planner_hint: Optional[str] = None,
+        platform_config: Optional[Dict[str, object]] = None,
         sandbox_overrides: Optional[Dict[str, object]] = None,
         chunk_size: int = DEFAULT_SYNTH_CHUNK_SIZE,
     ) -> AsyncGenerator[RuntimeEvent, None]:
+        chunk_size = self._resolve_chunk_size(
+            base_chunk_size=chunk_size,
+            platform_config=platform_config,
+            sandbox_overrides=sandbox_overrides,
+        )
         # Sources from memory_bundle if available
         sources: List[str] = []
         if runtime_state.memory_bundle and runtime_state.memory_bundle.sections:
@@ -145,14 +151,6 @@ class Synthesizer:
             return
         if boundary.output_tokens is not None:
             params["max_tokens"] = int(boundary.output_tokens)
-        yield RuntimeEvent.llm_request(
-            llm_call_id=llm_call_id,
-            model=effective_model or "unknown",
-            messages=messages,
-            parent_entity_type="synthesis_run",
-            parent_entity_id=synthesis_run_id,
-            purpose="final_answer",
-        )
         buffer: List[str] = []
         started_at = time.monotonic()
         try:
@@ -173,17 +171,11 @@ class Synthesizer:
                 return
 
         full = "".join(buffer).strip()
-        yield RuntimeEvent.llm_response(
+        yield RuntimeEvent.llm_turn(
             llm_call_id=llm_call_id,
             model=effective_model or "unknown",
+            messages=messages,
             content=full,
-            response_length=len(full),
-            parent_entity_type="synthesis_run",
-            parent_entity_id=synthesis_run_id,
-        )
-        yield RuntimeEvent.llm_call(
-            llm_call_id=llm_call_id,
-            model=effective_model or "unknown",
             response_length=len(full),
             tokens_in=max(1, len(str(messages)) // 4),
             tokens_out=max(1, len(full) // 4) if full else 0,
@@ -192,6 +184,8 @@ class Synthesizer:
             parent_entity_type="synthesis_run",
             parent_entity_id=synthesis_run_id,
             purpose="final_answer",
+            actor_type="synthesizer",
+            actor_entity_id=synthesis_run_id,
         )
         if not full:
             # Fallback: stitched summaries.
@@ -252,3 +246,23 @@ class Synthesizer:
         if not parts and runtime_state.runtime_facts:
             parts = [item.text for item in runtime_state.runtime_facts[-10:]]
         return "\n\n".join(parts) or "Не удалось собрать ответ."
+
+    @staticmethod
+    def _resolve_chunk_size(
+        *,
+        base_chunk_size: int,
+        platform_config: Optional[Dict[str, object]],
+        sandbox_overrides: Optional[Dict[str, object]],
+    ) -> int:
+        chunk_size = int(base_chunk_size) if int(base_chunk_size) > 0 else DEFAULT_SYNTH_CHUNK_SIZE
+        runtime_cfg = (platform_config or {}).get("runtime")
+        if isinstance(runtime_cfg, dict):
+            value = runtime_cfg.get("synth_chunk_size")
+            if isinstance(value, int) and value > 0:
+                chunk_size = value
+        sandbox_runtime = (sandbox_overrides or {}).get("runtime")
+        if isinstance(sandbox_runtime, dict):
+            value = sandbox_runtime.get("synth_chunk_size")
+            if isinstance(value, int) and value > 0:
+                chunk_size = value
+        return max(1, chunk_size)

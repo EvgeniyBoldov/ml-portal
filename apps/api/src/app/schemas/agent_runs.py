@@ -11,8 +11,12 @@ class AgentRunStepResponse(BaseModel):
     step_number: int
     step_type: str = Field(
         ...,
-        description="user_request, routing, llm_request, llm_response, "
-                    "tool_call, tool_result, final_response, error"
+        description=(
+            "Canonical runtime step type, e.g. "
+            "user_request, planner_decision, llm_turn, operation_call, "
+            "operation_result, budget_snapshot, final, error. "
+            "Legacy values may appear in historical runs."
+        ),
     )
     data: Dict[str, Any] = Field(default={})
     tokens_in: Optional[int] = None

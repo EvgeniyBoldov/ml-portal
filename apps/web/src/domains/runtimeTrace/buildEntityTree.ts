@@ -56,7 +56,7 @@ import type { EntityBudget, EntityUsed } from './entityTypes';
 function llmBudgetFromEvents(events: SemanticEvent[]): EntityBudget | undefined {
   const used: EntityUsed = {};
   for (const event of events) {
-    if (event.raw_type !== 'llm_call') continue;
+    if (event.raw_type !== 'llm_call' && event.raw_type !== 'llm_turn') continue;
     const raw = (event.raw?.raw ?? {}) as Record<string, unknown>;
     const toNum = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
     const inTokens = toNum(raw.tokens_in);
@@ -339,6 +339,31 @@ function _buildEntityTree3Pass(
       const llmCallId = _getLlmCallId(event);
       pendingPairs.set(llmCallId, { type: 'llm', startEvent: event, events: [event] });
       llmEventsByCallId.set(llmCallId, [event]);
+      continue;
+    }
+
+    // --- llm_turn: self-contained llm event ---
+    if (rawType === 'llm_turn') {
+      const llmCallId = _getLlmCallId(event);
+      const pairEvents = [event];
+      const llmEntity: TraceEntity = {
+        id: hashIds([llmCallId, event.id]),
+        kind: 'llm',
+        parentId: resolvedParent.id,
+        depth: resolvedParent.depth + 1,
+        children: [],
+        title: event.summary ?? 'LLM',
+        status: event.status,
+        startedAt: event.started_at,
+        durationMs: event.duration_ms ?? 0,
+        sourceEventIds: [event.id],
+        budgetSnapshot: extractBudgetSnapshot(event),
+        budget: llmBudgetFromEvents(pairEvents),
+        data: buildLLMData(pairEvents),
+      };
+      resolvedParent.children.push(llmEntity);
+      entityById.set(llmEntity.id, llmEntity);
+      llmEntityByCallId.set(llmCallId, llmEntity);
       continue;
     }
 
@@ -947,6 +972,40 @@ export function buildEntityTree(
       pendingPairs.set(llmCallId, { type: 'llm', startEvent: event, events: [event] });
       llmEventsByCallId.set(llmCallId, [event]);
       emitDebug(event, 'open_llm_pair', undefined, llmCallId);
+      continue;
+    }
+
+    // --- Handle llm_turn (self-contained) ---
+    if (rawType === 'llm_turn') {
+      const llmCallId = getLlmCallId(event);
+      const pairEvents = [event];
+      const llmEntity: TraceEntity = {
+        id: hashIds([llmCallId, event.id]),
+        kind: 'llm',
+        parentId: null,
+        depth: 0,
+        children: [],
+        title: event.summary ?? 'LLM',
+        status: event.status,
+        startedAt: event.started_at,
+        durationMs: event.duration_ms ?? 0,
+        sourceEventIds: [event.id],
+        budgetSnapshot: extractBudgetSnapshot(event),
+        budget: llmBudgetFromEvents(pairEvents),
+        data: buildLLMData(pairEvents),
+      };
+
+      const parent = resolveParentForEvent(event);
+      llmEntity.parentId = parent.id;
+      llmEntity.depth = parent.depth + 1;
+      parent.children.push(llmEntity);
+      llmEntityByCallId.set(llmCallId, llmEntity);
+      emitDebug(event, 'create_llm_turn_entity', llmEntity, llmCallId);
+
+      const activeWindow = assembler.getCurrentAgentWindow();
+      if (activeWindow) {
+        activeWindow.events.push(event);
+      }
       continue;
     }
 

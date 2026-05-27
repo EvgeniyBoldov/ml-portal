@@ -14,6 +14,7 @@ export type RunStepType =
   | 'llm_call'
   | 'llm_request'
   | 'llm_response'
+  | 'llm_turn'
   | 'tool_call'
   | 'tool_result'
   | 'operation_call'

@@ -97,3 +97,27 @@ async def test_synthesizer_falls_back_when_db_role_load_fails():
     assert call["messages"][0]["content"]  # fallback prompt is non-empty
     assert events[-1].type.value == "final"
     assert events[-1].data["content"] == "fallback answer"
+
+
+@pytest.mark.asyncio
+async def test_synthesizer_honors_platform_chunk_size_override_for_short_circuit():
+    llm = _LLMClientProbe([])
+    synth = Synthesizer(session=SimpleNamespace(), llm_client=llm)
+    memory = _memory()
+    state = ensure_runtime_turn_state(memory)
+    state.agent_results = [
+        {"success": True, "summary": "x" * 47},
+    ]
+
+    events = [
+        event
+        async for event in synth.stream(
+            runtime_state=state,
+            run_id=memory.run_id,
+            platform_config={"runtime": {"synth_chunk_size": 5}},
+        )
+    ]
+
+    deltas = [ev.data.get("content", "") for ev in events if ev.type.value == "delta"]
+    assert deltas
+    assert all(len(chunk) <= 5 for chunk in deltas)

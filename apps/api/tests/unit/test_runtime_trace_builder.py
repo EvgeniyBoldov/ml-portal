@@ -1,5 +1,6 @@
 from datetime import datetime, UTC
 
+from app.runtime.events import RuntimeEventType
 from app.services.runtime_trace_builder import RuntimeTraceBuilder, TraceStep
 
 
@@ -46,3 +47,25 @@ def test_runtime_trace_builder_unknown_event_fallback():
     assert event.category == "system"
     assert "brand_new_event" in event.title
 
+
+def test_runtime_trace_builder_logs_warning_for_legacy_raw_type(caplog):
+    trace = RuntimeTraceBuilder().build(
+        [TraceStep(id="legacy-1", raw_type="llm_request", data={"model": "x"})]
+    )
+
+    assert trace.total_events == 1
+    assert any("legacy raw_type=llm_request" in rec.message for rec in caplog.records)
+
+
+def test_runtime_trace_builder_knows_all_runtime_event_types():
+    missing_category = []
+    missing_title = []
+    for event_type in RuntimeEventType:
+        key = event_type.value
+        if key not in RuntimeTraceBuilder._CATEGORY_MAP:
+            missing_category.append(key)
+        if key not in RuntimeTraceBuilder._TITLES:
+            missing_title.append(key)
+
+    assert missing_category == []
+    assert missing_title == []

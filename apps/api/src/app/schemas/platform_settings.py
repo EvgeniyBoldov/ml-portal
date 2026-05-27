@@ -1,7 +1,7 @@
 """
 PlatformSettings schemas for API.
 """
-from typing import Optional
+from typing import Optional, Dict
 from datetime import datetime
 from uuid import UUID
 from pydantic import BaseModel, Field, ConfigDict
@@ -19,6 +19,23 @@ class PlatformSettingsBase(BaseModel):
     forbid_destructive: Optional[bool] = Field(False, description="Forbid destructive operations globally")
     forbid_write_in_prod: Optional[bool] = Field(False, description="Forbid write operations in production")
     require_backup_before_write: Optional[bool] = Field(False, description="Require backup before write operations")
+    required_operation_retry_instruction: Optional[str] = Field(
+        None,
+        description="Retry instruction injected when agent answered without required operation call",
+    )
+    operations_rules_text: Optional[str] = Field(
+        None,
+        description="Override text block for mandatory operation rules in operation prompt",
+    )
+    intent_messages: Optional[Dict[str, str]] = Field(
+        None,
+        description="Runtime intent message templates, e.g. agent_start/final_answer/operation_call",
+    )
+    synth_chunk_size: Optional[int] = Field(
+        None,
+        ge=1,
+        description="Default synthesizer delta chunk size",
+    )
     
     # === Chat File Upload ===
     chat_upload_max_bytes: Optional[int] = Field(None, description="Max upload size for chat attachments in bytes")

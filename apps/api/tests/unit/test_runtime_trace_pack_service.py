@@ -74,3 +74,43 @@ def test_trace_pack_collects_run_and_step_errors():
     assert len(pack["errors"]) == 2
     assert any(item["scope"] == "run" for item in pack["errors"])
     assert any(item["scope"] == "step" for item in pack["errors"])
+
+
+def test_trace_pack_planner_io_filters_non_planner_llm():
+    run = SimpleNamespace(
+        id=uuid4(),
+        agent_slug="test-agent",
+        status="completed",
+        logging_level="full",
+        context_snapshot={},
+        error=None,
+        steps=[
+            _step(0, "planner_decision", {"kind": "call_agent"}),
+            _step(1, "llm_request", {"model": "planner-m", "parent_entity_type": "planner_iteration"}),
+            _step(2, "llm_response", {"model": "planner-m", "parent_entity_type": "planner_iteration"}),
+            _step(3, "llm_request", {"model": "agent-m", "parent_entity_type": "agent_run"}),
+            _step(4, "llm_response", {"model": "agent-m", "parent_entity_type": "agent_run"}),
+        ],
+    )
+
+    pack = RuntimeTracePackService().build_trace_pack(run)
+    planner_io = pack["planner_io"]
+    assert len(planner_io) == 3
+    assert all(item["step_number"] in {0, 1, 2} for item in planner_io)
+
+
+def test_trace_pack_prefers_llm_turn_for_model_config():
+    run = SimpleNamespace(
+        id=uuid4(),
+        agent_slug="test-agent",
+        status="completed",
+        logging_level="full",
+        context_snapshot={},
+        error=None,
+        steps=[
+            _step(0, "llm_request", {"model": "legacy-model", "parent_entity_type": "planner_iteration"}),
+            _step(1, "llm_turn", {"model": "turn-model", "parent_entity_type": "planner_iteration"}),
+        ],
+    )
+    pack = RuntimeTracePackService().build_trace_pack(run)
+    assert pack["llm_model_config"]["model"] == "turn-model"

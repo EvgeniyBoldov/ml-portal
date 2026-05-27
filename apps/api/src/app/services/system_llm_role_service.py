@@ -165,16 +165,19 @@ class SystemLLMRoleService:
                 role = await self.repo.create(role)
                 logger.info(f"Created default {role_type.value} role")
             else:
-                # Sync prompt-related fields so changes in v3_role_defaults propagate.
+                # Do not overwrite admin-customized prompts on restart.
+                # Only backfill prompt fields when the DB value is empty.
                 updated = False
                 for field in ("identity", "mission", "rules", "safety", "output_requirements"):
                     new_val = config.get(field)
-                    if new_val is not None and getattr(role, field, None) != new_val:
+                    current_val = getattr(role, field, None)
+                    is_empty = current_val is None or (isinstance(current_val, str) and not current_val.strip())
+                    if new_val is not None and is_empty:
                         setattr(role, field, new_val)
                         updated = True
                 if updated:
                     role = await self.repo.update(role)
-                    logger.info(f"Updated prompt fields for {role_type.value} role")
+                    logger.info(f"Backfilled empty prompt fields for {role_type.value} role")
 
             default_roles[role_type] = role
         

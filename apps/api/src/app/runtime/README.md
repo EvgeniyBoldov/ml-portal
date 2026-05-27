@@ -53,6 +53,12 @@ Notes:
 - Redaction: `redactor.py` (`RuntimeRedactor`) for trace/prompt/tool/context surfaces.
 - Replay: `replay.py` (trace-pack validation and deterministic replay checks).
 
+Runtime-config keys currently used by orchestrator/agent flows:
+- `required_operation_retry_instruction` — text injected on protocol retry when agent skipped required operation call.
+- `operations_rules_text` — full override of "mandatory operation rules" block appended to operation prompt.
+- `intent_messages` — map of runtime intent templates (`agent_start`, `final_answer`, `operation_call`).
+- `runtime.synth_chunk_size` — default chunk size for synthesizer delta streaming in short-circuit/fallback paths.
+
 ## Collection Readiness
 
 Runtime preflight exposes canonical collection readiness contract via
@@ -78,6 +84,19 @@ python -m app.runtime.replay path/to/trace_pack.json
 ```
 
 By default replay blocks destructive/write operations.
+
+## Lifecycle Persistence Policy
+
+- Canonical runtime event stream includes lifecycle events:
+  `run_start/run_end`, `orchestrator_*`, `planner_iteration_*`,
+  `agent_*`, `synthesis_*`.
+- `agent_run_steps` (chat/agent runs) persist execution-relevant steps
+  (`planner_decision`, `llm_turn`, `operation_*`, `budget_snapshot`, `final`, `error`)
+  and do **not** require lifecycle duplication there.
+- `sandbox_run_steps` persist the full event stream (including lifecycle events),
+  which is used by sandbox inspector and deep replay/debug flows.
+- Trace consumers must treat legacy step types (`llm_request/llm_response/llm_call`,
+  `routing/triage/planner_action`) as historical fallback only.
 
 ## Tests
 

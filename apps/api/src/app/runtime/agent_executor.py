@@ -50,9 +50,7 @@ _PASS_THROUGH = {
     LegacyEventType.BUDGET_SNAPSHOT: RuntimeEventType.BUDGET_SNAPSHOT,
     LegacyEventType.OPERATION_CALL: RuntimeEventType.OPERATION_CALL,
     LegacyEventType.OPERATION_RESULT: RuntimeEventType.OPERATION_RESULT,
-    LegacyEventType.LLM_REQUEST: RuntimeEventType.LLM_REQUEST,
-    LegacyEventType.LLM_RESPONSE: RuntimeEventType.LLM_RESPONSE,
-    LegacyEventType.LLM_CALL: RuntimeEventType.LLM_CALL,
+    LegacyEventType.LLM_TURN: RuntimeEventType.LLM_TURN,
     LegacyEventType.CONFIRMATION_REQUIRED: RuntimeEventType.CONFIRMATION_REQUIRED,
     LegacyEventType.ERROR: RuntimeEventType.ERROR,
 }

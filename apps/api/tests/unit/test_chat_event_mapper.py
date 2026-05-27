@@ -73,3 +73,57 @@ class TestChatEventMapper:
         assert result["code"] == "operation_unavailable"
         assert result["recoverable"] is False
         assert result["details"]["retryable"] is False
+
+    def test_llm_mapping_uses_whitelist_only(self):
+        mapper = ChatEventMapper()
+        event = SimpleNamespace(
+            type=RuntimeEventType.LLM_TURN,
+            data={
+                "llm_call_id": "c1",
+                "model": "gpt-test",
+                "messages": [{"role": "system", "content": "hidden"}],
+                "system_prompt": "secret",
+                "response_length": 10,
+            },
+        )
+        result = mapper.map_runtime_event(event)
+        assert result is not None
+        assert result["type"] == "llm_turn"
+        assert result["llm_call_id"] == "c1"
+        assert result["model"] == "gpt-test"
+        assert result["response_length"] == 10
+        assert "messages" not in result
+        assert "system_prompt" not in result
+
+    def test_legacy_llm_event_is_not_mapped(self):
+        mapper = ChatEventMapper()
+        event = SimpleNamespace(
+            type="llm_request",
+            data={"llm_call_id": "legacy-1", "model": "gpt-test"},
+        )
+        assert mapper.map_runtime_event(event) is None
+
+    def test_maps_llm_turn_event(self):
+        mapper = ChatEventMapper()
+        event = SimpleNamespace(
+            type=RuntimeEventType.LLM_TURN,
+            data={
+                "llm_call_id": "turn-1",
+                "model": "gpt-test",
+                "tokens_in": 100,
+                "tokens_out": 50,
+                "tokens_total": 150,
+                "duration_ms": 320,
+                "actor_type": "planner",
+                "actor_entity_id": "planner-1",
+                "messages": [{"role": "system", "content": "hidden"}],
+            },
+        )
+        result = mapper.map_runtime_event(event)
+        assert result is not None
+        assert result["type"] == "llm_turn"
+        assert result["llm_call_id"] == "turn-1"
+        assert result["tokens_total"] == 150
+        assert result["actor_type"] == "planner"
+        assert result["actor_entity_id"] == "planner-1"
+        assert "messages" not in result

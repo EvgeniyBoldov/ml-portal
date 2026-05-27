@@ -12,6 +12,10 @@ def _is_not_found_error(exc: Exception) -> bool:
     msg = str(exc).lower()
     return "404" in msg or "not found" in msg
 
+def _is_query_points_endpoint_missing(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return "404" in msg and "/points/query" in msg
+
 
 def _match_condition(key: str, value: Any) -> qm.FieldCondition:
     if isinstance(value, (list, tuple, set)):
@@ -125,10 +129,41 @@ class QdrantVectorStore:
                 for point in points
             ]
         except Exception as exc:
+            if _is_query_points_endpoint_missing(exc):
+                return await self._legacy_search(
+                    collection=collection,
+                    query=list(query),
+                    top_k=top_k,
+                    filter=query_filter,
+                )
             if _is_not_found_error(exc):
                 logger.warning("Qdrant collection not found during search: %s", collection)
                 return []
             raise
+
+    async def _legacy_search(
+        self,
+        *,
+        collection: str,
+        query: Sequence[float],
+        top_k: int,
+        filter: qm.Filter | None = None,
+    ) -> list[dict]:
+        response = await self._client.search(
+            collection_name=collection,
+            query_vector=list(query),
+            limit=top_k,
+            query_filter=filter,
+            with_payload=True,
+        )
+        return [
+            {
+                "id": point.id,
+                "score": point.score,
+                "payload": point.payload or {},
+            }
+            for point in (response or [])
+        ]
 
     async def delete_by_filter(self, collection: str, filter: Mapping[str, Any] | qm.Filter) -> None:
         query_filter = _dict_to_filter(filter) if not isinstance(filter, qm.Filter) else filter

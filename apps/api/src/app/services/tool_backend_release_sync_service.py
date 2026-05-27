@@ -91,7 +91,6 @@ class ToolBackendReleaseSyncService:
                 slug=versioned_tool.tool_slug,
                 name=versioned_tool.name,
                 domains=domains,
-                kind="read",
             )
             self.session.add(tool)
             await self.session.flush()

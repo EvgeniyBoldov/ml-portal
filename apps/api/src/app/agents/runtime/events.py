@@ -17,9 +17,7 @@ class RuntimeEventType(str, Enum):
     BUDGET_SNAPSHOT = "budget_snapshot"
     OPERATION_CALL = "operation_call"
     OPERATION_RESULT = "operation_result"
-    LLM_REQUEST = "llm_request"
-    LLM_RESPONSE = "llm_response"
-    LLM_CALL = "llm_call"
+    LLM_TURN = "llm_turn"
     DELTA = "delta"
     FINAL = "final"
     ERROR = "error"
@@ -54,12 +52,35 @@ class RuntimeEvent:
         operation_slug: str,
         call_id: str,
         arguments: dict,
+        *,
+        parent_entity_type: Optional[str] = None,
+        parent_entity_id: Optional[str] = None,
+        agent_slug: Optional[str] = None,
+        agent_run_id: Optional[str] = None,
+        llm_call_id: Optional[str] = None,
+        actor_type: Optional[str] = None,
+        actor_entity_id: Optional[str] = None,
     ) -> RuntimeEvent:
-        return cls(RuntimeEventType.OPERATION_CALL, {
+        payload: Dict[str, Any] = {
             "operation": operation_slug,
             "call_id": call_id,
             "arguments": arguments,
-        })
+        }
+        if parent_entity_type is not None:
+            payload["parent_entity_type"] = parent_entity_type
+        if parent_entity_id is not None:
+            payload["parent_entity_id"] = parent_entity_id
+        if agent_slug is not None:
+            payload["agent_slug"] = agent_slug
+        if agent_run_id is not None:
+            payload["agent_run_id"] = agent_run_id
+        if llm_call_id is not None:
+            payload["llm_call_id"] = llm_call_id
+        if actor_type is not None:
+            payload["actor_type"] = actor_type
+        if actor_entity_id is not None:
+            payload["actor_entity_id"] = actor_entity_id
+        return cls(RuntimeEventType.OPERATION_CALL, payload)
 
     @classmethod
     def operation_result(
@@ -69,6 +90,13 @@ class RuntimeEvent:
         success: bool,
         data: Any,
         *,
+        parent_entity_type: Optional[str] = None,
+        parent_entity_id: Optional[str] = None,
+        agent_slug: Optional[str] = None,
+        agent_run_id: Optional[str] = None,
+        llm_call_id: Optional[str] = None,
+        actor_type: Optional[str] = None,
+        actor_entity_id: Optional[str] = None,
         reused: Optional[bool] = None,
         reused_from_call_id: Optional[str] = None,
         error_code: Optional[RuntimeErrorCode | str] = None,
@@ -99,19 +127,25 @@ class RuntimeEvent:
             payload["result"] = dict(envelope)
         if truncated:
             payload["truncated"] = True
+        if parent_entity_type is not None:
+            payload["parent_entity_type"] = parent_entity_type
+        if parent_entity_id is not None:
+            payload["parent_entity_id"] = parent_entity_id
+        if agent_slug is not None:
+            payload["agent_slug"] = agent_slug
+        if agent_run_id is not None:
+            payload["agent_run_id"] = agent_run_id
+        if llm_call_id is not None:
+            payload["llm_call_id"] = llm_call_id
+        if actor_type is not None:
+            payload["actor_type"] = actor_type
+        if actor_entity_id is not None:
+            payload["actor_entity_id"] = actor_entity_id
         return cls(RuntimeEventType.OPERATION_RESULT, payload)
 
     @classmethod
-    def llm_request(cls, **payload: Any) -> RuntimeEvent:
-        return cls(RuntimeEventType.LLM_REQUEST, dict(payload))
-
-    @classmethod
-    def llm_response(cls, **payload: Any) -> RuntimeEvent:
-        return cls(RuntimeEventType.LLM_RESPONSE, dict(payload))
-
-    @classmethod
-    def llm_call(cls, **payload: Any) -> RuntimeEvent:
-        return cls(RuntimeEventType.LLM_CALL, dict(payload))
+    def llm_turn(cls, **payload: Any) -> RuntimeEvent:
+        return cls(RuntimeEventType.LLM_TURN, dict(payload))
 
     @classmethod
     def delta(cls, content: str) -> RuntimeEvent:

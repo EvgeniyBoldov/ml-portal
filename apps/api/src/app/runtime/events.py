@@ -52,9 +52,7 @@ class RuntimeEventType(str, Enum):
     PROTOCOL_RETRY = "protocol_retry"
     INTENT = "intent"
     BUDGET_SNAPSHOT = "budget_snapshot"
-    LLM_REQUEST = "llm_request"
-    LLM_RESPONSE = "llm_response"
-    LLM_CALL = "llm_call"
+    LLM_TURN = "llm_turn"
     # Operation (tool) execution, emitted by AgentToolRuntime
     OPERATION_CALL = "operation_call"
     OPERATION_RESULT = "operation_result"
@@ -232,16 +230,8 @@ class RuntimeEvent:
         return cls(RuntimeEventType.BUDGET_SNAPSHOT, payload)
 
     @classmethod
-    def llm_request(cls, **payload: Any) -> "RuntimeEvent":
-        return cls(RuntimeEventType.LLM_REQUEST, dict(payload))
-
-    @classmethod
-    def llm_response(cls, **payload: Any) -> "RuntimeEvent":
-        return cls(RuntimeEventType.LLM_RESPONSE, dict(payload))
-
-    @classmethod
-    def llm_call(cls, **payload: Any) -> "RuntimeEvent":
-        return cls(RuntimeEventType.LLM_CALL, dict(payload))
+    def llm_turn(cls, **payload: Any) -> "RuntimeEvent":
+        return cls(RuntimeEventType.LLM_TURN, dict(payload))
 
     @classmethod
     def operation_call(
@@ -255,6 +245,8 @@ class RuntimeEvent:
         agent_slug: Optional[str] = None,
         agent_run_id: Optional[str] = None,
         llm_call_id: Optional[str] = None,
+        actor_type: Optional[str] = None,
+        actor_entity_id: Optional[str] = None,
     ) -> "RuntimeEvent":
         payload: Dict[str, Any] = {"operation": operation, "call_id": call_id, "arguments": arguments}
         if parent_entity_type is not None:
@@ -267,6 +259,10 @@ class RuntimeEvent:
             payload["agent_run_id"] = agent_run_id
         if llm_call_id is not None:
             payload["llm_call_id"] = llm_call_id
+        if actor_type is not None:
+            payload["actor_type"] = actor_type
+        if actor_entity_id is not None:
+            payload["actor_entity_id"] = actor_entity_id
         return cls(RuntimeEventType.OPERATION_CALL, payload)
 
     @classmethod
@@ -286,6 +282,8 @@ class RuntimeEvent:
         agent_slug: Optional[str] = None,
         agent_run_id: Optional[str] = None,
         llm_call_id: Optional[str] = None,
+        actor_type: Optional[str] = None,
+        actor_entity_id: Optional[str] = None,
     ) -> "RuntimeEvent":
         payload: Dict[str, Any] = {
             "operation": operation,
@@ -313,6 +311,10 @@ class RuntimeEvent:
             payload["agent_run_id"] = agent_run_id
         if llm_call_id is not None:
             payload["llm_call_id"] = llm_call_id
+        if actor_type is not None:
+            payload["actor_type"] = actor_type
+        if actor_entity_id is not None:
+            payload["actor_entity_id"] = actor_entity_id
         return cls(RuntimeEventType.OPERATION_RESULT, payload)
 
     @classmethod

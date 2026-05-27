@@ -416,14 +416,12 @@ class RunStore:
                         func.count(),
                     ).where(
                         AgentRunStep.run_id == run_id,
-                        AgentRunStep.step_type.in_(["tool_call", "operation_call", "llm_request"]),
+                        AgentRunStep.step_type.in_(["tool_call", "operation_call", "llm_turn"]),
                     ).group_by(AgentRunStep.step_type)
                 )
-                for step_type, cnt in counts.fetchall():
-                    if step_type in {"tool_call", "operation_call"}:
-                        run.total_tool_calls = cnt
-                    elif step_type == "llm_request":
-                        run.total_llm_calls = cnt
+                counts_map = {str(step_type): int(cnt) for step_type, cnt in counts.fetchall()}
+                run.total_tool_calls = int(max(counts_map.get("tool_call", 0), counts_map.get("operation_call", 0)))
+                run.total_llm_calls = int(counts_map.get("llm_turn", 0))
 
                 token_agg = await s.execute(
                     select(

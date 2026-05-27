@@ -280,6 +280,7 @@ class RuntimePipeline:
                 stop_reason=planning_outcome.stop_reason,
                 planner_hint=planning_outcome.planner_hint,
                 model=request.model,
+                platform_config=platform.config,
                 sandbox_overrides=request.sandbox_overrides,
                 envelope=envelope,
                 run_id=run_id,
@@ -378,6 +379,7 @@ class RuntimePipeline:
         stop_reason: PipelineStopReason,
         planner_hint: Optional[str],
         model: Optional[str],
+        platform_config: Optional[Dict[str, Any]] = None,
         sandbox_overrides: Optional[Dict[str, Any]] = None,
         envelope: EventEnvelopeStamper,
         run_id: Optional[UUID] = None,
@@ -432,6 +434,7 @@ class RuntimePipeline:
             stop_reason=stop_reason,
             planner_hint=planner_hint,
             model=model,
+            platform_config=platform_config,
             sandbox_overrides=sandbox_overrides,
             run_synthesizer=True,
         ):
@@ -450,66 +453,29 @@ class RuntimePipeline:
                 synthesis_status = "failed"
             if budget_registry is not None:
                 try:
-                    if ev.type == RuntimeEventType.LLM_REQUEST:
-                        in_tokens = self._estimate_tokens_from_payload(ev.data.get("messages"))
+                    if ev.type == RuntimeEventType.LLM_TURN:
+                        in_tokens = int(ev.data.get("tokens_in") or 0)
+                        out_tokens = int(ev.data.get("tokens_out") or 0)
+                        total_tokens = int(ev.data.get("tokens_total") or (in_tokens + out_tokens))
+                        dur = int(ev.data.get("duration_ms") or 0)
+                        delta_payload: Dict[str, int] = {}
                         if in_tokens > 0:
                             budget_registry.consume(synthesis_id, "tokens_in", in_tokens, reason="tokens")
-                            budget_registry.consume(synthesis_id, "tokens_total", in_tokens, reason="tokens")
-                            snap = budget_registry.emit_snapshot(
-                                synthesis_id,
-                                reason="tokens",
-                                delta={"tokens_in": in_tokens, "tokens_total": in_tokens},
-                            ) or {}
-                            yield envelope.stamp(
-                                RuntimeEvent.budget_snapshot(
-                                    entity_type="synthesis_run",
-                                    entity_id=synthesis_id,
-                                    parent_entity_type="run",
-                                    parent_entity_id=str(effective_run_id),
-                                    role="synthesizer",
-                                    own=snap.get("own", {}),
-                                    limits=snap.get("limits"),
-                                    delta={"tokens_in": in_tokens, "tokens_total": in_tokens},
-                                    reason="tokens",
-                                    at_ms=snap.get("at_ms"),
-                                ),
-                                OrchestrationPhase.SYNTHESIS,
-                                run_id=str(runtime_state.run_id),
-                            )
-                    elif ev.type == RuntimeEventType.LLM_RESPONSE:
-                        out_tokens = self._estimate_tokens_from_payload(ev.data.get("content"))
+                            delta_payload["tokens_in"] = in_tokens
                         if out_tokens > 0:
                             budget_registry.consume(synthesis_id, "tokens_out", out_tokens, reason="tokens")
-                            budget_registry.consume(synthesis_id, "tokens_total", out_tokens, reason="tokens")
-                            snap = budget_registry.emit_snapshot(
-                                synthesis_id,
-                                reason="tokens",
-                                delta={"tokens_out": out_tokens, "tokens_total": out_tokens},
-                            ) or {}
-                            yield envelope.stamp(
-                                RuntimeEvent.budget_snapshot(
-                                    entity_type="synthesis_run",
-                                    entity_id=synthesis_id,
-                                    parent_entity_type="run",
-                                    parent_entity_id=str(effective_run_id),
-                                    role="synthesizer",
-                                    own=snap.get("own", {}),
-                                    limits=snap.get("limits"),
-                                    delta={"tokens_out": out_tokens, "tokens_total": out_tokens},
-                                    reason="tokens",
-                                    at_ms=snap.get("at_ms"),
-                                ),
-                                OrchestrationPhase.SYNTHESIS,
-                                run_id=str(runtime_state.run_id),
-                            )
-                    elif ev.type == RuntimeEventType.LLM_CALL:
-                        dur = ev.data.get("duration_ms")
-                        if isinstance(dur, int) and dur > 0:
+                            delta_payload["tokens_out"] = out_tokens
+                        if total_tokens > 0:
+                            budget_registry.consume(synthesis_id, "tokens_total", total_tokens, reason="tokens")
+                            delta_payload["tokens_total"] = total_tokens
+                        if dur > 0:
                             budget_registry.consume(synthesis_id, "wall_time_ms", dur, reason="wall_time")
+                            delta_payload["wall_time_ms"] = dur
+                        if delta_payload:
                             snap = budget_registry.emit_snapshot(
                                 synthesis_id,
-                                reason="wall_time",
-                                delta={"wall_time_ms": dur},
+                                reason="llm_turn",
+                                delta=delta_payload,
                             ) or {}
                             yield envelope.stamp(
                                 RuntimeEvent.budget_snapshot(
@@ -520,8 +486,8 @@ class RuntimePipeline:
                                     role="synthesizer",
                                     own=snap.get("own", {}),
                                     limits=snap.get("limits"),
-                                    delta={"wall_time_ms": dur},
-                                    reason="wall_time",
+                                    delta=delta_payload,
+                                    reason="llm_turn",
                                     at_ms=snap.get("at_ms"),
                                 ),
                                 OrchestrationPhase.SYNTHESIS,
