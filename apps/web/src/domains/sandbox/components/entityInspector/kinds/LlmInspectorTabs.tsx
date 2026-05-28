@@ -88,8 +88,20 @@ export function LlmInspectorTabs({ entity, steps }: { entity: TraceEntity; steps
         </InspectorFieldGroup>
       </>
     );
-    if (tab === 'request') return <InspectorJsonBlock value={requestPayload ?? data?.prompt?.messages ?? data?.prompt?.systemPrompt ?? '—'} />;
-    if (tab === 'response') return <InspectorJsonBlock value={responsePayload ?? data?.response?.content ?? data?.response?.rawResponse ?? '—'} />;
+    if (tab === 'request') {
+      return (
+        <InspectorFieldGroup>
+          <InspectorJsonBlock value={requestPayload ?? data?.prompt?.messages ?? data?.prompt?.systemPrompt ?? '—'} />
+        </InspectorFieldGroup>
+      );
+    }
+    if (tab === 'response') {
+      return (
+        <InspectorFieldGroup>
+          <InspectorJsonBlock value={responsePayload ?? data?.response?.content ?? data?.response?.rawResponse ?? '—'} />
+        </InspectorFieldGroup>
+      );
+    }
     if (tab === 'budgets') return <BudgetsTab entity={entity} steps={steps} />;
     return <RawTab value={entity.data} entity={entity} steps={steps} />;
   }} />;

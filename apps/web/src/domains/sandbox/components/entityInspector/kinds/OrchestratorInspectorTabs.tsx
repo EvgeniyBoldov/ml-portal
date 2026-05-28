@@ -1,4 +1,4 @@
-import { InspectorTabs } from '@/shared/ui/Inspector';
+import { InspectorTabs, InspectorFieldGroup, InspectorFieldRow } from '@/shared/ui/Inspector';
 import { isOrchestratorData, type TraceEntity } from '@/domains/runtimeTrace/entityTypes';
 import type { RunStep } from '../../../hooks/useSandboxRun';
 import { BudgetsTab, InfoTab, RawTab } from '../shared';
@@ -20,11 +20,11 @@ export function OrchestratorInspectorTabs({ entity, steps }: { entity: TraceEnti
         if (tab === 'info') return <InfoTab entity={entity} steps={steps} />;
         if (tab === 'overview') {
           return (
-            <div>
-              <div><b>Slug:</b> {data?.slug ?? '—'}</div>
-              <div><b>Role:</b> {data?.role ?? '—'}</div>
-              <div><b>Intent:</b> {data?.intent ?? '—'}</div>
-            </div>
+            <InspectorFieldGroup>
+              <InspectorFieldRow label="Slug">{data?.slug ?? '—'}</InspectorFieldRow>
+              <InspectorFieldRow label="Role">{data?.role ?? '—'}</InspectorFieldRow>
+              <InspectorFieldRow label="Intent">{data?.intent ?? '—'}</InspectorFieldRow>
+            </InspectorFieldGroup>
           );
         }
         if (tab === 'budgets') return <BudgetsTab entity={entity} steps={steps} />;

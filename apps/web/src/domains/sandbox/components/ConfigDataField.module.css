@@ -23,11 +23,13 @@
 }
 
 .field-short {
-  align-items: flex-start;
+  align-items: stretch;
+  min-width: 0;
 }
 
 .field-wide {
-  align-items: flex-start;
+  align-items: stretch;
+  min-width: 0;
 }
 
 .field-name {

@@ -7,10 +7,11 @@ export function AgentInspectorTabs({ entity, steps }: { entity: TraceEntity; ste
   const data = isAgentData(entity.data) ? entity.data : null;
   const llmChildren = (entity.children ?? []).filter((c) => c.kind === 'llm' && isLLMData(c.data));
   const llmWithPrompt = llmChildren.find((c) => {
+    if (!isLLMData(c.data)) return false;
     const llm = c.data;
     return !!(llm.prompt?.messages?.length || llm.prompt?.systemPrompt);
   });
-  const llmPromptData = llmWithPrompt ? llmWithPrompt.data : null;
+  const llmPromptData = llmWithPrompt && isLLMData(llmWithPrompt.data) ? llmWithPrompt.data : null;
   const tabs = [{ key: 'info', label: 'Info' }, { key: 'prompt', label: 'Prompt' }, { key: 'tools', label: 'Tools' }, { key: 'budgets', label: 'Budgets' }, { key: 'rbac', label: 'RBAC' }, { key: 'raw', label: 'Raw' }];
 
   const extractOperationSlug = (value: unknown): string | null => {
@@ -57,12 +58,17 @@ export function AgentInspectorTabs({ entity, steps }: { entity: TraceEntity; ste
       if (llmPromptData?.prompt?.isBriefMode) {
         return <InspectorNotice tone="info" title="Brief Logging" message="Messages не сохранены" />;
       }
-      const systemPromptFromMessages = llmPromptData?.prompt?.messages?.find((msg) => String(msg.role ?? '') === 'system');
+      const promptMessages: Array<Record<string, unknown>> = llmPromptData?.prompt?.messages ?? [];
+      const systemPromptFromMessages = promptMessages.find((msg: Record<string, unknown>) => String(msg.role ?? '') === 'system');
       const promptSnapshot = llmPromptData?.prompt?.systemPrompt
         ?? (typeof systemPromptFromMessages?.content === 'string' ? systemPromptFromMessages.content : undefined)
         ?? data?.prompt?.systemPrompt
         ?? '—';
-      return <InspectorJsonBlock value={promptSnapshot} />;
+      return (
+        <InspectorFieldGroup>
+          <InspectorJsonBlock value={promptSnapshot} />
+        </InspectorFieldGroup>
+      );
     }
     if (tab === 'tools') {
       return (

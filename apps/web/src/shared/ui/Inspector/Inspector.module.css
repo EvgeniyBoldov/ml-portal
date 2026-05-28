@@ -3,6 +3,7 @@
   flex-direction: column;
   height: 100%;
   overflow: hidden;
+  width: 100%;
 }
 
 .header {
@@ -34,22 +35,29 @@
   flex: 1;
   overflow: auto;
   padding: var(--space-2, 8px);
+  width: 100%;
+  min-width: 0;
 }
 
 .tabContent {
   padding: var(--space-3, 12px) 0;
+  width: 100%;
+  min-width: 0;
 }
 
 .fields {
   display: flex;
   flex-direction: column;
   gap: var(--space-3, 12px);
+  width: 100%;
+  min-width: 0;
 }
 
 .field {
   display: flex;
   flex-direction: column;
   gap: var(--space-1, 4px);
+  width: 100%;
 }
 
 .label {
@@ -57,11 +65,15 @@
   color: var(--text-secondary, #6b7280);
   text-transform: uppercase;
   letter-spacing: 0.5px;
+  display: block;
 }
 
 .value {
   font-size: var(--text-sm, 14px);
   color: var(--text-primary, #1a1a1a);
+  display: block;
+  width: 100%;
+  min-width: 0;
 }
 
 .code {
@@ -74,6 +86,8 @@
   max-height: 400px;
   white-space: pre-wrap;
   word-break: break-word;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .jsonActions {

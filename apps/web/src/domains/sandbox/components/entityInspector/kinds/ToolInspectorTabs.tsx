@@ -30,10 +30,28 @@ export function ToolInspectorTabs({ entity, steps }: { entity: TraceEntity; step
         </InspectorFieldGroup>
       </>
     );
-    if (tab === 'input') return <InspectorJsonBlock value={data?.arguments ?? '—'} />;
-    if (tab === 'output') return <InspectorJsonBlock value={outputValue} />;
+    if (tab === 'input') {
+      return (
+        <InspectorFieldGroup>
+          <InspectorJsonBlock value={data?.arguments ?? '—'} />
+        </InspectorFieldGroup>
+      );
+    }
+    if (tab === 'output') {
+      return (
+        <InspectorFieldGroup>
+          <InspectorJsonBlock value={outputValue} />
+        </InspectorFieldGroup>
+      );
+    }
     if (tab === 'budgets') return <BudgetsTab entity={entity} steps={steps} />;
-    if (tab === 'errors') return <InspectorJsonBlock value={{ error: data?.result?.error ?? null, errorCode: data?.result?.errorCode ?? null, retryable: data?.result?.retryable ?? null, retries: data?.retries ?? [] }} />;
+    if (tab === 'errors') {
+      return (
+        <InspectorFieldGroup>
+          <InspectorJsonBlock value={{ error: data?.result?.error ?? null, errorCode: data?.result?.errorCode ?? null, retryable: data?.result?.retryable ?? null, retries: data?.retries ?? [] }} />
+        </InspectorFieldGroup>
+      );
+    }
     return <RawTab value={entity.data} entity={entity} steps={steps} />;
   }} />;
 }

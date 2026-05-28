@@ -290,7 +290,7 @@ export function PlatformSettingsPage() {
     ? [
         <Button
           key="fill-defaults"
-          variant="secondary"
+          variant="outline"
           onClick={() => fillPlatformDefaults.mutate()}
           disabled={fillPlatformDefaults.isPending}
         >

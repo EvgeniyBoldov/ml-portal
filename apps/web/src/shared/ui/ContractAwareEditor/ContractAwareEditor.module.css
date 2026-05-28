@@ -15,12 +15,17 @@
 /* ── Inline shell (outside modal) ────────────────────────── */
 .inlineEditorShell {
   position: relative;
+  width: 100%;
+  min-width: 0;
 }
 
 .inlineTextarea {
   padding-right: 3rem;
   min-height: 120px;
   resize: vertical;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 .expandButton {

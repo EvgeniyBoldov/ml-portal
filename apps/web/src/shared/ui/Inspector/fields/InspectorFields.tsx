@@ -12,7 +12,7 @@ export function InspectorFieldRow({ label, children }: { label: string; children
   return (
     <div className={styles.field}>
       <span className={styles.label}>{label}</span>
-      <span className={styles.value}>{children}</span>
+      <div className={styles.value}>{children}</div>
     </div>
   );
 }

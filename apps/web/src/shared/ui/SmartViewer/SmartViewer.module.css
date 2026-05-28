@@ -6,6 +6,8 @@
   line-height: 1.5;
   color: var(--text-primary, #e2e8f0);
   overflow: auto;
+  width: 100%;
+  min-width: 0;
 }
 
 /* ── Row layout ────────────────────────────────────────────── */

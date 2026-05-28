@@ -144,18 +144,26 @@ export function RawTab({ value, entity, steps }: { value: unknown; entity?: Trac
   const safeValue = sanitizeForInspector(value);
 
   if (!entity || !steps || entity.sourceEventIds.length === 0) {
-    return <InspectorJsonBlock value={safeValue} />;
+    return (
+      <InspectorFieldGroup>
+        <InspectorJsonBlock value={safeValue} />
+      </InspectorFieldGroup>
+    );
   }
 
   const sourceIds = new Set(entity.sourceEventIds);
   const rawSteps = steps.filter((step) => sourceIds.has(step.id));
 
   if (rawSteps.length === 0) {
-    return <InspectorJsonBlock value={safeValue} />;
+    return (
+      <InspectorFieldGroup>
+        <InspectorJsonBlock value={safeValue} />
+      </InspectorFieldGroup>
+    );
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+    <InspectorFieldGroup>
       {rawSteps.map((step, index) => (
         <InspectorJsonBlock
           key={step.id}
@@ -168,6 +176,6 @@ export function RawTab({ value, entity, steps }: { value: unknown; entity?: Trac
           }}
         />
       ))}
-    </div>
+    </InspectorFieldGroup>
   );
 }
