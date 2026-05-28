@@ -137,6 +137,7 @@ class SystemLLMRoleService:
             'id': str(role.id),
             'role_type': role.role_type,
             'prompt': role.compiled_prompt,
+            'extras': role.extras or {},
             'model': role.model,
             'temperature': role.temperature,
             'max_tokens': role.max_tokens,

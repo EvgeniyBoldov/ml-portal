@@ -86,6 +86,11 @@ class SystemLLMRole(Base):
         nullable=True,
         comment="Few-shot examples for the role"
     )
+    extras: Mapped[Optional[Dict[str, Any]]] = mapped_column(
+        JSONB,
+        nullable=True,
+        comment="Role-specific runtime knobs (non-prompt policy params)"
+    )
     
     # === Execution Configuration ===
     model: Mapped[Optional[str]] = mapped_column(

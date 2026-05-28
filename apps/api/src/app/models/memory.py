@@ -48,6 +48,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -221,6 +222,12 @@ class DialogueSummary(Base):
     raw_tail: Mapped[str] = mapped_column(
         Text, nullable=False, default="",
         comment="Last N exchanges verbatim, capped by character budget.",
+    )
+    summary_v2: Mapped[Optional[Dict[str, Any]]] = mapped_column(
+        JSONB,
+        nullable=True,
+        server_default=text("'{}'::jsonb"),
+        comment="Structured summary v2 payload (dual-write/read-fallback migration path).",
     )
 
     # --- bookkeeping --------------------------------------------------------

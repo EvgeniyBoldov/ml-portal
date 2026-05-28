@@ -32,6 +32,8 @@ app = Celery(
         "app.workers.tasks_cleanup",
         # LDAP sync tasks
         "app.workers.tasks_ldap_sync",
+        # Memory writeback tasks
+        "app.workers.tasks_memory",
     ],
     autodiscover_tasks=False,  # Отключаем автообнаружение задач
 )
@@ -143,6 +145,9 @@ app.conf.task_queues = (
     # Maintenance queues
     Queue('maintenance.default', routing_key='maintenance.default', priority=1),
     
+    
+    # Memory writeback queue (low priority, background)
+    Queue('memory', routing_key='memory', priority=1),
     # Dead letter queue
     Queue('dlq', routing_key='dlq', priority=0),
 )
@@ -174,6 +179,9 @@ app.conf.task_routes = {
     "app.workers.tasks_ldap_sync.sync_ldap_users": {"queue": "maintenance.default", "priority": 2},
     "app.workers.tasks_ldap_sync.ldap_health_check": {"queue": "health", "priority": 3},
     "app.workers.tasks_cleanup.cleanup_expired_sandbox_sessions": {"queue": "cleanup_low", "priority": 1},
+    
+    # Memory writeback tasks
+    "app.workers.tasks_memory.finalize_memory": {"queue": "memory", "priority": 1},
     "app.workers.tasks_cleanup.cleanup_deprecated_entities": {"queue": "cleanup_low", "priority": 1},
 
     # Reindex tasks

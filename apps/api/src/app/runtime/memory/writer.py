@@ -5,6 +5,7 @@ Failure policy: write-side failures must not break user turn completion.
 """
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from time import monotonic
 from typing import List, Optional, Protocol
@@ -13,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.http.clients import LLMClientProtocol
 from app.core.logging import get_logger
+from app.core.prometheus_metrics import memory_writer_component_status_total
 from app.models.memory import FactScope
 from app.runtime.memory.dto import SummaryDTO
 from app.runtime.memory.fact_extractor import (
@@ -30,6 +32,9 @@ logger = get_logger(__name__)
 
 
 RAW_TAIL_MAX_CHARS = 2000
+_TRIVIAL_UTTERANCES = {
+    "ok", "okay", "ок", "ага", "угу", "спасибо", "thanks", "thank you", "понял", "понятно",
+}
 
 
 @dataclass(frozen=True)
@@ -40,6 +45,7 @@ class MemoryWriteContext:
     skip_llm_helpers: bool
     terminal_reason: Optional[PipelineStopReason] = None
     sandbox_overrides: Optional[dict] = None
+    raw_tail_max_chars: int = RAW_TAIL_MAX_CHARS
 
 
 @dataclass(frozen=True)
@@ -86,6 +92,9 @@ class MemoryWriter:
         self._summary_store = SummaryStore(session)
         self._extractor = FactExtractor(session=session, llm_client=llm_client)
         self._compactor = SummaryCompactor(session=session, llm_client=llm_client)
+        # Single AsyncSession is not concurrency-safe for writes.
+        # We still parallelize LLM-heavy component logic and serialize DB writes.
+        self._db_write_lock = asyncio.Lock()
         self._components: List[MemoryWriteComponent] = [
             _FactMemoryWriteComponent(self),
             _ConversationMemoryWriteComponent(self),
@@ -109,45 +118,54 @@ class MemoryWriter:
             user_message=user_message,
             assistant_final=assistant_final or "",
             skip_llm_helpers=self._should_skip_llm_helpers(
-                memory, assistant_final or "", terminal_reason
+                memory, user_message, terminal_reason
             ),
             terminal_reason=terminal_reason,
             sandbox_overrides=sandbox_overrides,
+            raw_tail_max_chars=_resolve_raw_tail_max_chars(sandbox_overrides),
         )
 
-        results: List[MemoryWriteResult] = []
-        for component in self._components:
-            started = monotonic()
-            try:
-                result = await component.write(context)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "MemoryWriter component '%s' failed for chat=%s: %s",
-                    component.name,
-                    memory.chat_id,
-                    exc,
-                )
-                result = MemoryWriteResult(
-                    component_name=component.name,
-                    status="failed",
-                    error_code="memory_component_error",
-                    error_message=str(exc)[:500],
-                )
-            elapsed_ms = int((monotonic() - started) * 1000)
-            results.append(
-                MemoryWriteResult(
-                    component_name=result.component_name,
-                    status=result.status,
-                    inserted_count=result.inserted_count,
-                    updated_count=result.updated_count,
-                    skipped_count=result.skipped_count,
-                    error_code=result.error_code,
-                    error_message=result.error_message,
-                    duration_ms=elapsed_ms,
-                )
-            )
+        results = await asyncio.gather(
+            *[self._run_component(component=component, context=context, chat_id=memory.chat_id) for component in self._components],
+            return_exceptions=False,
+        )
 
         self._attach_write_diagnostics(memory=memory, results=results)
+
+    async def _run_component(
+        self,
+        *,
+        component: MemoryWriteComponent,
+        context: MemoryWriteContext,
+        chat_id,
+    ) -> MemoryWriteResult:
+        started = monotonic()
+        try:
+            result = await component.write(context)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "MemoryWriter component '%s' failed for chat=%s: %s",
+                component.name,
+                chat_id,
+                exc,
+            )
+            result = MemoryWriteResult(
+                component_name=component.name,
+                status="failed",
+                error_code="memory_component_error",
+                error_message=str(exc)[:500],
+            )
+        elapsed_ms = int((monotonic() - started) * 1000)
+        return MemoryWriteResult(
+            component_name=result.component_name,
+            status=result.status,
+            inserted_count=result.inserted_count,
+            updated_count=result.updated_count,
+            skipped_count=result.skipped_count,
+            error_code=result.error_code,
+            error_message=result.error_message,
+            duration_ms=elapsed_ms,
+        )
 
     async def _write_summary_fallback_only(
         self,
@@ -155,6 +173,7 @@ class MemoryWriter:
         memory: TurnMemory,
         user_message: str,
         assistant_final: str,
+        raw_tail_max_chars: int = RAW_TAIL_MAX_CHARS,
     ) -> None:
         assert memory.chat_id is not None
         fallback = SummaryDTO(
@@ -163,10 +182,16 @@ class MemoryWriter:
             done=list(memory.summary.done),
             entities=dict(memory.summary.entities),
             open_questions=list(memory.summary.open_questions),
-            raw_tail=_rebuild_raw_tail(memory.summary.raw_tail, user_message, assistant_final),
+            raw_tail=_rebuild_raw_tail(
+                memory.summary.raw_tail,
+                user_message,
+                assistant_final,
+                max_chars=raw_tail_max_chars,
+            ),
             last_updated_turn=memory.turn_number,
         )
-        await self._summary_store.save(fallback)
+        async with self._db_write_lock:
+            await self._summary_store.save(fallback)
 
     # ---------------------------------------------------------------- facts
 
@@ -194,11 +219,12 @@ class MemoryWriter:
             user_id=memory.user_id,
             tenant_id=memory.tenant_id,
         )
-        long_term_saved = await long_term.save_for_runtime(facts=new_facts)
-        for fact in new_facts:
-            if fact.scope in (FactScope.USER, FactScope.TENANT):
-                continue
-            await self._fact_store.upsert_with_supersede(fact)
+        async with self._db_write_lock:
+            long_term_saved = await long_term.save_for_runtime(facts=new_facts)
+            for fact in new_facts:
+                if fact.scope in (FactScope.USER, FactScope.TENANT):
+                    continue
+                await self._fact_store.upsert_with_supersede(fact)
         return max(long_term_saved, len(new_facts))
 
     # -------------------------------------------------------------- summary
@@ -209,6 +235,7 @@ class MemoryWriter:
         user_message: str,
         assistant_final: str,
         sandbox_overrides: Optional[dict] = None,
+        raw_tail_max_chars: int = RAW_TAIL_MAX_CHARS,
     ) -> None:
         assert memory.chat_id is not None  # guarded by caller
 
@@ -227,19 +254,26 @@ class MemoryWriter:
         # touch it. We append user+assistant pair to the existing tail
         # and clip from the front to respect the char budget.
         new_summary.raw_tail = _rebuild_raw_tail(
-            memory.summary.raw_tail, user_message, assistant_final,
+            memory.summary.raw_tail,
+            user_message,
+            assistant_final,
+            max_chars=raw_tail_max_chars,
         )
         new_summary.chat_id = memory.chat_id
 
-        await self._summary_store.save(new_summary)
+        async with self._db_write_lock:
+            await self._summary_store.save(new_summary)
 
     @staticmethod
     def _should_skip_llm_helpers(
-        memory: TurnMemory, assistant_final: str, terminal_reason: Optional[PipelineStopReason]
+        memory: TurnMemory, user_message: str, terminal_reason: Optional[PipelineStopReason]
     ) -> bool:
         """Avoid extra LLM helper calls on known degraded turns."""
-        # Typed signal: skip on loop detection or budget exceeded
-        if terminal_reason in (PipelineStopReason.LOOP_DETECTED, PipelineStopReason.BUDGET_EXCEEDED):
+        # Typed signal: skip on budget exceeded only.
+        if terminal_reason == PipelineStopReason.BUDGET_EXCEEDED:
+            return True
+        # Trivial acknowledgement turns do not provide stable memory signal.
+        if _is_trivial_utterance(user_message):
             return True
 
         failed_results = [r for r in memory.agent_results if not r.success]
@@ -256,6 +290,14 @@ class MemoryWriter:
 
     @staticmethod
     def _attach_write_diagnostics(*, memory: TurnMemory, results: List[MemoryWriteResult]) -> None:
+        for item in results:
+            try:
+                memory_writer_component_status_total.labels(
+                    component_name=item.component_name or "unknown",
+                    status=item.status or "unknown",
+                ).inc()
+            except Exception:
+                pass
         payload = {
             "results": [item.compact_view() for item in results],
             "failed_components": [item.component_name for item in results if item.status == "failed"],
@@ -290,6 +332,7 @@ class _ConversationMemoryWriteComponent:
                 memory=ctx.memory,
                 user_message=ctx.user_message,
                 assistant_final=ctx.assistant_final,
+                raw_tail_max_chars=ctx.raw_tail_max_chars,
             )
             return MemoryWriteResult(component_name=self.name, status="degraded", updated_count=1)
 
@@ -298,6 +341,7 @@ class _ConversationMemoryWriteComponent:
             ctx.user_message,
             ctx.assistant_final,
             ctx.sandbox_overrides,
+            ctx.raw_tail_max_chars,
         )
         return MemoryWriteResult(component_name=self.name, status="ok", updated_count=1)
 
@@ -306,6 +350,8 @@ def _rebuild_raw_tail(
     previous_tail: str,
     user_message: str,
     assistant_final: str,
+    *,
+    max_chars: int = RAW_TAIL_MAX_CHARS,
 ) -> str:
     """Append the current turn to the tail and clip from the front.
 
@@ -320,10 +366,10 @@ def _rebuild_raw_tail(
     if assistant_final:
         pieces.append(f"assistant: {assistant_final.strip()}")
     joined = "\n".join(pieces)
-    if len(joined) <= RAW_TAIL_MAX_CHARS:
+    if len(joined) <= max_chars:
         return joined
     # Clip from the front — keep the most recent content.
-    return joined[-RAW_TAIL_MAX_CHARS:]
+    return joined[-max_chars:]
 
 
 def _looks_non_retryable_limit_error(text: str) -> bool:
@@ -339,3 +385,25 @@ def _looks_non_retryable_limit_error(text: str) -> bool:
     )
     lowered = (text or "").lower()
     return any(p in lowered for p in patterns)
+
+
+def _is_trivial_utterance(text: str) -> bool:
+    normalized = " ".join((text or "").strip().lower().split())
+    if not normalized:
+        return False
+    return normalized in _TRIVIAL_UTTERANCES
+
+
+def _resolve_raw_tail_max_chars(sandbox_overrides: Optional[dict]) -> int:
+    value = None
+    cfg = sandbox_overrides or {}
+    if isinstance(cfg, dict):
+        runtime_cfg = cfg.get("runtime")
+        memory_cfg = cfg.get("memory")
+        if isinstance(runtime_cfg, dict):
+            value = runtime_cfg.get("memory_raw_tail_max_chars", value)
+        if isinstance(memory_cfg, dict):
+            value = memory_cfg.get("raw_tail_max_chars", value)
+    if isinstance(value, int) and value >= 256:
+        return value
+    return RAW_TAIL_MAX_CHARS

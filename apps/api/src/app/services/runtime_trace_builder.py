@@ -27,14 +27,8 @@ class TraceStep:
 
 class RuntimeTraceBuilder:
     _logger = get_logger(__name__)
-    _LEGACY_RAW_TYPES = {
-        "routing",
-        "triage",
-        "planner_action",
-        "llm_request",
-        "llm_response",
-        "llm_call",
-    }
+    # Legacy raw types — cleared for v3 (system not in production)
+    _LEGACY_RAW_TYPES: set[str] = set()
 
     _CATEGORY_MAP: Dict[str, str] = {
         # lifecycle
@@ -73,8 +67,6 @@ class RuntimeTraceBuilder:
         "tool_result": "operation",
         # outputs / status
         "final": "final",
-        "final_response": "final",
-        "direct_response": "final",
         "error": "error",
         "status": "system",
         "delta": "system",
@@ -82,10 +74,6 @@ class RuntimeTraceBuilder:
         "run_paused": "system",
         "stop": "system",
         "done": "system",
-        # legacy aliases (compat)
-        "routing": "decision",
-        "triage": "decision",
-        "planner_action": "planner",
     }
 
     _TITLES: Dict[str, str] = {
@@ -119,17 +107,11 @@ class RuntimeTraceBuilder:
         "operation_result": "Результат операции",
         "tool_result": "Результат операции",
         "final": "Финальный ответ",
-        "final_response": "Финальный ответ",
-        "direct_response": "Финальный ответ",
         "error": "Ошибка",
         "status": "Статус",
         "delta": "Поток ответа",
         "waiting_input": "Ожидание ввода",
         "stop": "Остановлено",
-        # legacy aliases (compat)
-        "routing": "Маршрутизация",
-        "triage": "Триаж",
-        "planner_action": "Планировщик",
     }
 
     def build(self, steps: Iterable[TraceStep]) -> RunTraceResponse:
@@ -268,10 +250,8 @@ class RuntimeTraceBuilder:
         if raw_type == "budget_snapshot":
             owner = data.get("owner_scope") or data.get("scope") or "unknown"
             return f"{owner}: snapshot"
-        if raw_type in {"final", "final_response"}:
+        if raw_type == "final":
             return str(data.get("content") or data.get("answer") or "Final response")
-        if raw_type == "direct_response":
-            return f"content_length={data.get('content_length') or 0}"
         if raw_type == "error":
             return str(data.get("error") or data.get("message") or "Error")
         return str(data)[:180] if data else raw_type

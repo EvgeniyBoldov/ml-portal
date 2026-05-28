@@ -168,7 +168,7 @@ class PromptAssembler:
         blocks = [block for block in blocks if block]
         if not blocks:
             return ""
-        return "## Available Collections\n\n" + "\n\n".join(blocks)
+        return "## Доступные коллекции\n\n" + "\n\n".join(blocks)
 
     def assemble_constraints_prompt(
         self,
@@ -180,30 +180,30 @@ class PromptAssembler:
     ) -> str:
         blocks: List[str] = []
         blocks.append(
-            "### Runtime Limits\n"
+            "### Ограничения\n"
             + "\n".join([
-                f"- Max steps: {policy_limits.max_steps}",
-                f"- Max tool calls total: {policy_limits.max_tool_calls_total}",
-                f"- Max wall time (ms): {policy_limits.max_wall_time_ms}",
-                f"- Tool timeout (ms): {policy_limits.tool_timeout_ms}",
-                f"- Max retries: {policy_limits.max_retries}",
-                f"- Streaming enabled: {policy_limits.streaming_enabled}",
-                f"- Citations required: {policy_limits.citations_required}",
-                f"- Parallel tool calls allowed: {policy_limits.allow_parallel_tool_calls}",
+                f"- Макс. шагов: {policy_limits.max_steps}",
+                f"- Макс. вызовов операций: {policy_limits.max_tool_calls_total}",
+                f"- Макс. время выполнения (ms): {policy_limits.max_wall_time_ms}",
+                f"- Таймаут операции (ms): {policy_limits.tool_timeout_ms}",
+                f"- Макс. повторов: {policy_limits.max_retries}",
+                f"- Стриминг: {policy_limits.streaming_enabled}",
+                f"- Требуются цитаты: {policy_limits.citations_required}",
+                f"- Параллельные вызовы: {policy_limits.allow_parallel_tool_calls}",
             ])
         )
         if exec_request.policy_data:
-            blocks.append(f"### Policy Version\n{_compact_json(exec_request.policy_data)}")
+            blocks.append(f"### Версия политики\n{_compact_json(exec_request.policy_data)}")
         if exec_request.limit_data:
-            blocks.append(f"### Limit Version\n{_compact_json(exec_request.limit_data)}")
+            blocks.append(f"### Версия лимитов\n{_compact_json(exec_request.limit_data)}")
 
         platform_lines: List[str] = []
         if isinstance(platform_config, dict):
             policies_text = _text(platform_config.get("policies_text"))
             if policies_text:
-                platform_lines.append(f"- Policies: {policies_text}")
+                platform_lines.append(f"- Политики: {policies_text}")
         if platform_lines:
-            blocks.append("### Platform Constraints\n" + "\n".join(platform_lines))
+            blocks.append("Ограничения платформы\n" + "\n".join(platform_lines))
 
         include_sandbox_notes = bool(
             isinstance(sandbox_overrides, dict)
@@ -211,11 +211,11 @@ class PromptAssembler:
         )
         sandbox_lines = self._extract_sandbox_notes(sandbox_overrides) if include_sandbox_notes else []
         if sandbox_lines:
-            blocks.append("### Sandbox Notes\n" + "\n".join(f"- {line}" for line in sandbox_lines))
+            blocks.append("Заметки sandbox\n" + "\n".join(f"- {line}" for line in sandbox_lines))
 
         if len(blocks) == 1 and not platform_lines and not sandbox_lines and not exec_request.policy_data and not exec_request.limit_data:
             return ""
-        return "## Runtime Constraints\n\n" + "\n\n".join(blocks)
+        return "## Ограничения рантайма\n\n" + "\n\n".join(blocks)
 
     def assemble_operation_schemas(
         self,
@@ -252,6 +252,10 @@ class PromptAssembler:
                 return value.strip()
         if isinstance(platform_config, dict):
             value = platform_config.get("operations_rules_text")
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+            # Fallback to OrchestrationSettings.tool_use_guard
+            value = platform_config.get("tool_use_guard")
             if isinstance(value, str) and value.strip():
                 return value.strip()
         return None

@@ -76,6 +76,29 @@
   word-break: break-word;
 }
 
+.jsonActions {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 4px;
+}
+
+.jsonExpandBtn {
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary, #9ca3af);
+  font-size: 13px;
+  padding: 2px 4px;
+  border-radius: 4px;
+  cursor: pointer;
+  line-height: 1;
+  transition: color 100ms, background 100ms;
+}
+
+.jsonExpandBtn:hover {
+  color: var(--text-primary, #1a1a1a);
+  background: var(--bg-hover, rgba(0, 0, 0, 0.06));
+}
+
 .empty {
   padding: var(--space-4, 16px);
   text-align: center;

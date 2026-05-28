@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, AsyncIterator, Dict, List
+from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
@@ -8,7 +9,6 @@ import pytest
 from app.agents.context import ToolContext
 from app.runtime.contracts import NextStep, NextStepKind, PipelineRequest, PipelineStopReason
 from app.runtime.envelope import PhasedEvent
-from app.runtime.memory.working_memory import WorkingMemory
 from app.runtime.events import RuntimeEvent, RuntimeEventType
 from app.runtime.stages.planning_stage import PlanningOutcomeKind, PlanningStage
 from app.runtime.turn_state import RuntimeTurnState
@@ -59,8 +59,8 @@ class _AgentCaptureAndPause:
         )
 
 
-def _memory() -> WorkingMemory:
-    return WorkingMemory(
+def _memory():
+    return SimpleNamespace(
         run_id=uuid4(),
         chat_id=uuid4(),
         tenant_id=uuid4(),
@@ -68,10 +68,11 @@ def _memory() -> WorkingMemory:
         goal="goal",
         question="goal",
         status="running",
+        memory_state={},
     )
 
 
-def _request(memory: WorkingMemory) -> PipelineRequest:
+def _request(memory) -> PipelineRequest:
     return PipelineRequest(
         request_text="goal",
         chat_id=str(memory.chat_id),
@@ -143,7 +144,7 @@ async def test_planning_stage_syncs_runtime_turn_state_on_pause():
     assert len(runtime_state.planner_steps) == 1
 
 
-def _runtime_state(memory: WorkingMemory, *, chat_id: str | None) -> RuntimeTurnState:
+def _runtime_state(memory, *, chat_id: str | None) -> RuntimeTurnState:
     return RuntimeTurnState.from_seed(
         run_id=memory.run_id,
         chat_id=UUID(chat_id) if chat_id else None,

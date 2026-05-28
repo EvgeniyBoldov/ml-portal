@@ -86,6 +86,13 @@ memory_writer_finalize_failures_total = Counter(
     registry=_registry
 )
 
+memory_writer_component_status_total = Counter(
+    'memory_writer_component_status_total',
+    'Total number of memory writer component outcomes',
+    ['component_name', 'status'],
+    registry=_registry
+)
+
 # Model progress ratio
 model_progress_ratio = Gauge(
     'rag_model_progress_ratio',

@@ -6,9 +6,9 @@ from uuid import uuid4
 
 import pytest
 
-from app.runtime.memory.working_memory import WorkingMemory
-from app.runtime.state_bridge import ensure_runtime_turn_state
+from app.runtime.memory.components import MemoryBundle
 from app.runtime.synthesizer import Synthesizer
+from app.runtime.turn_state import RuntimeTurnState
 
 
 class _LLMClientProbe:
@@ -28,15 +28,15 @@ class _LLMClientProbe:
             yield chunk
 
 
-def _memory() -> WorkingMemory:
-    return WorkingMemory(
+def _runtime_state() -> RuntimeTurnState:
+    return RuntimeTurnState.from_seed(
         run_id=uuid4(),
         chat_id=uuid4(),
         tenant_id=uuid4(),
         user_id=uuid4(),
         goal="compare docs",
-        question="compare docs",
-        status="running",
+        current_user_query="compare docs",
+        memory_bundle=MemoryBundle(),
     )
 
 
@@ -44,7 +44,7 @@ def _memory() -> WorkingMemory:
 async def test_synthesizer_loads_db_prompt_and_passes_role_params_to_llm():
     llm = _LLMClientProbe(["hello ", "world"])
     synth = Synthesizer(session=SimpleNamespace(), llm_client=llm)
-    memory = _memory()
+    state = _runtime_state()
 
     with patch(
         "app.services.system_llm_role_service.SystemLLMRoleService.get_role_config",
@@ -57,10 +57,9 @@ async def test_synthesizer_loads_db_prompt_and_passes_role_params_to_llm():
             }
         ),
     ):
-        state = ensure_runtime_turn_state(memory)
         events = [event async for event in synth.stream(
             runtime_state=state,
-            run_id=memory.run_id,
+            run_id=state.run_id,
             planner_hint="force full synthesis path",
         )]
 
@@ -69,8 +68,10 @@ async def test_synthesizer_loads_db_prompt_and_passes_role_params_to_llm():
     assert call["model"] == "gpt-test"
     assert call["params"] == {"temperature": 0.15, "max_tokens": 321}
     assert call["messages"][0]["content"] == "SYNTH-PROMPT"
-    assert events[0].type.value == "status"
-    assert events[-1].type.value == "final"
+    assert events[0].type.value == "synthesis_start"
+    assert any(ev.type.value == "status" for ev in events)
+    assert events[-2].type.value == "final"
+    assert events[-1].type.value == "synthesis_end"
     assert state.final_answer == "hello world"
 
 
@@ -78,15 +79,15 @@ async def test_synthesizer_loads_db_prompt_and_passes_role_params_to_llm():
 async def test_synthesizer_falls_back_when_db_role_load_fails():
     llm = _LLMClientProbe(["fallback answer"])
     synth = Synthesizer(session=SimpleNamespace(), llm_client=llm)
-    memory = _memory()
+    state = _runtime_state()
 
     with patch(
         "app.services.system_llm_role_service.SystemLLMRoleService.get_role_config",
         new=AsyncMock(side_effect=RuntimeError("db unavailable")),
     ):
         events = [event async for event in synth.stream(
-            runtime_state=ensure_runtime_turn_state(memory),
-            run_id=memory.run_id,
+            runtime_state=state,
+            run_id=state.run_id,
             planner_hint="force full synthesis path",
         )]
 
@@ -95,16 +96,16 @@ async def test_synthesizer_falls_back_when_db_role_load_fails():
     assert call["model"] is None
     assert call["params"] == {"temperature": 0.3, "max_tokens": 2000}
     assert call["messages"][0]["content"]  # fallback prompt is non-empty
-    assert events[-1].type.value == "final"
-    assert events[-1].data["content"] == "fallback answer"
+    assert events[-2].type.value == "final"
+    assert events[-2].data["content"] == "fallback answer"
+    assert events[-1].type.value == "synthesis_end"
 
 
 @pytest.mark.asyncio
 async def test_synthesizer_honors_platform_chunk_size_override_for_short_circuit():
     llm = _LLMClientProbe([])
     synth = Synthesizer(session=SimpleNamespace(), llm_client=llm)
-    memory = _memory()
-    state = ensure_runtime_turn_state(memory)
+    state = _runtime_state()
     state.agent_results = [
         {"success": True, "summary": "x" * 47},
     ]
@@ -113,7 +114,7 @@ async def test_synthesizer_honors_platform_chunk_size_override_for_short_circuit
         event
         async for event in synth.stream(
             runtime_state=state,
-            run_id=memory.run_id,
+            run_id=state.run_id,
             platform_config={"runtime": {"synth_chunk_size": 5}},
         )
     ]

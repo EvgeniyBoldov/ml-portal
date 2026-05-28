@@ -1,0 +1,224 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  font-family: var(--font-mono, ui-monospace, 'Cascadia Code', monospace);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-primary, #e2e8f0);
+  overflow: auto;
+}
+
+/* ── Row layout ────────────────────────────────────────────── */
+.row {
+  display: flex;
+  align-items: flex-start;
+  min-height: 20px;
+}
+
+.row:hover {
+  background: var(--bg-hover, rgba(255, 255, 255, 0.04));
+  border-radius: 2px;
+}
+
+/* ── Gutter ────────────────────────────────────────────────── */
+.gutter {
+  width: 20px;
+  min-width: 20px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 2px;
+}
+
+.gutterMarker {
+  width: 14px;
+  height: 14px;
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary, #64748b);
+  font-size: 9px;
+  line-height: 1;
+  padding: 0;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 2px;
+  flex-shrink: 0;
+  transition: color 100ms, background 100ms;
+}
+
+.gutterMarker:hover {
+  color: var(--text-primary, #e2e8f0);
+  background: var(--bg-hover, rgba(255, 255, 255, 0.08));
+}
+
+.gutterSpacer {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+}
+
+/* ── Row content ───────────────────────────────────────────── */
+.rowContent {
+  flex: 1;
+  min-width: 0;
+  padding-top: 1px;
+  padding-bottom: 1px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ── Tokens ────────────────────────────────────────────────── */
+.key {
+  color: var(--text-secondary, #94a3b8);
+}
+
+.bracket {
+  color: var(--text-tertiary, #64748b);
+}
+
+.valueString {
+  color: var(--text-primary, #e2e8f0);
+}
+
+.valueNumber {
+  color: var(--info, #60a5fa);
+}
+
+.valueTrue {
+  color: var(--success, #34d399);
+}
+
+.valueFalse {
+  color: var(--danger, #f87171);
+}
+
+.valueNull {
+  color: var(--text-tertiary, #64748b);
+  font-style: italic;
+}
+
+.badge {
+  margin-left: 8px;
+  font-size: 10px;
+  color: var(--success, #34d399);
+  opacity: 0.8;
+  flex-shrink: 0;
+}
+
+/* ── Toolbar (copy button) ─────────────────────────────────── */
+.toolbar {
+  display: flex;
+  justify-content: flex-end;
+  padding: 4px 4px 2px;
+  flex-shrink: 0;
+}
+
+.copyBtn {
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary, #64748b);
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: color 100ms, background 100ms;
+}
+
+.copyBtn:hover {
+  color: var(--text-primary, #e2e8f0);
+  background: var(--bg-hover, rgba(255, 255, 255, 0.08));
+}
+
+/* ── Empty state ───────────────────────────────────────────── */
+.empty {
+  padding: 4px 8px;
+  color: var(--text-tertiary, #64748b);
+  font-style: italic;
+}
+
+/* ── Modal layout ──────────────────────────────────────────── */
+.modalBody {
+  display: flex;
+  flex-direction: column;
+  height: 80vh;
+  max-height: 860px;
+  padding: 0;
+}
+
+.modalHeader {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  flex-shrink: 0;
+  gap: 8px;
+}
+
+.modalScrollArea {
+  flex: 1;
+  overflow: auto;
+  padding: 12px 16px;
+}
+
+.modalEditSplit {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.modalEditPane {
+  flex: 1;
+  min-width: 0;
+  border-right: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.modalEditLabel {
+  padding: 6px 12px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary, #94a3b8);
+  border-bottom: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  flex-shrink: 0;
+}
+
+.modalEditTextarea {
+  flex: 1;
+  resize: none;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text-primary, #e2e8f0);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 12px;
+  overflow: auto;
+}
+
+.modalPreviewPane {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  padding: 12px 16px;
+}
+
+.modalPreviewLabel {
+  padding: 6px 12px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary, #94a3b8);
+  border-bottom: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  flex-shrink: 0;
+}

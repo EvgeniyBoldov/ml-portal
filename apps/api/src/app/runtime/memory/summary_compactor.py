@@ -23,6 +23,7 @@ from app.models.system_llm_role import SystemLLMRoleType
 from app.runtime.llm.structured import StructuredCallError, StructuredLLMCall
 from app.runtime.memory.dto import SummaryDTO
 from app.runtime.memory.fact_extractor import AgentResultSnippet
+from app.services.system_llm_role_service import SystemLLMRoleService
 
 logger = get_logger(__name__)
 
@@ -39,6 +40,13 @@ class _LLMSummaryOutput(BaseModel):
     done: List[str] = Field(default_factory=list)
     entities: Dict[str, str] = Field(default_factory=dict)
     open_questions: List[str] = Field(default_factory=list)
+    # Optional v2 delta fields. If absent, we fall back to legacy facets above.
+    new_goals: List[str] = Field(default_factory=list)
+    completed_goals: List[str] = Field(default_factory=list)
+    new_entities: Dict[str, str] = Field(default_factory=dict)
+    updated_entities: Dict[str, str] = Field(default_factory=dict)
+    resolved_questions: List[str] = Field(default_factory=list)
+    new_questions: List[str] = Field(default_factory=list)
 
 
 class SummaryCompactor:
@@ -50,6 +58,7 @@ class SummaryCompactor:
         session: AsyncSession,
         llm_client: LLMClientProtocol,
     ) -> None:
+        self._role_service = SystemLLMRoleService(session)
         self._structured = StructuredLLMCall(
             session=session, llm_client=llm_client
         )
@@ -107,13 +116,24 @@ class SummaryCompactor:
             logger.warning("SummaryCompactor unexpected error: %s", exc)
             return self._fallback(previous, turn_number)
 
+        role_extras: dict = {}
+        try:
+            role_config = await self._role_service.get_role_config(SystemLLMRoleType.SUMMARY_COMPACTOR)
+            maybe_extras = role_config.get("extras")
+            if isinstance(maybe_extras, dict):
+                role_extras = maybe_extras
+        except Exception:
+            role_extras = {}
+        policy = _resolve_summary_policy(role_extras, sandbox_overrides)
+
+        merged = _merge_summary(previous=previous, out=out, policy=policy)
         return SummaryDTO(
             chat_id=previous.chat_id,
-            goals=_clip_list(out.goals, MAX_GOALS),
-            done=_clip_list(out.done, MAX_DONE),
-            entities=_clip_map(out.entities, MAX_ENTITIES),
-            open_questions=_clip_list(out.open_questions, MAX_OPEN_QUESTIONS),
-            raw_tail=previous.raw_tail,          # writer maintains this
+            goals=merged["goals"],
+            done=merged["done"],
+            entities=merged["entities"],
+            open_questions=merged["open_questions"],
+            raw_tail=previous.raw_tail,  # writer maintains this
             last_updated_turn=turn_number,
         )
 
@@ -127,11 +147,11 @@ class SummaryCompactor:
         return copy
 
 
-def _clip_list(items: List[str], cap: int) -> List[str]:
+def _clip_list(items: List[str], cap: int, *, max_item_len: int = MAX_ITEM_LEN) -> List[str]:
     out: List[str] = []
     seen: set[str] = set()
     for raw in items:
-        v = (raw or "").strip()[:MAX_ITEM_LEN]
+        v = (raw or "").strip()[:max_item_len]
         if not v or v in seen:
             continue
         seen.add(v)
@@ -141,14 +161,87 @@ def _clip_list(items: List[str], cap: int) -> List[str]:
     return out
 
 
-def _clip_map(items: Dict[str, str], cap: int) -> Dict[str, str]:
+def _clip_map(items: Dict[str, str], cap: int, *, max_item_len: int = MAX_ITEM_LEN) -> Dict[str, str]:
     out: Dict[str, str] = {}
     for k, v in items.items():
-        k_clean = (k or "").strip()[:MAX_ITEM_LEN]
-        v_clean = (v or "").strip()[:MAX_ITEM_LEN]
+        k_clean = (k or "").strip()[:max_item_len]
+        v_clean = (v or "").strip()[:max_item_len]
         if not k_clean or not v_clean:
             continue
         out[k_clean] = v_clean
         if len(out) >= cap:
             break
     return out
+
+
+def _resolve_summary_policy(role_extras: Optional[dict], sandbox_overrides: Optional[dict]) -> dict:
+    cfg = dict(
+        max_goals=MAX_GOALS,
+        max_done=MAX_DONE,
+        max_entities=MAX_ENTITIES,
+        max_open_questions=MAX_OPEN_QUESTIONS,
+        max_item_len=MAX_ITEM_LEN,
+    )
+    overrides = sandbox_overrides or {}
+    memory = overrides.get("memory") if isinstance(overrides, dict) else None
+    compact = overrides.get("summary_compactor") if isinstance(overrides, dict) else None
+    for source in (role_extras, memory, compact):
+        if not isinstance(source, dict):
+            continue
+        for key in ("max_goals", "max_done", "max_entities", "max_open_questions", "max_item_len"):
+            val = source.get(key)
+            if isinstance(val, int) and val > 0:
+                cfg[key] = val
+    return cfg
+
+
+def _merge_summary(*, previous: SummaryDTO, out: _LLMSummaryOutput, policy: dict) -> dict:
+    max_item_len = int(policy["max_item_len"])
+
+    prev_goals = _clip_list(list(previous.goals or []), 10_000, max_item_len=max_item_len)
+    prev_done = _clip_list(list(previous.done or []), 10_000, max_item_len=max_item_len)
+    prev_questions = _clip_list(list(previous.open_questions or []), 10_000, max_item_len=max_item_len)
+    prev_entities = _clip_map(dict(previous.entities or {}), 10_000, max_item_len=max_item_len)
+
+    # Delta path (preferred)
+    if (
+        out.new_goals
+        or out.completed_goals
+        or out.new_entities
+        or out.updated_entities
+        or out.resolved_questions
+        or out.new_questions
+    ):
+        normalized_completed = {x.lower() for x in _clip_list(out.completed_goals, 10_000, max_item_len=max_item_len)}
+        goals = [g for g in prev_goals if g.lower() not in normalized_completed]
+        goals.extend(_clip_list(out.new_goals, 10_000, max_item_len=max_item_len))
+        goals = _clip_list(goals, policy["max_goals"], max_item_len=max_item_len)
+
+        done = list(prev_done)
+        done.extend(_clip_list(out.completed_goals, 10_000, max_item_len=max_item_len))
+        done = _clip_list(done, policy["max_done"], max_item_len=max_item_len)
+
+        entities = dict(prev_entities)
+        entities.update(_clip_map(out.new_entities, 10_000, max_item_len=max_item_len))
+        entities.update(_clip_map(out.updated_entities, 10_000, max_item_len=max_item_len))
+        entities = _clip_map(entities, policy["max_entities"], max_item_len=max_item_len)
+
+        resolved = {x.lower() for x in _clip_list(out.resolved_questions, 10_000, max_item_len=max_item_len)}
+        questions = [q for q in prev_questions if q.lower() not in resolved]
+        questions.extend(_clip_list(out.new_questions, 10_000, max_item_len=max_item_len))
+        questions = _clip_list(questions, policy["max_open_questions"], max_item_len=max_item_len)
+
+        return {
+            "goals": goals,
+            "done": done,
+            "entities": entities,
+            "open_questions": questions,
+        }
+
+    # Legacy full-state output path
+    return {
+        "goals": _clip_list(out.goals, policy["max_goals"], max_item_len=max_item_len),
+        "done": _clip_list(out.done, policy["max_done"], max_item_len=max_item_len),
+        "entities": _clip_map(out.entities, policy["max_entities"], max_item_len=max_item_len),
+        "open_questions": _clip_list(out.open_questions, policy["max_open_questions"], max_item_len=max_item_len),
+    }

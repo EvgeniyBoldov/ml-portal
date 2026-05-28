@@ -16,12 +16,14 @@ class OrchestrationBase(BaseModel):
     # === Executor Settings (used by AgentRuntime) ===
     executor_model: Optional[str] = Field(None, description="Default model alias for execution/generation")
     executor_temperature: Optional[float] = Field(0.7, description="Default temperature for execution/generation")
+    tool_use_guard: Optional[str] = Field(None, description="Policy text for tool use (MANDATORY RULES)")
 
 
 class ExecutorSettingsUpdate(BaseModel):
     """Schema for updating executor settings."""
     executor_model: Optional[str] = Field(None, description="Default model alias for execution/generation")
     executor_temperature: Optional[float] = Field(None, description="Default temperature for execution/generation")
+    tool_use_guard: Optional[str] = Field(None, description="Policy text for tool use (MANDATORY RULES)")
 
 
 class OrchestrationSettingsResponse(OrchestrationBase):

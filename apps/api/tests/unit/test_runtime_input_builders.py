@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 from uuid import uuid4
+from types import SimpleNamespace
 
 from app.runtime.input_builders import PlannerInputBuilder, SynthesizerInputBuilder
 from app.runtime.memory.components import MemoryBundle
-from app.runtime.memory.working_memory import WorkingMemory
 from app.runtime.turn_state import RuntimeTurnState
 
 
-def _memory() -> WorkingMemory:
-    return WorkingMemory(
+def _memory():
+    return SimpleNamespace(
         run_id=uuid4(),
         chat_id=uuid4(),
         tenant_id=uuid4(),
@@ -17,6 +17,7 @@ def _memory() -> WorkingMemory:
         goal="legacy goal",
         question="legacy q",
         status="running",
+        memory_state={},
     )
 
 

@@ -34,19 +34,6 @@ class ChatEventMapper:
         "actor_entity_id",
     }
 
-    @staticmethod
-    def _planner_action_type(kind: Any) -> Optional[str]:
-        text = str(kind or "").strip()
-        if not text:
-            return None
-        if text == "call_agent":
-            return "agent_call"
-        if text == "final":
-            return "finalize"
-        if text in {"ask_user", "clarify"}:
-            return "ask_user"
-        return text
-
     def map_runtime_event(self, event: RuntimeEvent) -> Optional[Dict[str, Any]]:
         env = _envelope(event.data)
 
@@ -107,21 +94,16 @@ class ChatEventMapper:
         if event.type == RuntimeEventType.PLANNER_DECISION:
             kind = event.data.get("kind")
             rationale = event.data.get("rationale")
-            action_type = self._planner_action_type(kind)
             return {
-                "type": "planner_action",
+                "type": "planner_decision",
                 "iteration": event.data.get("iteration"),
                 "kind": kind,
                 "rationale": rationale,
                 "risk": event.data.get("risk"),
                 "contract_version": 1,
-                # legacy aliases
-                "action_type": action_type,
-                "step_type": kind,
                 "agent_slug": event.data.get("agent_slug"),
                 "phase_id": event.data.get("phase_id"),
                 "phase_title": event.data.get("phase_title"),
-                "why": rationale,
                 "orchestration_envelope": env,
             }
 

@@ -42,6 +42,7 @@ class OrchestrationSettingsProvider:
         self._settings_cache = {
             "executor_model": settings.executor_model,
             "executor_temperature": settings.executor_temperature,
+            "tool_use_guard": settings.tool_use_guard,
         }
         return self._settings_cache
 

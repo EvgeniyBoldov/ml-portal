@@ -17,7 +17,6 @@ from app.runtime.contracts import (
     NextStepKind,
     PipelineStopReason,
 )
-from app.runtime.memory.working_memory import WorkingMemory, Fact, AgentResult
 
 
 def __getattr__(name: str):
@@ -40,7 +39,4 @@ __all__ = [
     "NextStep",
     "NextStepKind",
     "PipelineStopReason",
-    "WorkingMemory",
-    "Fact",
-    "AgentResult",
 ]

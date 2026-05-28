@@ -5,6 +5,7 @@ agent_start/end, synthesis_start/end) are emitted with correct parent_entity_id 
 from __future__ import annotations
 
 from typing import Any, AsyncIterator, List
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -12,7 +13,6 @@ import pytest
 from app.runtime.contracts import NextStep, NextStepKind, PipelineRequest, PipelineStopReason
 from app.runtime.envelope import PhasedEvent
 from app.runtime.events import RuntimeEvent, RuntimeEventType
-from app.runtime.memory.working_memory import WorkingMemory
 from app.runtime.stages.planning_stage import PlanningOutcomeKind, PlanningStage
 from app.runtime.turn_state import RuntimeTurnState
 from app.agents.context import ToolContext
@@ -90,8 +90,8 @@ class _AgentWithFinalAnswer:
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _memory() -> WorkingMemory:
-    return WorkingMemory(
+def _memory():
+    return SimpleNamespace(
         run_id=uuid4(),
         chat_id=uuid4(),
         tenant_id=uuid4(),
@@ -102,7 +102,7 @@ def _memory() -> WorkingMemory:
     )
 
 
-def _runtime_state(memory: WorkingMemory) -> RuntimeTurnState:
+def _runtime_state(memory) -> RuntimeTurnState:
     return RuntimeTurnState.from_seed(
         run_id=memory.run_id,
         chat_id=memory.chat_id,
@@ -114,7 +114,7 @@ def _runtime_state(memory: WorkingMemory) -> RuntimeTurnState:
     )
 
 
-def _request(memory: WorkingMemory) -> PipelineRequest:
+def _request(memory) -> PipelineRequest:
     return PipelineRequest(
         request_text="goal",
         chat_id=str(memory.chat_id),

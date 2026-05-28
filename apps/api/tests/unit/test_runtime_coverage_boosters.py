@@ -23,19 +23,91 @@ from app.runtime.events import RuntimeEventType
 from app.runtime.budgets import BudgetLimitsResolver, RunBudgetLedger
 from app.runtime.llm.structured import StructuredCallError
 from app.agents.runtime.llm import LLMAdapter
-from app.runtime.memory.working_memory import WorkingMemory
 from app.runtime.operation_errors import RuntimeErrorCode
 from app.runtime.planner.planner import Planner, PlannerLLMOutput
 from app.runtime.planner.validator import validate_next_step
-from app.runtime.state_bridge import ensure_runtime_turn_state
 from app.runtime.stages.planning_stage import PlanningStage
+from app.runtime.turn_state import RuntimeTurnState
+from app.runtime.memory.components import MemoryBundle
 
 
-def _memory(*, can_finalize: bool = True) -> WorkingMemory:
-    mem = WorkingMemory(run_id=uuid4(), goal="goal")
+def _memory(*, can_finalize: bool = True):
+    mem = SimpleNamespace(
+        run_id=uuid4(),
+        chat_id=None,
+        user_id=None,
+        tenant_id=None,
+        goal="goal",
+        question="",
+        outline=None,
+        current_phase_id=None,
+        completed_phase_ids=[],
+        blocked_phase_ids=[],
+        open_questions=[],
+        status="running",
+        final_answer=None,
+        final_error=None,
+        iter_count=0,
+        used_tool_calls=0,
+        recent_action_signatures=[],
+        planner_steps=[],
+        agent_results=[],
+        facts=[],
+        tool_ledger=None,
+    )
     if not can_finalize:
         mem.outline = {"phases": [{"phase_id": "must-do", "must_do": True}]}
     return mem
+
+
+def ensure_runtime_turn_state(memory) -> RuntimeTurnState:
+    state = RuntimeTurnState.from_seed(
+        run_id=memory.run_id,
+        chat_id=memory.chat_id,
+        user_id=memory.user_id,
+        tenant_id=memory.tenant_id,
+        goal=memory.goal or "",
+        current_user_query=memory.question or "",
+        memory_bundle=MemoryBundle(),
+    )
+    state.outline = memory.outline
+    state.current_phase_id = memory.current_phase_id
+    state.completed_phase_ids = list(memory.completed_phase_ids or [])
+    state.blocked_phase_ids = list(memory.blocked_phase_ids or [])
+    state.open_questions = list(memory.open_questions or [])
+    state.status = memory.status or "running"
+    state.final_answer = memory.final_answer
+    state.final_error = memory.final_error
+    state.iter_count = int(memory.iter_count or 0)
+    state.used_tool_calls = int(memory.used_tool_calls or 0)
+    state.recent_action_signatures = list(memory.recent_action_signatures or [])
+    state.planner_steps = [
+        {
+            "iteration": int(getattr(item, "iteration", 0) or 0),
+            "kind": str(getattr(item, "kind", "") or ""),
+            "agent_slug": getattr(item, "agent_slug", None),
+            "phase_id": getattr(item, "phase_id", None),
+            "rationale": str(getattr(item, "rationale", "") or ""),
+        }
+        for item in (memory.planner_steps or [])
+    ]
+    state.agent_results = [
+        {
+            "agent_slug": str(getattr(item, "agent_slug", "") or ""),
+            "summary": str(getattr(item, "summary", "") or ""),
+            "facts": list(getattr(item, "facts", []) or []),
+            "phase_id": getattr(item, "phase_id", None),
+            "iteration": int(getattr(item, "iteration", 0) or 0),
+            "success": bool(getattr(item, "success", True)),
+            "error": getattr(item, "error", None),
+        }
+        for item in (memory.agent_results or [])
+    ]
+    for fact in (memory.facts or []):
+        text = str(getattr(fact, "text", "") or "").strip()
+        if text:
+            state.add_runtime_fact(text, source=str(getattr(fact, "source", "") or "planner"))
+    return state
 
 
 class _FakeRunSession:
@@ -173,7 +245,7 @@ async def test_agent_executor_fast_fallback_when_no_operations():
     user_id = uuid4()
     tenant_id = uuid4()
     chat_id = uuid4()
-    mem = WorkingMemory(run_id=uuid4(), goal="goal")
+    mem = _memory()
     step = NextStep(kind=NextStepKind.CALL_AGENT, rationale="r", agent_slug="ops", agent_input={"query": "q"})
 
     executor.preflight.prepare = AsyncMock(

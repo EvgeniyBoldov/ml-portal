@@ -24,7 +24,7 @@ class CapabilityCardBundle:
         sections = [s for s in (self.agent_card, self.collections_card, self.operations_card) if s]
         if not sections:
             return ""
-        return "## Runtime Capability Card\n\n" + "\n\n".join(sections)
+        return "## Карточка возможностей\n\n" + "\n\n".join(sections)
 
 
 class CapabilityCardBuilder:
@@ -47,26 +47,26 @@ class CapabilityCardBuilder:
         if agent is None:
             return ""
 
-        lines: List[str] = ["### Agent", f"- Slug: `{self._text(getattr(agent, 'slug', ''))}`"]
+        lines: List[str] = ["### Агент", f"- Slug: `{self._text(getattr(agent, 'slug', ''))}`"]
 
         title = self._text(getattr(agent, "name", ""))
         if title:
-            lines.append(f"- Title: {title}")
+            lines.append(f"- Название: {title}")
 
         description = self._text(getattr(agent, "description", ""))
         if description:
-            lines.append(f"- Description: {description}")
+            lines.append(f"- Описание: {description}")
 
         tags = [self._text(tag) for tag in (getattr(agent, "tags", None) or [])]
         tags = [tag for tag in tags if tag]
         if tags:
-            lines.append(f"- Tags: {', '.join(tags)}")
+            lines.append(f"- Теги: {', '.join(tags)}")
 
         agent_version = exec_request.agent_version
         if agent_version is not None:
             risk_level = self._text(getattr(agent_version, "risk_level", ""))
             if risk_level:
-                lines.append(f"- Risk level: {risk_level}")
+                lines.append(f"- Уровень риска: {risk_level}")
 
         return "\n".join(lines)
 
@@ -74,7 +74,7 @@ class CapabilityCardBuilder:
         if not items:
             return ""
 
-        lines: List[str] = ["### Collections"]
+        lines: List[str] = ["### Коллекции"]
         shown = 0
         for item in items:
             if shown >= MAX_COLLECTIONS_IN_CARD:
@@ -92,45 +92,45 @@ class CapabilityCardBuilder:
             line = f"- `{slug}`"
             details: List[str] = []
             if collection_type:
-                details.append(f"type: {collection_type}")
+                details.append(f"тип: {collection_type}")
             if readiness is not None:
                 readiness_status = self._text(getattr(readiness, "status", ""))
                 if readiness_status:
-                    details.append(f"readiness: {readiness_status}")
+                    details.append(f"готовность: {readiness_status}")
                 schema_freshness = self._text(getattr(readiness, "schema_freshness", ""))
                 if schema_freshness:
-                    details.append(f"schema: {schema_freshness}")
+                    details.append(f"схема: {schema_freshness}")
             if entity_type:
-                details.append(f"entity: {entity_type}")
+                details.append(f"сущность: {entity_type}")
             if purpose:
-                details.append(f"purpose: {purpose}")
+                details.append(f"назначение: {purpose}")
             if data_description:
-                details.append(f"data: {data_description}")
+                details.append(f"данные: {data_description}")
             elif description:
-                details.append(f"about: {description}")
+                details.append(f"описание: {description}")
             if remote_tables:
                 preview = ", ".join(f"`{name}`" for name in remote_tables[:5])
                 if len(remote_tables) > 5:
-                    preview += f", +{len(remote_tables) - 5} more"
-                details.append(f"tables: {preview}")
+                    preview += f", +{len(remote_tables) - 5} ещё"
+                details.append(f"таблицы: {preview}")
             if readiness is not None:
                 missing = list(getattr(readiness, "missing_requirements", []) or [])
                 if missing:
-                    details.append(f"missing: {', '.join(self._text(v) for v in missing if self._text(v))}")
+                    details.append(f"отсутствует: {', '.join(self._text(v) for v in missing if self._text(v))}")
             if details:
                 line += " - " + "; ".join(details)
             lines.append(line)
 
         total = len(items)
         if total > shown:
-            lines.append(f"- ... and {total - shown} more collections")
+            lines.append(f"- ... и ещё {total - shown} коллекций")
         return "\n".join(lines)
 
     def _build_operations_card(self, operations: Sequence["ResolvedOperation"]) -> str:
         if not operations:
             return ""
 
-        lines: List[str] = [f"### Allowed Operations ({len(operations)})"]
+        lines: List[str] = [f"### Доступные операции ({len(operations)})"]
         shown = 0
         for op in operations:
             if shown >= MAX_OPERATIONS_IN_CARD:
@@ -140,14 +140,14 @@ class CapabilityCardBuilder:
             line = f"- `{op.operation_slug}`"
             details: List[str] = []
             if coll_slug:
-                details.append(f"collection: {coll_slug}")
+                details.append(f"коллекция: {coll_slug}")
             if details:
                 line += " - " + "; ".join(details)
             lines.append(line)
 
         total = len(operations)
         if total > shown:
-            lines.append(f"- ... and {total - shown} more operations")
+            lines.append(f"- ... и ещё {total - shown} операций")
         return "\n".join(lines)
 
     @staticmethod

@@ -20,6 +20,7 @@ rolling summary job is delegated to MemoryWriter + SummaryCompactor.
 """
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, Dict, List, Optional
 from uuid import UUID, uuid4
@@ -32,7 +33,7 @@ from app.agents.runtime_rbac_resolver import RuntimeRbacResolver
 from app.core.http.clients import LLMClientProtocol
 from app.core.logging import get_logger
 from app.runtime.assembler import PipelineAssembler
-from app.runtime.budgets import BudgetExceededError, BudgetRegistry, BudgetResolver
+from app.runtime.budgets import BudgetRegistry, BudgetResolver
 from app.runtime.contracts import PipelineRequest, PipelineStopReason
 from app.runtime.envelope import EventEnvelopeStamper, PhasedEvent
 from app.runtime.event_emitter import RuntimeEventEmitter
@@ -46,6 +47,10 @@ from app.core.prometheus_metrics import memory_writer_finalize_failures_total
 from app.services.agent_service import AgentService
 from app.services.permission_service import PermissionService
 from app.services.run_store import RunStore
+
+# Memory writeback can be off-loaded to Celery for lower latency
+# Set RUNTIME_MEMORY_INLINE=1 to disable Celery and run inline (dev mode)
+RUNTIME_MEMORY_INLINE = os.getenv("RUNTIME_MEMORY_INLINE", "0") == "1"
 
 logger = get_logger(__name__)
 
@@ -256,12 +261,14 @@ class RuntimePipeline:
                     logger.warning("Failed to finish top-level AgentRun: %s", _e)
             # Memory write-back still runs for paused/aborted turns so
             # next turn sees the open_questions / error context.
-            await self._finalize_memory(
+            async for memory_ev in self._finalize_memory(
                 turn_mem=turn_mem,
                 runtime_state=runtime_state,
                 request=request,
                 stop_reason=planning_outcome.stop_reason,
-            )
+                emitter=emitter,
+            ):
+                yield memory_ev
             return
 
         # --- Finalization -----------------------------------------------
@@ -279,6 +286,7 @@ class RuntimePipeline:
                 runtime_state=runtime_state,
                 stop_reason=planning_outcome.stop_reason,
                 planner_hint=planning_outcome.planner_hint,
+                final_answer_strategy=planning_outcome.final_answer_strategy,
                 model=request.model,
                 platform_config=platform.config,
                 sandbox_overrides=request.sandbox_overrides,
@@ -300,12 +308,14 @@ class RuntimePipeline:
         )
 
         # --- Memory: write path (new) -----------------------------------
-        await self._finalize_memory(
+        async for memory_ev in self._finalize_memory(
             turn_mem=turn_mem,
             runtime_state=runtime_state,
             request=request,
             stop_reason=planning_outcome.stop_reason,
-        )
+            emitter=emitter,
+        ):
+            yield memory_ev
 
     @staticmethod
     def _apply_sandbox_overrides(request: PipelineRequest, ctx: ToolContext) -> None:
@@ -378,6 +388,7 @@ class RuntimePipeline:
         runtime_state: RuntimeTurnState,
         stop_reason: PipelineStopReason,
         planner_hint: Optional[str],
+        final_answer_strategy: Literal["synthesize", "verbatim", "use_agent_result"],
         model: Optional[str],
         platform_config: Optional[Dict[str, Any]] = None,
         sandbox_overrides: Optional[Dict[str, Any]] = None,
@@ -387,55 +398,17 @@ class RuntimePipeline:
         budget_resolver: Optional[BudgetResolver] = None,
     ) -> AsyncGenerator[RuntimeEvent, None]:
         effective_run_id = run_id or runtime_state.run_id
-        synthesis_id = f"{effective_run_id}:synthesis:1"
-        if budget_registry is not None:
-            synthesis_limits = None
-            if budget_resolver is not None:
-                try:
-                    synthesis_limits = await budget_resolver.resolve_orchestrator("synthesizer", sandbox_overrides)
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("Failed to resolve synthesizer limits: %s", exc)
-            budget_registry.register(
-                entity_type="synthesis_run",
-                entity_id=synthesis_id,
-                parent_entity_id=str(effective_run_id),
-                role="synthesizer",
-                limits=synthesis_limits,
-            )
-            init_payload = budget_registry.emit_snapshot(synthesis_id, reason="init") or {}
-            yield envelope.stamp(
-                RuntimeEvent.budget_snapshot(
-                    entity_type="synthesis_run",
-                    entity_id=synthesis_id,
-                    parent_entity_type="run",
-                    parent_entity_id=str(effective_run_id),
-                    role="synthesizer",
-                    own=init_payload.get("own", {}),
-                    limits=init_payload.get("limits"),
-                    delta={},
-                    reason="init",
-                    at_ms=init_payload.get("at_ms"),
-                ),
-                OrchestrationPhase.SYNTHESIS,
-                run_id=str(effective_run_id),
-            )
-        yield envelope.stamp(
-            RuntimeEvent.synthesis_start(
-                synthesis_id=synthesis_id,
-                run_id=str(effective_run_id),
-            ),
-            OrchestrationPhase.SYNTHESIS,
-            run_id=str(effective_run_id),
-        )
         final_stage = self._assembler.build_finalization_stage()
-        synthesis_status = "completed"
         async for phased in final_stage.run(
             runtime_state=runtime_state,
             stop_reason=stop_reason,
             planner_hint=planner_hint,
+            final_answer_strategy=final_answer_strategy,
             model=model,
             platform_config=platform_config,
             sandbox_overrides=sandbox_overrides,
+            budget_registry=budget_registry,
+            budget_resolver=budget_resolver,
             run_synthesizer=True,
         ):
             ev = phased.event
@@ -449,109 +422,7 @@ class RuntimePipeline:
                     stop_reason=stop_reason.value,
                 )
                 phased = PhasedEvent(ev, phased.phase)
-            if ev.type == RuntimeEventType.ERROR:
-                synthesis_status = "failed"
-            if budget_registry is not None:
-                try:
-                    if ev.type == RuntimeEventType.LLM_TURN:
-                        in_tokens = int(ev.data.get("tokens_in") or 0)
-                        out_tokens = int(ev.data.get("tokens_out") or 0)
-                        total_tokens = int(ev.data.get("tokens_total") or (in_tokens + out_tokens))
-                        dur = int(ev.data.get("duration_ms") or 0)
-                        delta_payload: Dict[str, int] = {}
-                        if in_tokens > 0:
-                            budget_registry.consume(synthesis_id, "tokens_in", in_tokens, reason="tokens")
-                            delta_payload["tokens_in"] = in_tokens
-                        if out_tokens > 0:
-                            budget_registry.consume(synthesis_id, "tokens_out", out_tokens, reason="tokens")
-                            delta_payload["tokens_out"] = out_tokens
-                        if total_tokens > 0:
-                            budget_registry.consume(synthesis_id, "tokens_total", total_tokens, reason="tokens")
-                            delta_payload["tokens_total"] = total_tokens
-                        if dur > 0:
-                            budget_registry.consume(synthesis_id, "wall_time_ms", dur, reason="wall_time")
-                            delta_payload["wall_time_ms"] = dur
-                        if delta_payload:
-                            snap = budget_registry.emit_snapshot(
-                                synthesis_id,
-                                reason="llm_turn",
-                                delta=delta_payload,
-                            ) or {}
-                            yield envelope.stamp(
-                                RuntimeEvent.budget_snapshot(
-                                    entity_type="synthesis_run",
-                                    entity_id=synthesis_id,
-                                    parent_entity_type="run",
-                                    parent_entity_id=str(effective_run_id),
-                                    role="synthesizer",
-                                    own=snap.get("own", {}),
-                                    limits=snap.get("limits"),
-                                    delta=delta_payload,
-                                    reason="llm_turn",
-                                    at_ms=snap.get("at_ms"),
-                                ),
-                                OrchestrationPhase.SYNTHESIS,
-                                run_id=str(runtime_state.run_id),
-                            )
-                except BudgetExceededError as exc:
-                    synthesis_status = "failed"
-                    yield envelope.stamp(
-                        RuntimeEvent.error(
-                            f"Synthesizer budget exceeded: {exc.metric}",
-                            recoverable=False,
-                            parent_entity_type="synthesis_run",
-                            parent_entity_id=synthesis_id,
-                        ),
-                        OrchestrationPhase.SYNTHESIS,
-                        run_id=str(runtime_state.run_id),
-                    )
-                    break
             yield envelope.stamp_phased(phased, run_id=str(runtime_state.run_id))
-        if budget_registry is not None:
-            final_payload = budget_registry.emit_snapshot(synthesis_id, reason="finalize") or {}
-            yield envelope.stamp(
-                RuntimeEvent.budget_snapshot(
-                    entity_type="synthesis_run",
-                    entity_id=synthesis_id,
-                    parent_entity_type="run",
-                    parent_entity_id=str(effective_run_id),
-                    role="synthesizer",
-                    own=final_payload.get("own", {}),
-                    limits=final_payload.get("limits"),
-                    delta={},
-                    reason="finalize",
-                    at_ms=final_payload.get("at_ms"),
-                ),
-                OrchestrationPhase.SYNTHESIS,
-                run_id=str(effective_run_id),
-            )
-        yield envelope.stamp(
-            RuntimeEvent.synthesis_end(
-                synthesis_id=synthesis_id,
-                run_id=str(effective_run_id),
-                status=synthesis_status,
-            ),
-            OrchestrationPhase.SYNTHESIS,
-            run_id=str(effective_run_id),
-        )
-
-    @staticmethod
-    def _estimate_tokens_from_payload(value: object) -> int:
-        import json
-
-        if value is None:
-            return 0
-        try:
-            if isinstance(value, str):
-                raw = value
-            else:
-                raw = json.dumps(value, ensure_ascii=False, default=str)
-        except Exception:
-            raw = str(value)
-        raw = (raw or "").strip()
-        if not raw:
-            return 0
-        return max(1, len(raw) // 4)
 
     async def _finalize_memory(
         self,
@@ -560,12 +431,16 @@ class RuntimePipeline:
         runtime_state: RuntimeTurnState,
         request: PipelineRequest,
         stop_reason: PipelineStopReason,
-    ) -> None:
+        emitter: RuntimeEventEmitter,
+    ) -> AsyncGenerator[RuntimeEvent, None]:
         """Persist the turn's memory effects via MemoryWriter.
 
         Wraps every call in best-effort error handling: a write failure
         must never surface to the caller — the user already got their
         answer, we'd rather miss one turn of memory than double-fault.
+
+        When RUNTIME_MEMORY_INLINE is False (default), the actual writeback
+        is off-loaded to Celery for lower SSE latency.
         """
         # Sync agent_results from runtime_state to turn_mem
         turn_mem.agent_results = [
@@ -579,6 +454,87 @@ class RuntimePipeline:
         # Sync memory_bundle reference
         runtime_state.memory_bundle = turn_mem.memory_bundle
         assistant_final = runtime_state.final_answer or ""
+        yield emitter.emit(
+            RuntimeEvent.status(
+                "memory_write_start",
+                turn_number=turn_mem.turn_number,
+                agent_results=len(turn_mem.agent_results or []),
+                mode="inline" if RUNTIME_MEMORY_INLINE else "celery",
+            ),
+            phase=OrchestrationPhase.PIPELINE,
+        )
+
+        # If Celery off-load is enabled, serialize and dispatch
+        if not RUNTIME_MEMORY_INLINE:
+            try:
+                from app.workers.tasks_memory import (
+                    finalize_memory_task,
+                    MemoryFinalizePayload,
+                    FactPayload,
+                    SummaryPayload,
+                    AgentResultPayload,
+                )
+
+                payload = MemoryFinalizePayload(
+                    chat_id=str(turn_mem.chat_id),
+                    user_id=str(turn_mem.user_id) if turn_mem.user_id else None,
+                    tenant_id=str(turn_mem.tenant_id) if turn_mem.tenant_id else None,
+                    turn_number=turn_mem.turn_number,
+                    user_message=request.request_text,
+                    assistant_final=assistant_final,
+                    summary=SummaryPayload(
+                        chat_id=str(turn_mem.summary.chat_id),
+                        goals=list(turn_mem.summary.goals or []),
+                        done=list(turn_mem.summary.done or []),
+                        entities=dict(turn_mem.summary.entities or {}),
+                        open_questions=list(turn_mem.summary.open_questions or []),
+                        raw_tail=turn_mem.summary.raw_tail or "",
+                        last_updated_turn=turn_mem.summary.last_updated_turn,
+                    ),
+                    retrieved_facts=[
+                        FactPayload(
+                            scope=f.scope.value,
+                            subject=f.subject,
+                            value=f.value,
+                            source=f.source.value if f.source else "USER_UTTERANCE",
+                            user_id=str(f.user_id) if f.user_id else None,
+                            tenant_id=str(f.tenant_id) if f.tenant_id else None,
+                            chat_id=str(f.chat_id) if f.chat_id else None,
+                            confidence=f.confidence,
+                        )
+                        for f in (turn_mem.retrieved_facts or [])
+                    ],
+                    agent_results=[
+                        AgentResultPayload(
+                            agent=r.agent,
+                            summary=r.summary,
+                            success=r.success,
+                        )
+                        for r in turn_mem.agent_results
+                    ],
+                    skip_llm_helpers=False,  # Determined by worker based on terminal_reason
+                    terminal_reason=stop_reason.value if stop_reason else None,
+                    sandbox_overrides=request.sandbox_overrides,
+                )
+
+                # Fire-and-forget to Celery
+                finalize_memory_task.delay(payload.model_dump(mode="json"))
+
+                yield emitter.emit(
+                    RuntimeEvent.status(
+                        "memory_write_dispatched",
+                        turn_number=turn_mem.turn_number,
+                        mode="celery",
+                    ),
+                    phase=OrchestrationPhase.PIPELINE,
+                )
+                return
+
+            except Exception as exc:
+                logger.warning("Failed to dispatch memory task to Celery: %s. Falling back to inline.", exc)
+                # Fall through to inline mode
+
+        # Inline mode (dev or fallback)
         try:
             await self._assembler.memory_writer.finalize(
                 memory=turn_mem,
@@ -592,6 +548,48 @@ class RuntimePipeline:
             memory_writer_finalize_failures_total.labels(
                 stop_reason=stop_reason.value if stop_reason else "unknown"
             ).inc()
+            yield emitter.emit(
+                RuntimeEvent.status(
+                    "memory_write_failed",
+                    error=str(exc)[:500],
+                    turn_number=turn_mem.turn_number,
+                ),
+                phase=OrchestrationPhase.PIPELINE,
+            )
+            return
+
+        write_status = (
+            (turn_mem.memory_diagnostics or {}).get("memory_write_status")
+            if isinstance(turn_mem.memory_diagnostics, dict)
+            else None
+        ) or {}
+        for item in write_status.get("results") or []:
+            if not isinstance(item, dict):
+                continue
+            yield emitter.emit(
+                RuntimeEvent.status(
+                    "memory_component_result",
+                    component_name=item.get("component_name"),
+                    status=item.get("status"),
+                    inserted_count=item.get("inserted_count", 0),
+                    updated_count=item.get("updated_count", 0),
+                    skipped_count=item.get("skipped_count", 0),
+                    error_code=item.get("error_code"),
+                    error_message=item.get("error_message"),
+                    duration_ms=item.get("duration_ms", 0),
+                ),
+                phase=OrchestrationPhase.PIPELINE,
+            )
+
+        yield emitter.emit(
+            RuntimeEvent.status(
+                "memory_write_end",
+                turn_number=turn_mem.turn_number,
+                failed_components=write_status.get("failed_components", []),
+                degraded_components=write_status.get("degraded_components", []),
+            ),
+            phase=OrchestrationPhase.PIPELINE,
+        )
 
     async def _resolve_available_agents_for_planner(
         self,

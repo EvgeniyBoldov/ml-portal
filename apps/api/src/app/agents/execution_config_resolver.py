@@ -72,6 +72,11 @@ class ExecutionConfigResolver:
                         f"[Sandbox] Applied platform overrides: {list(platform_ov.keys())}",
                     )
 
+                # Add tool_use_guard from OrchestrationSettings to platform_config
+                # so prompt_assembler can use it as fallback for operations rules
+                if config.get("tool_use_guard"):
+                    platform_config["tool_use_guard"] = config.get("tool_use_guard")
+
                 agent = exec_request.agent
                 limits_service = ExecutionLimitsService(session)
                 agent_slug = str(getattr(agent, "slug", "") or "").strip() if agent else ""

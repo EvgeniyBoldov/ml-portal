@@ -48,6 +48,12 @@ class SystemLLMTrace(Base):
         index=True,
         comment="triage | planner | summary"
     )
+    caller_role: Mapped[Optional[str]] = mapped_column(
+        String(32),
+        nullable=True,
+        index=True,
+        comment="planner | synthesizer | fact_extractor | summary_compactor | agent"
+    )
     
     # === Relationships ===
     chat_id: Mapped[Optional[uuid.UUID]] = mapped_column(

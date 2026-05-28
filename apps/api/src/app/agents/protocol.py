@@ -199,20 +199,20 @@ def build_operations_prompt(
         mandatory_rules_text.strip()
         if isinstance(mandatory_rules_text, str) and mandatory_rules_text.strip()
         else (
-            "MANDATORY RULES — follow these without exception:\n"
-            "1. If the user asks for REAL DATA (records, values, counts, status, config) — you MUST call an operation first. Never answer from prior knowledge about actual data.\n"
-            "2. EXCEPTION: if the user asks only about what data sources, collections, or operations are available (meta-question about capabilities) — you MAY answer directly using the capability card above without calling any operation.\n"
-            "3. Only after you receive operation results may you compose and deliver the final answer for data questions.\n"
-            "4. Never make up or assume actual data values — collect them via operations."
+            "ОБЯЗАТЕЛЬНЫЕ ПРАВИЛА — соблюдай без исключений:\n"
+            "1. Если пользователь запрашивает РЕАЛЬНЫЕ ДАННЫЕ (записи, значения, количества, статусы, конфигурацию) — сначала вызови операцию. Не отвечай по памяти.\n"
+            "2. ИСКЛЮЧЕНИЕ: если вопрос только о том, какие источники данных или операции доступны (мета-вопрос о возможностях) — можно ответить напрямую из capability card.\n"
+            "3. Финальный ответ на вопросы о данных — только после получения результатов операций.\n"
+            "4. Не придумывай значения — используй только данные из операций."
         )
     )
 
     return f"""
-## Available Operations
+## Доступные операции
 
 {rules_block}
 
-To call an operation, respond with an operation_call block:
+Чтобы вызвать операцию, ответь блоком operation_call:
 
 ```operation_call
 {{
@@ -223,9 +223,9 @@ To call an operation, respond with an operation_call block:
 }}
 ```
 
-You may call multiple operations in one response. Always use the exact operation name from the list below.
+Можно вызывать несколько операций в одном ответе. Используй точное имя операции из списка ниже.
 
-Available operations:
+Список операций:
 {operations_json}
 """
 

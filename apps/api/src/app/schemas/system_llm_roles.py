@@ -25,6 +25,7 @@ class SystemLLMRoleBase(BaseModel):
     safety: Optional[str] = Field(None, description="Safety constraints and rules")
     output_requirements: Optional[str] = Field(None, description="Output format and structure requirements")
     examples: Optional[List[Dict[str, Any]]] = Field(None, description="Few-shot examples for the role")
+    extras: Optional[Dict[str, Any]] = Field(None, description="Role-specific runtime knobs")
     
     # === Execution Configuration ===
     model: Optional[str] = Field(None, description="Model alias for this role")
@@ -87,6 +88,7 @@ class SystemLLMRoleUpdate(BaseModel):
     safety: Optional[str] = Field(None, description="Safety constraints and rules")
     output_requirements: Optional[str] = Field(None, description="Output format and structure requirements")
     examples: Optional[List[Dict[str, Any]]] = Field(None, description="Few-shot examples for the role")
+    extras: Optional[Dict[str, Any]] = Field(None, description="Role-specific runtime knobs")
     
     model: Optional[str] = Field(None, description="Model alias for this role")
     temperature: Optional[float] = Field(None, ge=0.0, le=2.0, description="Temperature for LLM calls")

@@ -32,6 +32,7 @@ from uuid import UUID
 
 from app.agents.context import ToolContext
 from app.runtime.contracts import NextStep
+from app.runtime.budgets import BudgetRegistry, BudgetResolver
 from app.runtime.events import RuntimeEvent
 from app.runtime.turn_state import RuntimeTurnState
 
@@ -109,4 +110,6 @@ class SynthesizerPort(Protocol):
         planner_hint: Optional[str] = None,
         platform_config: Optional[Dict[str, Any]] = None,
         sandbox_overrides: Optional[Dict[str, Any]] = None,
+        budget_registry: Optional[BudgetRegistry] = None,
+        budget_resolver: Optional[BudgetResolver] = None,
     ) -> AsyncIterator[RuntimeEvent]: ...

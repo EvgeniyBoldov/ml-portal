@@ -27,6 +27,16 @@ def _normalize_trace_type(trace_type: str) -> str:
     return normalized
 
 
+def _infer_caller_role(trace_type: str, role_config: Dict[str, Any]) -> str:
+    role_type = str((role_config or {}).get("role_type") or "").strip().lower()
+    if role_type in {"planner", "synthesizer", "fact_extractor", "summary_compactor"}:
+        return role_type
+    normalized = _normalize_trace_type(trace_type)
+    if normalized == SystemLLMTraceType.SUMMARY.value:
+        return "summary_compactor"
+    return "planner"
+
+
 class SystemLLMTraceService:
     """Service for managing system LLM traces."""
     
@@ -116,6 +126,7 @@ class SystemLLMTraceService:
         
         trace = SystemLLMTrace(
             trace_type=trace_type,
+            caller_role=_infer_caller_role(trace_type, role_config),
             chat_id=chat_id,
             agent_run_id=agent_run_id,
             tenant_id=tenant_id,

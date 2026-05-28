@@ -22,12 +22,16 @@ from app.runtime.llm.structured import (
 )
 from app.runtime.memory.dto import SummaryDTO
 from app.runtime.memory.fact_extractor import (
+    AgentResultSnippet,
     FactExtractor,
+    _resolve_fact_policy,
     _LLMFactCandidate,
     _LLMFactOutput,
 )
 from app.runtime.memory.summary_compactor import (
     SummaryCompactor,
+    _resolve_summary_policy,
+    _merge_summary,
     _LLMSummaryOutput,
 )
 
@@ -194,6 +198,43 @@ async def test_fact_extractor_returns_empty_on_unexpected_exception(extractor):
     assert facts == []
 
 
+def test_fact_extractor_policy_merges_role_and_sandbox():
+    policy = _resolve_fact_policy(
+        {"max_facts_per_turn": 3, "confidence_min": 0.7},
+        {"fact_extractor": {"max_facts_per_turn": 5}},
+    )
+    # sandbox override wins over role extras
+    assert policy["max_facts_per_turn"] == 5
+    assert policy["confidence_min"] == 0.7
+
+
+@pytest.mark.asyncio
+async def test_fact_extractor_marks_agent_result_source_when_from_agent_summary(extractor):
+    uid = uuid4()
+    extractor._structured.invoke = AsyncMock(
+        return_value=_llm_result(
+            _LLMFactOutput(
+                facts=[
+                    _LLMFactCandidate(
+                        scope="user",
+                        subject="preferred vendor",
+                        value="juniper",
+                        confidence=0.95,
+                    )
+                ]
+            )
+        )
+    )
+    facts = await extractor.extract(
+        user_message="",
+        agent_results=[AgentResultSnippet(agent="viewer", summary="Preferred vendor: juniper", success=True)],
+        known_facts=[],
+        user_id=uid,
+    )
+    assert len(facts) == 1
+    assert facts[0].source.value == "agent_result"
+
+
 # ============================================================ SummaryCompactor
 
 
@@ -287,3 +328,46 @@ async def test_summary_compactor_fallback_on_unexpected_exception(compactor):
         agent_results=[], turn_number=1,
     )
     assert out.last_updated_turn == 1
+
+
+def test_summary_compactor_policy_merges_role_and_sandbox():
+    policy = _resolve_summary_policy(
+        {"max_goals": 2, "max_item_len": 90},
+        {"summary_compactor": {"max_goals": 4}},
+    )
+    assert policy["max_goals"] == 4
+    assert policy["max_item_len"] == 90
+
+
+def test_summary_compactor_merge_delta_path():
+    prev = SummaryDTO(
+        chat_id=uuid4(),
+        goals=["g_old", "g_done"],
+        done=["d_old"],
+        entities={"incident": "INC-1"},
+        open_questions=["q_old", "q_done"],
+    )
+    out = _LLMSummaryOutput(
+        new_goals=["g_new"],
+        completed_goals=["g_done"],
+        new_entities={"repo": "ml-portal"},
+        updated_entities={"incident": "INC-2"},
+        resolved_questions=["q_done"],
+        new_questions=["q_new"],
+    )
+    merged = _merge_summary(
+        previous=prev,
+        out=out,
+        policy={
+            "max_goals": 10,
+            "max_done": 10,
+            "max_entities": 10,
+            "max_open_questions": 10,
+            "max_item_len": 120,
+        },
+    )
+    assert merged["goals"] == ["g_old", "g_new"]
+    assert "g_done" in merged["done"]
+    assert merged["entities"]["incident"] == "INC-2"
+    assert merged["entities"]["repo"] == "ml-portal"
+    assert merged["open_questions"] == ["q_old", "q_new"]

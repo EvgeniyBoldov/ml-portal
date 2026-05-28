@@ -2,7 +2,7 @@
 
 These are the thin wiring layers. Their job is to:
   * MemoryBuilder: call SummaryStore.load + FactStore.retrieve with
-    the right scopes, produce a WorkingMemory transport.
+    the right scopes, produce a TurnMemory transport.
   * MemoryWriter: on finalize, drive FactExtractor + FactStore +
     SummaryCompactor + SummaryStore; maintain raw_tail locally;
     no-op for chat_id=None; swallow any exception.

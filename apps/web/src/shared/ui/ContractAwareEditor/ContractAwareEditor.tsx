@@ -5,6 +5,7 @@ import { Button, Modal, Textarea } from '@/shared/ui';
 import { ContractLegend } from './ContractLegend';
 import { TextareaWithHighlight } from './highlight/TextareaWithHighlight';
 import { useLiveCoverage } from './useLiveCoverage';
+import { SmartViewer } from '@/shared/ui/SmartViewer';
 import styles from './ContractAwareEditor.module.css';
 
 type Props = {
@@ -14,6 +15,8 @@ type Props = {
   inputContract?: Record<string, unknown> | null;
   fieldLabel?: string;
   disabled?: boolean;
+  mode?: 'editable' | 'view';
+  triggerOnly?: boolean;
   rows?: number;
   placeholder?: string;
 };
@@ -25,6 +28,8 @@ export function ContractAwareEditor({
   inputContract = null,
   fieldLabel = 'Редактор',
   disabled = false,
+  mode = 'editable',
+  triggerOnly = false,
   rows = 8,
   placeholder,
 }: Props) {
@@ -43,10 +48,10 @@ export function ContractAwareEditor({
     }
     return [...names];
   }, [coverage.coverageMap]);
-
   const bodyClassName = useMemo(() => {
     return hasLegend ? styles.modalBodySplit : styles.modalBodyPlain;
   }, [hasLegend]);
+  const isEditable = mode === 'editable' && !disabled;
 
   useEffect(() => {
     if (!open) return;
@@ -80,26 +85,26 @@ export function ContractAwareEditor({
   return (
     <>
       <div className={styles.inlineEditorShell}>
-        <Textarea
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          rows={rows}
-          placeholder={placeholder}
-          disabled={disabled}
-          className={styles.inlineTextarea}
-        />
-        {!disabled && (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className={styles.expandButton}
-            onClick={() => setOpen(true)}
-            title="Открыть расширенный редактор"
-          >
-            ↗
-          </Button>
+        {!triggerOnly && (
+          <Textarea
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            rows={rows}
+            placeholder={placeholder}
+            disabled={!isEditable}
+            className={styles.inlineTextarea}
+          />
         )}
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className={styles.expandButton}
+          onClick={() => setOpen(true)}
+          title={isEditable ? 'Открыть расширенный редактор' : 'Открыть просмотр'}
+        >
+          ↗
+        </Button>
       </div>
 
       <Modal
@@ -115,28 +120,34 @@ export function ContractAwareEditor({
             <div className={styles.editorHeader}>
               <div className={styles.editorTitle}>{fieldLabel}</div>
               <div className={styles.editorHint}>
-                Изменения применяются сразу в форме
+                {isEditable ? 'Изменения применяются сразу в форме' : 'Режим просмотра'}
               </div>
             </div>
-            <TextareaWithHighlight
-              value={value}
-              onChange={onChange}
-              hoveredField={hoveredField}
-              activeField={activeField}
-              placeholder={placeholder}
-              disabled={disabled}
-              textareaRef={textareaRef}
-              knownFields={knownFieldNames}
-              onMarkClick={(field) => {
-                setActiveField(field);
-                setHoveredField(field);
-              }}
-              onTextFieldSelect={(field) => {
-                if (!field) return;
-                setActiveField(field);
-                setHoveredField(field);
-              }}
-            />
+            {isEditable ? (
+              <TextareaWithHighlight
+                value={value}
+                onChange={onChange}
+                hoveredField={hoveredField}
+                activeField={activeField}
+                placeholder={placeholder}
+                disabled={false}
+                textareaRef={textareaRef}
+                knownFields={knownFieldNames}
+                onMarkClick={(field) => {
+                  setActiveField(field);
+                  setHoveredField(field);
+                }}
+                onTextFieldSelect={(field) => {
+                  if (!field) return;
+                  setActiveField(field);
+                  setHoveredField(field);
+                }}
+              />
+            ) : (
+              <div className={styles.modalTextarea} style={{ overflowY: 'auto' }}>
+                <SmartViewer value={value} />
+              </div>
+            )}
           </div>
 
           {hasLegend && (

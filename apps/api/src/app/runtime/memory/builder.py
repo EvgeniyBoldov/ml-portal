@@ -2,8 +2,8 @@
 
 The builder assembles a componentized `MemoryBundle` instead of dumping all
 stored memory into the prompt. Backward-compatible `TurnMemory.summary` and
-`TurnMemory.retrieved_facts` projections remain for the current runtime while
-the legacy `WorkingMemory` bridge is being retired.
+`TurnMemory.retrieved_facts` projections remain for planner/synth input
+compatibility during the runtime helpers transition.
 """
 from __future__ import annotations
 

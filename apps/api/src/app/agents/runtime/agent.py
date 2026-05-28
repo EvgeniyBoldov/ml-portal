@@ -59,9 +59,9 @@ logger = get_logger(__name__)
 
 MAX_STEPS_WITHOUT_SUCCESSFUL_TOOL_RESULT_DEFAULT = 2
 DEFAULT_REQUIRED_OPERATION_RETRY_INSTRUCTION = (
-    "You must call at least one available operation before answering. "
-    "Do not answer from prior knowledge. "
-    "Choose the most relevant operation and return an operation call."
+    "Необходимо вызвать хотя бы одну операцию перед ответом. "
+    "Не отвечай по памяти — используй результаты операций. "
+    "Выбери наиболее подходящую операцию и верни operation_call."
 )
 DEFAULT_INTENT_MESSAGES = {
     "agent_start": "Запускаю выполнение агента",

@@ -32,6 +32,7 @@ class OrchestrationSettings(Base):
     # === Executor Settings ===
     executor_model: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, comment="Default model alias for execution/generation")
     executor_temperature: Mapped[Optional[float]] = mapped_column(Float, nullable=True, default=0.7)
+    tool_use_guard: Mapped[Optional[str]] = mapped_column(String(2000), nullable=True, comment="Policy text for tool use (MANDATORY RULES)")
     # Legacy DB columns may still exist physically until cleanup migration.
 
     created_at: Mapped[datetime] = mapped_column(

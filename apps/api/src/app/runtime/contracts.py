@@ -85,6 +85,11 @@ class NextStep(BaseModel):
 
     # --- FINAL ---
     final_answer: Optional[str] = None
+    # Explicit strategy: how should synthesizer treat this final step?
+    #   "synthesize" — run LLM synthesis (default)
+    #   "verbatim" — stream final_answer as-is (bypass LLM)
+    #   "use_agent_result" — synthesize from single successful agent result
+    final_answer_strategy: Literal["synthesize", "verbatim", "use_agent_result"] = "synthesize"
 
     # --- metadata ---
     phase_id: Optional[str] = None

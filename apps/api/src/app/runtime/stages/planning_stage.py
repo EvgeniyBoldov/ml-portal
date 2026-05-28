@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, AsyncIterator, Dict, List, Optional
+from typing import Any, AsyncIterator, Dict, List, Literal, Optional
 from uuid import UUID, uuid4
 
 from app.agents.context import ToolContext
@@ -56,6 +56,7 @@ class PlanningOutcome:
     kind: PlanningOutcomeKind
     stop_reason: PipelineStopReason
     planner_hint: Optional[str] = None      # final_answer hint from planner
+    final_answer_strategy: Literal["synthesize", "verbatim", "use_agent_result"] = "synthesize"
     error_message: Optional[str] = None
 
 
@@ -423,6 +424,7 @@ class PlanningStage:
                     kind=PlanningOutcomeKind.NEEDS_FINAL,
                     stop_reason=PipelineStopReason.COMPLETED,
                     planner_hint=step.final_answer,
+                    final_answer_strategy=step.final_answer_strategy,
                 )
                 return
 

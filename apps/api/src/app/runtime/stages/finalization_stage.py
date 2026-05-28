@@ -21,6 +21,7 @@ from app.runtime.envelope import PhasedEvent
 from app.runtime.events import OrchestrationPhase
 from app.runtime.ports import SynthesizerPort
 from app.runtime.turn_state import RuntimeTurnState
+from app.runtime.budgets import BudgetRegistry, BudgetResolver
 
 logger = get_logger(__name__)
 
@@ -41,9 +42,12 @@ class FinalizationStage:
         runtime_state: RuntimeTurnState,
         stop_reason: PipelineStopReason,
         planner_hint: Optional[str],
+        final_answer_strategy: Literal["synthesize", "verbatim", "use_agent_result"] = "synthesize",
         model: Optional[str],
         platform_config: Optional[dict] = None,
         sandbox_overrides: Optional[dict] = None,
+        budget_registry: Optional[BudgetRegistry] = None,
+        budget_resolver: Optional[BudgetResolver] = None,
         run_synthesizer: bool = True,
     ) -> AsyncIterator[PhasedEvent]:
         """Drive synthesizer and set the terminal flags."""
@@ -54,8 +58,11 @@ class FinalizationStage:
                 run_id=state.run_id,
                 model=model,
                 planner_hint=planner_hint,
+                final_answer_strategy=final_answer_strategy,
                 platform_config=platform_config,
                 sandbox_overrides=sandbox_overrides,
+                budget_registry=budget_registry,
+                budget_resolver=budget_resolver,
             ):
                 yield PhasedEvent(event, OrchestrationPhase.SYNTHESIS)
 

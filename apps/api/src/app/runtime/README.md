@@ -115,6 +115,7 @@ CI gates:
 ## Completed (was TODO)
 
 - ✅ Remove bidirectional state bridge `WorkingMemory ↔ RuntimeTurnState` — fully migrated to `RuntimeTurnState` as single source of truth.
+- ✅ Remove `WorkingMemory` from public runtime package exports (`app.runtime`, `app.runtime.memory`).
 
 ## TODO
 

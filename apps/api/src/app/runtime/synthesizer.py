@@ -19,7 +19,6 @@ already produced a user-ready answer.
 """
 from __future__ import annotations
 
-import time
 from typing import AsyncGenerator, Dict, List, Optional
 from uuid import UUID
 
@@ -27,13 +26,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.http.clients import LLMClientProtocol
 from app.core.logging import get_logger
-from app.models.execution_limit import ExecutionLimitScope
 from app.models.system_llm_role import SystemLLMRoleType
+from app.runtime.budgets import BudgetRegistry, BudgetResolver
 from app.runtime.events import RuntimeEvent
 from app.runtime.input_builders import SynthesizerInputBuilder
-from app.runtime.llm.limits import LLMLimitExceededError, apply_llm_limits, estimate_tokens
+from app.runtime.llm.streaming import RoleStreamingCall, StreamDelta, StreamError, StreamTurn
 from app.runtime.turn_state import RuntimeTurnState
-from app.services.execution_limits_service import ExecutionLimitsPayload, ExecutionLimitsService, apply_limits_override
 from app.services.system_llm_role_service import SystemLLMRoleService
 
 logger = get_logger(__name__)
@@ -64,7 +62,7 @@ class Synthesizer:
         self.session = session
         self.llm_client = llm_client
         self._input_builder = SynthesizerInputBuilder()
-        self._limits_service = ExecutionLimitsService(session)
+        self._streaming_call = RoleStreamingCall(session=session, llm_client=llm_client)
 
     async def stream(
         self,
@@ -73,14 +71,51 @@ class Synthesizer:
         run_id: UUID,
         model: Optional[str] = None,
         planner_hint: Optional[str] = None,
+        final_answer_strategy: Literal["synthesize", "verbatim", "use_agent_result"] = "synthesize",
         platform_config: Optional[Dict[str, object]] = None,
         sandbox_overrides: Optional[Dict[str, object]] = None,
+        budget_registry: Optional[BudgetRegistry] = None,
+        budget_resolver: Optional[BudgetResolver] = None,
         chunk_size: int = DEFAULT_SYNTH_CHUNK_SIZE,
     ) -> AsyncGenerator[RuntimeEvent, None]:
         chunk_size = self._resolve_chunk_size(
             base_chunk_size=chunk_size,
             platform_config=platform_config,
             sandbox_overrides=sandbox_overrides,
+        )
+        synthesis_run_id = f"{run_id}:synthesis:1"
+        synthesis_status = "completed"
+
+        if budget_registry is not None:
+            synthesis_limits = None
+            if budget_resolver is not None:
+                try:
+                    synthesis_limits = await budget_resolver.resolve_orchestrator("synthesizer", sandbox_overrides)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Failed to resolve synthesizer limits: %s", exc)
+            budget_registry.register(
+                entity_type="synthesis_run",
+                entity_id=synthesis_run_id,
+                parent_entity_id=str(run_id),
+                role="synthesizer",
+                limits=synthesis_limits,
+            )
+            init_payload = budget_registry.emit_snapshot(synthesis_run_id, reason="init") or {}
+            yield RuntimeEvent.budget_snapshot(
+                entity_type="synthesis_run",
+                entity_id=synthesis_run_id,
+                parent_entity_type="run",
+                parent_entity_id=str(run_id),
+                role="synthesizer",
+                own=init_payload.get("own", {}),
+                limits=init_payload.get("limits"),
+                delta={},
+                reason="init",
+                at_ms=init_payload.get("at_ms"),
+            )
+        yield RuntimeEvent.synthesis_start(
+            synthesis_id=synthesis_run_id,
+            run_id=str(run_id),
         )
         # Sources from memory_bundle if available
         sources: List[str] = []
@@ -90,17 +125,67 @@ class Synthesizer:
                     sources = [item.text for item in section.items[:20] if item.text]
                     break
 
-        # Short-circuit: single successful agent_result with non-trivial text.
-        short_answer = self._short_circuit_answer(runtime_state=runtime_state)
-        is_informative_hint = planner_hint and "to be synthesized" not in planner_hint.lower()
-        if short_answer and not is_informative_hint:
-            logger.info("Synthesizer short-circuit for run=%s", run_id)
-            yield RuntimeEvent.status("synthesizing", short_circuit=True)
+        # Short-circuit based on explicit strategy (structural, not heuristic)
+        if final_answer_strategy == "verbatim" and planner_hint:
+            # Stream the planner's final_answer directly without LLM synthesis
+            short_answer = planner_hint
+            logger.info("Synthesizer verbatim short-circuit for run=%s", run_id)
+            yield RuntimeEvent.status("synthesizing", short_circuit=True, mode="verbatim")
             for i in range(0, len(short_answer), chunk_size):
                 yield RuntimeEvent.delta(short_answer[i : i + chunk_size])
             runtime_state.final_answer = short_answer
             yield RuntimeEvent.final(short_answer, sources=sources, run_id=str(run_id))
+            if budget_registry is not None:
+                final_payload = budget_registry.emit_snapshot(synthesis_run_id, reason="finalize") or {}
+                yield RuntimeEvent.budget_snapshot(
+                    entity_type="synthesis_run",
+                    entity_id=synthesis_run_id,
+                    parent_entity_type="run",
+                    parent_entity_id=str(run_id),
+                    role="synthesizer",
+                    own=final_payload.get("own", {}),
+                    limits=final_payload.get("limits"),
+                    delta={},
+                    reason="finalize",
+                    at_ms=final_payload.get("at_ms"),
+                )
+            yield RuntimeEvent.synthesis_end(
+                synthesis_id=synthesis_run_id,
+                run_id=str(run_id),
+                status=synthesis_status,
+            )
             return
+
+        if final_answer_strategy == "use_agent_result":
+            # Use single successful agent result directly
+            short_answer = self._short_circuit_answer(runtime_state=runtime_state)
+            if short_answer:
+                logger.info("Synthesizer use_agent_result short-circuit for run=%s", run_id)
+                yield RuntimeEvent.status("synthesizing", short_circuit=True, mode="use_agent_result")
+                for i in range(0, len(short_answer), chunk_size):
+                    yield RuntimeEvent.delta(short_answer[i : i + chunk_size])
+                runtime_state.final_answer = short_answer
+                yield RuntimeEvent.final(short_answer, sources=sources, run_id=str(run_id))
+                if budget_registry is not None:
+                    final_payload = budget_registry.emit_snapshot(synthesis_run_id, reason="finalize") or {}
+                    yield RuntimeEvent.budget_snapshot(
+                        entity_type="synthesis_run",
+                        entity_id=synthesis_run_id,
+                        parent_entity_type="run",
+                        parent_entity_id=str(run_id),
+                        role="synthesizer",
+                        own=final_payload.get("own", {}),
+                        limits=final_payload.get("limits"),
+                        delta={},
+                        reason="finalize",
+                        at_ms=final_payload.get("at_ms"),
+                )
+                yield RuntimeEvent.synthesis_end(
+                    synthesis_id=synthesis_run_id,
+                    run_id=str(run_id),
+                    status=synthesis_status,
+                )
+                return
 
         # Full synthesis path. Load role-level config (prompt + model +
         # temperature + max_tokens) from the SYNTHESIZER system LLM role;
@@ -121,80 +206,110 @@ class Synthesizer:
             system_prompt=system_prompt,
         )
         llm_call_id = f"{run_id}:synthesis-llm:1"
-        synthesis_run_id = f"{run_id}:synthesis:1"
-        try:
-            limits = await self._limits_service.get_effective(
-                scope_type=ExecutionLimitScope.ORCHESTRATOR_ROLE,
-                scope_ref="synthesizer",
-            )
-        except Exception:
-            limits = ExecutionLimitsPayload()
-        synth_override = ((sandbox_overrides or {}).get("orchestrator_limits") or {}).get("synthesizer")
-        limits = apply_limits_override(limits, synth_override if isinstance(synth_override, dict) else None)
-        input_tokens = estimate_tokens(str(messages))
-        requested_output_tokens = int(params["max_tokens"]) if params.get("max_tokens") is not None else None
-        try:
-            boundary = apply_llm_limits(
-                limits=limits,
-                input_tokens=input_tokens,
-                requested_output_tokens=requested_output_tokens,
-            )
-        except LLMLimitExceededError as exc:
-            yield RuntimeEvent.error(
-                str(exc),
-                recoverable=False,
-                error_code=exc.code,
-                parent_entity_type="synthesis_run",
-                parent_entity_id=synthesis_run_id,
-            )
-            runtime_state.final_error = str(exc)
-            return
-        if boundary.output_tokens is not None:
-            params["max_tokens"] = int(boundary.output_tokens)
-        buffer: List[str] = []
-        started_at = time.monotonic()
-        try:
-            async for chunk in self.llm_client.chat_stream(
-                messages,
-                model=effective_model,
-                params=params or None,
-            ):
-                if not chunk:
-                    continue
-                buffer.append(chunk)
-                yield RuntimeEvent.delta(chunk)
-        except Exception as exc:
-            logger.error("Synthesizer LLM stream failed: %s", exc, exc_info=True)
-            if not buffer:
-                yield RuntimeEvent.error(f"Failed to synthesize answer: {exc}", recoverable=True)
-                runtime_state.final_error = str(exc)
-                return
-
-        full = "".join(buffer).strip()
-        yield RuntimeEvent.llm_turn(
-            llm_call_id=llm_call_id,
-            model=effective_model or "unknown",
+        full = ""
+        async for stream_event in self._streaming_call.invoke_stream(
+            role=SystemLLMRoleType.SYNTHESIZER,
             messages=messages,
-            content=full,
-            response_length=len(full),
-            tokens_in=max(1, len(str(messages)) // 4),
-            tokens_out=max(1, len(full) // 4) if full else 0,
-            tokens_total=(max(1, len(str(messages)) // 4) + (max(1, len(full) // 4) if full else 0)),
-            duration_ms=int((time.monotonic() - started_at) * 1000),
-            parent_entity_type="synthesis_run",
-            parent_entity_id=synthesis_run_id,
-            purpose="final_answer",
-            actor_type="synthesizer",
-            actor_entity_id=synthesis_run_id,
-        )
+            llm_call_id=llm_call_id,
+            role_config=role_cfg,
+            model_override=effective_model,
+            params_override=params or None,
+            sandbox_overrides=sandbox_overrides,
+            budget_registry=budget_registry,
+            budget_entity_id=synthesis_run_id,
+        ):
+            if isinstance(stream_event, StreamDelta):
+                if stream_event.chunk:
+                    yield RuntimeEvent.delta(stream_event.chunk)
+                continue
+            if isinstance(stream_event, StreamError):
+                synthesis_status = "failed"
+                yield RuntimeEvent.error(
+                    stream_event.message,
+                    recoverable=stream_event.recoverable,
+                    error_code=stream_event.code,
+                    parent_entity_type="synthesis_run",
+                    parent_entity_id=synthesis_run_id,
+                )
+                runtime_state.final_error = stream_event.message
+                return
+            if isinstance(stream_event, StreamTurn):
+                full = (stream_event.content or "").strip()
+                if budget_registry is not None:
+                    delta_payload: Dict[str, int] = {}
+                    if stream_event.tokens_in > 0:
+                        delta_payload["tokens_in"] = stream_event.tokens_in
+                    if stream_event.tokens_out > 0:
+                        delta_payload["tokens_out"] = stream_event.tokens_out
+                    if stream_event.tokens_total > 0:
+                        delta_payload["tokens_total"] = stream_event.tokens_total
+                    if stream_event.duration_ms > 0:
+                        delta_payload["wall_time_ms"] = stream_event.duration_ms
+                    if delta_payload:
+                        snap = budget_registry.emit_snapshot(
+                            synthesis_run_id,
+                            reason="llm_turn",
+                            delta=delta_payload,
+                        ) or {}
+                        yield RuntimeEvent.budget_snapshot(
+                            entity_type="synthesis_run",
+                            entity_id=synthesis_run_id,
+                            parent_entity_type="run",
+                            parent_entity_id=str(run_id),
+                            role="synthesizer",
+                            own=snap.get("own", {}),
+                            limits=snap.get("limits"),
+                            delta=delta_payload,
+                            reason="llm_turn",
+                            at_ms=snap.get("at_ms"),
+                        )
+                yield RuntimeEvent.llm_turn(
+                    llm_call_id=stream_event.llm_call_id,
+                    model=effective_model or stream_event.model or "unknown",
+                    messages=stream_event.messages,
+                    content=full,
+                    response_length=stream_event.response_length,
+                    tokens_in=stream_event.tokens_in,
+                    tokens_out=stream_event.tokens_out,
+                    tokens_total=stream_event.tokens_total,
+                    duration_ms=stream_event.duration_ms,
+                    parent_entity_type="synthesis_run",
+                    parent_entity_id=synthesis_run_id,
+                    purpose="final_answer",
+                    actor_type="synthesizer",
+                    actor_entity_id=synthesis_run_id,
+                )
         if not full:
-            # Fallback: stitched summaries.
+            # Fallback: stitched summaries (LLM вернул пустой ответ).
+            logger.warning(
+                "Synthesizer LLM вернул пустой ответ для run=%s — используется fallback из agent_results",
+                run_id,
+            )
             full = self._stitched_fallback(runtime_state=runtime_state)
             for i in range(0, len(full), chunk_size):
                 yield RuntimeEvent.delta(full[i : i + chunk_size])
 
         runtime_state.final_answer = full
         yield RuntimeEvent.final(full, sources=sources, run_id=str(run_id))
+        if budget_registry is not None:
+            final_payload = budget_registry.emit_snapshot(synthesis_run_id, reason="finalize") or {}
+            yield RuntimeEvent.budget_snapshot(
+                entity_type="synthesis_run",
+                entity_id=synthesis_run_id,
+                parent_entity_type="run",
+                parent_entity_id=str(run_id),
+                role="synthesizer",
+                own=final_payload.get("own", {}),
+                limits=final_payload.get("limits"),
+                delta={},
+                reason="finalize",
+                at_ms=final_payload.get("at_ms"),
+            )
+        yield RuntimeEvent.synthesis_end(
+            synthesis_id=synthesis_run_id,
+            run_id=str(run_id),
+            status=synthesis_status,
+        )
 
     # ---------------------------------------------------------------- helpers --
 
@@ -245,7 +360,11 @@ class Synthesizer:
                 parts.append(str(item.get("summary") or "").strip())
         if not parts and runtime_state.runtime_facts:
             parts = [item.text for item in runtime_state.runtime_facts[-10:]]
-        return "\n\n".join(parts) or "Не удалось собрать ответ."
+        result = "\n\n".join(parts)
+        if not result:
+            logger.warning("Synthesizer _stitched_fallback: нет ни agent_results ни runtime_facts — возвращается пустой ответ")
+            return "Не удалось получить ответ. Попробуйте позже."
+        return result
 
     @staticmethod
     def _resolve_chunk_size(
