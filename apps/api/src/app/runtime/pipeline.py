@@ -454,18 +454,23 @@ class RuntimePipeline:
         # Sync memory_bundle reference
         runtime_state.memory_bundle = turn_mem.memory_bundle
         assistant_final = runtime_state.final_answer or ""
+        memory_inline_override = False
+        if isinstance(request.sandbox_overrides, dict):
+            memory_inline_override = bool(request.sandbox_overrides.get("memory_inline", False))
+        use_inline_memory = RUNTIME_MEMORY_INLINE or memory_inline_override
+
         yield emitter.emit(
             RuntimeEvent.status(
                 "memory_write_start",
                 turn_number=turn_mem.turn_number,
                 agent_results=len(turn_mem.agent_results or []),
-                mode="inline" if RUNTIME_MEMORY_INLINE else "celery",
+                mode="inline" if use_inline_memory else "celery",
             ),
             phase=OrchestrationPhase.PIPELINE,
         )
 
         # If Celery off-load is enabled, serialize and dispatch
-        if not RUNTIME_MEMORY_INLINE:
+        if not use_inline_memory:
             try:
                 from app.workers.tasks_memory import (
                     finalize_memory_task,

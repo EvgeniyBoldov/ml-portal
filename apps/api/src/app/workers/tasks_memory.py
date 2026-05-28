@@ -166,11 +166,9 @@ def finalize_memory_task(self, payload_dict: Dict[str, Any]) -> Dict[str, Any]:
         
         async with AsyncSessionLocal() as session:
             # Create LLM client from settings
-            from app.core.config import get_settings
-            from app.core.http.clients import get_llm_client
-            
-            settings = get_settings()
-            llm_client = get_llm_client(settings)
+            from app.core.di import get_llm_client
+
+            llm_client = get_llm_client()
             
             # Reconstruct TurnMemory
             turn_memory = _deserialize_turn_memory(payload)

@@ -311,6 +311,9 @@ async def run_sandbox(
                     agent_version=None,
                 )
             sandbox_overrides["logging_level"] = "full"
+            # In sandbox we keep memory finalize inline so fact/summary helper
+            # events are visible in the same run trace.
+            sandbox_overrides["memory_inline"] = True
             runtime_trace = RuntimeTraceLogger(
                 session=stream_db,
                 session_factory=session_factory,
