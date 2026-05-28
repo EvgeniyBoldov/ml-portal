@@ -24,7 +24,6 @@ import Toggle from '../Toggle';
 import { Select } from '../Select';
 import Badge from '../Badge';
 import { Tags } from '../Tags';
-import { JSONDisplaySimple } from '../JSONDisplay/JSONDisplaySimple';
 import { Tooltip } from '../Tooltip';
 import styles from './GridLayout.module.css';
 
@@ -431,7 +430,17 @@ function FieldEditor({ field, value, editable, onChange }: FieldEditorProps) {
         : JSON.stringify(value ?? {}, null, 2);
 
       if (isDisabled) {
-        return <JSONDisplaySimple value={jsonValue} maxHeight="320px" />;
+        return (
+          <code style={{
+            fontFamily: 'var(--font-mono, monospace)',
+            fontSize: '0.875rem',
+            color: 'var(--text-secondary)',
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word',
+          }}>
+            {jsonValue || '—'}
+          </code>
+        );
       }
 
       return (

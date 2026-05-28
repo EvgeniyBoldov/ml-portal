@@ -72,35 +72,29 @@ const POLICY_GATES_FIELDS: FieldConfig[] = [
   },
 ];
 
-const FALLBACK_RETRY_FIELDS: FieldConfig[] = [
+const FALLBACK_RUNTIME_RULES_FIELDS: FieldConfig[] = [
   {
     key: 'required_operation_retry_instruction',
     type: 'textarea',
     label: 'Инструкция повтора операции',
     description: 'Текст, который подмешивается в протокол, если агент ответил без обязательного operation_call.',
-    rows: 5,
+    rows: 4,
     placeholder: 'Необходимо вызвать хотя бы одну операцию перед ответом...',
   },
-];
-
-const FALLBACK_OPERATION_RULES_FIELDS: FieldConfig[] = [
   {
     key: 'operations_rules_text',
     type: 'textarea',
     label: 'Правила операций',
     description: 'Полная замена блока обязательных правил для prompt с operations.',
-    rows: 10,
+    rows: 8,
     placeholder: 'ОБЯЗАТЕЛЬНЫЕ ПРАВИЛА — соблюдай без исключений...',
   },
-];
-
-const FALLBACK_INTENT_FIELDS: FieldConfig[] = [
   {
     key: 'intent_messages',
     type: 'json',
     label: 'Сообщения намерений',
     description: 'JSON-словарь для runtime intent messages: agent_start, final_answer, operation_call.',
-    rows: 10,
+    rows: 6,
   },
 ];
 
@@ -407,33 +401,11 @@ export function PlatformSettingsPage() {
         actions={fallbackTabActions}
       >
         <Block
-          title="Инструкция повтора"
-          icon="refresh-cw"
-          iconVariant="info"
-          width="full"
-          fields={FALLBACK_RETRY_FIELDS}
-          data={mode === 'edit' ? formData : (platformSettings || {})}
-          editable={mode === 'edit'}
-          onChange={mode === 'edit' ? handleFieldChange : undefined}
-        />
-
-        <Block
-          title="Правила операций"
+          title="Runtime правила"
           icon="clipboard-list"
           iconVariant="warning"
-          width="full"
-          fields={FALLBACK_OPERATION_RULES_FIELDS}
-          data={mode === 'edit' ? formData : (platformSettings || {})}
-          editable={mode === 'edit'}
-          onChange={mode === 'edit' ? handleFieldChange : undefined}
-        />
-
-        <Block
-          title="Сообщения намерений"
-          icon="bot"
-          iconVariant="primary"
-          width="1/2"
-          fields={FALLBACK_INTENT_FIELDS}
+          width="2/3"
+          fields={FALLBACK_RUNTIME_RULES_FIELDS}
           data={mode === 'edit' ? formData : (platformSettings || {})}
           editable={mode === 'edit'}
           onChange={mode === 'edit' ? handleFieldChange : undefined}
@@ -443,7 +415,7 @@ export function PlatformSettingsPage() {
           title="Числовые фолбеки"
           icon="settings"
           iconVariant="success"
-          width="1/2"
+          width="1/3"
           fields={FALLBACK_NUMERIC_FIELDS}
           data={mode === 'edit' ? formData : (platformSettings || {})}
           editable={mode === 'edit'}
