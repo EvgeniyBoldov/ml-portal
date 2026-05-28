@@ -4,7 +4,7 @@ from app.agents.runtime.prompt_assembler import PromptAssembler
 
 def test_build_operations_prompt_uses_default_mandatory_rules():
     prompt = build_operations_prompt([{"type": "function", "function": {"name": "x", "parameters": {}}}])
-    assert "MANDATORY RULES" in prompt
+    assert "ОБЯЗАТЕЛЬНЫЕ ПРАВИЛА" in prompt
 
 
 def test_build_operations_prompt_uses_override_rules_text():
@@ -27,4 +27,3 @@ def test_prompt_assembler_resolves_operations_rules_override_priority():
         )
         == "sandbox"
     )
-

@@ -24,6 +24,7 @@ from dataclasses import dataclass
 
 from app.agents.context import OperationCall
 from app.agents.json_utils import extract_balanced_json
+from app.services.platform_settings_defaults import PLATFORM_OPERATION_RULES_TEXT
 
 if TYPE_CHECKING:
     from app.agents.contracts import ResolvedOperation
@@ -180,6 +181,8 @@ def build_operations_prompt(
     operation_schemas: List[dict],
     *,
     mandatory_rules_text: Optional[str] = None,
+    prompt_labels: Optional[Dict[str, Any]] = None,
+    prompt_budgets: Optional[Dict[str, Any]] = None,
 ) -> str:
     """
     Генерирует инструкцию для LLM о доступных operations.
@@ -194,25 +197,31 @@ def build_operations_prompt(
         return ""
     
     operations_json = json.dumps(operation_schemas, ensure_ascii=False, indent=2)
+    labels = prompt_labels if isinstance(prompt_labels, dict) else {}
+    budgets = prompt_budgets if isinstance(prompt_budgets, dict) else {}
+    heading = _prompt_label(labels, "operations_heading", "Доступные операции")
+    rules_heading = _prompt_label(labels, "mandatory_rules_heading", "ОБЯЗАТЕЛЬНЫЕ ПРАВИЛА")
+    call_heading = _prompt_label(labels, "operation_call_heading", "Чтобы вызвать операцию, ответь блоком operation_call:")
+    list_heading = _prompt_label(labels, "operation_list_heading", "Список операций:")
+
+    rules_max_chars = _prompt_budget(budgets, "operations_rules_max_chars")
+    if rules_max_chars is not None and isinstance(mandatory_rules_text, str) and len(mandatory_rules_text) > rules_max_chars:
+        mandatory_rules_text = mandatory_rules_text[:rules_max_chars].rstrip()
     
     rules_block = (
         mandatory_rules_text.strip()
         if isinstance(mandatory_rules_text, str) and mandatory_rules_text.strip()
         else (
-            "ОБЯЗАТЕЛЬНЫЕ ПРАВИЛА — соблюдай без исключений:\n"
-            "1. Если пользователь запрашивает РЕАЛЬНЫЕ ДАННЫЕ (записи, значения, количества, статусы, конфигурацию) — сначала вызови операцию. Не отвечай по памяти.\n"
-            "2. ИСКЛЮЧЕНИЕ: если вопрос только о том, какие источники данных или операции доступны (мета-вопрос о возможностях) — можно ответить напрямую из capability card.\n"
-            "3. Финальный ответ на вопросы о данных — только после получения результатов операций.\n"
-            "4. Не придумывай значения — используй только данные из операций."
+            PLATFORM_OPERATION_RULES_TEXT.replace("ОБЯЗАТЕЛЬНЫЕ ПРАВИЛА", rules_heading, 1)
         )
     )
 
     return f"""
-## Доступные операции
+## {heading}
 
 {rules_block}
 
-Чтобы вызвать операцию, ответь блоком operation_call:
+{call_heading}
 
 ```operation_call
 {{
@@ -225,9 +234,36 @@ def build_operations_prompt(
 
 Можно вызывать несколько операций в одном ответе. Используй точное имя операции из списка ниже.
 
-Список операций:
+{list_heading}
 {operations_json}
 """
+
+
+def _prompt_label(labels: Dict[str, Any], key: str, default: str) -> str:
+    value = labels.get(key)
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return default
+
+
+def _prompt_budget(budgets: Dict[str, Any], key: str) -> Optional[int]:
+    def _coerce(value: Any) -> Optional[int]:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed > 0 else None
+
+    direct = _coerce(budgets.get(key))
+    if direct is not None:
+        return direct
+    for section in ("operations", "prompt_assembler", "capability_card", "json_schema"):
+        section_value = budgets.get(section)
+        if isinstance(section_value, dict):
+            nested = _coerce(section_value.get(key))
+            if nested is not None:
+                return nested
+    return None
 
 
 def build_operation_results_message(results: List[Tuple[OperationCall, str]]) -> str:

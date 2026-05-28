@@ -50,6 +50,10 @@ from app.runtime.budgets import RunBudgetLedger
 from app.runtime.llm.limits import LLMLimitExceededError, apply_llm_limits
 from app.runtime.operation_errors import OperationResultEnvelope, RuntimeErrorCode
 from app.services.execution_limits_service import ExecutionLimitsPayload, ExecutionLimitsService, apply_limits_override
+from app.services.platform_settings_defaults import (
+    PLATFORM_INTENT_MESSAGES,
+    PLATFORM_REQUIRED_OPERATION_RETRY_INSTRUCTION,
+)
 
 if TYPE_CHECKING:
     from app.agents.context import ToolContext
@@ -58,16 +62,8 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 MAX_STEPS_WITHOUT_SUCCESSFUL_TOOL_RESULT_DEFAULT = 2
-DEFAULT_REQUIRED_OPERATION_RETRY_INSTRUCTION = (
-    "Необходимо вызвать хотя бы одну операцию перед ответом. "
-    "Не отвечай по памяти — используй результаты операций. "
-    "Выбери наиболее подходящую операцию и верни operation_call."
-)
-DEFAULT_INTENT_MESSAGES = {
-    "agent_start": "Запускаю выполнение агента",
-    "final_answer": "Формирую финальный ответ",
-    "operation_call": "Выполняю операцию: {operation_slug}",
-}
+DEFAULT_REQUIRED_OPERATION_RETRY_INSTRUCTION = PLATFORM_REQUIRED_OPERATION_RETRY_INSTRUCTION
+DEFAULT_INTENT_MESSAGES = PLATFORM_INTENT_MESSAGES
 
 
 def _estimate_tokens(text: str) -> int:
@@ -990,7 +986,7 @@ class AgentToolRuntime(BaseRuntime):
         if isinstance(runtime_override, str) and runtime_override.strip():
             return runtime_override.strip()
 
-        policy_text = (platform_config or {}).get("required_operation_retry_instruction")
+        policy_text = (platform_config or {}).get("retry_instruction")
         if isinstance(policy_text, str) and policy_text.strip():
             return policy_text.strip()
         return DEFAULT_REQUIRED_OPERATION_RETRY_INSTRUCTION

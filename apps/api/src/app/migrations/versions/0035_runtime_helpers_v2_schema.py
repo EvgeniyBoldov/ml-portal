@@ -1,6 +1,6 @@
 """runtime helpers v2 schema bridge
 
-Revision ID: 0035_runtime_helpers_v2_schema
+Revision ID: 0035
 Revises: 0034_plat_runtime_ovr
 Create Date: 2026-05-27
 """
@@ -11,7 +11,7 @@ from sqlalchemy.dialects import postgresql
 
 
 # revision identifiers, used by Alembic.
-revision = '0035_runtime_helpers_v2_schema'
+revision = '0035'
 down_revision = '0034_plat_runtime_ovr'
 branch_labels = None
 depends_on = None

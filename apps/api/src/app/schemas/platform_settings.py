@@ -23,6 +23,11 @@ class PlatformSettingsBase(BaseModel):
         None,
         description="Retry instruction injected when agent answered without required operation call",
     )
+    default_max_iters: Optional[int] = Field(
+        25,
+        ge=1,
+        description="Default max planner iterations when execution limits do not provide a value",
+    )
     operations_rules_text: Optional[str] = Field(
         None,
         description="Override text block for mandatory operation rules in operation prompt",

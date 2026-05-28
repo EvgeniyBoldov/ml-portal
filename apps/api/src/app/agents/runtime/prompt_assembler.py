@@ -103,6 +103,8 @@ class PromptAssembler:
             exec_request.policy_data,
             exec_request.limit_data,
         )
+        prompt_labels = self._resolve_prompt_labels(platform_config=platform_config, sandbox_overrides=sandbox_overrides)
+        prompt_budgets = self._resolve_prompt_budgets(platform_config=platform_config, sandbox_overrides=sandbox_overrides)
         base_prompt = self.agent_renderer.render_base_prompt(
             exec_request,
             system_prompt_override=system_prompt_override,
@@ -113,6 +115,8 @@ class PromptAssembler:
             capability_prompt = self.capability_card_builder.build(
                 exec_request=exec_request,
                 resolved_operations=resolved_operations,
+                prompt_labels=prompt_labels,
+                prompt_budgets=prompt_budgets,
             ).combined
         collection_prompt = self.assemble_collection_prompt(exec_request.resolved_data_instances)
         constraints_prompt = self.assemble_constraints_prompt(
@@ -120,6 +124,8 @@ class PromptAssembler:
             policy_limits=resolved_policy_limits,
             platform_config=platform_config,
             sandbox_overrides=sandbox_overrides,
+            prompt_labels=prompt_labels,
+            prompt_budgets=prompt_budgets,
         )
         if operation_schemas is None and resolved_operations is not None:
             operation_schemas = self.assemble_operation_schemas(resolved_operations)
@@ -131,6 +137,8 @@ class PromptAssembler:
             build_operations_prompt(
                 operation_schemas,
                 mandatory_rules_text=operations_rules_override,
+                prompt_labels=prompt_labels,
+                prompt_budgets=prompt_budgets,
             )
             if operation_schemas
             else ""
@@ -177,33 +185,40 @@ class PromptAssembler:
         policy_limits: PolicyLimits,
         platform_config: Optional[Dict[str, Any]] = None,
         sandbox_overrides: Optional[Dict[str, Any]] = None,
+        prompt_labels: Optional[Dict[str, Any]] = None,
+        prompt_budgets: Optional[Dict[str, Any]] = None,
     ) -> str:
+        labels = prompt_labels if isinstance(prompt_labels, dict) else {}
+        budgets = prompt_budgets if isinstance(prompt_budgets, dict) else {}
         blocks: List[str] = []
         blocks.append(
-            "### Ограничения\n"
+            f"### {self._label(labels, 'runtime_limits_title', 'Ограничения')}\n"
             + "\n".join([
-                f"- Макс. шагов: {policy_limits.max_steps}",
-                f"- Макс. вызовов операций: {policy_limits.max_tool_calls_total}",
-                f"- Макс. время выполнения (ms): {policy_limits.max_wall_time_ms}",
-                f"- Таймаут операции (ms): {policy_limits.tool_timeout_ms}",
-                f"- Макс. повторов: {policy_limits.max_retries}",
-                f"- Стриминг: {policy_limits.streaming_enabled}",
-                f"- Требуются цитаты: {policy_limits.citations_required}",
-                f"- Параллельные вызовы: {policy_limits.allow_parallel_tool_calls}",
+                f"- {self._label(labels, 'max_steps_label', 'Макс. шагов')}: {policy_limits.max_steps}",
+                f"- {self._label(labels, 'max_tool_calls_label', 'Макс. вызовов операций')}: {policy_limits.max_tool_calls_total}",
+                f"- {self._label(labels, 'max_wall_time_label', 'Макс. время выполнения (ms)')}: {policy_limits.max_wall_time_ms}",
+                f"- {self._label(labels, 'tool_timeout_label', 'Таймаут операции (ms)')}: {policy_limits.tool_timeout_ms}",
+                f"- {self._label(labels, 'max_retries_label', 'Макс. повторов')}: {policy_limits.max_retries}",
+                f"- {self._label(labels, 'streaming_label', 'Стриминг')}: {policy_limits.streaming_enabled}",
+                f"- {self._label(labels, 'citations_label', 'Требуются цитаты')}: {policy_limits.citations_required}",
+                f"- {self._label(labels, 'parallel_calls_label', 'Параллельные вызовы')}: {policy_limits.allow_parallel_tool_calls}",
             ])
         )
         if exec_request.policy_data:
-            blocks.append(f"### Версия политики\n{_compact_json(exec_request.policy_data)}")
+            blocks.append(f"### {self._label(labels, 'policy_version_title', 'Версия политики')}\n{_compact_json(exec_request.policy_data)}")
         if exec_request.limit_data:
-            blocks.append(f"### Версия лимитов\n{_compact_json(exec_request.limit_data)}")
+            blocks.append(f"### {self._label(labels, 'limit_version_title', 'Версия лимитов')}\n{_compact_json(exec_request.limit_data)}")
 
         platform_lines: List[str] = []
         if isinstance(platform_config, dict):
             policies_text = _text(platform_config.get("policies_text"))
             if policies_text:
-                platform_lines.append(f"- Политики: {policies_text}")
+                max_policy_chars = self._budget(budgets, "policies_text_max_chars", 1200)
+                if len(policies_text) > max_policy_chars:
+                    policies_text = policies_text[:max_policy_chars].rstrip()
+                platform_lines.append(f"- {self._label(labels, 'policies_label', 'Политики')}: {policies_text}")
         if platform_lines:
-            blocks.append("Ограничения платформы\n" + "\n".join(platform_lines))
+            blocks.append(f"{self._label(labels, 'platform_constraints_title', 'Ограничения платформы')}\n" + "\n".join(platform_lines))
 
         include_sandbox_notes = bool(
             isinstance(sandbox_overrides, dict)
@@ -211,11 +226,11 @@ class PromptAssembler:
         )
         sandbox_lines = self._extract_sandbox_notes(sandbox_overrides) if include_sandbox_notes else []
         if sandbox_lines:
-            blocks.append("Заметки sandbox\n" + "\n".join(f"- {line}" for line in sandbox_lines))
+            blocks.append(f"{self._label(labels, 'sandbox_notes_title', 'Заметки sandbox')}\n" + "\n".join(f"- {line}" for line in sandbox_lines))
 
         if len(blocks) == 1 and not platform_lines and not sandbox_lines and not exec_request.policy_data and not exec_request.limit_data:
             return ""
-        return "## Ограничения рантайма\n\n" + "\n\n".join(blocks)
+        return f"## {self._label(labels, 'runtime_constraints_title', 'Ограничения рантайма')}\n\n" + "\n\n".join(blocks)
 
     def assemble_operation_schemas(
         self,
@@ -259,6 +274,57 @@ class PromptAssembler:
             if isinstance(value, str) and value.strip():
                 return value.strip()
         return None
+
+    @staticmethod
+    def _resolve_prompt_labels(
+        *,
+        platform_config: Optional[Dict[str, Any]],
+        sandbox_overrides: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        labels: Dict[str, Any] = {}
+        if isinstance(platform_config, dict) and isinstance(platform_config.get("prompt_labels"), dict):
+            labels.update(platform_config["prompt_labels"])
+        if isinstance(sandbox_overrides, dict) and isinstance(sandbox_overrides.get("prompt_labels"), dict):
+            labels.update(sandbox_overrides["prompt_labels"])
+        return labels
+
+    @staticmethod
+    def _resolve_prompt_budgets(
+        *,
+        platform_config: Optional[Dict[str, Any]],
+        sandbox_overrides: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        budgets: Dict[str, Any] = {}
+        if isinstance(platform_config, dict) and isinstance(platform_config.get("prompt_budgets"), dict):
+            budgets.update(platform_config["prompt_budgets"])
+        if isinstance(sandbox_overrides, dict) and isinstance(sandbox_overrides.get("prompt_budgets"), dict):
+            budgets.update(sandbox_overrides["prompt_budgets"])
+        return budgets
+
+    @staticmethod
+    def _label(labels: Dict[str, Any], key: str, default: str) -> str:
+        value = labels.get(key)
+        return str(value).strip() if isinstance(value, str) and value.strip() else default
+
+    @staticmethod
+    def _budget(budgets: Dict[str, Any], key: str, default: int) -> int:
+        def _coerce(value: Any) -> Optional[int]:
+            try:
+                parsed = int(value)
+            except (TypeError, ValueError):
+                return None
+            return parsed if parsed > 0 else None
+
+        direct = _coerce(budgets.get(key))
+        if direct is not None:
+            return direct
+        for section in ("prompt_assembler", "constraints", "policy"):
+            section_value = budgets.get(section)
+            if isinstance(section_value, dict):
+                nested = _coerce(section_value.get(key))
+                if nested is not None:
+                    return nested
+        return default
 
 
 def _text(value: Any) -> str:

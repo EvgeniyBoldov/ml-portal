@@ -44,6 +44,12 @@ class PlatformSettings(Base):
         nullable=True,
         comment="Runtime prompt injected after no_operation_call_before_answer protocol retry",
     )
+    default_max_iters: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        nullable=True,
+        default=25,
+        comment="Default max planner iterations when execution limits do not provide a value",
+    )
     operations_rules_text: Mapped[Optional[str]] = mapped_column(
         Text,
         nullable=True,

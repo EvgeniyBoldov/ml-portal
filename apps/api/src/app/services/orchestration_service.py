@@ -43,6 +43,10 @@ class OrchestrationSettingsProvider:
             "executor_model": settings.executor_model,
             "executor_temperature": settings.executor_temperature,
             "tool_use_guard": settings.tool_use_guard,
+            "retry_instruction": settings.retry_instruction,
+            "intent_messages": settings.intent_messages,
+            "prompt_budgets": settings.prompt_budgets,
+            "prompt_labels": settings.prompt_labels,
         }
         return self._settings_cache
 

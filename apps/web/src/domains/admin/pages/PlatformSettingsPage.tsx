@@ -1,7 +1,7 @@
 /**
  * PlatformSettingsPage - Global platform configuration (singleton)
  *
- * Tabs: Модели | Общие доступы | RBAC
+ * Tabs: Модели | Ограничения | Фолбеки | Лимиты | Общие доступы | RBAC
  * Uses EntityPageV2 + Tab architecture.
  */
 import { useNavigate } from 'react-router-dom';
@@ -16,7 +16,7 @@ import { ADMIN_ACTION_LABELS, ADMIN_ENTITY_LABELS } from '@/shared/constants/adm
 import { RBACRulesTable } from '@/shared/ui/RBACRulesTable';
 import { CredentialsPanel } from '@/shared/ui/CredentialsPanel';
 import { Block, type FieldConfig } from '@/shared/ui/GridLayout';
-import { usePlatformSettings, useUpdatePlatformSettings, usePlatformExecutionLimits, useUpdatePlatformExecutionLimits } from '@/shared/api/hooks/usePlatformSettings';
+import { usePlatformSettings, useUpdatePlatformSettings, useFillPlatformSettingsDefaults, usePlatformExecutionLimits, useUpdatePlatformExecutionLimits } from '@/shared/api/hooks/usePlatformSettings';
 import { useState } from 'react';
 import ConfirmDialog from '@/shared/ui/ConfirmDialog';
 import {
@@ -69,6 +69,54 @@ const POLICY_GATES_FIELDS: FieldConfig[] = [
     type: 'boolean',
     label: 'Требовать бэкап перед write',
     description: 'Требовать создание бэкапа перед операциями записи',
+  },
+];
+
+const FALLBACK_RETRY_FIELDS: FieldConfig[] = [
+  {
+    key: 'required_operation_retry_instruction',
+    type: 'textarea',
+    label: 'Инструкция повтора операции',
+    description: 'Текст, который подмешивается в протокол, если агент ответил без обязательного operation_call.',
+    rows: 5,
+    placeholder: 'Необходимо вызвать хотя бы одну операцию перед ответом...',
+  },
+];
+
+const FALLBACK_OPERATION_RULES_FIELDS: FieldConfig[] = [
+  {
+    key: 'operations_rules_text',
+    type: 'textarea',
+    label: 'Правила операций',
+    description: 'Полная замена блока обязательных правил для prompt с operations.',
+    rows: 10,
+    placeholder: 'ОБЯЗАТЕЛЬНЫЕ ПРАВИЛА — соблюдай без исключений...',
+  },
+];
+
+const FALLBACK_INTENT_FIELDS: FieldConfig[] = [
+  {
+    key: 'intent_messages',
+    type: 'json',
+    label: 'Сообщения намерений',
+    description: 'JSON-словарь для runtime intent messages: agent_start, final_answer, operation_call.',
+    rows: 10,
+  },
+];
+
+const FALLBACK_NUMERIC_FIELDS: FieldConfig[] = [
+  {
+    key: 'default_max_iters',
+    type: 'number',
+    label: 'Max iters по умолчанию',
+    description: 'Используется, если execution limits не задали runtime_steps_max.',
+  },
+  {
+    key: 'synth_chunk_size',
+    type: 'number',
+    label: 'Размер синтез-чанка',
+    description: 'Размер чанка для synth delta streaming в short-circuit/fallback путях.',
+    min: 1,
   },
 ];
 
@@ -198,6 +246,7 @@ export function PlatformSettingsPage() {
   // Platform settings
   const { data: platformSettings, isLoading: settingsLoading } = usePlatformSettings();
   const updateSettings = useUpdatePlatformSettings();
+  const fillPlatformDefaults = useFillPlatformSettingsDefaults();
 
   const { data: platformLimits } = usePlatformExecutionLimits();
   const updatePlatformLimits = useUpdatePlatformExecutionLimits();
@@ -242,6 +291,34 @@ export function PlatformSettingsPage() {
     setShowConfirmDialog(false);
     setPendingUpdates(null);
   };
+
+  const fallbackTabActions = mode === 'view'
+    ? [
+        <Button
+          key="fill-defaults"
+          variant="secondary"
+          onClick={() => fillPlatformDefaults.mutate()}
+          disabled={fillPlatformDefaults.isPending}
+        >
+          {fillPlatformDefaults.isPending ? 'Заполнение...' : 'Заполнить дефолтами'}
+        </Button>,
+        ...buildEntityCrudActions({
+          mode,
+          saving: updateSettings.isPending,
+          tone: 'default',
+          onEdit: handleEdit,
+          onSave: handleSave,
+          onCancel: handleCancel,
+        }),
+      ]
+    : buildEntityCrudActions({
+        mode,
+        saving: updateSettings.isPending,
+        tone: 'default',
+        onEdit: handleEdit,
+        onSave: handleSave,
+        onCancel: handleCancel,
+      });
 
   // ─── Render ────────────────────────────────────────────────────────
 
@@ -322,7 +399,59 @@ export function PlatformSettingsPage() {
         />
       </Tab>
 
-      {/* ── Tab 3: Лимиты платформы (execution_limits) ── */}
+      {/* ── Tab 3: Фолбеки ── */}
+      <Tab
+        title="Фолбеки"
+        layout="grid"
+        id="fallbacks"
+        actions={fallbackTabActions}
+      >
+        <Block
+          title="Инструкция повтора"
+          icon="refresh-cw"
+          iconVariant="info"
+          width="full"
+          fields={FALLBACK_RETRY_FIELDS}
+          data={mode === 'edit' ? formData : (platformSettings || {})}
+          editable={mode === 'edit'}
+          onChange={mode === 'edit' ? handleFieldChange : undefined}
+        />
+
+        <Block
+          title="Правила операций"
+          icon="clipboard-list"
+          iconVariant="warning"
+          width="full"
+          fields={FALLBACK_OPERATION_RULES_FIELDS}
+          data={mode === 'edit' ? formData : (platformSettings || {})}
+          editable={mode === 'edit'}
+          onChange={mode === 'edit' ? handleFieldChange : undefined}
+        />
+
+        <Block
+          title="Сообщения намерений"
+          icon="bot"
+          iconVariant="primary"
+          width="1/2"
+          fields={FALLBACK_INTENT_FIELDS}
+          data={mode === 'edit' ? formData : (platformSettings || {})}
+          editable={mode === 'edit'}
+          onChange={mode === 'edit' ? handleFieldChange : undefined}
+        />
+
+        <Block
+          title="Числовые фолбеки"
+          icon="settings"
+          iconVariant="success"
+          width="1/2"
+          fields={FALLBACK_NUMERIC_FIELDS}
+          data={mode === 'edit' ? formData : (platformSettings || {})}
+          editable={mode === 'edit'}
+          onChange={mode === 'edit' ? handleFieldChange : undefined}
+        />
+      </Tab>
+
+      {/* ── Tab 4: Лимиты платформы (execution_limits) ── */}
       <Tab
         title="Лимиты"
         layout="grid"

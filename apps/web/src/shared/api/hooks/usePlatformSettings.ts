@@ -68,6 +68,21 @@ export function useUpdatePlatformSettings() {
   });
 }
 
+export function useFillPlatformSettingsDefaults() {
+  const queryClient = useQueryClient();
+  const showError = useErrorToast();
+  const showSuccess = useSuccessToast();
+
+  return useMutation({
+    mutationFn: () => platformSettingsApi.fillDefaults(),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: qk.platform.settings() });
+      showSuccess('Пустые поля заполнены значениями по умолчанию');
+    },
+    onError: (err: Error) => showError(err.message),
+  });
+}
+
 export function usePlatformExecutionLimits() {
   return useQuery({
     queryKey: ['admin', 'execution-limits', 'platform'],

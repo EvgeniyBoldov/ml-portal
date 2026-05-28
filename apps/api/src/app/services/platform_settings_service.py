@@ -11,6 +11,7 @@ from sqlalchemy import select
 from app.models.platform_settings import PlatformSettings
 from app.repositories.platform_settings_repository import PlatformSettingsRepository
 from app.core.logging import get_logger
+from app.services.platform_settings_defaults import build_platform_runtime_config
 
 logger = get_logger(__name__)
 
@@ -42,24 +43,7 @@ class PlatformSettingsProvider:
             db.add(settings)
             await db.flush()
 
-        self._cache = {
-            # Policy gates
-            "policies_text": settings.policies_text,
-            "require_confirmation_for_write": settings.require_confirmation_for_write or False,
-            "require_confirmation_for_destructive": settings.require_confirmation_for_destructive or False,
-            "forbid_destructive": settings.forbid_destructive or False,
-            "forbid_write_in_prod": settings.forbid_write_in_prod or False,
-            "require_backup_before_write": settings.require_backup_before_write or False,
-            "required_operation_retry_instruction": settings.required_operation_retry_instruction,
-            "operations_rules_text": settings.operations_rules_text,
-            "intent_messages": settings.intent_messages,
-            "runtime": {
-                "synth_chunk_size": settings.synth_chunk_size,
-            },
-            # Chat upload settings
-            "chat_upload_max_bytes": settings.chat_upload_max_bytes,
-            "chat_upload_allowed_extensions": settings.chat_upload_allowed_extensions,
-        }
+        self._cache = build_platform_runtime_config(settings)
         return self._cache
 
 
@@ -72,7 +56,17 @@ class PlatformSettingsService:
 
     async def get(self) -> PlatformSettings:
         """Get platform settings (creates if not exists)."""
-        return await self.repo.get_or_create()
+        settings = await self.repo.get_or_create()
+        if getattr(settings, "_defaults_applied", False):
+            PlatformSettingsProvider.invalidate_cache()
+            setattr(settings, "_defaults_applied", False)
+        return settings
+
+    async def fill_defaults(self) -> PlatformSettings:
+        """Fill missing values from Python defaults without overwriting explicit values."""
+        settings = await self.repo.get_or_create()
+        PlatformSettingsProvider.invalidate_cache()
+        return settings
 
     async def update(
         self,
@@ -84,6 +78,7 @@ class PlatformSettingsService:
         forbid_write_in_prod: Optional[bool] = ...,
         require_backup_before_write: Optional[bool] = ...,
         required_operation_retry_instruction: Optional[str] = ...,
+        default_max_iters: Optional[int] = ...,
         operations_rules_text: Optional[str] = ...,
         intent_messages: Optional[Dict[str, str]] = ...,
         synth_chunk_size: Optional[int] = ...,
@@ -112,6 +107,8 @@ class PlatformSettingsService:
             settings.require_backup_before_write = require_backup_before_write
         if required_operation_retry_instruction is not ...:
             settings.required_operation_retry_instruction = required_operation_retry_instruction
+        if default_max_iters is not ...:
+            settings.default_max_iters = default_max_iters
         if operations_rules_text is not ...:
             settings.operations_rules_text = operations_rules_text
         if intent_messages is not ...:

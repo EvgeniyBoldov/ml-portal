@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.platform_settings import PlatformSettings
 from app.core.logging import get_logger
+from app.services.platform_settings_defaults import apply_missing_platform_defaults
 
 logger = get_logger(__name__)
 
@@ -29,12 +30,18 @@ class PlatformSettingsRepository:
         """Get existing or create new platform settings."""
         settings = await self.get()
         if settings:
+            if apply_missing_platform_defaults(settings):
+                await self.session.flush()
+                setattr(settings, "_defaults_applied", True)
             return settings
 
         settings = PlatformSettings()
+        defaults_applied = apply_missing_platform_defaults(settings)
         self.session.add(settings)
         await self.session.flush()
         await self.session.refresh(settings)
+        if defaults_applied:
+            setattr(settings, "_defaults_applied", True)
         logger.info("Created platform settings singleton")
         return settings
 

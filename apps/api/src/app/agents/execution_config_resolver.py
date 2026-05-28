@@ -77,6 +77,26 @@ class ExecutionConfigResolver:
                 if config.get("tool_use_guard"):
                     platform_config["tool_use_guard"] = config.get("tool_use_guard")
 
+                # Add retry_instruction from OrchestrationSettings to platform_config
+                # so agent.py can use it instead of hardcoded DEFAULT_REQUIRED_OPERATION_RETRY_INSTRUCTION
+                if config.get("retry_instruction"):
+                    platform_config["retry_instruction"] = config.get("retry_instruction")
+
+                # Add intent_messages from OrchestrationSettings to platform_config
+                # so agent.py can use it instead of hardcoded DEFAULT_INTENT_MESSAGES
+                if config.get("intent_messages"):
+                    platform_config["intent_messages"] = config.get("intent_messages")
+
+                # Add prompt_budgets from OrchestrationSettings to platform_config
+                # so various modules can use it instead of hardcoded magic numbers
+                if config.get("prompt_budgets"):
+                    platform_config["prompt_budgets"] = config.get("prompt_budgets")
+
+                # Add prompt_labels from OrchestrationSettings to platform_config
+                # so prompt_assembler and capability_card_builder can use it instead of hardcoded labels
+                if config.get("prompt_labels"):
+                    platform_config["prompt_labels"] = config.get("prompt_labels")
+
                 agent = exec_request.agent
                 limits_service = ExecutionLimitsService(session)
                 agent_slug = str(getattr(agent, "slug", "") or "").strip() if agent else ""

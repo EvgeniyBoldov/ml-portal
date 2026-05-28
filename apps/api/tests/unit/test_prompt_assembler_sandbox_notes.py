@@ -28,7 +28,7 @@ def test_constraints_prompt_hides_sandbox_notes_by_default():
         platform_config={},
         sandbox_overrides={"prompt": "x", "orchestration": {"a": 1}},
     )
-    assert "Sandbox Notes" not in text
+    assert "Заметки sandbox" not in text
 
 
 def test_constraints_prompt_includes_sandbox_notes_when_flag_enabled():
@@ -52,5 +52,4 @@ def test_constraints_prompt_includes_sandbox_notes_when_flag_enabled():
             "orchestration": {"a": 1},
         },
     )
-    assert "Sandbox Notes" in text
-
+    assert "Заметки sandbox" in text

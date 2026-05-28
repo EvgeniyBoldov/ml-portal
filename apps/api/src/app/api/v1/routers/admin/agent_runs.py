@@ -39,7 +39,6 @@ from app.services.runtime_trace_builder import RuntimeTraceBuilder, TraceStep
 from app.services.run_store import RunStore
 
 router = APIRouter(tags=["Agent Runs"])
-DEFAULT_MAX_ITERS = 25
 
 
 def _resolve_runtime_user_id(current_user: Users, user_id: Optional[UUID]) -> UUID:
@@ -130,10 +129,14 @@ async def get_runtime_hitl_policy(
     platform_config = await PlatformSettingsProvider.get_instance().get_config(session)
     limits_service = ExecutionLimitsService(session)
     limits = await limits_service.get_effective(scope_type=ExecutionLimitScope.PLATFORM, scope_ref="global")
+    runtime_defaults = platform_config.get("runtime", {}) if isinstance(platform_config, dict) else {}
+    default_max_iters = runtime_defaults.get("default_max_iters")
+    if default_max_iters is None and isinstance(platform_config, dict):
+        default_max_iters = platform_config.get("default_max_iters")
     payload = RuntimeHitlPolicyContractService().build(
         platform_config=platform_config,
         operations=resolved.resolved_operations,
-        max_iters=int(limits.runtime_steps_max or DEFAULT_MAX_ITERS),
+        max_iters=int(limits.runtime_steps_max or default_max_iters),
     )
     return RuntimeHitlPolicyContractResponse(
         tenant_id=tenant_id,

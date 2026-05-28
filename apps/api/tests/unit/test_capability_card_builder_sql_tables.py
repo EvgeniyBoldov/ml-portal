@@ -19,7 +19,7 @@ def test_collections_card_includes_remote_tables_preview():
 
     card = builder._build_collections_card([item])  # noqa: SLF001
 
-    assert "tables:" in card
+    assert "таблицы:" in card
     assert "`tenwork_tickets`" in card
     assert "`services`" in card
 
@@ -45,6 +45,6 @@ def test_collections_card_includes_readiness_status_and_missing_requirements():
 
     card = builder._build_collections_card([item])  # noqa: SLF001
 
-    assert "readiness: schema_stale" in card
-    assert "schema: stale" in card
-    assert "missing: schema_stale" in card
+    assert "готовность: schema_stale" in card
+    assert "схема: stale" in card
+    assert "отсутствует: schema_stale" in card

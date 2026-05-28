@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import db_session, require_admin
 from app.core.security import UserCtx
+from app.services.platform_settings_defaults import build_effective_platform_settings_payload
 from app.services.platform_settings_service import PlatformSettingsService
 from app.schemas.platform_settings import PlatformSettingsResponse, PlatformSettingsUpdate
 
@@ -25,7 +26,7 @@ async def get_platform_settings(
     service = PlatformSettingsService(db)
     settings = await service.get()
     await db.commit()
-    return PlatformSettingsResponse.model_validate(settings)
+    return PlatformSettingsResponse.model_validate(build_effective_platform_settings_payload(settings))
 
 
 @router.patch("", response_model=PlatformSettingsResponse)
@@ -47,4 +48,16 @@ async def update_platform_settings(
         settings = await service.get()
 
     await db.commit()
-    return PlatformSettingsResponse.model_validate(settings)
+    return PlatformSettingsResponse.model_validate(build_effective_platform_settings_payload(settings))
+
+
+@router.post("/fill-defaults", response_model=PlatformSettingsResponse)
+async def fill_platform_settings_defaults(
+    db: AsyncSession = Depends(db_session),
+    _: UserCtx = Depends(require_admin),
+):
+    """Fill empty platform settings fields from Python defaults."""
+    service = PlatformSettingsService(db)
+    settings = await service.fill_defaults()
+    await db.commit()
+    return PlatformSettingsResponse.model_validate(build_effective_platform_settings_payload(settings))

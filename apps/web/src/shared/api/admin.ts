@@ -752,6 +752,11 @@ export interface PlatformSettings {
   forbid_destructive?: boolean;
   forbid_write_in_prod?: boolean;
   require_backup_before_write?: boolean;
+  required_operation_retry_instruction?: string;
+  operations_rules_text?: string;
+  intent_messages?: Record<string, string>;
+  default_max_iters?: number;
+  synth_chunk_size?: number;
   // Global Caps / Rails
   abs_max_plan_steps?: number;
   abs_max_concurrency?: number;
@@ -770,6 +775,11 @@ export interface PlatformSettingsUpdate {
   forbid_destructive?: boolean;
   forbid_write_in_prod?: boolean;
   require_backup_before_write?: boolean;
+  required_operation_retry_instruction?: string;
+  operations_rules_text?: string;
+  intent_messages?: Record<string, string>;
+  default_max_iters?: number;
+  synth_chunk_size?: number;
   abs_max_plan_steps?: number;
   abs_max_concurrency?: number;
   abs_max_task_runtime_s?: number;
@@ -788,6 +798,9 @@ export const platformSettingsApi = {
       method: 'PATCH', 
       body: JSON.stringify(data),
     }),
+
+  fillDefaults: (): Promise<PlatformSettings> =>
+    apiRequest('/admin/settings/fill-defaults', { method: 'POST' }),
 };
 
 export interface ExecutionLimits {
