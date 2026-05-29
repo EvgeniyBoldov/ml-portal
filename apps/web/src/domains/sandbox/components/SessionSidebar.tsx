@@ -36,9 +36,13 @@ const TYPE_LABELS: Record<string, string> = {
   model: 'Модель',
 };
 
+function isPlatformOverrideFieldPath(fieldPath: string): boolean {
+  return fieldPath.startsWith('platform.') || fieldPath.startsWith('platform_limits.');
+}
+
 function getOverrideGroupKey(override: { entity_type: string; entity_id: string | null; field_path: string }): string {
   if (override.entity_type === 'orchestration' && override.entity_id === null) {
-    if (override.field_path.startsWith('platform.')) return 'orchestration:global:platform';
+    if (isPlatformOverrideFieldPath(override.field_path)) return 'orchestration:global:platform';
     if (override.field_path === 'agent.version_id') return 'orchestration:global:agent_version_pin';
   }
   return `${override.entity_type}:${override.entity_id ?? 'global'}`;
@@ -93,13 +97,15 @@ export default function SessionSidebar({
   const countOverridesForEntity = (entityType: string, entityId: string | null): number =>
     branchOverrides.filter((override) => override.entity_type === entityType && (override.entity_id ?? null) === entityId).length;
 
-  const hasOverrideForParameter = (parameterTab: 'platform'): boolean =>
-    branchOverrides.some(
+  const hasOverrideForParameter = (parameterTab: 'platform'): boolean => {
+    if (parameterTab !== 'platform') return false;
+    return branchOverrides.some(
       (override) =>
         override.entity_type === 'orchestration' &&
         override.entity_id === null &&
-        override.field_path.startsWith(`${parameterTab}.`),
+        isPlatformOverrideFieldPath(override.field_path),
     );
+  };
 
   const resolveToolPublished = (toolId: string, defaultPublished: boolean): boolean => {
     const override = branchOverrides.find(
