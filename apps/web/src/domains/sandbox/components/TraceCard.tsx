@@ -32,6 +32,8 @@ const formatTitle = (entity: TraceEntity): string => {
     case 'run':
       if (data.kind === 'run') return data.userRequest?.slice(0, 60) ?? title;
       return title;
+    case 'phase':
+      return title;
     case 'orchestrator':
       if (data.kind === 'orchestrator') {
         if (data.role === 'synthesizer') return 'Синтезер';
@@ -108,6 +110,12 @@ const resolveToneMeta = (entity: TraceEntity): ToneMeta => {
     }
     return { badgeLabel: 'PLAN', badgeTone: 'info', className: styles.planner };
   }
+  if (entity.kind === 'phase' && entity.data.kind === 'phase') {
+    if (entity.data.phaseRole === 'active') {
+      return { badgeLabel: 'PHASE', badgeTone: 'info', className: styles.planner };
+    }
+    return { badgeLabel: 'MEM', badgeTone: 'warn', className: styles.fact };
+  }
   if (entity.kind === 'agent' && entity.data.kind === 'agent') {
     const slug = String(entity.data.slug ?? '').toLowerCase();
     if (slug === 'facts' || slug === 'fact_extractor') {
@@ -131,6 +139,7 @@ const resolveToneMeta = (entity: TraceEntity): ToneMeta => {
 // Краткий сквозной вид по логу: приоритет на агент/планер/тул
 const BUDGET_KINDS: Record<string, Array<'planner_steps' | 'agent_steps' | 'tool_calls' | 'tokens_total' | 'retries' | 'wall_time_ms'>> = {
   run: ['planner_steps', 'tool_calls'],
+  phase: ['planner_steps', 'agent_steps', 'tool_calls', 'tokens_total', 'wall_time_ms'],
   orchestrator: ['planner_steps', 'tokens_total', 'wall_time_ms'],
   agent: ['agent_steps', 'tokens_total', 'wall_time_ms'],
   llm: ['tokens_total'],
@@ -201,7 +210,7 @@ export function TraceCard({
     }
     return BUDGET_KINDS[kind] ?? [];
   })();
-  const showAggregated = kind === 'run' || kind === 'orchestrator' || kind === 'agent';
+  const showAggregated = kind === 'run' || kind === 'orchestrator' || kind === 'agent' || kind === 'phase';
   const pillsUsed = showAggregated ? entity.budget?.aggregated : entity.budget?.own;
   const pillsLimits = entity.budget?.limits ?? null;
   const statusIcon = STATUS_ICONS[status] ?? '○';

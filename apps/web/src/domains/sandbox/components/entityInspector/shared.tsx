@@ -20,7 +20,18 @@ export function statusTone(status: TraceEntity['status']): 'neutral' | 'success'
 }
 
 export function kindLabel(kind: string): string {
-  return kind.charAt(0).toUpperCase() + kind.slice(1);
+  const labels: Record<string, string> = {
+    run: 'Run',
+    phase: 'Phase',
+    orchestrator: 'Orchestrator',
+    planner: 'Planner',
+    agent: 'Agent',
+    llm: 'LLM',
+    tool: 'Tool',
+    error: 'Error',
+    unknown: 'Unknown',
+  };
+  return labels[kind] ?? (kind.charAt(0).toUpperCase() + kind.slice(1));
 }
 
 export function InfoTab({ entity, steps }: { entity: TraceEntity; steps: RunStep[] }) {
@@ -28,12 +39,12 @@ export function InfoTab({ entity, steps }: { entity: TraceEntity; steps: RunStep
 
   return (
     <InspectorFieldGroup>
-      <InspectorFieldRow label="Type"><Badge tone="neutral" size="sm">{kindLabel(entity.kind)}</Badge></InspectorFieldRow>
-      <InspectorFieldRow label="Status"><Badge tone={statusTone(entity.status)} size="sm">{entity.status}</Badge></InspectorFieldRow>
-      <InspectorFieldRow label="Duration">{formatDuration(entity.durationMs)}</InspectorFieldRow>
-      <InspectorFieldRow label="Steps">{stepCount > 0 ? stepCount : '—'}</InspectorFieldRow>
+      <InspectorFieldRow label="Тип"><Badge tone="neutral" size="sm">{kindLabel(entity.kind)}</Badge></InspectorFieldRow>
+      <InspectorFieldRow label="Статус"><Badge tone={statusTone(entity.status)} size="sm">{entity.status}</Badge></InspectorFieldRow>
+      <InspectorFieldRow label="Длительность">{formatDuration(entity.durationMs)}</InspectorFieldRow>
+      <InspectorFieldRow label="Шагов">{stepCount > 0 ? stepCount : '—'}</InspectorFieldRow>
       <InspectorFieldRow label="ID"><code>{entity.id.slice(0, 16)}...</code></InspectorFieldRow>
-      {entity.title ? <InspectorFieldRow label="Title">{entity.title}</InspectorFieldRow> : null}
+      {entity.title ? <InspectorFieldRow label="Заголовок">{entity.title}</InspectorFieldRow> : null}
     </InspectorFieldGroup>
   );
 }
@@ -86,6 +97,7 @@ function extractBudgetFromStep(step: RunStep): { used: EntityUsed; limits: Entit
 }
 
 function budgetTitleForKind(kind: TraceEntity['kind']): string {
+  if (kind === 'phase') return 'Расход фазы';
   if (kind === 'agent') return 'Бюджет агента';
   if (kind === 'planner' || kind === 'decision' || kind === 'orchestrator') return 'Бюджет оркестратора';
   if (kind === 'tool') return 'Расход инструмента';
@@ -99,10 +111,10 @@ export function BudgetsTab({ entity, steps }: { entity: TraceEntity; steps: RunS
     .map(extractBudgetFromStep)
     .find(Boolean);
 
-  const used = (entity.kind === 'run' || entity.kind === 'orchestrator' || entity.kind === 'agent')
+  const used = (entity.kind === 'run' || entity.kind === 'orchestrator' || entity.kind === 'agent' || entity.kind === 'phase')
     ? (entity.budget?.aggregated ?? fromStep?.used ?? {})
     : (entity.budget?.own ?? fromStep?.used ?? {});
-  const limits = entity.budget?.limits ?? fromStep?.limits;
+  const limits = entity.kind === 'phase' ? null : (entity.budget?.limits ?? fromStep?.limits);
 
   if (limits && Object.keys(limits).length > 0) {
     return (
@@ -115,6 +127,10 @@ export function BudgetsTab({ entity, steps }: { entity: TraceEntity; steps: RunS
   }
 
   return <SpendSummary used={used} />;
+}
+
+export function SpendTab({ entity }: { entity: TraceEntity }) {
+  return <SpendSummary used={entity.budget?.aggregated ?? {}} />;
 }
 
 export function RawTab({ value, entity, steps }: { value: unknown; entity?: TraceEntity; steps?: RunStep[] }) {

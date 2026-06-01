@@ -22,6 +22,7 @@ import type {
   TraceEntity,
   AgentData,
   OrchestratorData,
+  PhaseData,
   UnknownData,
 } from './entityTypes';
 import type { SemanticEvent } from './types';
@@ -126,10 +127,12 @@ function normalizeRunPhaseLayout(runRoot: TraceEntity): void {
   );
 
   const runChildren = [...runRoot.children];
-  let activePhase = runChildren.find((c) => getRole(c) === 'planner');
+  let activePhase = runChildren.find((c) => c.kind === 'phase' && c.data.kind === 'phase' && c.data.phaseRole === 'active');
   const moveToActive = runChildren.filter((child) => {
+    if (child.kind === 'phase') return false;
     const role = getRole(child);
-    if (role === 'memory' || role === 'planner') return false;
+    if (role === 'memory') return false;
+    if (role === 'planner') return true;
     if (role === 'synthesizer') return true;
     return child.kind === 'planner';
   });
@@ -137,7 +140,7 @@ function normalizeRunPhaseLayout(runRoot: TraceEntity): void {
   if (!activePhase && moveToActive.length > 0) {
     activePhase = {
       id: hashIds([runRoot.id, 'active-phase']),
-      kind: 'orchestrator',
+      kind: 'phase',
       parentId: runRoot.id,
       depth: runRoot.depth + 1,
       children: [],
@@ -145,15 +148,14 @@ function normalizeRunPhaseLayout(runRoot: TraceEntity): void {
       status: 'info',
       sourceEventIds: [],
       data: {
-        kind: 'orchestrator',
-        slug: 'active_phase',
-        role: 'planner',
-      } as OrchestratorData,
+        kind: 'phase',
+        phaseRole: 'active',
+      } as PhaseData,
     };
     runRoot.children.unshift(activePhase);
   }
 
-  if (activePhase && activePhase.kind === 'orchestrator' && activePhase.data.kind === 'orchestrator') {
+  if (activePhase && activePhase.kind === 'phase' && activePhase.data.kind === 'phase') {
     activePhase.title = 'Подготовка ответа';
     for (const child of moveToActive) {
       const idx = runRoot.children.findIndex((c) => c.id === child.id);
@@ -193,10 +195,35 @@ function normalizeRunPhaseLayout(runRoot: TraceEntity): void {
     }
   }
 
+  for (let i = 0; i < runRoot.children.length; i += 1) {
+    const child = runRoot.children[i];
+    if (child.kind !== 'orchestrator' || child.data.kind !== 'orchestrator') continue;
+    if (String(child.data.role ?? '').toLowerCase() !== 'memory') continue;
+    const memoryPhase: TraceEntity = {
+      ...child,
+      kind: 'phase',
+      title: 'Мемори',
+      data: {
+        kind: 'phase',
+        phaseRole: 'memory',
+      } as PhaseData,
+    };
+    setEntityDepthRecursive(memoryPhase, runRoot.depth + 1);
+    runRoot.children[i] = memoryPhase;
+  }
+
+  const deriveStatus = (children: TraceEntity[]): TraceEntity['status'] => {
+    if (children.some((c) => c.status === 'error')) return 'error';
+    if (children.some((c) => c.status === 'warn')) return 'warn';
+    if (children.some((c) => c.status === 'pending')) return 'pending';
+    if (children.some((c) => c.status === 'ok')) return 'ok';
+    return 'info';
+  };
+  if (activePhase && activePhase.kind === 'phase') {
+    activePhase.status = deriveStatus(activePhase.children);
+  }
   for (const child of runRoot.children) {
-    if (getRole(child) === 'memory') {
-      child.title = 'Мемори';
-    }
+    if (child.kind === 'phase') child.status = deriveStatus(child.children);
   }
 }
 

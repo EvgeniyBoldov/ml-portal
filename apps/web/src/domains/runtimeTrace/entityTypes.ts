@@ -13,6 +13,7 @@ import type { SemanticEvent } from './types';
 
 export type EntityKind =
   | 'run'
+  | 'phase'
   | 'orchestrator'
   | 'planner'
   | 'agent'
@@ -173,6 +174,11 @@ export interface OrchestratorData {
   intent?: string;
 }
 
+export interface PhaseData {
+  kind: 'phase';
+  phaseRole: 'active' | 'memory';
+}
+
 export interface RunData {
   kind: 'run';
   userRequest?: string;
@@ -216,6 +222,7 @@ export type EntityData =
   | AgentData
   | PlannerData
   | OrchestratorData
+  | PhaseData
   | RunData
   | ErrorData
   | UnknownData;
@@ -315,6 +322,10 @@ export function isPlannerData(data: EntityData): data is PlannerData {
 
 export function isOrchestratorData(data: EntityData): data is OrchestratorData {
   return data.kind === 'orchestrator';
+}
+
+export function isPhaseData(data: EntityData): data is PhaseData {
+  return data.kind === 'phase';
 }
 
 export function isRunData(data: EntityData): data is RunData {

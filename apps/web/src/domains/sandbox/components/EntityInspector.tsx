@@ -35,6 +35,7 @@ export function EntityInspector({ entity, steps }: EntityInspectorProps) {
       }
     >
       {entity.kind === 'run' && <RunInspectorTabs entity={entity} steps={steps} />}
+      {entity.kind === 'phase' && <OrchestratorInspectorTabs entity={entity} steps={steps} />}
       {entity.kind === 'agent' && <AgentInspectorTabs entity={entity} steps={steps} />}
       {entity.kind === 'orchestrator' && <OrchestratorInspectorTabs entity={entity} steps={steps} />}
       {entity.kind === 'llm' && <LlmInspectorTabs entity={entity} steps={steps} />}
