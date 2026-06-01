@@ -134,6 +134,13 @@ class Synthesizer:
             for i in range(0, len(short_answer), chunk_size):
                 yield RuntimeEvent.delta(short_answer[i : i + chunk_size])
             runtime_state.final_answer = short_answer
+            yield RuntimeEvent.status(
+                "final_answer_marker",
+                producer="synthesizer_verbatim",
+                parent_entity_type="synthesis_run",
+                parent_entity_id=synthesis_run_id,
+                content=short_answer,
+            )
             yield RuntimeEvent.final(short_answer, sources=sources, run_id=str(run_id))
             if budget_registry is not None:
                 final_payload = budget_registry.emit_snapshot(synthesis_run_id, reason="finalize") or {}
@@ -165,6 +172,13 @@ class Synthesizer:
                 for i in range(0, len(short_answer), chunk_size):
                     yield RuntimeEvent.delta(short_answer[i : i + chunk_size])
                 runtime_state.final_answer = short_answer
+                yield RuntimeEvent.status(
+                    "final_answer_marker",
+                    producer="synthesizer_agent_result",
+                    parent_entity_type="synthesis_run",
+                    parent_entity_id=synthesis_run_id,
+                    content=short_answer,
+                )
                 yield RuntimeEvent.final(short_answer, sources=sources, run_id=str(run_id))
                 if budget_registry is not None:
                     final_payload = budget_registry.emit_snapshot(synthesis_run_id, reason="finalize") or {}
@@ -232,6 +246,11 @@ class Synthesizer:
                     parent_entity_id=synthesis_run_id,
                 )
                 runtime_state.final_error = stream_event.message
+                yield RuntimeEvent.synthesis_end(
+                    synthesis_id=synthesis_run_id,
+                    run_id=str(run_id),
+                    status=synthesis_status,
+                )
                 return
             if isinstance(stream_event, StreamTurn):
                 full = (stream_event.content or "").strip()
@@ -290,6 +309,13 @@ class Synthesizer:
                 yield RuntimeEvent.delta(full[i : i + chunk_size])
 
         runtime_state.final_answer = full
+        yield RuntimeEvent.status(
+            "final_answer_marker",
+            producer="synthesizer_llm",
+            parent_entity_type="synthesis_run",
+            parent_entity_id=synthesis_run_id,
+            content=full,
+        )
         yield RuntimeEvent.final(full, sources=sources, run_id=str(run_id))
         if budget_registry is not None:
             final_payload = budget_registry.emit_snapshot(synthesis_run_id, reason="finalize") or {}

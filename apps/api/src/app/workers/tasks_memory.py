@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import json
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 from uuid import uuid4
@@ -84,6 +85,9 @@ class MemoryFinalizePayload(BaseModel):
     runtime_run_id: Optional[str] = None
     tail_id: Optional[str] = None
     stream_key: Optional[str] = None
+    memory_limits: Optional[Dict[str, int]] = None
+    facts_limits: Optional[Dict[str, int]] = None
+    conversation_limits: Optional[Dict[str, int]] = None
 
 
 def get_async_session():
@@ -175,6 +179,7 @@ def finalize_memory_task(self, payload_dict: Dict[str, Any]) -> Dict[str, Any]:
         payload = MemoryFinalizePayload.model_validate(payload_dict)
         AsyncSessionLocal = get_async_session()
         bus = RuntimeTailEventBus()
+        metric_keys = ("planner_steps", "agent_steps", "tool_calls", "tokens_in", "tokens_out", "tokens_total", "retries", "wall_time_ms")
 
         async def _publish(event: RuntimeEvent) -> None:
             if not payload.stream_key:
@@ -202,11 +207,63 @@ def finalize_memory_task(self, payload_dict: Dict[str, Any]) -> Dict[str, Any]:
                 "facts": f"{payload.runtime_run_id or payload.chat_id}:memory:facts",
                 "conversation": f"{payload.runtime_run_id or payload.chat_id}:memory:conversation",
             }
+            memory_orchestrator_id = (
+                f"{payload.runtime_run_id}:memory"
+                if payload.runtime_run_id
+                else f"{payload.chat_id}:memory"
+            )
+            component_limits = {
+                "facts": payload.facts_limits,
+                "conversation": payload.conversation_limits,
+            }
+            budget_own: dict[str, dict[str, int]] = {
+                memory_orchestrator_id: {},
+                component_entity_ids["facts"]: {},
+                component_entity_ids["conversation"]: {},
+            }
+            llm_structured_result: dict[str, dict[str, Any]] = {}
+
+            async def _emit_budget_snapshot(
+                *,
+                entity_type: str,
+                entity_id: str,
+                parent_entity_id: str,
+                role: str,
+                limits: Optional[dict[str, int]] = None,
+                delta: Optional[dict[str, int]] = None,
+                reason: str,
+            ) -> None:
+                own = budget_own.setdefault(entity_id, {})
+                for key, value in (delta or {}).items():
+                    own[key] = int(own.get(key, 0)) + int(value)
+                await _publish(
+                    RuntimeEvent.budget_snapshot(
+                        entity_type=entity_type,
+                        entity_id=entity_id,
+                        parent_entity_type="orchestrator" if entity_type == "agent_run" else "run",
+                        parent_entity_id=parent_entity_id,
+                        own=own,
+                        limits=limits,
+                        delta=delta or {},
+                        reason=reason,
+                        role=role,
+                    )
+                )
 
             async def _on_llm_event(component_name: str, llm_payload: dict[str, Any]) -> None:
                 parent_id = component_entity_ids.get(component_name, memory_orchestrator_id)
                 messages = llm_payload.get("messages")
                 response_text = llm_payload.get("response")
+                if isinstance(response_text, str) and response_text.strip():
+                    try:
+                        parsed = json.loads(response_text)
+                        if isinstance(parsed, dict):
+                            llm_structured_result[component_name] = parsed
+                    except Exception:
+                        pass
+                tokens_in = int(llm_payload.get("tokens_in") or 0)
+                tokens_out = int(llm_payload.get("tokens_out") or 0)
+                tokens_total = int(llm_payload.get("tokens_total") or (tokens_in + tokens_out))
                 await _publish(
                     RuntimeEvent.llm_turn(
                         llm_call_id=f"{parent_id}:llm:{uuid4().hex[:8]}",
@@ -220,7 +277,36 @@ def finalize_memory_task(self, payload_dict: Dict[str, Any]) -> Dict[str, Any]:
                         content=str(response_text) if isinstance(response_text, str) else None,
                         response=str(response_text) if isinstance(response_text, str) else None,
                         duration_ms=llm_payload.get("duration_ms"),
+                        tokens_in=tokens_in,
+                        tokens_out=tokens_out,
+                        tokens_total=tokens_total,
                     )
+                )
+                await _emit_budget_snapshot(
+                    entity_type="agent_run",
+                    entity_id=parent_id,
+                    parent_entity_id=memory_orchestrator_id,
+                    role=component_name,
+                    limits=component_limits.get(component_name),
+                    delta={
+                        "tokens_in": tokens_in,
+                        "tokens_out": tokens_out,
+                        "tokens_total": tokens_total,
+                    },
+                    reason="llm_turn",
+                )
+                await _emit_budget_snapshot(
+                    entity_type="orchestrator",
+                    entity_id=memory_orchestrator_id,
+                    parent_entity_id=payload.runtime_run_id or payload.chat_id or memory_orchestrator_id,
+                    role="memory",
+                    limits=payload.memory_limits,
+                    delta={
+                        "tokens_in": tokens_in,
+                        "tokens_out": tokens_out,
+                        "tokens_total": tokens_total,
+                    },
+                    reason=f"{component_name}_llm_turn",
                 )
 
             writer = MemoryWriter(
@@ -238,11 +324,6 @@ def finalize_memory_task(self, payload_dict: Dict[str, Any]) -> Dict[str, Any]:
                 except ValueError:
                     logger.warning("Unknown terminal reason: %s", payload.terminal_reason)
             
-            memory_orchestrator_id = (
-                f"{payload.runtime_run_id}:memory"
-                if payload.runtime_run_id
-                else f"{payload.chat_id}:memory"
-            )
             memory_status = "completed"
             results: list[dict[str, Any]] = []
             failed_components: list[str] = []
@@ -254,6 +335,14 @@ def finalize_memory_task(self, payload_dict: Dict[str, Any]) -> Dict[str, Any]:
                     role="memory",
                 )
             )
+            await _emit_budget_snapshot(
+                entity_type="orchestrator",
+                entity_id=memory_orchestrator_id,
+                parent_entity_id=payload.runtime_run_id or payload.chat_id or memory_orchestrator_id,
+                role="memory",
+                limits=payload.memory_limits,
+                reason="init",
+            )
             try:
                 for component_name, component_entity_id in component_entity_ids.items():
                     await _publish(
@@ -263,6 +352,14 @@ def finalize_memory_task(self, payload_dict: Dict[str, Any]) -> Dict[str, Any]:
                             parent_entity_type="orchestrator",
                             agent_slug=component_name,
                         )
+                    )
+                    await _emit_budget_snapshot(
+                        entity_type="agent_run",
+                        entity_id=component_entity_id,
+                        parent_entity_id=memory_orchestrator_id,
+                        role=component_name,
+                        limits=component_limits.get(component_name),
+                        reason="init",
                     )
                 await writer.finalize(
                     memory=turn_memory,
@@ -309,6 +406,70 @@ def finalize_memory_task(self, payload_dict: Dict[str, Any]) -> Dict[str, Any]:
                             parent_entity_id=component_entity_id,
                         )
                     )
+                    if component_name == "facts":
+                        parsed = llm_structured_result.get(component_name) or {}
+                        facts_payload = parsed.get("facts") if isinstance(parsed, dict) else None
+                        await _publish(
+                            RuntimeEvent.status(
+                                "memory_facts_result",
+                                parent_entity_type="agent_run",
+                                parent_entity_id=component_entity_id,
+                                facts=facts_payload if isinstance(facts_payload, list) else [],
+                            )
+                        )
+                    if component_name == "conversation":
+                        parsed = llm_structured_result.get(component_name) or {}
+                        summary: dict[str, Any] = {}
+                        if isinstance(parsed, dict):
+                            if isinstance(parsed.get("summary"), dict):
+                                summary = dict(parsed.get("summary") or {})
+                            else:
+                                summary = {
+                                    "goals": parsed.get("goals") if isinstance(parsed.get("goals"), list) else [],
+                                    "done": parsed.get("done") if isinstance(parsed.get("done"), list) else [],
+                                    "entities": parsed.get("entities") if isinstance(parsed.get("entities"), dict) else {},
+                                    "open_questions": parsed.get("open_questions") if isinstance(parsed.get("open_questions"), list) else [],
+                                }
+                        # Fallback to finalized summary DTO when LLM structured payload is missing/invalid.
+                        if not summary:
+                            summary = {
+                                "goals": list(turn_memory.summary.goals or []),
+                                "done": list(turn_memory.summary.done or []),
+                                "entities": dict(turn_memory.summary.entities or {}),
+                                "open_questions": list(turn_memory.summary.open_questions or []),
+                                "raw_tail": turn_memory.summary.raw_tail or "",
+                                "last_updated_turn": int(turn_memory.summary.last_updated_turn or 0),
+                            }
+                        await _publish(
+                            RuntimeEvent.status(
+                                "memory_summary_result",
+                                parent_entity_type="agent_run",
+                                parent_entity_id=component_entity_id,
+                                summary=summary,
+                            )
+                        )
+                    delta = {
+                        "agent_steps": 1,
+                        "wall_time_ms": int(item.get("duration_ms") or 0),
+                    }
+                    await _emit_budget_snapshot(
+                        entity_type="agent_run",
+                        entity_id=component_entity_id,
+                        parent_entity_id=memory_orchestrator_id,
+                        role=component_name,
+                        limits=component_limits.get(component_name),
+                        delta=delta,
+                        reason="component_result",
+                    )
+                    await _emit_budget_snapshot(
+                        entity_type="orchestrator",
+                        entity_id=memory_orchestrator_id,
+                        parent_entity_id=payload.runtime_run_id or payload.chat_id or memory_orchestrator_id,
+                        role="memory",
+                        limits=payload.memory_limits,
+                        delta=delta,
+                        reason=f"{component_name}_component_result",
+                    )
                     await _publish(
                         RuntimeEvent.agent_end(
                             agent_run_id=component_entity_id,
@@ -322,6 +483,41 @@ def finalize_memory_task(self, payload_dict: Dict[str, Any]) -> Dict[str, Any]:
                 memory_status = "failed"
                 raise
             finally:
+                for entity_id in list(budget_own.keys()):
+                    entity_type = "orchestrator" if entity_id == memory_orchestrator_id else "agent_run"
+                    parent_entity_id = (
+                        payload.runtime_run_id or payload.chat_id or memory_orchestrator_id
+                        if entity_type == "orchestrator"
+                        else memory_orchestrator_id
+                    )
+                    limits = (
+                        payload.memory_limits
+                        if entity_type == "orchestrator"
+                        else component_limits.get("facts")
+                        if entity_id == component_entity_ids["facts"]
+                        else component_limits.get("conversation")
+                    )
+                    role = "memory" if entity_type == "orchestrator" else (
+                        "facts" if entity_id == component_entity_ids["facts"] else "conversation"
+                    )
+                    own_snapshot = {
+                        key: int(value)
+                        for key, value in budget_own.get(entity_id, {}).items()
+                        if key in metric_keys
+                    }
+                    await _publish(
+                        RuntimeEvent.budget_snapshot(
+                            entity_type=entity_type,
+                            entity_id=entity_id,
+                            parent_entity_type="orchestrator" if entity_type == "agent_run" else "run",
+                            parent_entity_id=parent_entity_id,
+                            own=own_snapshot,
+                            limits=limits,
+                            delta={},
+                            reason="finalize",
+                            role=role,
+                        )
+                    )
                 await _publish(
                     RuntimeEvent.status(
                         "memory_write_end",

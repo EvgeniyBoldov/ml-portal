@@ -24,8 +24,10 @@ from app.runtime.budgets import BudgetLimitsResolver, RunBudgetLedger
 from app.runtime.llm.structured import StructuredCallError
 from app.agents.runtime.llm import LLMAdapter
 from app.runtime.operation_errors import RuntimeErrorCode
+from app.runtime.planner.iteration_policy import classify_agent_failure
 from app.runtime.planner.planner import Planner, PlannerLLMOutput
 from app.runtime.planner.validator import validate_next_step
+from app.runtime.stages.planner_call_agent_dispatcher import PlannerCallAgentDispatcher
 from app.runtime.stages.planning_stage import PlanningStage
 from app.runtime.turn_state import RuntimeTurnState
 from app.runtime.memory.components import MemoryBundle
@@ -213,6 +215,59 @@ def test_validator_final_and_abort_constraints():
     ) is None
 
 
+def test_validator_blocks_repeated_call_agent_after_sufficient_success():
+    mem = _memory()
+    state = ensure_runtime_turn_state(mem)
+    state.add_iteration_result(
+        {
+            "iteration": 1,
+            "step_kind": NextStepKind.CALL_AGENT.value,
+            "agent_slug": "analyst",
+            "phase_id": "phase-1",
+            "outcome": "success",
+            "summary": "done",
+            "sufficient_for_phase": True,
+        }
+    )
+    err = validate_next_step(
+        NextStep(
+            kind=NextStepKind.CALL_AGENT,
+            rationale="r",
+            agent_slug="analyst",
+            phase_id="phase-1",
+        ),
+        allowed_agents=["analyst"],
+        runtime_state=state,
+    )
+    assert err == "call_agent step blocked: previous successful result for this phase is already sufficient"
+
+
+def test_validator_blocks_repeated_pending_question_from_iteration_results():
+    mem = _memory()
+    state = ensure_runtime_turn_state(mem)
+    state.add_iteration_result(
+        {
+            "iteration": 1,
+            "step_kind": NextStepKind.CLARIFY.value,
+            "phase_id": "phase-1",
+            "outcome": "needs_input",
+            "summary": "Нужно уточнение",
+            "question": "Уточните период отчета",
+            "sufficient_for_phase": False,
+        }
+    )
+    err = validate_next_step(
+        NextStep(
+            kind=NextStepKind.ASK_USER,
+            rationale="r",
+            question="  Уточните   период отчета  ",
+        ),
+        allowed_agents=["analyst"],
+        runtime_state=state,
+    )
+    assert err == "ask_user step repeats pending question from previous iteration"
+
+
 def test_agent_executor_helper_paths():
     legacy_status = SimpleNamespace(type=LegacyEventType.STATUS, data={"stage": "x"})
     translated = AgentExecutor._translate(legacy_status)  # noqa: SLF001
@@ -315,77 +370,87 @@ def test_planner_llm_output_coerces_agent_input_json_string():
 
 def test_planning_stage_detects_non_retryable_agent_failure():
     state = ensure_runtime_turn_state(_memory())
-    state.add_agent_result(
+    state.add_iteration_result(
         {
+            "iteration": 1,
+            "step_kind": NextStepKind.CALL_AGENT.value,
             "agent_slug": "mon.net",
             "summary": "request too large",
-            "success": False,
-            "error": "rate_limit_exceeded",
+            "outcome": "failed",
             "retryable": False,
             "error_code": RuntimeErrorCode.AGENT_WALL_TIME_EXCEEDED.value,
+            "sufficient_for_phase": False,
         }
     )
-    assert PlanningStage._has_non_retryable_agent_failure(state, "mon.net") is True  # noqa: SLF001
+    assert classify_agent_failure(state, agent_slug="mon.net")["non_retryable"] is True
 
 
 def test_planning_stage_detects_non_retryable_auth_failure():
     state = ensure_runtime_turn_state(_memory())
-    state.add_agent_result(
+    state.add_iteration_result(
         {
+            "iteration": 1,
+            "step_kind": NextStepKind.CALL_AGENT.value,
             "agent_slug": "mon.net",
             "summary": "invalid_api_key",
-            "success": False,
-            "error": "invalid_api_key",
+            "outcome": "failed",
             "retryable": False,
             "error_code": RuntimeErrorCode.AGENT_RUNTIME_EXCEPTION.value,
+            "sufficient_for_phase": False,
         }
     )
-    assert PlanningStage._has_non_retryable_agent_failure(state, "mon.net") is True  # noqa: SLF001
+    assert classify_agent_failure(state, agent_slug="mon.net")["non_retryable"] is True
 
 
 def test_planning_stage_detects_non_retryable_tool_protocol_failure():
     state = ensure_runtime_turn_state(_memory())
-    state.add_agent_result(
+    state.add_iteration_result(
         {
+            "iteration": 1,
+            "step_kind": NextStepKind.CALL_AGENT.value,
             "agent_slug": "mon.net",
             "summary": "tool_use_failed",
-            "success": False,
-            "error": "tool_use_failed",
+            "outcome": "failed",
             "retryable": False,
             "error_code": RuntimeErrorCode.AGENT_NON_RETRYABLE_OPERATION_FAILURE.value,
+            "sufficient_for_phase": False,
         }
     )
-    assert PlanningStage._has_non_retryable_agent_failure(state, "mon.net") is True  # noqa: SLF001
+    assert classify_agent_failure(state, agent_slug="mon.net")["non_retryable"] is True
 
 
 def test_planning_stage_detects_non_retryable_not_found_failure():
     state = ensure_runtime_turn_state(_memory())
-    state.add_agent_result(
+    state.add_iteration_result(
         {
+            "iteration": 1,
+            "step_kind": NextStepKind.CALL_AGENT.value,
             "agent_slug": "net.enginer",
             "summary": "operation not found",
-            "success": False,
-            "error": "not found",
+            "outcome": "failed",
             "retryable": False,
             "error_code": RuntimeErrorCode.OPERATION_UNAVAILABLE.value,
+            "sufficient_for_phase": False,
         }
     )
-    assert PlanningStage._has_non_retryable_agent_failure(state, "net.enginer") is True  # noqa: SLF001
+    assert classify_agent_failure(state, agent_slug="net.enginer")["non_retryable"] is True
 
 
 def test_planning_stage_marks_last_result_as_unavailable_for_preflight_failure():
     state = ensure_runtime_turn_state(_memory())
-    state.add_agent_result(
+    state.add_iteration_result(
         {
+            "iteration": 1,
+            "step_kind": NextStepKind.CALL_AGENT.value,
             "agent_slug": "ops",
             "summary": "sub_agent_unavailable",
-            "success": False,
-            "error": "preflight_failed",
+            "outcome": "failed",
             "error_code": RuntimeErrorCode.AGENT_PRECHECK_FAILED.value,
             "retryable": False,
+            "sufficient_for_phase": False,
         }
     )
-    assert PlanningStage._last_agent_unavailable(state, "ops") is True  # noqa: SLF001
+    assert classify_agent_failure(state, agent_slug="ops")["unavailable"] is True
 
 
 def test_planning_stage_remove_agent_by_slug():
@@ -393,7 +458,7 @@ def test_planning_stage_remove_agent_by_slug():
         {"slug": "ops", "description": "ops"},
         {"slug": "net", "description": "net"},
     ]
-    removed = PlanningStage._remove_agent(agents, "ops")  # noqa: SLF001
+    removed = PlannerCallAgentDispatcher._remove_agent(agents, "ops")  # noqa: SLF001
     assert removed is True
     assert agents == [{"slug": "net", "description": "net"}]
 

@@ -220,10 +220,14 @@ function normalizeRunPhaseLayout(runRoot: TraceEntity): void {
     return 'info';
   };
   if (activePhase && activePhase.kind === 'phase') {
+    activePhase.sourceEventIds = Array.from(new Set(activePhase.children.flatMap((child) => child.sourceEventIds || [])));
     activePhase.status = deriveStatus(activePhase.children);
   }
   for (const child of runRoot.children) {
-    if (child.kind === 'phase') child.status = deriveStatus(child.children);
+    if (child.kind === 'phase') {
+      child.sourceEventIds = Array.from(new Set(child.children.flatMap((c) => c.sourceEventIds || [])));
+      child.status = deriveStatus(child.children);
+    }
   }
 }
 
@@ -925,11 +929,50 @@ export function buildEntityTree(
 
     // --- Handle agent_end (backend Stage 1) ---
     if (rawType === 'agent_end') {
+      // Update agent status from the event before popping
+      const endStatus = typeof raw.status === 'string' ? raw.status : 'completed';
+      const agentStatus: TraceEntity['status'] =
+        endStatus === 'failed' ? 'error' :
+        endStatus === 'aborted' ? 'warn' :
+        endStatus === 'paused' ? 'warn' :
+        endStatus === 'completed' ? 'ok' : 'info';
+      // Find and update the most recent agent entity in the stack
+      for (let sIdx = stack.length - 1; sIdx >= 0; sIdx--) {
+        if (stack[sIdx].entity.kind === 'agent') {
+          stack[sIdx].entity.status = agentStatus;
+          if (!stack[sIdx].entity.sourceEventIds.includes(event.id)) {
+            stack[sIdx].entity.sourceEventIds.push(event.id);
+          }
+          break;
+        }
+      }
       // Pop until we exit agent level
       while (stack.length > 2 && stack[stack.length - 1].entity.kind === 'agent') {
         stack.pop();
       }
       emitDebug(event, 'close_agent');
+      continue;
+    }
+
+    // --- Handle planner_iteration_end (backend Stage 1) ---
+    if (rawType === 'planner_iteration_end') {
+      const endStatus = typeof raw.status === 'string' ? raw.status : 'completed';
+      const plannerStatus: TraceEntity['status'] =
+        endStatus === 'failed' ? 'error' :
+        endStatus === 'aborted' ? 'warn' :
+        endStatus === 'paused' ? 'warn' :
+        endStatus === 'completed' ? 'ok' : 'info';
+      // Find and update the most recent planner entity in the stack
+      for (let sIdx = stack.length - 1; sIdx >= 0; sIdx--) {
+        if (stack[sIdx].entity.kind === 'planner') {
+          stack[sIdx].entity.status = plannerStatus;
+          if (!stack[sIdx].entity.sourceEventIds.includes(event.id)) {
+            stack[sIdx].entity.sourceEventIds.push(event.id);
+          }
+          break;
+        }
+      }
+      emitDebug(event, 'close_planner_iteration');
       continue;
     }
 

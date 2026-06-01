@@ -85,7 +85,7 @@ export function LlmInspectorTabs({ entity, steps }: { entity: TraceEntity; steps
           <InspectorFieldRow label="Model"><code>{data?.params?.model ?? '—'}</code></InspectorFieldRow>
           <InspectorFieldRow label="Tokens In">{data?.tokensIn ?? '—'}</InspectorFieldRow>
           <InspectorFieldRow label="Tokens Out">{data?.tokensOut ?? '—'}</InspectorFieldRow>
-          <InspectorFieldRow label="Tokens Total"><code>{String(responsePayloadRaw?.tokens_total ?? '—')}</code></InspectorFieldRow>
+          <InspectorFieldRow label="Tokens Total"><code>{String(data?.tokensTotal ?? '—')}</code></InspectorFieldRow>
           <InspectorFieldRow label="Duration"><code>{String(responsePayloadRaw?.duration_ms ?? '—')} ms</code></InspectorFieldRow>
         </InspectorFieldGroup>
       </>

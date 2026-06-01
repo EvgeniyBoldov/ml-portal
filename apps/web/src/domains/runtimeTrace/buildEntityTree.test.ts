@@ -233,12 +233,16 @@ describe('buildEntityTree', () => {
       expect(tree.id).toBe(RUN_ID);
     });
 
-    it('creates orchestrator as child of run', () => {
+    it('creates orchestrator inside active phase', () => {
       const tree = buildEntityTree(events);
+      const activePhase = tree.children.find(
+        (e) => e.kind === 'phase' && e.data.kind === 'phase' && e.data.phaseRole === 'active',
+      );
+      expect(activePhase).toBeDefined();
       const orch = flattenEntityTree(tree).find(e => e.id === ORCH_ID);
       expect(orch).toBeDefined();
       expect(orch?.kind).toBe('orchestrator');
-      expect(orch?.parentId).toBe(RUN_ID);
+      expect(orch?.parentId).toBe(activePhase?.id);
     });
 
     it('creates planner iteration as child of orchestrator', () => {
@@ -274,12 +278,16 @@ describe('buildEntityTree', () => {
       expect(toolChildren.length).toBe(1);
     });
 
-    it('creates synthesis entity as child of run', () => {
+    it('creates synthesis entity inside active phase', () => {
       const tree = buildEntityTree(events);
+      const activePhase = tree.children.find(
+        (e) => e.kind === 'phase' && e.data.kind === 'phase' && e.data.phaseRole === 'active',
+      );
+      expect(activePhase).toBeDefined();
       const synth = flattenEntityTree(tree).find(e => e.id === SYNTH_ID);
       expect(synth).toBeDefined();
       expect(synth?.kind).toBe('orchestrator');
-      expect(synth?.parentId).toBe(RUN_ID);
+      expect(synth?.parentId).toBe(activePhase?.id);
     });
 
     it('sets completed status on entities after *_end events', () => {
@@ -296,17 +304,21 @@ describe('buildEntityTree', () => {
       expect(iter?.data.kind).toBe('planner');
     });
 
-    it('tree depth is correct: run(0) → orch(1) → iter(2) → agent(3) → tool(4)', () => {
+    it('tree depth is correct: run(0) → phase(1) → orch(2) → iter(3) → agent(4) → tool(5)', () => {
       const tree = buildEntityTree(events);
       expect(tree.depth).toBe(0);
+      const activePhase = tree.children.find(
+        (e) => e.kind === 'phase' && e.data.kind === 'phase' && e.data.phaseRole === 'active',
+      );
+      expect(activePhase?.depth).toBe(1);
       const orch = flattenEntityTree(tree).find(e => e.id === ORCH_ID);
-      expect(orch?.depth).toBe(1);
+      expect(orch?.depth).toBe(2);
       const iter = flattenEntityTree(tree).find(e => e.id === ITER_ID);
-      expect(iter?.depth).toBe(2);
+      expect(iter?.depth).toBe(3);
       const agent = flattenEntityTree(tree).find(e => e.id === AGENT_RUN_ID);
-      expect(agent?.depth).toBe(3);
+      expect(agent?.depth).toBe(4);
       const tool = agent!.children.find(c => c.kind === 'tool');
-      expect(tool?.depth).toBe(4);
+      expect(tool?.depth).toBe(5);
     });
   });
 

@@ -62,8 +62,9 @@ class PlannerServicePort(Protocol):
         tenant_id: UUID,
         user_id: UUID,
         agent_run_id: UUID,
+        planner_iteration_id: Optional[str] = None,
         sandbox_overrides: Optional[Dict[str, Any]] = None,
-    ) -> NextStep: ...
+    ) -> tuple[NextStep, List[Any]]: ...
 
 
 # --------------------------------------------------------------------------- #

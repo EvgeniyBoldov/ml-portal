@@ -4,6 +4,11 @@ from __future__ import annotations
 from typing import Iterable, Optional
 
 from app.runtime.contracts import NextStep, NextStepKind
+from app.runtime.planner.iteration_policy import (
+    has_previous_sufficient_call_agent,
+    has_repeated_pending_question,
+    should_block_repeated_call_agent_after_success,
+)
 from app.runtime.turn_state import RuntimeTurnState
 
 
@@ -33,10 +38,26 @@ def validate_next_step(
                 f"agent '{step.agent_slug}' is not in the allowed list: "
                 f"{sorted(allowed)}"
             )
+        if should_block_repeated_call_agent_after_success(
+            runtime_state,
+            agent_slug=step.agent_slug,
+            phase_id=step.phase_id,
+        ):
+            return "call_agent step blocked: previous successful result for this phase is already sufficient"
 
     if step.kind in (NextStepKind.ASK_USER, NextStepKind.CLARIFY):
-        if not (step.question or "").strip():
+        question = (step.question or "").strip()
+        if not question:
             return f"{step.kind.value} step missing question"
+        question_lc = " ".join(question.lower().split())
+        if any(" ".join(str(item or "").lower().split()) == question_lc for item in runtime_state.open_questions):
+            return f"{step.kind.value} step repeats an already asked question"
+        if has_repeated_pending_question(runtime_state, question):
+            return f"{step.kind.value} step repeats pending question from previous iteration"
+        # If the previous iteration already produced a sufficient successful result,
+        # clarify is usually a planner regression.
+        if has_previous_sufficient_call_agent(runtime_state):
+            return f"{step.kind.value} step blocked: previous agent result is already sufficient"
 
     if step.kind == NextStepKind.DIRECT_ANSWER:
         if not (step.final_answer or "").strip():

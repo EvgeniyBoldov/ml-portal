@@ -132,6 +132,8 @@ class MemoryWriter:
             sandbox_overrides=sandbox_overrides,
             raw_tail_max_chars=_resolve_raw_tail_max_chars(sandbox_overrides),
         )
+        if not context.persist_chat_scoped and context.sandbox_branch_id is None:
+            return
 
         results: list[MemoryWriteResult] = []
         for component in self._components:
@@ -217,6 +219,9 @@ class MemoryWriter:
         sandbox_overrides: Optional[dict] = None,
         persist_chat_scoped: bool = True,
     ) -> int:
+        branch_id = _resolve_sandbox_branch_id(sandbox_overrides)
+        if memory.chat_id is None and (not persist_chat_scoped) and branch_id is None:
+            return 0
         known = [
             KnownFactSnippet(subject=s, value=v)
             for s, v in memory.iter_known_subjects()
@@ -241,7 +246,6 @@ class MemoryWriter:
             tenant_id=memory.tenant_id,
         )
         if memory.chat_id is None or not persist_chat_scoped:
-            branch_id = _resolve_sandbox_branch_id(sandbox_overrides)
             if branch_id is not None:
                 await self._write_branch_facts(branch_id=branch_id, facts=new_facts)
             return len(new_facts)
@@ -264,6 +268,9 @@ class MemoryWriter:
         raw_tail_max_chars: int = RAW_TAIL_MAX_CHARS,
         persist_chat_scoped: bool = True,
     ) -> bool:
+        branch_id = _resolve_sandbox_branch_id(sandbox_overrides)
+        if memory.chat_id is None and (not persist_chat_scoped) and branch_id is None:
+            return False
         new_summary = await self._compactor.compact(
             previous=memory.summary,
             user_message=user_message,
@@ -290,7 +297,6 @@ class MemoryWriter:
             max_chars=raw_tail_max_chars,
         )
         if memory.chat_id is None or not persist_chat_scoped:
-            branch_id = _resolve_sandbox_branch_id(sandbox_overrides)
             if branch_id is not None:
                 await self._write_branch_summary(branch_id=branch_id, summary=new_summary)
             return False

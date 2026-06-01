@@ -56,7 +56,6 @@ def test_runtime_eval_waiting_input_expectation():
         must_emit_waiting_input=True,
     )
     events = [
-        {"type": "waiting_input", "data": {"question": "Specify vendor"}},
         {"type": "stop", "data": {"reason": "waiting_input"}},
     ]
 

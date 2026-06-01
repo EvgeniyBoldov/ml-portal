@@ -118,7 +118,7 @@ def evaluate_runtime_case(
     tool_choice_score = _score_tool_choice(case, seen_operations, notes)
     memory_selection_score = _score_memory_selection(case, seen_memory_facts, notes)
     grounding_score = _score_grounding(case, final_answer, notes)
-    terminal_behavior_score = _score_terminal(case, seen_event_types, notes)
+    terminal_behavior_score = _score_terminal(case, runtime_events, seen_event_types, notes)
     safety_score = _score_safety(case, seen_event_types, seen_operations, final_answer, notes)
 
     dimensions = RuntimeEvaluationScore(
@@ -322,7 +322,12 @@ def _score_grounding(case: RuntimeEvaluationCase, final_answer: str, notes: List
     return score
 
 
-def _score_terminal(case: RuntimeEvaluationCase, seen_event_types: Set[str], notes: List[str]) -> float:
+def _score_terminal(
+    case: RuntimeEvaluationCase,
+    runtime_events: Sequence[Dict[str, Any]],
+    seen_event_types: Set[str],
+    notes: List[str],
+) -> float:
     checks = 0
     score = 0
 
@@ -333,7 +338,7 @@ def _score_terminal(case: RuntimeEvaluationCase, seen_event_types: Set[str], not
         notes.append("Final event is missing")
 
     checks += 1
-    waiting_seen = "waiting_input" in seen_event_types
+    waiting_seen = _has_waiting_input(runtime_events, seen_event_types)
     if case.must_emit_waiting_input == waiting_seen:
         score += 1
     else:
@@ -344,7 +349,11 @@ def _score_terminal(case: RuntimeEvaluationCase, seen_event_types: Set[str], not
 
     checks += 1
     expected_terminal = str(case.expected_terminal_event or "").strip().lower()
-    if not expected_terminal or expected_terminal in seen_event_types:
+    if expected_terminal == "waiting_input":
+        expected_ok = waiting_seen
+    else:
+        expected_ok = (not expected_terminal) or (expected_terminal in seen_event_types)
+    if expected_ok:
         score += 1
     else:
         notes.append(f"Expected terminal event missing: {expected_terminal}")
@@ -403,3 +412,18 @@ def _to_str_list(value: Any) -> List[str]:
 def _to_optional_text(value: Any) -> Optional[str]:
     text = str(value or "").strip()
     return text or None
+
+
+def _has_waiting_input(runtime_events: Sequence[Dict[str, Any]], seen_event_types: Set[str]) -> bool:
+    if "waiting_input" in seen_event_types:
+        return True
+    for item in runtime_events:
+        event_type = str(item.get("type") or "").strip().lower()
+        if event_type != "stop":
+            continue
+        data = item.get("data")
+        if not isinstance(data, dict):
+            continue
+        if str(data.get("reason") or "").strip().lower() == "waiting_input":
+            return True
+    return False

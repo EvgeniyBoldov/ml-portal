@@ -41,6 +41,7 @@ const CATEGORY_MAP: Record<string, TraceCategory> = {
   status: 'system',
   delta: 'system',
   waiting_input: 'system',
+  final_answer_marker: 'system',
   run_paused: 'system',
   stop: 'system',
   done: 'system',
@@ -124,6 +125,7 @@ function summarize(rawType: string, data: Record<string, unknown>): string {
   if (rawType === 'synthesis_end') return `synthesis: ${String(data.status ?? 'done')}`;
   if (rawType === 'run_start') return String(data.entity_id ?? 'run');
   if (rawType === 'run_end') return `run: ${String(data.status ?? 'done')}`;
+  if (rawType === 'final_answer_marker') return `final: ${String(data.producer ?? 'unknown')}`;
   return Object.keys(data).length > 0 ? JSON.stringify(data).slice(0, 180) : rawType;
 }
 
@@ -188,6 +190,7 @@ function titleOf(rawType: string, category: TraceCategory): string {
     agent_end: 'Агент: конец',
     synthesis_start: 'Синтез: старт',
     synthesis_end: 'Синтез: конец',
+    final_answer_marker: 'Маркер финального ответа',
   };
   return titles[rawType] ?? `${category}: ${rawType}`;
 }

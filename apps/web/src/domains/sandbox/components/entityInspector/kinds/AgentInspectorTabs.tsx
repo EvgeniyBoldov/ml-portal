@@ -14,6 +14,16 @@ export function AgentInspectorTabs({ entity, steps }: { entity: TraceEntity; ste
     && s.type === 'status'
     && String(s.data.stage ?? '') === 'memory_component_result'
   ));
+  const factsResultStep = [...steps].reverse().find((s) => (
+    String(s.data.parent_entity_id ?? '') === entity.id
+    && s.type === 'status'
+    && String(s.data.stage ?? '') === 'memory_facts_result'
+  ));
+  const summaryResultStep = [...steps].reverse().find((s) => (
+    String(s.data.parent_entity_id ?? '') === entity.id
+    && s.type === 'status'
+    && String(s.data.stage ?? '') === 'memory_summary_result'
+  ));
   const llmChildren = (entity.children ?? []).filter((c) => c.kind === 'llm' && isLLMData(c.data));
   const llmWithPrompt = llmChildren.find((c) => {
     if (!isLLMData(c.data)) return false;
@@ -21,28 +31,19 @@ export function AgentInspectorTabs({ entity, steps }: { entity: TraceEntity; ste
     return !!(llm.prompt?.messages?.length || llm.prompt?.systemPrompt);
   });
   const llmPromptData = llmWithPrompt && isLLMData(llmWithPrompt.data) ? llmWithPrompt.data : null;
-  const llmResultData = llmWithPrompt && isLLMData(llmWithPrompt.data) ? llmWithPrompt.data : null;
-  const parsed = (() => {
-    const raw = llmResultData?.response?.rawResponse ?? llmResultData?.response?.content;
-    if (typeof raw !== 'string') return null;
-    try {
-      return JSON.parse(raw) as Record<string, unknown>;
-    } catch {
-      return null;
-    }
-  })();
-  const extractedFacts = Array.isArray(parsed?.facts)
-    ? parsed?.facts as Array<Record<string, unknown>>
+  const extractedFacts = Array.isArray(factsResultStep?.data.facts)
+    ? factsResultStep?.data.facts as Array<Record<string, unknown>>
     : [];
   const summaryPayload = (() => {
-    if (!parsed) return null;
-    const summary = (parsed.summary && typeof parsed.summary === 'object') ? parsed.summary as Record<string, unknown> : parsed;
+    const summary = summaryResultStep?.data.summary;
+    if (!summary || typeof summary !== 'object') return null;
+    const record = summary as Record<string, unknown>;
     return {
-      goals: Array.isArray(summary.goals) ? summary.goals : [],
-      done: Array.isArray(summary.done) ? summary.done : [],
-      entities: (summary.entities && typeof summary.entities === 'object') ? summary.entities : {},
-      open_questions: Array.isArray(summary.open_questions) ? summary.open_questions : [],
-      raw_tail: typeof summary.raw_tail === 'string' ? summary.raw_tail : '',
+      goals: Array.isArray(record.goals) ? record.goals : [],
+      done: Array.isArray(record.done) ? record.done : [],
+      entities: (record.entities && typeof record.entities === 'object') ? record.entities : {},
+      open_questions: Array.isArray(record.open_questions) ? record.open_questions : [],
+      raw_tail: typeof record.raw_tail === 'string' ? record.raw_tail : '',
     };
   })();
   const tabs = isFactsComponent
@@ -94,6 +95,7 @@ export function AgentInspectorTabs({ entity, steps }: { entity: TraceEntity; ste
     if (tab === 'facts' && isFactsComponent) {
       return (
         <InspectorFieldGroup>
+          {!factsResultStep ? 'No structured result' : null}
           <InspectorJsonBlock value={extractedFacts.length > 0 ? extractedFacts : []} />
         </InspectorFieldGroup>
       );
@@ -101,6 +103,7 @@ export function AgentInspectorTabs({ entity, steps }: { entity: TraceEntity; ste
     if (tab === 'result' && isSummaryComponent) {
       return (
         <InspectorFieldGroup>
+          {!summaryResultStep ? <InspectorFieldRow label="Result">No structured result</InspectorFieldRow> : null}
           <InspectorFieldRow label="Goals">
             <InspectorJsonBlock value={summaryPayload?.goals ?? []} />
           </InspectorFieldRow>

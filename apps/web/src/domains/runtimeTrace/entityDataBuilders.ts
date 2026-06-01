@@ -49,8 +49,14 @@ export function buildLLMData(events: SemanticEvent[]): LLMData {
   }
   const tokensInRaw = respRaw.tokens_in ?? respOutputs.tokens_in;
   const tokensOutRaw = respRaw.tokens_out ?? respOutputs.tokens_out;
+  const tokensTotalRaw = respRaw.tokens_total ?? respOutputs.tokens_total;
   const tokensIn = toNumber(tokensInRaw);
   const tokensOut = toNumber(tokensOutRaw);
+  const tokensTotal = toNumber(tokensTotalRaw) ?? (
+    tokensIn !== undefined || tokensOut !== undefined
+      ? Number(tokensIn ?? 0) + Number(tokensOut ?? 0)
+      : undefined
+  );
   return {
     kind: 'llm',
     llmCallId: typeof llmCallId === 'string' ? llmCallId : undefined,
@@ -71,6 +77,7 @@ export function buildLLMData(events: SemanticEvent[]): LLMData {
     },
     tokensIn,
     tokensOut,
+    tokensTotal,
   };
 }
 

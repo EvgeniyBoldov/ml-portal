@@ -36,6 +36,11 @@ from app.runtime.assembler import PipelineAssembler
 from app.runtime.budgets import BudgetRegistry, BudgetResolver
 from app.runtime.contracts import PipelineRequest, PipelineStopReason
 from app.runtime.envelope import EventEnvelopeStamper, PhasedEvent
+from app.runtime.entity_ids import (
+    memory_component_entity_id as _memory_component_entity_id,
+    memory_orchestrator_id as _memory_orchestrator_id,
+    planner_orchestrator_id,
+)
 from app.runtime.event_emitter import RuntimeEventEmitter
 from app.runtime.events import OrchestrationPhase, RuntimeEvent, RuntimeEventType
 from app.runtime.memory.fact_extractor import AgentResultSnippet
@@ -48,19 +53,10 @@ from app.services.agent_service import AgentService
 from app.services.permission_service import PermissionService
 from app.services.run_store import RunStore
 
-# Memory writeback can be off-loaded to Celery for lower latency
-# Set RUNTIME_MEMORY_INLINE=1 to disable Celery and run inline (dev mode)
-RUNTIME_MEMORY_INLINE = os.getenv("RUNTIME_MEMORY_INLINE", "0") == "1"
+# Memory writeback runs via Celery (single canonical execution mode).
+RUNTIME_MEMORY_INLINE = False
 
 logger = get_logger(__name__)
-
-
-def _memory_orchestrator_id(run_id: str) -> str:
-    return f"{run_id}:memory"
-
-
-def _memory_component_entity_id(run_id: str, component_name: str, index: int) -> str:
-    return f"{run_id}:memory:{component_name}:{index}"
 
 
 class RuntimePipeline:
@@ -159,7 +155,7 @@ class RuntimePipeline:
         )
         run_id_str = str(run_id)
         emitter = RuntimeEventEmitter(stamper=envelope, run_id=run_id_str)
-        orchestrator_id = f"{run_id}:orchestrator"
+        orchestrator_id = planner_orchestrator_id(run_id_str)
         yield emitter.emit(
             RuntimeEvent.run_start(run_id=run_id_str),
             phase=OrchestrationPhase.PIPELINE,
@@ -272,6 +268,7 @@ class RuntimePipeline:
                 request=request,
                 stop_reason=planning_outcome.stop_reason,
                 emitter=emitter,
+                budget_resolver=budget_resolver,
             ):
                 yield memory_ev
             yield emitter.emit(
@@ -315,6 +312,7 @@ class RuntimePipeline:
             request=request,
             stop_reason=planning_outcome.stop_reason,
             emitter=emitter,
+            budget_resolver=budget_resolver,
         ):
             yield memory_ev
         yield emitter.emit(
@@ -440,6 +438,7 @@ class RuntimePipeline:
         request: PipelineRequest,
         stop_reason: PipelineStopReason,
         emitter: RuntimeEventEmitter,
+        budget_resolver: Optional[BudgetResolver] = None,
     ) -> AsyncGenerator[RuntimeEvent, None]:
         """Persist the turn's memory effects via MemoryWriter.
 
@@ -462,143 +461,126 @@ class RuntimePipeline:
         # Sync memory_bundle reference
         runtime_state.memory_bundle = turn_mem.memory_bundle
         assistant_final = runtime_state.final_answer or ""
-        memory_inline_override = False
+        inline_memory = bool(RUNTIME_MEMORY_INLINE)
         if isinstance(request.sandbox_overrides, dict):
-            memory_inline_override = bool(request.sandbox_overrides.get("memory_inline", False))
-        use_inline_memory = RUNTIME_MEMORY_INLINE or memory_inline_override
-
+            inline_memory = inline_memory or bool(request.sandbox_overrides.get("memory_inline"))
         yield emitter.emit(
             RuntimeEvent.status(
                 "memory_write_start",
                 turn_number=turn_mem.turn_number,
                 agent_results=len(turn_mem.agent_results or []),
-                mode="inline" if use_inline_memory else "celery",
+                mode="inline" if inline_memory else "celery",
                 parent_entity_type="orchestrator",
                 parent_entity_id=_memory_orchestrator_id(str(runtime_state.run_id)),
             ),
             phase=OrchestrationPhase.PIPELINE,
         )
-
-        # If Celery off-load is enabled, serialize and dispatch
-        if not use_inline_memory:
-            try:
-                tail_id = str(uuid4())
-                stream_key: Optional[str] = None
-                if isinstance(request.sandbox_overrides, dict):
-                    raw_stream_key = request.sandbox_overrides.get("sandbox_run_id")
-                    if isinstance(raw_stream_key, str) and raw_stream_key.strip():
-                        stream_key = raw_stream_key.strip()
-                from app.workers.tasks_memory import (
-                    finalize_memory_task,
-                    MemoryFinalizePayload,
-                    FactPayload,
-                    SummaryPayload,
-                    AgentResultPayload,
-                )
-
-                payload = MemoryFinalizePayload(
-                    chat_id=str(turn_mem.chat_id) if turn_mem.chat_id else None,
-                    user_id=str(turn_mem.user_id) if turn_mem.user_id else None,
-                    tenant_id=str(turn_mem.tenant_id) if turn_mem.tenant_id else None,
-                    turn_number=turn_mem.turn_number,
-                    user_message=request.request_text,
-                    assistant_final=assistant_final,
-                    summary=SummaryPayload(
-                        chat_id=str(turn_mem.summary.chat_id),
-                        goals=list(turn_mem.summary.goals or []),
-                        done=list(turn_mem.summary.done or []),
-                        entities=dict(turn_mem.summary.entities or {}),
-                        open_questions=list(turn_mem.summary.open_questions or []),
-                        raw_tail=turn_mem.summary.raw_tail or "",
-                        last_updated_turn=turn_mem.summary.last_updated_turn,
-                    ),
-                    retrieved_facts=[
-                        FactPayload(
-                            scope=f.scope.value,
-                            subject=f.subject,
-                            value=f.value,
-                            source=f.source.value if f.source else "USER_UTTERANCE",
-                            user_id=str(f.user_id) if f.user_id else None,
-                            tenant_id=str(f.tenant_id) if f.tenant_id else None,
-                            chat_id=str(f.chat_id) if f.chat_id else None,
-                            confidence=f.confidence,
-                        )
-                        for f in (turn_mem.retrieved_facts or [])
-                    ],
-                    agent_results=[
-                        AgentResultPayload(
-                            agent=r.agent,
-                            summary=r.summary,
-                            success=r.success,
-                        )
-                        for r in turn_mem.agent_results
-                    ],
-                    skip_llm_helpers=False,  # Determined by worker based on terminal_reason
-                    terminal_reason=stop_reason.value if stop_reason else None,
-                    sandbox_overrides=request.sandbox_overrides,
-                    runtime_run_id=str(runtime_state.run_id),
-                    tail_id=tail_id,
-                    stream_key=stream_key,
-                )
-
-                # Fire-and-forget to Celery
-                finalize_memory_task.delay(payload.model_dump(mode="json"))
-
+        if inline_memory:
+            memory_orchestrator = _memory_orchestrator_id(str(runtime_state.run_id))
+            component_ids = {
+                "facts": f"{runtime_state.run_id}:memory:facts",
+                "conversation": f"{runtime_state.run_id}:memory:conversation",
+            }
+            yield emitter.emit(
+                RuntimeEvent.orchestrator_start(
+                    orchestrator_id=memory_orchestrator,
+                    run_id=str(runtime_state.run_id),
+                    role="memory",
+                ),
+                phase=OrchestrationPhase.PIPELINE,
+            )
+            for component, component_id in component_ids.items():
                 yield emitter.emit(
-                    RuntimeEvent.status(
-                        "memory_write_dispatched",
-                        turn_number=turn_mem.turn_number,
-                        mode="celery",
-                        tail_id=tail_id,
-                        stream_key=stream_key,
-                        runtime_run_id=str(runtime_state.run_id),
+                    RuntimeEvent.agent_start(
+                        agent_run_id=component_id,
+                        parent_entity_type="orchestrator",
+                        parent_entity_id=memory_orchestrator,
+                        agent_slug=component,
                     ),
                     phase=OrchestrationPhase.PIPELINE,
                 )
-                return
-
-            except Exception as exc:
-                logger.warning("Failed to dispatch memory task to Celery: %s. Falling back to inline.", exc)
-                # Fall through to inline mode
-
-        # Inline mode (dev or fallback)
-        memory_orchestrator_id = _memory_orchestrator_id(str(runtime_state.run_id))
-        memory_status = "completed"
-        yield emitter.emit(
-            RuntimeEvent.orchestrator_start(
-                orchestrator_id=memory_orchestrator_id,
-                run_id=str(runtime_state.run_id),
-                role="memory",
-            ),
-            phase=OrchestrationPhase.PIPELINE,
-        )
-        try:
-            await self._assembler.memory_writer.finalize(
-                memory=turn_mem,
-                user_message=request.request_text,
-                assistant_final=assistant_final,
-                terminal_reason=stop_reason,
-                sandbox_overrides=request.sandbox_overrides,
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("MemoryWriter.finalize best-effort failed: %s", exc)
-            memory_writer_finalize_failures_total.labels(
-                stop_reason=stop_reason.value if stop_reason else "unknown"
-            ).inc()
-            memory_status = "failed"
+            memory_status = "completed"
+            results: list[dict[str, Any]] = []
+            failed_components: list[str] = []
+            degraded_components: list[str] = []
+            try:
+                await self._assembler.memory_writer.finalize(
+                    memory=turn_mem,
+                    user_message=request.request_text,
+                    assistant_final=assistant_final,
+                    terminal_reason=stop_reason,
+                    sandbox_overrides=request.sandbox_overrides,
+                )
+                diagnostics = turn_mem.memory_diagnostics or {}
+                write_status = diagnostics.get("memory_write_status", {})
+                results = [item for item in (write_status.get("results") or []) if isinstance(item, dict)]
+                failed_components = [str(item) for item in (write_status.get("failed_components") or [])]
+                degraded_components = [str(item) for item in (write_status.get("degraded_components") or [])]
+                for index, item in enumerate(results, start=1):
+                    component_name = str(item.get("component_name") or "unknown")
+                    component_entity_id = component_ids.get(
+                        component_name,
+                        _memory_component_entity_id(str(runtime_state.run_id), component_name, index),
+                    )
+                    component_status = str(item.get("status") or "completed")
+                    lifecycle_status = "failed" if component_status == "failed" else (
+                        "paused" if component_status in {"degraded", "skipped"} else "completed"
+                    )
+                    yield emitter.emit(
+                        RuntimeEvent.status(
+                            "memory_component_result",
+                            component_name=component_name,
+                            status=component_status,
+                            inserted_count=item.get("inserted_count", 0),
+                            updated_count=item.get("updated_count", 0),
+                            skipped_count=item.get("skipped_count", 0),
+                            error_code=item.get("error_code"),
+                            error_message=item.get("error_message"),
+                            duration_ms=item.get("duration_ms", 0),
+                            parent_entity_type="agent_run",
+                            parent_entity_id=component_entity_id,
+                        ),
+                        phase=OrchestrationPhase.PIPELINE,
+                    )
+                    yield emitter.emit(
+                        RuntimeEvent.agent_end(
+                            agent_run_id=component_entity_id,
+                            parent_entity_type="orchestrator",
+                            parent_entity_id=memory_orchestrator,
+                            agent_slug=component_name,
+                            status=lifecycle_status,
+                        ),
+                        phase=OrchestrationPhase.PIPELINE,
+                    )
+            except Exception as exc:  # noqa: BLE001
+                memory_status = "failed"
+                memory_writer_finalize_failures_total.labels(
+                    stop_reason=stop_reason.value if stop_reason else "unknown"
+                ).inc()
+                yield emitter.emit(
+                    RuntimeEvent.status(
+                        "memory_write_failed",
+                        error=str(exc)[:500],
+                        turn_number=turn_mem.turn_number,
+                        parent_entity_type="orchestrator",
+                        parent_entity_id=memory_orchestrator,
+                    ),
+                    phase=OrchestrationPhase.PIPELINE,
+                )
             yield emitter.emit(
                 RuntimeEvent.status(
-                    "memory_write_failed",
-                    error=str(exc)[:500],
+                    "memory_write_end",
                     turn_number=turn_mem.turn_number,
+                    failed_components=failed_components,
+                    degraded_components=degraded_components,
                     parent_entity_type="orchestrator",
-                    parent_entity_id=memory_orchestrator_id,
+                    parent_entity_id=memory_orchestrator,
                 ),
                 phase=OrchestrationPhase.PIPELINE,
             )
             yield emitter.emit(
                 RuntimeEvent.orchestrator_end(
-                    orchestrator_id=memory_orchestrator_id,
+                    orchestrator_id=memory_orchestrator,
                     run_id=str(runtime_state.run_id),
                     status=memory_status,
                 ),
@@ -606,75 +588,129 @@ class RuntimePipeline:
             )
             return
 
-        write_status = (
-            (turn_mem.memory_diagnostics or {}).get("memory_write_status")
-            if isinstance(turn_mem.memory_diagnostics, dict)
-            else None
-        ) or {}
-        for index, item in enumerate(write_status.get("results") or [], start=1):
-            if not isinstance(item, dict):
-                continue
-            component_name = str(item.get("component_name") or "unknown")
-            component_entity_id = _memory_component_entity_id(str(runtime_state.run_id), component_name, index)
-            component_status = str(item.get("status") or "completed")
-            lifecycle_status = "failed" if component_status == "failed" else (
-                "paused" if component_status in {"degraded", "skipped"} else "completed"
+        try:
+            tail_id = str(uuid4())
+            stream_key: Optional[str] = None
+            if isinstance(request.sandbox_overrides, dict):
+                raw_stream_key = request.sandbox_overrides.get("sandbox_run_id")
+                if isinstance(raw_stream_key, str) and raw_stream_key.strip():
+                    stream_key = raw_stream_key.strip()
+            if not stream_key:
+                stream_key = str(runtime_state.run_id)
+
+            from app.workers.tasks_memory import (
+                finalize_memory_task,
+                MemoryFinalizePayload,
+                FactPayload,
+                SummaryPayload,
+                AgentResultPayload,
             )
-            yield emitter.emit(
-                RuntimeEvent.agent_start(
-                    agent_run_id=component_entity_id,
-                    parent_entity_id=memory_orchestrator_id,
-                    parent_entity_type="orchestrator",
-                    agent_slug=component_name,
+            memory_limits: Optional[dict[str, int]] = None
+            facts_limits: Optional[dict[str, int]] = None
+            conversation_limits: Optional[dict[str, int]] = None
+            try:
+                if budget_resolver is not None:
+                    memory_entity_limits = await budget_resolver.resolve_orchestrator("memory", request.sandbox_overrides)
+                    facts_entity_limits = await budget_resolver.resolve_orchestrator("facts", request.sandbox_overrides)
+                    conversation_entity_limits = await budget_resolver.resolve_orchestrator(
+                        "conversation",
+                        request.sandbox_overrides,
+                    )
+
+                    def _limits_payload(entity_limits) -> Optional[dict[str, int]]:
+                        payload = {
+                            "planner_steps": entity_limits.planner_steps,
+                            "agent_steps": entity_limits.agent_steps,
+                            "tool_calls": entity_limits.tool_calls,
+                            "tokens_total": entity_limits.tokens_total,
+                            "retries": entity_limits.retries,
+                            "wall_time_ms": entity_limits.wall_time_ms,
+                        }
+                        values = {k: int(v) for k, v in payload.items() if isinstance(v, int) and v > 0}
+                        return values or None
+
+                    memory_limits = _limits_payload(memory_entity_limits)
+                    facts_limits = _limits_payload(facts_entity_limits)
+                    conversation_limits = _limits_payload(conversation_entity_limits)
+            except Exception:
+                logger.debug("Unable to resolve memory component limits", exc_info=True)
+            # explicit limits are optional; worker handles missing values.
+            payload = MemoryFinalizePayload(
+                chat_id=str(turn_mem.chat_id) if turn_mem.chat_id else None,
+                user_id=str(turn_mem.user_id) if turn_mem.user_id else None,
+                tenant_id=str(turn_mem.tenant_id) if turn_mem.tenant_id else None,
+                turn_number=turn_mem.turn_number,
+                user_message=request.request_text,
+                assistant_final=assistant_final,
+                summary=SummaryPayload(
+                    chat_id=str(turn_mem.summary.chat_id),
+                    goals=list(turn_mem.summary.goals or []),
+                    done=list(turn_mem.summary.done or []),
+                    entities=dict(turn_mem.summary.entities or {}),
+                    open_questions=list(turn_mem.summary.open_questions or []),
+                    raw_tail=turn_mem.summary.raw_tail or "",
+                    last_updated_turn=turn_mem.summary.last_updated_turn,
                 ),
-                phase=OrchestrationPhase.PIPELINE,
+                retrieved_facts=[
+                    FactPayload(
+                        scope=f.scope.value,
+                        subject=f.subject,
+                        value=f.value,
+                        source=f.source.value if f.source else "USER_UTTERANCE",
+                        user_id=str(f.user_id) if f.user_id else None,
+                        tenant_id=str(f.tenant_id) if f.tenant_id else None,
+                        chat_id=str(f.chat_id) if f.chat_id else None,
+                        confidence=f.confidence,
+                    )
+                    for f in (turn_mem.retrieved_facts or [])
+                ],
+                agent_results=[
+                    AgentResultPayload(
+                        agent=r.agent,
+                        summary=r.summary,
+                        success=r.success,
+                    )
+                    for r in turn_mem.agent_results
+                ],
+                skip_llm_helpers=False,
+                terminal_reason=stop_reason.value if stop_reason else None,
+                sandbox_overrides=request.sandbox_overrides,
+                runtime_run_id=str(runtime_state.run_id),
+                tail_id=tail_id,
+                stream_key=stream_key,
+                memory_limits=memory_limits,
+                facts_limits=facts_limits,
+                conversation_limits=conversation_limits,
             )
+            finalize_memory_task.delay(payload.model_dump(mode="json"))
             yield emitter.emit(
                 RuntimeEvent.status(
-                    "memory_component_result",
-                    component_name=component_name,
-                    status=component_status,
-                    inserted_count=item.get("inserted_count", 0),
-                    updated_count=item.get("updated_count", 0),
-                    skipped_count=item.get("skipped_count", 0),
-                    error_code=item.get("error_code"),
-                    error_message=item.get("error_message"),
-                    duration_ms=item.get("duration_ms", 0),
-                    parent_entity_type="agent_run",
-                    parent_entity_id=component_entity_id,
+                    "memory_write_dispatched",
+                    turn_number=turn_mem.turn_number,
+                    mode="celery",
+                    tail_id=tail_id,
+                    stream_key=stream_key,
+                    runtime_run_id=str(runtime_state.run_id),
                 ),
                 phase=OrchestrationPhase.PIPELINE,
             )
+            return
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to dispatch memory task to Celery: %s", exc)
+            memory_writer_finalize_failures_total.labels(
+                stop_reason=stop_reason.value if stop_reason else "unknown"
+            ).inc()
             yield emitter.emit(
-                RuntimeEvent.agent_end(
-                    agent_run_id=component_entity_id,
-                    parent_entity_id=memory_orchestrator_id,
+                RuntimeEvent.status(
+                    "memory_write_failed",
+                    error=str(exc)[:500],
+                    turn_number=turn_mem.turn_number,
                     parent_entity_type="orchestrator",
-                    agent_slug=component_name,
-                    status=lifecycle_status,
+                    parent_entity_id=_memory_orchestrator_id(str(runtime_state.run_id)),
                 ),
                 phase=OrchestrationPhase.PIPELINE,
             )
-
-        yield emitter.emit(
-            RuntimeEvent.status(
-                "memory_write_end",
-                turn_number=turn_mem.turn_number,
-                failed_components=write_status.get("failed_components", []),
-                degraded_components=write_status.get("degraded_components", []),
-                parent_entity_type="orchestrator",
-                parent_entity_id=memory_orchestrator_id,
-            ),
-            phase=OrchestrationPhase.PIPELINE,
-        )
-        yield emitter.emit(
-            RuntimeEvent.orchestrator_end(
-                orchestrator_id=memory_orchestrator_id,
-                run_id=str(runtime_state.run_id),
-                status=memory_status,
-            ),
-            phase=OrchestrationPhase.PIPELINE,
-        )
+            return
 
     async def _resolve_available_agents_for_planner(
         self,

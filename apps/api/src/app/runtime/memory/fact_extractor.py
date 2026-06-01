@@ -130,6 +130,14 @@ class FactExtractor:
             return []
         if llm_event_callback is not None:
             try:
+                response_text = str(result.raw_response or "")
+                request_text = "\n".join(
+                    str((message or {}).get("content") or "")
+                    for message in (result.request_messages or [])
+                    if isinstance(message, dict)
+                )
+                tokens_in = max(0, len(request_text) // 4)
+                tokens_out = max(0, len(response_text) // 4)
                 await llm_event_callback(
                     {
                         "role": SystemLLMRoleType.FACT_EXTRACTOR.value,
@@ -138,6 +146,9 @@ class FactExtractor:
                         "params": result.request_params,
                         "response": result.raw_response,
                         "duration_ms": result.duration_ms,
+                        "tokens_in": tokens_in,
+                        "tokens_out": tokens_out,
+                        "tokens_total": tokens_in + tokens_out,
                     }
                 )
             except Exception:

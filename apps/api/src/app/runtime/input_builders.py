@@ -48,6 +48,11 @@ class PlannerInputBuilder:
             ],
             "execution_outline": outline,
             "memory": state.planner_snapshot(),
+            "last_iteration_result": (
+                state.iteration_results[-1].model_dump()
+                if state.iteration_results
+                else None
+            ),
             "policies": self._trim_text(
                 (platform_config or {}).get("policies_text") or "default",
                 MAX_POLICIES_TEXT_CHARS,

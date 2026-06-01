@@ -101,6 +101,7 @@ export interface LLMData {
   };
   tokensIn?: number;
   tokensOut?: number;
+  tokensTotal?: number;
 }
 
 export interface ToolData {

@@ -20,12 +20,28 @@ MAX_RUNTIME_FACTS = 60
 MAX_RUNTIME_PLANNER_STEPS = 80
 MAX_RUNTIME_RESULTS = 30
 MAX_RUNTIME_ACTION_SIGNATURES = 12
+MAX_RUNTIME_ITERATION_RESULTS = 80
 LOOP_THRESHOLD = 3  # Now configurable via RuntimeBudget.loop_threshold
 
 
 class RuntimeFact(BaseModel):
     text: str = Field(min_length=1, description="Fact text must be non-empty")
     source: str = "runtime"
+
+
+class PlannerIterationResult(BaseModel):
+    iteration: int = 0
+    step_kind: str = ""
+    agent_slug: Optional[str] = None
+    phase_id: Optional[str] = None
+    outcome: str = "unknown"  # success | failed | partial | needs_input | final | aborted | direct_answer
+    summary: str = ""
+    missing_inputs: List[str] = Field(default_factory=list)
+    question: Optional[str] = None
+    sufficient_for_phase: bool = False
+    retryable: Optional[bool] = None
+    error_code: Optional[str] = None
+    signature: str = ""
 
 
 class RuntimeTurnState(BaseModel):
@@ -47,6 +63,7 @@ class RuntimeTurnState(BaseModel):
 
     planner_steps: List[Dict[str, Any]] = Field(default_factory=list)
     agent_results: List[Dict[str, Any]] = Field(default_factory=list)
+    iteration_results: List[PlannerIterationResult] = Field(default_factory=list)
     runtime_facts: List[RuntimeFact] = Field(default_factory=list)
     tool_ledger: ToolLedger = Field(default_factory=ToolLedger)
     open_questions: List[str] = Field(default_factory=list)
@@ -134,16 +151,27 @@ class RuntimeTurnState(BaseModel):
         if len(self.planner_steps) > MAX_RUNTIME_PLANNER_STEPS:
             self.planner_steps = self.planner_steps[-MAX_RUNTIME_PLANNER_STEPS:]
 
-        signature = self._step_signature(step)
-        self.recent_action_signatures.append(signature)
-        if len(self.recent_action_signatures) > MAX_RUNTIME_ACTION_SIGNATURES:
-            self.recent_action_signatures = self.recent_action_signatures[-MAX_RUNTIME_ACTION_SIGNATURES:]
-        self.iter_count += 1
+        if str((step or {}).get("kind") or "") == "call_agent":
+            signature = self._step_signature(step)
+            self.recent_action_signatures.append(signature)
+            if len(self.recent_action_signatures) > MAX_RUNTIME_ACTION_SIGNATURES:
+                self.recent_action_signatures = self.recent_action_signatures[-MAX_RUNTIME_ACTION_SIGNATURES:]
 
     def add_agent_result(self, result: Dict[str, Any]) -> None:
         self.agent_results.append(dict(result or {}))
         if len(self.agent_results) > MAX_RUNTIME_RESULTS:
             self.agent_results = self.agent_results[-MAX_RUNTIME_RESULTS:]
+
+    def add_iteration_result(self, result: Dict[str, Any]) -> None:
+        entry = PlannerIterationResult.model_validate(result or {})
+        self.iteration_results.append(entry)
+        if len(self.iteration_results) > MAX_RUNTIME_ITERATION_RESULTS:
+            self.iteration_results = self.iteration_results[-MAX_RUNTIME_ITERATION_RESULTS:]
+
+    def latest_iteration_result(self) -> Optional[PlannerIterationResult]:
+        if not self.iteration_results:
+            return None
+        return self.iteration_results[-1]
 
     def detect_loop(self, threshold: Optional[int] = None) -> bool:
         effective = threshold if threshold is not None else LOOP_THRESHOLD
@@ -203,6 +231,7 @@ class RuntimeTurnState(BaseModel):
             "iter_count": self.iter_count,
             "facts": [item.text for item in self.runtime_facts[-max_items:]],
             "agent_results": list(self.agent_results[-max_items:]),
+            "iteration_results": [item.model_dump() for item in self.iteration_results[-max_items:]],
             "open_questions": list(self.open_questions[-max_items:]),
             "recent_actions": list(self.recent_action_signatures[-max_items:]),
             "recent_tool_calls": self.tool_ledger.compact_view(max_items=max_items),
@@ -229,6 +258,7 @@ class RuntimeTurnState(BaseModel):
             "final_error": (self.final_error or "")[:300],
             "planner_steps": len(self.planner_steps),
             "agent_results": len(self.agent_results),
+            "iteration_results": len(self.iteration_results),
             "runtime_facts": len(self.runtime_facts),
             "open_questions": list(self.open_questions[-5:]),
             "tool_ledger": self.tool_ledger.compact_view(max_items=8),
@@ -245,6 +275,8 @@ class RuntimeTurnState(BaseModel):
         agent_input = (step or {}).get("agent_input") or {}
         query = " ".join(str(agent_input.get("query") or "").split())
         query_hash = hashlib.md5(query.encode("utf-8")).hexdigest()[:12] if query else "-"
-        payload = f"{kind}|{agent_slug}|{phase_id}|{query_hash}"
+        question = " ".join(str((step or {}).get("question") or "").split())
+        question_hash = hashlib.md5(question.encode("utf-8")).hexdigest()[:12] if question else "-"
+        payload = f"{kind}|{agent_slug}|{phase_id}|{query_hash}|{question_hash}"
         return hashlib.md5(payload.encode("utf-8")).hexdigest()[:12]
     model_config = ConfigDict(arbitrary_types_allowed=True)

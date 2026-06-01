@@ -34,6 +34,10 @@ from app.runtime.contracts import NextStep
 from app.runtime.events import RuntimeEvent, RuntimeEventType
 from app.runtime.memory.components import MemoryBundle, MemoryItem, MemorySection
 from app.runtime.operation_errors import RuntimeErrorCode
+from app.runtime.planner.iteration_policy import (
+    resolve_agent_outcome,
+    resolve_sufficient_for_phase,
+)
 from app.runtime.turn_state import RuntimeTurnState
 from app.services.run_store import RunStore
 
@@ -116,6 +120,9 @@ class AgentExecutor:
                     "agent_slug": agent_slug,
                     "summary": f"preflight_failed: {exc}",
                     "success": False,
+                    "outcome": "failed",
+                    "sufficient_for_phase": False,
+                    "missing_inputs": [],
                     "error": str(exc),
                     "error_code": RuntimeErrorCode.AGENT_PRECHECK_FAILED.value,
                     "retryable": False,
@@ -133,6 +140,9 @@ class AgentExecutor:
                     "agent_slug": agent_slug,
                     "summary": msg,
                     "success": False,
+                    "outcome": "failed",
+                    "sufficient_for_phase": False,
+                    "missing_inputs": [],
                     "error": msg,
                     "error_code": RuntimeErrorCode.AGENT_UNAVAILABLE.value,
                     "retryable": False,
@@ -170,6 +180,9 @@ class AgentExecutor:
                     "agent_slug": agent_slug,
                     "summary": msg,
                     "success": False,
+                    "outcome": "failed",
+                    "sufficient_for_phase": False,
+                    "missing_inputs": [],
                     "error": msg,
                     "error_code": RuntimeErrorCode.AGENT_NO_OPERATIONS.value,
                     "retryable": False,
@@ -261,6 +274,12 @@ class AgentExecutor:
         facts = self._extract_facts(summary_preview, sub_sources)
 
         result_summary = summary_preview or ("no_output" if success else (final_error or "failed"))
+        outcome = resolve_agent_outcome(success=success)
+        sufficient_for_phase = resolve_sufficient_for_phase(
+            success=success,
+            summary=summary_preview,
+            missing_inputs=[],
+        )
         state.add_agent_result(
             {
                 "agent_slug": agent_slug,
@@ -269,6 +288,9 @@ class AgentExecutor:
                 "phase_id": step.phase_id,
                 "iteration": state.iter_count,
                 "success": success,
+                "outcome": outcome,
+                "sufficient_for_phase": sufficient_for_phase,
+                "missing_inputs": [],
                 "error": final_error,
                 "error_code": final_error_code,
                 "retryable": final_retryable,

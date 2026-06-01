@@ -34,12 +34,15 @@ logger = get_logger(__name__)
 
 @dataclass
 class PlannerLLMTrace:
+    attempt: int
+    success: bool
     llm_call_id: str
     model: str
     request_payload: Dict[str, Any]
     raw_response: str
     response_length: int
     duration_ms: int
+    retry_reason: Optional[str] = None
     tokens_in: int = 0
     tokens_out: int = 0
     tokens_total: int = 0
@@ -118,7 +121,7 @@ class Planner:
         agent_run_id: Optional[UUID] = None,
         planner_iteration_id: Optional[str] = None,
         sandbox_overrides: Optional[Dict[str, Any]] = None,
-    ) -> tuple[NextStep, Optional[PlannerLLMTrace]]:
+    ) -> tuple[NextStep, List[PlannerLLMTrace]]:
         allowed_slugs = [a.get("slug") for a in available_agents if a.get("slug")]
         payload_base = self._input_builder.build(
             runtime_state=runtime_state,
@@ -130,11 +133,17 @@ class Planner:
         # First attempt — normal payload. On structural or validator failure, retry
         # once with an explicit error appended so the model can correct itself.
         last_error: Optional[str] = None
+        traces: List[PlannerLLMTrace] = []
         for attempt in range(2):
             payload = dict(payload_base)
             if last_error:
                 payload["previous_error"] = last_error
 
+            llm_call_id = (
+                f"{planner_iteration_id}:planner-llm:{attempt + 1}"
+                if planner_iteration_id
+                else f"planner-llm:{attempt + 1}"
+            )
             try:
                 result = await self.llm.invoke(
                     role=SystemLLMRoleType.PLANNER,
@@ -150,9 +159,43 @@ class Planner:
                 )
             except StructuredCallError as exc:
                 last_error = f"schema_error: {exc}"
+                raw_response = str(exc)
+                traces.append(
+                    PlannerLLMTrace(
+                        attempt=attempt + 1,
+                        success=False,
+                        llm_call_id=llm_call_id,
+                        model="unknown",
+                        request_payload=payload,
+                        raw_response=raw_response,
+                        response_length=len(raw_response),
+                        duration_ms=0,
+                        retry_reason=last_error,
+                        tokens_in=0,
+                        tokens_out=0,
+                        tokens_total=0,
+                    )
+                )
                 continue
 
             candidate = self._to_next_step(result.value)
+            request_text = json.dumps(payload, ensure_ascii=False, default=str)
+            current_trace = PlannerLLMTrace(
+                attempt=attempt + 1,
+                success=False,
+                llm_call_id=llm_call_id,
+                model=result.model or "unknown",
+                request_payload=payload,
+                raw_response=result.raw_response,
+                response_length=len(result.raw_response or ""),
+                duration_ms=result.duration_ms,
+                tokens_in=self._estimate_tokens(request_text),
+                tokens_out=self._estimate_tokens(result.raw_response or ""),
+                tokens_total=(
+                    self._estimate_tokens(request_text)
+                    + self._estimate_tokens(result.raw_response or "")
+                ),
+            )
 
             err = validate_next_step(
                 candidate,
@@ -160,32 +203,17 @@ class Planner:
                 runtime_state=runtime_state,
             )
             if err is None:
-                llm_call_id = (
-                    f"{planner_iteration_id}:planner-llm:{attempt + 1}"
-                    if planner_iteration_id
-                    else f"planner-llm:{attempt + 1}"
-                )
-                trace = PlannerLLMTrace(
-                    llm_call_id=llm_call_id,
-                    model=result.model or "unknown",
-                    request_payload=payload,
-                    raw_response=result.raw_response,
-                    response_length=len(result.raw_response or ""),
-                    duration_ms=result.duration_ms,
-                    tokens_in=self._estimate_tokens(json.dumps(payload, ensure_ascii=False, default=str)),
-                    tokens_out=self._estimate_tokens(result.raw_response or ""),
-                    tokens_total=(
-                        self._estimate_tokens(json.dumps(payload, ensure_ascii=False, default=str))
-                        + self._estimate_tokens(result.raw_response or "")
-                    ),
-                )
-                return candidate, trace
+                current_trace.success = True
+                traces.append(current_trace)
+                return candidate, traces
 
             logger.info("Planner validation retry (attempt=%s): %s", attempt, err)
             last_error = err
+            current_trace.retry_reason = err
+            traces.append(current_trace)
 
         # Two attempts failed → safe forced finalize if we have facts, else abort.
-        return self._safe_fallback(runtime_state, last_error), None
+        return self._safe_fallback(runtime_state, last_error), traces
 
     # --------------------------------------------------------------- helpers --
 
