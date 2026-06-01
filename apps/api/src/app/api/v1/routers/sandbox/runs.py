@@ -1,4 +1,5 @@
 """Sandbox runs — list, detail, execute (SSE), confirm."""
+import asyncio
 import json
 import uuid
 from typing import AsyncGenerator, Optional
@@ -41,6 +42,7 @@ from app.services.run_store import RunStore
 from app.services.runtime_hitl_protocol_service import RuntimeHitlProtocolService
 from app.services.runtime_terminal_status import planner_terminal_from_event
 from app.services.runtime_trace_builder import RuntimeTraceBuilder, TraceStep
+from app.services.runtime_tail_event_bus import RuntimeTailSubscriber
 
 from .helpers import check_session_owner, tenant_uuid, user_uuid
 
@@ -313,7 +315,8 @@ async def run_sandbox(
             sandbox_overrides["logging_level"] = "full"
             # In sandbox we keep memory finalize inline so fact/summary helper
             # events are visible in the same run trace.
-            sandbox_overrides["memory_inline"] = True
+            sandbox_overrides["memory_inline"] = bool(sandbox_overrides.get("memory_inline", False))
+            sandbox_overrides["sandbox_run_id"] = str(run_id)
             runtime_trace = RuntimeTraceLogger(
                 session=stream_db,
                 session_factory=session_factory,
@@ -354,6 +357,11 @@ async def run_sandbox(
             final_status = "completed"
             final_error: Optional[str] = None
             stream_enricher = SandboxStepEnrichmentService(stream_db)
+            tail_pending: set[str] = set()
+            tail_finished_early: set[str] = set()
+            tail_subscriber = RuntimeTailSubscriber(stream_key=str(run_id))
+            tail_queue: asyncio.Queue[dict] = asyncio.Queue()
+            tail_listener_task: Optional[asyncio.Task] = None
 
             async def _persist_step(evt_type: str, evt_data: dict) -> None:
                 nonlocal step_num
@@ -386,7 +394,38 @@ async def run_sandbox(
                 except Exception as step_err:
                     logger.warning(f"[Sandbox] Failed to persist step: {step_err}")
 
+            async def _handle_tail_event(message: dict) -> tuple[str, dict]:
+                evt_type = str(message.get("type") or "status")
+                yield_payload = dict(message)
+                if evt_type == "status" and str(yield_payload.get("stage")) == "tail_finished":
+                    tail_id = str(yield_payload.get("tail_id") or "").strip()
+                    if tail_id and tail_id in tail_pending:
+                        tail_pending.discard(tail_id)
+                    elif tail_id:
+                        tail_finished_early.add(tail_id)
+                return evt_type, yield_payload
+
+            async def _drain_tail_events(max_items: int = 100) -> list[tuple[str, dict]]:
+                drained = 0
+                out: list[tuple[str, dict]] = []
+                while drained < max_items:
+                    try:
+                        message = tail_queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
+                    out.append(await _handle_tail_event(message))
+                    drained += 1
+                return out
+
             try:
+                await tail_subscriber.subscribe()
+
+                async def _tail_listener() -> None:
+                    async for message in tail_subscriber.listen():
+                        await tail_queue.put(message)
+
+                tail_listener_task = asyncio.create_task(_tail_listener())
+
                 async for event in pipeline.execute(pipeline_request, tool_ctx):
                     terminal = planner_terminal_from_event(event)
                     if terminal is not None:
@@ -421,13 +460,45 @@ async def run_sandbox(
                         "run_id": str(run_id),
                         **event.data,
                     }
+                    if event.type == RuntimeEventType.STATUS and str(event.data.get("stage")) == "memory_write_dispatched":
+                        tail_id = str(event.data.get("tail_id") or "").strip()
+                        if tail_id:
+                            if tail_id in tail_finished_early:
+                                tail_finished_early.discard(tail_id)
+                            else:
+                                tail_pending.add(tail_id)
                     yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
                     await _persist_step(event.type.value, event.data)
+                    drained_tail = await _drain_tail_events()
+                    for evt_type, evt_payload in drained_tail:
+                        yield f"data: {json.dumps(evt_payload, ensure_ascii=False)}\n\n"
+                        await _persist_step(evt_type, evt_payload)
 
                 if not str(final_status).startswith("waiting_"):
                     svc_final = SandboxService(stream_db)
                     await svc_final.finish_run(run_id, final_status, final_error)
                     await stream_db.commit()
+
+                if tail_pending:
+                    deadline = asyncio.get_event_loop().time() + 90.0
+                    while tail_pending and asyncio.get_event_loop().time() < deadline:
+                        timeout = min(1.0, max(0.0, deadline - asyncio.get_event_loop().time()))
+                        try:
+                            message = await asyncio.wait_for(tail_queue.get(), timeout=timeout)
+                        except asyncio.TimeoutError:
+                            continue
+                        evt_type, evt_payload = await _handle_tail_event(message)
+                        yield f"data: {json.dumps(evt_payload, ensure_ascii=False)}\n\n"
+                        await _persist_step(evt_type, evt_payload)
+                    if tail_pending:
+                        timeout_payload = {
+                            "type": "status",
+                            "run_id": str(run_id),
+                            "stage": "tail_timeout",
+                            "pending_tail_ids": sorted(tail_pending),
+                        }
+                        yield f"data: {json.dumps(timeout_payload, ensure_ascii=False)}\n\n"
+                        await _persist_step("status", timeout_payload)
 
             except Exception as e:
                 await runtime_trace.log_error(
@@ -444,6 +515,13 @@ async def run_sandbox(
                 except Exception:
                     pass
             finally:
+                if tail_listener_task is not None:
+                    tail_listener_task.cancel()
+                    try:
+                        await tail_listener_task
+                    except BaseException:
+                        pass
+                await tail_subscriber.unsubscribe()
                 yield f"data: {json.dumps({'type': 'done', 'run_id': str(run_id)})}\n\n"
 
     return StreamingResponse(

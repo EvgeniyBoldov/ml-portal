@@ -48,6 +48,8 @@ class StructuredCallResult(Generic[T]):
     raw_response: str
     duration_ms: int
     model: str
+    request_messages: list[dict[str, Any]]
+    request_params: dict[str, Any]
 
 
 _JSON_FENCE = re.compile(r"```(?:json)?\s*(\{.*?\}|\[.*?\])\s*```", re.DOTALL | re.IGNORECASE)
@@ -185,6 +187,8 @@ class StructuredLLMCall:
                 raw_response=raw_response,
                 duration_ms=duration_ms,
                 model=model,
+                request_messages=messages,
+                request_params=dict(params or {}),
             )
 
         # All attempts failed — try fallback factory if provided.
@@ -198,6 +202,8 @@ class StructuredLLMCall:
                     raw_response=raw_response,
                     duration_ms=duration_ms,
                     model=model,
+                    request_messages=messages,
+                    request_params=dict(params or {}),
                 )
             except Exception as fallback_exc:
                 logger.error("StructuredLLMCall fallback failed role=%s: %s", role, fallback_exc)

@@ -104,6 +104,102 @@ function lifecycleEntityKind(rawType: string): EntityKind {
   return 'unknown';
 }
 
+function memoryComponentTitle(slug: string): string {
+  if (slug === 'facts' || slug === 'fact_extractor') return 'Fact Extractor';
+  if (slug === 'conversation' || slug === 'summary_compactor') return 'Summary Compactor';
+  return slug || 'agent';
+}
+
+function setEntityDepthRecursive(entity: TraceEntity, depth: number): void {
+  entity.depth = depth;
+  for (const child of entity.children) {
+    setEntityDepthRecursive(child, depth + 1);
+  }
+}
+
+function normalizeRunPhaseLayout(runRoot: TraceEntity): void {
+  if (runRoot.kind !== 'run') return;
+  const getRole = (node: TraceEntity): string => (
+    node.kind === 'orchestrator' && node.data.kind === 'orchestrator'
+      ? String(node.data.role ?? '').toLowerCase()
+      : ''
+  );
+
+  const runChildren = [...runRoot.children];
+  let activePhase = runChildren.find((c) => getRole(c) === 'planner');
+  const moveToActive = runChildren.filter((child) => {
+    const role = getRole(child);
+    if (role === 'memory' || role === 'planner') return false;
+    if (role === 'synthesizer') return true;
+    return child.kind === 'planner';
+  });
+
+  if (!activePhase && moveToActive.length > 0) {
+    activePhase = {
+      id: hashIds([runRoot.id, 'active-phase']),
+      kind: 'orchestrator',
+      parentId: runRoot.id,
+      depth: runRoot.depth + 1,
+      children: [],
+      title: 'Подготовка ответа',
+      status: 'info',
+      sourceEventIds: [],
+      data: {
+        kind: 'orchestrator',
+        slug: 'active_phase',
+        role: 'planner',
+      } as OrchestratorData,
+    };
+    runRoot.children.unshift(activePhase);
+  }
+
+  if (activePhase && activePhase.kind === 'orchestrator' && activePhase.data.kind === 'orchestrator') {
+    activePhase.title = 'Подготовка ответа';
+    for (const child of moveToActive) {
+      const idx = runRoot.children.findIndex((c) => c.id === child.id);
+      if (idx >= 0) runRoot.children.splice(idx, 1);
+      if (!activePhase.children.some((c) => c.id === child.id)) {
+        child.parentId = activePhase.id;
+        setEntityDepthRecursive(child, activePhase.depth + 1);
+        activePhase.children.push(child);
+      }
+    }
+
+    const synth = [...activePhase.children].reverse().find((c) => getRole(c) === 'synthesizer');
+    const plannerFinals = activePhase.children.filter(
+      (c) => c.kind === 'planner' && c.data.kind === 'planner' && c.data.stepKind === 'final',
+    );
+    for (const finalNode of plannerFinals) {
+      if (synth && synth.kind === 'orchestrator' && synth.data.kind === 'orchestrator') {
+        for (const sid of finalNode.sourceEventIds) {
+          if (!synth.sourceEventIds.includes(sid)) synth.sourceEventIds.push(sid);
+        }
+        if (!synth.data.intent && finalNode.data.kind === 'planner') {
+          synth.data.intent = finalNode.data.rationale;
+        }
+      }
+      activePhase.children = activePhase.children.filter((c) => c.id !== finalNode.id);
+    }
+
+    let plannerIterationCounter = 1;
+    for (const child of activePhase.children) {
+      if (getRole(child) === 'synthesizer') {
+        child.title = 'Синтезер';
+      }
+      if (child.kind === 'planner') {
+        child.title = `Планер итерация ${plannerIterationCounter}`;
+        plannerIterationCounter += 1;
+      }
+    }
+  }
+
+  for (const child of runRoot.children) {
+    if (getRole(child) === 'memory') {
+      child.title = 'Мемори';
+    }
+  }
+}
+
 function buildEntityFromLifecycleStart(event: SemanticEvent): TraceEntity | null {
   const raw = (event.raw?.raw ?? {}) as Record<string, unknown>;
   const entityId = (
@@ -137,11 +233,12 @@ function buildEntityFromLifecycleStart(event: SemanticEvent): TraceEntity | null
   } else if (kind === 'orchestrator') {
     if (role === 'synthesizer') title = 'Synthesis';
     else if (role === 'planner') title = 'Planner';
+    else if (role === 'memory') title = 'Memory';
     else title = slug || 'Orchestrator';
   } else if (kind === 'run') {
     title = 'Run';
   } else if (kind === 'agent') {
-    title = agentSlug || 'agent';
+    title = memoryComponentTitle(agentSlug || 'agent');
   }
 
   const data: EntityData = (() => {
@@ -559,6 +656,7 @@ function _buildEntityTree3Pass(
   applyBudgetSnapshots(indexEntitiesById(treeRoot), events);
   aggregateBudgetsBottomUp(treeRoot);
   sortTreeChronologically(treeRoot, buildEventOrderIndex(events));
+  normalizeRunPhaseLayout(treeRoot);
 
   return treeRoot;
 }

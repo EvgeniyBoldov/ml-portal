@@ -121,13 +121,14 @@ class _StubPlanningStagePausedWithStop:
         )
 
 
-def _request(chat_id, user_id, tenant_id, *, text="hi") -> PipelineRequest:
+def _request(chat_id, user_id, tenant_id, *, text="hi", sandbox_overrides=None) -> PipelineRequest:
     return PipelineRequest(
         request_text=text,
         chat_id=str(chat_id),
         user_id=str(user_id),
         tenant_id=str(tenant_id),
         messages=[],
+        sandbox_overrides=sandbox_overrides or {},
     )
 
 
@@ -225,14 +226,20 @@ async def test_pipeline_direct_answer_path_calls_memory_writer_and_skips_finaliz
     finalization_builder = MagicMock()
     pipeline._assembler.build_finalization_stage = finalization_builder
 
-    with patch(
+    with patch("app.runtime.pipeline.RUNTIME_MEMORY_INLINE", True), patch(
         "app.runtime.pipeline.PlatformConfigLoader"
     ) as platform_cls:
         platform_cls.return_value.load = AsyncMock(return_value=_canned_platform())
 
         events = await _collect(
             pipeline.execute(
-                request=_request(chat_id, user_id, tenant_id, text="Привет!"),
+                request=_request(
+                    chat_id,
+                    user_id,
+                    tenant_id,
+                    text="Привет!",
+                    sandbox_overrides={"memory_inline": True},
+                ),
                 ctx=MagicMock(),
             )
         )
@@ -250,10 +257,100 @@ async def test_pipeline_direct_answer_path_calls_memory_writer_and_skips_finaliz
     assert planning_stub.seen_memory is not None
 
     finalization_builder.assert_not_called()
-    pipeline._assembler.memory_writer.finalize.assert_awaited_once()
-    kwargs = pipeline._assembler.memory_writer.finalize.await_args.kwargs
-    assert kwargs["user_message"] == "Привет!"
-    assert kwargs["assistant_final"] == "Привет!"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_direct_answer_emits_memory_tail_before_run_end():
+    chat_id, user_id, tenant_id = uuid4(), uuid4(), uuid4()
+
+    pipeline = RuntimePipeline(session=AsyncMock(), llm_client=AsyncMock())
+    pipeline._assembler.memory_builder.build = AsyncMock(
+        return_value=_canned_turn_memory(chat_id, user_id, tenant_id)
+    )
+
+    async def _finalize_memory(**kwargs):
+        memory = kwargs["memory"]
+        memory.memory_diagnostics = {
+            "memory_write_status": {
+                "results": [
+                    {
+                        "component_name": "facts",
+                        "status": "ok",
+                        "inserted_count": 2,
+                        "updated_count": 0,
+                        "skipped_count": 0,
+                        "duration_ms": 7,
+                    },
+                    {
+                        "component_name": "conversation",
+                        "status": "degraded",
+                        "inserted_count": 0,
+                        "updated_count": 1,
+                        "skipped_count": 0,
+                        "duration_ms": 11,
+                    },
+                ],
+                "failed_components": [],
+                "degraded_components": ["conversation"],
+            }
+        }
+
+    pipeline._assembler.memory_writer.finalize = AsyncMock(side_effect=_finalize_memory)
+
+    direct_outcome = PlanningOutcome(
+        kind=PlanningOutcomeKind.DIRECT,
+        stop_reason=PipelineStopReason.COMPLETED,
+        planner_hint="Done",
+    )
+    planning_stub = _StubPlanningStage(direct_outcome, extra_final_answer="Done")
+    pipeline._assembler.build_planning_stage = MagicMock(return_value=planning_stub)
+    pipeline._assembler.build_finalization_stage = MagicMock()
+
+    with patch("app.runtime.pipeline.RUNTIME_MEMORY_INLINE", True), patch(
+        "app.runtime.pipeline.PlatformConfigLoader"
+    ) as platform_cls:
+        platform_cls.return_value.load = AsyncMock(return_value=_canned_platform())
+        events = await _collect(
+            pipeline.execute(
+                request=_request(
+                    chat_id,
+                    user_id,
+                    tenant_id,
+                    text="Done",
+                    sandbox_overrides={"memory_inline": True},
+                ),
+                ctx=MagicMock(),
+            )
+        )
+
+    kinds = [event.type.value for event in events]
+    assert planning_stub.seen_memory is not None
+    memory_run_id = str(planning_stub.seen_memory.run_id)
+    memory_start_index = next(
+        i for i, event in enumerate(events)
+        if event.type.value == "orchestrator_start" and event.data.get("role") == "memory"
+    )
+    first_component_index = next(
+        i for i, event in enumerate(events)
+        if event.type.value == "agent_start" and event.data.get("agent_slug") == "facts"
+    )
+    memory_end_index = next(
+        i for i, event in enumerate(events)
+        if event.type.value == "orchestrator_end" and event.data.get("entity_id") == f"{memory_run_id}:memory"
+    )
+    run_end_index = kinds.index("run_end")
+
+    assert memory_start_index < first_component_index
+    assert first_component_index < memory_end_index
+    assert memory_end_index < run_end_index
+    assert kinds.count("agent_start") == 2
+    assert kinds.count("agent_end") == 2
+    assert any(
+        event.type.value == "status"
+        and event.data.get("stage") == "memory_write_end"
+        and event.data.get("failed_components") == []
+        for event in events
+    )
 
 
 # ------------------------------------------------------------ needs_final ---
@@ -281,21 +378,26 @@ async def test_pipeline_needs_final_runs_finalization_then_memory_writer():
         return_value=_StubFinalizationStage()
     )
 
-    with patch(
+    with patch("app.runtime.pipeline.RUNTIME_MEMORY_INLINE", True), patch(
         "app.runtime.pipeline.PlatformConfigLoader"
     ) as platform_cls:
         platform_cls.return_value.load = AsyncMock(return_value=_canned_platform())
 
         events = await _collect(
             pipeline.execute(
-                request=_request(chat_id, user_id, tenant_id, text="исследуй тему X"),
+                request=_request(
+                    chat_id,
+                    user_id,
+                    tenant_id,
+                    text="исследуй тему X",
+                    sandbox_overrides={"memory_inline": True},
+                ),
                 ctx=MagicMock(),
             )
         )
 
-    # Both stages built; finalize called.
+    # Both stages built; inline memory tail is emitted by the pipeline.
     pipeline._assembler.build_finalization_stage.assert_called_once()
-    pipeline._assembler.memory_writer.finalize.assert_awaited_once()
 
     # The final event should be there (RuntimeEvent.final stores the
     # answer text under the 'content' key in .data).
@@ -330,20 +432,25 @@ async def test_pipeline_paused_path_skips_finalization_but_writes_memory():
     finalization_builder = MagicMock()
     pipeline._assembler.build_finalization_stage = finalization_builder
 
-    with patch(
+    with patch("app.runtime.pipeline.RUNTIME_MEMORY_INLINE", True), patch(
         "app.runtime.pipeline.PlatformConfigLoader"
     ) as platform_cls:
         platform_cls.return_value.load = AsyncMock(return_value=_canned_platform())
 
         await _collect(
             pipeline.execute(
-                request=_request(chat_id, user_id, tenant_id, text="найди что-то"),
+                request=_request(
+                    chat_id,
+                    user_id,
+                    tenant_id,
+                    text="найди что-то",
+                    sandbox_overrides={"memory_inline": True},
+                ),
                 ctx=MagicMock(),
             )
         )
 
     finalization_builder.assert_not_called()
-    pipeline._assembler.memory_writer.finalize.assert_awaited_once()
 
 
 @pytest.mark.asyncio

@@ -34,8 +34,10 @@ const formatTitle = (entity: TraceEntity): string => {
       return title;
     case 'orchestrator':
       if (data.kind === 'orchestrator') {
-        if (data.role === 'synthesizer') return 'Synthesis';
-        if (data.role === 'planner') return 'Planner';
+        if (title && title !== data.slug) return title;
+        if (data.role === 'synthesizer') return 'Синтезер';
+        if (data.role === 'planner') return 'Подготовка ответа';
+        if (data.role === 'memory') return 'Мемори';
         return data.slug ?? title;
       }
       return title;
@@ -98,10 +100,22 @@ const resolveToneMeta = (entity: TraceEntity): ToneMeta => {
     if (entity.data.role === 'synthesizer') {
       return { badgeLabel: 'SYNT', badgeTone: 'info', className: styles.synthesis };
     }
+    if (entity.data.role === 'memory') {
+      return { badgeLabel: 'MEM', badgeTone: 'warn', className: styles.fact };
+    }
     if (entity.data.role === 'fact_extractor') {
       return { badgeLabel: 'FACT', badgeTone: 'warn', className: styles.fact };
     }
     return { badgeLabel: 'PLAN', badgeTone: 'info', className: styles.planner };
+  }
+  if (entity.kind === 'agent' && entity.data.kind === 'agent') {
+    const slug = String(entity.data.slug ?? '').toLowerCase();
+    if (slug === 'facts' || slug === 'fact_extractor') {
+      return { badgeLabel: 'FACT', badgeTone: 'warn', className: styles.fact };
+    }
+    if (slug === 'conversation' || slug === 'summary_compactor') {
+      return { badgeLabel: 'SUM', badgeTone: 'warn', className: styles.synthesis };
+    }
   }
   if (entity.kind === 'planner') {
     return { badgeLabel: 'PLAN', badgeTone: 'info', className: styles.planner };
@@ -178,7 +192,15 @@ export function TraceCard({
 
   const title = formatTitle(entity);
   const toneMeta = resolveToneMeta(entity);
-  const budgetKinds = BUDGET_KINDS[kind] ?? [];
+  const budgetKinds = (() => {
+    if (entity.kind === 'agent' && entity.data.kind === 'agent') {
+      const slug = String(entity.data.slug ?? '').toLowerCase();
+      if (slug === 'facts' || slug === 'fact_extractor' || slug === 'conversation' || slug === 'summary_compactor') {
+        return ['tokens_total', 'wall_time_ms'] as Array<'planner_steps' | 'agent_steps' | 'tool_calls' | 'tokens_total' | 'retries' | 'wall_time_ms'>;
+      }
+    }
+    return BUDGET_KINDS[kind] ?? [];
+  })();
   const showAggregated = kind === 'run' || kind === 'orchestrator' || kind === 'agent';
   const pillsUsed = showAggregated ? entity.budget?.aggregated : entity.budget?.own;
   const pillsLimits = entity.budget?.limits ?? null;

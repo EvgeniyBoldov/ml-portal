@@ -8,21 +8,23 @@ from __future__ import annotations
 
 import asyncio
 import os
-from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 from uuid import UUID
+from uuid import uuid4
 
 from celery import shared_task
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 
-from app.core.http.clients import LLMClientProtocol
 from app.core.logging import get_logger
 from app.models.memory import FactScope
 from app.runtime.memory.dto import SummaryDTO, FactDTO
+from app.runtime.memory.fact_extractor import AgentResultSnippet
 from app.runtime.memory.transport import TurnMemory
 from app.runtime.memory.writer import MemoryWriter
+from app.runtime.events import RuntimeEvent
+from app.services.runtime_tail_event_bus import RuntimeTailEventBus
 
 logger = get_logger(__name__)
 
@@ -63,7 +65,7 @@ class MemoryFinalizePayload(BaseModel):
     
     All UUIDs are serialized as strings for JSON compatibility.
     """
-    chat_id: str
+    chat_id: Optional[str] = None
     user_id: Optional[str] = None
     tenant_id: Optional[str] = None
     turn_number: int
@@ -79,6 +81,9 @@ class MemoryFinalizePayload(BaseModel):
     skip_llm_helpers: bool = False
     terminal_reason: Optional[str] = None
     sandbox_overrides: Optional[Dict[str, Any]] = None
+    runtime_run_id: Optional[str] = None
+    tail_id: Optional[str] = None
+    stream_key: Optional[str] = None
 
 
 def get_async_session():
@@ -92,6 +97,12 @@ def get_async_session():
 
 def _deserialize_turn_memory(payload: MemoryFinalizePayload) -> TurnMemory:
     """Reconstruct TurnMemory from serializable payload."""
+    fallback_chat_id = payload.summary.chat_id if payload.summary and payload.summary.chat_id else None
+    chat_id_str = payload.chat_id or fallback_chat_id
+    if not chat_id_str:
+        raise ValueError("MemoryFinalizePayload.chat_id is required")
+    parsed_chat_id = UUID(chat_id_str)
+
     # Reconstruct facts
     facts = [
         FactDTO(
@@ -109,7 +120,7 @@ def _deserialize_turn_memory(payload: MemoryFinalizePayload) -> TurnMemory:
     
     # Reconstruct summary
     summary = SummaryDTO(
-        chat_id=UUID(payload.summary.chat_id),
+        chat_id=parsed_chat_id,
         goals=payload.summary.goals,
         done=payload.summary.done,
         entities=payload.summary.entities,
@@ -120,7 +131,7 @@ def _deserialize_turn_memory(payload: MemoryFinalizePayload) -> TurnMemory:
     
     # Build minimal TurnMemory
     memory = TurnMemory(
-        chat_id=UUID(payload.chat_id),
+        chat_id=parsed_chat_id,
         user_id=UUID(payload.user_id) if payload.user_id else None,
         tenant_id=UUID(payload.tenant_id) if payload.tenant_id else None,
         turn_number=payload.turn_number,
@@ -131,7 +142,7 @@ def _deserialize_turn_memory(payload: MemoryFinalizePayload) -> TurnMemory:
     
     # Attach agent results
     memory.agent_results = [
-        {"agent": r.agent, "summary": r.summary, "success": r.success}
+        AgentResultSnippet(agent=r.agent, summary=r.summary, success=r.success)
         for r in payload.agent_results
     ]
     
@@ -163,7 +174,20 @@ def finalize_memory_task(self, payload_dict: Dict[str, Any]) -> Dict[str, Any]:
     async def _finalize():
         payload = MemoryFinalizePayload.model_validate(payload_dict)
         AsyncSessionLocal = get_async_session()
-        
+        bus = RuntimeTailEventBus()
+
+        async def _publish(event: RuntimeEvent) -> None:
+            if not payload.stream_key:
+                return
+            message = {
+                "type": event.type.value,
+                "run_id": payload.stream_key,
+                **dict(event.data or {}),
+            }
+            if payload.tail_id:
+                message["tail_id"] = payload.tail_id
+            await bus.publish(stream_key=payload.stream_key, payload=message)
+
         async with AsyncSessionLocal() as session:
             # Create LLM client from settings
             from app.core.di import get_llm_client
@@ -174,9 +198,35 @@ def finalize_memory_task(self, payload_dict: Dict[str, Any]) -> Dict[str, Any]:
             turn_memory = _deserialize_turn_memory(payload)
             
             # Run memory writer
+            component_entity_ids = {
+                "facts": f"{payload.runtime_run_id or payload.chat_id}:memory:facts",
+                "conversation": f"{payload.runtime_run_id or payload.chat_id}:memory:conversation",
+            }
+
+            async def _on_llm_event(component_name: str, llm_payload: dict[str, Any]) -> None:
+                parent_id = component_entity_ids.get(component_name, memory_orchestrator_id)
+                messages = llm_payload.get("messages")
+                response_text = llm_payload.get("response")
+                await _publish(
+                    RuntimeEvent.llm_turn(
+                        llm_call_id=f"{parent_id}:llm:{uuid4().hex[:8]}",
+                        parent_entity_type="agent_run",
+                        parent_entity_id=parent_id,
+                        purpose=str(llm_payload.get("role") or component_name),
+                        model=llm_payload.get("model"),
+                        temperature=(llm_payload.get("params") or {}).get("temperature"),
+                        max_tokens=(llm_payload.get("params") or {}).get("max_tokens"),
+                        messages=messages if isinstance(messages, list) else None,
+                        content=str(response_text) if isinstance(response_text, str) else None,
+                        response=str(response_text) if isinstance(response_text, str) else None,
+                        duration_ms=llm_payload.get("duration_ms"),
+                    )
+                )
+
             writer = MemoryWriter(
                 session=session,
                 llm_client=llm_client,
+                llm_event_callback=_on_llm_event,
             )
             
             from app.runtime.contracts import PipelineStopReason
@@ -188,24 +238,124 @@ def finalize_memory_task(self, payload_dict: Dict[str, Any]) -> Dict[str, Any]:
                 except ValueError:
                     logger.warning("Unknown terminal reason: %s", payload.terminal_reason)
             
-            await writer.finalize(
-                memory=turn_memory,
-                user_message=payload.user_message,
-                assistant_final=payload.assistant_final,
-                terminal_reason=terminal_reason,
-                sandbox_overrides=payload.sandbox_overrides,
+            memory_orchestrator_id = (
+                f"{payload.runtime_run_id}:memory"
+                if payload.runtime_run_id
+                else f"{payload.chat_id}:memory"
             )
-            
-            diagnostics = turn_memory.memory_diagnostics or {}
-            write_status = diagnostics.get("memory_write_status", {})
-            
+            memory_status = "completed"
+            results: list[dict[str, Any]] = []
+            failed_components: list[str] = []
+            degraded_components: list[str] = []
+            await _publish(
+                RuntimeEvent.orchestrator_start(
+                    orchestrator_id=memory_orchestrator_id,
+                    run_id=payload.runtime_run_id or payload.chat_id,
+                    role="memory",
+                )
+            )
+            try:
+                for component_name, component_entity_id in component_entity_ids.items():
+                    await _publish(
+                        RuntimeEvent.agent_start(
+                            agent_run_id=component_entity_id,
+                            parent_entity_id=memory_orchestrator_id,
+                            parent_entity_type="orchestrator",
+                            agent_slug=component_name,
+                        )
+                    )
+                await writer.finalize(
+                    memory=turn_memory,
+                    user_message=payload.user_message,
+                    assistant_final=payload.assistant_final,
+                    terminal_reason=terminal_reason,
+                    sandbox_overrides=payload.sandbox_overrides,
+                )
+                diagnostics = turn_memory.memory_diagnostics or {}
+                write_status = diagnostics.get("memory_write_status", {})
+                results = [
+                    item for item in (write_status.get("results") or [])
+                    if isinstance(item, dict)
+                ]
+                failed_components = [
+                    str(name) for name in (write_status.get("failed_components") or [])
+                ]
+                degraded_components = [
+                    str(name) for name in (write_status.get("degraded_components") or [])
+                ]
+
+                for index, item in enumerate(results, start=1):
+                    component_name = str(item.get("component_name") or "unknown")
+                    component_entity_id = component_entity_ids.get(
+                        component_name,
+                        f"{payload.runtime_run_id or payload.chat_id}:memory:{component_name}:{index}",
+                    )
+                    component_status = str(item.get("status") or "completed")
+                    lifecycle_status = "failed" if component_status == "failed" else (
+                        "paused" if component_status in {"degraded", "skipped"} else "completed"
+                    )
+                    await _publish(
+                        RuntimeEvent.status(
+                            "memory_component_result",
+                            component_name=component_name,
+                            status=component_status,
+                            inserted_count=item.get("inserted_count", 0),
+                            updated_count=item.get("updated_count", 0),
+                            skipped_count=item.get("skipped_count", 0),
+                            error_code=item.get("error_code"),
+                            error_message=item.get("error_message"),
+                            duration_ms=item.get("duration_ms", 0),
+                            parent_entity_type="agent_run",
+                            parent_entity_id=component_entity_id,
+                        )
+                    )
+                    await _publish(
+                        RuntimeEvent.agent_end(
+                            agent_run_id=component_entity_id,
+                            parent_entity_id=memory_orchestrator_id,
+                            parent_entity_type="orchestrator",
+                            agent_slug=component_name,
+                            status=lifecycle_status,
+                        )
+                    )
+            except Exception:
+                memory_status = "failed"
+                raise
+            finally:
+                await _publish(
+                    RuntimeEvent.status(
+                        "memory_write_end",
+                        turn_number=payload.turn_number,
+                        failed_components=failed_components,
+                        degraded_components=degraded_components,
+                        parent_entity_type="orchestrator",
+                        parent_entity_id=memory_orchestrator_id,
+                    )
+                )
+                await _publish(
+                    RuntimeEvent.orchestrator_end(
+                        orchestrator_id=memory_orchestrator_id,
+                        run_id=payload.runtime_run_id or payload.chat_id,
+                        status=memory_status,
+                    )
+                )
+                await _publish(
+                    RuntimeEvent.status(
+                        "tail_finished",
+                        tail_id=payload.tail_id,
+                        status=memory_status,
+                        parent_entity_type="orchestrator",
+                        parent_entity_id=memory_orchestrator_id,
+                    )
+                )
+
             return {
                 "status": "ok",
                 "chat_id": payload.chat_id,
                 "turn_number": payload.turn_number,
-                "components": write_status.get("results", []),
-                "failed": write_status.get("failed_components", []),
-                "degraded": write_status.get("degraded_components", []),
+                "components": results,
+                "failed": failed_components,
+                "degraded": degraded_components,
             }
     
     try:

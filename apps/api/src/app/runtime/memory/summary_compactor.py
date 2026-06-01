@@ -11,7 +11,7 @@ the model NOT to touch it.
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import Dict, List, Optional, Sequence
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -75,6 +75,7 @@ class SummaryCompactor:
         user_id: Optional[UUID] = None,
         tenant_id: Optional[UUID] = None,
         sandbox_overrides: Optional[dict] = None,
+        llm_event_callback: Optional[Callable[[dict[str, Any]], Awaitable[None]]] = None,
     ) -> SummaryDTO:
         """Return a NEW SummaryDTO. On any failure returns a conservative
         fallback that keeps previous structured fields and just bumps
@@ -115,6 +116,20 @@ class SummaryCompactor:
         except Exception as exc:  # noqa: BLE001 — never break the turn
             logger.warning("SummaryCompactor unexpected error: %s", exc)
             return self._fallback(previous, turn_number)
+        if llm_event_callback is not None:
+            try:
+                await llm_event_callback(
+                    {
+                        "role": SystemLLMRoleType.SUMMARY_COMPACTOR.value,
+                        "model": result.model,
+                        "messages": result.request_messages,
+                        "params": result.request_params,
+                        "response": result.raw_response,
+                        "duration_ms": result.duration_ms,
+                    }
+                )
+            except Exception:
+                logger.debug("SummaryCompactor llm_event_callback failed", exc_info=True)
 
         role_extras: dict = {}
         try:

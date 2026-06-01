@@ -11,7 +11,7 @@ owns:
 from __future__ import annotations
 
 import re
-from typing import Any, List, Optional, Sequence
+from typing import Any, Awaitable, Callable, List, Optional, Sequence
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -100,6 +100,7 @@ class FactExtractor:
         tenant_id: Optional[UUID] = None,
         chat_id: Optional[UUID] = None,
         sandbox_overrides: Optional[dict] = None,
+        llm_event_callback: Optional[Callable[[dict[str, Any]], Awaitable[None]]] = None,
     ) -> List[FactDTO]:
         """Run the extractor. On any failure returns [] and logs a warning —
         memory extraction must never break a chat turn.
@@ -127,6 +128,20 @@ class FactExtractor:
         except Exception as exc:  # noqa: BLE001 — extractor must never raise
             logger.warning("FactExtractor unexpected error: %s", exc)
             return []
+        if llm_event_callback is not None:
+            try:
+                await llm_event_callback(
+                    {
+                        "role": SystemLLMRoleType.FACT_EXTRACTOR.value,
+                        "model": result.model,
+                        "messages": result.request_messages,
+                        "params": result.request_params,
+                        "response": result.raw_response,
+                        "duration_ms": result.duration_ms,
+                    }
+                )
+            except Exception:
+                logger.debug("FactExtractor llm_event_callback failed", exc_info=True)
 
         role_extras: dict[str, Any] = {}
         try:

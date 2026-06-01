@@ -55,6 +55,14 @@ RUNTIME_MEMORY_INLINE = os.getenv("RUNTIME_MEMORY_INLINE", "0") == "1"
 logger = get_logger(__name__)
 
 
+def _memory_orchestrator_id(run_id: str) -> str:
+    return f"{run_id}:memory"
+
+
+def _memory_component_entity_id(run_id: str, component_name: str, index: int) -> str:
+    return f"{run_id}:memory:{component_name}:{index}"
+
+
 class RuntimePipeline:
     """Coordinator. Stateless between turns; all turn state lives in
     per-turn state objects built by the assembler."""
@@ -232,10 +240,6 @@ class RuntimePipeline:
                 ),
                 phase=OrchestrationPhase.PLANNER,
             )
-            yield emitter.emit(
-                RuntimeEvent.run_end(run_id=run_id_str, status=terminal_status),
-                phase=OrchestrationPhase.PIPELINE,
-            )
             # Persist pause state so resume endpoint can find run by run_id.
             if planning_outcome.kind == PlanningOutcomeKind.PAUSED and self._run_store is not None:
                 try:
@@ -269,6 +273,10 @@ class RuntimePipeline:
                 emitter=emitter,
             ):
                 yield memory_ev
+            yield emitter.emit(
+                RuntimeEvent.run_end(run_id=run_id_str, status=terminal_status),
+                phase=OrchestrationPhase.PIPELINE,
+            )
             return
 
         # --- Finalization -----------------------------------------------
@@ -299,14 +307,6 @@ class RuntimePipeline:
         # PlanningOutcomeKind.DIRECT already emitted delta+final inside
         # the stage; nothing to finalize beyond memory write-back below.
 
-        yield emitter.emit(
-            RuntimeEvent.run_end(
-                run_id=run_id_str,
-                status=planning_outcome.stop_reason.value if planning_outcome.stop_reason else "completed",
-            ),
-            phase=OrchestrationPhase.PIPELINE,
-        )
-
         # --- Memory: write path (new) -----------------------------------
         async for memory_ev in self._finalize_memory(
             turn_mem=turn_mem,
@@ -316,6 +316,13 @@ class RuntimePipeline:
             emitter=emitter,
         ):
             yield memory_ev
+        yield emitter.emit(
+            RuntimeEvent.run_end(
+                run_id=run_id_str,
+                status=planning_outcome.stop_reason.value if planning_outcome.stop_reason else "completed",
+            ),
+            phase=OrchestrationPhase.PIPELINE,
+        )
 
     @staticmethod
     def _apply_sandbox_overrides(request: PipelineRequest, ctx: ToolContext) -> None:
@@ -465,6 +472,8 @@ class RuntimePipeline:
                 turn_number=turn_mem.turn_number,
                 agent_results=len(turn_mem.agent_results or []),
                 mode="inline" if use_inline_memory else "celery",
+                parent_entity_type="orchestrator",
+                parent_entity_id=_memory_orchestrator_id(str(runtime_state.run_id)),
             ),
             phase=OrchestrationPhase.PIPELINE,
         )
@@ -472,6 +481,12 @@ class RuntimePipeline:
         # If Celery off-load is enabled, serialize and dispatch
         if not use_inline_memory:
             try:
+                tail_id = str(uuid4())
+                stream_key: Optional[str] = None
+                if isinstance(request.sandbox_overrides, dict):
+                    raw_stream_key = request.sandbox_overrides.get("sandbox_run_id")
+                    if isinstance(raw_stream_key, str) and raw_stream_key.strip():
+                        stream_key = raw_stream_key.strip()
                 from app.workers.tasks_memory import (
                     finalize_memory_task,
                     MemoryFinalizePayload,
@@ -481,7 +496,7 @@ class RuntimePipeline:
                 )
 
                 payload = MemoryFinalizePayload(
-                    chat_id=str(turn_mem.chat_id),
+                    chat_id=str(turn_mem.chat_id) if turn_mem.chat_id else None,
                     user_id=str(turn_mem.user_id) if turn_mem.user_id else None,
                     tenant_id=str(turn_mem.tenant_id) if turn_mem.tenant_id else None,
                     turn_number=turn_mem.turn_number,
@@ -520,6 +535,9 @@ class RuntimePipeline:
                     skip_llm_helpers=False,  # Determined by worker based on terminal_reason
                     terminal_reason=stop_reason.value if stop_reason else None,
                     sandbox_overrides=request.sandbox_overrides,
+                    runtime_run_id=str(runtime_state.run_id),
+                    tail_id=tail_id,
+                    stream_key=stream_key,
                 )
 
                 # Fire-and-forget to Celery
@@ -530,6 +548,9 @@ class RuntimePipeline:
                         "memory_write_dispatched",
                         turn_number=turn_mem.turn_number,
                         mode="celery",
+                        tail_id=tail_id,
+                        stream_key=stream_key,
+                        runtime_run_id=str(runtime_state.run_id),
                     ),
                     phase=OrchestrationPhase.PIPELINE,
                 )
@@ -540,6 +561,16 @@ class RuntimePipeline:
                 # Fall through to inline mode
 
         # Inline mode (dev or fallback)
+        memory_orchestrator_id = _memory_orchestrator_id(str(runtime_state.run_id))
+        memory_status = "completed"
+        yield emitter.emit(
+            RuntimeEvent.orchestrator_start(
+                orchestrator_id=memory_orchestrator_id,
+                run_id=str(runtime_state.run_id),
+                role="memory",
+            ),
+            phase=OrchestrationPhase.PIPELINE,
+        )
         try:
             await self._assembler.memory_writer.finalize(
                 memory=turn_mem,
@@ -553,11 +584,22 @@ class RuntimePipeline:
             memory_writer_finalize_failures_total.labels(
                 stop_reason=stop_reason.value if stop_reason else "unknown"
             ).inc()
+            memory_status = "failed"
             yield emitter.emit(
                 RuntimeEvent.status(
                     "memory_write_failed",
                     error=str(exc)[:500],
                     turn_number=turn_mem.turn_number,
+                    parent_entity_type="orchestrator",
+                    parent_entity_id=memory_orchestrator_id,
+                ),
+                phase=OrchestrationPhase.PIPELINE,
+            )
+            yield emitter.emit(
+                RuntimeEvent.orchestrator_end(
+                    orchestrator_id=memory_orchestrator_id,
+                    run_id=str(runtime_state.run_id),
+                    status=memory_status,
                 ),
                 phase=OrchestrationPhase.PIPELINE,
             )
@@ -568,20 +610,47 @@ class RuntimePipeline:
             if isinstance(turn_mem.memory_diagnostics, dict)
             else None
         ) or {}
-        for item in write_status.get("results") or []:
+        for index, item in enumerate(write_status.get("results") or [], start=1):
             if not isinstance(item, dict):
                 continue
+            component_name = str(item.get("component_name") or "unknown")
+            component_entity_id = _memory_component_entity_id(str(runtime_state.run_id), component_name, index)
+            component_status = str(item.get("status") or "completed")
+            lifecycle_status = "failed" if component_status == "failed" else (
+                "paused" if component_status in {"degraded", "skipped"} else "completed"
+            )
+            yield emitter.emit(
+                RuntimeEvent.agent_start(
+                    agent_run_id=component_entity_id,
+                    parent_entity_id=memory_orchestrator_id,
+                    parent_entity_type="orchestrator",
+                    agent_slug=component_name,
+                ),
+                phase=OrchestrationPhase.PIPELINE,
+            )
             yield emitter.emit(
                 RuntimeEvent.status(
                     "memory_component_result",
-                    component_name=item.get("component_name"),
-                    status=item.get("status"),
+                    component_name=component_name,
+                    status=component_status,
                     inserted_count=item.get("inserted_count", 0),
                     updated_count=item.get("updated_count", 0),
                     skipped_count=item.get("skipped_count", 0),
                     error_code=item.get("error_code"),
                     error_message=item.get("error_message"),
                     duration_ms=item.get("duration_ms", 0),
+                    parent_entity_type="agent_run",
+                    parent_entity_id=component_entity_id,
+                ),
+                phase=OrchestrationPhase.PIPELINE,
+            )
+            yield emitter.emit(
+                RuntimeEvent.agent_end(
+                    agent_run_id=component_entity_id,
+                    parent_entity_id=memory_orchestrator_id,
+                    parent_entity_type="orchestrator",
+                    agent_slug=component_name,
+                    status=lifecycle_status,
                 ),
                 phase=OrchestrationPhase.PIPELINE,
             )
@@ -592,6 +661,16 @@ class RuntimePipeline:
                 turn_number=turn_mem.turn_number,
                 failed_components=write_status.get("failed_components", []),
                 degraded_components=write_status.get("degraded_components", []),
+                parent_entity_type="orchestrator",
+                parent_entity_id=memory_orchestrator_id,
+            ),
+            phase=OrchestrationPhase.PIPELINE,
+        )
+        yield emitter.emit(
+            RuntimeEvent.orchestrator_end(
+                orchestrator_id=memory_orchestrator_id,
+                run_id=str(runtime_state.run_id),
+                status=memory_status,
             ),
             phase=OrchestrationPhase.PIPELINE,
         )

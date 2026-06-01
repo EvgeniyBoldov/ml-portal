@@ -169,7 +169,7 @@ export interface PlannerData {
 export interface OrchestratorData {
   kind: 'orchestrator';
   slug: string;
-  role?: 'planner' | 'synthesizer' | 'fact_extractor' | 'summary' | string;
+  role?: 'planner' | 'synthesizer' | 'memory' | 'fact_extractor' | 'summary_compactor' | 'summary' | string;
   intent?: string;
 }
 

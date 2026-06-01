@@ -5,6 +5,21 @@ import { BudgetsTab, InfoTab, RawTab } from '../shared';
 
 export function AgentInspectorTabs({ entity, steps }: { entity: TraceEntity; steps: RunStep[] }) {
   const data = isAgentData(entity.data) ? entity.data : null;
+  const slug = String(data?.slug ?? '').toLowerCase();
+  const isFactsComponent = slug === 'facts' || slug === 'fact_extractor';
+  const isSummaryComponent = slug === 'conversation' || slug === 'summary_compactor';
+  const isMemoryComponent = isFactsComponent || isSummaryComponent;
+  const sourceIds = new Set(entity.sourceEventIds ?? []);
+  const memoryResultStep = [...steps].reverse().find((s) => (
+    (sourceIds.has(s.id) || String(s.data.parent_entity_id ?? '') === entity.id)
+    && s.type === 'status'
+    && String(s.data.stage ?? '') === 'memory_component_result'
+  ));
+  const memoryWriteEndStep = [...steps].reverse().find((s) => (
+    s.type === 'status'
+    && String(s.data.stage ?? '') === 'memory_write_end'
+    && String(s.data.parent_entity_id ?? '') === String(entity.parentId ?? '')
+  ));
   const llmChildren = (entity.children ?? []).filter((c) => c.kind === 'llm' && isLLMData(c.data));
   const llmWithPrompt = llmChildren.find((c) => {
     if (!isLLMData(c.data)) return false;
@@ -12,7 +27,11 @@ export function AgentInspectorTabs({ entity, steps }: { entity: TraceEntity; ste
     return !!(llm.prompt?.messages?.length || llm.prompt?.systemPrompt);
   });
   const llmPromptData = llmWithPrompt && isLLMData(llmWithPrompt.data) ? llmWithPrompt.data : null;
-  const tabs = [{ key: 'info', label: 'Info' }, { key: 'prompt', label: 'Prompt' }, { key: 'tools', label: 'Tools' }, { key: 'budgets', label: 'Budgets' }, { key: 'rbac', label: 'RBAC' }, { key: 'raw', label: 'Raw' }];
+  const tabs = isFactsComponent
+    ? [{ key: 'info', label: 'Info' }, { key: 'facts', label: 'Факты' }, { key: 'prompt', label: 'Prompt' }, { key: 'budgets', label: 'Budgets' }, { key: 'raw', label: 'Raw' }]
+    : isSummaryComponent
+      ? [{ key: 'info', label: 'Info' }, { key: 'result', label: 'Результат' }, { key: 'prompt', label: 'Prompt' }, { key: 'budgets', label: 'Budgets' }, { key: 'raw', label: 'Raw' }]
+    : [{ key: 'info', label: 'Info' }, { key: 'prompt', label: 'Prompt' }, { key: 'tools', label: 'Tools' }, { key: 'budgets', label: 'Budgets' }, { key: 'rbac', label: 'RBAC' }, { key: 'raw', label: 'Raw' }];
 
   const extractOperationSlug = (value: unknown): string | null => {
     if (typeof value === 'string' && value.trim().length > 0) return value.trim();
@@ -54,6 +73,47 @@ export function AgentInspectorTabs({ entity, steps }: { entity: TraceEntity; ste
 
   return <InspectorTabs entityId={entity.id} tabs={tabs} render={(tab) => {
     if (tab === 'info') return <InfoTab entity={entity} steps={steps} />;
+    if (tab === 'facts' && isFactsComponent) {
+      const result = (memoryResultStep?.data ?? {}) as Record<string, unknown>;
+      const inserted = Number(result.inserted_count ?? 0);
+      const updated = Number(result.updated_count ?? 0);
+      const skipped = Number(result.skipped_count ?? 0);
+      const total = (Number.isFinite(inserted) ? inserted : 0) + (Number.isFinite(updated) ? updated : 0);
+      return (
+        <InspectorFieldGroup>
+          <InspectorFieldRow label="Компонент"><code>{String(result.component_name ?? data?.slug ?? 'facts')}</code></InspectorFieldRow>
+          <InspectorFieldRow label="Статус"><code>{String(result.status ?? '—')}</code></InspectorFieldRow>
+          <InspectorFieldRow label="Новых фактов">{String(inserted)}</InspectorFieldRow>
+          <InspectorFieldRow label="Обновлено">{String(updated)}</InspectorFieldRow>
+          <InspectorFieldRow label="Пропущено">{String(skipped)}</InspectorFieldRow>
+          <InspectorFieldRow label="Итого сохранено">{String(total)}</InspectorFieldRow>
+          <InspectorFieldRow label="Длительность">{String(result.duration_ms ?? '—')} ms</InspectorFieldRow>
+          <InspectorFieldRow label="Диагностика">
+            {total > 0
+              ? 'Факты извлечены и сохранены.'
+              : 'Новых фактов не найдено или они были отфильтрованы/дубликаты.'}
+          </InspectorFieldRow>
+        </InspectorFieldGroup>
+      );
+    }
+    if (tab === 'result' && isSummaryComponent) {
+      const result = (memoryResultStep?.data ?? {}) as Record<string, unknown>;
+      const writeEnd = (memoryWriteEndStep?.data ?? {}) as Record<string, unknown>;
+      const failed = Array.isArray(writeEnd.failed_components) ? writeEnd.failed_components.map(String) : [];
+      const degraded = Array.isArray(writeEnd.degraded_components) ? writeEnd.degraded_components.map(String) : [];
+      return (
+        <InspectorFieldGroup>
+          <InspectorFieldRow label="Компонент"><code>{String(result.component_name ?? data?.slug ?? 'conversation')}</code></InspectorFieldRow>
+          <InspectorFieldRow label="Статус"><code>{String(result.status ?? '—')}</code></InspectorFieldRow>
+          <InspectorFieldRow label="Updated">{String(result.updated_count ?? 0)}</InspectorFieldRow>
+          <InspectorFieldRow label="Duration">{String(result.duration_ms ?? '—')} ms</InspectorFieldRow>
+          <InspectorFieldRow label="Error code"><code>{String(result.error_code ?? '—')}</code></InspectorFieldRow>
+          <InspectorFieldRow label="Error"><code>{String(result.error_message ?? '—')}</code></InspectorFieldRow>
+          <InspectorFieldRow label="Failed components">{failed.length ? failed.join(', ') : '—'}</InspectorFieldRow>
+          <InspectorFieldRow label="Degraded components">{degraded.length ? degraded.join(', ') : '—'}</InspectorFieldRow>
+        </InspectorFieldGroup>
+      );
+    }
     if (tab === 'prompt') {
       if (llmPromptData?.prompt?.isBriefMode) {
         return <InspectorNotice tone="info" title="Brief Logging" message="Messages не сохранены" />;
