@@ -162,7 +162,6 @@ services:
       - ./mcp/netbox/server.py:/opt/mcp/netbox/server.py:ro
     environment:
       - PORT=8080
-      - NETBOX_URL=${NETBOX_URL}
       - VERIFY_SSL=false
       - NETBOX_TIMEOUT_SECONDS=20
       - MCP_SECRET_BROKER_TIMEOUT_SECONDS=10

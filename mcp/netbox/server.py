@@ -14,8 +14,8 @@ from helpers.secret_broker import SecretBrokerClient, extract_credential_access
 
 app = FastAPI(title="NetBox MCP Shim", version="1.0.0")
 
-NETBOX_URL = os.environ.get("NETBOX_URL", "http://host.docker.internal:8000")
 VERIFY_SSL = os.environ.get("VERIFY_SSL", "false").lower() == "true"
+NETBOX_CA_BUNDLE = (os.environ.get("NETBOX_CA_BUNDLE") or "").strip()
 REQUEST_TIMEOUT_SECONDS = int(os.environ.get("NETBOX_TIMEOUT_SECONDS", "20"))
 BROKER_TIMEOUT_SECONDS = int(os.environ.get("MCP_SECRET_BROKER_TIMEOUT_SECONDS", "10"))
 PROTOCOL_VERSION = "2024-11-05"
@@ -102,8 +102,11 @@ def _extract_base_url(payload: Dict[str, Any], arguments: Dict[str, Any]) -> str
                 if isinstance(value, str) and value.strip():
                     return _normalize_base_url(value)
 
-    # 4. Env fallback
-    return _normalize_base_url(NETBOX_URL)
+    raise ValueError(
+        "No NetBox base URL: expected one of "
+        "payload.{netbox_url|base_url|url}, arguments.{netbox_url|base_url|url}, "
+        "instance_context.{data_instance_url|provider_url|base_url}, or instance_context.config.url"
+    )
 
 
 async def _resolve_runtime_access(arguments: Dict[str, Any]) -> tuple[str, str]:
@@ -153,7 +156,8 @@ async def _netbox_get(
         "Accept": "application/json",
     }
     url = f"{base_url}{path}"
-    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS, verify=VERIFY_SSL) as client:
+    verify: bool | str = NETBOX_CA_BUNDLE if NETBOX_CA_BUNDLE else VERIFY_SSL
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS, verify=verify) as client:
         response = await client.get(url, headers=headers, params=params)
     response.raise_for_status()
     return response.json()

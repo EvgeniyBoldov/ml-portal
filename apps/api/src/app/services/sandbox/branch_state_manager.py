@@ -120,7 +120,7 @@ class SandboxBranchStateManager:
         field_path: str,
         value_json: Dict[str, Any] | List[Any] | str | int | float | bool | None,
         value_type: str = "json",
-        entity_id: Optional[UUID] = None,
+        entity_id: Optional[str] = None,
     ) -> SandboxBranchOverride:
         existing = await self.host.branch_overrides.get_by_unique_key(
             branch_id=branch_id,
@@ -155,7 +155,7 @@ class SandboxBranchStateManager:
         branch_id: UUID,
         entity_type: str,
         field_path: str,
-        entity_id: Optional[UUID] = None,
+        entity_id: Optional[str] = None,
     ) -> bool:
         existing = await self.host.branch_overrides.get_by_unique_key(
             branch_id=branch_id,
@@ -173,7 +173,7 @@ class SandboxBranchStateManager:
         *,
         branch_id: UUID,
         entity_type: str,
-        entity_id: Optional[UUID] = None,
+        entity_id: Optional[str] = None,
     ) -> int:
         return await self.host.branch_overrides.delete_by_entity(
             branch_id=branch_id,

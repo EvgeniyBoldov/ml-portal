@@ -255,7 +255,8 @@ class SandboxBranchOverride(Base):
         nullable=False,
     )
     entity_type: Mapped[str] = mapped_column(String(50), nullable=False)
-    entity_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    # Supports both UUID-backed entities (agents/tools) and string slugs (orchestrators).
+    entity_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     field_path: Mapped[str] = mapped_column(String(255), nullable=False)
     value_json: Mapped[Dict[str, Any] | List[Any] | str | int | float | bool | None] = mapped_column(JSONB, nullable=True)
     value_type: Mapped[str] = mapped_column(String(50), nullable=False, default="json")

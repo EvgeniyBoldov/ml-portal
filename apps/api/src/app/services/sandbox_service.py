@@ -199,7 +199,7 @@ class SandboxService:
         field_path: str,
         value_json: Dict[str, Any] | List[Any] | str | int | float | bool | None,
         value_type: str = "json",
-        entity_id: Optional[UUID] = None,
+        entity_id: Optional[str] = None,
     ) -> SandboxBranchOverride:
         return await self.branch_state.upsert_branch_override(
             branch_id=branch_id,
@@ -216,7 +216,7 @@ class SandboxService:
         branch_id: UUID,
         entity_type: str,
         field_path: str,
-        entity_id: Optional[UUID] = None,
+        entity_id: Optional[str] = None,
     ) -> bool:
         return await self.branch_state.delete_branch_override(
             branch_id=branch_id,
@@ -229,7 +229,7 @@ class SandboxService:
         self,
         branch_id: UUID,
         entity_type: str,
-        entity_id: Optional[UUID] = None,
+        entity_id: Optional[str] = None,
     ) -> int:
         return await self.branch_state.delete_branch_overrides_for_entity(
             branch_id=branch_id,

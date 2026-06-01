@@ -276,7 +276,7 @@ async def delete_branch_overrides(
     branch_id: uuid.UUID,
     entity_type: Optional[str] = Query(default=None),
     field_path: Optional[str] = Query(default=None),
-    entity_id: Optional[uuid.UUID] = Query(default=None),
+    entity_id: Optional[str] = Query(default=None),
     db: AsyncSession = Depends(db_session),
     user: UserCtx = Depends(require_admin),
 ):

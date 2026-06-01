@@ -1,5 +1,11 @@
 # TODO
 
+## Credentials — platform level dedup
+
+- Разобраться с дублированием credential записей на одном owner-уровне (platform/user/tenant) для одного `instance_id`.
+- Добавить защиту на уровне БД (partial unique index для `is_active=true`) и безопасную дедуп-миграцию.
+- Уточнить policy резолва при наличии исторических дублей (детерминированный выбор newest/updated).
+
 ## Периодические задачи — активный scheduler (отложено)
 
 - Перевести scheduler на динамическое управление из UI (без релиза кода).

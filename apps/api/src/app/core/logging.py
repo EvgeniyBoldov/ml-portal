@@ -8,6 +8,12 @@ def _configure_logging():
         level=getattr(logging, level, logging.INFO),
         format="%(message)s",
     )
+    # Keep SDK transport debug out of app logs unless explicitly overridden.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("openai").setLevel(logging.WARNING)
+    logging.getLogger("openai._base_client").setLevel(logging.WARNING)
+    logging.getLogger("openai.resources").setLevel(logging.WARNING)
 
 _configured = False
 

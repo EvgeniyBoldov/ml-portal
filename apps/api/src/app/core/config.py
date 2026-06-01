@@ -186,6 +186,14 @@ class Settings(BaseSettings):
         default="/api/v1/internal/mcp/credentials/resolve",
         description="Path to credential broker resolve endpoint",
     )
+    MCP_HTTP_VERIFY_SSL: bool = Field(
+        default=True,
+        description="Verify TLS certificates for outbound MCP HTTP requests",
+    )
+    MCP_HTTP_CA_BUNDLE: str | None = Field(
+        default=None,
+        description="Optional CA bundle path for outbound MCP HTTP requests",
+    )
 
     # Runtime RBAC behavior
     RUNTIME_RBAC_ENFORCE_RULES: bool = Field(

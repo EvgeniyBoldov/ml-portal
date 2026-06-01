@@ -99,17 +99,32 @@ class CredentialRepository:
     async def _find_user(self, *, base, user_id: Optional[UUID]) -> Optional[Credential]:
         if not user_id:
             return None
-        stmt = select(Credential).where(and_(*base, Credential.owner_user_id == user_id))
+        stmt = (
+            select(Credential)
+            .where(and_(*base, Credential.owner_user_id == user_id))
+            .order_by(Credential.updated_at.desc(), Credential.created_at.desc())
+            .limit(1)
+        )
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
     async def _find_tenant(self, *, base, tenant_id: Optional[UUID]) -> Optional[Credential]:
         if not tenant_id:
             return None
-        stmt = select(Credential).where(and_(*base, Credential.owner_tenant_id == tenant_id))
+        stmt = (
+            select(Credential)
+            .where(and_(*base, Credential.owner_tenant_id == tenant_id))
+            .order_by(Credential.updated_at.desc(), Credential.created_at.desc())
+            .limit(1)
+        )
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
     async def _find_platform(self, *, base) -> Optional[Credential]:
-        stmt = select(Credential).where(and_(*base, Credential.owner_platform == True))
+        stmt = (
+            select(Credential)
+            .where(and_(*base, Credential.owner_platform == True))
+            .order_by(Credential.updated_at.desc(), Credential.created_at.desc())
+            .limit(1)
+        )
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
     async def get_all_for_instance(

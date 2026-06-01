@@ -4,10 +4,19 @@ import json
 from typing import Any, Dict, Optional
 
 import httpx
+from app.core.config import get_settings
 
 
 MCP_ACCEPT_HEADER = "application/json, text/event-stream"
 MCP_PROTOCOL_VERSION = "2024-11-05"
+
+
+def _mcp_http_verify() -> bool | str:
+    settings = get_settings()
+    ca_bundle = str(getattr(settings, "MCP_HTTP_CA_BUNDLE", "") or "").strip()
+    if ca_bundle:
+        return ca_bundle
+    return bool(getattr(settings, "MCP_HTTP_VERIFY_SSL", True))
 
 
 def parse_mcp_response(body: str) -> Dict[str, Any]:
@@ -39,7 +48,7 @@ async def mcp_initialize(
     provider_url: str,
     timeout_s: int = 20,
 ) -> str:
-    async with httpx.AsyncClient(timeout=timeout_s) as client:
+    async with httpx.AsyncClient(timeout=timeout_s, verify=_mcp_http_verify()) as client:
         response = await client.post(
             provider_url,
             headers={
@@ -70,7 +79,7 @@ async def mcp_list_tools(
     timeout_s: int = 30,
 ) -> list[Dict[str, Any]]:
     """Initialize an MCP session and return the full tools list."""
-    async with httpx.AsyncClient(timeout=timeout_s) as client:
+    async with httpx.AsyncClient(timeout=timeout_s, verify=_mcp_http_verify()) as client:
         init_response = await client.post(
             provider_url,
             headers={
@@ -123,7 +132,7 @@ async def mcp_call_tool(
     arguments: Optional[Dict[str, Any]] = None,
     timeout_s: int = 30,
 ) -> Dict[str, Any]:
-    async with httpx.AsyncClient(timeout=timeout_s) as client:
+    async with httpx.AsyncClient(timeout=timeout_s, verify=_mcp_http_verify()) as client:
         response = await client.post(
             provider_url,
             headers={

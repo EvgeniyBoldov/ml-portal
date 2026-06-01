@@ -420,7 +420,7 @@ class SandboxBranchOverrideRepository:
         self,
         branch_id: UUID,
         entity_type: str,
-        entity_id: Optional[UUID],
+        entity_id: Optional[str],
         field_path: str,
     ) -> Optional[SandboxBranchOverride]:
         stmt = (
@@ -457,7 +457,7 @@ class SandboxBranchOverrideRepository:
         self,
         branch_id: UUID,
         entity_type: str,
-        entity_id: Optional[UUID],
+        entity_id: Optional[str],
     ) -> int:
         stmt = (
             delete(SandboxBranchOverride)

@@ -100,7 +100,7 @@ class SandboxBranchSummaryArtifactResponse(BaseModel):
 
 class SandboxBranchOverrideUpsert(BaseModel):
     entity_type: str = Field(..., min_length=1, max_length=50)
-    entity_id: Optional[UUID] = None
+    entity_id: Optional[str] = Field(default=None, max_length=255)
     field_path: str = Field(..., min_length=1, max_length=255)
     value_json: dict[str, Any] | list[Any] | str | int | float | bool | None
     value_type: str = Field(default="json", min_length=1, max_length=50)
@@ -110,7 +110,7 @@ class SandboxBranchOverrideResponse(BaseModel):
     id: UUID
     branch_id: UUID
     entity_type: str
-    entity_id: Optional[UUID] = None
+    entity_id: Optional[str] = None
     field_path: str
     value_json: Any
     value_type: str
