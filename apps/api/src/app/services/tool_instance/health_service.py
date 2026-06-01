@@ -30,7 +30,11 @@ class ToolInstanceHealthService:
             self.host.logger.error(f"Health check failed for instance {instance_id}: {e}")
             instance.health_status = "unhealthy"
             await self.host.repo.update(instance)
-            return HealthCheckResult(status="unhealthy", message=str(e))
+            return HealthCheckResult(
+                status="unhealthy",
+                message=str(e),
+                details={"error": str(e), "error_type": type(e).__name__},
+            )
 
     async def perform_health_check(self, instance):
         connector_type = str(getattr(instance, "connector_type", "") or "").strip().lower()
@@ -69,6 +73,7 @@ class ToolInstanceHealthService:
             return HealthCheckResult(
                 status="unhealthy",
                 message=f"Connection failed: {str(e)}",
+                details={"error": str(e), "error_type": type(e).__name__, "url": str(url)},
             )
 
     async def _check_mcp_connector(self, instance) -> HealthCheckResult:
@@ -89,6 +94,7 @@ class ToolInstanceHealthService:
             return HealthCheckResult(
                 status="unhealthy",
                 message=f"MCP sync unavailable: {exc}",
+                details={"error": str(exc), "error_type": type(exc).__name__, "provider_url": provider_url},
             )
 
     async def _check_sql_connector(self, instance) -> HealthCheckResult:
@@ -119,6 +125,7 @@ class ToolInstanceHealthService:
             return HealthCheckResult(
                 status="unhealthy",
                 message=f"MCP sync unavailable: {exc}",
+                details={"error": str(exc), "error_type": type(exc).__name__, "provider_url": provider_url},
             )
 
         config = instance.config or {}
@@ -157,6 +164,7 @@ class ToolInstanceHealthService:
             return HealthCheckResult(
                 status="unknown",
                 message=f"MCP sync available, but DB check failed: {exc}",
+                details={"error": str(exc), "error_type": type(exc).__name__, "provider_url": provider_url},
             )
 
         tool_error = mcp_result_error_message(result)

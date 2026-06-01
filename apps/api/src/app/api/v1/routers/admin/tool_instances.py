@@ -432,3 +432,5 @@ async def check_tool_instance_health(
         )
     except ToolInstanceNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Health check failed: {e}")
