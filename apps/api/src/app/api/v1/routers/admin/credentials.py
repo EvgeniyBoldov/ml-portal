@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import db_session, require_admin
 from app.core.security import UserCtx
 from app.services.credential_service import CredentialService
+from app.core.logging import get_logger
 from app.schemas.tool_instances import (
     CredentialCreate,
     CredentialUpdate,
@@ -16,6 +17,7 @@ from app.schemas.tool_instances import (
 )
 
 router = APIRouter(tags=["credentials"])
+logger = get_logger(__name__)
 
 
 def _mask_secret(value: str) -> str:
@@ -37,7 +39,18 @@ def _build_masked_payload(payload: Dict[str, Any]) -> Dict[str, str]:
 
 async def _to_credential_response(service: CredentialService, credential_id: UUID) -> CredentialResponse:
     cred = await service.get_credentials(credential_id)
-    decrypted = await service.get_decrypted_credentials(credential_id)
+    masked_payload: Dict[str, str] = {}
+    try:
+        decrypted = await service.get_decrypted_credentials(credential_id)
+        masked_payload = _build_masked_payload(decrypted.payload)
+    except Exception as exc:
+        # Keep listing/updating manageable even if some historical credentials
+        # cannot be decrypted after master-key rotation.
+        logger.warning(
+            "Credential %s is not decryptable and will be returned without payload: %s",
+            cred.id,
+            exc,
+        )
     has_payload = bool(cred.encrypted_payload and str(cred.encrypted_payload).strip())
     return CredentialResponse(
         id=cred.id,
@@ -48,7 +61,7 @@ async def _to_credential_response(service: CredentialService, credential_id: UUI
         auth_type=cred.auth_type,
         is_active=cred.is_active,
         has_payload=has_payload,
-        masked_payload=_build_masked_payload(decrypted.payload),
+        masked_payload=masked_payload,
         created_at=cred.created_at,
     )
 
