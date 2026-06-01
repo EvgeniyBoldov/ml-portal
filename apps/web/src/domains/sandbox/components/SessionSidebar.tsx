@@ -90,6 +90,12 @@ export default function SessionSidebar({
     enabled: activeBranchId.length > 0,
     staleTime: 15_000,
   });
+  const { data: branchArtifacts } = useQuery({
+    queryKey: qk.sandbox.branchArtifacts.meta(sessionId, activeBranchId),
+    queryFn: () => sandboxApi.getBranchArtifactsMeta(sessionId, activeBranchId),
+    enabled: activeBranchId.length > 0,
+    staleTime: 15_000,
+  });
 
   const hasOverrideForEntity = (entityType: string, entityId: string | null): boolean =>
     branchOverrides.some((override) => override.entity_type === entityType && (override.entity_id ?? null) === entityId);
@@ -648,6 +654,39 @@ export default function SessionSidebar({
             </button>
           </div>
         )}
+      </AccordionSection>
+
+      <AccordionSection title="Артефакты" count={2}>
+        <div className={styles['nav-list']}>
+          <button
+            type="button"
+            className={`${styles['nav-item']} ${
+              selectedItem?.type === 'artifact' && selectedItem.artifactKind === 'facts'
+                ? styles['nav-item-active']
+                : ''
+            }`}
+            onClick={() => onSelectItem({ type: 'artifact', id: 'branch-facts', name: 'Факты', artifactKind: 'facts' })}
+          >
+            <span className={styles['nav-name']}>Факты</span>
+            <span className={styles['nav-desc']}>
+              {typeof branchArtifacts?.facts_count === 'number' ? `${branchArtifacts.facts_count} шт.` : '—'}
+            </span>
+          </button>
+          <button
+            type="button"
+            className={`${styles['nav-item']} ${
+              selectedItem?.type === 'artifact' && selectedItem.artifactKind === 'summary'
+                ? styles['nav-item-active']
+                : ''
+            }`}
+            onClick={() => onSelectItem({ type: 'artifact', id: 'branch-summary', name: 'Саммари', artifactKind: 'summary' })}
+          >
+            <span className={styles['nav-name']}>Саммари</span>
+            <span className={styles['nav-desc']}>
+              {branchArtifacts?.summary_present ? 'Есть' : 'Пусто'}
+            </span>
+          </button>
+        </div>
       </AccordionSection>
 
       <ConfirmDialog

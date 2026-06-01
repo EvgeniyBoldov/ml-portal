@@ -34,10 +34,10 @@ const formatTitle = (entity: TraceEntity): string => {
       return title;
     case 'orchestrator':
       if (data.kind === 'orchestrator') {
-        if (title && title !== data.slug) return title;
         if (data.role === 'synthesizer') return 'Синтезер';
         if (data.role === 'planner') return 'Подготовка ответа';
         if (data.role === 'memory') return 'Мемори';
+        if (title && title !== data.slug) return title;
         return data.slug ?? title;
       }
       return title;

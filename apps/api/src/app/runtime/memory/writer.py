@@ -7,8 +7,10 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from time import monotonic
 from typing import Any, Awaitable, Callable, List, Optional, Protocol
+from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,6 +20,7 @@ from app.core.logging import get_logger
 from app.core.prometheus_metrics import memory_writer_component_status_total
 from app.models.chat import Chats
 from app.models.memory import FactScope
+from app.models.sandbox import SandboxBranch
 from app.runtime.memory.dto import SummaryDTO
 from app.runtime.memory.fact_extractor import (
     FactExtractor,
@@ -46,6 +49,7 @@ class MemoryWriteContext:
     assistant_final: str
     skip_llm_helpers: bool
     persist_chat_scoped: bool
+    sandbox_branch_id: Optional[UUID]
     terminal_reason: Optional[PipelineStopReason] = None
     sandbox_overrides: Optional[dict] = None
     raw_tail_max_chars: int = RAW_TAIL_MAX_CHARS
@@ -123,6 +127,7 @@ class MemoryWriter:
                 memory, user_message, terminal_reason
             ),
             persist_chat_scoped=await self._chat_exists(memory.chat_id),
+            sandbox_branch_id=_resolve_sandbox_branch_id(sandbox_overrides),
             terminal_reason=terminal_reason,
             sandbox_overrides=sandbox_overrides,
             raw_tail_max_chars=_resolve_raw_tail_max_chars(sandbox_overrides),
@@ -178,10 +183,11 @@ class MemoryWriter:
         user_message: str,
         assistant_final: str,
         raw_tail_max_chars: int = RAW_TAIL_MAX_CHARS,
+        sandbox_overrides: Optional[dict] = None,
     ) -> None:
-        assert memory.chat_id is not None
+        chat_id = memory.chat_id or _resolve_sandbox_branch_id(sandbox_overrides) or UUID(int=0)
         fallback = SummaryDTO(
-            chat_id=memory.chat_id,
+            chat_id=chat_id,
             goals=list(memory.summary.goals),
             done=list(memory.summary.done),
             entities=dict(memory.summary.entities),
@@ -194,6 +200,11 @@ class MemoryWriter:
             ),
             last_updated_turn=memory.turn_number,
         )
+        if memory.chat_id is None:
+            branch_id = _resolve_sandbox_branch_id(sandbox_overrides)
+            if branch_id is not None:
+                await self._write_branch_summary(branch_id=branch_id, summary=fallback)
+            return
         async with self._db_write_lock:
             await self._summary_store.save(fallback)
 
@@ -230,7 +241,9 @@ class MemoryWriter:
             tenant_id=memory.tenant_id,
         )
         if memory.chat_id is None or not persist_chat_scoped:
-            # Sandbox-only flow: keep extraction/trace visibility, skip DB writes.
+            branch_id = _resolve_sandbox_branch_id(sandbox_overrides)
+            if branch_id is not None:
+                await self._write_branch_facts(branch_id=branch_id, facts=new_facts)
             return len(new_facts)
         async with self._db_write_lock:
             long_term_saved = await long_term.save_for_runtime(facts=new_facts)
@@ -277,7 +290,9 @@ class MemoryWriter:
             max_chars=raw_tail_max_chars,
         )
         if memory.chat_id is None or not persist_chat_scoped:
-            # Sandbox-only flow: keep compactor execution/trace, skip summary persistence.
+            branch_id = _resolve_sandbox_branch_id(sandbox_overrides)
+            if branch_id is not None:
+                await self._write_branch_summary(branch_id=branch_id, summary=new_summary)
             return False
         new_summary.chat_id = memory.chat_id
 
@@ -290,6 +305,26 @@ class MemoryWriter:
             return False
         row = await self._session.execute(select(Chats.id).where(Chats.id == chat_id))
         return row.scalar_one_or_none() is not None
+
+    async def _write_branch_facts(self, *, branch_id: UUID, facts: List[Any]) -> None:
+        row = await self._session.execute(select(SandboxBranch).where(SandboxBranch.id == branch_id))
+        branch = row.scalar_one_or_none()
+        if branch is None:
+            return
+        branch.facts_artifact_json = [_fact_to_artifact_row(item) for item in facts]
+        branch.artifacts_updated_at = datetime.now(timezone.utc)
+        self._session.add(branch)
+        await self._session.flush()
+
+    async def _write_branch_summary(self, *, branch_id: UUID, summary: SummaryDTO) -> None:
+        row = await self._session.execute(select(SandboxBranch).where(SandboxBranch.id == branch_id))
+        branch = row.scalar_one_or_none()
+        if branch is None:
+            return
+        branch.summary_artifact_json = _summary_to_artifact_payload(summary)
+        branch.artifacts_updated_at = datetime.now(timezone.utc)
+        self._session.add(branch)
+        await self._session.flush()
 
     @staticmethod
     def _should_skip_llm_helpers(
@@ -349,8 +384,14 @@ class _FactMemoryWriteComponent:
             ctx.sandbox_overrides,
             ctx.persist_chat_scoped,
         )
-        if not ctx.persist_chat_scoped:
-            return MemoryWriteResult(component_name=self.name, status="degraded", inserted_count=inserted)
+        if not ctx.persist_chat_scoped and not ctx.sandbox_branch_id:
+            return MemoryWriteResult(
+                component_name=self.name,
+                status="degraded",
+                inserted_count=inserted,
+                error_code="sandbox_persist_skipped",
+                error_message="Chat-scoped persistence skipped: sandbox chat is not stored in chats table",
+            )
         return MemoryWriteResult(component_name=self.name, status="ok", inserted_count=inserted)
 
 
@@ -367,6 +408,7 @@ class _ConversationMemoryWriteComponent:
                 user_message=ctx.user_message,
                 assistant_final=ctx.assistant_final,
                 raw_tail_max_chars=ctx.raw_tail_max_chars,
+                sandbox_overrides=ctx.sandbox_overrides,
             )
             return MemoryWriteResult(component_name=self.name, status="degraded", updated_count=1)
 
@@ -378,9 +420,53 @@ class _ConversationMemoryWriteComponent:
             ctx.raw_tail_max_chars,
             ctx.persist_chat_scoped,
         )
-        if not persisted:
-            return MemoryWriteResult(component_name=self.name, status="degraded", updated_count=1)
+        if not persisted and not ctx.sandbox_branch_id:
+            return MemoryWriteResult(
+                component_name=self.name,
+                status="degraded",
+                updated_count=1,
+                error_code="sandbox_persist_skipped",
+                error_message="Chat-scoped summary persistence skipped: sandbox chat is not stored in chats table",
+            )
         return MemoryWriteResult(component_name=self.name, status="ok", updated_count=1)
+
+
+def _resolve_sandbox_branch_id(sandbox_overrides: Optional[dict]) -> Optional[UUID]:
+    raw = (sandbox_overrides or {}).get("sandbox_branch_id")
+    if not raw:
+        return None
+    try:
+        return UUID(str(raw))
+    except (TypeError, ValueError):
+        return None
+
+
+def _fact_to_artifact_row(fact: Any) -> dict[str, Any]:
+    scope_value = getattr(fact, "scope", FactScope.CHAT)
+    if hasattr(scope_value, "value"):
+        scope_value = scope_value.value
+    source_value = getattr(fact, "source", "user_utterance")
+    if hasattr(source_value, "value"):
+        source_value = source_value.value
+    return {
+        "scope": str(scope_value),
+        "subject": str(getattr(fact, "subject", "")),
+        "value": str(getattr(fact, "value", "")),
+        "source": str(source_value),
+        "confidence": float(getattr(fact, "confidence", 1.0)),
+        "source_ref": getattr(fact, "source_ref", None),
+    }
+
+
+def _summary_to_artifact_payload(summary: SummaryDTO) -> dict[str, Any]:
+    return {
+        "goals": list(summary.goals or []),
+        "done": list(summary.done or []),
+        "entities": dict(summary.entities or {}),
+        "open_questions": list(summary.open_questions or []),
+        "raw_tail": summary.raw_tail or "",
+        "last_updated_turn": int(summary.last_updated_turn or 0),
+    }
 
 
 def _rebuild_raw_tail(

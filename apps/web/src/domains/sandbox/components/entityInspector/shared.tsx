@@ -99,7 +99,7 @@ export function BudgetsTab({ entity, steps }: { entity: TraceEntity; steps: RunS
     .map(extractBudgetFromStep)
     .find(Boolean);
 
-  const used = entity.kind === 'run'
+  const used = (entity.kind === 'run' || entity.kind === 'orchestrator' || entity.kind === 'agent')
     ? (entity.budget?.aggregated ?? fromStep?.used ?? {})
     : (entity.budget?.own ?? fromStep?.used ?? {});
   const limits = entity.budget?.limits ?? fromStep?.limits;

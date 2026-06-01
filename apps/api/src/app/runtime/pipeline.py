@@ -124,6 +124,7 @@ class RuntimePipeline:
             agent_slug=effective_agent_slug,  # RBAC-sanitized
             attachment_ids=attachment_ids,
             platform_config=platform.config,
+            sandbox_overrides=request.sandbox_overrides,
         )
         if attachments_dropped:
             turn_mem.memory_diagnostics = dict(turn_mem.memory_diagnostics or {})

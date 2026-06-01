@@ -599,6 +599,8 @@ class SandboxOverrideResolver:
                 for ov in self._iter_overrides("agent_version")
                 if ov.get("entity_id")
             },
+            "branch_facts_overrides": self.get_overrides_for_entity("sandbox_branch_facts", None),
+            "branch_summary_overrides": self.get_overrides_for_entity("sandbox_branch_summary", None),
         }
 
         if agent_version is not None:

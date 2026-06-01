@@ -317,6 +317,8 @@ async def run_sandbox(
             # events are visible in the same run trace.
             sandbox_overrides["memory_inline"] = bool(sandbox_overrides.get("memory_inline", False))
             sandbox_overrides["sandbox_run_id"] = str(run_id)
+            sandbox_overrides["sandbox_branch_id"] = str(branch_id)
+            sandbox_overrides["sandbox_session_id"] = str(session_id)
             runtime_trace = RuntimeTraceLogger(
                 session=stream_db,
                 session_factory=session_factory,

@@ -74,7 +74,39 @@ class SandboxBranchStateManager:
                     updated_by=user_id,
                 )
                 await self.host.branch_overrides.create(copied)
+        source_branch = await self.host.branches.get_by_id(source_branch_id)
+        if source_branch is not None:
+            await self.host.branches.update(
+                new_branch,
+                {
+                    "facts_artifact_json": list(source_branch.facts_artifact_json or []),
+                    "summary_artifact_json": dict(source_branch.summary_artifact_json or {}),
+                    "artifacts_updated_at": source_branch.artifacts_updated_at,
+                },
+            )
         return new_branch
+
+    async def get_branch_artifacts(self, branch_id: UUID) -> Optional[SandboxBranch]:
+        return await self.host.branches.get_by_id(branch_id)
+
+    async def update_branch_artifacts(
+        self,
+        *,
+        branch_id: UUID,
+        facts: Optional[List[Dict[str, Any]]] = None,
+        summary: Optional[Dict[str, Any]] = None,
+    ) -> Optional[SandboxBranch]:
+        branch = await self.host.branches.get_by_id(branch_id)
+        if branch is None:
+            return None
+        payload: Dict[str, Any] = {
+            "artifacts_updated_at": datetime.now(timezone.utc),
+        }
+        if facts is not None:
+            payload["facts_artifact_json"] = list(facts)
+        if summary is not None:
+            payload["summary_artifact_json"] = dict(summary)
+        return await self.host.branches.update(branch, payload)
 
     async def list_branch_overrides(self, branch_id: UUID) -> List[SandboxBranchOverride]:
         return await self.host.branch_overrides.list_by_branch(branch_id)
@@ -226,4 +258,3 @@ class SandboxBranchStateManager:
                 "value_type": ov.get("value_type"),
             }
         return config
-

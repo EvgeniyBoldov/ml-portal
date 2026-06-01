@@ -395,6 +395,13 @@ class SandboxBranchRepository:
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
+    async def update(self, obj: SandboxBranch, data: dict[str, Any]) -> SandboxBranch:
+        for key, value in data.items():
+            setattr(obj, key, value)
+        self.session.add(obj)
+        await self.session.flush()
+        return obj
+
 
 class SandboxBranchOverrideRepository:
     def __init__(self, session: AsyncSession):

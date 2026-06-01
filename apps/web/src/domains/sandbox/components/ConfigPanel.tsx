@@ -345,6 +345,18 @@ export function ConfigPanel({
     enabled: activeBranchId.length > 0,
     staleTime: 15_000,
   });
+  const { data: branchFactsArtifact } = useQuery({
+    queryKey: qk.sandbox.branchArtifacts.facts(sessionId, activeBranchId),
+    queryFn: () => sandboxApi.getBranchFactsArtifact(sessionId, activeBranchId),
+    enabled: activeBranchId.length > 0,
+    staleTime: 15_000,
+  });
+  const { data: branchSummaryArtifact } = useQuery({
+    queryKey: qk.sandbox.branchArtifacts.summary(sessionId, activeBranchId),
+    queryFn: () => sandboxApi.getBranchSummaryArtifact(sessionId, activeBranchId),
+    enabled: activeBranchId.length > 0,
+    staleTime: 15_000,
+  });
 
   const selectedBlueprintKey = useMemo(() => {
     if (!selectedItem) return '';
@@ -353,6 +365,9 @@ export function ConfigPanel({
     }
     if (selectedItem.type === 'tool') {
       return 'discovered_tool';
+    }
+    if (selectedItem.type === 'artifact') {
+      return selectedItem.artifactKind === 'facts' ? 'branch_facts' : 'branch_summary';
     }
     return selectedItem.type;
   }, [activeParameterTab, selectedItem]);
@@ -394,6 +409,12 @@ export function ConfigPanel({
     if (selectedItem.type === 'router') {
       const routerEntityId = selectedRouter?.id ?? null;
       return { entityType: selectedBlueprint?.entity_type ?? 'orchestration', entityId: routerEntityId };
+    }
+    if (selectedItem.type === 'artifact') {
+      return {
+        entityType: selectedItem.artifactKind === 'facts' ? 'sandbox_branch_facts' : 'sandbox_branch_summary',
+        entityId: null,
+      };
     }
     return { entityType: selectedBlueprint?.entity_type ?? 'orchestration', entityId: null };
   }, [selectedAgentVersionId, selectedBlueprint?.entity_type, selectedItem, selectedRouter?.id, selectedTool?.id]);
@@ -461,6 +482,8 @@ export function ConfigPanel({
       discovered_tool: selectedToolBase as Record<string, unknown>,
       router: ({ ...(selectedRouter?.config ?? {}), limits: orchestratorLimits ?? {} }) as Record<string, unknown>,
       platform: ({ ...(platformSettings ?? {}), limits: platformLimits ?? {} }) as Record<string, unknown>,
+      branch_facts: ({ facts: branchFactsArtifact?.facts ?? [] }) as Record<string, unknown>,
+      branch_summary: ({ ...(branchSummaryArtifact?.summary ?? {}) }) as Record<string, unknown>,
     };
 
     const source = sourceByKey[selectedBlueprint.key] ?? {};
@@ -477,6 +500,8 @@ export function ConfigPanel({
     selectedRouter,
     selectedToolVersionId,
     selectedTool,
+    branchFactsArtifact?.facts,
+    branchSummaryArtifact?.summary,
   ]);
 
   const sectionTabs = useMemo(

@@ -79,6 +79,25 @@ class SandboxBranchListItem(BaseModel):
     updated_at: datetime
 
 
+class SandboxBranchArtifactsMetaResponse(BaseModel):
+    branch_id: UUID
+    facts_count: int = 0
+    summary_present: bool = False
+    updated_at: Optional[datetime] = None
+
+
+class SandboxBranchFactsArtifactResponse(BaseModel):
+    branch_id: UUID
+    facts: list[dict[str, Any]] = []
+    updated_at: Optional[datetime] = None
+
+
+class SandboxBranchSummaryArtifactResponse(BaseModel):
+    branch_id: UUID
+    summary: dict[str, Any] = {}
+    updated_at: Optional[datetime] = None
+
+
 class SandboxBranchOverrideUpsert(BaseModel):
     entity_type: str = Field(..., min_length=1, max_length=50)
     entity_id: Optional[UUID] = None

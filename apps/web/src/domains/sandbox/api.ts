@@ -11,6 +11,9 @@ import type {
   SandboxSessionUpdate,
   SandboxBranchListItem,
   SandboxBranchOverride,
+  SandboxBranchArtifactsMeta,
+  SandboxBranchFactsArtifact,
+  SandboxBranchSummaryArtifact,
   SandboxRunListItem,
   SandboxRunDetail,
   SandboxConfirmAction,
@@ -129,6 +132,15 @@ export const sandboxApi = {
       { method: 'DELETE' },
     );
   },
+
+  getBranchArtifactsMeta: (sessionId: string, branchId: string): Promise<SandboxBranchArtifactsMeta> =>
+    apiRequest(`${BASE}/sessions/${sessionId}/branches/${branchId}/artifacts`),
+
+  getBranchFactsArtifact: (sessionId: string, branchId: string): Promise<SandboxBranchFactsArtifact> =>
+    apiRequest(`${BASE}/sessions/${sessionId}/branches/${branchId}/artifacts/facts`),
+
+  getBranchSummaryArtifact: (sessionId: string, branchId: string): Promise<SandboxBranchSummaryArtifact> =>
+    apiRequest(`${BASE}/sessions/${sessionId}/branches/${branchId}/artifacts/summary`),
 
   // ── Runs ────────────────────────────────────────────────────────────────
 

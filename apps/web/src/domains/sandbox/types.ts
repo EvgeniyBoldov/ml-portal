@@ -91,6 +91,25 @@ export interface SandboxBranchOverride {
   updated_at: string;
 }
 
+export interface SandboxBranchArtifactsMeta {
+  branch_id: string;
+  facts_count: number;
+  summary_present: boolean;
+  updated_at: string | null;
+}
+
+export interface SandboxBranchFactsArtifact {
+  branch_id: string;
+  facts: Record<string, unknown>[];
+  updated_at: string | null;
+}
+
+export interface SandboxBranchSummaryArtifact {
+  branch_id: string;
+  summary: Record<string, unknown>;
+  updated_at: string | null;
+}
+
 // ── Run ─────────────────────────────────────────────────────────────────────
 
 export interface SandboxRunListItem {
@@ -235,11 +254,12 @@ export interface SandboxCatalog {
   resolver_blueprints: SandboxResolverBlueprint[];
 }
 
-export type SandboxSelectableType = 'agent' | 'tool' | 'router' | 'parameter' | 'run';
+export type SandboxSelectableType = 'agent' | 'tool' | 'router' | 'parameter' | 'run' | 'artifact';
 
 export interface SandboxSelectedItem {
   type: SandboxSelectableType;
   id: string;
   name: string;
   versionId?: string | null;
+  artifactKind?: 'facts' | 'summary';
 }

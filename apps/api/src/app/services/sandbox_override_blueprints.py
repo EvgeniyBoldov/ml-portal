@@ -283,4 +283,37 @@ SANDBOX_BLUEPRINTS: List[Dict[str, Any]] = [
             _section("Limits", _limit_fields("platform_limits")),
         ],
     ),
+    _blueprint(
+        "branch_facts",
+        "Артефакт: Факты",
+        "sandbox_branch_facts",
+        [
+            _section(
+                "Факты",
+                [
+                    _field("facts", "Facts JSON", "facts", field_type="json"),
+                ],
+            ),
+        ],
+        description="Branch-level runtime facts artifact for sandbox memory.",
+    ),
+    _blueprint(
+        "branch_summary",
+        "Артефакт: Саммари",
+        "sandbox_branch_summary",
+        [
+            _section(
+                "Summary",
+                [
+                    _field("goals", "Goals", "goals", field_type="json"),
+                    _field("done", "Done", "done", field_type="json"),
+                    _field("entities", "Entities", "entities", field_type="json"),
+                    _field("open_questions", "Open questions", "open_questions", field_type="json"),
+                    _field("raw_tail", "Raw tail", "raw_tail", field_type="text"),
+                    _field("last_updated_turn", "Last turn", "last_updated_turn", field_type="integer"),
+                ],
+            ),
+        ],
+        description="Branch-level summary artifact used in sandbox memory context.",
+    ),
 ]

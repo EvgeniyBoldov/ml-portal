@@ -10,6 +10,9 @@ from app.core.security import UserCtx
 from app.schemas.sandbox import (
     SandboxBranchCreate,
     SandboxBranchForkRequest,
+    SandboxBranchArtifactsMetaResponse,
+    SandboxBranchFactsArtifactResponse,
+    SandboxBranchSummaryArtifactResponse,
     SandboxBranchListItem,
     SandboxBranchOverrideResponse,
     SandboxBranchOverrideUpsert,
@@ -114,6 +117,73 @@ async def fork_branch(
         created_by=branch.created_by,
         created_at=branch.created_at,
         updated_at=branch.updated_at,
+    )
+
+
+@router.get(
+    "/sessions/{session_id}/branches/{branch_id}/artifacts",
+    response_model=SandboxBranchArtifactsMetaResponse,
+)
+async def get_branch_artifacts_meta(
+    session_id: uuid.UUID,
+    branch_id: uuid.UUID,
+    db: AsyncSession = Depends(db_session),
+    user: UserCtx = Depends(require_admin),
+):
+    svc = SandboxService(db)
+    await check_session_owner(svc, session_id, user)
+    branch = await svc.get_branch_artifacts(branch_id)
+    if not branch or branch.session_id != session_id:
+        raise HTTPException(status_code=404, detail="Branch not found")
+    return SandboxBranchArtifactsMetaResponse(
+        branch_id=branch.id,
+        facts_count=len(branch.facts_artifact_json or []),
+        summary_present=bool(branch.summary_artifact_json),
+        updated_at=branch.artifacts_updated_at,
+    )
+
+
+@router.get(
+    "/sessions/{session_id}/branches/{branch_id}/artifacts/facts",
+    response_model=SandboxBranchFactsArtifactResponse,
+)
+async def get_branch_facts_artifact(
+    session_id: uuid.UUID,
+    branch_id: uuid.UUID,
+    db: AsyncSession = Depends(db_session),
+    user: UserCtx = Depends(require_admin),
+):
+    svc = SandboxService(db)
+    await check_session_owner(svc, session_id, user)
+    branch = await svc.get_branch_artifacts(branch_id)
+    if not branch or branch.session_id != session_id:
+        raise HTTPException(status_code=404, detail="Branch not found")
+    return SandboxBranchFactsArtifactResponse(
+        branch_id=branch.id,
+        facts=list(branch.facts_artifact_json or []),
+        updated_at=branch.artifacts_updated_at,
+    )
+
+
+@router.get(
+    "/sessions/{session_id}/branches/{branch_id}/artifacts/summary",
+    response_model=SandboxBranchSummaryArtifactResponse,
+)
+async def get_branch_summary_artifact(
+    session_id: uuid.UUID,
+    branch_id: uuid.UUID,
+    db: AsyncSession = Depends(db_session),
+    user: UserCtx = Depends(require_admin),
+):
+    svc = SandboxService(db)
+    await check_session_owner(svc, session_id, user)
+    branch = await svc.get_branch_artifacts(branch_id)
+    if not branch or branch.session_id != session_id:
+        raise HTTPException(status_code=404, detail="Branch not found")
+    return SandboxBranchSummaryArtifactResponse(
+        branch_id=branch.id,
+        summary=dict(branch.summary_artifact_json or {}),
+        updated_at=branch.artifacts_updated_at,
     )
 
 
