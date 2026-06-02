@@ -306,6 +306,7 @@ class RuntimePipeline:
                 stop_reason=planning_outcome.stop_reason,
                 emitter=emitter,
                 budget_resolver=budget_resolver,
+                logging_level=run_logging_level,
             ):
                 yield memory_ev
             yield emitter.emit(
@@ -351,6 +352,7 @@ class RuntimePipeline:
             stop_reason=planning_outcome.stop_reason,
             emitter=emitter,
             budget_resolver=budget_resolver,
+            logging_level=run_logging_level,
         ):
             yield memory_ev
         yield emitter.emit(
@@ -479,6 +481,7 @@ class RuntimePipeline:
         stop_reason: PipelineStopReason,
         emitter: RuntimeEventEmitter,
         budget_resolver: Optional[BudgetResolver] = None,
+        logging_level: Optional[str] = None,
     ) -> AsyncGenerator[RuntimeEvent, None]:
         """Persist the turn's memory effects via MemoryWriter.
 
@@ -721,7 +724,7 @@ class RuntimePipeline:
                 memory_limits=memory_limits,
                 facts_limits=facts_limits,
                 conversation_limits=conversation_limits,
-                logging_level=run_logging_level,
+                logging_level=logging_level,
             )
             finalize_memory_task.delay(payload.model_dump(mode="json"))
             yield emitter.emit(
