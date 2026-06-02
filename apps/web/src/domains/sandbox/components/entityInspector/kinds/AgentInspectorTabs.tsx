@@ -133,14 +133,7 @@ export function AgentInspectorTabs({ entity, steps }: { entity: TraceEntity; ste
   const availableOperationGroups = groupOperationLabels(availableOperations);
   const usedOperationGroups = groupOperationLabels(usedOperations);
 
-  const rbacSnapshot = [...steps]
-    .reverse()
-    .find((s) => (
-      s.type === 'status'
-      && String(s.data.stage ?? '') === 'agent_rbac_snapshot'
-      && String((s.data.agent_slug ?? '')).trim() === String(data?.slug ?? '').trim()
-    ));
-  const rbac = (snapshotRbac ?? rbacSnapshot?.data.rbac ?? null) as Record<string, unknown> | null;
+  const rbac = (snapshotRbac ?? null) as Record<string, unknown> | null;
   const taskInput = snapshotInputs?.agent_input;
   const taskText = typeof taskInput === 'string'
     ? taskInput

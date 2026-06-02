@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, Dict, List, Literal, Optional
 from uuid import uuid4
@@ -59,16 +60,7 @@ class PlannerCallAgentDispatcher:
             tenant_id=tenant_id,
             agent_version_id=agent_version_id,
         )
-        yield PhasedEvent(
-            RuntimeEvent.agent_start(
-                agent_run_id=lifecycle_agent_run_id,
-                parent_entity_id=planner_iteration_id,
-                parent_entity_type="planner_iteration",
-                agent_slug=step.agent_slug or "unknown",
-                context_snapshot=agent_context_snapshot,
-            ),
-            OrchestrationPhase.AGENT,
-        )
+        agent_started = False
 
         async for event in self._agent.execute(
             step=step,
@@ -82,6 +74,31 @@ class PlannerCallAgentDispatcher:
             agent_version_id=agent_version_id,
             lifecycle_agent_run_id=lifecycle_agent_run_id,
         ):
+            if (
+                event.type == RuntimeEventType.STATUS
+                and str(event.data.get("stage") or "") == "agent_context_snapshot"
+            ):
+                merged_snapshot = self._merge_context_snapshots(
+                    agent_context_snapshot,
+                    event.data.get("context_snapshot"),
+                )
+                if merged_snapshot:
+                    agent_context_snapshot = merged_snapshot
+                continue
+
+            if not agent_started:
+                yield PhasedEvent(
+                    RuntimeEvent.agent_start(
+                        agent_run_id=lifecycle_agent_run_id,
+                        parent_entity_id=planner_iteration_id,
+                        parent_entity_type="planner_iteration",
+                        agent_slug=step.agent_slug or "unknown",
+                        context_snapshot=agent_context_snapshot,
+                    ),
+                    OrchestrationPhase.AGENT,
+                )
+                agent_started = True
+
             yield PhasedEvent(event, OrchestrationPhase.AGENT)
             if event.type == RuntimeEventType.CONFIRMATION_REQUIRED:
                 runtime_state.status = PipelineStopReason.WAITING_CONFIRMATION.value
@@ -136,6 +153,18 @@ class PlannerCallAgentDispatcher:
                     stop_reason=PipelineStopReason.WAITING_CONFIRMATION,
                 )
                 return
+
+        if not agent_started:
+            yield PhasedEvent(
+                RuntimeEvent.agent_start(
+                    agent_run_id=lifecycle_agent_run_id,
+                    parent_entity_id=planner_iteration_id,
+                    parent_entity_type="planner_iteration",
+                    agent_slug=step.agent_slug or "unknown",
+                    context_snapshot=agent_context_snapshot,
+                ),
+                OrchestrationPhase.AGENT,
+            )
 
         last_agent_result = latest_agent_result_payload(
             runtime_state,
@@ -320,3 +349,20 @@ class PlannerCallAgentDispatcher:
                 "version_label": version_label,
             },
         )
+
+    @staticmethod
+    def _merge_context_snapshots(
+        base: Optional[Dict[str, Any]],
+        override: Any,
+    ) -> Optional[Dict[str, Any]]:
+        if not isinstance(base, dict):
+            base = {}
+        if not isinstance(override, dict):
+            return base or None
+        merged = deepcopy(base)
+        for key, value in override.items():
+            if isinstance(value, dict) and isinstance(merged.get(key), dict):
+                merged[key] = {**merged.get(key, {}), **value}
+            else:
+                merged[key] = value
+        return merged or None

@@ -102,8 +102,8 @@ context_snapshot: {
 - `meta.agent_slug`
 - `meta.model`
 - `meta.version_label`
-- по возможности `meta.available_operations`
-- RBAC снапшот остается желательным, но если недоступен в этом месте, старые `agent_rbac_snapshot` events временно остаются fallback-источником
+- `meta.available_operations`
+- `rbac`
 
 5. `synthesis_start`
 - `inputs.goal`
@@ -131,15 +131,6 @@ context_snapshot: {
 - при `logging_level=full` писать полный `system_prompt`
 - при `brief` писать только `system_prompt_hash`
 
-### Deprecated fallback
-
-До полного перехода оставить:
-
-- `status("planner_rbac_snapshot")`
-- `status("agent_rbac_snapshot")`
-
-Новые инспекторы читают RBAC сначала из snapshot, потом из legacy status.
-
 ## Frontend
 
 ### Trace entity data
@@ -165,7 +156,7 @@ context_snapshot: {
 
 - сначала `entity.data.contextSnapshot`
 - потом legacy `entity.data.context_snapshot`
-- потом fallback по `steps`
+- потом fallback по `steps` только для неснепшотных call payload
 
 ### Inspector contract
 
@@ -223,8 +214,7 @@ context_snapshot: {
 
 ### Этап 4. Cleanup
 
-12. После стабилизации убрать legacy чтение RBAC из status events
-13. Затем убрать deprecated эмиссию snapshot-status событий на backend
+12. После стабилизации убрать remaining fallback по старым non-snapshot структурам
 
 ## Риски
 

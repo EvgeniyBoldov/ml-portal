@@ -66,7 +66,7 @@ describe('getSnapshotScopedSteps', () => {
     expect(scoped.map((item) => item.id)).toEqual(['agent-start', 'viewer-op', 'viewer-result', 'agent-end']);
   });
 
-  it('pulls planner-related snapshots by planner iteration id', () => {
+  it('pulls planner-related steps by planner iteration id', () => {
     const entity = makeEntity({
       id: 'planner-1',
       kind: 'planner',
@@ -77,14 +77,13 @@ describe('getSnapshotScopedSteps', () => {
       step('planner-start', 'planner_iteration_start', { planner_iteration_id: 'iter-1', planner_run_id: 'run-1' }),
       step('planner-decision', 'planner_decision', { planner_iteration_id: 'iter-1', planner_run_id: 'run-1' }),
       step('planner-end', 'planner_iteration_end', { planner_iteration_id: 'iter-1', planner_run_id: 'run-1' }),
-      step('planner-rbac', 'status', { stage: 'planner_rbac_snapshot', planner_iteration_id: 'iter-1', planner_run_id: 'run-1' }),
-      step('other-rbac', 'status', { stage: 'planner_rbac_snapshot', planner_iteration_id: 'iter-2', planner_run_id: 'run-2' }),
+      step('other-planner-start', 'planner_iteration_start', { planner_iteration_id: 'iter-2', planner_run_id: 'run-2' }),
     ];
 
     const scoped = getSnapshotScopedSteps(entity, steps);
 
-    expect(scoped.map((item) => item.id)).toContain('planner-rbac');
-    expect(scoped.map((item) => item.id)).not.toContain('other-rbac');
+    expect(scoped.map((item) => item.id)).toEqual(['planner-start', 'planner-decision', 'planner-end']);
+    expect(scoped.map((item) => item.id)).not.toContain('other-planner-start');
   });
 
   it('includes descendant entity steps for synthetic phase inspectors', () => {

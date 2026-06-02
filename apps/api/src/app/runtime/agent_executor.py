@@ -15,6 +15,7 @@ Design:
 """
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any, AsyncGenerator, Dict, List, Optional
 from uuid import UUID
 
@@ -31,6 +32,7 @@ from app.agents.runtime.events import (
 from app.core.http.clients import LLMClientProtocol
 from app.core.logging import get_logger
 from app.runtime.contracts import NextStep
+from app.runtime.context_snapshot import compact_snapshot
 from app.runtime.events import RuntimeEvent, RuntimeEventType
 from app.runtime.memory.components import MemoryBundle, MemoryItem, MemorySection
 from app.runtime.operation_errors import RuntimeErrorCode
@@ -153,13 +155,16 @@ class AgentExecutor:
             yield RuntimeEvent.status(msg, agent=agent_slug)
             return
 
-        collection_filter_audit = (sub_request.rbac_audit or {}).get("collection_filter")
-        if isinstance(collection_filter_audit, dict):
-            yield RuntimeEvent.status(
-                "agent_rbac_snapshot",
-                agent_slug=agent_slug,
-                rbac=collection_filter_audit,
-            )
+        yield RuntimeEvent.status(
+            "agent_context_snapshot",
+            agent_slug=agent_slug,
+            context_snapshot=self._build_context_snapshot(
+                step=step,
+                sub_request=sub_request,
+                goal=state.goal,
+                model=model,
+            ),
+        )
 
         # Inject execution deps before any tool-runtime call.
         deps = ctx.get_runtime_deps()
@@ -506,3 +511,40 @@ class AgentExecutor:
             if title:
                 facts.append(f"source: {title[:120]}")
         return facts
+
+    @staticmethod
+    def _build_context_snapshot(
+        *,
+        step: NextStep,
+        sub_request: ExecutionRequest,
+        goal: str,
+        model: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        collection_filter_audit = (sub_request.rbac_audit or {}).get("collection_filter")
+        version_label: Optional[str] = None
+        version = sub_request.agent_version
+        if version is not None:
+            version_number = getattr(version, "version", None)
+            version_status = getattr(version, "status", None)
+            if version_number is not None:
+                version_label = f"v{version_number}"
+                if version_status:
+                    version_label = f"{version_label} ({version_status})"
+
+        return compact_snapshot(
+            inputs={
+                "goal": goal,
+                "agent_input": step.agent_input or {},
+            },
+            prompt={"system_prompt": sub_request.prompt} if sub_request.prompt else None,
+            rbac=deepcopy(collection_filter_audit) if isinstance(collection_filter_audit, dict) else None,
+            meta={
+                "role": sub_request.agent_slug,
+                "agent_slug": sub_request.agent_slug,
+                "model": model or getattr(sub_request.agent, "model", None),
+                "version_label": version_label,
+                "available_operations": [
+                    item.operation_slug for item in (sub_request.resolved_operations or [])
+                ],
+            },
+        ) or {}

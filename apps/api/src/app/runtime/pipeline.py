@@ -207,14 +207,6 @@ class RuntimePipeline:
             phase=OrchestrationPhase.PIPELINE,
         )
         yield emitter.emit(
-            RuntimeEvent.status(
-                "planner_rbac_snapshot",
-                rbac=planner_rbac_audit,
-                explicit_agent_slug=explicit_slug,
-            ),
-            phase=OrchestrationPhase.PLANNER,
-        )
-        yield emitter.emit(
             RuntimeEvent.orchestrator_start(
                 orchestrator_id=orchestrator_id,
                 run_id=run_id_str,
