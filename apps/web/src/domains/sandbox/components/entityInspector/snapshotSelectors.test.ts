@@ -3,6 +3,15 @@ import type { TraceEntity } from '@/domains/runtimeTrace/entityTypes';
 import type { RunStep, RunStepType } from '../../hooks/useSandboxRun';
 import { getSnapshotScopedSteps } from './snapshotSelectors';
 
+type TestRunStepType =
+  | RunStepType
+  | 'run_start'
+  | 'run_end'
+  | 'agent_start'
+  | 'agent_end'
+  | 'planner_iteration_start'
+  | 'planner_iteration_end';
+
 function makeEntity(overrides: Partial<TraceEntity>): TraceEntity {
   return {
     id: overrides.id ?? 'entity-1',
@@ -17,8 +26,8 @@ function makeEntity(overrides: Partial<TraceEntity>): TraceEntity {
   };
 }
 
-function step(id: string, type: RunStepType, data: Record<string, unknown>): RunStep {
-  return { id, type, data, timestamp: 0 };
+function step(id: string, type: TestRunStepType, data: Record<string, unknown>): RunStep {
+  return { id, type: type as RunStepType, data, timestamp: 0 };
 }
 
 describe('getSnapshotScopedSteps', () => {
