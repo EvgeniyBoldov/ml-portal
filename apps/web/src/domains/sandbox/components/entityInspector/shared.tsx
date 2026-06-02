@@ -307,7 +307,7 @@ export function getStepsPromptSnapshot(steps: RunStep[]): string | undefined {
 }
 
 export function getEntityPromptSnapshot(entity: TraceEntity): string | undefined {
-  const data = entity.data as Record<string, unknown> | undefined;
+  const data = entity.data as unknown as Record<string, unknown> | undefined;
   if (!data) return undefined;
 
   const entitySnapshot = getEntityContextSnapshot(entity);
@@ -376,7 +376,7 @@ export function getEntityPromptSnapshot(entity: TraceEntity): string | undefined
 }
 
 export function getEntityContextSnapshot(entity: TraceEntity): TraceContextSnapshot | undefined {
-  const data = entity.data as Record<string, unknown> | undefined;
+  const data = entity.data as unknown as Record<string, unknown> | undefined;
   if (!data) return undefined;
   const snapshot = data.contextSnapshot ?? data.context_snapshot;
   if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) return undefined;

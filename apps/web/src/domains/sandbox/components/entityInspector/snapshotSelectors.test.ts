@@ -1,13 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { TraceEntity } from '@/domains/runtimeTrace/entityTypes';
+import type { RunStep, RunStepType } from '../../hooks/useSandboxRun';
 import { getSnapshotScopedSteps } from './snapshotSelectors';
-
-interface TestStep {
-  id: string;
-  type: string;
-  data: Record<string, unknown>;
-  timestamp: number;
-}
 
 function makeEntity(overrides: Partial<TraceEntity>): TraceEntity {
   return {
@@ -23,7 +17,7 @@ function makeEntity(overrides: Partial<TraceEntity>): TraceEntity {
   };
 }
 
-function step(id: string, type: string, data: Record<string, unknown>): TestStep {
+function step(id: string, type: RunStepType, data: Record<string, unknown>): RunStep {
   return { id, type, data, timestamp: 0 };
 }
 
