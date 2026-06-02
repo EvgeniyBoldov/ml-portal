@@ -5,10 +5,13 @@ from typing import Any, AsyncIterator, Dict, List, Literal, Optional
 from uuid import uuid4
 
 from app.agents.context import ToolContext
+from app.core.db import get_session_factory
 from app.runtime.contracts import NextStep, PipelineRequest, PipelineStopReason
+from app.runtime.context_snapshot import compact_snapshot, prompt_snapshot, serialize_limits
 from app.runtime.envelope import PhasedEvent
 from app.runtime.events import OrchestrationPhase, RuntimeEvent, RuntimeEventType
 from app.runtime.operation_errors import RuntimeErrorCode
+from app.services.agent_service import AgentService
 from app.runtime.planner.iteration_policy import (
     build_iteration_result,
     classify_agent_failure,
@@ -49,12 +52,20 @@ class PlannerCallAgentDispatcher:
         self.result = None
         agent_run_id = run_id
         lifecycle_agent_run_id = str(uuid4())
+        agent_context_snapshot = await self._build_agent_context_snapshot(
+            step=step,
+            ctx=ctx,
+            request=request,
+            tenant_id=tenant_id,
+            agent_version_id=agent_version_id,
+        )
         yield PhasedEvent(
             RuntimeEvent.agent_start(
                 agent_run_id=lifecycle_agent_run_id,
                 parent_entity_id=planner_iteration_id,
                 parent_entity_type="planner_iteration",
                 agent_slug=step.agent_slug or "unknown",
+                context_snapshot=agent_context_snapshot,
             ),
             OrchestrationPhase.AGENT,
         )
@@ -247,3 +258,65 @@ class PlannerCallAgentDispatcher:
             if str((item or {}).get("slug") or "").strip() != agent_slug
         ]
         return len(available_agents) != before
+
+    @staticmethod
+    async def _build_agent_context_snapshot(
+        *,
+        step: NextStep,
+        ctx: ToolContext,
+        request: PipelineRequest,
+        tenant_id: Any,
+        agent_version_id: Any = None,
+    ) -> Optional[Dict[str, Any]]:
+        agent_slug = str(step.agent_slug or "").strip()
+        if not agent_slug:
+            return None
+
+        prompt_text: Optional[str] = None
+        model_name: Optional[str] = None
+        version_label: Optional[str] = None
+        runtime_deps = ctx.get_runtime_deps()
+        session_factory = runtime_deps.session_factory or get_session_factory()
+        try:
+            async with session_factory() as session:
+                service = AgentService(session)
+                if agent_version_id:
+                    version = await service.get_version(agent_version_id)
+                else:
+                    version = await service.resolve_published_version(agent_slug, tenant_id)
+                prompt_text = getattr(version, "compiled_prompt", None)
+                version_number = getattr(version, "version", None)
+                version_status = getattr(version, "status", None)
+                if version_number is not None:
+                    version_label = f"v{version_number}"
+                    if version_status:
+                        version_label = f"{version_label} ({version_status})"
+                agent = await service.get_agent(version.agent_id)
+                model_name = getattr(agent, "model", None)
+        except Exception:
+            prompt_text = None
+            model_name = None
+            version_label = None
+
+        agent_limits = None
+        budget_resolver = ctx.extra.get("runtime_budget_resolver")
+        try:
+            if budget_resolver is not None:
+                agent_limits = await budget_resolver.resolve_orchestrator(agent_slug, request.sandbox_overrides)
+        except Exception:
+            agent_limits = None
+
+        return compact_snapshot(
+            inputs={
+                "agent_input": step.agent_input or {},
+                "goal": request.request_text,
+            },
+            prompt=prompt_snapshot(prompt_text, str(ctx.extra.get("runtime_logging_level") or "brief")),
+            limits=serialize_limits(agent_limits),
+            meta={
+                "role": agent_slug,
+                "agent_slug": agent_slug,
+                "model": model_name or request.model,
+                "version_label": version_label,
+            },
+        )

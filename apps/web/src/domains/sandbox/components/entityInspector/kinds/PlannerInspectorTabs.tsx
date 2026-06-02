@@ -1,8 +1,7 @@
-import Badge from '@/shared/ui/Badge';
-import { InspectorFieldGroup, InspectorFieldRow, InspectorNotice, InspectorTabs } from '@/shared/ui/Inspector';
+import { InspectorFieldGroup, InspectorFieldRow, InspectorTabs } from '@/shared/ui/Inspector';
 import { isPlannerData, type TraceEntity } from '@/domains/runtimeTrace/entityTypes';
 import type { RunStep } from '../../../hooks/useSandboxRun';
-import { BudgetsTab, formatDuration, RawTab } from '../shared';
+import { BudgetsTab, RawTab, SnapshotBadgeField, SnapshotTextField, SnapshotValueField, getEntityContextSnapshot } from '../shared';
 
 const PLANNER_ACTION_LABELS: Record<string, string> = {
   call_agent: 'Вызвать агента',
@@ -22,41 +21,30 @@ const RISK_TONE: Record<string, 'neutral' | 'success' | 'warn' | 'danger' | 'inf
 
 const PLANNER_DECISION_TYPES = new Set(['planner_step', 'planner_action', 'planner_decision']);
 
-function PlannerInfoTab({ entity, steps }: { entity: TraceEntity; steps: RunStep[] }) {
+function PlannerIntentTab({ entity, steps }: { entity: TraceEntity; steps: RunStep[] }) {
   const data = isPlannerData(entity.data) ? entity.data : null;
-  const source = steps.filter((s) => entity.sourceEventIds.includes(s.id));
-
-  const thinking = source.find((s) => s.type === 'status' && String((s.data as Record<string, unknown>).stage ?? '') === 'planner_thinking');
-  const decision = source.find((s) => PLANNER_DECISION_TYPES.has(s.type));
-  const decisionData = (decision?.data ?? {}) as Record<string, unknown>;
-  const envelope = (decisionData._envelope ?? {}) as Record<string, unknown>;
-
-  const actionKey = String(data?.stepKind ?? decisionData.kind ?? 'planner_decision');
-  const actionLabel = PLANNER_ACTION_LABELS[actionKey] ?? actionKey;
-  const risk = String(decisionData.risk ?? 'unknown');
-  const plannerIterationId = String(decisionData.planner_iteration_id ?? (thinking?.data as Record<string, unknown> | undefined)?.planner_iteration_id ?? '—');
-  const plannerRunId = String(decisionData.planner_run_id ?? (thinking?.data as Record<string, unknown> | undefined)?.planner_run_id ?? '—');
-  const sequence = String(envelope.sequence ?? '—');
-  const agentSlug = String(decisionData.agent_slug ?? data?.decision?.chosenAgentSlug ?? '—');
+  const snapshot = getEntityContextSnapshot(entity);
+  const snapshotInputs = snapshot?.inputs;
+  const snapshotMeta = snapshot?.meta;
+  const availableAgents = Array.isArray(snapshotMeta?.available_agents) ? snapshotMeta.available_agents.map(String) : [];
+  const facts = typeof snapshotMeta?.memory_digest?.facts === 'number' ? snapshotMeta.memory_digest.facts : undefined;
+  const summaryChars = typeof snapshotMeta?.memory_digest?.summary_chars === 'number' ? snapshotMeta.memory_digest.summary_chars : undefined;
 
   return (
     <InspectorFieldGroup>
-      <InspectorFieldRow label="Этап">Планирование</InspectorFieldRow>
-      <InspectorFieldRow label="Статусы">Думал → Решил</InspectorFieldRow>
-      <InspectorFieldRow label="Действие">{actionLabel}</InspectorFieldRow>
-      <InspectorFieldRow label="Цель">{agentSlug !== '—' && agentSlug !== 'null' ? `Агент: ${agentSlug}` : 'Пользователь'}</InspectorFieldRow>
-      <InspectorFieldRow label="Риск"><Badge tone={RISK_TONE[risk] ?? 'neutral'} size="sm">{risk}</Badge></InspectorFieldRow>
-      <InspectorFieldRow label="Длительность">{formatDuration(entity.durationMs)}</InspectorFieldRow>
-      <InspectorFieldRow label="Итерация">{plannerIterationId}</InspectorFieldRow>
-      <InspectorFieldRow label="Planner Run">{plannerRunId}</InspectorFieldRow>
-      <InspectorFieldRow label="Sequence">{sequence}</InspectorFieldRow>
+      <SnapshotTextField label="Намерение" text={String(snapshotInputs?.iteration_intent ?? data?.rationale ?? '—')} />
+      <SnapshotValueField label="Попытка" value={snapshotMeta?.attempt ?? '—'} />
+      <SnapshotValueField label="Максимум попыток" value={snapshotMeta?.max_attempts ?? '—'} />
+      <SnapshotValueField label="Фактов в памяти" value={facts ?? '—'} />
+      <SnapshotValueField label="Размер summary" value={summaryChars ?? '—'} />
+      <InspectorFieldRow label="Доступные агенты">{availableAgents.length ? availableAgents.join(', ') : '—'}</InspectorFieldRow>
     </InspectorFieldGroup>
   );
 }
 
 function PlannerDecisionTab({ entity, steps }: { entity: TraceEntity; steps: RunStep[] }) {
   const data = isPlannerData(entity.data) ? entity.data : null;
-  const source = steps.filter((s) => entity.sourceEventIds.includes(s.id));
+  const source = steps;
   const decision = source.find((s) => PLANNER_DECISION_TYPES.has(s.type));
   const decisionData = (decision?.data ?? {}) as Record<string, unknown>;
   const actionKey = String(data?.stepKind ?? decisionData.kind ?? 'planner_decision');
@@ -66,63 +54,27 @@ function PlannerDecisionTab({ entity, steps }: { entity: TraceEntity; steps: Run
 
   return (
     <InspectorFieldGroup>
-      <InspectorFieldRow label="Решение">{actionLabel}</InspectorFieldRow>
-      <InspectorFieldRow label="Тип действия"><code>{actionKey}</code></InspectorFieldRow>
-      <InspectorFieldRow label="Целевой агент">{agentSlug !== 'null' ? agentSlug : '—'}</InspectorFieldRow>
-      <InspectorFieldRow label="Phase ID">{phaseId !== 'null' ? phaseId : '—'}</InspectorFieldRow>
-    </InspectorFieldGroup>
-  );
-}
-
-function PlannerRationaleTab({ entity, steps }: { entity: TraceEntity; steps: RunStep[] }) {
-  const data = isPlannerData(entity.data) ? entity.data : null;
-  const source = steps.filter((s) => entity.sourceEventIds.includes(s.id));
-  const decision = source.find((s) => PLANNER_DECISION_TYPES.has(s.type));
-  const decisionData = (decision?.data ?? {}) as Record<string, unknown>;
-  const rationale = String(data?.rationale ?? decisionData.rationale ?? '').trim();
-
-  return (
-    <InspectorFieldGroup>
-      <InspectorFieldRow label="Обоснование">
-        <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.45 }}>{rationale || '—'}</div>
-      </InspectorFieldRow>
-    </InspectorFieldGroup>
-  );
-}
-
-function PlannerRbacTab({ steps }: { steps: RunStep[] }) {
-  const snapshot = [...steps]
-    .reverse()
-    .find((s) => s.type === 'status' && String(s.data.stage ?? '') === 'planner_rbac_snapshot');
-
-  const rbac = (snapshot?.data.rbac ?? null) as Record<string, unknown> | null;
-  if (!rbac) {
-    return <InspectorNotice tone="neutral" title="RBAC Snapshot" message="Снимок RBAC для планера не найден" />;
-  }
-
-  const candidates = Array.isArray(rbac.candidates) ? rbac.candidates.map(String) : [];
-  const allowed = Array.isArray(rbac.allowed) ? rbac.allowed.map(String) : [];
-  const denied = Array.isArray(rbac.denied_by_rbac) ? rbac.denied_by_rbac.map(String) : [];
-
-  return (
-    <InspectorFieldGroup>
-      <InspectorFieldRow label="Кандидаты">{String(candidates.length)}</InspectorFieldRow>
-      <InspectorFieldRow label="Доступно">{String(allowed.length)}</InspectorFieldRow>
-      <InspectorFieldRow label="Срезано RBAC">{String(denied.length)}</InspectorFieldRow>
-      <InspectorFieldRow label="Allowed">{allowed.length ? allowed.join(', ') : '—'}</InspectorFieldRow>
-      <InspectorFieldRow label="Denied">{denied.length ? denied.join(', ') : '—'}</InspectorFieldRow>
+      <SnapshotValueField label="Решение" value={actionLabel} />
+      <SnapshotValueField label="Тип действия" value={actionKey} />
+      <SnapshotValueField label="Целевой агент" value={agentSlug !== 'null' ? agentSlug : '—'} />
+      <SnapshotValueField label="Фаза" value={phaseId !== 'null' ? phaseId : '—'} />
+      <SnapshotBadgeField label="Риск" tone={RISK_TONE[String(decisionData.risk ?? 'unknown')] ?? 'neutral'} text={String(decisionData.risk ?? 'unknown')} />
+      <InspectorFieldRow label="Обоснование">{String(data?.rationale ?? decisionData.rationale ?? '—')}</InspectorFieldRow>
     </InspectorFieldGroup>
   );
 }
 
 export function PlannerInspectorTabs({ entity, steps }: { entity: TraceEntity; steps: RunStep[] }) {
-  const tabs = [{ key: 'info', label: 'Info' }, { key: 'decision', label: 'Decision' }, { key: 'rationale', label: 'Rationale' }, { key: 'rbac', label: 'RBAC' }, { key: 'budgets', label: 'Budgets' }, { key: 'raw', label: 'Raw' }];
+  const tabs = [
+    { key: 'intent', label: 'Намерение' },
+    { key: 'decision', label: 'Решение' },
+    { key: 'budgets', label: 'Бюджет' },
+    { key: 'raw', label: 'RAW' },
+  ];
 
   return <InspectorTabs entityId={entity.id} tabs={tabs} render={(tab) => {
-    if (tab === 'info') return <PlannerInfoTab entity={entity} steps={steps} />;
+    if (tab === 'intent') return <PlannerIntentTab entity={entity} steps={steps} />;
     if (tab === 'decision') return <PlannerDecisionTab entity={entity} steps={steps} />;
-    if (tab === 'rationale') return <PlannerRationaleTab entity={entity} steps={steps} />;
-    if (tab === 'rbac') return <PlannerRbacTab steps={steps} />;
     if (tab === 'budgets') return <BudgetsTab entity={entity} steps={steps} />;
     return <RawTab value={entity.data} entity={entity} steps={steps} />;
   }} />;

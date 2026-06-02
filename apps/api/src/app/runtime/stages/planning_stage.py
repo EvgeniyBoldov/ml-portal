@@ -31,6 +31,7 @@ from app.runtime.contracts import (
     PipelineRequest,
     PipelineStopReason,
 )
+from app.runtime.context_snapshot import compact_snapshot, serialize_limits
 from app.runtime.envelope import PhasedEvent
 from app.runtime.entity_ids import planner_orchestrator_id
 from app.runtime.events import OrchestrationPhase, RuntimeEvent, RuntimeEventType
@@ -127,11 +128,32 @@ class PlanningStage:
                 "planner_iteration_id": planner_iteration_id,
                 "iteration": planner_iteration,
             }
+            iteration_context_snapshot = compact_snapshot(
+                inputs={
+                    "goal": runtime_state.goal or request.request_text,
+                    "iteration_intent": f"Choose next step for iteration #{planner_iteration}",
+                },
+                limits=serialize_limits(planner_limits),
+                meta={
+                    "attempt": planner_iteration,
+                    "max_attempts": self._max_iterations,
+                    "available_agents": [
+                        str(agent.get("slug") or "")
+                        for agent in planner_agents
+                        if str(agent.get("slug") or "").strip()
+                    ],
+                    "memory_digest": {
+                        "facts": len(runtime_state.runtime_facts),
+                        "summary_chars": len(str(runtime_state.memory_bundle.compact_view())),
+                    },
+                },
+            )
             yield PhasedEvent(
                 RuntimeEvent.planner_iteration_start(
                     iteration_id=planner_iteration_id,
                     orchestrator_id=effective_orchestrator_id,
                     iteration=planner_iteration,
+                    context_snapshot=iteration_context_snapshot,
                 ),
                 OrchestrationPhase.PLANNER,
             )

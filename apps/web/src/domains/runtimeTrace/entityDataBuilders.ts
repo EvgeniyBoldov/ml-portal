@@ -240,5 +240,5 @@ export function enrichPlannerIterationFromStepData(container: TraceEntity, plann
   if (plannerData.rationale) container.data.rationale = plannerData.rationale;
   if (plannerData.decision) container.data.decision = plannerData.decision;
   const label = String((container.data as PlannerData).stepKind ?? 'iteration');
-  container.title = `Plan: ${label}`;
+  container.title = `Step: ${label}`;
 }

@@ -301,7 +301,10 @@ function BudgetCard({ data }: { data: unknown }) {
           {wall && (
             <div className={styles.budgetStat}>
               <span className={styles.budgetLabel}>Wall time</span>
-              <span className={styles.budgetValue}>{Number(wall.used ?? 0)}ms{Number(wall.limit ?? 0) > 0 ? `/${Number(wall.limit)}ms` : ''}</span>
+              <span className={styles.budgetValue}>
+                {(Number(wall.used ?? 0) / 1000).toFixed(1).replace('.', ',')} s
+                {Number(wall.limit ?? 0) > 0 ? `/${(Number(wall.limit) / 1000).toFixed(1).replace('.', ',')} s` : ''}
+              </span>
             </div>
           )}
         </div>

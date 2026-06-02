@@ -19,7 +19,7 @@ already produced a user-ready answer.
 """
 from __future__ import annotations
 
-from typing import AsyncGenerator, Dict, List, Optional
+from typing import AsyncGenerator, Dict, List, Literal, Optional
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,6 +28,7 @@ from app.core.http.clients import LLMClientProtocol
 from app.core.logging import get_logger
 from app.models.system_llm_role import SystemLLMRoleType
 from app.runtime.budgets import BudgetRegistry, BudgetResolver
+from app.runtime.context_snapshot import compact_snapshot, prompt_snapshot, serialize_limits
 from app.runtime.events import RuntimeEvent
 from app.runtime.input_builders import SynthesizerInputBuilder
 from app.runtime.llm.streaming import RoleStreamingCall, StreamDelta, StreamError, StreamTurn
@@ -77,6 +78,7 @@ class Synthesizer:
         budget_registry: Optional[BudgetRegistry] = None,
         budget_resolver: Optional[BudgetResolver] = None,
         chunk_size: int = DEFAULT_SYNTH_CHUNK_SIZE,
+        logging_level: Optional[str] = None,
     ) -> AsyncGenerator[RuntimeEvent, None]:
         chunk_size = self._resolve_chunk_size(
             base_chunk_size=chunk_size,
@@ -85,6 +87,10 @@ class Synthesizer:
         )
         synthesis_run_id = f"{run_id}:synthesis:1"
         synthesis_status = "completed"
+
+        # Load synthesizer role config early for context snapshot
+        synth_role_cfg = await self._load_role_config()
+        synth_prompt = synth_role_cfg.get("prompt", "")
 
         if budget_registry is not None:
             synthesis_limits = None
@@ -113,9 +119,23 @@ class Synthesizer:
                 reason="init",
                 at_ms=init_payload.get("at_ms"),
             )
+        else:
+            synthesis_limits = None
         yield RuntimeEvent.synthesis_start(
             synthesis_id=synthesis_run_id,
             run_id=str(run_id),
+            context_snapshot=compact_snapshot(
+                inputs={
+                    "planner_hint": planner_hint,
+                    "goal": runtime_state.goal,
+                },
+                prompt=prompt_snapshot(synth_prompt, logging_level),
+                limits=serialize_limits(synthesis_limits),
+                meta={
+                    "role": "synthesizer",
+                    "model": synth_role_cfg.get("model") or model,
+                },
+            ),
         )
         # Sources from memory_bundle if available
         sources: List[str] = []
@@ -193,7 +213,7 @@ class Synthesizer:
                         delta={},
                         reason="finalize",
                         at_ms=final_payload.get("at_ms"),
-                )
+                    )
                 yield RuntimeEvent.synthesis_end(
                     synthesis_id=synthesis_run_id,
                     run_id=str(run_id),
@@ -201,10 +221,10 @@ class Synthesizer:
                 )
                 return
 
-        # Full synthesis path. Load role-level config (prompt + model +
+        # Full synthesis path. Use pre-loaded role config (prompt + model +
         # temperature + max_tokens) from the SYNTHESIZER system LLM role;
         # caller-supplied `model` still wins when provided.
-        role_cfg = await self._load_role_config()
+        role_cfg = synth_role_cfg
         system_prompt = role_cfg["prompt"]
         effective_model = model or role_cfg.get("model")
         params: Dict[str, float] = {}

@@ -98,7 +98,7 @@ export function createLegacyContainerAssembler(
       parentId: root.id,
       depth: 1,
       children: [],
-      title: `Plan #${key || 1}`,
+      title: `Step #${key || 1}`,
       status: 'info',
       startedAt: event.started_at,
       durationMs: event.duration_ms,
@@ -107,7 +107,7 @@ export function createLegacyContainerAssembler(
       data: {
         kind: 'planner',
         stepKind: 'iteration',
-        rationale: `Planner iteration ${numericIteration || 1}`,
+        rationale: `Step iteration ${numericIteration || 1}`,
       },
     };
     root.children.push(plannerEntity);

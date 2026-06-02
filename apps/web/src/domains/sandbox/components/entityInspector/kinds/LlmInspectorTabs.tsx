@@ -1,11 +1,15 @@
-import { InspectorFieldGroup, InspectorFieldRow, InspectorJsonBlock, InspectorTabs } from '@/shared/ui/Inspector';
+import { InspectorFieldGroup, InspectorTabs } from '@/shared/ui/Inspector';
 import { isLLMData, type TraceEntity } from '@/domains/runtimeTrace/entityTypes';
 import type { RunStep } from '../../../hooks/useSandboxRun';
-import { InfoTab, RawTab } from '../shared';
+import { BudgetsTab, InfoTab, RawTab, SnapshotJsonField, SnapshotValueField } from '../shared';
 
 export function LlmInspectorTabs({ entity, steps }: { entity: TraceEntity; steps: RunStep[] }) {
   const data = isLLMData(entity.data) ? entity.data : null;
-  const sourceSteps = steps.filter((s) => entity.sourceEventIds.includes(s.id));
+  const sourceSteps = steps.filter((s) => (
+    entity.sourceEventIds.includes(s.id)
+    || String((s.data as Record<string, unknown>)?.parent_entity_id ?? '') === entity.id
+    || String((s.data as Record<string, unknown>)?.entity_id ?? '') === entity.id
+  ));
   const requestStep = sourceSteps.find((s) => s.type === 'llm_turn' || s.type === 'llm_request' || s.type === 'llm_call');
   const responseStep = [...sourceSteps].reverse().find((s) => s.type === 'llm_turn' || s.type === 'llm_response' || s.type === 'llm_call');
   const requestPayloadRaw = (requestStep?.data ?? null) as Record<string, unknown> | null;
@@ -21,7 +25,6 @@ export function LlmInspectorTabs({ entity, steps }: { entity: TraceEntity; steps
   };
 
   const requestKeys = [
-    'llm_call_id',
     'model',
     'purpose',
     'messages',
@@ -34,18 +37,8 @@ export function LlmInspectorTabs({ entity, steps }: { entity: TraceEntity; steps
     'stop',
     'stop_sequences',
     'native_tool_calling',
-    'step',
-    'agent_slug',
-    'agent_run_id',
-    'parent_entity_type',
-    'parent_entity_id',
-    'actor_type',
-    'actor_entity_id',
-    'planner_iteration_id',
-    'planner_run_id',
   ];
   const responseKeys = [
-    'llm_call_id',
     'content',
     'response',
     'text',
@@ -58,52 +51,52 @@ export function LlmInspectorTabs({ entity, steps }: { entity: TraceEntity; steps
     'finish_reason',
     'error',
     'error_code',
-    'step',
-    'agent_slug',
-    'agent_run_id',
-    'parent_entity_type',
-    'parent_entity_id',
-    'actor_type',
-    'actor_entity_id',
-    'planner_iteration_id',
-    'planner_run_id',
   ];
 
   const requestPayload = pick(requestPayloadRaw, requestKeys);
   const responsePayload = pick(responsePayloadRaw, responseKeys);
-  const tabs = [{ key: 'info', label: 'Инфо' }, { key: 'request', label: 'Реквест' }, { key: 'response', label: 'Респонс' }, { key: 'raw', label: 'RAW' }];
+  const tabs = [
+    { key: 'info', label: 'Инфо' },
+    { key: 'request', label: 'Реквест' },
+    { key: 'response', label: 'Респонс' },
+    { key: 'budgets', label: 'Бюджет' },
+    { key: 'raw', label: 'RAW' },
+  ];
 
   return <InspectorTabs entityId={entity.id} tabs={tabs} render={(tab) => {
     if (tab === 'info') return (
       <>
         <InfoTab entity={entity} steps={steps} />
         <InspectorFieldGroup>
-          <InspectorFieldRow label="LLM Call ID"><code>{data?.llmCallId ?? '—'}</code></InspectorFieldRow>
-          <InspectorFieldRow label="Purpose"><code>{data?.purpose ?? '—'}</code></InspectorFieldRow>
-          <InspectorFieldRow label="Parent Type"><code>{data?.parentEntityType ?? '—'}</code></InspectorFieldRow>
-          <InspectorFieldRow label="Parent ID"><code>{data?.parentEntityId ?? '—'}</code></InspectorFieldRow>
-          <InspectorFieldRow label="Model"><code>{data?.params?.model ?? '—'}</code></InspectorFieldRow>
-          <InspectorFieldRow label="Tokens In">{data?.tokensIn ?? '—'}</InspectorFieldRow>
-          <InspectorFieldRow label="Tokens Out">{data?.tokensOut ?? '—'}</InspectorFieldRow>
-          <InspectorFieldRow label="Tokens Total"><code>{String(data?.tokensTotal ?? '—')}</code></InspectorFieldRow>
-          <InspectorFieldRow label="Duration"><code>{String(responsePayloadRaw?.duration_ms ?? '—')} ms</code></InspectorFieldRow>
+          <SnapshotValueField label="Назначение" value={data?.purpose ?? '—'} />
+          <SnapshotValueField label="Модель" value={data?.params?.model ?? '—'} />
+          <SnapshotValueField label="Токены in" value={data?.tokensIn ?? '—'} />
+          <SnapshotValueField label="Токены out" value={data?.tokensOut ?? '—'} />
+          <SnapshotValueField label="Токены" value={data?.tokensTotal ?? '—'} />
+          <SnapshotValueField
+            label="Длительность"
+            value={typeof responsePayloadRaw?.duration_ms === 'number'
+              ? `${(responsePayloadRaw.duration_ms / 1000).toFixed(1).replace('.', ',')} s`
+              : '—'}
+          />
         </InspectorFieldGroup>
       </>
     );
     if (tab === 'request') {
       return (
         <InspectorFieldGroup>
-          <InspectorJsonBlock value={requestPayload ?? data?.prompt?.messages ?? data?.prompt?.systemPrompt ?? '—'} />
+          <SnapshotJsonField label="Реквест" value={requestPayload ?? data?.prompt?.messages ?? data?.prompt?.systemPrompt ?? '—'} />
         </InspectorFieldGroup>
       );
     }
     if (tab === 'response') {
       return (
         <InspectorFieldGroup>
-          <InspectorJsonBlock value={responsePayload ?? data?.response?.content ?? data?.response?.rawResponse ?? '—'} />
+          <SnapshotJsonField label="Респонс" value={responsePayload ?? data?.response?.content ?? data?.response?.rawResponse ?? '—'} />
         </InspectorFieldGroup>
       );
     }
+    if (tab === 'budgets') return <BudgetsTab entity={entity} steps={steps} />;
     return <RawTab value={entity.data} entity={entity} steps={steps} />;
   }} />;
 }

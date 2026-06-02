@@ -3,6 +3,10 @@ import { buildEntityTree } from '../buildEntityTree';
 import { BudgetPills } from '../budget';
 import type { SemanticEvent } from '../types';
 import type { TraceEntity } from '../entityTypes';
+import {
+  getTraceEntityKindLabel,
+  getTraceEntityTitle,
+} from '../tracePresentation';
 import styles from './RuntimeTraceTree.module.css';
 
 interface RuntimeTraceTreeProps {
@@ -10,11 +14,16 @@ interface RuntimeTraceTreeProps {
 }
 
 function statusLabel(status: TraceEntity['status']): string {
-  if (status === 'ok') return 'OK';
-  if (status === 'error') return 'Error';
-  if (status === 'warn') return 'Warn';
-  if (status === 'pending') return 'Pending';
-  return 'Info';
+  if (status === 'ok') return 'Успешно';
+  if (status === 'error') return 'Ошибка';
+  if (status === 'warn') return 'Предупреждение';
+  if (status === 'pending') return 'В процессе';
+  return 'Инфо';
+}
+
+function formatDuration(durationMs?: number): string {
+  if (durationMs === undefined || durationMs === null) return '—';
+  return `${(durationMs / 1000).toFixed(1).replace('.', ',')} s`;
 }
 
 function Row({
@@ -31,19 +40,26 @@ function Row({
   const hasChildren = entity.children.length > 0;
   const isOpen = expanded.has(entity.id);
   const indent = { paddingLeft: `${12 + depth * 18}px` };
+  const title = getTraceEntityTitle(entity);
+  const canToggle = hasChildren;
 
   return (
     <>
-      <button type="button" className={styles.row} style={indent} onClick={() => hasChildren && onToggle(entity.id)}>
-        <span>{hasChildren ? (isOpen ? '▾' : '▸') : '•'}</span>
-        <span className={styles.title}>{entity.title}</span>
-        {entity.durationMs != null && <span className={styles.meta}>{entity.durationMs}ms</span>}
-        <BudgetPills
-          used={entity.budget?.aggregated ?? entity.budget?.own}
-          limits={entity.budget?.limits ?? null}
-          metrics={['planner_steps', 'agent_steps', 'tool_calls', 'tokens_total', 'retries', 'wall_time_ms']}
-        />
-        <span className={styles.status}>{statusLabel(entity.status)}</span>
+      <button type="button" className={styles.row} style={indent} onClick={() => canToggle && onToggle(entity.id)}>
+        <span className={styles.chevron}>{hasChildren ? (isOpen ? '▾' : '▸') : ''}</span>
+        <span className={styles.kindChip}>{getTraceEntityKindLabel(entity)}</span>
+        <span className={styles.title}>{title}</span>
+        <span className={styles.metaCol}>{formatDuration(entity.durationMs)}</span>
+        <span className={styles.metaCol}>
+          <BudgetPills
+            used={entity.budget?.aggregated ?? entity.budget?.own}
+            limits={entity.budget?.limits ?? null}
+            metrics={['planner_steps', 'agent_steps', 'tool_calls', 'tokens_total', 'retries', 'wall_time_ms']}
+          />
+        </span>
+        <span className={styles.statusCol}>
+          <span className={`${styles.statusDot} ${styles[`status_${entity.status}`]}`} title={statusLabel(entity.status)} />
+        </span>
       </button>
       {hasChildren && isOpen && (
         <div className={styles.children}>
@@ -86,6 +102,14 @@ export function RuntimeTraceTree({ events }: RuntimeTraceTreeProps): React.React
 
   return (
     <div className={styles.container}>
+      <div className={styles.headerRow}>
+        <span className={styles.headerSpacer} />
+        <span className={styles.headerType}>Тип</span>
+        <span className={styles.headerTitle}>Сущность</span>
+        <span className={styles.headerMeta}>Длительность</span>
+        <span className={styles.headerMeta}>Расход</span>
+        <span className={styles.headerMeta}>Статус</span>
+      </div>
       <Row entity={tree} depth={0} expanded={expanded} onToggle={handleToggle} />
     </div>
   );

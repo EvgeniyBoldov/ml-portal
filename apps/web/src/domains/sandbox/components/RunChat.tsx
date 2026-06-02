@@ -86,8 +86,7 @@ function toRecord(value: unknown): Record<string, unknown> {
 }
 
 function fmtDuration(ms: number): string {
-  if (ms < 1000) return `${ms}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
+  return `${(ms / 1000).toFixed(1).replace('.', ',')} s`;
 }
 
 function extractFinalContent(

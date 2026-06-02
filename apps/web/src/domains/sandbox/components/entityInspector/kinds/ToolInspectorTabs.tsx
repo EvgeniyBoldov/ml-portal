@@ -1,8 +1,8 @@
 import { InspectorTabs } from '@/shared/ui/Inspector';
 import { isToolData, type TraceEntity } from '@/domains/runtimeTrace/entityTypes';
 import type { RunStep } from '../../../hooks/useSandboxRun';
-import { BudgetsTab, InfoTab, RawTab } from '../shared';
-import { InspectorFieldGroup, InspectorFieldRow, InspectorJsonBlock } from '@/shared/ui/Inspector';
+import { BudgetsTab, InfoTab, RawTab, SnapshotCodeField, SnapshotJsonField, SnapshotValueField } from '../shared';
+import { InspectorFieldGroup } from '@/shared/ui/Inspector';
 
 export function ToolInspectorTabs({ entity, steps }: { entity: TraceEntity; steps: RunStep[] }) {
   const data = isToolData(entity.data) ? entity.data : null;
@@ -15,32 +15,37 @@ export function ToolInspectorTabs({ entity, steps }: { entity: TraceEntity; step
         retryable: data?.result?.retryable,
       };
   const hasErrors = !!(data?.result?.error || data?.result?.errorCode || (data?.retries && data.retries.length > 0));
-  const tabs = [{ key: 'info', label: 'Info' }, { key: 'input', label: 'Input' }, { key: 'output', label: 'Output' }, { key: 'budgets', label: 'Budgets' }, ...(hasErrors ? [{ key: 'errors', label: 'Errors' }] : []), { key: 'raw', label: 'Raw' }];
+  const tabs = [
+    { key: 'info', label: 'Инфо' },
+    { key: 'input', label: 'Реквест' },
+    { key: 'output', label: 'Респонс' },
+    { key: 'budgets', label: 'Бюджет' },
+    ...(hasErrors ? [{ key: 'errors', label: 'Ошибки' }] : []),
+    { key: 'raw', label: 'RAW' },
+  ];
 
   return <InspectorTabs entityId={entity.id} tabs={tabs} render={(tab) => {
     if (tab === 'info') return (
       <>
         <InfoTab entity={entity} steps={steps} />
         <InspectorFieldGroup>
-          <InspectorFieldRow label="Tool"><code>{data?.toolSlug ?? '—'}</code></InspectorFieldRow>
-          <InspectorFieldRow label="Call ID"><code>{data?.callId ?? '—'}</code></InspectorFieldRow>
-          <InspectorFieldRow label="Called By Agent"><code>{data?.calledByAgentSlug ?? '—'}</code></InspectorFieldRow>
-          <InspectorFieldRow label="Agent Run ID"><code>{data?.calledByAgentRunId ?? '—'}</code></InspectorFieldRow>
-          <InspectorFieldRow label="LLM Call ID"><code>{data?.llmCallId ?? '—'}</code></InspectorFieldRow>
+          <SnapshotCodeField label="Тул" value={data?.toolSlug ?? '—'} />
+          <SnapshotCodeField label="Агент" value={data?.calledByAgentSlug ?? '—'} />
+          <SnapshotValueField label="Статус" value={data?.result?.success ? 'Успешно' : 'Ошибка'} />
         </InspectorFieldGroup>
       </>
     );
     if (tab === 'input') {
       return (
         <InspectorFieldGroup>
-          <InspectorJsonBlock value={data?.arguments ?? '—'} />
+          <SnapshotJsonField label="Реквест" value={data?.arguments ?? '—'} />
         </InspectorFieldGroup>
       );
     }
     if (tab === 'output') {
       return (
         <InspectorFieldGroup>
-          <InspectorJsonBlock value={outputValue} />
+          <SnapshotJsonField label="Респонс" value={outputValue} />
         </InspectorFieldGroup>
       );
     }
@@ -48,7 +53,10 @@ export function ToolInspectorTabs({ entity, steps }: { entity: TraceEntity; step
     if (tab === 'errors') {
       return (
         <InspectorFieldGroup>
-          <InspectorJsonBlock value={{ error: data?.result?.error ?? null, errorCode: data?.result?.errorCode ?? null, retryable: data?.result?.retryable ?? null, retries: data?.retries ?? [] }} />
+          <SnapshotJsonField
+            label="Ошибки"
+            value={{ error: data?.result?.error ?? null, errorCode: data?.result?.errorCode ?? null, retryable: data?.result?.retryable ?? null, retries: data?.retries ?? [] }}
+          />
         </InspectorFieldGroup>
       );
     }

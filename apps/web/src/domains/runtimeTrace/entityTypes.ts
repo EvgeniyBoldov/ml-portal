@@ -130,6 +130,43 @@ export interface ToolData {
   };
 }
 
+export interface TraceContextSnapshot {
+  inputs?: {
+    user_request?: string;
+    goal?: string;
+    agent_input?: unknown;
+    planner_hint?: string;
+    iteration_intent?: string;
+  };
+  system_prompt?: string;
+  system_prompt_hash?: string;
+  limits?: Partial<Record<BudgetMetric, number>>;
+  rbac?: {
+    candidates?: string[];
+    allowed?: string[];
+    denied?: string[];
+    reason?: Record<string, string>;
+    denied_by_rbac?: string[];
+    denied_by_capability?: string[];
+  };
+  meta?: {
+    role?: string;
+    model?: string;
+    agent_slug?: string;
+    version_label?: string;
+    explicit_agent_slug?: string;
+    available_operations?: string[];
+    available_agents?: string[];
+    components?: string[];
+    attempt?: number;
+    max_attempts?: number;
+    memory_digest?: {
+      facts?: number;
+      summary_chars?: number;
+    };
+  };
+}
+
 export interface AgentData {
   kind: 'agent';
   slug: string;
@@ -143,6 +180,7 @@ export interface AgentData {
     isBriefMode: boolean;
     messagesHash?: string;
   };
+  contextSnapshot?: TraceContextSnapshot;
   toolsAvailable?: string[];
   deniedTools?: string[]; // Future (after backend Stage 1)
   partialModeWarning?: string;
@@ -152,6 +190,7 @@ export interface PlannerData {
   kind: 'planner';
   stepKind: string; // 'call_agent' | 'direct_answer' | 'final' | 'ask_user' | 'abort' | ...
   rationale?: string;
+  contextSnapshot?: TraceContextSnapshot;
   alternatives?: Array<{
     kind: string;
     agentSlug?: string;
@@ -173,6 +212,7 @@ export interface OrchestratorData {
   slug: string;
   role?: 'planner' | 'synthesizer' | 'memory' | 'fact_extractor' | 'summary_compactor' | 'summary' | string;
   intent?: string;
+  contextSnapshot?: TraceContextSnapshot;
 }
 
 export interface PhaseData {
@@ -184,6 +224,7 @@ export interface RunData {
   kind: 'run';
   userRequest?: string;
   agentSlug?: string;
+  contextSnapshot?: TraceContextSnapshot;
   limits?: {
     maxSteps?: number;
     maxTools?: number;

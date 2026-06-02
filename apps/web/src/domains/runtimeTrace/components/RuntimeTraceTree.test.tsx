@@ -46,8 +46,8 @@ describe('RuntimeTraceTree', () => {
 
     render(<RuntimeTraceTree events={events} />);
     expect(screen.getByText('Подготовка ответа')).toBeInTheDocument();
-    expect(screen.getByText('Мемори')).toBeInTheDocument();
-    expect(screen.getByText('Planner')).toBeInTheDocument();
-    expect(screen.getByText('Синтезер')).toBeInTheDocument();
+    expect(screen.getByText('Память')).toBeInTheDocument();
+    expect(screen.getByText('Планировщик')).toBeInTheDocument();
+    expect(screen.getByText('Синтез')).toBeInTheDocument();
   });
 });

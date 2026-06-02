@@ -4,9 +4,39 @@
   background: var(--surface-elevated);
 }
 
+.headerRow {
+  display: grid;
+  grid-template-columns: 18px 74px minmax(220px, 1fr) 110px 220px 36px;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-default);
+  background: var(--surface-base);
+}
+
+.headerSpacer {
+  width: 16px;
+}
+
+.headerType,
+.headerTitle,
+.headerMeta {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.headerMeta {
+  justify-self: end;
+  text-align: right;
+}
+
 .row {
   width: 100%;
-  display: flex;
+  display: grid;
+  grid-template-columns: 18px 74px minmax(220px, 1fr) 110px 220px 36px;
   align-items: center;
   gap: 8px;
   padding: 8px 12px;
@@ -28,17 +58,67 @@
 
 .title {
   font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.meta {
+.metaCol {
   color: var(--text-secondary);
   font-size: 12px;
+  justify-self: end;
+  text-align: right;
+  min-width: 0;
 }
 
-.status {
-  margin-left: auto;
-  font-size: 12px;
+.statusCol {
+  display: flex;
+  justify-content: center;
+}
+
+.chevron {
   color: var(--text-secondary);
+  width: 16px;
+}
+
+.kindChip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 20px;
+  border-radius: 999px;
+  border: 1px solid var(--border-default);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--surface-base);
+}
+
+.statusDot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  display: inline-block;
+}
+
+.status_ok {
+  background: #22c55e;
+}
+
+.status_warn {
+  background: #f59e0b;
+}
+
+.status_error {
+  background: #ef4444;
+}
+
+.status_pending {
+  background: #0ea5e9;
+}
+
+.status_info {
+  background: #94a3b8;
 }
 
 .children {

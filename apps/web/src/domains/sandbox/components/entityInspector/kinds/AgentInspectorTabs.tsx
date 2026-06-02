@@ -1,10 +1,62 @@
-import { InspectorFieldGroup, InspectorFieldRow, InspectorJsonBlock, InspectorNotice, InspectorTabs } from '@/shared/ui/Inspector';
-import { isAgentData, isLLMData, type TraceEntity } from '@/domains/runtimeTrace/entityTypes';
+import { InspectorFieldGroup, InspectorFieldRow, InspectorNotice, InspectorTabs } from '@/shared/ui/Inspector';
+import { isAgentData, type TraceEntity } from '@/domains/runtimeTrace/entityTypes';
 import type { RunStep } from '../../../hooks/useSandboxRun';
-import { BudgetsTab, InfoTab, RawTab } from '../shared';
+import {
+  BudgetsTab,
+  InfoTab,
+  RawTab,
+  SnapshotJsonField,
+  SnapshotTextField,
+  SnapshotValueField,
+  getEntityInputsSnapshot,
+  getEntityMetaSnapshot,
+  getEntityRbacSnapshot,
+  getPromptSnapshot,
+} from '../shared';
+
+function prettifySegment(value: string): string {
+  return value
+    .replace(/[_-]+/g, ' ')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+function splitOperationSlug(slug: string): { collection: string; label: string } {
+  const cleaned = slug.trim();
+  if (!cleaned) return { collection: 'Общее', label: 'unknown' };
+  const parts = cleaned.split(/[./:]/).filter(Boolean);
+  if (parts.length <= 1) {
+    return { collection: 'Общее', label: prettifySegment(parts[0] ?? cleaned) };
+  }
+  const label = prettifySegment(parts.pop() ?? cleaned);
+  const collection = prettifySegment(parts.join(' '));
+  return { collection, label };
+}
+
+function groupOperationLabels(slugs: string[]): Array<{ collection: string; labels: string[] }> {
+  const groups = new Map<string, Set<string>>();
+  for (const slug of slugs) {
+    const { collection, label } = splitOperationSlug(slug);
+    const current = groups.get(collection) ?? new Set<string>();
+    current.add(label);
+    groups.set(collection, current);
+  }
+  return Array.from(groups.entries())
+    .map(([collection, labels]) => ({
+      collection,
+      labels: Array.from(labels).sort((a, b) => a.localeCompare(b)),
+    }))
+    .sort((a, b) => a.collection.localeCompare(b.collection));
+}
 
 export function AgentInspectorTabs({ entity, steps }: { entity: TraceEntity; steps: RunStep[] }) {
   const data = isAgentData(entity.data) ? entity.data : null;
+  const snapshotInputs = getEntityInputsSnapshot(entity);
+  const snapshotMeta = getEntityMetaSnapshot(entity);
+  const snapshotRbac = getEntityRbacSnapshot(entity);
   const slug = String(data?.slug ?? '').toLowerCase();
   const isFactsComponent = slug === 'facts' || slug === 'fact_extractor';
   const isSummaryComponent = slug === 'conversation' || slug === 'summary_compactor';
@@ -24,13 +76,7 @@ export function AgentInspectorTabs({ entity, steps }: { entity: TraceEntity; ste
     && s.type === 'status'
     && String(s.data.stage ?? '') === 'memory_summary_result'
   ));
-  const llmChildren = (entity.children ?? []).filter((c) => c.kind === 'llm' && isLLMData(c.data));
-  const llmWithPrompt = llmChildren.find((c) => {
-    if (!isLLMData(c.data)) return false;
-    const llm = c.data;
-    return !!(llm.prompt?.messages?.length || llm.prompt?.systemPrompt);
-  });
-  const llmPromptData = llmWithPrompt && isLLMData(llmWithPrompt.data) ? llmWithPrompt.data : null;
+  const promptSnapshot = getPromptSnapshot(entity, steps) ?? '—';
   const extractedFacts = Array.isArray(factsResultStep?.data.facts)
     ? factsResultStep?.data.facts as Array<Record<string, unknown>>
     : [];
@@ -47,10 +93,10 @@ export function AgentInspectorTabs({ entity, steps }: { entity: TraceEntity; ste
     };
   })();
   const tabs = isFactsComponent
-    ? [{ key: 'info', label: 'Инфо' }, { key: 'facts', label: 'Факты' }, { key: 'prompt', label: 'Промт' }, { key: 'budgets', label: 'Бюджет' }, { key: 'raw', label: 'RAW' }]
+    ? [{ key: 'info', label: 'Параметры' }, { key: 'facts', label: 'Факты' }, { key: 'prompt', label: 'Промпт' }, { key: 'budgets', label: 'Бюджет' }, { key: 'raw', label: 'RAW' }]
     : isSummaryComponent
-      ? [{ key: 'info', label: 'Инфо' }, { key: 'result', label: 'Результат' }, { key: 'prompt', label: 'Промт' }, { key: 'budgets', label: 'Бюджет' }, { key: 'raw', label: 'RAW' }]
-      : [{ key: 'info', label: 'Инфо' }, { key: 'prompt', label: 'Промт' }, { key: 'tools', label: 'Tools' }, { key: 'budgets', label: 'Бюджет' }, { key: 'rbac', label: 'RBAC' }, { key: 'raw', label: 'RAW' }];
+      ? [{ key: 'info', label: 'Параметры' }, { key: 'result', label: 'Результат' }, { key: 'prompt', label: 'Промпт' }, { key: 'budgets', label: 'Бюджет' }, { key: 'raw', label: 'RAW' }]
+      : [{ key: 'info', label: 'Параметры' }, { key: 'task', label: 'Задание' }, { key: 'prompt', label: 'Промпт' }, { key: 'tools', label: 'Инструменты' }, { key: 'rbac', label: 'RBAC' }, { key: 'budgets', label: 'Бюджет' }, { key: 'raw', label: 'RAW' }];
 
   const extractOperationSlug = (value: unknown): string | null => {
     if (typeof value === 'string' && value.trim().length > 0) return value.trim();
@@ -63,14 +109,18 @@ export function AgentInspectorTabs({ entity, steps }: { entity: TraceEntity; ste
   const stepAvailableOperations = steps.flatMap((step) => {
     const stepData = (step.data ?? {}) as Record<string, unknown>;
     const direct = Array.isArray(stepData.available_operations) ? stepData.available_operations : [];
-    const fromSnapshot = ((stepData.context_snapshot as Record<string, unknown> | undefined)?.available_operations);
+    const nestedSnapshot = stepData.context_snapshot as Record<string, unknown> | undefined;
+    const fromSnapshot = (nestedSnapshot?.meta as Record<string, unknown> | undefined)?.available_operations;
     const nested = Array.isArray(fromSnapshot) ? fromSnapshot : [];
     return [...direct, ...nested]
       .map(extractOperationSlug)
       .filter((item): item is string => !!item);
   });
 
-  const availableOperations = Array.from(new Set([...(data?.toolsAvailable ?? []), ...stepAvailableOperations])).sort((a, b) => a.localeCompare(b));
+  const snapshotAvailableOperations = Array.isArray(snapshotMeta?.available_operations)
+    ? snapshotMeta.available_operations.map(String)
+    : [];
+  const availableOperations = Array.from(new Set([...(data?.toolsAvailable ?? []), ...snapshotAvailableOperations, ...stepAvailableOperations])).sort((a, b) => a.localeCompare(b));
   const usedOperations = Array.from(new Set(
     steps
       .filter((step) => step.type === 'operation_call' || step.type === 'tool_call')
@@ -80,6 +130,8 @@ export function AgentInspectorTabs({ entity, steps }: { entity: TraceEntity; ste
       })
       .filter((item): item is string => !!item),
   )).sort((a, b) => a.localeCompare(b));
+  const availableOperationGroups = groupOperationLabels(availableOperations);
+  const usedOperationGroups = groupOperationLabels(usedOperations);
 
   const rbacSnapshot = [...steps]
     .reverse()
@@ -88,62 +140,84 @@ export function AgentInspectorTabs({ entity, steps }: { entity: TraceEntity; ste
       && String(s.data.stage ?? '') === 'agent_rbac_snapshot'
       && String((s.data.agent_slug ?? '')).trim() === String(data?.slug ?? '').trim()
     ));
-  const rbac = (rbacSnapshot?.data.rbac ?? null) as Record<string, unknown> | null;
+  const rbac = (snapshotRbac ?? rbacSnapshot?.data.rbac ?? null) as Record<string, unknown> | null;
+  const taskInput = snapshotInputs?.agent_input;
+  const taskText = typeof taskInput === 'string'
+    ? taskInput
+    : taskInput && typeof taskInput === 'object'
+      ? JSON.stringify(taskInput, null, 2)
+      : '—';
 
   return <InspectorTabs entityId={entity.id} tabs={tabs} render={(tab) => {
-    if (tab === 'info') return <InfoTab entity={entity} steps={steps} />;
+    if (tab === 'info') {
+      return (
+        <InspectorFieldGroup>
+          <InfoTab entity={entity} steps={steps} showTitle={false} />
+          <SnapshotValueField label="Роль" value={snapshotMeta?.role ?? data?.slug ?? '—'} />
+          <SnapshotValueField label="Модель" value={snapshotMeta?.model ?? '—'} />
+          {!isFactsComponent && !isSummaryComponent ? (
+            <>
+              <SnapshotValueField label="Slug" value={data?.slug ?? snapshotMeta?.agent_slug ?? '—'} />
+              <SnapshotValueField label="Версия" value={data?.versionLabel ?? snapshotMeta?.version_label ?? '—'} />
+            </>
+          ) : null}
+        </InspectorFieldGroup>
+      );
+    }
     if (tab === 'facts' && isFactsComponent) {
       return (
         <InspectorFieldGroup>
-          {!factsResultStep ? 'No structured result' : null}
-          <InspectorJsonBlock value={extractedFacts.length > 0 ? extractedFacts : []} />
+          {!factsResultStep ? 'Нет структурированного результата' : null}
+          <SnapshotJsonField label="Факты" value={extractedFacts.length > 0 ? extractedFacts : []} />
         </InspectorFieldGroup>
       );
     }
     if (tab === 'result' && isSummaryComponent) {
       return (
         <InspectorFieldGroup>
-          {!summaryResultStep ? <InspectorFieldRow label="Result">No structured result</InspectorFieldRow> : null}
-          <InspectorFieldRow label="Goals">
-            <InspectorJsonBlock value={summaryPayload?.goals ?? []} />
-          </InspectorFieldRow>
-          <InspectorFieldRow label="Done">
-            <InspectorJsonBlock value={summaryPayload?.done ?? []} />
-          </InspectorFieldRow>
-          <InspectorFieldRow label="Entities">
-            <InspectorJsonBlock value={summaryPayload?.entities ?? {}} />
-          </InspectorFieldRow>
-          <InspectorFieldRow label="Open Questions">
-            <InspectorJsonBlock value={summaryPayload?.open_questions ?? []} />
-          </InspectorFieldRow>
+          {!summaryResultStep ? <InspectorFieldRow label="Результат">Нет структурированного результата</InspectorFieldRow> : null}
+          <SnapshotTextField label="Промпт" text={promptSnapshot} />
+          <SnapshotValueField label="Целей" value={summaryPayload?.goals?.length ?? 0} />
+          <SnapshotValueField label="Сделано" value={summaryPayload?.done?.length ?? 0} />
+          <SnapshotValueField label="Открытых вопросов" value={summaryPayload?.open_questions?.length ?? 0} />
+          <InspectorFieldRow label="Цели">{summaryPayload?.goals.length ? summaryPayload.goals.join(', ') : '—'}</InspectorFieldRow>
+          <InspectorFieldRow label="Сделано">{summaryPayload?.done.length ? summaryPayload.done.join(', ') : '—'}</InspectorFieldRow>
+          <InspectorFieldRow label="Сущности">{Object.keys(summaryPayload?.entities ?? {}).length ? Object.keys(summaryPayload?.entities ?? {}).join(', ') : '—'}</InspectorFieldRow>
+          <InspectorFieldRow label="Открытые вопросы">{summaryPayload?.open_questions.length ? summaryPayload.open_questions.join(', ') : '—'}</InspectorFieldRow>
+        </InspectorFieldGroup>
+      );
+    }
+    if (tab === 'task' && !isFactsComponent && !isSummaryComponent) {
+      return (
+        <InspectorFieldGroup>
+          <SnapshotTextField label="Задание" text={taskText} />
         </InspectorFieldGroup>
       );
     }
     if (tab === 'prompt') {
-      if (llmPromptData?.prompt?.isBriefMode) {
-        return <InspectorNotice tone="info" title="Brief Logging" message="Messages не сохранены" />;
-      }
-      const promptMessages: Array<Record<string, unknown>> = llmPromptData?.prompt?.messages ?? [];
-      const systemPromptFromMessages = promptMessages.find((msg: Record<string, unknown>) => String(msg.role ?? '') === 'system');
-      const promptSnapshot = llmPromptData?.prompt?.systemPrompt
-        ?? (typeof systemPromptFromMessages?.content === 'string' ? systemPromptFromMessages.content : undefined)
-        ?? data?.prompt?.systemPrompt
-        ?? '—';
       return (
         <InspectorFieldGroup>
-          <InspectorJsonBlock value={promptSnapshot} />
+          <SnapshotTextField label="Промпт" text={promptSnapshot} />
         </InspectorFieldGroup>
       );
     }
     if (tab === 'tools') {
       return (
         <InspectorFieldGroup>
-          <InspectorFieldRow label="Available">
-            {availableOperations.length > 0 ? availableOperations.join('\n') : '—'}
-          </InspectorFieldRow>
-          <InspectorFieldRow label="Used">
-            {usedOperations.length > 0 ? usedOperations.join('\n') : '—'}
-          </InspectorFieldRow>
+          <SnapshotValueField label="Доступно всего" value={String(availableOperations.length)} />
+          <SnapshotValueField label="Использовано всего" value={String(usedOperations.length)} />
+          {availableOperationGroups.map((group) => (
+            <InspectorFieldRow key={`available-${group.collection}`} label={`Доступно: ${group.collection}`}>
+              {group.labels.join(', ')}
+            </InspectorFieldRow>
+          ))}
+          {availableOperationGroups.length === 0 ? <InspectorFieldRow label="Доступно">—</InspectorFieldRow> : null}
+          {usedOperationGroups.map((group) => (
+            <InspectorFieldRow key={`used-${group.collection}`} label={`Использовано: ${group.collection}`}>
+              {group.labels.join(', ')}
+            </InspectorFieldRow>
+          ))}
+          {usedOperationGroups.length === 0 ? <InspectorFieldRow label="Использовано">—</InspectorFieldRow> : null}
         </InspectorFieldGroup>
       );
     }
@@ -155,18 +229,18 @@ export function AgentInspectorTabs({ entity, steps }: { entity: TraceEntity; ste
       const allowed = Array.isArray(rbac.allowed) ? rbac.allowed.map(String) : [];
       const deniedByRbac = Array.isArray(rbac.denied_by_rbac) ? rbac.denied_by_rbac.map(String) : [];
       const deniedByCapability = Array.isArray(rbac.denied_by_capability) ? rbac.denied_by_capability.map(String) : [];
-      const bound = Array.isArray(rbac.capability_bound_collections) ? rbac.capability_bound_collections.map(String) : [];
+      const deniedLegacy = Array.isArray(rbac.denied) ? rbac.denied.map(String) : [];
+      const denied = Array.from(new Set([...deniedByRbac, ...deniedByCapability]));
       return (
         <InspectorFieldGroup>
-          <InspectorFieldRow label="Slug">{data?.slug ?? '—'}</InspectorFieldRow>
-          <InspectorFieldRow label="Version">{data?.versionLabel ?? data?.versionId ?? '—'}</InspectorFieldRow>
-          <InspectorFieldRow label="Capability Bind">{bound.length ? bound.join(', ') : 'all'}</InspectorFieldRow>
-          <InspectorFieldRow label="Allowed">{allowed.length ? allowed.join(', ') : '—'}</InspectorFieldRow>
-          <InspectorFieldRow label="Denied RBAC">{deniedByRbac.length ? deniedByRbac.join(', ') : '—'}</InspectorFieldRow>
-          <InspectorFieldRow label="Denied Capability">{deniedByCapability.length ? deniedByCapability.join(', ') : '—'}</InspectorFieldRow>
+          <SnapshotValueField label="Доступно" value={String(allowed.length)} />
+          <SnapshotValueField label="Отклонено" value={String(denied.length || deniedLegacy.length)} />
+          <InspectorFieldRow label="Разрешено">{allowed.length ? allowed.join(', ') : '—'}</InspectorFieldRow>
+          <InspectorFieldRow label="Отклонено">{(denied.length ? denied : deniedLegacy).length ? (denied.length ? denied : deniedLegacy).join(', ') : '—'}</InspectorFieldRow>
         </InspectorFieldGroup>
       );
     }
-    return <RawTab value={{ ...entity.data, memory_component_result: memoryResultStep?.data ?? null }} entity={entity} steps={steps} />;
+    const rawValue = memoryResultStep ? { ...entity.data, memory_component_result: memoryResultStep.data } : entity.data;
+    return <RawTab value={rawValue} entity={entity} steps={steps} />;
   }} />;
 }

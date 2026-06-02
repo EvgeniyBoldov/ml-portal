@@ -12,7 +12,7 @@ stage level. The RuntimeTurnState is the single source of truth.
 """
 from __future__ import annotations
 
-from typing import AsyncIterator, Optional
+from typing import AsyncIterator, Literal, Optional
 from uuid import UUID
 
 from app.core.logging import get_logger
@@ -49,6 +49,7 @@ class FinalizationStage:
         budget_registry: Optional[BudgetRegistry] = None,
         budget_resolver: Optional[BudgetResolver] = None,
         run_synthesizer: bool = True,
+        logging_level: Optional[str] = None,
     ) -> AsyncIterator[PhasedEvent]:
         """Drive synthesizer and set the terminal flags."""
         state = runtime_state
@@ -63,6 +64,7 @@ class FinalizationStage:
                 sandbox_overrides=sandbox_overrides,
                 budget_registry=budget_registry,
                 budget_resolver=budget_resolver,
+                logging_level=logging_level,
             ):
                 yield PhasedEvent(event, OrchestrationPhase.SYNTHESIS)
 

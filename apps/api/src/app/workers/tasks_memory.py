@@ -20,11 +20,14 @@ from sqlalchemy.orm import sessionmaker
 
 from app.core.logging import get_logger
 from app.models.memory import FactScope
+from app.models.system_llm_role import SystemLLMRoleType
+from app.runtime.context_snapshot import compact_snapshot, prompt_snapshot
 from app.runtime.memory.dto import SummaryDTO, FactDTO
 from app.runtime.memory.fact_extractor import AgentResultSnippet
 from app.runtime.memory.transport import TurnMemory
 from app.runtime.memory.writer import MemoryWriter
 from app.runtime.events import RuntimeEvent
+from app.services.system_llm_role_service import SystemLLMRoleService
 from app.services.runtime_tail_event_bus import RuntimeTailEventBus
 
 logger = get_logger(__name__)
@@ -88,6 +91,7 @@ class MemoryFinalizePayload(BaseModel):
     memory_limits: Optional[Dict[str, int]] = None
     facts_limits: Optional[Dict[str, int]] = None
     conversation_limits: Optional[Dict[str, int]] = None
+    logging_level: Optional[str] = None
 
 
 def get_async_session():
@@ -151,6 +155,22 @@ def _deserialize_turn_memory(payload: MemoryFinalizePayload) -> TurnMemory:
     ]
     
     return memory
+
+
+async def _load_memory_prompts(session: AsyncSession) -> dict[str, str]:
+    service = SystemLLMRoleService(session)
+    prompts: dict[str, str] = {}
+    try:
+        facts_cfg = await service.get_role_config(SystemLLMRoleType.FACT_EXTRACTOR)
+        prompts["facts"] = str(facts_cfg.get("prompt") or "")
+    except Exception:
+        prompts["facts"] = ""
+    try:
+        summary_cfg = await service.get_role_config(SystemLLMRoleType.SUMMARY_COMPACTOR)
+        prompts["conversation"] = str(summary_cfg.get("prompt") or "")
+    except Exception:
+        prompts["conversation"] = ""
+    return prompts
 
 
 @shared_task(
@@ -314,6 +334,7 @@ def finalize_memory_task(self, payload_dict: Dict[str, Any]) -> Dict[str, Any]:
                 llm_client=llm_client,
                 llm_event_callback=_on_llm_event,
             )
+            component_prompts = await _load_memory_prompts(session)
             
             from app.runtime.contracts import PipelineStopReason
             
@@ -333,6 +354,16 @@ def finalize_memory_task(self, payload_dict: Dict[str, Any]) -> Dict[str, Any]:
                     orchestrator_id=memory_orchestrator_id,
                     run_id=payload.runtime_run_id or payload.chat_id,
                     role="memory",
+                    context_snapshot=compact_snapshot(
+                        inputs={
+                            "user_request": payload.user_message,
+                        },
+                        limits=payload.memory_limits,
+                        meta={
+                            "role": "memory",
+                            "components": list(component_entity_ids.keys()),
+                        },
+                    ),
                 )
             )
             await _emit_budget_snapshot(
@@ -351,6 +382,20 @@ def finalize_memory_task(self, payload_dict: Dict[str, Any]) -> Dict[str, Any]:
                             parent_entity_id=memory_orchestrator_id,
                             parent_entity_type="orchestrator",
                             agent_slug=component_name,
+                            context_snapshot=compact_snapshot(
+                                inputs={
+                                    "user_request": payload.user_message,
+                                },
+                                prompt=prompt_snapshot(
+                                    component_prompts.get(component_name),
+                                    payload.logging_level,
+                                ),
+                                limits=component_limits.get(component_name),
+                                meta={
+                                    "role": component_name,
+                                    "agent_slug": component_name,
+                                },
+                            ),
                         )
                     )
                     await _emit_budget_snapshot(

@@ -24,6 +24,7 @@ from typing import (
     AsyncIterator,
     Dict,
     List,
+    Literal,
     Optional,
     Protocol,
     runtime_checkable,
@@ -109,8 +110,10 @@ class SynthesizerPort(Protocol):
         run_id: UUID,
         model: Optional[str] = None,
         planner_hint: Optional[str] = None,
+        final_answer_strategy: Literal["synthesize", "verbatim", "use_agent_result"] = "synthesize",
         platform_config: Optional[Dict[str, Any]] = None,
         sandbox_overrides: Optional[Dict[str, Any]] = None,
         budget_registry: Optional[BudgetRegistry] = None,
         budget_resolver: Optional[BudgetResolver] = None,
+        logging_level: Optional[str] = None,
     ) -> AsyncIterator[RuntimeEvent]: ...

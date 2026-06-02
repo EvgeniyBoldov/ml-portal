@@ -1,22 +1,26 @@
-import { InspectorFieldGroup, InspectorJsonBlock, InspectorNotice, InspectorTabs } from '@/shared/ui/Inspector';
+import { InspectorFieldGroup, InspectorNotice, InspectorTabs } from '@/shared/ui/Inspector';
 import { isUnknownData, type TraceEntity } from '@/domains/runtimeTrace/entityTypes';
 import type { RunStep } from '../../../hooks/useSandboxRun';
-import { InfoTab } from '../shared';
+import { InfoTab, SnapshotJsonField } from '../shared';
 
 export function UnknownInspectorTabs({ entity, steps }: { entity: TraceEntity; steps: RunStep[] }) {
   const data = isUnknownData(entity.data) ? entity.data : null;
-  const tabs = [{ key: 'info', label: 'Info' }, { key: 'raw', label: 'Raw' }, { key: 'hint', label: 'Hint' }];
+  const tabs = [
+    { key: 'info', label: 'Инфо' },
+    { key: 'raw', label: 'RAW' },
+    { key: 'hint', label: 'Подсказка' },
+  ];
 
   return <InspectorTabs entityId={entity.id} tabs={tabs} render={(tab) => {
     if (tab === 'info') return <InfoTab entity={entity} steps={steps} />;
     if (tab === 'raw') {
       return (
         <InspectorFieldGroup>
-          <InspectorJsonBlock value={data?.raw ?? '—'} />
+          <SnapshotJsonField label="RAW" value={data?.raw ?? '—'} />
         </InspectorFieldGroup>
       );
     }
-    if (tab === 'hint') return <InspectorNotice tone="warn" title="New Event Type" message={data?.hint ?? 'Unknown event type'} code={data?.rawType} />;
+    if (tab === 'hint') return <InspectorNotice tone="warn" title="Новый тип события" message={data?.hint ?? 'Неизвестный тип события'} code={data?.rawType} />;
     return null;
   }} />;
 }

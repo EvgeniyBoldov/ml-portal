@@ -15,6 +15,10 @@ function formatValue(n: number, unit = ''): string {
   return `${formatNumber(n)}${unit ? ` ${unit}` : ''}`;
 }
 
+function formatSecondsFromMs(ms: number): string {
+  return `${(ms / 1000).toFixed(1).replace('.', ',')} s`;
+}
+
 function percentUsed(used: number, limit?: number): number | null {
   if (limit === undefined || limit <= 0) return null;
   return Math.max(0, Math.min(100, Math.round((used / limit) * 100)));
@@ -28,18 +32,18 @@ function toneForPercent(pct: number | null): 'neutral' | 'warn' | 'danger' {
 }
 
 const LABELS: Record<BudgetMetric, string> = {
-  planner_steps: 'Planner steps',
-  agent_steps: 'Agent steps',
-  tool_calls: 'Tool calls',
-  tokens_in: 'Tokens in',
-  tokens_out: 'Tokens out',
-  tokens_total: 'Tokens total',
-  retries: 'Retries',
-  wall_time_ms: 'Wall time',
+  planner_steps: 'Step',
+  agent_steps: 'Steps',
+  tool_calls: 'Calls',
+  tokens_in: 'In',
+  tokens_out: 'Out',
+  tokens_total: 'Tokens',
+  retries: 'Retry',
+  wall_time_ms: 'Time',
 };
 
 const HINTS: Record<BudgetMetric, string> = {
-  planner_steps: 'Количество шагов планировщика',
+  planner_steps: 'Количество шагов',
   agent_steps: 'Количество шагов цикла агента',
   tool_calls: 'Количество вызовов инструментов',
   tokens_in: 'Входные токены LLM-запросов',
@@ -50,7 +54,7 @@ const HINTS: Record<BudgetMetric, string> = {
 };
 
 const UNITS: Partial<Record<BudgetMetric, string>> = {
-  wall_time_ms: 'ms',
+  wall_time_ms: 's',
 };
 
 interface BudgetPillsProps {
@@ -70,7 +74,13 @@ export function BudgetPills({ used, limits, metrics, className = '' }: BudgetPil
       const pct = percentUsed(v, limit);
       const tone = toneForPercent(pct);
       const label = LABELS[key];
-      const value = limit !== undefined ? `${formatNumber(v)}/${formatNumber(limit)}` : `${formatNumber(v)}`;
+      const value = key === 'wall_time_ms'
+        ? limit !== undefined
+          ? `${formatSecondsFromMs(v)}/${formatSecondsFromMs(limit)}`
+          : formatSecondsFromMs(v)
+        : limit !== undefined
+          ? `${formatNumber(v)}/${formatNumber(limit)}`
+          : `${formatNumber(v)}`;
       return (
         <Tooltip key={key} content={HINTS[key]} position="top" maxWidth={280}>
           <span className={styles.pillContainer}>
@@ -146,14 +156,24 @@ export function BudgetTable({ title, used, limits, metrics, className = '' }: Bu
       key: 'used',
       title: 'Использовано',
       align: 'right',
-      render: (_, row) => <span className={styles.number}>{formatValue(row.used, row.unit)}</span>,
+      render: (_, row) => (
+        <span className={styles.number}>
+          {row.key === 'wall_time_ms' ? formatSecondsFromMs(row.used) : formatValue(row.used, row.unit)}
+        </span>
+      ),
     },
     {
       key: 'limit',
       title: 'Лимит',
       align: 'right',
       render: (_, row) => (
-        <span className={styles.number}>{row.limit !== undefined ? formatValue(row.limit, row.unit) : '—'}</span>
+        <span className={styles.number}>
+          {row.limit !== undefined
+            ? row.key === 'wall_time_ms'
+              ? formatSecondsFromMs(row.limit)
+              : formatValue(row.limit, row.unit)
+            : '—'}
+        </span>
       ),
     },
     {

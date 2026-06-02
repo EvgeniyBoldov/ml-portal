@@ -35,6 +35,7 @@ from app.core.logging import get_logger
 from app.runtime.assembler import PipelineAssembler
 from app.runtime.budgets import BudgetRegistry, BudgetResolver
 from app.runtime.contracts import PipelineRequest, PipelineStopReason
+from app.runtime.context_snapshot import compact_snapshot, prompt_snapshot, serialize_limits
 from app.runtime.envelope import EventEnvelopeStamper, PhasedEvent
 from app.runtime.entity_ids import (
     memory_component_entity_id as _memory_component_entity_id,
@@ -49,9 +50,11 @@ from app.runtime.platform_config import PlatformConfigLoader
 from app.runtime.stages.planning_stage import PlanningOutcomeKind
 from app.runtime.turn_state import RuntimeTurnState
 from app.core.prometheus_metrics import memory_writer_finalize_failures_total
+from app.models.system_llm_role import SystemLLMRoleType
 from app.services.agent_service import AgentService
 from app.services.permission_service import PermissionService
 from app.services.run_store import RunStore
+from app.services.system_llm_role_service import SystemLLMRoleService
 
 # Memory writeback runs via Celery (single canonical execution mode).
 RUNTIME_MEMORY_INLINE = False
@@ -156,8 +159,51 @@ class RuntimePipeline:
         run_id_str = str(run_id)
         emitter = RuntimeEventEmitter(stamper=envelope, run_id=run_id_str)
         orchestrator_id = planner_orchestrator_id(run_id_str)
+        ctx.extra["runtime_logging_level"] = run_logging_level
+
+        # Load planner role config for context snapshot
+        role_service = SystemLLMRoleService(self._session)
+        try:
+            planner_role_config = await role_service.get_role_config(SystemLLMRoleType.PLANNER)
+            planner_prompt = planner_role_config.get("prompt", "")
+            planner_model = planner_role_config.get("model")
+        except Exception:
+            planner_prompt = ""
+            planner_model = None
+
+        budget_resolver = BudgetResolver(self._session)
+        run_limits_v2 = await budget_resolver.resolve_run(platform.config, request.sandbox_overrides)
+        planner_limits = await budget_resolver.resolve_orchestrator("planner", request.sandbox_overrides)
+
+        run_context_snapshot = compact_snapshot(
+            inputs={
+                "user_request": request.request_text,
+            },
+            limits=serialize_limits(run_limits_v2.as_entity_limits()),
+            meta={
+                "agent_slug": effective_agent_slug or explicit_slug,
+                "model": request.model,
+            },
+        )
+        planner_context_snapshot = compact_snapshot(
+            inputs={
+                "goal": request.request_text,
+            },
+            prompt=prompt_snapshot(planner_prompt, run_logging_level),
+            limits=serialize_limits(planner_limits),
+            rbac=planner_rbac_audit if isinstance(planner_rbac_audit, dict) else None,
+            meta={
+                "role": "planner",
+                "model": planner_model or request.model,
+                "explicit_agent_slug": explicit_slug,
+            },
+        )
+
         yield emitter.emit(
-            RuntimeEvent.run_start(run_id=run_id_str),
+            RuntimeEvent.run_start(
+                run_id=run_id_str,
+                context_snapshot=run_context_snapshot,
+            ),
             phase=OrchestrationPhase.PIPELINE,
         )
         yield emitter.emit(
@@ -173,13 +219,12 @@ class RuntimePipeline:
                 orchestrator_id=orchestrator_id,
                 run_id=run_id_str,
                 role="planner",
+                context_snapshot=planner_context_snapshot,
             ),
             phase=OrchestrationPhase.PLANNER,
         )
 
         # Per-entity budget registry
-        budget_resolver = BudgetResolver(self._session)
-        run_limits_v2 = await budget_resolver.resolve_run(platform.config, request.sandbox_overrides)
         budget_registry = BudgetRegistry(run_limits=run_limits_v2)
         budget_registry.register(
             entity_type="run",
@@ -300,6 +345,7 @@ class RuntimePipeline:
                 run_id=run_id,
                 budget_registry=budget_registry,
                 budget_resolver=budget_resolver,
+                logging_level=run_logging_level,
             ):
                 yield ev
         # PlanningOutcomeKind.DIRECT already emitted delta+final inside
@@ -402,6 +448,7 @@ class RuntimePipeline:
         run_id: Optional[UUID] = None,
         budget_registry: Optional[BudgetRegistry] = None,
         budget_resolver: Optional[BudgetResolver] = None,
+        logging_level: Optional[str] = None,
     ) -> AsyncGenerator[RuntimeEvent, None]:
         effective_run_id = run_id or runtime_state.run_id
         final_stage = self._assembler.build_finalization_stage()
@@ -416,6 +463,7 @@ class RuntimePipeline:
             budget_registry=budget_registry,
             budget_resolver=budget_resolver,
             run_synthesizer=True,
+            logging_level=logging_level,
         ):
             ev = phased.event
             # Tag FINAL events with stop_reason so downstream can distinguish
@@ -681,6 +729,7 @@ class RuntimePipeline:
                 memory_limits=memory_limits,
                 facts_limits=facts_limits,
                 conversation_limits=conversation_limits,
+                logging_level=run_logging_level,
             )
             finalize_memory_task.delay(payload.model_dump(mode="json"))
             yield emitter.emit(

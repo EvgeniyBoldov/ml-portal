@@ -23,6 +23,7 @@ import type {
   AgentData,
   OrchestratorData,
   PhaseData,
+  TraceContextSnapshot,
   UnknownData,
 } from './entityTypes';
 import type { SemanticEvent } from './types';
@@ -109,6 +110,12 @@ function memoryComponentTitle(slug: string): string {
   if (slug === 'facts' || slug === 'fact_extractor') return 'Fact Extractor';
   if (slug === 'conversation' || slug === 'summary_compactor') return 'Summary Compactor';
   return slug || 'agent';
+}
+
+function extractContextSnapshot(raw: Record<string, unknown>): TraceContextSnapshot | undefined {
+  const snapshot = raw.context_snapshot;
+  if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) return undefined;
+  return snapshot as TraceContextSnapshot;
 }
 
 function setEntityDepthRecursive(entity: TraceEntity, depth: number): void {
@@ -256,14 +263,15 @@ function buildEntityFromLifecycleStart(event: SemanticEvent): TraceEntity | null
   const agentSlug = typeof raw.agent_slug === 'string' ? raw.agent_slug : undefined;
   const role = derivedRole;
   const slug = agentSlug ?? (typeof raw.slug === 'string' ? raw.slug : entityId);
+  const contextSnapshot = extractContextSnapshot(raw);
 
   let title = slug;
   if (kind === 'planner') {
     const iter = typeof raw.iteration === 'number' ? raw.iteration : 1;
-    title = `Plan #${iter}`;
+    title = `Step #${iter}`;
   } else if (kind === 'orchestrator') {
     if (role === 'synthesizer') title = 'Synthesis';
-    else if (role === 'planner') title = 'Planner';
+    else if (role === 'planner') title = 'Orchestrator';
     else if (role === 'memory') title = 'Memory';
     else title = slug || 'Orchestrator';
   } else if (kind === 'run') {
@@ -274,13 +282,17 @@ function buildEntityFromLifecycleStart(event: SemanticEvent): TraceEntity | null
 
   const data: EntityData = (() => {
     if (kind === 'run') {
-      return { kind: 'run' } as RunData;
+      return {
+        kind: 'run',
+        contextSnapshot,
+      } as RunData;
     }
     if (kind === 'orchestrator') {
       return {
         kind: 'orchestrator',
         slug: slug,
         role: (role ?? (event.raw_type === 'synthesis_start' ? 'synthesizer' : 'planner')) as OrchestratorData['role'],
+        contextSnapshot,
       } as OrchestratorData;
     }
     if (kind === 'planner') {
@@ -288,7 +300,8 @@ function buildEntityFromLifecycleStart(event: SemanticEvent): TraceEntity | null
       return {
         kind: 'planner',
         stepKind: 'iteration',
-        rationale: `Planner iteration ${iter}`,
+        rationale: `Step iteration ${iter}`,
+        contextSnapshot,
       } as PlannerData;
     }
     if (kind === 'agent') {
@@ -296,6 +309,7 @@ function buildEntityFromLifecycleStart(event: SemanticEvent): TraceEntity | null
         kind: 'agent',
         slug: agentSlug ?? 'unknown',
         prompt: { isBriefMode: false },
+        contextSnapshot,
       } as AgentData;
     }
     return { kind: 'unknown', rawType: event.raw_type, raw: raw, hint: '' } as UnknownData;
@@ -871,7 +885,8 @@ export function buildEntityTree(
 
     // --- Handle orchestrator_start (backend Stage 1) ---
     if (rawType === 'orchestrator_start') {
-      const slug = String(event.raw?.raw?.slug ?? 'orchestrator');
+      const rawEvent = (event.raw?.raw ?? {}) as Record<string, unknown>;
+      const slug = String(rawEvent.slug ?? rawEvent.role ?? 'orchestrator');
       const orchestrator: TraceEntity = {
         id: hashIds([event.id]),
         kind: 'orchestrator',
@@ -887,8 +902,9 @@ export function buildEntityTree(
         data: {
           kind: 'orchestrator',
           slug,
-          role: event.raw?.raw?.role as OrchestratorData['role'] ?? undefined,
-          intent: typeof event.raw?.raw?.intent === 'string' ? event.raw.raw.intent : undefined,
+          role: rawEvent.role as OrchestratorData['role'] ?? undefined,
+          intent: typeof rawEvent.intent === 'string' ? rawEvent.intent : undefined,
+          contextSnapshot: extractContextSnapshot(rawEvent),
         },
       };
       pushEntity(orchestrator);
@@ -905,7 +921,8 @@ export function buildEntityTree(
 
     // --- Handle agent_start (backend Stage 1) ---
     if (rawType === 'agent_start') {
-      const slug = String(event.raw?.raw?.slug ?? 'agent');
+      const rawEvent = (event.raw?.raw ?? {}) as Record<string, unknown>;
+      const slug = String(rawEvent.agent_slug ?? rawEvent.slug ?? 'agent');
       const agent: TraceEntity = {
         id: hashIds([event.id]),
         kind: 'agent',
@@ -919,7 +936,8 @@ export function buildEntityTree(
         data: {
           kind: 'agent',
           slug,
-          isBriefMode: false,
+          prompt: { isBriefMode: false },
+          contextSnapshot: extractContextSnapshot(rawEvent),
         } as AgentData,
       };
       pushEntity(agent);
@@ -930,7 +948,7 @@ export function buildEntityTree(
     // --- Handle agent_end (backend Stage 1) ---
     if (rawType === 'agent_end') {
       // Update agent status from the event before popping
-      const endStatus = typeof raw.status === 'string' ? raw.status : 'completed';
+      const endStatus = typeof rawPayload.status === 'string' ? rawPayload.status : 'completed';
       const agentStatus: TraceEntity['status'] =
         endStatus === 'failed' ? 'error' :
         endStatus === 'aborted' ? 'warn' :
@@ -956,7 +974,7 @@ export function buildEntityTree(
 
     // --- Handle planner_iteration_end (backend Stage 1) ---
     if (rawType === 'planner_iteration_end') {
-      const endStatus = typeof raw.status === 'string' ? raw.status : 'completed';
+      const endStatus = typeof rawPayload.status === 'string' ? rawPayload.status : 'completed';
       const plannerStatus: TraceEntity['status'] =
         endStatus === 'failed' ? 'error' :
         endStatus === 'aborted' ? 'warn' :

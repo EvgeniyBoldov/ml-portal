@@ -6,6 +6,7 @@
 
 .tabList {
   display: flex;
+  flex-wrap: nowrap;
   gap: var(--sp-1);
   border-bottom: 2px solid var(--border-color);
   margin-bottom: var(--sp-4);
@@ -13,10 +14,14 @@
   background: var(--bg-secondary);
   border-radius: var(--radius-md) var(--radius-md) 0 0;
   padding: 0 var(--sp-2);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-gutter: stable;
 }
 
 .tab {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: var(--sp-2);
   padding: var(--sp-3) var(--sp-4);
@@ -30,6 +35,23 @@
   cursor: pointer;
   transition: all var(--transition-fast);
   border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+}
+
+.tabList::-webkit-scrollbar {
+  height: 8px;
+}
+
+.tabList::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.tabList::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: 999px;
+}
+
+.tabList::-webkit-scrollbar-thumb:hover {
+  background: var(--text-tertiary);
 }
 
 .tab:hover {
