@@ -413,7 +413,8 @@ async def test_pipeline_needs_final_runs_finalization_then_memory_writer():
 async def test_pipeline_paused_path_skips_finalization_but_writes_memory():
     """CLARIFY / ASK_USER → planner emits waiting_input, pipeline does NOT
     invoke FinalizationStage, but MUST still invoke MemoryWriter so the
-    next turn sees the open_question in its summary."""
+    next turn sees the open_question in its summary. Memory tail must not
+    continue in the user-visible stream after pause."""
     chat_id, user_id, tenant_id = uuid4(), uuid4(), uuid4()
 
     pipeline = RuntimePipeline(session=AsyncMock(), llm_client=AsyncMock())
@@ -437,7 +438,7 @@ async def test_pipeline_paused_path_skips_finalization_but_writes_memory():
     ) as platform_cls:
         platform_cls.return_value.load = AsyncMock(return_value=_canned_platform())
 
-        await _collect(
+        events = await _collect(
             pipeline.execute(
                 request=_request(
                     chat_id,
@@ -451,6 +452,11 @@ async def test_pipeline_paused_path_skips_finalization_but_writes_memory():
         )
 
     finalization_builder.assert_not_called()
+    pipeline._assembler.memory_writer.finalize.assert_awaited_once()
+    assert not any(
+        e.data.get("stage") in {"memory_write_start", "memory_write_end", "memory_write_dispatched"}
+        for e in events
+    )
 
 
 @pytest.mark.asyncio
@@ -481,10 +487,10 @@ async def test_pipeline_paused_path_uses_same_run_id_for_stop_and_run_store_paus
     stop_run_id = stop_events[-1].data.get("run_id")
     assert stop_run_id
 
-    assert run_store.start_run.await_count == 1
-    assert run_store.pause_run.await_count == 1
-    start_kwargs = run_store.start_run.await_args.kwargs
-    pause_kwargs = run_store.pause_run.await_args.kwargs
+    assert run_store.start_or_resume_run.await_count == 1
+    assert run_store.set_run_status.await_count == 1
+    start_kwargs = run_store.start_or_resume_run.await_args.kwargs
+    pause_kwargs = run_store.set_run_status.await_args.kwargs
     assert str(start_kwargs["run_id_override"]) == stop_run_id
     assert str(pause_kwargs["run_id"]) == stop_run_id
 
@@ -515,8 +521,8 @@ async def test_pipeline_uses_full_logging_level_for_top_level_run_from_sandbox_o
         platform_cls.return_value.load = AsyncMock(return_value=_canned_platform())
         await _collect(pipeline.execute(request=request, ctx=ctx))
 
-    assert run_store.start_run.await_count == 1
-    assert run_store.start_run.await_args.kwargs["logging_level"] == "full"
+    assert run_store.start_or_resume_run.await_count == 1
+    assert run_store.start_or_resume_run.await_args.kwargs["logging_level"] == "full"
 
 
 @pytest.mark.asyncio
@@ -547,5 +553,5 @@ async def test_pipeline_uses_brief_logging_level_by_default_for_top_level_run():
             )
         )
 
-    assert run_store.start_run.await_count == 1
-    assert run_store.start_run.await_args.kwargs["logging_level"] == "brief"
+    assert run_store.start_or_resume_run.await_count == 1
+    assert run_store.start_or_resume_run.await_args.kwargs["logging_level"] == "brief"

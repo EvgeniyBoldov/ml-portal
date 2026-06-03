@@ -50,7 +50,7 @@ export function getTraceEntityTitle(entity: TraceEntity): string {
     const orchestrator = entity.data as OrchestratorData;
     const role = String(orchestrator.role ?? '').toLowerCase();
     if (role === 'planner') return 'Планировщик';
-    if (role === 'synthesizer') return 'Синтез';
+    if (role === 'synthesizer' || role === 'planner_direct') return 'Синтез';
     if (role === 'memory') return 'Память';
     return shortName(orchestrator.slug || entity.title);
   }

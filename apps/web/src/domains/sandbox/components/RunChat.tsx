@@ -322,6 +322,7 @@ interface Props {
   onSelectBranch: (branchId: string) => void;
   onCreateBranchFromMessage: (sourceText: string, parentRunId?: string | null) => Promise<void>;
   onRun: (text: string, parentRunId?: string | null, attachmentIds?: string[]) => void;
+  onResumeSubmit: (text: string) => void;
   onStop: () => void;
   onSelectRun?: (runId?: string) => void;
   onSelectStep?: (runId: string, stepId: string, virtualStep: VirtualInspectorStep, steps: RunStep[], entity?: TraceEntity) => void;
@@ -342,6 +343,7 @@ export default function RunChat({
   onSelectBranch,
   onCreateBranchFromMessage,
   onRun,
+  onResumeSubmit,
   onStop,
   onSelectRun,
   onSelectStep,
@@ -430,6 +432,7 @@ export default function RunChat({
   }, []);
 
   const handleSubmit = async () => {
+    if (isWaitingInput || activeRun.status === 'waiting_confirmation') return;
     const text = input.trim();
     if ((!text && attachments.length === 0) || isRunning || isReadOnly || isUploading) return;
 
@@ -514,14 +517,22 @@ export default function RunChat({
 
   const handleClarifySubmit = () => {
     const text = input.trim();
-    if (!text || attachments.length > 0) return;
-    onRun(text, isWaitingInput ? activeRun.runId : undefined);
+    if (!text) return;
+    setInput('');
+    onResumeSubmit(text);
   };
 
-  const handleKeyDown = (e: KeyboardEvent) => {
+  const handleComposerKeyDown = (e: KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSubmitVoid();
+    }
+  };
+
+  const handleClarifyKeyDown = (e: KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleClarifySubmit();
     }
   };
 
@@ -556,7 +567,8 @@ export default function RunChat({
 
   const hasActiveRun = activeRun.status !== 'idle';
   const hasHistory = historicalRuns.length > 0;
-  const showActiveAnswerCard = isRunning || activeRun.finalContent.trim().length > 0;
+  const isPaused = activeRun.status === 'waiting_input' || activeRun.status === 'waiting_confirmation';
+  const showActiveAnswerCard = !isPaused && (isRunning || activeRun.finalContent.trim().length > 0);
   const latestClarifyQuestion = useMemo(() => {
     for (let i = activeRun.steps.length - 1; i >= 0; i--) {
       const step = activeRun.steps[i];
@@ -581,11 +593,8 @@ export default function RunChat({
   }, [activeRun.requestText, activeRun.runId, lineageRuns, input]);
 
   const activeAssistantMessage = useMemo(() => {
-    const finalText = String(activeRun.finalContent || '').trim();
-    if (finalText) return finalText;
-    if (isWaitingInput && latestClarifyQuestion) return latestClarifyQuestion;
-    return '';
-  }, [activeRun.finalContent, isWaitingInput, latestClarifyQuestion]);
+    return String(activeRun.finalContent || '').trim();
+  }, [activeRun.finalContent]);
 
   return (
     <div className={styles.chat}>
@@ -632,7 +641,7 @@ export default function RunChat({
             />
 
             <div className={styles['answer-row']}>
-              {(showActiveAnswerCard || (isWaitingInput && !!latestClarifyQuestion)) && (
+              {showActiveAnswerCard && (
                 <ChatAnswerCard text={activeAssistantMessage} isRunning={isRunning} />
               )}
               {!isReadOnly && !isRunning && activeRun.finalContent && (
@@ -661,7 +670,7 @@ export default function RunChat({
                     placeholder="Введите уточнение для продолжения..."
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
-                    onKeyDown={handleKeyDown}
+                    onKeyDown={handleClarifyKeyDown}
                     rows={2}
                     disabled={isRunning}
                   />
@@ -679,7 +688,7 @@ export default function RunChat({
         )}
       </div>
 
-      {!isReadOnly && (
+      {!isReadOnly && !isPaused && (
         <div className={styles['input-area']}>
           <div className={styles['branch-tabs-shell']}>
             <div className={styles['branch-tabs']} role="tablist" aria-label="Ветки чата">
@@ -724,7 +733,7 @@ export default function RunChat({
               placeholder={isWaitingInput ? 'Введите уточнение для продолжения...' : 'Введите запрос для агента...'}
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
+              onKeyDown={handleComposerKeyDown}
               rows={1}
               disabled={isRunning || isUploading}
             />

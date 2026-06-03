@@ -168,6 +168,7 @@ export interface SandboxSSEEvent {
 
 export interface SandboxConfirmAction {
   confirmed: boolean;
+  user_input?: string;
 }
 
 // ── Catalog (sidebar data) ──────────────────────────────────────────────────

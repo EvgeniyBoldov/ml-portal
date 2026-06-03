@@ -305,15 +305,9 @@ export default function SandboxSessionPage() {
           onSelectBranch={setActiveBranchId}
           onCreateBranchFromMessage={handleCreateBranchFromMessage}
           onRun={handleRun}
+          onResumeSubmit={(text) => sandboxRun.confirmAction(true, text)}
           onStop={sandboxRun.stop}
           onSelectRun={handleSelectRun}
-          onClarifySubmit={(text) => {
-            if (sandboxRun.activeRun?.status === 'waiting_confirmation') {
-              sandboxRun.confirmAction(true, text);
-            } else {
-              sandboxRun.handleClarifySubmit(text);
-            }
-          }}
           onSelectStep={(runId, stepId, virtualStep, steps, entity) => {
             void handleSelectStep(runId, stepId, virtualStep, steps, entity);
           }}

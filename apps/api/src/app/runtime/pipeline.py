@@ -432,9 +432,22 @@ class RuntimePipeline:
                     )
                 except Exception as _e:  # noqa: BLE001
                     logger.warning("Failed to finish top-level AgentRun: %s", _e)
-            if await_background_tail:
+            if planning_outcome.kind == PlanningOutcomeKind.PAUSED:
+                # A paused run must stop the user-visible stream immediately.
+                # Memory side effects may continue, but never in the same SSE
+                # stream after STOP/run_paused.
+                await self._consume_memory_finalize_background(
+                    turn_mem=turn_mem,
+                    runtime_state=runtime_state,
+                    request=request,
+                    stop_reason=planning_outcome.stop_reason,
+                    emitter=emitter,
+                    budget_resolver=budget_resolver,
+                    logging_level=run_logging_level,
+                )
+            elif await_background_tail:
                 # Sandbox/trace mode consumes the full runtime tail, including
-                # memory writeback lifecycle.
+                # memory writeback lifecycle, after non-paused terminal states.
                 async for memory_ev in self._finalize_memory(
                     turn_mem=turn_mem,
                     runtime_state=runtime_state,

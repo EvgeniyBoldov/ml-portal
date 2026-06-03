@@ -207,6 +207,7 @@ class SandboxRunStepResponse(BaseModel):
 
 class SandboxConfirmAction(BaseModel):
     confirmed: bool
+    user_input: Optional[str] = None
 
 
 # ── Catalog ─────────────────────────────────────────────────────────────────

@@ -40,6 +40,7 @@ from app.services.sandbox_service import SandboxService
 from app.services.sandbox_step_enrichment_service import SandboxStepEnrichmentService
 from app.services.run_store import RunStore
 from app.services.runtime_hitl_protocol_service import RuntimeHitlProtocolService
+from app.services.chat_router_event_mapper import build_resume_content
 from app.services.runtime_terminal_status import planner_terminal_from_event
 from app.services.runtime_trace_builder import RuntimeTraceBuilder, TraceStep
 from app.services.runtime_tail_event_bus import RuntimeTailSubscriber
@@ -637,8 +638,13 @@ async def resume_sandbox_run(
     if run.status not in ("waiting_confirmation", "waiting_input"):
         raise HTTPException(status_code=400, detail="Run is not waiting for resume")
 
-    action = "confirm" if data.confirmed else "cancel"
-    user_input = getattr(data, "user_input", None) or ""
+    user_input = str(data.user_input or "").strip()
+    if run.status == "waiting_input":
+        action = "input"
+        if not user_input:
+            raise HTTPException(status_code=400, detail="user_input is required for waiting_input resume")
+    else:
+        action = "confirm" if data.confirmed else "cancel"
 
     if action == "cancel":
         await svc.finish_run(run_id, "cancelled", "Cancelled by user")
@@ -653,28 +659,29 @@ async def resume_sandbox_run(
     # Build checkpoint from paused state
     paused_action = run.paused_action if isinstance(run.paused_action, dict) else None
     paused_context = run.paused_context if isinstance(run.paused_context, dict) else None
+    effective_config = run.effective_config if isinstance(run.effective_config, dict) else {}
+    sandbox_resolver = RuntimeSandboxResolver()
+    resumed_agent_slug = sandbox_resolver.sandbox_agent_slug(effective_config)
+    resumed_agent_version_id = sandbox_resolver.sandbox_agent_version_id(effective_config)
 
     # Extract agent_run_id for pipeline continuation (internal run ID from paused context)
     agent_run_id = paused_context.get("run_id") if paused_context else None
 
     checkpoint = RuntimeResumeCheckpointService().build(
         run_id=run_id,
-        agent_slug=run.agent_slug,
-        tenant_id=str(run.tenant_id) if run.tenant_id else None,
-        user_id=str(run.user_id) if run.user_id else str(user.id),
-        chat_id=run.chat_id,
+        agent_slug=resumed_agent_slug,
+        tenant_id=str(await tenant_uuid(db, user)),
+        user_id=str(user_uuid(user)),
+        chat_id=None,
         paused_action=paused_action,
         paused_context=paused_context,
-        resume_action="confirm",  # Sandbox always confirms
+        resume_action=action,
         user_input=user_input or None,
-        source_context_snapshot=run.context_snapshot if isinstance(run.context_snapshot, dict) else None,
+        source_context_snapshot=None,
     )
 
     # Update run to resumed state
     await svc.finish_run(run_id, "resumed", None)
-    snapshot = dict(run.context_snapshot or {})
-    snapshot["resume_checkpoint"] = checkpoint
-    await svc.update_run_context(run_id, snapshot)
     await db.commit()
 
     # Get branch info
@@ -720,15 +727,22 @@ async def resume_sandbox_run(
             if not original_goal and paused_context and isinstance(paused_context.get("orchestrator"), dict):
                 original_goal = paused_context["orchestrator"].get("goal", "")
 
-            request_text = original_goal or "Continue"
+            request_text = original_goal or str(run.request_text or "").strip() or "Continue"
+            resume_content = build_resume_content(
+                action=action,
+                user_input=user_input,
+                paused_action=paused_action if isinstance(paused_action, dict) else None,
+                paused_context=paused_context if isinstance(paused_context, dict) else None,
+            )
 
             pipeline_request = PipelineRequest(
                 request_text=request_text,
                 chat_id=None,
                 user_id=str(u_uuid),
                 tenant_id=str(t_uuid),
-                messages=[{"role": "user", "content": user_input or request_text}],
-                agent_slug=run.agent_slug,
+                messages=[{"role": "user", "content": resume_content}],
+                agent_slug=resumed_agent_slug,
+                agent_version_id=str(resumed_agent_version_id) if resumed_agent_version_id else None,
                 sandbox_overrides={
                     "logging_level": "full",
                     "sandbox_run_id": str(run_id),
@@ -908,7 +922,7 @@ async def resume_sandbox_run(
                         await tail_listener_task
                     except asyncio.CancelledError:
                         pass
-                await tail_subscriber.close()
+                await tail_subscriber.unsubscribe()
 
             yield f'data: {json.dumps({"type": "done", "run_id": str(run_id)})}\n\n'
 

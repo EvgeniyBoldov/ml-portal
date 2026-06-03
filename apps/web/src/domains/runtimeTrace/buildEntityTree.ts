@@ -119,6 +119,13 @@ function extractContextSnapshot(raw: Record<string, unknown>): TraceContextSnaps
   return snapshot as TraceContextSnapshot;
 }
 
+function normalizeOrchestratorRole(role: string | undefined): string | undefined {
+  const normalized = String(role ?? '').trim().toLowerCase();
+  if (!normalized) return undefined;
+  if (normalized === 'planner_direct') return 'synthesizer';
+  return normalized;
+}
+
 function setEntityDepthRecursive(entity: TraceEntity, depth: number): void {
   entity.depth = depth;
   for (const child of entity.children) {
@@ -130,7 +137,7 @@ function normalizeRunPhaseLayout(runRoot: TraceEntity): void {
   if (runRoot.kind !== 'run') return;
   const getRole = (node: TraceEntity): string => (
     node.kind === 'orchestrator' && node.data.kind === 'orchestrator'
-      ? String(node.data.role ?? '').toLowerCase()
+      ? String(normalizeOrchestratorRole(String(node.data.role ?? '')) ?? '')
       : ''
   );
 
@@ -142,6 +149,7 @@ function normalizeRunPhaseLayout(runRoot: TraceEntity): void {
     if (role === 'memory') return false;
     if (role === 'planner') return true;
     if (role === 'synthesizer') return true;
+    if (child.kind === 'interaction') return true;
     return child.kind === 'planner';
   });
 
@@ -253,7 +261,7 @@ function buildEntityFromLifecycleStart(event: SemanticEvent): TraceEntity | null
   const rawEntityType = typeof raw.entity_type === 'string' ? raw.entity_type : undefined;
   const derivedRole: string | undefined =
     typeof raw.role === 'string'
-      ? raw.role
+      ? normalizeOrchestratorRole(raw.role)
       : rawEntityType === 'synthesis_run'
         ? 'synthesizer'
         : event.raw_type === 'synthesis_start'

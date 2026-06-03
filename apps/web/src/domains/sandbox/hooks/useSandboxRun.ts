@@ -34,6 +34,7 @@ export type RunStepType =
   | 'policy_decision'
   | 'confirmation_required'
   | 'question_answer'
+  | 'answer'
   | 'waiting_input'
   | 'run_paused'
   | 'stop'
@@ -198,7 +199,9 @@ export function useSandboxRun(sessionId: string) {
                   ...prev,
                   status: 'waiting_confirmation',
                   pendingConfirmation: event,
+                  finalContent: '',
                 }));
+                finalContent = '';
                 // Don't add confirmation_required to steps — show in input header only
                 continue;
               }
@@ -208,13 +211,16 @@ export function useSandboxRun(sessionId: string) {
                   ...prev,
                   status: 'waiting_input',
                   pendingConfirmation: null,
+                  finalContent: '',
                 }));
+                finalContent = '';
                 // Don't add waiting_input to steps - it shows in input field only
                 continue;
               }
 
               if (type === 'run_paused') {
                 const reason = String((data.reason as string) ?? '').trim();
+                const isPaused = reason === 'waiting_confirmation' || reason === 'waiting_input';
                 setActiveRun((prev) => ({
                   ...prev,
                   status:
@@ -223,27 +229,31 @@ export function useSandboxRun(sessionId: string) {
                       : reason === 'waiting_input'
                         ? 'waiting_input'
                         : prev.status,
+                  finalContent: isPaused ? '' : prev.finalContent,
                 }));
+                if (isPaused) finalContent = '';
                 addStep(type as RunStepType, data);
                 continue;
               }
 
               if (type === 'stop') {
                 const reason = String((data.reason as string) ?? '').trim();
-                if (reason === 'waiting_confirmation' || reason === 'waiting_input') {
+                const isPaused = reason === 'waiting_confirmation' || reason === 'waiting_input';
+                if (isPaused) {
                   setActiveRun((prev) => ({
                     ...prev,
-                    status: reason,
+                    status: reason as ActiveRun['status'],
+                    finalContent: '',
                   }));
+                  finalContent = '';
+                } else {
+                  setActiveRun((prev) => ({ ...prev, status: reason as ActiveRun['status'] }));
                 }
                 addStep(type as RunStepType, data);
                 continue;
               }
 
-              // Skip question_answer - it's an internal resume event, not a chat message
-              if (type !== 'question_answer') {
-                addStep(type as RunStepType, data);
-              }
+              addStep(type as RunStepType, data);
             } catch {
               // ignore parse errors
             }
@@ -348,6 +358,16 @@ export function useSandboxRun(sessionId: string) {
                 setActiveRun((prev) => ({ ...prev, finalContent }));
               }
 
+              if (type === 'delta') {
+                finalContent += (data.content as string) ?? '';
+                setActiveRun((prev) => ({ ...prev, finalContent }));
+              }
+
+              if (type === 'final' || type === 'final_content') {
+                finalContent = (data.content as string) ?? finalContent;
+                setActiveRun((prev) => ({ ...prev, finalContent }));
+              }
+
               if (type === 'run_paused') {
                 const reason = String((data.reason as string) ?? '').trim();
                 setActiveRun((prev) => ({
@@ -362,7 +382,9 @@ export function useSandboxRun(sessionId: string) {
                   ...prev,
                   status: 'waiting_confirmation',
                   pendingConfirmation: event,
+                  finalContent: '',
                 }));
+                finalContent = '';
               }
 
               if (type === 'waiting_input') {
@@ -370,7 +392,21 @@ export function useSandboxRun(sessionId: string) {
                   ...prev,
                   status: 'waiting_input',
                   pendingConfirmation: null,
+                  finalContent: '',
                 }));
+                finalContent = '';
+              }
+
+              if (type === 'run_paused') {
+                const reason = String((event.reason as string) ?? '').trim();
+                if (reason === 'waiting_confirmation' || reason === 'waiting_input') {
+                  setActiveRun((prev) => ({
+                    ...prev,
+                    status: reason as ActiveRun['status'],
+                    finalContent: '',
+                  }));
+                  finalContent = '';
+                }
               }
 
               if (type === 'error') {
@@ -378,14 +414,11 @@ export function useSandboxRun(sessionId: string) {
                 throw new Error(errorMsg);
               }
 
-              if (type === 'final' || type === 'done') {
+              if (type === 'done') {
                 isDone = true;
               }
 
-              // Skip question_answer - it's an internal resume event, not a chat message
-              if (type !== 'question_answer') {
-                addStep(type as RunStepType, data);
-              }
+              addStep(type as RunStepType, data);
             } catch {
               // Ignore malformed events
             }
@@ -397,6 +430,7 @@ export function useSandboxRun(sessionId: string) {
           status: prev.status === 'waiting_confirmation' || prev.status === 'waiting_input'
             ? prev.status
             : 'completed',
+          finalContent,
         }));
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);

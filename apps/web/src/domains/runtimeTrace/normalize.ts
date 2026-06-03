@@ -77,7 +77,7 @@ function summarize(rawType: string, data: Record<string, unknown>): string {
   if (rawType === 'protocol_retry') return String(data.reason ?? 'Protocol retry');
   if (rawType === 'question_answer') {
     const question = String(data.question ?? '').trim();
-    const answer = String(data.user_answer ?? '').trim();
+    const answer = String(data.user_answer ?? data.answer ?? '').trim();
     if (question && answer) return `${question} → ${answer}`;
     return question || answer || 'Question answered';
   }
