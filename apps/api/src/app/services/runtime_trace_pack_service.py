@@ -30,6 +30,7 @@ class RuntimeTracePackService:
         "error",
         "waiting_input",
         "confirmation_required",
+        "question_answer",
         "status",
     }
 

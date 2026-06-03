@@ -33,6 +33,7 @@ export type RunStepType =
   | 'agent_result'
   | 'policy_decision'
   | 'confirmation_required'
+  | 'question_answer'
   | 'waiting_input'
   | 'run_paused'
   | 'stop'
@@ -198,7 +199,7 @@ export function useSandboxRun(sessionId: string) {
                   status: 'waiting_confirmation',
                   pendingConfirmation: event,
                 }));
-                addStep(type as RunStepType, data);
+                // Don't add confirmation_required to steps — show in input header only
                 continue;
               }
 
@@ -208,7 +209,7 @@ export function useSandboxRun(sessionId: string) {
                   status: 'waiting_input',
                   pendingConfirmation: null,
                 }));
-                addStep(type as RunStepType, data);
+                // Don't add waiting_input to steps - it shows in input field only
                 continue;
               }
 
@@ -239,7 +240,10 @@ export function useSandboxRun(sessionId: string) {
                 continue;
               }
 
-              addStep(type as RunStepType, data);
+              // Skip question_answer - it's an internal resume event, not a chat message
+              if (type !== 'question_answer') {
+                addStep(type as RunStepType, data);
+              }
             } catch {
               // ignore parse errors
             }
@@ -273,23 +277,135 @@ export function useSandboxRun(sessionId: string) {
   );
 
   const confirmAction = useCallback(
-    async (confirmed: boolean) => {
+    async (confirmed: boolean, userInput?: string) => {
       if (!activeRun.runId) return;
       try {
-        await sandboxApi.confirmRunAction(sessionId, activeRun.runId, {
-          confirmed,
-        });
+        if (!confirmed) {
+          // Just cancel without streaming
+          await sandboxApi.confirmRunAction(sessionId, activeRun.runId, {
+            confirmed: false,
+          });
+          setActiveRun((prev) => ({
+            ...prev,
+            status: 'completed',
+            pendingConfirmation: null,
+          }));
+          addStep('status', { stage: 'write_rejected' });
+          return;
+        }
+
+        // For confirm, use resume endpoint with SSE streaming
+        const controller = new AbortController();
+        abortRef.current = controller;
+
+        const response = await sandboxApi.resumeRun(
+          sessionId,
+          activeRun.runId,
+          { confirmed: true, user_input: userInput },
+          controller.signal,
+        );
+
+        if (!response.ok) {
+          const err = await response.text();
+          throw new Error(err || `HTTP ${response.status}`);
+        }
+
+        const reader = response.body?.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let finalContent = '';
+        let isDone = false;
+
         setActiveRun((prev) => ({
           ...prev,
-          status: confirmed ? 'running' : 'completed',
+          status: 'running',
           pendingConfirmation: null,
         }));
-        addStep('status', {
-          stage: confirmed ? 'write_confirmed' : 'write_rejected',
-        });
+        addStep('status', { stage: 'write_confirmed' });
+
+        while (reader && !isDone) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+
+          const lines = buffer.split('\n');
+          buffer = lines.pop() ?? '';
+
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            const raw = line.slice(6).trim();
+            if (!raw) continue;
+            if (raw === '[DONE]') {
+              isDone = true;
+              break;
+            }
+            try {
+              const event = JSON.parse(raw) as SandboxSSEEvent;
+              const { type, run_id, ...data } = event;
+
+              if (type === 'chunk' && typeof data.text === 'string') {
+                finalContent += data.text;
+                setActiveRun((prev) => ({ ...prev, finalContent }));
+              }
+
+              if (type === 'run_paused') {
+                const reason = String((data.reason as string) ?? '').trim();
+                setActiveRun((prev) => ({
+                  ...prev,
+                  status: reason === 'waiting_confirmation' ? 'waiting_confirmation' : 'waiting_input',
+                  pendingConfirmation: event,
+                }));
+              }
+
+              if (type === 'confirmation_required') {
+                setActiveRun((prev) => ({
+                  ...prev,
+                  status: 'waiting_confirmation',
+                  pendingConfirmation: event,
+                }));
+              }
+
+              if (type === 'waiting_input') {
+                setActiveRun((prev) => ({
+                  ...prev,
+                  status: 'waiting_input',
+                  pendingConfirmation: null,
+                }));
+              }
+
+              if (type === 'error') {
+                const errorMsg = String((data.error as string) ?? 'Unknown error');
+                throw new Error(errorMsg);
+              }
+
+              if (type === 'final' || type === 'done') {
+                isDone = true;
+              }
+
+              // Skip question_answer - it's an internal resume event, not a chat message
+              if (type !== 'question_answer') {
+                addStep(type as RunStepType, data);
+              }
+            } catch {
+              // Ignore malformed events
+            }
+          }
+        }
+
+        setActiveRun((prev) => ({
+          ...prev,
+          status: prev.status === 'waiting_confirmation' || prev.status === 'waiting_input'
+            ? prev.status
+            : 'completed',
+        }));
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        addStep('error', { error: `Confirmation failed: ${message}` });
+        addStep('error', { error: `Resume failed: ${message}` });
+        setActiveRun((prev) => ({
+          ...prev,
+          status: 'error',
+          pendingConfirmation: null,
+        }));
       }
     },
     [sessionId, activeRun.runId, addStep],

@@ -143,6 +143,22 @@ class SandboxRunManager:
             },
         )
 
+    async def update_run_context(
+        self,
+        run_id: UUID,
+        context_snapshot: Dict[str, Any],
+    ) -> Optional[SandboxRun]:
+        """Update the context_snapshot for a run (used during resume)."""
+        obj = await self.host.runs.get_by_id(run_id)
+        if not obj:
+            return None
+        return await self.host.runs.update(
+            obj,
+            {
+                "context_snapshot": context_snapshot,
+            },
+        )
+
     async def get_run_steps_count(self, run_id: UUID) -> int:
         return await self.host.runs.get_steps_count(run_id)
 

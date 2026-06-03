@@ -17,6 +17,7 @@ export type EntityKind =
   | 'orchestrator'
   | 'planner'
   | 'agent'
+  | 'interaction'
   | 'llm'
   | 'tool'
   | 'decision'
@@ -186,6 +187,15 @@ export interface AgentData {
   partialModeWarning?: string;
 }
 
+export interface InteractionData {
+  kind: 'interaction';
+  interactionKind: 'clarify' | 'confirm' | 'resume' | string;
+  question?: string;
+  answer?: string;
+  resumeAction?: string;
+  sourceRunId?: string;
+}
+
 export interface PlannerData {
   kind: 'planner';
   stepKind: string; // 'call_agent' | 'direct_answer' | 'final' | 'ask_user' | 'abort' | ...
@@ -262,6 +272,7 @@ export type EntityData =
   | LLMData
   | ToolData
   | AgentData
+  | InteractionData
   | PlannerData
   | OrchestratorData
   | PhaseData
@@ -356,6 +367,10 @@ export function isToolData(data: EntityData): data is ToolData {
 
 export function isAgentData(data: EntityData): data is AgentData {
   return data.kind === 'agent';
+}
+
+export function isInteractionData(data: EntityData): data is InteractionData {
+  return data.kind === 'interaction';
 }
 
 export function isPlannerData(data: EntityData): data is PlannerData {

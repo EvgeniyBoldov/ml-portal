@@ -10,7 +10,7 @@ import { Icon } from '@/shared/ui/Icon';
 export default function Chat() {
   const { chatId } = useParams();
   const state = useChatMessagesState();
-  const { loadMessages, setCurrentChat, clearPendingState, applyPausedState, sendMessageStream, abortStream } = useChatActions();
+  const { loadMessages, setCurrentChat, clearPendingState, sendMessageStream, abortStream, resumeStream } = useChatActions();
   const historyRef = useRef<HTMLDivElement>(null);
   const [busy, setBusy] = React.useState(false);
   const [streamError, setStreamError] = React.useState<string | null>(null);
@@ -140,37 +140,41 @@ export default function Chat() {
     setClarifyBusy(true);
     setStreamError(null);
     try {
-      if (state.pausedRunId) {
-        const { resumeRun } = await import('@shared/api/chats');
-        const resume = await resumeRun(state.pausedRunId, 'input', clarifyInput.trim());
-        setClarifyInput('');
-        if (chatId) {
-          await loadMessages(chatId);
-        }
-        if (resume.status === 'resumed_paused_again') {
-          const pausedContext = (resume.paused_again_context || {}) as Record<string, unknown>;
-          const pausedAction = (resume.paused_again_action || {}) as Record<string, unknown>;
-          applyPausedState({
-            runId: resume.paused_again_run_id || null,
-            reason: resume.paused_again_reason || String(pausedContext.reason || ''),
-            question: String(pausedContext.question || pausedAction.question || ''),
-            message: String(pausedContext.message || pausedAction.message || ''),
-            action: pausedAction,
-          });
-        } else {
-          clearPendingState();
-        }
+      const userInput = clarifyInput.trim();
+      setClarifyInput('');
+      // Close input window immediately after sending
+      clearPendingState();
+      
+      if (pendingConfirmation && state.pausedRunId) {
+        // Handle confirmation with user input
+        const fingerprint = pendingConfirmation.data?.operation_fingerprint || '';
+        await resumeStream(
+          state.pausedRunId,
+          fingerprint,
+          userInput,
+          () => {}, // No chunk handler
+          (err: string) => setStreamError(_friendlyError(err)),
+        );
+      } else if (state.pausedRunId) {
+        // Handle clarify input
+        await resumeStream(
+          state.pausedRunId,
+          'input',
+          userInput,
+          () => {}, // No chunk handler for clarify
+          (err: string) => setStreamError(_friendlyError(err)),
+        );
       } else {
         // Triage clarify path has no resumable run_id; continue as a normal user message.
-        const message = clarifyInput.trim();
-        clearPendingState();
-        setClarifyInput('');
-        await handleSend(message, {});
+        await handleSend(userInput, {});
+      }
+      
+      if (chatId) {
+        await loadMessages(chatId);
       }
     } catch (e: unknown) {
-      const rawError = e instanceof Error ? e.message : 'Ошибка отправки уточнения';
+      const rawError = e instanceof Error ? e.message : 'Ошибка отправки';
       if (rawError.includes('Paused run not found')) {
-        // Stale run_id: fallback to normal message flow.
         const message = clarifyInput.trim();
         clearPendingState();
         setClarifyInput('');
@@ -309,28 +313,26 @@ export default function Chat() {
             setBusy(false);
           }}
           onConfirm={async () => {
-            if (!chatId || !pendingConfirmation.operationFingerprint || busy) return;
+            if (!chatId || busy) return;
             setBusy(true);
             setStreamError(null);
+            // Close confirmation window immediately after sending
+            clearPendingState();
             try {
-              const { issueConfirmationToken } = await import('@shared/api/chats');
-              const issued = await issueConfirmationToken(chatId, pendingConfirmation.operationFingerprint);
-              const token = String(issued.token || '').trim();
-              clearPendingState();
-              if (!token) {
-                throw new Error('Confirmation token was not issued');
+              const runId = String(pendingConfirmation.runId || state.pausedRunId || '').trim();
+              if (!runId) {
+                throw new Error('Paused run not found');
               }
-              await sendMessageStream(
-                chatId,
-                'Подтверждаю выполнение операции. Продолжай.',
-                false,
-                () => {},
+              await resumeStream(
+                runId,
+                'confirm',
+                '',
+                () => {}, // No chunk handler for confirm
                 (err: string) => setStreamError(_friendlyError(err)),
-                undefined,
-                [],
-                [],
-                [token]
               );
+              if (chatId) {
+                await loadMessages(chatId);
+              }
             } catch (e) {
               console.error('Failed to confirm operation', e);
               setStreamError(_friendlyError(e instanceof Error ? e.message : 'Не удалось подтвердить операцию'));

@@ -164,6 +164,19 @@ export const sandboxApi = {
       body: JSON.stringify(data),
     }),
 
+  resumeRun: async (
+    sessionId: string,
+    runId: string,
+    data: SandboxConfirmAction,
+    signal?: AbortSignal,
+  ): Promise<Response> => {
+    const { fetchStreamWithAuth } = await import('@/shared/api/streamAuth');
+    return fetchStreamWithAuth(`${BASE}/sessions/${sessionId}/runs/${runId}/resume`, {
+      body: data,
+      signal,
+    });
+  },
+
   uploadAttachment: async (sessionId: string, file: File): Promise<ChatAttachment> => {
     const form = new FormData();
     form.append('file', file);

@@ -85,25 +85,21 @@ export async function deleteChat(chat_id: string) {
   });
 }
 
-/** Resume a paused run (confirm action) */
-export async function resumeRun(runId: string, action: 'confirm' | 'cancel' | 'input', input?: string) {
+/** Resume a paused run (confirm/cancel/input action) - returns Response for SSE streaming */
+export async function resumeRunStream(
+  runId: string,
+  action: 'confirm' | 'cancel' | 'input',
+  input?: string,
+  signal?: AbortSignal,
+): Promise<Response> {
+  const { fetchStreamWithAuth } = await import('@/shared/api/streamAuth');
   const body: Record<string, string> = { action };
   if (action === 'input' && input) {
     body.input = input;
   }
-  return apiRequest<{
-    run_id: string;
-    status: string;
-    paused_action?: Record<string, unknown>;
-    paused_context?: Record<string, unknown>;
-    paused_again_reason?: string;
-    paused_again_run_id?: string;
-    paused_again_action?: Record<string, unknown>;
-    paused_again_context?: Record<string, unknown>;
-    user_input?: string;
-  }>(`/chats/runs/${runId}/resume`, {
-    method: 'POST',
-    body: JSON.stringify(body),
+  return fetchStreamWithAuth(`/chats/runs/${runId}/resume`, {
+    body,
+    signal,
   });
 }
 

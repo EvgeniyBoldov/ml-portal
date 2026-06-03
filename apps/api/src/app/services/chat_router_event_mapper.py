@@ -191,17 +191,7 @@ def build_resume_content(
     paused_action: Optional[Dict[str, Any]],
     paused_context: Optional[Dict[str, Any]],
 ) -> str:
-    question = ""
-    if isinstance(paused_context, dict):
-        question = str(paused_context.get("question") or paused_context.get("message") or "").strip()
-    if not question and isinstance(paused_action, dict):
-        question = str(paused_action.get("question") or paused_action.get("message") or "").strip()
-
     if action == "input":
-        if question:
-            return f"Уточнение пользователя на вопрос '{question}': {user_input}"
         return user_input
 
-    if question:
-        return f"Пользователь подтверждает выполнение. Контекст подтверждения: {question}"
-    return "Пользователь подтверждает выполнение. Продолжай выполнение задачи."
+    return "Подтверждаю."

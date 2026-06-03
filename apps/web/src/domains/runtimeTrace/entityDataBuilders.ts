@@ -1,6 +1,7 @@
 import type {
   AgentData,
   ErrorData,
+  InteractionData,
   LLMData,
   PlannerData,
   RunData,
@@ -190,6 +191,20 @@ export function buildAgentData(events: SemanticEvent[], subAgentRun?: SubAgentRu
     hasOverrides,
     toolsAvailable,
     partialModeWarning,
+  };
+}
+
+export function buildInteractionData(event: SemanticEvent): InteractionData {
+  const raw = event.raw?.raw ?? {};
+  const resumeAction = typeof raw.resume_action === 'string' ? raw.resume_action : undefined;
+  const questionKind = typeof raw.question_kind === 'string' ? raw.question_kind : undefined;
+  return {
+    kind: 'interaction',
+    interactionKind: questionKind ?? resumeAction ?? 'resume',
+    question: typeof raw.question === 'string' ? raw.question : undefined,
+    answer: typeof raw.user_answer === 'string' ? raw.user_answer : undefined,
+    resumeAction,
+    sourceRunId: typeof raw.source_run_id === 'string' ? raw.source_run_id : undefined,
   };
 }
 

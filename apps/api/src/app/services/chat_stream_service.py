@@ -174,6 +174,7 @@ class ChatStreamService:
         model: Optional[str] = None,
         agent_slug: Optional[str] = None,
         continuation_meta: Optional[Dict[str, Any]] = None,
+        persist_user_message: bool = True,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """Send message and stream response while preserving current chat contract."""
 
@@ -271,6 +272,7 @@ class ChatStreamService:
                 model=model,
                 agent_slug=agent_slug,
                 continuation_meta=continuation_meta,
+                persist_user_message=persist_user_message,
                 run_with_router=self._run_with_router,
                 store_idempotency=self.store_idempotency,
                 bind_attachments=self.attachment_service.bind_to_message,
@@ -317,6 +319,7 @@ class ChatStreamService:
                 model=model,
                 continuation_meta=(tool_ctx.extra or {}).get("continuation_meta", {}) if hasattr(tool_ctx, "extra") else {},
                 confirmation_tokens=list((tool_ctx.extra or {}).get("confirmation_tokens") or []),
+                await_background_tail=False,
             )
 
             async for event in pipeline.execute(pipeline_request, tool_ctx):

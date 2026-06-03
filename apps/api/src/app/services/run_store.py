@@ -226,7 +226,7 @@ class RunStore:
         except (ValueError, AttributeError):
             return None
     
-    async def start_run(
+    async def start_or_resume_run(
         self,
         tenant_id,
         agent_slug: str,
@@ -236,16 +236,67 @@ class RunStore:
         message_id=None,
         context_snapshot: Optional[Dict[str, Any]] = None,
         run_id_override: Optional[uuid.UUID] = None,
+        resume_from_run_id: Optional[uuid.UUID] = None,
     ) -> uuid.UUID:
-        """
-        Start a new agent run and return its ID.
+        """Start a new run or resume an existing paused run.
+
+        If resume_from_run_id is provided and that run exists in a waiting_* status,
+        we resume it: set status to "running", clear finished_at/error, update
+        context_snapshot with the new one, and return the existing run_id.
+
+        Otherwise, creates a new AgentRun (using run_id_override if provided).
 
         Args:
             tenant_id: UUID or str — tenant identifier
-            logging_level: "none" | "brief" | "full" — copied from Agent at run start
+            agent_slug: Agent slug to use
+            logging_level: "none" | "brief" | "full"
+            user_id: User UUID or str
+            chat_id: Chat UUID or str (optional)
+            message_id: Message UUID or str (optional)
             context_snapshot: Frozen versions/config for reproducibility
-            run_id_override: Use a pre-generated UUID instead of creating a new one.
+            run_id_override: Use a pre-generated UUID for new run
+            resume_from_run_id: Resume this existing paused run if found
+
+        Returns:
+            The run_id (existing or new)
         """
+        # Check if we should resume an existing run.
+        # We look up by ID directly because the calling endpoint may have already
+        # set the status to "resumed" (or another non-waiting status) before invoking
+        # the pipeline. The presence of resume_from_run_id is the source of truth here.
+        if resume_from_run_id is not None:
+            run_id = resume_from_run_id
+            existing_found = False
+            async with self._write_session() as s:
+                result = await s.execute(
+                    select(AgentRun).where(AgentRun.id == run_id)
+                )
+                run = result.scalar_one_or_none()
+                if run is not None:
+                    existing_found = True
+                    run.status = "running"
+                    run.finished_at = None
+                    run.error = None
+                    # Merge new context_snapshot into existing, preserving resume_checkpoint
+                    existing_snapshot = dict(run.context_snapshot or {})
+                    if context_snapshot:
+                        existing_snapshot.update(context_snapshot)
+                    run.context_snapshot = self._redactor.redact(existing_snapshot)
+                    run.agent_slug = agent_slug  # Update in case it changed
+                    run.logging_level = logging_level
+                    # Keep paused_action/context for now; resume_run will clear them later
+            if existing_found:
+                async with self._state_lock:
+                    self._step_counters[run_id] = self._step_counters.get(run_id, 0)
+                    self._run_start_times[run_id] = time.time()
+                    self._logging_levels[run_id] = logging_level
+                logger.info(f"Resumed existing run {run_id}")
+                return run_id
+            logger.warning(
+                f"resume_from_run_id={run_id} not found; falling back to create new run"
+            )
+
+        # Create new run
         run_id = run_id_override if run_id_override is not None else uuid.uuid4()
         run = AgentRun(
             id=run_id,
@@ -268,6 +319,32 @@ class RunStore:
             self._logging_levels[run_id] = logging_level
 
         return run_id
+
+    async def start_run(
+        self,
+        tenant_id,
+        agent_slug: str,
+        logging_level: str = "brief",
+        user_id=None,
+        chat_id=None,
+        message_id=None,
+        context_snapshot: Optional[Dict[str, Any]] = None,
+        run_id_override: Optional[uuid.UUID] = None,
+    ) -> uuid.UUID:
+        """
+        Start a new agent run and return its ID.
+        (Legacy method, delegates to start_or_resume_run without resume logic)
+        """
+        return await self.start_or_resume_run(
+            tenant_id=tenant_id,
+            agent_slug=agent_slug,
+            logging_level=logging_level,
+            user_id=user_id,
+            chat_id=chat_id,
+            message_id=message_id,
+            context_snapshot=context_snapshot,
+            run_id_override=run_id_override,
+        )
     
     async def add_intent(
         self,
@@ -577,6 +654,26 @@ class RunStore:
 
         logger.info(f"Run {run_id} resumed")
     
+    async def set_run_status(
+        self,
+        run_id: uuid.UUID,
+        status: str,
+    ) -> None:
+        """Set run status without touching paused_action or paused_context.
+
+        Used by RuntimePipeline to mark PAUSED/ABORTED/FAILED while preserving
+        the full paused state that was written by endpoint or orchestrator.
+        """
+        async with self._write_session() as s:
+            result = await s.execute(
+                select(AgentRun).where(AgentRun.id == run_id)
+            )
+            run = result.scalar_one_or_none()
+            if not run:
+                logger.warning(f"Cannot set status for run {run_id}: not found")
+                return
+            run.status = normalize_run_status_for_storage(status)
+
     async def delete_runs_before(self, before_date: datetime, tenant_id: Optional[uuid.UUID] = None) -> int:
         """Delete runs older than a given date. Returns count of deleted runs."""
         async with self._write_session() as s:

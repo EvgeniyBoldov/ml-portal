@@ -30,6 +30,7 @@ export function getTraceEntityKindLabel(entity: TraceEntity): string {
   if (entity.kind === 'phase') return 'Фаза';
   if (entity.kind === 'orchestrator') return 'Оркестратор';
   if (entity.kind === 'planner') return 'Шаг';
+  if (entity.kind === 'interaction') return 'Диалог';
   if (entity.kind === 'agent') return 'Агент';
   if (entity.kind === 'llm') return 'LLM';
   if (entity.kind === 'tool') return 'Tool';
@@ -69,6 +70,11 @@ export function getTraceEntityTitle(entity: TraceEntity): string {
     if (slug === 'conversation' || slug === 'summary_compactor') return 'Сводка';
     return compactSlug(agent.slug || entity.title);
   }
+  if (entity.kind === 'interaction' && entity.data.kind === 'interaction') {
+    if (entity.data.interactionKind === 'confirm') return 'Подтверждение';
+    if (entity.data.interactionKind === 'clarify') return 'Уточнение';
+    return 'Вопрос-ответ';
+  }
   if (entity.kind === 'llm') return 'LLM';
   if (entity.kind === 'tool' && entity.data.kind === 'tool') {
     const tool = entity.data as ToolData;
@@ -84,7 +90,7 @@ export function getTraceSnapshotInspectorKind(entity: TraceEntity): TraceSnapsho
   if (entity.kind === 'phase') return 'phase';
   if (entity.kind === 'llm' || entity.kind === 'tool') return 'call';
   if (entity.kind === 'error') return 'error';
-  if (entity.kind === 'run' || entity.kind === 'agent' || entity.kind === 'orchestrator' || entity.kind === 'planner') {
+  if (entity.kind === 'run' || entity.kind === 'agent' || entity.kind === 'orchestrator' || entity.kind === 'planner' || entity.kind === 'interaction') {
     return 'entity';
   }
   return 'unknown';

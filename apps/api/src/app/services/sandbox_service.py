@@ -400,6 +400,14 @@ class SandboxService:
     async def resume_run(self, run_id: UUID) -> Optional[SandboxRun]:
         return await self.run_manager.resume_run(run_id)
 
+    async def update_run_context(
+        self,
+        run_id: UUID,
+        context_snapshot: Dict[str, Any],
+    ) -> Optional[SandboxRun]:
+        """Update the context_snapshot for a run (used during resume)."""
+        return await self.run_manager.update_run_context(run_id, context_snapshot)
+
     async def get_run_steps_count(self, run_id: UUID) -> int:
         return await self.run_manager.get_run_steps_count(run_id)
 

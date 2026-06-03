@@ -51,6 +51,7 @@ class RuntimeTraceBuilder:
         "planner_decision": "planner",
         "policy_decision": "policy",
         "confirmation_required": "policy",
+        "question_answer": "system",
         "protocol_retry": "retry",
         # budget
         "budget_snapshot": "budget",
@@ -95,6 +96,7 @@ class RuntimeTraceBuilder:
         "planner_decision": "Решение планировщика",
         "policy_decision": "Решение политики",
         "confirmation_required": "Требуется подтверждение",
+        "question_answer": "Вопрос-ответ",
         "protocol_retry": "Повтор протокола",
         "budget_snapshot": "Снимок бюджета",
         "llm_call": "LLM вызов",
@@ -228,6 +230,16 @@ class RuntimeTraceBuilder:
             return str(data.get("content") or data.get("request") or "User request")
         if raw_type == "protocol_retry":
             return str(data.get("reason") or "Protocol retry")
+        if raw_type == "question_answer":
+            question = str(data.get("question") or "").strip()
+            answer = str(data.get("user_answer") or "").strip()
+            if question and answer:
+                return f"{question} → {answer}"
+            if question:
+                return question
+            if answer:
+                return answer
+            return "Question answered"
         if raw_type in {"routing", "routing_decision"}:
             return str(data.get("agent_slug") or data.get("mode") or "Routing decision")
         if raw_type == "triage_complete":

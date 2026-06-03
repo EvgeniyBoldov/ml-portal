@@ -611,3 +611,305 @@ async def confirm_run_action(
         await svc.finish_run(run_id, "completed", "Write action rejected by user")
         await db.commit()
         return {"status": "rejected", "run_id": str(run_id)}
+
+
+@router.post("/sessions/{session_id}/runs/{run_id}/resume")
+async def resume_sandbox_run(
+    session_id: uuid.UUID,
+    run_id: uuid.UUID,
+    data: SandboxConfirmAction,
+    db: AsyncSession = Depends(db_session),
+    user: UserCtx = Depends(require_admin),
+    llm_client: LLMClientProtocol = Depends(get_llm_client),
+):
+    """Resume a paused sandbox run (waiting_confirmation or waiting_input) via SSE stream.
+
+    Continues the same run (no new trace), streaming incremental events.
+    """
+    from app.services.runtime_resume_checkpoint_service import RuntimeResumeCheckpointService
+
+    svc = SandboxService(db)
+    await check_session_owner(svc, session_id, user)
+
+    run = await svc.get_run(run_id)
+    if not run or run.session_id != session_id:
+        raise HTTPException(status_code=404, detail="Run not found")
+    if run.status not in ("waiting_confirmation", "waiting_input"):
+        raise HTTPException(status_code=400, detail="Run is not waiting for resume")
+
+    action = "confirm" if data.confirmed else "cancel"
+    user_input = getattr(data, "user_input", None) or ""
+
+    if action == "cancel":
+        await svc.finish_run(run_id, "cancelled", "Cancelled by user")
+        await db.commit()
+
+        async def _cancel_gen() -> AsyncGenerator[str, None]:
+            yield f'data: {{"type": "run_paused", "status": "cancelled", "run_id": "{run_id}"}}\n\n'
+            yield f'data: {{"type": "done", "run_id": "{run_id}"}}\n\n'
+
+        return StreamingResponse(_cancel_gen(), media_type="text/event-stream")
+
+    # Build checkpoint from paused state
+    paused_action = run.paused_action if isinstance(run.paused_action, dict) else None
+    paused_context = run.paused_context if isinstance(run.paused_context, dict) else None
+
+    # Extract agent_run_id for pipeline continuation (internal run ID from paused context)
+    agent_run_id = paused_context.get("run_id") if paused_context else None
+
+    checkpoint = RuntimeResumeCheckpointService().build(
+        run_id=run_id,
+        agent_slug=run.agent_slug,
+        tenant_id=str(run.tenant_id) if run.tenant_id else None,
+        user_id=str(run.user_id) if run.user_id else str(user.id),
+        chat_id=run.chat_id,
+        paused_action=paused_action,
+        paused_context=paused_context,
+        resume_action="confirm",  # Sandbox always confirms
+        user_input=user_input or None,
+        source_context_snapshot=run.context_snapshot if isinstance(run.context_snapshot, dict) else None,
+    )
+
+    # Update run to resumed state
+    await svc.finish_run(run_id, "resumed", None)
+    snapshot = dict(run.context_snapshot or {})
+    snapshot["resume_checkpoint"] = checkpoint
+    await svc.update_run_context(run_id, snapshot)
+    await db.commit()
+
+    # Get branch info
+    branch = await svc.get_branch(run.branch_id) if run.branch_id else None
+    if not branch:
+        raise HTTPException(status_code=400, detail="Run has no branch")
+
+    u_uuid = user_uuid(user)
+    t_uuid = await tenant_uuid(db, user)
+
+    # Confirmation tokens for HITL gate
+    confirmed_fingerprints: list[str] = []
+    if isinstance(paused_action, dict):
+        confirmed_fingerprints = RuntimeHitlProtocolService.extract_confirmed_fingerprints(paused_action, paused_context)
+
+    async def event_stream() -> AsyncGenerator[str, None]:
+        session_factory = get_session_factory()
+        async with session_factory() as stream_db:
+            runtime_trace = RuntimeTraceLogger(
+                session=stream_db,
+                session_factory=session_factory,
+                run_store=RunStore(session_factory=session_factory),
+            )
+
+            tool_ctx = runtime_trace.attach_context(ToolContext(
+                tenant_id=t_uuid,
+                user_id=u_uuid,
+                chat_id=None,
+                request_id=str(uuid.uuid4()),
+                extra={"sandbox_confirmed_fingerprints": confirmed_fingerprints},
+            ))
+
+            pipeline = RuntimePipeline(
+                session=stream_db,
+                llm_client=llm_client,
+                run_store=RunStore(session_factory=session_factory),
+            )
+
+            # Build request from paused state context
+            original_goal = ""
+            if paused_context and isinstance(paused_context.get("inputs"), dict):
+                original_goal = paused_context["inputs"].get("goal", "")
+            if not original_goal and paused_context and isinstance(paused_context.get("orchestrator"), dict):
+                original_goal = paused_context["orchestrator"].get("goal", "")
+
+            request_text = original_goal or "Continue"
+
+            pipeline_request = PipelineRequest(
+                request_text=request_text,
+                chat_id=None,
+                user_id=str(u_uuid),
+                tenant_id=str(t_uuid),
+                messages=[{"role": "user", "content": user_input or request_text}],
+                agent_slug=run.agent_slug,
+                sandbox_overrides={
+                    "logging_level": "full",
+                    "sandbox_run_id": str(run_id),
+                    "sandbox_branch_id": str(branch.id),
+                    "sandbox_session_id": str(session_id),
+                },
+                continuation_meta={
+                    "resume_checkpoint": checkpoint,
+                    "resumed_from_run_id": agent_run_id,  # Continue same AgentRun, not new one
+                },
+                confirmation_tokens=confirmed_fingerprints,
+            )
+
+            step_num = 0
+            final_status = "completed"
+            final_error: Optional[str] = None
+            stream_enricher = SandboxStepEnrichmentService(stream_db)
+            tail_pending: set[str] = set()
+            tail_finished_early: set[str] = set()
+            tail_subscriber = RuntimeTailSubscriber(stream_key=str(run_id))
+            tail_queue: asyncio.Queue[dict] = asyncio.Queue()
+            tail_listener_task: Optional[asyncio.Task] = None
+
+            async def _persist_step(evt_type: str, evt_data: dict) -> None:
+                nonlocal step_num
+                step_num += 1
+                try:
+                    svc_inner = SandboxService(stream_db)
+                    step_payload = {
+                        **evt_data,
+                        "branch_id": str(branch.id) if branch else "",
+                    }
+                    step_payload = stream_enricher.sanitize_step_payload(
+                        step_type=evt_type,
+                        step_data=step_payload,
+                    )
+                    step_payload = await stream_enricher.enrich(
+                        step_payload,
+                        branch_name=branch.name if branch else "",
+                        snapshot_hash="",
+                    )
+                    await svc_inner.add_run_step(
+                        run_id=run_id,
+                        step_type=evt_type,
+                        step_data=step_payload,
+                        order_num=step_num,
+                    )
+                    await stream_db.commit()
+                except Exception as step_err:
+                    logger.warning(f"[Sandbox Resume] Failed to persist step: {step_err}")
+
+            async def _handle_tail_event(message: dict) -> tuple[str, dict]:
+                evt_type = str(message.get("type") or "status")
+                yield_payload = dict(message)
+                if evt_type == "status" and str(yield_payload.get("stage")) == "tail_finished":
+                    tail_id = str(yield_payload.get("tail_id") or "").strip()
+                    if tail_id and tail_id in tail_pending:
+                        tail_pending.discard(tail_id)
+                    elif tail_id:
+                        tail_finished_early.add(tail_id)
+                return evt_type, yield_payload
+
+            async def _drain_tail_events(max_items: int = 100) -> list[tuple[str, dict]]:
+                drained = 0
+                out: list[tuple[str, dict]] = []
+                while drained < max_items:
+                    try:
+                        message = tail_queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
+                    out.append(await _handle_tail_event(message))
+                    drained += 1
+                return out
+
+            try:
+                await tail_subscriber.subscribe()
+
+                async def _tail_listener() -> None:
+                    async for message in tail_subscriber.listen():
+                        await tail_queue.put(message)
+
+                tail_listener_task = asyncio.create_task(_tail_listener())
+
+                async for event in pipeline.execute(pipeline_request, tool_ctx):
+                    terminal = planner_terminal_from_event(event)
+                    if terminal is not None:
+                        final_status = terminal[0].value
+                        final_error = terminal[1]
+
+                    if event.type == RuntimeEventType.STOP:
+                        paused_payload = RuntimeHitlProtocolService.build_paused_from_stop(dict(event.data or {}))
+                        svc_pause = SandboxService(stream_db)
+                        await svc_pause.pause_run(
+                            run_id=run_id,
+                            status=paused_payload["reason"],
+                            paused_action=paused_payload["action"],
+                            paused_context=paused_payload["context"],
+                        )
+                        await stream_db.commit()
+                        pause_event = {
+                            "type": "run_paused",
+                            "reason": paused_payload["reason"],
+                            "action": paused_payload["action"],
+                            "context": paused_payload["context"],
+                            "contract_version": paused_payload["contract_version"],
+                            "run_id": str(run_id),
+                        }
+                        yield f'data: {json.dumps(pause_event, ensure_ascii=False)}\n\n'
+                        await _persist_step("run_paused", pause_event)
+                    elif event.type == RuntimeEventType.FINAL:
+                        final_status = "completed"
+                        final_error = None
+
+                    payload = {
+                        "type": event.type.value,
+                        "run_id": str(run_id),
+                        **event.data,
+                    }
+                    if event.type == RuntimeEventType.STATUS and str(event.data.get("stage")) == "memory_write_dispatched":
+                        tail_id = str(event.data.get("tail_id") or "").strip()
+                        if tail_id:
+                            if tail_id in tail_finished_early:
+                                tail_finished_early.discard(tail_id)
+                            else:
+                                tail_pending.add(tail_id)
+                    yield f'data: {json.dumps(payload, ensure_ascii=False)}\n\n'
+                    await _persist_step(event.type.value, event.data)
+                    drained_tail = await _drain_tail_events()
+                    for evt_type, evt_payload in drained_tail:
+                        yield f'data: {json.dumps(evt_payload, ensure_ascii=False)}\n\n'
+                        await _persist_step(evt_type, evt_payload)
+
+                if not str(final_status).startswith("waiting_"):
+                    svc_final = SandboxService(stream_db)
+                    await svc_final.finish_run(run_id, final_status, final_error)
+                    await stream_db.commit()
+
+                if tail_pending:
+                    deadline = asyncio.get_event_loop().time() + 90.0
+                    while tail_pending and asyncio.get_event_loop().time() < deadline:
+                        timeout = min(1.0, max(0.0, deadline - asyncio.get_event_loop().time()))
+                        try:
+                            message = await asyncio.wait_for(tail_queue.get(), timeout=timeout)
+                        except asyncio.TimeoutError:
+                            continue
+                        evt_type, evt_payload = await _handle_tail_event(message)
+                        yield f'data: {json.dumps(evt_payload, ensure_ascii=False)}\n\n'
+                        await _persist_step(evt_type, evt_payload)
+                    if tail_pending:
+                        timeout_payload = {
+                            "type": "status",
+                            "run_id": str(run_id),
+                            "stage": "tail_timeout",
+                            "pending_tail_ids": sorted(tail_pending),
+                        }
+                        yield f'data: {json.dumps(timeout_payload, ensure_ascii=False)}\n\n'
+                        await _persist_step("status", timeout_payload)
+
+            except Exception as e:
+                await runtime_trace.log_error(
+                    run_id,
+                    stage="sandbox_resume_stream",
+                    error=e,
+                    data={"run_id": str(run_id)},
+                )
+                yield f'data: {json.dumps({"type": "error", "error": str(e), "run_id": str(run_id)})}\n\n'
+                try:
+                    svc_err = SandboxService(stream_db)
+                    await svc_err.finish_run(run_id, "failed", str(e))
+                    await stream_db.commit()
+                except Exception:
+                    pass
+            finally:
+                if tail_listener_task and not tail_listener_task.done():
+                    tail_listener_task.cancel()
+                    try:
+                        await tail_listener_task
+                    except asyncio.CancelledError:
+                        pass
+                await tail_subscriber.close()
+
+            yield f'data: {json.dumps({"type": "done", "run_id": str(run_id)})}\n\n'
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")

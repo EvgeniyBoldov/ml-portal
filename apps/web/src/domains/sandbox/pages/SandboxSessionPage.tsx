@@ -307,6 +307,13 @@ export default function SandboxSessionPage() {
           onRun={handleRun}
           onStop={sandboxRun.stop}
           onSelectRun={handleSelectRun}
+          onClarifySubmit={(text) => {
+            if (sandboxRun.activeRun?.status === 'waiting_confirmation') {
+              sandboxRun.confirmAction(true, text);
+            } else {
+              sandboxRun.handleClarifySubmit(text);
+            }
+          }}
           onSelectStep={(runId, stepId, virtualStep, steps, entity) => {
             void handleSelectStep(runId, stepId, virtualStep, steps, entity);
           }}
@@ -335,15 +342,7 @@ export default function SandboxSessionPage() {
         />
       </div>
 
-      {/* Write confirmation dialog */}
-      {sandboxRun.isWaitingConfirmation &&
-        sandboxRun.activeRun.pendingConfirmation && (
-          <ConfirmWriteDialog
-            event={sandboxRun.activeRun.pendingConfirmation}
-            onConfirm={() => sandboxRun.confirmAction(true)}
-            onReject={() => sandboxRun.confirmAction(false)}
-          />
-        )}
+      {/* Confirmation now handled via RunChat clarify-box */}
     </div>
   );
 }

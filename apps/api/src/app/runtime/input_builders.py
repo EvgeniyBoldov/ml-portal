@@ -34,7 +34,9 @@ class PlannerInputBuilder:
 
         return {
             "goal": state.goal,
+            "current_user_query": state.current_user_query,
             "conversation_summary": conversation_summary,
+            "continuation": dict(state.continuation or {}) or None,
             "available_agents": [
                 {
                     "slug": item.get("slug"),

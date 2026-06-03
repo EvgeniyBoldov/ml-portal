@@ -39,6 +39,23 @@ from app.agents.runtime.confirmation import get_confirmation_service
 router = APIRouter()
 logger = get_logger(__name__)
 
+_NON_RUNTIME_RESOLVABLE_AGENT_SLUGS = {
+    "planner",
+    "synthesizer",
+    "fact_extractor",
+    "summary_compactor",
+    "memory",
+}
+
+
+def _normalize_resume_agent_slug(agent_slug: str | None) -> str | None:
+    if not agent_slug:
+        return None
+    normalized = str(agent_slug).strip()
+    if not normalized or normalized in _NON_RUNTIME_RESOLVABLE_AGENT_SLUGS:
+        return None
+    return normalized
+
 
 def _compat_symbol(name: str, fallback: Any) -> Any:
     """Compatibility shim for legacy test patch points on package module."""
@@ -205,8 +222,8 @@ async def resume_run(
     session: AsyncSession = Depends(db_session),
     current_user: UserCtx = Depends(get_current_user),
     _rl: None = Depends(rate_limit_dependency(key_prefix="chat_resume", rpm=20, rph=300)),
-):
-    """Resume a paused run (waiting_confirmation or waiting_input)."""
+) -> StreamingResponse:
+    """Resume a paused run (waiting_confirmation or waiting_input) with SSE streaming."""
     from app.services.chat_turn_service import ChatTurnService
     from app.repositories.chats_repo import AsyncChatsRepository, AsyncChatMessagesRepository
 
@@ -245,7 +262,11 @@ async def resume_run(
         if turn:
             await turn_service.cancel_turn(turn.id, error_message="Cancelled by user", agent_run_id=run_uuid)
         await session.commit()
-        return {"run_id": run_id, "status": "cancelled"}
+        # Return SSE for cancel (single error-like event with status)
+        async def _cancel_gen() -> AsyncGenerator[str, None]:
+            yield format_chat_sse(ChatSSEEventType.ERROR, {"run_id": run_id, "status": "cancelled", "reason": "User cancelled"})
+            yield format_chat_sse_done()
+        return StreamingResponse(_cancel_gen(), media_type="text/event-stream")
 
     user_input = ""
     if action == "input":
@@ -263,16 +284,16 @@ async def resume_run(
         paused_context=paused_context if isinstance(paused_context, dict) else None,
         resume_action=action,
         user_input=user_input or None,
+        source_context_snapshot=run.context_snapshot if isinstance(run.context_snapshot, dict) else None,
     )
 
     run.status = normalize_run_status_for_storage("resumed")
     run.error = None
-    run.finished_at = datetime.now(timezone.utc)
+    run.finished_at = None  # Clear finished_at for resumed run
     snapshot = dict(getattr(run, "context_snapshot", None) or {})
     snapshot["resume_checkpoint"] = checkpoint
     run.context_snapshot = snapshot
-    run.paused_action = None
-    run.paused_context = None
+    # Keep paused_action/context until pipeline starts and clears them via resume_run
     if turn:
         await turn_service.cancel_turn(
             turn.id,
@@ -282,17 +303,11 @@ async def resume_run(
     await session.commit()
 
     if not run.chat_id:
-        payload: Dict[str, Any] = {
-            "run_id": run_id,
-            "status": "resumed_without_continuation",
-            "paused_action": paused_action,
-            "paused_context": paused_context,
-            "resume_checkpoint": checkpoint,
-            "warning": "Run has no chat_id, continuation skipped",
-        }
-        if action == "input":
-            payload["user_input"] = user_input
-        return payload
+        # No chat_id - can't stream, return error SSE
+        async def _no_chat_gen() -> AsyncGenerator[str, None]:
+            yield format_chat_sse(ChatSSEEventType.ERROR, {"run_id": run_id, "status": "error", "reason": "Run has no chat_id"})
+            yield format_chat_sse_done()
+        return StreamingResponse(_no_chat_gen(), media_type="text/event-stream")
 
     resume_content = build_resume_content(
         action=action,
@@ -337,16 +352,35 @@ async def resume_run(
         messages_repo=messages_repo,
     )
 
-    return await ChatResumeOrchestrator(service).continue_chat(
-        run_id=run_id,
-        chat_id=str(run.chat_id),
-        user_id=str(current_user.id),
-        tenant_id=str(run.tenant_id),
-        agent_slug=run.agent_slug,
-        resume_content=resume_content,
-        checkpoint=checkpoint,
-        paused_action=paused_action if isinstance(paused_action, dict) else None,
-        paused_context=paused_context if isinstance(paused_context, dict) else None,
-        user_input=user_input or None,
-        confirmation_tokens=confirmation_tokens,
-    )
+    async def _resume_gen() -> AsyncGenerator[str, None]:
+        try:
+            async for event in service.send_message_stream(
+                chat_id=str(run.chat_id),
+                user_id=str(current_user.id),
+                tenant_id=str(run.tenant_id),
+                content=resume_content,
+                attachment_ids=[],
+                idempotency_key=None,
+                model=None,
+                agent_slug=_normalize_resume_agent_slug(run.agent_slug),
+                continuation_meta={
+                    "resume_checkpoint": checkpoint,
+                    "resumed_from_run_id": run_id,
+                },
+                confirmation_tokens=confirmation_tokens,
+                persist_user_message=False,
+            ):
+                try:
+                    sse_text = map_service_event_to_sse(event)
+                except Exception as exc:
+                    logger.warning("Failed to map resume event to SSE: %s", exc)
+                    sse_text = None
+                if sse_text:
+                    yield sse_text
+            yield format_chat_sse_done()
+        except Exception as e:
+            logger.error(f"Error in resume stream: {e}", exc_info=True)
+            yield format_chat_sse(ChatSSEEventType.ERROR, ErrorPayload(error=str(e)))
+            yield format_chat_sse_done()
+
+    return StreamingResponse(_resume_gen(), media_type="text/event-stream")

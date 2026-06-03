@@ -26,6 +26,49 @@ def orchestrator() -> ChatTurnOrchestrator:
 
 class TestChatTurnOrchestrator:
     @pytest.mark.asyncio
+    async def test_execute_turn_skips_user_message_persistence_for_resume_flow(self, orchestrator: ChatTurnOrchestrator):
+        chat = SimpleNamespace(tenant_id="00000000-0000-0000-0000-000000000001", name="Chat")
+        orchestrator.turn_service.start_turn = AsyncMock(return_value=SimpleNamespace(id=uuid4()))
+        orchestrator.turn_service.attach_user_message = AsyncMock()
+        orchestrator.turn_service.complete_turn = AsyncMock()
+        orchestrator.persistence_service.create_user_message = AsyncMock()
+        orchestrator.persistence_service.create_assistant_message = AsyncMock(
+            return_value=SimpleNamespace(message_id="assistant-1", created_at="2026-01-01T12:00:01Z")
+        )
+        orchestrator.context_service.load_chat_context = AsyncMock(return_value=[])
+        orchestrator.title_service.generate_chat_title = AsyncMock(return_value=None)
+
+        async def fake_run_with_router(**kwargs):
+            yield {"type": "final_content", "content": "Продолжаю", "sources": []}
+
+        events = [
+            event
+            async for event in orchestrator.execute_turn(
+                chat=chat,
+                chat_id="chat-1",
+                user_id="user-1",
+                content="Подтверждаю.",
+                attachment_ids=[],
+                attachment_meta=[],
+                attachment_prompt_context="",
+                idempotency_key=None,
+                model=None,
+                agent_slug=None,
+                continuation_meta={"resume_checkpoint": {"resume_action": "confirm"}},
+                persist_user_message=False,
+                run_with_router=fake_run_with_router,
+                store_idempotency=AsyncMock(),
+                bind_attachments=AsyncMock(),
+                process_generated_files=AsyncMock(return_value={"content": "Продолжаю", "attachments": []}),
+            )
+        ]
+
+        assert all(event["type"] != "user_message" for event in events)
+        orchestrator.persistence_service.create_user_message.assert_not_awaited()
+        orchestrator.turn_service.attach_user_message.assert_not_awaited()
+        orchestrator.persistence_service.create_assistant_message.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_execute_turn_emits_final_and_completed(self, orchestrator: ChatTurnOrchestrator):
         chat = SimpleNamespace(tenant_id="00000000-0000-0000-0000-000000000001", name="New Chat")
         orchestrator.turn_service.start_turn = AsyncMock(return_value=SimpleNamespace(id=uuid4()))
@@ -59,6 +102,7 @@ class TestChatTurnOrchestrator:
                 model=None,
                 agent_slug=None,
                 continuation_meta=None,
+                persist_user_message=True,
                 run_with_router=fake_run_with_router,
                 store_idempotency=store_idempotency,
                 bind_attachments=bind_attachments,
@@ -105,6 +149,7 @@ class TestChatTurnOrchestrator:
                 model=None,
                 agent_slug=None,
                 continuation_meta=None,
+                persist_user_message=True,
                 run_with_router=fake_run_with_router,
                 store_idempotency=AsyncMock(),
                 bind_attachments=bind_attachments,
@@ -149,6 +194,7 @@ class TestChatTurnOrchestrator:
                 model=None,
                 agent_slug=None,
                 continuation_meta=None,
+                persist_user_message=True,
                 run_with_router=fake_run_with_router,
                 store_idempotency=AsyncMock(),
                 bind_attachments=bind_attachments,
@@ -194,6 +240,7 @@ class TestChatTurnOrchestrator:
                 model=None,
                 agent_slug=None,
                 continuation_meta=None,
+                persist_user_message=True,
                 run_with_router=fake_run_with_router,
                 store_idempotency=AsyncMock(),
                 bind_attachments=AsyncMock(),
@@ -232,6 +279,7 @@ class TestChatTurnOrchestrator:
                 model=None,
                 agent_slug=None,
                 continuation_meta=None,
+                persist_user_message=True,
                 run_with_router=fake_run_with_router,
                 store_idempotency=AsyncMock(),
                 bind_attachments=AsyncMock(),
@@ -284,6 +332,7 @@ class TestChatTurnOrchestrator:
                 model=None,
                 agent_slug=None,
                 continuation_meta=None,
+                persist_user_message=True,
                 run_with_router=fake_run_with_router,
                 store_idempotency=store_idempotency,
                 bind_attachments=AsyncMock(),
@@ -335,6 +384,7 @@ class TestChatTurnOrchestrator:
                 model=None,
                 agent_slug=None,
                 continuation_meta=None,
+                persist_user_message=True,
                 run_with_router=fake_run_with_router,
                 store_idempotency=AsyncMock(),
                 bind_attachments=AsyncMock(),

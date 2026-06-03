@@ -131,6 +131,7 @@ class PlanningStage:
             iteration_context_snapshot = compact_snapshot(
                 inputs={
                     "goal": runtime_state.goal or request.request_text,
+                    "current_user_query": runtime_state.current_user_query,
                     "iteration_intent": f"Choose next step for iteration #{planner_iteration}",
                 },
                 limits=serialize_limits(planner_limits),
@@ -146,6 +147,7 @@ class PlanningStage:
                         "facts": len(runtime_state.runtime_facts),
                         "summary_chars": len(str(runtime_state.memory_bundle.compact_view())),
                     },
+                    "continuation": dict(runtime_state.continuation or {}) or None,
                 },
             )
             yield PhasedEvent(

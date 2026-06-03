@@ -53,6 +53,7 @@ class ChatTurnOrchestrator:
         model: Optional[str],
         agent_slug: Optional[str],
         continuation_meta: Optional[Dict[str, Any]],
+        persist_user_message: bool,
         run_with_router,
         store_idempotency,
         bind_attachments,
@@ -68,29 +69,33 @@ class ChatTurnOrchestrator:
         )
         turn_id = persisted_turn.id  # cache scalar to survive ORM expiry
 
-        yield {"type": "status", "stage": "saving_user_message"}
-        user_meta = {"attachments": attachment_meta} if attachment_meta else None
-        user_message = await self.persistence_service.create_user_message(
-            chat_id=chat_id,
-            content=content,
-            meta=user_meta,
-        )
-        user_message_id = user_message.message_id  # cache scalar to survive ORM expiry
-        user_message_created_at = user_message.created_at
-        if attachment_ids:
-            await bind_attachments(
+        user_message_id: Optional[str] = None
+        if persist_user_message:
+            yield {"type": "status", "stage": "saving_user_message"}
+            user_meta = {"attachments": attachment_meta} if attachment_meta else None
+            user_message = await self.persistence_service.create_user_message(
                 chat_id=chat_id,
-                owner_id=user_id,
-                attachment_ids=attachment_ids,
-                message_id=user_message_id,
+                content=content,
+                meta=user_meta,
             )
-        await self.turn_service.attach_user_message(turn_id, user_message_id)
-        turn.transition(TurnPhase.USER_PERSISTED)
-        yield {
-            "type": "user_message",
-            "message_id": user_message_id,
-            "created_at": user_message_created_at,
-        }
+            user_message_id = user_message.message_id  # cache scalar to survive ORM expiry
+            user_message_created_at = user_message.created_at
+            if attachment_ids:
+                await bind_attachments(
+                    chat_id=chat_id,
+                    owner_id=user_id,
+                    attachment_ids=attachment_ids,
+                    message_id=user_message_id,
+                )
+            await self.turn_service.attach_user_message(turn_id, user_message_id)
+            turn.transition(TurnPhase.USER_PERSISTED)
+            yield {
+                "type": "user_message",
+                "message_id": user_message_id,
+                "created_at": user_message_created_at,
+            }
+        else:
+            turn.transition(TurnPhase.USER_PERSISTED)
 
         turn.transition(TurnPhase.CONTEXT_LOADED)
         yield {"type": "status", "stage": "loading_context"}
@@ -135,6 +140,7 @@ class ChatTurnOrchestrator:
         assistant_content = ""
         rag_sources = []
         llm_error: Optional[dict[str, str]] = None
+        final_stop_reason: Optional[str] = None
         run_paused = False
         paused_run_id: Optional[str] = None
         last_run_id: Optional[str] = None
@@ -162,12 +168,7 @@ class ChatTurnOrchestrator:
                 elif event_data.get("type") == "final_content":
                     assistant_content = event_data.get("content", assistant_content)
                     rag_sources = event_data.get("sources", [])
-                    _final_stop_reason = event_data.get("stop_reason")
-                    if _final_stop_reason in ("failed", "loop_detected", "budget_exceeded", "aborted"):
-                        llm_error = self._normalize_runtime_error(
-                            code=f"runtime_{_final_stop_reason}",
-                            raw_message=f"Agent run ended with status: {_final_stop_reason}",
-                        )
+                    final_stop_reason = str(event_data.get("stop_reason") or "").strip() or None
                 elif event_data.get("type") == "run_paused":
                     run_paused = True
                     paused_run_id = event_data.get("run_id")
@@ -216,7 +217,15 @@ class ChatTurnOrchestrator:
                 content=assistant_content,
                 rag_sources=rag_sources,
                 attachments=generated_attachment_meta,
-                extra_meta={"runtime_run_id": last_run_id} if last_run_id else None,
+                extra_meta={
+                    **({"runtime_run_id": last_run_id} if last_run_id else {}),
+                    **({"runtime_stop_reason": final_stop_reason} if final_stop_reason else {}),
+                    **(
+                        {"runtime_status": final_stop_reason}
+                        if final_stop_reason and final_stop_reason not in {"completed", "stopped"}
+                        else {}
+                    ),
+                } or None,
             )
 
             if generated_attachment_ids:
@@ -228,7 +237,7 @@ class ChatTurnOrchestrator:
                     message_id=assistant_message.message_id,
                 )
 
-            if idempotency_key:
+            if idempotency_key and user_message_id:
                 await store_idempotency(
                     idempotency_key,
                     user_message_id,

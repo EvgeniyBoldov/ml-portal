@@ -100,4 +100,16 @@ describe('runtimeTrace normalize', () => {
     expect(event.category).toBe('planner');
     expect(event.summary).toBe('call_agent: Need network inventory');
   });
+
+  it('summarizes question-answer interaction events', () => {
+    const event = normalizeTraceEvent({
+      id: 'qa-1',
+      raw_type: 'question_answer',
+      data: { question: 'Какой регламент?', user_answer: 'HR' },
+    });
+
+    expect(event.category).toBe('system');
+    expect(event.title).toBe('Вопрос-ответ');
+    expect(event.summary).toBe('Какой регламент? → HR');
+  });
 });

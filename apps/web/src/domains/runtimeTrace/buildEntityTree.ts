@@ -31,6 +31,7 @@ import { hashEntityIds as hashIds } from './traceIds';
 import {
   buildAgentData,
   buildErrorData,
+  buildInteractionData,
   buildLLMData,
   buildPlannerData,
   buildRunData,
@@ -620,6 +621,26 @@ function _buildEntityTree3Pass(
         resolvedParent.children.push(decision);
         entityById.set(decision.id, decision);
       }
+      continue;
+    }
+
+    // --- error ---
+    if (rawType === 'question_answer') {
+      const interactionEntity: TraceEntity = {
+        id: String(raw.entity_id ?? hashIds([event.id])),
+        kind: 'interaction',
+        parentId: resolvedParent.id,
+        depth: resolvedParent.depth + 1,
+        children: [],
+        title: event.summary ?? 'Question answered',
+        status: event.status,
+        startedAt: event.started_at,
+        durationMs: event.duration_ms,
+        sourceEventIds: [event.id],
+        data: buildInteractionData(event),
+      };
+      resolvedParent.children.push(interactionEntity);
+      entityById.set(interactionEntity.id, interactionEntity);
       continue;
     }
 
@@ -1330,6 +1351,34 @@ export function buildEntityTree(
       if (recentPending) {
         recentPending.events.push(event);
       }
+
+      const activeWindow = assembler.getCurrentAgentWindow();
+      if (activeWindow) {
+        activeWindow.events.push(event);
+      }
+      continue;
+    }
+
+    // --- Handle error events ---
+    if (rawType === 'question_answer') {
+      const interactionEntity: TraceEntity = {
+        id: String((event.raw?.raw?.entity_id as string | undefined) ?? hashIds([event.id])),
+        kind: 'interaction',
+        parentId: null,
+        depth: 0,
+        children: [],
+        title: event.summary ?? 'Question answered',
+        status: event.status,
+        startedAt: event.started_at,
+        durationMs: event.duration_ms,
+        sourceEventIds: [event.id],
+        data: buildInteractionData(event),
+      };
+
+      const parent = resolveParentForEvent(event);
+      interactionEntity.parentId = parent.id;
+      interactionEntity.depth = parent.depth + 1;
+      parent.children.push(interactionEntity);
 
       const activeWindow = assembler.getCurrentAgentWindow();
       if (activeWindow) {

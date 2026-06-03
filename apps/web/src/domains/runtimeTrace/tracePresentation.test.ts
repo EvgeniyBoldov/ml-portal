@@ -55,4 +55,16 @@ describe('tracePresentation', () => {
     expect(getTraceEntityTitle(entity)).toBe('Память');
     expect(getTraceSnapshotInspectorKind(entity)).toBe('phase');
   });
+
+  it('maps interaction entities to entity inspection', () => {
+    const entity = makeEntity({
+      kind: 'interaction',
+      title: 'Question answered',
+      data: { kind: 'interaction', interactionKind: 'clarify', question: 'Q', answer: 'A' },
+    });
+
+    expect(getTraceEntityKindLabel(entity)).toBe('Диалог');
+    expect(getTraceEntityTitle(entity)).toBe('Уточнение');
+    expect(getTraceSnapshotInspectorKind(entity)).toBe('entity');
+  });
 });

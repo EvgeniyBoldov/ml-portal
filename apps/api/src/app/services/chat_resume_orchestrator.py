@@ -53,6 +53,7 @@ class ChatResumeOrchestrator:
                 "resumed_from_run_id": run_id,
             },
             confirmation_tokens=list(confirmation_tokens or []),
+            persist_user_message=False,
         ):
             terminal = continuation_terminal_from_event(event)
             if terminal:

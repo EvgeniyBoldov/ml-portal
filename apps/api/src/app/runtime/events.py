@@ -62,6 +62,7 @@ class RuntimeEventType(str, Enum):
     # Interaction
     WAITING_INPUT = "waiting_input"
     CONFIRMATION_REQUIRED = "confirmation_required"
+    QUESTION_ANSWER = "question_answer"
     STOP = "stop"
     # Errors
     ERROR = "error"
@@ -371,6 +372,35 @@ class RuntimeEvent:
         if summary:
             data["summary"] = summary
         return cls(RuntimeEventType.CONFIRMATION_REQUIRED, data)
+
+    @classmethod
+    def question_answer(
+        cls,
+        *,
+        interaction_id: str,
+        parent_entity_id: str,
+        resume_action: str,
+        question: Optional[str] = None,
+        user_answer: Optional[str] = None,
+        source_run_id: Optional[str] = None,
+        question_kind: Optional[str] = None,
+    ) -> "RuntimeEvent":
+        data: Dict[str, Any] = {
+            "entity_id": interaction_id,
+            "entity_type": "question_answer",
+            "parent_entity_type": "orchestrator",
+            "parent_entity_id": parent_entity_id,
+            "resume_action": resume_action,
+        }
+        if question:
+            data["question"] = question
+        if user_answer:
+            data["user_answer"] = user_answer
+        if source_run_id:
+            data["source_run_id"] = source_run_id
+        if question_kind:
+            data["question_kind"] = question_kind
+        return cls(RuntimeEventType.QUESTION_ANSWER, data)
 
     @classmethod
     def stop(

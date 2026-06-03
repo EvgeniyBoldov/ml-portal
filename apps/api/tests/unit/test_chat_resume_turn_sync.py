@@ -381,6 +381,7 @@ class TestChatResumeTurnSync:
                 model=None,
                 agent_slug=None,
                 continuation_meta=None,
+                persist_user_message=True,
                 run_with_router=fake_run_with_router,
                 store_idempotency=AsyncMock(),
                 bind_attachments=AsyncMock(),

@@ -54,6 +54,7 @@ class RuntimeTurnState(BaseModel):
 
     goal: str = ""
     current_user_query: str = ""
+    continuation: Dict[str, Any] = Field(default_factory=dict)
     outline: Optional[Dict[str, Any]] = None
     current_phase_id: Optional[str] = None
     completed_phase_ids: List[str] = Field(default_factory=list)
@@ -119,6 +120,7 @@ class RuntimeTurnState(BaseModel):
         goal: str,
         current_user_query: str,
         memory_bundle: MemoryBundle,
+        continuation: Optional[Dict[str, Any]] = None,
     ) -> "RuntimeTurnState":
         return cls(
             run_id=run_id,
@@ -128,6 +130,7 @@ class RuntimeTurnState(BaseModel):
             goal=goal,
             current_user_query=current_user_query,
             memory_bundle=memory_bundle,
+            continuation=dict(continuation or {}),
         )
 
     @staticmethod
@@ -229,6 +232,7 @@ class RuntimeTurnState(BaseModel):
         return {
             "goal": self.goal,
             "iter_count": self.iter_count,
+            "continuation": dict(self.continuation or {}),
             "facts": [item.text for item in self.runtime_facts[-max_items:]],
             "agent_results": list(self.agent_results[-max_items:]),
             "iteration_results": [item.model_dump() for item in self.iteration_results[-max_items:]],
@@ -251,6 +255,7 @@ class RuntimeTurnState(BaseModel):
             "tenant_id": str(self.tenant_id) if self.tenant_id else None,
             "goal": self.goal,
             "current_user_query": self.current_user_query,
+            "continuation": dict(self.continuation or {}),
             "status": self.status,
             "iter_count": self.iter_count,
             "used_tool_calls": self.used_tool_calls,

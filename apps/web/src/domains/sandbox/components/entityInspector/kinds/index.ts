@@ -1,6 +1,7 @@
 export { RunInspectorTabs } from './RunInspectorTabs';
 export { OrchestratorInspectorTabs } from './OrchestratorInspectorTabs';
 export { AgentInspectorTabs } from './AgentInspectorTabs';
+export { InteractionInspectorTabs } from './InteractionInspectorTabs';
 export { LlmInspectorTabs } from './LlmInspectorTabs';
 export { ToolInspectorTabs } from './ToolInspectorTabs';
 export { PlannerInspectorTabs } from './PlannerInspectorTabs';

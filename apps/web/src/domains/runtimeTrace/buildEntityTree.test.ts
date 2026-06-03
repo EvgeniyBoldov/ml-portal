@@ -218,6 +218,25 @@ describe('buildEntityTree', () => {
       makeEvent({ id: 'e7', raw_type: 'llm_response', category: 'llm', status: 'ok', refs: { parent_entity_id: AGENT_RUN_ID, llm_call_id: LLM_CALL_ID }, raw: { id: 'e7', raw_type: 'llm_response', raw: { llm_call_id: LLM_CALL_ID, parent_entity_id: AGENT_RUN_ID } } }),
       makeEvent({ id: 'e8', raw_type: 'operation_call', category: 'operation', refs: { parent_entity_id: AGENT_RUN_ID }, raw: { id: 'e8', raw_type: 'operation_call', raw: { operation_slug: 'rag.search', call_id: 'c1', parent_entity_id: AGENT_RUN_ID } } }),
       makeEvent({ id: 'e9', raw_type: 'operation_result', category: 'operation', status: 'ok', refs: { parent_entity_id: AGENT_RUN_ID }, raw: { id: 'e9', raw_type: 'operation_result', raw: { call_id: 'c1', success: true, parent_entity_id: AGENT_RUN_ID } } }),
+      makeEvent({
+        id: 'e9a',
+        raw_type: 'question_answer',
+        category: 'system',
+        summary: 'Какой регламент? → HR',
+        refs: { parent_entity_id: ORCH_ID },
+        raw: {
+          id: 'e9a',
+          raw_type: 'question_answer',
+          raw: {
+            entity_id: `${RUN_ID}:question-answer`,
+            parent_entity_type: 'orchestrator',
+            parent_entity_id: ORCH_ID,
+            question_kind: 'clarify',
+            question: 'Какой регламент?',
+            user_answer: 'HR',
+          },
+        },
+      }),
       lc('s10', 'agent_end', { entity_id: AGENT_RUN_ID, entity_type: 'agent_run', parent_entity_id: ITER_ID, parent_entity_type: 'planner_iteration', agent_slug: 'viewer', status: 'completed' }),
       lc('s11', 'planner_iteration_end', { entity_id: ITER_ID, entity_type: 'planner_iteration', parent_entity_id: ORCH_ID, iteration: 1, status: 'completed' }),
       lc('s12', 'orchestrator_end', { entity_id: ORCH_ID, entity_type: 'orchestrator', parent_entity_id: RUN_ID, status: 'completed' }),
@@ -276,6 +295,17 @@ describe('buildEntityTree', () => {
       expect(agent).toBeDefined();
       const toolChildren = agent!.children.filter(c => c.kind === 'tool');
       expect(toolChildren.length).toBe(1);
+    });
+
+    it('creates interaction step under orchestrator for question-answer', () => {
+      const tree = buildEntityTree(events);
+      const interaction = flattenEntityTree(tree).find(e => e.kind === 'interaction');
+      expect(interaction).toBeDefined();
+      expect(interaction?.parentId).toBe(ORCH_ID);
+      if (interaction?.data.kind === 'interaction') {
+        expect(interaction.data.question).toBe('Какой регламент?');
+        expect(interaction.data.answer).toBe('HR');
+      }
     });
 
     it('creates synthesis entity inside active phase', () => {

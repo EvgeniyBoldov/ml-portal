@@ -62,6 +62,117 @@ RUNTIME_MEMORY_INLINE = False
 logger = get_logger(__name__)
 
 
+def _extract_resume_checkpoint(request: PipelineRequest) -> Optional[Dict[str, Any]]:
+    continuation_meta = request.continuation_meta if isinstance(request.continuation_meta, dict) else {}
+    checkpoint = continuation_meta.get("resume_checkpoint")
+    return checkpoint if isinstance(checkpoint, dict) else None
+
+
+def _extract_effective_goal(request: PipelineRequest, checkpoint: Optional[Dict[str, Any]]) -> str:
+    if isinstance(checkpoint, dict):
+        for key in ("original_goal", "original_user_request"):
+            value = str(checkpoint.get(key) or "").strip()
+            if value:
+                return value
+
+        source_snapshot = checkpoint.get("source_context_snapshot")
+        if isinstance(source_snapshot, dict):
+            source_inputs = source_snapshot.get("inputs")
+            if isinstance(source_inputs, dict):
+                for key in ("goal", "user_request"):
+                    value = str(source_inputs.get(key) or "").strip()
+                    if value:
+                        return value
+
+    return str(request.request_text or "").strip()
+
+
+def _build_continuation_state(
+    request: PipelineRequest,
+    checkpoint: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    if not isinstance(checkpoint, dict):
+        return {}
+
+    paused_action = checkpoint.get("paused_action") if isinstance(checkpoint.get("paused_action"), dict) else {}
+    paused_context = checkpoint.get("paused_context") if isinstance(checkpoint.get("paused_context"), dict) else {}
+    resumed_from_run_id = ""
+    continuation_meta = request.continuation_meta if isinstance(request.continuation_meta, dict) else {}
+    if continuation_meta.get("resumed_from_run_id"):
+        resumed_from_run_id = str(continuation_meta.get("resumed_from_run_id"))
+    elif checkpoint.get("source_run_id"):
+        resumed_from_run_id = str(checkpoint.get("source_run_id"))
+
+    original_goal = _extract_effective_goal(request, checkpoint)
+    structured: Dict[str, Any] = {
+        "mode": "resume",
+        "resume_action": str(checkpoint.get("resume_action") or "").strip(),
+        "resumed_from_run_id": resumed_from_run_id,
+        "original_goal": original_goal,
+        "paused_action": paused_action,
+        "paused_context": paused_context,
+        "user_response": str(checkpoint.get("user_input") or request.request_text or "").strip(),
+    }
+    source_snapshot = checkpoint.get("source_context_snapshot")
+    if isinstance(source_snapshot, dict) and source_snapshot:
+        structured["source_context_snapshot"] = source_snapshot
+    return {key: value for key, value in structured.items() if value not in ("", None, [], {})}
+
+
+def _extract_effective_user_query(request: PipelineRequest, checkpoint: Optional[Dict[str, Any]]) -> str:
+    if isinstance(checkpoint, dict):
+        user_input = str(checkpoint.get("user_input") or "").strip()
+        if user_input:
+            return user_input
+        resume_action = str(checkpoint.get("resume_action") or "").strip().lower()
+        if resume_action == "confirm":
+            return "[confirmation]"
+        if resume_action == "cancel":
+            return "[cancel]"
+    return str(request.request_text or "").strip()
+
+
+def _build_question_answer_event(
+    *,
+    run_id: str,
+    orchestrator_id: str,
+    checkpoint: Optional[Dict[str, Any]],
+) -> Optional[RuntimeEvent]:
+    if not isinstance(checkpoint, dict):
+        return None
+
+    resume_action = str(checkpoint.get("resume_action") or "").strip().lower()
+    if resume_action not in {"input", "confirm"}:
+        return None
+
+    paused_action = checkpoint.get("paused_action") if isinstance(checkpoint.get("paused_action"), dict) else {}
+    paused_context = checkpoint.get("paused_context") if isinstance(checkpoint.get("paused_context"), dict) else {}
+
+    question = str(
+        paused_context.get("question")
+        or paused_action.get("question")
+        or paused_context.get("message")
+        or paused_action.get("message")
+        or ""
+    ).strip()
+    user_answer = str(checkpoint.get("user_input") or "").strip()
+    if resume_action == "confirm" and not user_answer:
+        user_answer = "Подтверждено"
+
+    question_kind = "confirm" if resume_action == "confirm" else "clarify"
+    source_run_id = str(checkpoint.get("source_run_id") or "").strip() or None
+
+    return RuntimeEvent.question_answer(
+        interaction_id=f"{run_id}:question-answer",
+        parent_entity_id=orchestrator_id,
+        resume_action=resume_action,
+        question=question or None,
+        user_answer=user_answer or None,
+        source_run_id=source_run_id,
+        question_kind=question_kind,
+    )
+
+
 class RuntimePipeline:
     """Coordinator. Stateless between turns; all turn state lives in
     per-turn state objects built by the assembler."""
@@ -99,6 +210,10 @@ class RuntimePipeline:
         # Per-execute creation is OK; the stamper has no heavy initialization cost.
         envelope = EventEnvelopeStamper(chat_id=request.chat_id)
         platform = await PlatformConfigLoader(self._session).load()
+        resume_checkpoint = _extract_resume_checkpoint(request)
+        effective_goal = _extract_effective_goal(request, resume_checkpoint)
+        continuation_state = _build_continuation_state(request, resume_checkpoint)
+        effective_user_query = _extract_effective_user_query(request, resume_checkpoint)
 
         # --- RBAC resolve FIRST (before memory build) -----------------
         # If agent_slug is denied by RBAC, we treat it as None (fallback to default)
@@ -115,7 +230,7 @@ class RuntimePipeline:
         # --- Memory: read path ----------------------------------------
         attachment_ids, attachments_dropped = _extract_attachment_ids(request.messages)
         turn_mem = await self._assembler.memory_builder.build(
-            goal=request.request_text,
+            goal=effective_goal,
             chat_id=chat_id,
             user_id=user_id,
             tenant_id=tenant_id,
@@ -130,31 +245,27 @@ class RuntimePipeline:
             turn_mem.memory_diagnostics["attachments_dropped_count"] = attachments_dropped
 
         # Initialize RuntimeTurnState as the single source of truth
-        run_id = uuid4()
-
-        # --- Create top-level AgentRun so pause/resume can find it by run_id
-        run_logging_level = await self._resolve_run_logging_level(ctx)
-        if self._run_store is not None:
+        # For resume, use the original run_id; otherwise generate new
+        resumed_from_run_id = continuation_state.get("resumed_from_run_id") if isinstance(continuation_state, dict) else None
+        if resumed_from_run_id:
             try:
-                await self._run_store.start_run(
-                    tenant_id=str(tenant_id),
-                    agent_slug=request.agent_slug or "planner",
-                    logging_level=run_logging_level,
-                    user_id=str(user_id),
-                    chat_id=str(chat_id) if chat_id else None,
-                    run_id_override=run_id,
-                )
-            except Exception as _e:  # noqa: BLE001
-                logger.warning("Failed to create top-level AgentRun: %s", _e)
+                run_id = UUID(resumed_from_run_id)
+            except ValueError:
+                run_id = uuid4()
+        else:
+            run_id = uuid4()
+
+        run_logging_level = await self._resolve_run_logging_level(ctx)
 
         runtime_state = RuntimeTurnState.from_seed(
             run_id=run_id,
             chat_id=chat_id,
             user_id=user_id,
             tenant_id=tenant_id,
-            goal=request.request_text,
-            current_user_query=request.request_text,
+            goal=effective_goal,
+            current_user_query=effective_user_query,
             memory_bundle=turn_mem.memory_bundle,
+            continuation=continuation_state,
         )
         run_id_str = str(run_id)
         emitter = RuntimeEventEmitter(stamper=envelope, run_id=run_id_str)
@@ -178,16 +289,19 @@ class RuntimePipeline:
         run_context_snapshot = compact_snapshot(
             inputs={
                 "user_request": request.request_text,
+                "goal": effective_goal,
+                "current_user_query": effective_user_query,
             },
             limits=serialize_limits(run_limits_v2.as_entity_limits()),
             meta={
                 "agent_slug": effective_agent_slug or explicit_slug,
                 "model": request.model,
+                "continuation": continuation_state or None,
             },
         )
         planner_context_snapshot = compact_snapshot(
             inputs={
-                "goal": request.request_text,
+                "goal": effective_goal,
             },
             prompt=prompt_snapshot(planner_prompt, run_logging_level),
             limits=serialize_limits(planner_limits),
@@ -196,8 +310,24 @@ class RuntimePipeline:
                 "role": "planner",
                 "model": planner_model or request.model,
                 "explicit_agent_slug": explicit_slug,
+                "continuation": continuation_state or None,
             },
         )
+
+        if self._run_store is not None:
+            try:
+                await self._run_store.start_or_resume_run(
+                    tenant_id=str(tenant_id),
+                    agent_slug=request.agent_slug or "planner",
+                    logging_level=run_logging_level,
+                    user_id=str(user_id),
+                    chat_id=str(chat_id) if chat_id else None,
+                    context_snapshot=run_context_snapshot,
+                    run_id_override=run_id,
+                    resume_from_run_id=run_id if resumed_from_run_id else None,
+                )
+            except Exception as _e:  # noqa: BLE001
+                logger.warning("Failed to create/resume top-level AgentRun: %s", _e)
 
         yield emitter.emit(
             RuntimeEvent.run_start(
@@ -215,6 +345,16 @@ class RuntimePipeline:
             ),
             phase=OrchestrationPhase.PLANNER,
         )
+        question_answer_event = _build_question_answer_event(
+            run_id=run_id_str,
+            orchestrator_id=orchestrator_id,
+            checkpoint=resume_checkpoint,
+        )
+        if question_answer_event is not None:
+            yield emitter.emit(
+                question_answer_event,
+                phase=OrchestrationPhase.PLANNER,
+            )
 
         # Per-entity budget registry
         budget_registry = BudgetRegistry(run_limits=run_limits_v2)
@@ -259,6 +399,7 @@ class RuntimePipeline:
 
         assert planning_stage.outcome is not None
         planning_outcome = planning_stage.outcome
+        await_background_tail = bool(getattr(request, "await_background_tail", True))
 
         if planning_outcome.kind in (
             PlanningOutcomeKind.PAUSED,
@@ -274,21 +415,15 @@ class RuntimePipeline:
                 ),
                 phase=OrchestrationPhase.PLANNER,
             )
-            # Persist pause state so resume endpoint can find run by run_id.
+            # Mark status only (paused_action/context are stored by endpoint or
+            # orchestrator before pipeline gets here, e.g., via turn_service.pause_turn
+            # or SandboxService.pause_run). We only update status here.
             if planning_outcome.kind == PlanningOutcomeKind.PAUSED and self._run_store is not None:
                 try:
                     pause_status = planning_outcome.stop_reason.value if planning_outcome.stop_reason else "paused"
-                    # paused_action/context are stored by ChatTurnOrchestrator via
-                    # turn_service.pause_turn; here we only mark the AgentRun as paused
-                    # so the resume endpoint can look it up by run_id.
-                    await self._run_store.pause_run(
-                        run_id=run_id,
-                        status=pause_status,
-                        paused_action={},
-                        paused_context={},
-                    )
+                    await self._run_store.set_run_status(run_id=run_id, status=pause_status)
                 except Exception as _e:  # noqa: BLE001
-                    logger.warning("Failed to pause top-level AgentRun: %s", _e)
+                    logger.warning("Failed to set paused status on AgentRun: %s", _e)
             elif self._run_store is not None:
                 try:
                     await self._run_store.finish_run(
@@ -297,22 +432,34 @@ class RuntimePipeline:
                     )
                 except Exception as _e:  # noqa: BLE001
                     logger.warning("Failed to finish top-level AgentRun: %s", _e)
-            # Memory write-back still runs for paused/aborted turns so
-            # next turn sees the open_questions / error context.
-            async for memory_ev in self._finalize_memory(
-                turn_mem=turn_mem,
-                runtime_state=runtime_state,
-                request=request,
-                stop_reason=planning_outcome.stop_reason,
-                emitter=emitter,
-                budget_resolver=budget_resolver,
-                logging_level=run_logging_level,
-            ):
-                yield memory_ev
-            yield emitter.emit(
-                RuntimeEvent.run_end(run_id=run_id_str, status=terminal_status),
-                phase=OrchestrationPhase.PIPELINE,
-            )
+            if await_background_tail:
+                # Sandbox/trace mode consumes the full runtime tail, including
+                # memory writeback lifecycle.
+                async for memory_ev in self._finalize_memory(
+                    turn_mem=turn_mem,
+                    runtime_state=runtime_state,
+                    request=request,
+                    stop_reason=planning_outcome.stop_reason,
+                    emitter=emitter,
+                    budget_resolver=budget_resolver,
+                    logging_level=run_logging_level,
+                ):
+                    yield memory_ev
+                yield emitter.emit(
+                    RuntimeEvent.run_end(run_id=run_id_str, status=terminal_status),
+                    phase=OrchestrationPhase.PIPELINE,
+                )
+            else:
+                # Chat mode should stop streaming immediately after pause/error.
+                await self._consume_memory_finalize_background(
+                    turn_mem=turn_mem,
+                    runtime_state=runtime_state,
+                    request=request,
+                    stop_reason=planning_outcome.stop_reason,
+                    emitter=emitter,
+                    budget_resolver=budget_resolver,
+                    logging_level=run_logging_level,
+                )
             return
 
         # --- Finalization -----------------------------------------------
@@ -344,24 +491,46 @@ class RuntimePipeline:
         # PlanningOutcomeKind.DIRECT already emitted delta+final inside
         # the stage; nothing to finalize beyond memory write-back below.
 
-        # --- Memory: write path (new) -----------------------------------
-        async for memory_ev in self._finalize_memory(
-            turn_mem=turn_mem,
-            runtime_state=runtime_state,
-            request=request,
-            stop_reason=planning_outcome.stop_reason,
-            emitter=emitter,
-            budget_resolver=budget_resolver,
-            logging_level=run_logging_level,
-        ):
-            yield memory_ev
-        yield emitter.emit(
-            RuntimeEvent.run_end(
-                run_id=run_id_str,
-                status=planning_outcome.stop_reason.value if planning_outcome.stop_reason else "completed",
-            ),
-            phase=OrchestrationPhase.PIPELINE,
-        )
+        if self._run_store is not None:
+            try:
+                await self._run_store.finish_run(
+                    run_id=run_id,
+                    status=planning_outcome.stop_reason.value if planning_outcome.stop_reason else "completed",
+                )
+            except Exception as _e:  # noqa: BLE001
+                logger.warning("Failed to finish top-level AgentRun: %s", _e)
+
+        if await_background_tail:
+            # Sandbox/trace mode consumes the full runtime tail after final answer.
+            async for memory_ev in self._finalize_memory(
+                turn_mem=turn_mem,
+                runtime_state=runtime_state,
+                request=request,
+                stop_reason=planning_outcome.stop_reason,
+                emitter=emitter,
+                budget_resolver=budget_resolver,
+                logging_level=run_logging_level,
+            ):
+                yield memory_ev
+            yield emitter.emit(
+                RuntimeEvent.run_end(
+                    run_id=run_id_str,
+                    status=planning_outcome.stop_reason.value if planning_outcome.stop_reason else "completed",
+                ),
+                phase=OrchestrationPhase.PIPELINE,
+            )
+        else:
+            # Chat mode should finish the user stream on FINAL and dispatch memory
+            # writeback in the background without surfacing tail events.
+            await self._consume_memory_finalize_background(
+                turn_mem=turn_mem,
+                runtime_state=runtime_state,
+                request=request,
+                stop_reason=planning_outcome.stop_reason,
+                emitter=emitter,
+                budget_resolver=budget_resolver,
+                logging_level=run_logging_level,
+            )
 
     @staticmethod
     def _apply_sandbox_overrides(request: PipelineRequest, ctx: ToolContext) -> None:
@@ -755,6 +924,33 @@ class RuntimePipeline:
                 phase=OrchestrationPhase.PIPELINE,
             )
             return
+
+    async def _consume_memory_finalize_background(
+        self,
+        *,
+        turn_mem: TurnMemory,
+        runtime_state: RuntimeTurnState,
+        request: PipelineRequest,
+        stop_reason: PipelineStopReason,
+        emitter: RuntimeEventEmitter,
+        budget_resolver: Optional[BudgetResolver] = None,
+        logging_level: Optional[str] = None,
+    ) -> None:
+        """Run memory finalization side effects without surfacing tail events.
+
+        Used by chat flows where the user stream must end on FINAL/STOP while
+        memory extraction/compaction continues in the background.
+        """
+        async for _ in self._finalize_memory(
+            turn_mem=turn_mem,
+            runtime_state=runtime_state,
+            request=request,
+            stop_reason=stop_reason,
+            emitter=emitter,
+            budget_resolver=budget_resolver,
+            logging_level=logging_level,
+        ):
+            pass
 
     async def _resolve_available_agents_for_planner(
         self,

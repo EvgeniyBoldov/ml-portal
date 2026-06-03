@@ -647,9 +647,13 @@ export default function RunChat({
               )}
             </div>
 
-            {!isReadOnly && isWaitingInput && (
+            {!isReadOnly && (isWaitingInput || activeRun?.status === 'waiting_confirmation') && (
               <div className={styles['clarify-box']}>
-                <div className={styles['clarify-title']}>Нужно уточнение от пользователя</div>
+                <div className={styles['clarify-title']}>
+                  {isWaitingInput 
+                    ? (latestClarifyQuestion || 'Нужно уточнение от пользователя')
+                    : (activeRun?.pendingConfirmation?.data?.summary || activeRun?.pendingConfirmation?.data?.message || 'Требуется подтверждение')}
+                </div>
                 <div className={styles['clarify-row']}>
                   <textarea
                     ref={clarifyInputRef}

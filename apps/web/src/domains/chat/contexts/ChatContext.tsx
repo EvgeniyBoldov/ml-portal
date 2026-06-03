@@ -104,6 +104,13 @@ interface ChatActions {
     attachmentMeta?: unknown[],
     confirmationTokens?: string[]
   ) => Promise<void>;
+  resumeStream: (
+    runId: string,
+    action: 'confirm' | 'cancel' | 'input',
+    input: string,
+    onChunk: (chunk: string) => void,
+    onError: (error: string) => void,
+  ) => Promise<void>;
 }
 
 const ChatStatusContext = createContext<Pick<ChatState, "error" | "isLoading"> | null>(null);
@@ -730,11 +737,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               const parsed = JSON.parse(data);
               applyEnvelope(parsed as Record<string, unknown>);
               applyOrchestrationState(parsed as Record<string, unknown>);
-              setPendingInput({
-                question: parsed.question,
-                reason: parsed.reason,
+              applyPausedState({
+                runId: typeof parsed.run_id === 'string' ? parsed.run_id : null,
+                reason: typeof parsed.reason === 'string' ? parsed.reason : 'waiting_input',
+                question: typeof parsed.question === 'string' ? parsed.question : undefined,
+                message: typeof parsed.message === 'string' ? parsed.message : undefined,
+                action: (parsed.action && typeof parsed.action === 'object' ? parsed.action : null) as Record<string, unknown> | null,
               });
-              updateStreamStatus('Ожидание ввода...');
               appendProgressEvent('Ожидание ввода', { source: 'waiting_input', level: 'warn' });
             } catch (e) {
               console.error('Failed to parse waiting_input event', e);
@@ -746,10 +755,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               const parsed = JSON.parse(data);
               applyEnvelope(parsed as Record<string, unknown>);
               applyOrchestrationState(parsed as Record<string, unknown>);
-              setStopReason(parsed.reason || 'stopped');
-              if (parsed.run_id) {
-                setPausedRunId(parsed.run_id);
-              }
+              applyPausedState({
+                runId: typeof parsed.run_id === 'string' ? parsed.run_id : null,
+                reason: typeof parsed.reason === 'string' ? parsed.reason : 'paused',
+                question: typeof parsed.question === 'string' ? parsed.question : undefined,
+                message: typeof parsed.message === 'string' ? parsed.message : undefined,
+                action: (parsed.action && typeof parsed.action === 'object' ? parsed.action : null) as Record<string, unknown> | null,
+              });
             } catch (e) {
               console.error('Failed to parse stop event', e);
             }
@@ -832,7 +844,174 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       setIsStreaming(false);
       abortControllerRef.current = null;
     }
-  }, [appendProgressEvent, updateStreamStatus]);
+  }, [appendProgressEvent, applyPausedState, updateStreamStatus]);
+
+  const resumeStream = useCallback(async (
+    runId: string,
+    action: 'confirm' | 'cancel' | 'input',
+    input: string,
+    onChunk: (chunk: string) => void,
+    onError: (error: string) => void,
+  ) => {
+    if (!runId) {
+      onError('Run ID is required');
+      return;
+    }
+
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+    setError(null);
+    setIsStreaming(true);
+
+    try {
+      const { resumeRunStream } = await import('@shared/api/chats');
+      const response = await resumeRunStream(runId, action, input || '', controller.signal);
+
+      if (!response.ok || !response.body) {
+        let reason = 'Ошибка возобновления';
+        try {
+          const text = await response.text();
+          try {
+            const j = JSON.parse(text);
+            reason = (j && (j.detail || j.error)) || reason;
+          } catch {
+            reason = text || reason;
+          }
+        } catch {}
+        throw new Error(reason);
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+
+        let sepIdx;
+        while ((sepIdx = buffer.indexOf('\n\n')) !== -1) {
+          const rawEvent = buffer.slice(0, sepIdx);
+          buffer = buffer.slice(sepIdx + 2);
+
+          const lines = rawEvent.split('\n');
+          const eventLine = lines.find(l => l.startsWith('event:')) || '';
+          const dataLines = lines.filter(l => l.startsWith('data:'));
+
+          const eventType = eventLine.replace('event:', '').trim();
+          const data = dataLines
+            .map(dl => {
+              let val = dl.slice(5);
+              if (val.startsWith(' ')) val = val.slice(1);
+              return val;
+            })
+            .join('\n');
+
+          if (data === '[DONE]') {
+            buffer = '';
+            break;
+          }
+
+          const applyEnvelope = (parsed: Record<string, unknown>) => {
+            const raw = parsed.orchestration_envelope;
+            if (!raw || typeof raw !== 'object') return;
+            setOrchestrationEnvelope(raw as OrchestrationEnvelope);
+          };
+          const applyOrchestrationState = (parsed: Record<string, unknown>) => {
+            const raw = parsed.orchestration_state;
+            if (!raw || typeof raw !== 'object') return;
+            setOrchestrationState(raw as OrchestrationState);
+          };
+
+          try {
+            const parsed = JSON.parse(data);
+            const type = parsed.type || eventType;
+
+            if (type === 'chunk' || type === 'delta') {
+              const chunkText = typeof parsed.text === 'string' ? parsed.text : '';
+              if (chunkText) onChunk(chunkText);
+            } else if (type === 'run_paused' || type === 'stop') {
+              applyEnvelope(parsed as Record<string, unknown>);
+              applyOrchestrationState(parsed as Record<string, unknown>);
+              applyPausedState({
+                runId: typeof parsed.run_id === 'string' ? parsed.run_id : null,
+                reason: typeof parsed.reason === 'string' ? parsed.reason : 'paused',
+                question: typeof parsed.question === 'string' ? parsed.question : undefined,
+                message: typeof parsed.message === 'string' ? parsed.message : undefined,
+                action: parsed.action as Record<string, unknown> | undefined,
+              });
+            } else if (type === 'confirmation_required') {
+              // Pause for confirmation
+              // Remove last agent message if it matches the confirmation question (avoid duplication)
+              const confirmationText = typeof parsed.summary === 'string' ? parsed.summary : '';
+              setMessages((prev) => {
+                const lastMsg = prev[prev.length - 1];
+                if (lastMsg && lastMsg.role === 'assistant' && lastMsg.content === confirmationText) {
+                  return prev.slice(0, -1);
+                }
+                return prev;
+              });
+              applyEnvelope(parsed as Record<string, unknown>);
+              applyOrchestrationState(parsed as Record<string, unknown>);
+              applyPausedState({
+                runId: typeof parsed.run_id === 'string' ? parsed.run_id : null,
+                reason: 'waiting_confirmation',
+                question: typeof parsed.summary === 'string' ? parsed.summary : undefined,
+                message: typeof parsed.message === 'string' ? parsed.message : undefined,
+                action: {
+                  operation_fingerprint: parsed.operation_fingerprint,
+                  tool_slug: parsed.tool_slug,
+                  operation: parsed.operation,
+                  risk_level: parsed.risk_level,
+                  args_preview: parsed.args_preview,
+                } as Record<string, unknown>,
+              });
+            } else if (type === 'waiting_input') {
+              // Pause for user input
+              // Remove last agent message if it matches the input question (avoid duplication)
+              const questionText = typeof parsed.question === 'string' ? parsed.question : '';
+              setMessages((prev) => {
+                const lastMsg = prev[prev.length - 1];
+                if (lastMsg && lastMsg.role === 'assistant' && lastMsg.content === questionText) {
+                  return prev.slice(0, -1);
+                }
+                return prev;
+              });
+              applyEnvelope(parsed as Record<string, unknown>);
+              applyOrchestrationState(parsed as Record<string, unknown>);
+              applyPausedState({
+                runId: typeof parsed.run_id === 'string' ? parsed.run_id : null,
+                reason: 'waiting_input',
+                question: typeof parsed.question === 'string' ? parsed.question : undefined,
+                message: typeof parsed.reason === 'string' ? parsed.reason : undefined,
+              });
+            } else if (type === 'error') {
+              const errorMsg = typeof parsed.error === 'string' ? parsed.error : 'Unknown error';
+              throw new Error(errorMsg);
+            } else if (type === 'final' || type === 'done' || data === '[DONE]') {
+              // Stream completed - close prompt window
+              clearPendingState();
+            }
+          } catch (_e) {
+            // Non-JSON lines are ignored
+          }
+        }
+      }
+    } catch (err: any) {
+      if (err?.name === 'AbortError') {
+        updateStreamStatus(null);
+      } else {
+        const errorMsg = err?.message || 'Ошибка возобновления';
+        setError(errorMsg);
+        onError(errorMsg);
+      }
+    } finally {
+      setIsStreaming(false);
+      abortControllerRef.current = null;
+    }
+  }, [applyPausedState, clearPendingState, updateStreamStatus]);
 
   const statusValue = useMemo(
     () => ({ error, isLoading }),
@@ -846,8 +1025,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       applyPausedState,
       abortStream,
       sendMessageStream,
+      resumeStream,
     }),
-    [loadMessages, setCurrentChat, clearPendingState, applyPausedState, abortStream, sendMessageStream]
+    [loadMessages, setCurrentChat, clearPendingState, applyPausedState, abortStream, sendMessageStream, resumeStream]
   );
   const messagesStateValue = useMemo(
     () => ({

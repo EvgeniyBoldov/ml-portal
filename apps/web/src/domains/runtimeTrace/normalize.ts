@@ -22,6 +22,7 @@ const CATEGORY_MAP: Record<string, TraceCategory> = {
   tool_result: 'operation',
   policy_decision: 'policy',
   confirmation_required: 'policy',
+  question_answer: 'system',
   final: 'final',
   final_response: 'final',
   error: 'error',
@@ -74,6 +75,12 @@ function pickIteration(step: TraceSourceStep): number {
 function summarize(rawType: string, data: Record<string, unknown>): string {
   if (rawType === 'user_request') return String(data.content ?? data.request ?? 'User request');
   if (rawType === 'protocol_retry') return String(data.reason ?? 'Protocol retry');
+  if (rawType === 'question_answer') {
+    const question = String(data.question ?? '').trim();
+    const answer = String(data.user_answer ?? '').trim();
+    if (question && answer) return `${question} → ${answer}`;
+    return question || answer || 'Question answered';
+  }
   if (rawType === 'routing') return String(data.agent_slug ?? data.mode ?? 'Routing decision');
   if (rawType === 'planner_action' || rawType === 'planner_step' || rawType === 'planner_decision') {
     const kind = String(data.kind ?? data.action_type ?? data.action ?? 'planner_decision');
@@ -179,6 +186,7 @@ function titleOf(rawType: string, category: TraceCategory): string {
     intent: 'Интент',
     policy_decision: 'Решение политики',
     confirmation_required: 'Требуется подтверждение',
+    question_answer: 'Вопрос-ответ',
     final: 'Финальный ответ',
     final_response: 'Финальный ответ',
     error: 'Ошибка',
