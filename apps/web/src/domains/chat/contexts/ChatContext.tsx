@@ -947,14 +947,15 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               // Remove last agent message if it matches the confirmation question (avoid duplication)
               const confirmationText = typeof parsed.summary === 'string' ? parsed.summary : '';
               setMessagesByChat((prev) => {
-                const current = prev[chatId];
+                if (!currentChatId) return prev;
+                const current = prev[currentChatId];
                 if (!current) return prev;
                 const items = current.items;
                 const lastMsg = items[items.length - 1];
                 if (lastMsg && lastMsg.role === 'assistant' && lastMsg.content === confirmationText) {
                   return {
                     ...prev,
-                    [chatId]: { ...current, items: items.slice(0, -1) }
+                    [currentChatId]: { ...current, items: items.slice(0, -1) }
                   };
                 }
                 return prev;
@@ -979,14 +980,15 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               // Remove last agent message if it matches the input question (avoid duplication)
               const questionText = typeof parsed.question === 'string' ? parsed.question : '';
               setMessagesByChat((prev) => {
-                const current = prev[chatId];
+                if (!currentChatId) return prev;
+                const current = prev[currentChatId];
                 if (!current) return prev;
                 const items = current.items;
                 const lastMsg = items[items.length - 1];
                 if (lastMsg && lastMsg.role === 'assistant' && lastMsg.content === questionText) {
                   return {
                     ...prev,
-                    [chatId]: { ...current, items: items.slice(0, -1) }
+                    [currentChatId]: { ...current, items: items.slice(0, -1) }
                   };
                 }
                 return prev;
@@ -1023,7 +1025,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       setIsStreaming(false);
       abortControllerRef.current = null;
     }
-  }, [applyPausedState, clearPendingState, updateStreamStatus]);
+  }, [applyPausedState, clearPendingState, updateStreamStatus, currentChatId]);
 
   const statusValue = useMemo(
     () => ({ error, isLoading }),

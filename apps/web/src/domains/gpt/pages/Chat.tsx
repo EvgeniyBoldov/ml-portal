@@ -147,10 +147,9 @@ export default function Chat() {
       
       if (pendingConfirmation && state.pausedRunId) {
         // Handle confirmation with user input
-        const fingerprint = pendingConfirmation.operationFingerprint || '';
         await resumeStream(
           state.pausedRunId,
-          fingerprint,
+          'confirm',
           userInput,
           () => {}, // No chunk handler
           (err: string) => setStreamError(_friendlyError(err)),
