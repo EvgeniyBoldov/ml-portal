@@ -147,7 +147,7 @@ export default function Chat() {
       
       if (pendingConfirmation && state.pausedRunId) {
         // Handle confirmation with user input
-        const fingerprint = pendingConfirmation.data?.operation_fingerprint || '';
+        const fingerprint = pendingConfirmation.operationFingerprint || '';
         await resumeStream(
           state.pausedRunId,
           fingerprint,

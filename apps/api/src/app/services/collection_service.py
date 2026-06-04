@@ -545,13 +545,8 @@ class CollectionService:
     async def get_by_id(self, collection_id: uuid.UUID) -> Optional[Collection]:
         return await self.query.get_by_id(collection_id)
 
-    async def get_by_slug(
-        self, tenant_id: uuid.UUID, slug: str
-    ) -> Optional[Collection]:
-        return await self.query.get_by_slug(tenant_id, slug)
-
-    async def get_by_slug_any_tenant(self, slug: str) -> Optional[Collection]:
-        return await self.query.get_by_slug_any_tenant(slug)
+    async def get_by_slug(self, slug: str) -> Optional[Collection]:
+        return await self.query.get_by_slug(slug)
 
     async def list_collections(
         self,
@@ -561,10 +556,10 @@ class CollectionService:
         return await self.query.list_collections(tenant_id, active_only=active_only)
 
     async def delete_collection(
-        self, tenant_id: uuid.UUID, slug: str, drop_table: bool = True
+        self, slug: str, drop_table: bool = True
     ) -> bool:
         return await self.lifecycle.delete_collection(
-            tenant_id, slug, drop_table=drop_table
+            slug, drop_table=drop_table
         )
 
     async def _delete_tool_instance_for_collection(self, instance_id: uuid.UUID) -> None:

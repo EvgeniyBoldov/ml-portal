@@ -156,7 +156,7 @@ class CollectionTextSearchTool(VersionedTool):
                     except (TypeError, ValueError):
                         collection = None
                 if collection is None:
-                    collection = await service.get_by_slug_any_tenant(collection_slug)
+                    collection = await service.get_by_slug(collection_slug)
                 if not collection:
                     log.error("Collection not found", collection=collection_slug)
                     return ToolResult.fail(
@@ -230,7 +230,7 @@ class CollectionTextSearchTool(VersionedTool):
                         data={
                             "hits": [],
                             "total": 0,
-                            "collection": collection.name,
+                            "collection": collection.slug,
                             "vector_fields": vector_fields,
                         },
                         message="Collection exists but has not been vectorized yet.",
@@ -250,7 +250,7 @@ class CollectionTextSearchTool(VersionedTool):
                         data={
                             "hits": [],
                             "total": 0,
-                            "collection": collection.name,
+                            "collection": collection.slug,
                             "vector_fields": vector_fields,
                         },
                         logs=log.entries_dict(),
@@ -359,7 +359,7 @@ class CollectionTextSearchTool(VersionedTool):
                     data={
                         "hits": hits,
                         "total": len(hits),
-                        "collection": collection.name,
+                        "collection": collection.slug,
                         "vector_fields": vector_fields,
                     },
                     logs=log.entries_dict(),

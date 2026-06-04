@@ -593,7 +593,7 @@ async def delete_collection(
     if not collection:
         raise HTTPException(status_code=404, detail="Collection not found")
 
-    deleted = await service.delete_collection(collection.tenant_id, collection.slug, drop_table=drop_table)
+    deleted = await service.delete_collection(collection.slug, drop_table=drop_table)
     if not deleted:
         raise HTTPException(status_code=404, detail="Collection not found")
 

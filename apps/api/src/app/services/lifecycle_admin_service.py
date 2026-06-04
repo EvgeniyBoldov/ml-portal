@@ -347,7 +347,7 @@ class LifecycleAdminService:
                 resource_id=entity_id,
             )
             service = CollectionService(self.session)
-            deleted = await service.delete_collection(collection.tenant_id, collection.slug, drop_table=True)
+            deleted = await service.delete_collection(collection.slug, drop_table=True)
             if not deleted:
                 raise ValueError("not_found")
             return LifecycleReport(

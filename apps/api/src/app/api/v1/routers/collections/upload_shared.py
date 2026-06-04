@@ -87,8 +87,7 @@ async def _resolve_table_collection_by_slug(
     tenant_id: Optional[uuid.UUID],
 ):
     service = CollectionService(session)
-    resolved_tenant_id = await _resolve_requested_tenant_id(session, user, tenant_id)
-    collection = await service.get_by_slug(resolved_tenant_id, slug)
+    collection = await service.get_by_slug(slug)
 
     if not collection:
         raise HTTPException(status_code=404, detail=f"Collection '{slug}' not found")

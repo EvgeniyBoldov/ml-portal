@@ -98,7 +98,7 @@ class CollectionGetTool(VersionedTool):
                     except (TypeError, ValueError):
                         collection = None
                 if collection is None:
-                    collection = await service.get_by_slug_any_tenant(collection_slug)
+                    collection = await service.get_by_slug(collection_slug)
                 if not collection:
                     log.error("Collection not found", collection=collection_slug)
                     return ToolResult.fail(
@@ -137,7 +137,7 @@ class CollectionGetTool(VersionedTool):
                         data={
                             "record": None,
                             "found": False,
-                            "collection": collection.name,
+                            "collection": collection.slug,
                         },
                         logs=log.entries_dict(),
                     )
@@ -151,7 +151,7 @@ class CollectionGetTool(VersionedTool):
                     data={
                         "record": formatted,
                         "found": True,
-                        "collection": collection.name,
+                        "collection": collection.slug,
                     },
                     logs=log.entries_dict(),
                 )

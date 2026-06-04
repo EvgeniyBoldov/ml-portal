@@ -111,7 +111,7 @@ class CollectionLifecycleService:
         raw_slug = str(slug or "").strip().lower()
         if raw_slug:
             self.contract.validate_slug(raw_slug)
-            existing = await self.host.get_by_slug(tenant_id, raw_slug)
+            existing = await self.host.get_by_slug(raw_slug)
             if existing:
                 raise self.host.CollectionExistsError(f"Collection '{raw_slug}' already exists")
             return raw_slug
@@ -123,7 +123,7 @@ class CollectionLifecycleService:
 
         candidate = base
         suffix = 2
-        while await self.host.get_by_slug(tenant_id, candidate):
+        while await self.host.get_by_slug(candidate):
             suffix_token = f"_{suffix}"
             head = base[: max(1, 50 - len(suffix_token))]
             candidate = f"{head}{suffix_token}"
@@ -178,8 +178,7 @@ class CollectionLifecycleService:
 
         qdrant_collection_name = None
         if needs_vector:
-            tenant_short = str(tenant_id).replace("-", "")[:8]
-            qdrant_collection_name = f"coll_{tenant_short}_{slug}"
+            qdrant_collection_name = f"coll_{slug}"
 
         collection = Collection(
             id=uuid.uuid4(),
@@ -339,9 +338,9 @@ class CollectionLifecycleService:
         return instance
 
     async def delete_collection(
-        self, tenant_id: uuid.UUID, slug: str, *, drop_table: bool = True
+        self, slug: str, *, drop_table: bool = True
     ) -> bool:
-        collection = await self.host.get_by_slug(tenant_id, slug)
+        collection = await self.host.get_by_slug(slug)
         if not collection:
             return False
 

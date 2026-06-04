@@ -946,10 +946,16 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               // Pause for confirmation
               // Remove last agent message if it matches the confirmation question (avoid duplication)
               const confirmationText = typeof parsed.summary === 'string' ? parsed.summary : '';
-              setMessages((prev) => {
-                const lastMsg = prev[prev.length - 1];
+              setMessagesByChat((prev) => {
+                const current = prev[chatId];
+                if (!current) return prev;
+                const items = current.items;
+                const lastMsg = items[items.length - 1];
                 if (lastMsg && lastMsg.role === 'assistant' && lastMsg.content === confirmationText) {
-                  return prev.slice(0, -1);
+                  return {
+                    ...prev,
+                    [chatId]: { ...current, items: items.slice(0, -1) }
+                  };
                 }
                 return prev;
               });
@@ -972,10 +978,16 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               // Pause for user input
               // Remove last agent message if it matches the input question (avoid duplication)
               const questionText = typeof parsed.question === 'string' ? parsed.question : '';
-              setMessages((prev) => {
-                const lastMsg = prev[prev.length - 1];
+              setMessagesByChat((prev) => {
+                const current = prev[chatId];
+                if (!current) return prev;
+                const items = current.items;
+                const lastMsg = items[items.length - 1];
                 if (lastMsg && lastMsg.role === 'assistant' && lastMsg.content === questionText) {
-                  return prev.slice(0, -1);
+                  return {
+                    ...prev,
+                    [chatId]: { ...current, items: items.slice(0, -1) }
+                  };
                 }
                 return prev;
               });

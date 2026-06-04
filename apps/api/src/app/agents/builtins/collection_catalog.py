@@ -112,7 +112,7 @@ class CollectionCatalogTool(VersionedTool):
                     except (TypeError, ValueError):
                         collection = None
                 if collection is None:
-                    collection = await service.get_by_slug_any_tenant(collection_slug)
+                    collection = await service.get_by_slug(collection_slug)
                 if not collection:
                     return ToolResult.fail(
                         f"Collection '{collection_slug}' not found",

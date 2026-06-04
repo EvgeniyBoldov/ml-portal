@@ -56,8 +56,7 @@ class CollectionVectorLifecycleService:
             return
 
         if not collection.qdrant_collection_name:
-            tenant_short = str(collection.tenant_id).replace("-", "")[:8]
-            collection.qdrant_collection_name = f"coll_{tenant_short}_{collection.slug}"
+            collection.qdrant_collection_name = f"coll_{collection.slug}"
         if not collection.vector_config:
             collection.vector_config = {
                 "chunk_strategy": "by_paragraphs",

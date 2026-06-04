@@ -206,7 +206,7 @@ async def get_collection(
         user=user,
         tenant_id=resolved_tenant_id,
     )
-    collection = await service.get_by_slug(resolved_tenant_id, slug)
+    collection = await service.get_by_slug(slug)
 
     if not collection:
         raise HTTPException(status_code=404, detail=f"Collection '{slug}' not found")

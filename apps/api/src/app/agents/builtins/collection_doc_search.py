@@ -152,7 +152,7 @@ class CollectionDocSearchTool(VersionedTool):
                     except (TypeError, ValueError):
                         collection = None
                 if collection is None:
-                    collection = await service.get_by_slug_any_tenant(collection_slug)
+                    collection = await service.get_by_slug(collection_slug)
                 if not collection:
                     log.error("Collection not found", collection=collection_slug)
                     return ToolResult.fail(
@@ -192,7 +192,7 @@ class CollectionDocSearchTool(VersionedTool):
                         data={
                             "hits": [],
                             "total": 0,
-                            "collection": collection.name,
+                            "collection": collection.slug,
                             "applied_filters": filters or {},
                         },
                         message="Collection exists but has not been indexed yet.",
@@ -233,7 +233,7 @@ class CollectionDocSearchTool(VersionedTool):
                     row_ids = await self._resolve_filtered_row_ids(session, collection, filters)
                     if not row_ids:
                         return ToolResult.ok(
-                            data={"hits": [], "total": 0, "collection": collection.name, "applied_filters": filters},
+                            data={"hits": [], "total": 0, "collection": collection.slug, "applied_filters": filters},
                             logs=log.entries_dict(),
                         )
                     if len(row_ids) > 2000:
@@ -251,7 +251,7 @@ class CollectionDocSearchTool(VersionedTool):
                 if not results:
                     log.info("No results found")
                     return ToolResult.ok(
-                        data={"hits": [], "total": 0, "collection": collection.name, "applied_filters": filters or {}},
+                        data={"hits": [], "total": 0, "collection": collection.slug, "applied_filters": filters or {}},
                         logs=log.entries_dict(),
                     )
 
@@ -342,7 +342,7 @@ class CollectionDocSearchTool(VersionedTool):
                     data={
                         "hits": hits,
                         "total": len(hits),
-                        "collection": collection.name,
+                        "collection": collection.slug,
                         "applied_filters": filters or {},
                     },
                     sources=sources,

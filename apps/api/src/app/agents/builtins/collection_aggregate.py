@@ -186,7 +186,7 @@ class CollectionAggregateTool(VersionedTool):
                     except (TypeError, ValueError):
                         collection = None
                 if collection is None:
-                    collection = await service.get_by_slug_any_tenant(collection_slug)
+                    collection = await service.get_by_slug(collection_slug)
                 if not collection:
                     log.error("Collection not found", collection=collection_slug)
                     return ToolResult.fail(
@@ -304,7 +304,7 @@ class CollectionAggregateTool(VersionedTool):
                     data={
                         "results": rows,
                         "total_groups": len(rows),
-                        "collection": collection.name,
+                        "collection": collection.slug,
                     },
                     logs=log.entries_dict(),
                 )

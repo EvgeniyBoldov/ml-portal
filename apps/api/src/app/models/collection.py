@@ -111,6 +111,9 @@ class Collection(Base, LifecycleMixin):
     System/platform fields exist logically, but are not persisted in `fields`.
     """
     __tablename__ = "collections"
+    __table_args__ = (
+        UniqueConstraint("slug", name="uq_collections_slug"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
