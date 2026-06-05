@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 
 from celery import Task
 from app.celery_app import app as celery_app
-from app.core.db import get_session_factory
+from app.workers.session_factory import get_worker_session
 from app.services.model_service import ModelService
 from app.services.model_health_checker import get_health_checker
 from app.models.model_registry import HealthStatus
@@ -38,7 +38,6 @@ def health_check_all_models(self: Task) -> dict:
     logger.info("Starting periodic health check for all models")
     
     async def _check_all():
-        session_factory = get_session_factory()
         health_checker = get_health_checker()
         
         results = {
@@ -48,7 +47,7 @@ def health_check_all_models(self: Task) -> dict:
             "errors": []
         }
         
-        async with session_factory() as session:
+        async with get_worker_session() as session:
             service = ModelService(session)
             models = await service.list_models(enabled_only=True)
             
@@ -122,10 +121,9 @@ def health_check_single_model(self: Task, model_id: str) -> dict:
     logger.info(f"Health check for model {model_id}")
     
     async def _check():
-        session_factory = get_session_factory()
         health_checker = get_health_checker()
         
-        async with session_factory() as session:
+        async with get_worker_session() as session:
             service = ModelService(session)
             model = await service.get_by_id(uuid.UUID(model_id))
             

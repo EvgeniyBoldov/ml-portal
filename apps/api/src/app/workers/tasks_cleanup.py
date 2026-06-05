@@ -9,9 +9,6 @@ from datetime import datetime, timedelta, timezone
 
 from celery import shared_task
 from sqlalchemy import delete, select, func, text
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-from sqlalchemy.orm import sessionmaker
-import os
 
 from app.models.audit_log import AuditLog
 from app.models.agent_run import AgentRun
@@ -22,6 +19,7 @@ from app.models.collection import Collection
 from app.models.agent import Agent
 from app.models.rbac import RbacRule
 from app.services.lifecycle_admin_service import LifecycleAdminService
+from app.workers.session_factory import get_worker_session
 
 logger = get_logger(__name__)
 
@@ -29,15 +27,6 @@ logger = get_logger(__name__)
 AUDIT_LOG_RETENTION_DAYS = 7
 AGENT_RUN_RETENTION_DAYS = 7
 DEFAULT_LIFECYCLE_RETENTION_DAYS = 14
-
-
-def get_async_session():
-    """Create async session for Celery tasks."""
-    db_url = os.getenv("ASYNC_DB_URL") or os.getenv("DATABASE_URL", "").replace(
-        "postgresql://", "postgresql+asyncpg://"
-    )
-    engine = create_async_engine(db_url, echo=False)
-    return sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 
 LIFECYCLE_MODELS = (
@@ -64,8 +53,7 @@ def cleanup_old_audit_logs(self):
     import asyncio
     
     async def _cleanup():
-        AsyncSessionLocal = get_async_session()
-        async with AsyncSessionLocal() as session:
+        async with get_worker_session() as session:
             cutoff_date = datetime.utcnow() - timedelta(days=AUDIT_LOG_RETENTION_DAYS)
             
             result = await session.execute(
@@ -99,8 +87,7 @@ def cleanup_old_agent_runs(self):
     import asyncio
     
     async def _cleanup():
-        AsyncSessionLocal = get_async_session()
-        async with AsyncSessionLocal() as session:
+        async with get_worker_session() as session:
             cutoff_date = datetime.utcnow() - timedelta(days=AGENT_RUN_RETENTION_DAYS)
             
             # AgentRunStep will be cascade deleted
@@ -133,8 +120,7 @@ def cleanup_expired_sandbox_sessions(self):
     import asyncio
 
     async def _cleanup():
-        AsyncSessionLocal = get_async_session()
-        async with AsyncSessionLocal() as session:
+        async with get_worker_session() as session:
             cutoff_date = datetime.now(timezone.utc)
             result = await session.execute(
                 delete(SandboxSession).where(SandboxSession.expires_at < cutoff_date)
@@ -168,9 +154,8 @@ def cleanup_deprecated_entities(self):
     import asyncio
 
     async def _cleanup():
-        AsyncSessionLocal = get_async_session()
         deleted_by_kind: dict[str, int] = {}
-        async with AsyncSessionLocal() as session:
+        async with get_worker_session() as session:
             now_expr = func.now()
             for kind, model in LIFECYCLE_MODELS:
                 if kind == "tenant":

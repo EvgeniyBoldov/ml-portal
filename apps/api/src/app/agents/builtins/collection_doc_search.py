@@ -2,7 +2,7 @@
 Collection Document Search Tool — векторный поиск по document-коллекциям.
 
 Ищет в dedicated Qdrant-коллекции (collection.qdrant_collection_name),
-которая создаётся при создании document-collection (coll_{tenant_short}_{slug}).
+которая создаётся при создании document-collection (coll_{slug}).
 Обогащает результаты метаданными из динамической таблицы и именами документов.
 """
 from __future__ import annotations
@@ -144,15 +144,7 @@ class CollectionDocSearchTool(VersionedTool):
             async with session_factory() as session:
                 # 1. Resolve collection
                 service = CollectionService(session)
-                collection = None
-                collection_id_raw = args.get("collection_id")
-                if collection_id_raw:
-                    try:
-                        collection = await service.get_by_id(uuid.UUID(str(collection_id_raw)))
-                    except (TypeError, ValueError):
-                        collection = None
-                if collection is None:
-                    collection = await service.get_by_slug(collection_slug)
+                collection = await service.get_by_slug(collection_slug)
                 if not collection:
                     log.error("Collection not found", collection=collection_slug)
                     return ToolResult.fail(
@@ -160,10 +152,21 @@ class CollectionDocSearchTool(VersionedTool):
                         logs=log.entries_dict(),
                     )
                 if collection_slug and str(collection.slug) != collection_slug:
+                    log.error(
+                        "Collection slug mismatch",
+                        expected=collection_slug,
+                        actual=collection.slug,
+                    )
                     return ToolResult.fail(
                         f"Collection slug mismatch: expected '{collection_slug}', got '{collection.slug}'",
                         logs=log.entries_dict(),
                     )
+                log.info(
+                    "Resolved collection",
+                    slug=collection.slug,
+                    qdrant_collection_name=collection.qdrant_collection_name,
+                    collection_type=collection.collection_type,
+                )
 
                 if collection.collection_type != "document":
                     log.error("Not a document collection", type=collection.collection_type)
@@ -186,6 +189,11 @@ class CollectionDocSearchTool(VersionedTool):
                 # 2. Check Qdrant collection exists
                 vector_store = QdrantVectorStore()
                 exists = await vector_store.collection_exists(collection.qdrant_collection_name)
+                log.info(
+                    "Qdrant collection existence check",
+                    qdrant_collection_name=collection.qdrant_collection_name,
+                    exists=exists,
+                )
                 if not exists:
                     log.warning("Qdrant collection does not exist yet")
                     return ToolResult.ok(
@@ -225,6 +233,12 @@ class CollectionDocSearchTool(VersionedTool):
                     query=query_embedding,
                     top_k=k * 2,
                     filter=qdrant_prefilter,
+                )
+                log.info(
+                    "Qdrant search completed",
+                    qdrant_collection_name=collection.qdrant_collection_name,
+                    results_count=len(results),
+                    top_k=k * 2,
                 )
 
                 # Backward compatibility: old indexed docs may not have payload prefilter fields yet.

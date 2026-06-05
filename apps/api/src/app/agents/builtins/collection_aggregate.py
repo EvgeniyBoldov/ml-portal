@@ -178,15 +178,7 @@ class CollectionAggregateTool(VersionedTool):
             async with session_factory() as session:
                 service = CollectionService(session)
 
-                collection = None
-                collection_id_raw = args.get("collection_id")
-                if collection_id_raw:
-                    try:
-                        collection = await service.get_by_id(uuid.UUID(str(collection_id_raw)))
-                    except (TypeError, ValueError):
-                        collection = None
-                if collection is None:
-                    collection = await service.get_by_slug(collection_slug)
+                collection = await service.get_by_slug(collection_slug)
                 if not collection:
                     log.error("Collection not found", collection=collection_slug)
                     return ToolResult.fail(
@@ -194,10 +186,20 @@ class CollectionAggregateTool(VersionedTool):
                         logs=log.entries_dict(),
                     )
                 if collection_slug and str(collection.slug) != collection_slug:
+                    log.error(
+                        "Collection slug mismatch",
+                        expected=collection_slug,
+                        actual=collection.slug,
+                    )
                     return ToolResult.fail(
                         f"Collection slug mismatch: expected '{collection_slug}', got '{collection.slug}'",
                         logs=log.entries_dict(),
                     )
+                log.info(
+                    "Resolved collection",
+                    slug=collection.slug,
+                    table_name=collection.table_name,
+                )
                 
                 # Validate metrics
                 if not metrics:

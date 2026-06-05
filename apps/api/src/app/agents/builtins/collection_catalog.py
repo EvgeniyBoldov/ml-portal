@@ -104,25 +104,27 @@ class CollectionCatalogTool(VersionedTool):
             session_factory = get_session_factory()
             async with session_factory() as session:
                 service = CollectionService(session)
-                collection = None
-                collection_id_raw = args.get("collection_id")
-                if collection_id_raw:
-                    try:
-                        collection = await service.get_by_id(uuid.UUID(str(collection_id_raw)))
-                    except (TypeError, ValueError):
-                        collection = None
-                if collection is None:
-                    collection = await service.get_by_slug(collection_slug)
+                collection = await service.get_by_slug(collection_slug)
                 if not collection:
                     return ToolResult.fail(
                         f"Collection '{collection_slug}' not found",
                         logs=log.entries_dict(),
                     )
                 if collection_slug and str(collection.slug) != collection_slug:
+                    log.error(
+                        "Collection slug mismatch",
+                        expected=collection_slug,
+                        actual=collection.slug,
+                    )
                     return ToolResult.fail(
                         f"Collection slug mismatch: expected '{collection_slug}', got '{collection.slug}'",
                         logs=log.entries_dict(),
                     )
+                log.info(
+                    "Resolved collection",
+                    slug=collection.slug,
+                    collection_type=collection.collection_type,
+                )
 
                 schema_payload = {
                     "user_fields": [self._field_view(field) for field in collection.get_user_fields()],

@@ -15,11 +15,10 @@ from uuid import uuid4
 
 from celery import shared_task
 from pydantic import BaseModel, Field
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-from sqlalchemy.orm import sessionmaker
 
 from app.core.logging import get_logger
 from app.models.memory import FactScope
+from app.workers.session_factory import get_worker_session
 from app.models.system_llm_role import SystemLLMRoleType
 from app.runtime.context_snapshot import compact_snapshot, prompt_snapshot
 from app.runtime.memory.dto import SummaryDTO, FactDTO
@@ -92,15 +91,6 @@ class MemoryFinalizePayload(BaseModel):
     facts_limits: Optional[Dict[str, int]] = None
     conversation_limits: Optional[Dict[str, int]] = None
     logging_level: Optional[str] = None
-
-
-def get_async_session():
-    """Create async session for Celery tasks."""
-    db_url = os.getenv("ASYNC_DB_URL") or os.getenv("DATABASE_URL", "").replace(
-        "postgresql://", "postgresql+asyncpg://"
-    )
-    engine = create_async_engine(db_url, echo=False)
-    return sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 
 def _deserialize_turn_memory(payload: MemoryFinalizePayload) -> TurnMemory:
@@ -197,7 +187,6 @@ def finalize_memory_task(self, payload_dict: Dict[str, Any]) -> Dict[str, Any]:
     
     async def _finalize():
         payload = MemoryFinalizePayload.model_validate(payload_dict)
-        AsyncSessionLocal = get_async_session()
         bus = RuntimeTailEventBus()
         metric_keys = ("planner_steps", "agent_steps", "tool_calls", "tokens_in", "tokens_out", "tokens_total", "retries", "wall_time_ms")
 
@@ -213,7 +202,7 @@ def finalize_memory_task(self, payload_dict: Dict[str, Any]) -> Dict[str, Any]:
                 message["tail_id"] = payload.tail_id
             await bus.publish(stream_key=payload.stream_key, payload=message)
 
-        async with AsyncSessionLocal() as session:
+        async with get_worker_session() as session:
             # Create LLM client from settings
             from app.core.di import get_llm_client
 

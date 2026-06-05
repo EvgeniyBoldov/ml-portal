@@ -13,24 +13,12 @@ from typing import Dict, Any, Optional
 
 from celery import Task
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.celery_app import app as celery_app
 from app.core.logging import get_logger
+from app.workers.session_factory import get_worker_session
 
-
-def get_async_session():
-    """Create async session for Celery tasks."""
-    db_url = os.getenv("ASYNC_DB_URL") or os.getenv("DATABASE_URL", "").replace(
-        "postgresql://", "postgresql+asyncpg://"
-    )
-    
-    engine = create_async_engine(db_url)
-    AsyncSessionLocal = sessionmaker(
-        engine, class_=AsyncSession, expire_on_commit=False
-    )
-    return AsyncSessionLocal
 from app.services.health import (
     HealthCheckEngine,
     MCPHealthAdapter,
@@ -94,8 +82,7 @@ def probe_mcp_connectors(self: Task) -> Dict[str, Any]:
     lock_key = get_lock_key(task_name)
     
     async def _probe():
-        AsyncSessionLocal = get_async_session()
-        async with AsyncSessionLocal() as session:
+        async with get_worker_session() as session:
             # Acquire distributed lock
             if not await acquire_advisory_lock(session, lock_key):
                 logger.info(f"Another instance is already running {task_name}")
@@ -173,8 +160,7 @@ def probe_data_connectors(self: Task) -> Dict[str, Any]:
         from app.models.tool_instance import ToolInstance
         from app.services.tool_instance_service import ToolInstanceService
 
-        AsyncSessionLocal = get_async_session()
-        async with AsyncSessionLocal() as session:
+        async with get_worker_session() as session:
             if not await acquire_advisory_lock(session, lock_key):
                 logger.info(f"Another instance is already running {task_name}")
                 return {"status": "skipped", "reason": "locked"}
@@ -243,8 +229,7 @@ def probe_embedding_models(self: Task) -> Dict[str, Any]:
     lock_key = get_lock_key(task_name)
     
     async def _probe():
-        AsyncSessionLocal = get_async_session()
-        async with AsyncSessionLocal() as session:
+        async with get_worker_session() as session:
             if not await acquire_advisory_lock(session, lock_key):
                 logger.info(f"Another instance is already running {task_name}")
                 return {"status": "skipped", "reason": "locked"}
@@ -298,8 +283,7 @@ def probe_rerank_models(self: Task) -> Dict[str, Any]:
     lock_key = get_lock_key(task_name)
     
     async def _probe():
-        AsyncSessionLocal = get_async_session()
-        async with AsyncSessionLocal() as session:
+        async with get_worker_session() as session:
             if not await acquire_advisory_lock(session, lock_key):
                 logger.info(f"Another instance is already running {task_name}")
                 return {"status": "skipped", "reason": "locked"}
@@ -353,8 +337,7 @@ def probe_llm_models(self: Task) -> Dict[str, Any]:
     lock_key = get_lock_key(task_name)
     
     async def _probe():
-        AsyncSessionLocal = get_async_session()
-        async with AsyncSessionLocal() as session:
+        async with get_worker_session() as session:
             if not await acquire_advisory_lock(session, lock_key):
                 logger.info(f"Another instance is already running {task_name}")
                 return {"status": "skipped", "reason": "locked"}
@@ -408,8 +391,7 @@ def rescan_discovery(self: Task) -> Dict[str, Any]:
     lock_key = get_lock_key(task_name)
     
     async def _rescan():
-        AsyncSessionLocal = get_async_session()
-        async with AsyncSessionLocal() as session:
+        async with get_worker_session() as session:
             if not await acquire_advisory_lock(session, lock_key):
                 logger.info(f"Another instance is already running {task_name}")
                 return {"status": "skipped", "reason": "locked"}
