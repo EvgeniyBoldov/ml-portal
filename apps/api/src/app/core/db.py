@@ -155,6 +155,19 @@ def get_pool_stats() -> dict:
     return stats
 
 
+def reset_db_engine() -> None:
+    """Reset the cached engine and session factory.
+
+    Called from Celery task_prerun so that each fork-worker task gets a
+    fresh engine bound to its own event loop.  Disposing an AsyncEngine is
+    async, so we just drop the reference and let GC clean up the old one.
+    """
+    global _engine, _session_factory, _startup_ready
+    _engine = None
+    _session_factory = None
+    _startup_ready = False
+
+
 def get_session_factory() -> async_sessionmaker[AsyncSession]:
     """Get the global session factory"""
     if _session_factory is None:

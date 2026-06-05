@@ -47,6 +47,11 @@ class OpenAICompatibleLLM:
         self._client_cache[cache_key] = client
         return client
 
+    def clear_client_cache(self) -> None:
+        """Clear cached AsyncOpenAI clients. Needed for Celery fork workers where each
+        task gets a new event loop and cached clients become bound to a dead loop."""
+        self._client_cache.clear()
+
     @staticmethod
     def _extract_secret(payload: dict, auth_type: str) -> Optional[str]:
         if auth_type == "api_key":

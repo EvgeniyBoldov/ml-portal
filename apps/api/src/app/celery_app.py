@@ -238,5 +238,20 @@ if settings.BEAT == 1:
 
 # Worker sessions are created lazily per task via get_worker_session().
 
+# Celery fork workers create a fresh event loop per task; any cached
+# AsyncOpenAI / httpx clients bound to the previous loop will raise
+# "Future attached to a different loop".  Reset the singleton before
+# every task run so that the client is recreated on the new loop.
+from celery.signals import task_prerun
+
+@task_prerun.connect
+def _on_task_prerun(*args, **kwargs) -> None:  # noqa: ARG001
+    from app.core.di import reset_llm_client
+    from app.core.db import reset_db_engine
+
+    reset_llm_client()
+    reset_db_engine()
+
+
 # Register periodic task tracking and enable/disable enforcement.
 from app.workers import periodic_task_tracker  # noqa: F401,E402

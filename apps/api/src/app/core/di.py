@@ -21,6 +21,21 @@ def get_llm_client() -> LLMClientProtocol:
         _llm_client = ResolvingLLMClient(inner)
     return _llm_client
 
+def reset_llm_client() -> None:
+    """Reset the global LLM client singleton.
+
+    Must be called before each Celery task run because fork workers create a
+    fresh event loop per task, and any cached AsyncOpenAI / httpx clients
+    bound to the previous loop will raise "Future attached to a different loop".
+    """
+    global _llm_client
+    if _llm_client is not None:
+        inner = getattr(_llm_client, "_inner", None)
+        if inner is not None and hasattr(inner, "clear_client_cache"):
+            inner.clear_client_cache()
+    _llm_client = None
+
+
 async def cleanup_clients() -> None:
     global _llm_client
     if _llm_client is not None:
