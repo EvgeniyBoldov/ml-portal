@@ -12,6 +12,7 @@ class OperationRuntimeContext(BaseModel):
     instance_slug: str = Field(..., min_length=1)
     collection_id: Optional[str] = None
     collection_slug: Optional[str] = None
+    allowed_collection_slugs: list[str] = Field(default_factory=list)
     provider_instance_id: str = Field(..., min_length=1)
     provider_instance_slug: str = Field(..., min_length=1)
     has_credentials: bool = False

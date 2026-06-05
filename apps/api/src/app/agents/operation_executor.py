@@ -59,7 +59,10 @@ class DirectOperationExecutor:
                 return ToolResult.fail(
                     f"Local handler missing for '{operation_call.operation_slug}'"
                 )
-            merged_args = self._merge_local_args(target, operation_call.arguments, ctx, binding=binding)
+            try:
+                merged_args = self._merge_local_args(target, operation_call.arguments, ctx, binding=binding)
+            except ValueError as exc:
+                return ToolResult.fail(str(exc))
             call = _UnifiedToolCall(
                 name=handler_slug,
                 arguments=merged_args,
@@ -202,16 +205,27 @@ class DirectOperationExecutor:
             return merged_args
         instance_info = binding.context.model_dump()
         config = instance_info.get("config") or {}
-        binding_collection_id = instance_info.get("collection_id")
-        # Enforce bound collection to prevent cross-collection access via crafted args.
-        if binding_collection_id:
-            merged_args["collection_id"] = binding_collection_id
+        allowed_slugs = instance_info.get("allowed_collection_slugs") or []
+
+        request_slug = merged_args.get("collection_slug")
         binding_collection_slug = instance_info.get("collection_slug")
-        if binding_collection_slug:
-            merged_args["collection_slug"] = binding_collection_slug
-        config_collection_slug = config.get("collection_slug")
-        if config_collection_slug and not merged_args.get("collection_slug"):
-            merged_args["collection_slug"] = config_collection_slug
+
+        # Validate: if bindings restrict collections, the requested one must be allowed.
+        if allowed_slugs and request_slug and request_slug not in allowed_slugs:
+            raise ValueError(
+                f"Collection '{request_slug}' is not allowed for this operation. "
+                f"Allowed: {allowed_slugs}"
+            )
+
+        # Backward-compatible fallback: if LLM did not provide a slug, use the binding one.
+        if not request_slug:
+            if binding_collection_slug:
+                merged_args["collection_slug"] = binding_collection_slug
+            else:
+                config_collection_slug = config.get("collection_slug")
+                if config_collection_slug:
+                    merged_args["collection_slug"] = config_collection_slug
+
         return merged_args
 
     def _merge_mcp_args(
@@ -228,14 +242,22 @@ class DirectOperationExecutor:
         instance_info = binding.context.model_dump()
         data_config = binding.context.config or {}
         credential_context = binding.credential
+        allowed_slugs = instance_info.get("allowed_collection_slugs") or []
 
-        # Enforce bound collection for remote MCP calls as well.
-        binding_collection_id = instance_info.get("collection_id")
-        if binding_collection_id:
-            merged_args["collection_id"] = binding_collection_id
+        request_slug = merged_args.get("collection_slug")
         binding_collection_slug = instance_info.get("collection_slug")
-        if binding_collection_slug:
-            merged_args["collection_slug"] = binding_collection_slug
+
+        # Validate: if bindings restrict collections, the requested one must be allowed.
+        if allowed_slugs and request_slug and request_slug not in allowed_slugs:
+            raise ValueError(
+                f"Collection '{request_slug}' is not allowed for this operation. "
+                f"Allowed: {allowed_slugs}"
+            )
+
+        # Backward-compatible fallback: if LLM did not provide a slug, use the binding one.
+        if not request_slug:
+            if binding_collection_slug:
+                merged_args["collection_slug"] = binding_collection_slug
 
         merged_args.setdefault("instance_context", {})
         if isinstance(merged_args["instance_context"], dict):

@@ -159,6 +159,13 @@ class OperationRouter:
 
             for operation, credential_context in operations:
                 if operation.operation_slug in seen_operation_slugs:
+                    # Shared local service instance handles multiple collections;
+                    # aggregate the collection into the existing binding.
+                    existing = graph_builder._graph.bindings.get(operation.operation_slug)
+                    if existing and collection_slug:
+                        current = set(existing.context.allowed_collection_slugs or [])
+                        current.add(collection_slug)
+                        existing.context.allowed_collection_slugs = sorted(current)
                     continue
                 seen_operation_slugs.add(operation.operation_slug)
                 if operation.collection_slug is None and collection_slug:
@@ -170,6 +177,7 @@ class OperationRouter:
                     runtime_domain=runtime_domain,
                     collection_id=collection_id,
                     collection_slug=collection_slug,
+                    allowed_collection_slugs=[collection_slug] if collection_slug else [],
                     has_credentials=operation.target.has_credentials,
                     credential_scope=operation.credential_scope,
                 )
@@ -247,6 +255,7 @@ class OperationRouter:
         runtime_domain: str,
         collection_id: Optional[str],
         collection_slug: Optional[str],
+        allowed_collection_slugs: list[str],
         has_credentials: bool,
         credential_scope: str,
     ) -> Dict[str, Any]:
@@ -255,6 +264,7 @@ class OperationRouter:
             "instance_slug": instance.slug,
             "collection_id": collection_id,
             "collection_slug": collection_slug,
+            "allowed_collection_slugs": allowed_collection_slugs,
             "provider_instance_id": str(provider_for_execution.id),
             "provider_instance_slug": provider_for_execution.slug,
             "has_credentials": has_credentials,

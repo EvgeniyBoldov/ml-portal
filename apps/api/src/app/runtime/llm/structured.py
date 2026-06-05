@@ -137,6 +137,26 @@ class StructuredLLMCall:
         if boundary.output_tokens is not None:
             params["max_tokens"] = int(boundary.output_tokens)
 
+        # JSON schema enforcement: constrain LLM output to the Pydantic schema.
+        # Works with OpenAI, Groq, and other providers supporting response_format.
+        if schema is not None:
+            try:
+                json_schema = schema.model_json_schema()
+                params["response_format"] = {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": schema.__name__,
+                        "schema": json_schema,
+                        "strict": False,  # strict mode too restrictive for nested dicts
+                    },
+                }
+            except Exception as schema_err:
+                logger.debug(
+                    "Failed to generate JSON schema for response_format, falling back to json_object: %s",
+                    schema_err,
+                )
+                params["response_format"] = {"type": "json_object"}
+
         last_error: Optional[str] = None
         raw_response = ""
         start = time.time()
@@ -242,8 +262,87 @@ class StructuredLLMCall:
             raise StructuredCallError("no JSON block detected in LLM response")
         try:
             return schema.model_validate(data)
-        except ValidationError as exc:
-            raise StructuredCallError(f"schema validation failed: {exc.errors()}") from exc
+        except ValidationError:
+            # Fallback: coerce common LLM output mismatches (weak models often
+            # return objects where strings are expected).
+            coerced = cls._coerce_schema_types(data, schema)
+            try:
+                return schema.model_validate(coerced)
+            except ValidationError as exc:
+                raise StructuredCallError(f"schema validation failed: {exc.errors()}") from exc
+
+    @staticmethod
+    def _coerce_schema_types(data: Any, schema: Type[T]) -> Any:
+        """Coerce common weak-model mismatches: list[dict]→list[str], dict[str,dict]→dict[str,str], etc."""
+        if not isinstance(data, dict):
+            return data
+
+        import typing
+
+        result = dict(data)
+        try:
+            hints = typing.get_type_hints(schema)
+        except Exception:
+            return result
+
+        for field_name, field_type in hints.items():
+            if field_name not in result:
+                continue
+            value = result[field_name]
+            origin = typing.get_origin(field_type)
+            args = typing.get_args(field_type)
+
+            # list[str] that came as list[dict] → take .text / .name / str()
+            if origin is list and args and args[0] is str:
+                if isinstance(value, list):
+                    coerced: list[str] = []
+                    for item in value:
+                        if isinstance(item, str):
+                            coerced.append(item)
+                        elif isinstance(item, dict):
+                            coerced.append(
+                                item.get("text")
+                                or item.get("name")
+                                or item.get("description")
+                                or str(item)
+                            )
+                        else:
+                            coerced.append(str(item))
+                    result[field_name] = coerced
+
+            # dict[str, str] that came as dict[str, dict] → take .name / str()
+            elif origin is dict and len(args) >= 2 and args[0] is str and args[1] is str:
+                if isinstance(value, dict):
+                    coerced_dict: dict[str, str] = {}
+                    for k, v in value.items():
+                        if isinstance(v, str):
+                            coerced_dict[k] = v
+                        elif isinstance(v, dict):
+                            coerced_dict[k] = (
+                                v.get("name")
+                                or v.get("description")
+                                or v.get("text")
+                                or str(v)
+                            )
+                        else:
+                            coerced_dict[k] = str(v)
+                    result[field_name] = coerced_dict
+                elif isinstance(value, list):
+                    # list[dict] → dict[str, str]
+                    coerced_dict = {}
+                    for item in value:
+                        if isinstance(item, dict):
+                            key = item.get("id") or item.get("name") or str(len(coerced_dict))
+                            val = (
+                                item.get("name")
+                                or item.get("description")
+                                or item.get("text")
+                                or str(item)
+                            )
+                            coerced_dict[str(key)] = str(val)
+                    result[field_name] = coerced_dict
+
+        return result
 
     @staticmethod
     def _extract_json(text: str) -> Optional[Any]:
