@@ -1,6 +1,7 @@
 """Runtime input builders for planner/synthesizer surfaces."""
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Optional
 
 from app.runtime.turn_state import RuntimeTurnState
@@ -76,52 +77,62 @@ class SynthesizerInputBuilder:
         self,
         *,
         runtime_state: RuntimeTurnState,
-        planner_hint: Optional[str],
+        answer_brief: Optional[str],
         system_prompt: str,
     ) -> List[Dict[str, str]]:
         state = runtime_state
 
-        parts: List[str] = []
-        goal = state.goal
-        parts.append(f"Цель: {goal or '(не указана)'}")
-
-        # Conversation context from memory_bundle if available
-        conversation_summary = ""
+        rag_sources: List[Dict[str, Any]] = []
         if state.memory_bundle and state.memory_bundle.sections:
             for section in state.memory_bundle.sections:
-                if section.name == "conversation" and section.items:
-                    conversation_summary = section.items[0].text[:1500]
-                    break
-        if conversation_summary:
-            parts.append(f"Контекст диалога:\n{conversation_summary}")
+                if section.name == "sources" and section.items:
+                    for item in section.items[:20]:
+                        if isinstance(item.metadata, dict) and isinstance(item.metadata.get("source"), dict):
+                            rag_sources.append(dict(item.metadata["source"]))
 
-        state_results = list(state.agent_results)
-        if state_results:
-            parts.append("Результаты агентов:")
-            for item in state_results[-8:]:
-                slug = str(item.get("agent_slug") or item.get("agent") or "agent")
-                success = bool(item.get("success", True))
-                summary = str(item.get("summary") or "")
-                status = "OK" if success else "FAIL"
-                parts.append(f"- [{slug}] ({status}) {summary[:400]}")
+        generated_files: List[Dict[str, Any]] = []
+        for item in state.agent_results:
+            item_attachments = item.get("attachments")
+            if isinstance(item_attachments, list):
+                for att in item_attachments[-10:]:
+                    if not isinstance(att, dict):
+                        continue
+                    generated_files.append(
+                        {
+                            "file_id": att.get("file_id"),
+                            "file_name": att.get("file_name") or att.get("name") or "file",
+                            "download_url": att.get("download_url") or att.get("url") or "",
+                            "content_type": att.get("content_type") or "",
+                            "size_bytes": att.get("size_bytes"),
+                        }
+                    )
 
-        if state.memory_bundle.sections:
-            parts.append("Отобранная память (sections):")
-            for section in state.memory_bundle.sections[:6]:
-                if not section.items:
-                    continue
-                parts.append(f"- {section.name}: {len(section.items)} items")
+        payload: Dict[str, Any] = {
+            "answer_brief": str(answer_brief or state.answer_brief or "").strip(),
+            "generated_files": generated_files[-10:],
+            "rag_sources": rag_sources[:20],
+            "language_hint": self._detect_language_hint(state.current_user_query or state.goal or ""),
+            "style_constraints": {
+                "concise": True,
+                "preserve_lists": True,
+                "preserve_order": True,
+            },
+        }
 
-        state_facts = list(state.runtime_facts)
-        if state_facts:
-            parts.append("Факты:")
-            for fact in state_facts[-20:]:
-                parts.append(f"- {fact.text[:200]}")
+        import json
 
-        if planner_hint:
-            parts.append(f"Подсказка планировщика: {planner_hint[:400]}")
+        user_content = json.dumps(payload, ensure_ascii=False, default=str, indent=2)
 
         return [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": "\n\n".join(parts)},
+            {"role": "user", "content": user_content},
         ]
+
+    @staticmethod
+    def _detect_language_hint(text: str) -> Optional[str]:
+        sample = str(text or "").strip()
+        if not sample:
+            return None
+        if re.search(r"[А-Яа-яЁё]", sample):
+            return "ru"
+        return None

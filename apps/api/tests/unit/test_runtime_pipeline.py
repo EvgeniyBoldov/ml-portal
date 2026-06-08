@@ -218,7 +218,7 @@ async def test_pipeline_direct_answer_path_calls_memory_writer_and_skips_finaliz
     direct_outcome = PlanningOutcome(
         kind=PlanningOutcomeKind.DIRECT,
         stop_reason=PipelineStopReason.COMPLETED,
-        planner_hint="Привет!",
+        answer_brief="Привет!",
     )
     planning_stub = _StubPlanningStage(direct_outcome, extra_final_answer="Привет!")
     pipeline._assembler.build_planning_stage = MagicMock(return_value=planning_stub)
@@ -300,7 +300,7 @@ async def test_pipeline_direct_answer_emits_memory_tail_before_run_end():
     direct_outcome = PlanningOutcome(
         kind=PlanningOutcomeKind.DIRECT,
         stop_reason=PipelineStopReason.COMPLETED,
-        planner_hint="Done",
+        answer_brief="Done",
     )
     planning_stub = _StubPlanningStage(direct_outcome, extra_final_answer="Done")
     pipeline._assembler.build_planning_stage = MagicMock(return_value=planning_stub)
@@ -369,7 +369,7 @@ async def test_pipeline_needs_final_runs_finalization_then_memory_writer():
     outcome = PlanningOutcome(
         kind=PlanningOutcomeKind.NEEDS_FINAL,
         stop_reason=PipelineStopReason.COMPLETED,
-        planner_hint=None,
+        answer_brief=None,
     )
     pipeline._assembler.build_planning_stage = MagicMock(
         return_value=_StubPlanningStage(outcome)

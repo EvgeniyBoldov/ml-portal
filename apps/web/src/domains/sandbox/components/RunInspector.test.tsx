@@ -47,4 +47,32 @@ describe('RunInspector semantic trace', () => {
     expect(screen.getByText(/No step selected/)).toBeInTheDocument();
     expect(screen.getByText(/Click a step in chat timeline to inspect details/)).toBeInTheDocument();
   });
+
+  it('renders error tab with traceback payload when the step has runtime error data', () => {
+    const steps: RunStep[] = [
+      {
+        id: 'step-err',
+        type: 'status',
+        data: {
+          stage: 'sub_agent_unavailable',
+          agent: 'net.enginer',
+          error: 'Sub-agent net.enginer unavailable: Preflight failed',
+          runtime_error_code: 'agent_precheck_failed',
+          debug: {
+            exception_type: 'ValidationError',
+            traceback: 'Traceback (most recent call last):\n  File "/app/app/agents/operation_builder.py", line 196, in _build_single_operation\nValidationError: data_instance_id',
+          },
+        },
+        timestamp: Date.now(),
+      },
+    ];
+
+    render(<RunInspector steps={steps} selectedStepId="step-err" runStatus="error" />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Error' }));
+    expect(screen.getByText(/Error details/)).toBeInTheDocument();
+    expect(screen.getAllByText(/agent_precheck_failed/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Traceback \(most recent call last\):/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/ValidationError: data_instance_id/).length).toBeGreaterThan(0);
+  });
 });

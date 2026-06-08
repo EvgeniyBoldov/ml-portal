@@ -14,6 +14,7 @@ from typing import Any, ClassVar, Dict, List, Optional
 from app.agents.context import ToolContext, ToolResult
 from app.agents.handlers.versioned_tool import VersionedTool, register_tool, tool_version
 from app.core.logging import get_logger
+from app.services.file_delivery_service import FileDeliveryService
 
 logger = get_logger(__name__)
 
@@ -358,6 +359,8 @@ class CollectionDocSearchTool(VersionedTool):
                     sources.append({
                         "source_id": source_id,
                         "source_name": source_name,
+                        "title": source_name,
+                        "uri": self._build_source_uri(source_id),
                         "chunk_id": payload.get("chunk_id"),
                         "text": text[:200],
                         "page": payload.get("page", 0),
@@ -386,6 +389,13 @@ class CollectionDocSearchTool(VersionedTool):
             logger.error(f"Collection doc search failed: {e}", exc_info=True)
             log.error("Search failed", error=str(e))
             return ToolResult.fail(f"Search failed: {str(e)}", logs=log.entries_dict())
+
+    @staticmethod
+    def _build_source_uri(source_id: str) -> Optional[str]:
+        sid = str(source_id or "").strip()
+        if not sid:
+            return None
+        return f"/api/v1/files/{FileDeliveryService.make_rag_document_file_id(sid, 'original')}/download"
 
     async def _resolve_embedding_alias(
         self, vector_store: Any, qdrant_collection_name: str, collection: Any = None,

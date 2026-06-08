@@ -59,10 +59,12 @@ class TestPayloadSerialization:
             message_id="msg-1",
             created_at="2025-01-01T00:00:00Z",
             sources=[{"url": "http://example.com"}],
+            attachments=[{"file_id": "chatatt_1", "file_name": "report.txt"}],
         )
         d = p.model_dump(mode="json")
         assert d["message_id"] == "msg-1"
         assert len(d["sources"]) == 1
+        assert len(d["attachments"]) == 1
 
     def test_error_payload(self):
         p = ErrorPayload(error="Something broke")

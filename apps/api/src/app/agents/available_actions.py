@@ -77,6 +77,7 @@ class AvailableActionsBuilder:
                     operation_slug=resolved_operation.operation_slug,
                     op=resolved_operation.operation,
                     name=resolved_operation.name,
+                    scope=resolved_operation.scope,
                     data_instance_slug=resolved_operation.data_instance_slug,
                     description=resolved_operation.description,
                     input_schema_hint=_schema_hint(resolved_operation.input_schema),
@@ -88,7 +89,7 @@ class AvailableActionsBuilder:
                     resource=resolved_operation.resource,
                     systems=list(
                         dict.fromkeys(
-                            [resolved_operation.source, resolved_operation.data_instance_slug]
+                            [resolved_operation.scope, resolved_operation.source]
                             + list(resolved_operation.systems or [])
                         )
                     ),

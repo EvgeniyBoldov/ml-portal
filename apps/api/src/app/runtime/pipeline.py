@@ -489,7 +489,7 @@ class RuntimePipeline:
             async for ev in self._run_finalization(
                 runtime_state=runtime_state,
                 stop_reason=planning_outcome.stop_reason,
-                planner_hint=planning_outcome.planner_hint,
+                answer_brief=planning_outcome.answer_brief,
                 final_answer_strategy=planning_outcome.final_answer_strategy,
                 model=request.model,
                 platform_config=platform.config,
@@ -615,7 +615,7 @@ class RuntimePipeline:
         *,
         runtime_state: RuntimeTurnState,
         stop_reason: PipelineStopReason,
-        planner_hint: Optional[str],
+        answer_brief: Optional[str],
         final_answer_strategy: Literal["synthesize", "verbatim", "use_agent_result"],
         model: Optional[str],
         platform_config: Optional[Dict[str, Any]] = None,
@@ -631,7 +631,7 @@ class RuntimePipeline:
         async for phased in final_stage.run(
             runtime_state=runtime_state,
             stop_reason=stop_reason,
-            planner_hint=planner_hint,
+            answer_brief=answer_brief,
             final_answer_strategy=final_answer_strategy,
             model=model,
             platform_config=platform_config,
@@ -649,6 +649,7 @@ class RuntimePipeline:
                     ev.data.get("content", ""),
                     sources=ev.data.get("sources"),
                     run_id=ev.data.get("run_id"),
+                    attachments=ev.data.get("attachments"),
                     stop_reason=stop_reason.value,
                 )
                 phased = PhasedEvent(ev, phased.phase)

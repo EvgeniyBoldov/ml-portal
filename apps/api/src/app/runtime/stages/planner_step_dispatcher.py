@@ -14,7 +14,7 @@ from app.runtime.turn_state import RuntimeTurnState
 class TerminalDispatchResult:
     outcome_kind: Literal["direct", "needs_final", "paused", "aborted"]
     stop_reason: PipelineStopReason
-    planner_hint: Optional[str] = None
+    answer_brief: Optional[str] = None
     final_answer_strategy: Literal["synthesize", "verbatim", "use_agent_result"] = "synthesize"
     error_message: Optional[str] = None
 
@@ -39,6 +39,7 @@ class PlannerStepDispatcher:
             if not answer:
                 answer = (step.rationale or "").strip() or "Не удалось сформировать ответ."
             synthesis_id = f"{run_id}:planner-direct"
+            runtime_state.answer_brief = answer
             runtime_state.final_answer = answer
             runtime_state.status = PipelineStopReason.COMPLETED.value
             events.append(
@@ -112,11 +113,12 @@ class PlannerStepDispatcher:
             return events, TerminalDispatchResult(
                 outcome_kind="direct",
                 stop_reason=PipelineStopReason.COMPLETED,
-                planner_hint=answer,
+                answer_brief=answer,
             )
 
         if step.kind == NextStepKind.FINAL:
             runtime_state.status = PipelineStopReason.COMPLETED.value
+            runtime_state.answer_brief = str(step.final_answer or "").strip() or None
             runtime_state.add_iteration_result(
                 build_iteration_result(
                     state=runtime_state,
@@ -143,7 +145,7 @@ class PlannerStepDispatcher:
             return events, TerminalDispatchResult(
                 outcome_kind="needs_final",
                 stop_reason=PipelineStopReason.COMPLETED,
-                planner_hint=step.final_answer,
+                answer_brief=step.final_answer,
                 final_answer_strategy=step.final_answer_strategy,
             )
 
@@ -198,6 +200,7 @@ class PlannerStepDispatcher:
             if not final_text:
                 reason = (step.rationale or "").strip()
                 final_text = f"Выполнение остановлено. {reason}" if reason else "Выполнение остановлено."
+            runtime_state.answer_brief = final_text
             runtime_state.final_answer = final_text
             runtime_state.add_iteration_result(
                 build_iteration_result(

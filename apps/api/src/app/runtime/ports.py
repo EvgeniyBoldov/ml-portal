@@ -109,7 +109,7 @@ class SynthesizerPort(Protocol):
         runtime_state: RuntimeTurnState,
         run_id: UUID,
         model: Optional[str] = None,
-        planner_hint: Optional[str] = None,
+        answer_brief: Optional[str] = None,
         final_answer_strategy: Literal["synthesize", "verbatim", "use_agent_result"] = "synthesize",
         platform_config: Optional[Dict[str, Any]] = None,
         sandbox_overrides: Optional[Dict[str, Any]] = None,

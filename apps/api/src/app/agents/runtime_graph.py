@@ -10,6 +10,7 @@ from app.agents.contracts import OperationCredentialContext, ProviderExecutionTa
 class OperationRuntimeContext(BaseModel):
     instance_id: str = Field(..., min_length=1)
     instance_slug: str = Field(..., min_length=1)
+    scope: str = Field(default="collection", min_length=1)
     collection_id: Optional[str] = None
     collection_slug: Optional[str] = None
     allowed_collection_slugs: list[str] = Field(default_factory=list)

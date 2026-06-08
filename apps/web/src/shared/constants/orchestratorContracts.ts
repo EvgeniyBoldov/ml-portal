@@ -31,41 +31,54 @@ export const PLANNER_INPUT_CONTRACT = {
 export const SYNTHESIZER_INPUT_CONTRACT = {
   type: 'object',
   properties: {
-    goal: { type: 'string', description: 'Цель ответа пользователю' },
-    conversation_summary: { type: 'string', description: 'Контекст диалога' },
-    agent_results: {
+    answer_brief: {
+      type: 'string',
+      description: 'Канонический черновик ответа пользователю. Synthesizer редактирует форму, но не меняет смысл.',
+    },
+    generated_files: {
       type: 'array',
-      description: 'Результаты ранее вызванных агентов',
+      description: 'Файлы, которые нужно явно упомянуть или отдать ссылкой пользователю',
       items: {
         type: 'object',
         properties: {
-          agent_slug: { type: 'string', description: 'Slug агента' },
-          summary: { type: 'string', description: 'Краткий итог результата' },
-          success: { type: 'boolean', description: 'Успешность' },
+          file_id: { type: 'string', description: 'Стабильный идентификатор файла' },
+          file_name: { type: 'string', description: 'Имя файла для показа в ответе' },
+          download_url: { type: 'string', description: 'Ссылка на скачивание файла' },
+          content_type: { type: 'string', description: 'MIME-тип файла' },
+          size_bytes: { type: ['integer', 'null'], description: 'Размер файла в байтах' },
         },
-        required: ['agent_slug', 'summary'],
+        required: ['file_id', 'file_name'],
       },
     },
-    memory_sections: {
+    rag_sources: {
       type: 'array',
-      description: 'Выбранные секции памяти',
+      description: 'Структурированные источники из RAG/документного поиска для цитирования',
       items: {
         type: 'object',
         properties: {
-          name: { type: 'string', description: 'Название секции' },
-          items_count: { type: 'integer', description: 'Количество элементов в секции' },
+          source_id: { type: 'string', description: 'Идентификатор источника' },
+          source_name: { type: 'string', description: 'Отображаемое имя документа/источника' },
+          text: { type: 'string', description: 'Короткий фрагмент или snippet' },
+          page: { type: ['integer', 'null'], description: 'Номер страницы, если известен' },
+          score: { type: ['number', 'null'], description: 'Оценка релевантности' },
         },
-        required: ['name'],
       },
     },
-    runtime_facts: {
-      type: 'array',
-      description: 'Собранные факты текущего хода',
-      items: { type: 'string' },
+    language_hint: {
+      type: ['string', 'null'],
+      description: 'Подсказка по языку итогового ответа',
     },
-    planner_hint: { type: ['string', 'null'], description: 'Подсказка планировщика' },
+    style_constraints: {
+      type: ['object', 'null'],
+      description: 'Ограничения на форму итогового текста',
+      properties: {
+        concise: { type: 'boolean', description: 'Сделать ответ компактным' },
+        preserve_lists: { type: 'boolean', description: 'Сохранять списки из answer_brief' },
+        preserve_order: { type: 'boolean', description: 'Сохранять порядок тезисов из answer_brief' },
+      },
+    },
   },
-  required: ['goal', 'agent_results', 'runtime_facts'],
+  required: ['answer_brief', 'generated_files', 'rag_sources'],
 };
 
 export const FACT_EXTRACTOR_INPUT_CONTRACT = {

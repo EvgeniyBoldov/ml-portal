@@ -64,7 +64,7 @@ class CollectionCatalogTool(VersionedTool):
     """
 
     tool_slug: ClassVar[str] = "collection.catalog"
-    domains: ClassVar[list] = ["collection.table", "collection.document", "collection.sql", "collection.api"]
+    domains: ClassVar[list] = ["system"]
     name: ClassVar[str] = "Collection Catalog"
     description: ClassVar[str] = (
         "Inspect collection schema and data shape: fields, metadata, dimensions, and remote catalog tables."

@@ -124,6 +124,7 @@ class RunContextCompact:
                 "operation_slug": t.operation_slug,
                 "op": t.op,
                 "name": t.name or "",
+                "scope": getattr(t, "scope", "collection"),
                 "data_instance_slug": t.data_instance_slug or "",
                 "description": t.description or "",
                 "side_effects": t.side_effects,

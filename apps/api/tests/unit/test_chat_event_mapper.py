@@ -48,13 +48,10 @@ class TestChatEventMapper:
         result = mapper.map_runtime_event(event)
 
         assert result is not None
-        assert result["type"] == "planner_action"
+        assert result["type"] == "planner_decision"
         assert result["agent_slug"] == "netbox"
         assert result["kind"] == "call_agent"
-        assert result["action_type"] == "agent_call"
-        assert result["step_type"] == "call_agent"
         assert result["rationale"] == "Нужны данные из NetBox"
-        assert result["why"] == "Нужны данные из NetBox"
         assert result["contract_version"] == 1
 
     def test_maps_error_event_with_code_and_details(self):
@@ -62,7 +59,7 @@ class TestChatEventMapper:
         event = SimpleNamespace(
             type=RuntimeEventType.ERROR,
             data={
-                "error": "failed",
+                "error": "Sub-agent net.enginer failed: traceback ...",
                 "error_code": "operation_unavailable",
                 "retryable": False,
             },
@@ -72,6 +69,7 @@ class TestChatEventMapper:
         assert result["type"] == "error"
         assert result["code"] == "operation_unavailable"
         assert result["recoverable"] is False
+        assert result["error"] == "Во время выполнения запроса возникли проблемы. Сообщите ран-администратору."
         assert result["details"]["retryable"] is False
 
     def test_llm_mapping_uses_whitelist_only(self):

@@ -404,7 +404,11 @@ class ExecutionPreflight:
         allowed_op_slugs = {
             op.operation_slug
             for op in operation_result.resolved_operations
-            if op.data_instance_slug in allowed_instance_slugs
+            if (
+                op.data_instance_slug is None
+                or op.data_instance_slug == "system"
+                or op.data_instance_slug in allowed_instance_slugs
+            )
         }
         operation_result.resolved_operations = [
             op for op in operation_result.resolved_operations

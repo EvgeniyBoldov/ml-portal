@@ -164,11 +164,15 @@ class CapabilityCardBuilder:
             if shown >= max_items:
                 break
             shown += 1
-            coll_slug = self._text(getattr(op, "collection_slug", None) or op.data_instance_slug)
+            coll_slug = ""
+            if getattr(op, "scope", "collection") != "system":
+                coll_slug = self._text(getattr(op, "collection_slug", None) or op.data_instance_slug)
             line = f"- `{op.operation_slug}`"
             details: List[str] = []
             if coll_slug:
                 details.append(f"{self._label(labels, 'collection_label', 'коллекция')}: {coll_slug}")
+            if getattr(op, "scope", "collection") == "system":
+                details.append(f"{self._label(labels, 'type_label', 'тип')}: system")
             if details:
                 line += " - " + "; ".join(details)
             lines.append(line)

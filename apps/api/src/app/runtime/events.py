@@ -274,6 +274,7 @@ class RuntimeEvent:
         call_id: str,
         success: bool,
         data: Any,
+        sources: Optional[list[dict[str, Any]]] = None,
         error_code: Optional[RuntimeErrorCode | str] = None,
         retryable: Optional[bool] = None,
         safe_message: Optional[str] = None,
@@ -292,6 +293,8 @@ class RuntimeEvent:
             "success": success,
             "data": data,
         }
+        if sources is not None:
+            payload["sources"] = list(sources)
         if error_code is not None:
             payload["error_code"] = (
                 error_code.value if isinstance(error_code, RuntimeErrorCode) else str(error_code)
@@ -430,6 +433,7 @@ class RuntimeEvent:
         retryable: Optional[bool] = None,
         parent_entity_type: Optional[str] = None,
         parent_entity_id: Optional[str] = None,
+        **extra: Any,
     ) -> "RuntimeEvent":
         payload: Dict[str, Any] = {"error": message, "recoverable": recoverable}
         if error_code is not None:
@@ -442,6 +446,7 @@ class RuntimeEvent:
             payload["parent_entity_type"] = parent_entity_type
         if parent_entity_id is not None:
             payload["parent_entity_id"] = parent_entity_id
+        payload.update(extra)
         return cls(RuntimeEventType.ERROR, payload)
 
     # -------- envelope --------

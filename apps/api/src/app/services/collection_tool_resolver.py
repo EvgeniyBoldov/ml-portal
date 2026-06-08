@@ -22,15 +22,6 @@ from app.services.collection_linking import (
 )
 from app.services.instance_capabilities import is_mcp_service_instance
 
-_CATALOG_DOMAINS: frozenset[str] = frozenset({
-    "collection.table",
-    "collection.document",
-    "collection.sql",
-    "collection.api",
-    "sql",
-    "api",
-})
-
 _LocalToolRule = Tuple[str, Optional[Callable[["CollectionToolResolutionContext"], bool]]]
 
 _LOCAL_TOOL_RULES: Dict[str, _LocalToolRule] = {
@@ -45,10 +36,6 @@ _LOCAL_TOOL_RULES: Dict[str, _LocalToolRule] = {
     "collection.search": ("collection.table", None),
     "collection.aggregate": ("collection.table", None),
     "collection.get": ("collection.table", None),
-    "collection.catalog": (
-        "",
-        lambda ctx: bool(ctx.bound_collection) and ctx.runtime_domain in _CATALOG_DOMAINS,
-    ),
 }
 
 
@@ -127,10 +114,6 @@ class CollectionToolResolver:
                 await self._load_local_tools_for_provider(provider=context.provider)
             )
 
-        # collection.catalog should be available for any bound collection,
-        # regardless of the provider kind.
-        if context.bound_collection is not None:
-            tools.extend(await self._load_local_collection_catalog_tools())
         return tools
 
     async def _load_provider_tools(
@@ -169,16 +152,18 @@ class CollectionToolResolver:
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
-    async def _load_local_collection_catalog_tools(self) -> List[DiscoveredTool]:
+    async def _load_system_tools(self) -> List[DiscoveredTool]:
+        """Load global system tools (provider_instance_id=NULL, domain='system')."""
         stmt = (
             select(DiscoveredTool)
             .options(selectinload(DiscoveredTool.tool))
             .where(
                 DiscoveredTool.is_active.is_(True),
                 DiscoveredTool.source == "local",
-                DiscoveredTool.slug == "collection.catalog",
+                DiscoveredTool.provider_instance_id.is_(None),
+                DiscoveredTool.domains.any("system"),
             )
-            .order_by(DiscoveredTool.provider_instance_id, DiscoveredTool.slug)
+            .order_by(DiscoveredTool.slug)
         )
         result = await self.session.execute(stmt)
         return list(result.scalars().all())

@@ -52,6 +52,7 @@ async def test_available_actions_keeps_destructive_operations_without_env_hardco
     assert len(actions.operations) == 1
     assert actions.operations[0].operation_slug == "instance.jira-prod.jira.issue.delete"
     assert actions.operations[0].risk_level == "destructive"
+    assert actions.operations[0].scope == "collection"
 
 
 def test_normalize_risk_defaults_to_safe_for_unknown_values():

@@ -488,12 +488,25 @@ class OperationExecutionFacade:
         for out in tool_outputs:
             tool_name = out.get("operation") or out.get("tool") or "unknown"
             if out.get("success") and out.get("data"):
-                try:
-                    data_str = _json.dumps(
-                        out["data"], ensure_ascii=False, default=str,
-                    )[:4000]
-                except Exception:
-                    data_str = str(out["data"])[:4000]
+                data = out["data"]
+                # Pretty-print file.generate results as markdown links
+                if tool_name in ("file.generate", "file_generate"):
+                    file_name = data.get("file_name") or data.get("filename") or "file"
+                    file_id = data.get("file_id") or ""
+                    download_url = data.get("download_url") or ""
+                    size_bytes = data.get("size_bytes")
+                    size_str = f" ({size_bytes} bytes)" if size_bytes else ""
+                    if download_url:
+                        data_str = f"📎 [{file_name}]({download_url}){size_str} — id: `{file_id}`"
+                    else:
+                        data_str = f"📎 {file_name}{size_str} — id: `{file_id}`"
+                else:
+                    try:
+                        data_str = _json.dumps(
+                            data, ensure_ascii=False, default=str,
+                        )[:4000]
+                    except Exception:
+                        data_str = str(data)[:4000]
                 parts.append(f"[{tool_name}] OK:\n{data_str}")
             elif out.get("error"):
                 parts.append(f"[{tool_name}] ERROR: {out['error']}")

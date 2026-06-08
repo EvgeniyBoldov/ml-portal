@@ -56,6 +56,15 @@ _JSON_FENCE = re.compile(r"```(?:json)?\s*(\{.*?\}|\[.*?\])\s*```", re.DOTALL | 
 _JSON_OBJECT = re.compile(r"(\{.*\}|\[.*\])", re.DOTALL)
 
 
+_ROLE_PROMPT_SECTIONS = [
+    ("identity", "IDENTITY"),
+    ("mission", "MISSION"),
+    ("rules", "RULES"),
+    ("safety", "SAFETY"),
+    ("output_requirements", "OUTPUT REQUIREMENTS"),
+]
+
+
 class StructuredLLMCall:
     """Thin, reusable wrapper over LLM chat for structured (JSON) outputs."""
 
@@ -101,17 +110,28 @@ class StructuredLLMCall:
         """
         role_config = await self.role_service.get_role_config(role)
 
-        system_prompt = system_prompt or role_config["prompt"]
+        role_key = str(role.value).strip().lower()
+        role_override = ((sandbox_overrides or {}).get("role_overrides") or {}).get(role_key)
+
+        # Apply model / temperature override from sandbox
+        model = role_config.get("model") or "unknown"
+        temperature = role_config.get("temperature")
+        if isinstance(role_override, dict):
+            if role_override.get("model"):
+                model = str(role_override["model"])
+            if role_override.get("temperature") is not None:
+                temperature = float(role_override["temperature"])
+
+        # Recompile system prompt if prompt parts are overridden
+        system_prompt = system_prompt or self._compile_role_prompt(role_config, role_override)
         user_message = json.dumps(payload, ensure_ascii=False, default=str)
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_message},
         ]
 
-        model = role_config.get("model") or "unknown"
         timeout_s = int(role_config.get("timeout_s") or 30)
         max_retries = int(role_config.get("max_retries") or 2)
-        temperature = role_config.get("temperature")
         max_tokens = role_config.get("max_tokens")
         params: Dict[str, Any] = {}
         if temperature is not None:
@@ -391,3 +411,36 @@ class StructuredLLMCall:
             "tokens per minute",
         )
         return any(p in text for p in patterns)
+
+    @staticmethod
+    def _compile_role_prompt(role_config: Dict[str, Any], role_override: Optional[Dict[str, Any]]) -> str:
+        """Recompile system prompt from role_config parts + optional sandbox overrides.
+
+        Mirrors SystemLLMRole.compiled_prompt logic so overrides to identity/mission/etc.
+        are reflected in the final prompt sent to the LLM.
+        """
+        parts: list[str] = []
+        for field, heading in _ROLE_PROMPT_SECTIONS:
+            base = role_config.get(field)
+            override_val = role_override.get(field) if isinstance(role_override, dict) else None
+            val = override_val if override_val is not None else base
+            if val:
+                parts.append(f"# {heading}\n{val}")
+
+        examples = role_config.get("examples")
+        override_examples = role_override.get("examples") if isinstance(role_override, dict) else None
+        effective_examples = override_examples if override_examples is not None else examples
+        if effective_examples:
+            parts.append("# EXAMPLES")
+            for i, example in enumerate(effective_examples, 1):
+                parts.append(f"## Example {i}")
+                if isinstance(example, dict):
+                    if example.get("description"):
+                        parts.append(f"Description: {example['description']}")
+                    if example.get("input"):
+                        parts.append(f"Input: {example['input']}")
+                    if example.get("output"):
+                        parts.append(f"Output: {example['output']}")
+                parts.append("")
+
+        return "\n\n".join(parts) if parts else (role_config.get("prompt") or "You are a helpful assistant.")

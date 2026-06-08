@@ -161,6 +161,7 @@ def map_service_event_to_sse(event: Dict[str, Any]) -> Optional[str]:
                 message_id=event["message_id"],
                 created_at=event.get("created_at"),
                 sources=event.get("sources", []),
+                attachments=event.get("attachments", []),
             ),
         )
     if et == "cached":

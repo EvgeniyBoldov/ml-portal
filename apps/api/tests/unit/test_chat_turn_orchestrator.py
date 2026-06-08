@@ -59,7 +59,6 @@ class TestChatTurnOrchestrator:
                 run_with_router=fake_run_with_router,
                 store_idempotency=AsyncMock(),
                 bind_attachments=AsyncMock(),
-                process_generated_files=AsyncMock(return_value={"content": "Продолжаю", "attachments": []}),
             )
         ]
 
@@ -82,12 +81,15 @@ class TestChatTurnOrchestrator:
 
         async def fake_run_with_router(**kwargs):
             yield {"type": "delta", "content": "Hello"}
-            yield {"type": "final_content", "content": "Hello", "sources": []}
+            yield {
+                "type": "final_content",
+                "content": "Hello",
+                "sources": [{"source_name": "Doc"}],
+                "attachments": [{"file_id": "chatatt_1", "file_name": "report.txt"}],
+            }
 
         store_idempotency = AsyncMock()
         bind_attachments = AsyncMock()
-        process_generated_files = AsyncMock(return_value={"content": "Hello", "attachments": []})
-
         events = [
             event
             async for event in orchestrator.execute_turn(
@@ -106,7 +108,6 @@ class TestChatTurnOrchestrator:
                 run_with_router=fake_run_with_router,
                 store_idempotency=store_idempotency,
                 bind_attachments=bind_attachments,
-                process_generated_files=process_generated_files,
             )
         ]
 
@@ -114,9 +115,18 @@ class TestChatTurnOrchestrator:
         assert "final" in event_types
         assert event_types[-1] == "status"
         assert events[-1]["stage"] == "completed"
+        final_event = next(event for event in events if event["type"] == "final")
+        assert final_event["attachments"][0]["file_id"] == "chatatt_1"
         store_idempotency.assert_awaited_once_with("idem-1", "user-1", "assistant-1")
         orchestrator.turn_service.attach_user_message.assert_awaited_once()
         orchestrator.turn_service.complete_turn.assert_awaited_once()
+        orchestrator.persistence_service.create_assistant_message.assert_awaited_once_with(
+            chat_id="chat-1",
+            content="Hello",
+            rag_sources=[{"source_name": "Doc"}],
+            attachments=[{"file_id": "chatatt_1", "file_name": "report.txt"}],
+            extra_meta=None,
+        )
 
     @pytest.mark.asyncio
     async def test_execute_turn_emits_empty_response_error_when_runtime_returns_nothing(self, orchestrator: ChatTurnOrchestrator):
@@ -133,8 +143,6 @@ class TestChatTurnOrchestrator:
                 yield {}
 
         bind_attachments = AsyncMock()
-        process_generated_files = AsyncMock(return_value={"content": "", "attachments": []})
-
         events = [
             event
             async for event in orchestrator.execute_turn(
@@ -153,7 +161,6 @@ class TestChatTurnOrchestrator:
                 run_with_router=fake_run_with_router,
                 store_idempotency=AsyncMock(),
                 bind_attachments=bind_attachments,
-                process_generated_files=process_generated_files,
             )
         ]
 
@@ -178,8 +185,6 @@ class TestChatTurnOrchestrator:
             yield {"type": "run_paused", "reason": "waiting_input", "run_id": "00000000-0000-0000-0000-000000000040"}
 
         bind_attachments = AsyncMock()
-        process_generated_files = AsyncMock(return_value={"content": "", "attachments": []})
-
         events = [
             event
             async for event in orchestrator.execute_turn(
@@ -198,7 +203,6 @@ class TestChatTurnOrchestrator:
                 run_with_router=fake_run_with_router,
                 store_idempotency=AsyncMock(),
                 bind_attachments=bind_attachments,
-                process_generated_files=process_generated_files,
             )
         ]
 
@@ -244,7 +248,6 @@ class TestChatTurnOrchestrator:
                 run_with_router=fake_run_with_router,
                 store_idempotency=AsyncMock(),
                 bind_attachments=AsyncMock(),
-                process_generated_files=AsyncMock(return_value={"content": "Hello", "attachments": []}),
             )
         ]
 
@@ -283,7 +286,6 @@ class TestChatTurnOrchestrator:
                 run_with_router=fake_run_with_router,
                 store_idempotency=AsyncMock(),
                 bind_attachments=AsyncMock(),
-                process_generated_files=AsyncMock(return_value={"content": "", "attachments": []}),
             )
         ]
 
@@ -336,7 +338,6 @@ class TestChatTurnOrchestrator:
                 run_with_router=fake_run_with_router,
                 store_idempotency=store_idempotency,
                 bind_attachments=AsyncMock(),
-                process_generated_files=AsyncMock(return_value={"content": "late-content", "attachments": []}),
             )
         ]
 
@@ -388,7 +389,6 @@ class TestChatTurnOrchestrator:
                 run_with_router=fake_run_with_router,
                 store_idempotency=AsyncMock(),
                 bind_attachments=AsyncMock(),
-                process_generated_files=AsyncMock(return_value={"content": "", "attachments": []}),
             )
         ]
 

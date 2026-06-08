@@ -17,9 +17,7 @@ class PlannerLLMTraceEmitter:
             RuntimeEvent.llm_turn(
                 llm_call_id=planner_llm_trace.llm_call_id,
                 model=planner_llm_trace.model,
-                messages=[
-                    {"role": "user", "content": planner_llm_trace.request_payload},
-                ],
+                messages=planner_llm_trace.request_messages,
                 content=planner_llm_trace.raw_response,
                 response_length=planner_llm_trace.response_length,
                 tokens_in=planner_llm_trace.tokens_in,

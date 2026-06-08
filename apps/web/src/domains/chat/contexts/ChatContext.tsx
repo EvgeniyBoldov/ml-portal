@@ -646,6 +646,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               const assistantCreatedAt = parsed.created_at;
               // Update sources if present in final event
               const finalSources = parsed.sources;
+              const finalAttachments = Array.isArray(parsed.attachments) ? parsed.attachments : undefined;
               // Update temp assistant message with real ID, created_at and sources
               if (flushTimer) {
                 clearTimeout(flushTimer);
@@ -666,7 +667,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                         id: realAssistantId!, 
                         created_at: assistantCreatedAt || m.created_at,
                         isOptimistic: false,
-                        meta: finalSources?.length ? { ...m.meta, rag_sources: finalSources } : m.meta
+                        meta: {
+                          ...m.meta,
+                          ...(finalSources?.length ? { rag_sources: finalSources } : {}),
+                          ...(finalAttachments?.length ? { attachments: finalAttachments } : {}),
+                        }
                       } : m
                     )
                   }

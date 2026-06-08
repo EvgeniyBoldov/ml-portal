@@ -30,7 +30,6 @@ from app.services.chat_title_service import ChatTitleService
 from app.services.chat_turn_orchestrator import ChatTurnOrchestrator
 from app.services.chat_turn_service import ChatTurnService
 from app.services.chat_attachment_service import ChatAttachmentService, ChatAttachmentNotFoundError
-from app.services.chat_generated_file_service import ChatGeneratedFileService
 from app.services.runtime_hitl_protocol_service import RuntimeHitlProtocolService
 from app.core.db import get_session_factory
 
@@ -65,7 +64,6 @@ class ChatStreamService:
         self.chat_turn_service = ChatTurnService(session)
         self.event_mapper = ChatEventMapper()
         self.attachment_service = ChatAttachmentService(session)
-        self.generated_file_service = ChatGeneratedFileService(self.attachment_service)
         self.turn_orchestrator = ChatTurnOrchestrator(
             context_service=self.context_service,
             persistence_service=self.persistence_service,
@@ -276,7 +274,6 @@ class ChatStreamService:
                 run_with_router=self._run_with_router,
                 store_idempotency=self.store_idempotency,
                 bind_attachments=self.attachment_service.bind_to_message,
-                process_generated_files=self._process_generated_files,
             ):
                 yield event
 
@@ -327,10 +324,12 @@ class ChatStreamService:
                 if event.type == RuntimeEventType.FINAL:
                     final_content = event.data.get("content", "")
                     final_sources = event.data.get("sources", [])
+                    final_attachments = event.data.get("attachments", [])
                     yield {
                         "type": "final_content",
                         "content": final_content,
                         "sources": final_sources,
+                        "attachments": final_attachments,
                         "stop_reason": event.data.get("stop_reason"),
                     }
                     # Rolling dialogue summary is produced by the pipeline's
@@ -390,25 +389,3 @@ class ChatStreamService:
             logger.error(f"Router error: {e}", exc_info=True)
             yield _safe_stream_error("routing_failed", "Routing failed")
 
-    async def _process_generated_files(
-        self,
-        *,
-        tenant_id: str,
-        chat_id: str,
-        owner_id: str,
-        assistant_text: str,
-    ) -> Dict[str, Any]:
-        try:
-            result = await self.generated_file_service.extract_and_store(
-                tenant_id=tenant_id,
-                chat_id=chat_id,
-                owner_id=owner_id,
-                assistant_text=assistant_text,
-            )
-            return {
-                "content": result.cleaned_content,
-                "attachments": result.attachments,
-            }
-        except Exception as exc:
-            logger.warning("Failed to process generated files: %s", exc)
-            return {"content": assistant_text, "attachments": []}

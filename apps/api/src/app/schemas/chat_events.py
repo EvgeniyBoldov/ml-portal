@@ -141,6 +141,7 @@ class FinalPayload(BaseModel):
     message_id: str
     created_at: Optional[str] = None
     sources: List[Dict[str, Any]] = Field(default_factory=list)
+    attachments: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class CachedPayload(BaseModel):

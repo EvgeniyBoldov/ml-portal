@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Dict, Optional
 
 from app.runtime import RuntimeEvent, RuntimeEventType
+from app.runtime.error_surface import build_user_safe_error_message
 
 
 def _envelope(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -80,7 +81,10 @@ class ChatEventMapper:
             recoverable = event.data.get("recoverable", retryable if retryable is not None else False)
             return {
                 "type": "error",
-                "error": event.data.get("error"),
+                "error": build_user_safe_error_message(
+                    retryable=retryable,
+                    error_code=error_code,
+                ),
                 "recoverable": recoverable,
                 "code": error_code,
                 "details": {

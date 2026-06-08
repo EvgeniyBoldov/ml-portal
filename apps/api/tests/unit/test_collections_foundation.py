@@ -596,6 +596,15 @@ def test_collection_doc_search_source_name_prefers_title_then_filename():
     assert result[str(rows[1].id)] == "fallback.txt"
 
 
+def test_collection_doc_search_builds_download_uri_for_source():
+    tool = CollectionDocSearchTool()
+    source_id = str(uuid4())
+
+    uri = tool._build_source_uri(source_id)  # noqa: SLF001
+
+    assert uri == f"/api/v1/files/ragdoc_{source_id}_original/download"
+
+
 def test_collection_doc_search_rejects_non_filterable_field():
     tool = CollectionDocSearchTool()
     collection = _table_collection()

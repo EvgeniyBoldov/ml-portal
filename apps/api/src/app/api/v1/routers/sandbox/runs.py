@@ -235,6 +235,11 @@ async def run_sandbox(
     run_id = sandbox_run.id
     u_uuid = user_uuid(user)
     t_uuid = await tenant_uuid(db, user)
+    sandbox_chat_id = await _ensure_sandbox_upload_chat(
+        db,
+        owner_id=u_uuid,
+        session_id=session_id,
+    )
     attachment_meta: list[dict] = []
     attachment_prompt_context = ""
 
@@ -330,7 +335,7 @@ async def run_sandbox(
             tool_ctx = runtime_trace.attach_context(ToolContext(
                 tenant_id=t_uuid,
                 user_id=u_uuid,
-                chat_id=None,
+                chat_id=str(sandbox_chat_id),
                 request_id=str(uuid.uuid4()),
                 extra={"sandbox_confirmed_fingerprints": sandbox_confirmed_fingerprints},
             ))
@@ -348,7 +353,7 @@ async def run_sandbox(
 
             pipeline_request = PipelineRequest(
                 request_text=data.request_text,
-                chat_id=None,  # sandbox runs are not bound to a persistent chat
+                chat_id=str(sandbox_chat_id),
                 user_id=str(u_uuid),
                 tenant_id=str(t_uuid),
                 messages=messages,
@@ -663,6 +668,13 @@ async def resume_sandbox_run(
     sandbox_resolver = RuntimeSandboxResolver()
     resumed_agent_slug = sandbox_resolver.sandbox_agent_slug(effective_config)
     resumed_agent_version_id = sandbox_resolver.sandbox_agent_version_id(effective_config)
+    u_uuid = user_uuid(user)
+    t_uuid = await tenant_uuid(db, user)
+    sandbox_chat_id = await _ensure_sandbox_upload_chat(
+        db,
+        owner_id=u_uuid,
+        session_id=session_id,
+    )
 
     # Extract agent_run_id for pipeline continuation (internal run ID from paused context)
     agent_run_id = paused_context.get("run_id") if paused_context else None
@@ -672,7 +684,7 @@ async def resume_sandbox_run(
         agent_slug=resumed_agent_slug,
         tenant_id=str(await tenant_uuid(db, user)),
         user_id=str(user_uuid(user)),
-        chat_id=None,
+        chat_id=str(sandbox_chat_id),
         paused_action=paused_action,
         paused_context=paused_context,
         resume_action=action,
@@ -688,9 +700,6 @@ async def resume_sandbox_run(
     branch = await svc.get_branch(run.branch_id) if run.branch_id else None
     if not branch:
         raise HTTPException(status_code=400, detail="Run has no branch")
-
-    u_uuid = user_uuid(user)
-    t_uuid = await tenant_uuid(db, user)
 
     # Confirmation tokens for HITL gate
     confirmed_fingerprints: list[str] = []
@@ -709,7 +718,7 @@ async def resume_sandbox_run(
             tool_ctx = runtime_trace.attach_context(ToolContext(
                 tenant_id=t_uuid,
                 user_id=u_uuid,
-                chat_id=None,
+                chat_id=str(sandbox_chat_id),
                 request_id=str(uuid.uuid4()),
                 extra={"sandbox_confirmed_fingerprints": confirmed_fingerprints},
             ))
@@ -737,7 +746,7 @@ async def resume_sandbox_run(
 
             pipeline_request = PipelineRequest(
                 request_text=request_text,
-                chat_id=None,
+                chat_id=str(sandbox_chat_id),
                 user_id=str(u_uuid),
                 tenant_id=str(t_uuid),
                 messages=[{"role": "user", "content": resume_content}],

@@ -24,7 +24,7 @@ class PlanningOutcomeMapper:
         return {
             "outcome_kind": result.outcome_kind,
             "stop_reason": result.stop_reason,
-            "planner_hint": result.planner_hint,
+            "answer_brief": result.answer_brief,
             "final_answer_strategy": result.final_answer_strategy,
             "error_message": result.error_message,
         }
@@ -37,6 +37,6 @@ class PlanningOutcomeMapper:
             return {
                 "outcome_kind": "needs_final",
                 "stop_reason": PipelineStopReason.FAILED,
-                "planner_hint": None,
+                "answer_brief": None,
             }
         return None

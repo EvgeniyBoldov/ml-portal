@@ -40,3 +40,18 @@ def test_planner_action_payload_contains_modern_and_legacy_fields():
     assert payload["why"] == "Нужно получить устройства"
     assert payload["tool_slug"] == "netbox"
     assert payload["op"] == "call_agent"
+
+
+def test_final_payload_carries_attachments():
+    frame = map_service_event_to_sse(
+        {
+            "type": "final",
+            "message_id": "msg-1",
+            "created_at": "2026-01-01T00:00:00Z",
+            "sources": [{"source_name": "Doc"}],
+            "attachments": [{"file_id": "chatatt_1", "file_name": "report.txt"}],
+        }
+    )
+    assert frame is not None
+    payload = _extract_payload(frame)
+    assert payload["attachments"][0]["file_id"] == "chatatt_1"

@@ -8,6 +8,7 @@ import pytest
 
 from app.runtime.contracts import PipelineStopReason
 from app.runtime.memory.components import MemoryBundle
+from app.runtime.stages.finalization_stage import FinalizationStage
 from app.runtime.stages.planner_budget_initializer import PlannerBudgetInitializer
 from app.runtime.stages.planner_next_step_invoker import PlannerNextStepInvoker
 from app.runtime.stages.planner_post_call_arbiter import PlannerPostCallArbiter
@@ -55,7 +56,7 @@ def test_planning_outcome_mapper_maps_terminal_and_call_agent():
     terminal = SimpleNamespace(
         outcome_kind="paused",
         stop_reason=PipelineStopReason.WAITING_INPUT,
-        planner_hint=None,
+        answer_brief=None,
         final_answer_strategy="synthesize",
         error_message=None,
     )
@@ -136,3 +137,49 @@ def test_planner_post_call_arbiter_loop_and_continue_paths():
     assert result.should_stop is False
     assert len(events) == 1
     assert events[0].event.type.value == "planner_iteration_end"
+
+
+def test_finalization_stage_hides_internal_failure_details_without_successful_results():
+    state = _state()
+    state.agent_results = [
+        {
+            "agent_slug": "net.enginer",
+            "summary": "preflight_failed: ProviderExecutionTarget missing fallback_raw",
+            "success": False,
+            "retryable": False,
+            "error_code": "agent_precheck_failed",
+            "error": "ProviderExecutionTarget missing fallback_raw",
+        }
+    ]
+
+    brief = FinalizationStage._resolve_answer_brief(
+        runtime_state=state,
+        explicit_answer_brief=None,
+        stop_reason=PipelineStopReason.FAILED,
+    )
+
+    assert "ProviderExecutionTarget" not in brief
+    assert "ран-администратору" in brief
+
+
+def test_finalization_stage_sanitizes_explicit_internal_error_brief_on_failed_stop():
+    state = _state()
+    state.agent_results = [
+        {
+            "agent_slug": "net.enginer",
+            "summary": "temporary failure",
+            "success": False,
+            "retryable": True,
+            "error_code": "agent_runtime_exception",
+            "error": "Traceback: boom",
+        }
+    ]
+
+    brief = FinalizationStage._resolve_answer_brief(
+        runtime_state=state,
+        explicit_answer_brief="Sub-agent failed with traceback and runtime exception",
+        stop_reason=PipelineStopReason.FAILED,
+    )
+
+    assert "traceback" not in brief.lower()
+    assert "Попробуйте повторить" in brief

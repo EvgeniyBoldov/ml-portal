@@ -309,6 +309,10 @@ async def test_agent_executor_fast_fallback_when_no_operations():
             execution_graph={},
             resolved_operations=[],
             rbac_audit=None,
+            agent_slug="ops",
+            agent_version=None,
+            prompt="",
+            agent=SimpleNamespace(model=None),
         )
     )
 
@@ -467,13 +471,13 @@ def test_llm_adapter_coerces_tool_choice_mismatch_into_operation_call_block():
     err = RuntimeError(
         "Error code: 400 - {'error': {'message': 'Tool choice is none, but model called a tool', "
         "'type': 'invalid_request_error', 'code': 'tool_use_failed', "
-        "'failed_generation': '{\"name\": \"instance.sql_test.collection.sql.catalog_inspect\", "
+        "'failed_generation': '{\"name\": \"collection.catalog_inspect\", "
         "\"arguments\": {\"collection_slug\": \"ticket_network\", \"limit_per_dimension\": 10}}'}}"
     )
     block = LLMAdapter._coerce_tool_choice_error_to_operation_call(err)  # noqa: SLF001
     assert block is not None
     assert "```operation_call" in block
-    assert '"operation": "instance.sql_test.collection.sql.catalog_inspect"' in block
+    assert '"operation": "collection.catalog_inspect"' in block
     assert '"collection_slug": "ticket_network"' in block
 
 
@@ -497,6 +501,7 @@ async def test_planner_retry_and_fallback_paths():
                     agent_input={},
                 ),
                 model="test-model",
+                request_messages=[],
                 raw_response="",
                 duration_ms=1,
             ),
@@ -508,6 +513,7 @@ async def test_planner_retry_and_fallback_paths():
                     agent_input={"query": "q"},
                 ),
                 model="test-model",
+                request_messages=[],
                 raw_response="",
                 duration_ms=1,
             ),
@@ -543,6 +549,7 @@ async def test_planner_emits_direct_answer_kind_when_llm_returns_one():
                 final_answer="Привет! Чем могу помочь?",
             ),
             model="test-model",
+            request_messages=[],
             raw_response="",
             duration_ms=1,
         )

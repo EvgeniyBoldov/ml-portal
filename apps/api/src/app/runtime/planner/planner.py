@@ -38,7 +38,7 @@ class PlannerLLMTrace:
     success: bool
     llm_call_id: str
     model: str
-    request_payload: Dict[str, Any]
+    request_messages: list[dict[str, Any]]
     raw_response: str
     response_length: int
     duration_ms: int
@@ -166,7 +166,7 @@ class Planner:
                         success=False,
                         llm_call_id=llm_call_id,
                         model="unknown",
-                        request_payload=payload,
+                        request_messages=[{"role": "user", "content": json.dumps(payload, ensure_ascii=False, default=str)}],
                         raw_response=raw_response,
                         response_length=len(raw_response),
                         duration_ms=0,
@@ -185,7 +185,7 @@ class Planner:
                 success=False,
                 llm_call_id=llm_call_id,
                 model=result.model or "unknown",
-                request_payload=payload,
+                request_messages=result.request_messages,
                 raw_response=result.raw_response,
                 response_length=len(result.raw_response or ""),
                 duration_ms=result.duration_ms,

@@ -11,10 +11,11 @@ import { normalizeTraceEvent } from '@/domains/runtimeTrace/normalize';
 import { buildTraceDiagnostics, TraceDiagnosticsInline } from '@/domains/runtimeTrace/components/TraceDiagnosticsSummary';
 import { extractTraceArtifacts } from '@/domains/runtimeTrace/artifacts';
 import { TraceArtifactsView } from '@/domains/runtimeTrace/components/TraceArtifactsView';
+import { SnapshotJsonField } from './entityInspector/shared';
 import styles from './RunInspector.module.css';
 
 type Tone = 'neutral' | 'info' | 'warn' | 'success' | 'danger';
-type InspectTabKey = 'summary' | 'input' | 'output' | 'context' | 'budgets' | 'raw';
+type InspectTabKey = 'summary' | 'input' | 'output' | 'context' | 'budgets' | 'error' | 'raw';
 type InspectFieldType =
   | 'datetime'
   | 'duration'
@@ -215,6 +216,23 @@ function sanitizeForInspector(value: unknown): unknown {
     out[key] = sanitizeForInspector(raw);
   }
   return out;
+}
+
+function readStringValue(source: Record<string, unknown>, keys: readonly string[]): string {
+  for (const key of keys) {
+    const value = source[key];
+    if (typeof value === 'string' && value.trim().length > 0) {
+      return value.trim();
+    }
+  }
+  return '';
+}
+
+function readDebugValue(source: Record<string, unknown>, key: string): string {
+  const debug = source.debug;
+  if (!debug || typeof debug !== 'object' || Array.isArray(debug)) return '';
+  const value = (debug as Record<string, unknown>)[key];
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : '';
 }
 
 function resolveHumanReadableRef(record: Record<string, unknown>, key: string, value: string): string | null {
@@ -805,6 +823,52 @@ export default function RunInspector({ steps, selectedStepId, selectedVirtualSte
     return mapToFields(payload).map((field) => ({ ...field, tone: 'danger' as const }));
   }, [selectedStep]);
 
+  const errorDetails = useMemo(() => {
+    if (!selectedStep) return null;
+    const source = (selectedStep.data || {}) as Record<string, unknown>;
+    const debug = source.debug && typeof source.debug === 'object' && !Array.isArray(source.debug)
+      ? (source.debug as Record<string, unknown>)
+      : null;
+
+    const traceback = readStringValue(source, ['traceback', 'stack', 'error_traceback'])
+      || (debug ? readStringValue(debug, ['traceback', 'stack']) : '');
+    const message = readStringValue(source, [
+      'operator_message',
+      'runtime_error_message',
+      'error',
+      'message',
+      'user_message',
+    ]);
+    const code = readStringValue(source, ['runtime_error_code', 'error_code', 'code']);
+    const stage = readStringValue(source, ['stage', 'phase']);
+    const agent = readStringValue(source, ['agent', 'agent_slug', 'tool_slug', 'operation_slug']);
+    const exceptionType = debug ? readStringValue(debug, ['exception_type', 'type']) : '';
+
+    if (!message && !traceback && !code && !stage && !agent && !exceptionType) {
+      return null;
+    }
+
+    const detailFields: InspectField[] = [];
+    if (code) detailFields.push({ key: 'code', label: 'Code', value: code, type: 'string', tone: 'danger' });
+    if (stage) detailFields.push({ key: 'stage', label: 'Stage', value: stage, type: 'string', tone: 'warn' });
+    if (agent) detailFields.push({ key: 'agent', label: 'Agent', value: agent, type: 'string' });
+    if (exceptionType) detailFields.push({ key: 'exception_type', label: 'Exception', value: exceptionType, type: 'string', tone: 'warn' });
+    if ('recoverable' in source && typeof source.recoverable === 'boolean') {
+      detailFields.push({ key: 'recoverable', label: 'Recoverable', value: source.recoverable, type: 'boolean', tone: source.recoverable ? 'warn' : 'danger' });
+    }
+    if ('retryable' in source && typeof source.retryable === 'boolean') {
+      detailFields.push({ key: 'retryable', label: 'Retryable', value: source.retryable, type: 'boolean', tone: source.retryable ? 'warn' : 'danger' });
+    }
+    if (message) detailFields.push({ key: 'message', label: 'Message', value: message, type: 'bigstring', tone: 'danger' });
+
+    return {
+      fields: detailFields,
+      traceback,
+      debug,
+      raw: source,
+    };
+  }, [selectedStep]);
+
   const budgetFields = useMemo(() => {
     if (selectedVirtualStep?.budget && selectedVirtualStep.budget.length > 0) {
       return selectedVirtualStep.budget.map((item) => ({
@@ -918,10 +982,11 @@ export default function RunInspector({ steps, selectedStepId, selectedVirtualSte
       { key: 'output', label: 'Output', fields: outputFields },
       { key: 'context', label: 'Meta', fields: contextFields },
       { key: 'budgets', label: 'Budgets', fields: [] },
+      ...(errorDetails ? [{ key: 'error', label: 'Error', fields: [] }] : []),
       { key: 'summary', label: 'Overview', fields: summaryFields },
       { key: 'raw', label: 'Raw', fields: [] },
     ],
-    [summaryFields, inputFields, outputFields, contextFields],
+    [summaryFields, inputFields, outputFields, contextFields, errorDetails],
   );
 
   const active = tabs.find((t) => t.key === activeTab) ?? tabs[0];
@@ -1023,6 +1088,26 @@ export default function RunInspector({ steps, selectedStepId, selectedVirtualSte
               ))}
             </div>
           </SectionAccordion>
+        ) : active.key === 'error' ? (
+          <>
+            <SectionAccordion title="Error details" count={errorDetails?.fields.length ?? 0} defaultOpen>
+              {errorDetails?.fields?.length ? (
+                <ParamAccordionList fields={errorDetails.fields} />
+              ) : (
+                <div className={styles['section-empty']}>No error payload available</div>
+              )}
+            </SectionAccordion>
+            {errorDetails?.traceback ? (
+              <SectionAccordion title="Traceback" defaultOpen>
+                <pre className={styles.payload}>{errorDetails.traceback}</pre>
+              </SectionAccordion>
+            ) : null}
+            {errorDetails?.debug ? (
+              <SectionAccordion title="Debug" defaultOpen={false}>
+                <SnapshotJsonField label="Debug payload" value={errorDetails.debug} />
+              </SectionAccordion>
+            ) : null}
+          </>
         ) : (
           <>
             {semanticEvent && active.key === 'summary' ? (

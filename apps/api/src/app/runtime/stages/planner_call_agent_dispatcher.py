@@ -230,7 +230,7 @@ class PlannerCallAgentDispatcher:
         if failure_state["non_retryable"]:
             runtime_state.add_runtime_fact(
                 "Agent failed with non-retryable runtime error; finalizing from collected facts.",
-                source="pipeline",
+                source="pipeline_internal",
             )
             yield PhasedEvent(
                 RuntimeEvent.status(

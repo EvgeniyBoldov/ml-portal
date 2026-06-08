@@ -116,6 +116,7 @@ class RuntimeCapabilityGraphService:
                 {
                     "operation_slug": op.operation_slug,
                     "operation": op.operation,
+                    "scope": op.scope,
                     "source": op.source,
                     "risk_level": op.risk_level,
                     "side_effects": op.side_effects,
@@ -124,7 +125,8 @@ class RuntimeCapabilityGraphService:
                     "provider_instance_slug": op.provider_instance_slug,
                 },
             )
-            add_edge(op_node_id, f"data:{op.data_instance_slug}", "targets_data_instance")
+            if op.scope != "system":
+                add_edge(op_node_id, f"data:{op.data_instance_slug}", "targets_data_instance")
             if op.provider_instance_slug:
                 add_edge(op_node_id, f"provider:{op.provider_instance_slug}", "executes_via_provider")
 
@@ -148,6 +150,9 @@ class RuntimeCapabilityGraphService:
             )
             allowed_collection_ids = self._normalize_uuid_set(getattr(agent, "allowed_collection_ids", None))
             for operation_slug, operation in operations_by_slug.items():
+                if operation.scope == "system":
+                    add_edge(agent_node_id, f"operation:{operation_slug}", "can_call")
+                    continue
                 data = data_by_slug.get(operation.data_instance_slug)
                 if data is None:
                     data = data_by_id.get(operation.data_instance_id)

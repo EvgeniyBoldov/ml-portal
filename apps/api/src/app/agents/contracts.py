@@ -98,6 +98,7 @@ class OperationAction(BaseModel):
     operation_slug: str = Field(..., min_length=1)
     op: str = Field(..., min_length=1)
     name: Optional[str] = None
+    scope: Literal["system", "collection"] = "collection"
     data_instance_slug: Optional[str] = None
     description: Optional[str] = None
     input_schema_hint: Optional[Dict[str, Any]] = None
@@ -230,6 +231,7 @@ class ResolvedOperation(BaseModel):
     operation_slug: str = Field(..., min_length=1)
     operation: str = Field(..., min_length=1)
     name: str = Field(..., min_length=1)
+    scope: Literal["system", "collection"] = "collection"
     description: Optional[str] = None
     input_schema: Dict[str, Any] = Field(default_factory=dict)
     output_schema: Optional[Dict[str, Any]] = None

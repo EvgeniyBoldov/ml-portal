@@ -17,8 +17,8 @@ def test_collection_table_operation_canonicalization():
     )
     assert canonical_operation_name("collection.table", "collection.get") == "collection.table.get"
     assert (
-        canonical_operation_name("collection.table", "collection.catalog")
-        == "collection.table.catalog_inspect"
+        canonical_operation_name("system", "collection.catalog")
+        == "collection.catalog_inspect"
     )
 
 
@@ -28,22 +28,22 @@ def test_collection_document_operation_canonicalization():
         == "collection.document.search"
     )
     assert (
-        canonical_operation_name("collection.document", "collection.catalog")
-        == "collection.document.catalog_inspect"
+        canonical_operation_name("system", "collection.catalog")
+        == "collection.catalog_inspect"
     )
 
 
 def test_collection_sql_catalog_operation_canonicalization():
     assert (
-        canonical_operation_name("collection.sql", "collection.catalog")
-        == "collection.sql.catalog_inspect"
+        canonical_operation_name("system", "collection.catalog")
+        == "collection.catalog_inspect"
     )
 
 
 def test_collection_api_catalog_operation_canonicalization():
     assert (
-        canonical_operation_name("collection.api", "collection.catalog")
-        == "collection.api.catalog_inspect"
+        canonical_operation_name("system", "collection.catalog")
+        == "collection.catalog_inspect"
     )
 
 

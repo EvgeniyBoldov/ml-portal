@@ -90,6 +90,7 @@ class RuntimeEvent:
         success: bool,
         data: Any,
         *,
+        sources: Optional[list[dict[str, Any]]] = None,
         parent_entity_type: Optional[str] = None,
         parent_entity_id: Optional[str] = None,
         agent_slug: Optional[str] = None,
@@ -111,6 +112,8 @@ class RuntimeEvent:
             "success": success,
             "data": data,
         }
+        if sources is not None:
+            payload["sources"] = list(sources)
         if error_code is not None:
             payload["error_code"] = (
                 error_code.value if isinstance(error_code, RuntimeErrorCode) else str(error_code)

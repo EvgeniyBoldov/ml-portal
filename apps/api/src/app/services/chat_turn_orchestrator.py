@@ -13,14 +13,6 @@ from app.services.chat_turn_state import ChatTurnState, TurnPhase
 
 logger = get_logger(__name__)
 
-FILE_GENERATION_INSTRUCTION = (
-    "When user asks to generate downloadable file, output file body in fenced block format:\n"
-    "```file name=report.txt\n<content>\n```\n"
-    "Supported formats: txt, md, csv, tsv, json. "
-    "Do not generate executables, video, audio, or PDF."
-)
-
-
 class ChatTurnOrchestrator:
     """Orchestrates a single chat turn while preserving current chat contract."""
 
@@ -57,7 +49,6 @@ class ChatTurnOrchestrator:
         run_with_router,
         store_idempotency,
         bind_attachments,
-        process_generated_files,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         turn = ChatTurnState(chat_id=chat_id, request_id=idempotency_key)
         hash_payload = content if not attachment_ids else f"{content}||attachments:{','.join(sorted(attachment_ids))}"
@@ -103,7 +94,7 @@ class ChatTurnOrchestrator:
         # new Fact/Summary stores. Injecting legacy chat summary here duplicates
         # context and inflates token usage.
         context = await self.context_service.load_chat_context(chat_id, limit=12)
-        llm_messages = context + [{"role": "system", "content": FILE_GENERATION_INSTRUCTION}]
+        llm_messages = context
         if attachment_prompt_context:
             llm_messages.append({"role": "system", "content": attachment_prompt_context})
         llm_messages.append({"role": "user", "content": str(content)})
@@ -139,6 +130,7 @@ class ChatTurnOrchestrator:
 
         assistant_content = ""
         rag_sources = []
+        final_attachments: list[dict[str, Any]] = []
         llm_error: Optional[dict[str, str]] = None
         final_stop_reason: Optional[str] = None
         run_paused = False
@@ -168,6 +160,11 @@ class ChatTurnOrchestrator:
                 elif event_data.get("type") == "final_content":
                     assistant_content = event_data.get("content", assistant_content)
                     rag_sources = event_data.get("sources", [])
+                    final_attachments = (
+                        event_data.get("attachments", [])
+                        if isinstance(event_data.get("attachments"), list)
+                        else []
+                    )
                     final_stop_reason = str(event_data.get("stop_reason") or "").strip() or None
                 elif event_data.get("type") == "run_paused":
                     run_paused = True
@@ -196,27 +193,11 @@ class ChatTurnOrchestrator:
             yield {"type": "error", "error": llm_error["user_message"], "code": llm_error["code"]}
 
         if assistant_content and not llm_error:
-            generated_attachment_ids: list[str] = []
-            generated_attachment_meta: list[dict[str, Any]] = []
-            generated = await process_generated_files(
-                tenant_id=tenant_id,
-                chat_id=chat_id,
-                owner_id=user_id,
-                assistant_text=assistant_content,
-            )
-            assistant_content = generated.get("content", assistant_content)
-            generated_attachment_meta = generated.get("attachments", [])
-            generated_attachment_ids = [
-                str(item.get("id"))
-                for item in generated_attachment_meta
-                if item.get("id")
-            ]
-
             assistant_message = await self.persistence_service.create_assistant_message(
                 chat_id=chat_id,
                 content=assistant_content,
                 rag_sources=rag_sources,
-                attachments=generated_attachment_meta,
+                attachments=final_attachments,
                 extra_meta={
                     **({"runtime_run_id": last_run_id} if last_run_id else {}),
                     **({"runtime_stop_reason": final_stop_reason} if final_stop_reason else {}),
@@ -227,15 +208,6 @@ class ChatTurnOrchestrator:
                     ),
                 } or None,
             )
-
-            if generated_attachment_ids:
-                await bind_attachments(
-                    tenant_id=tenant_id,
-                    chat_id=chat_id,
-                    owner_id=user_id,
-                    attachment_ids=generated_attachment_ids,
-                    message_id=assistant_message.message_id,
-                )
 
             if idempotency_key and user_message_id:
                 await store_idempotency(
@@ -254,6 +226,7 @@ class ChatTurnOrchestrator:
                 "message_id": assistant_message.message_id,
                 "created_at": assistant_message.created_at,
                 "sources": rag_sources,
+                "attachments": final_attachments,
             }
             turn.transition(TurnPhase.COMPLETED)
             yield {"type": "status", "stage": "completed"}

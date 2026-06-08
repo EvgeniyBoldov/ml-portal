@@ -106,7 +106,14 @@ class OperationBuilder:
             )
         else:
             operation_name = publication.canonical_op_slug
-        operation_slug = build_runtime_operation_slug(instance.slug, operation_name)
+
+        # System tools (file.generate, file.read) are global and should not be
+        # prefixed with instance slug; they share a single canonical slug.
+        is_system_tool = "system" in (getattr(discovered_tool, "domains", None) or [])
+        if is_system_tool:
+            operation_slug = operation_name if publication is not None else raw_operation_name
+        else:
+            operation_slug = build_runtime_operation_slug(instance.slug, operation_name)
         if operation_slug in seen_operation_slugs:
             logger.info(
                 "operation_publication_duplicate_canonical_skipped",
@@ -178,14 +185,25 @@ class OperationBuilder:
                 )
         elif has_credentials is not None:
             resolved_has_credentials = has_credentials
+        # System tools are global — they do not belong to a specific collection,
+        # but ProviderExecutionTarget still requires a non-empty data-instance
+        # identity. Use a stable sentinel so graph/trace code can keep working
+        # without fabricating a real collection binding.
+        if is_system_tool:
+            data_instance_id = "system"
+            data_instance_slug = "system"
+        else:
+            data_instance_id = str(instance.id)
+            data_instance_slug = instance.slug
+
         target = ProviderExecutionTarget(
             operation_slug=operation_slug,
             provider_type=provider_type,
             provider_instance_id=str(provider_for_target.id),
             provider_instance_slug=provider_for_target.slug,
             provider_url=provider_for_target.url or None,
-            data_instance_id=str(instance.id),
-            data_instance_slug=instance.slug,
+            data_instance_id=data_instance_id,
+            data_instance_slug=data_instance_slug,
             handler_slug=raw_operation_name if provider_type == "local" else None,
             mcp_tool_name=raw_operation_name if provider_type == "mcp" else None,
             timeout_s=None,
@@ -196,11 +214,12 @@ class OperationBuilder:
             operation_slug=operation_slug,
             operation=operation_name,
             name=resolution.title,
+            scope="system" if is_system_tool else "collection",
             description=resolution.description,
             input_schema=resolution.input_schema,
             output_schema=resolution.output_schema,
-            data_instance_id=str(instance.id),
-            data_instance_slug=instance.slug,
+            data_instance_id=data_instance_id,
+            data_instance_slug=data_instance_slug,
             provider_instance_id=str(provider_for_target.id),
             provider_instance_slug=provider_for_target.slug,
             source=provider_type,

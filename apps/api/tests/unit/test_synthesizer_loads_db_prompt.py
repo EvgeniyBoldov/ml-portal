@@ -60,7 +60,7 @@ async def test_synthesizer_loads_db_prompt_and_passes_role_params_to_llm():
         events = [event async for event in synth.stream(
             runtime_state=state,
             run_id=state.run_id,
-            planner_hint="force full synthesis path",
+            answer_brief="force full synthesis path",
         )]
 
     assert llm.calls, "chat_stream was not called"
@@ -88,7 +88,7 @@ async def test_synthesizer_falls_back_when_db_role_load_fails():
         events = [event async for event in synth.stream(
             runtime_state=state,
             run_id=state.run_id,
-            planner_hint="force full synthesis path",
+            answer_brief="force full synthesis path",
         )]
 
     assert llm.calls, "chat_stream was not called on fallback"
@@ -115,6 +115,7 @@ async def test_synthesizer_honors_platform_chunk_size_override_for_short_circuit
         async for event in synth.stream(
             runtime_state=state,
             run_id=state.run_id,
+            answer_brief="x" * 47,
             platform_config={"runtime": {"synth_chunk_size": 5}},
         )
     ]

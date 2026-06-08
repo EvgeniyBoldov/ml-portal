@@ -52,14 +52,14 @@ SEED_AGENTS = [
             ),
             "tool_use_rules": (
                 "Доступные операции для поиска в коллекциях:\n"
-                "- collection.document.catalog_inspect — посмотреть структуру и метаданные document collection "
+                "- collection.catalog_inspect — посмотреть структуру и метаданные любой collection "
                 "(поля, даты, размер выборки, доступные значения по измерениям).\n"
                 "- collection.document.search — семантический поиск по document collections. "
                 "Используй для регламентов, политик, инструкций и загруженных файлов.\n"
                 "- collection.table.search — SQL/DSL поиск по table collections. "
                 "Поддерживает query, filters, sort, limit, offset.\n\n"
                 "Стратегия:\n"
-                "1. Когда вопрос про структуру/метаданные коллекции, сначала используй collection.document.catalog_inspect.\n"
+                "1. Когда вопрос про структуру/метаданные коллекции, сначала используй collection.catalog_inspect.\n"
                 "1. Для документов (регламенты, политики) используй collection.document.search.\n"
                 "2. Для tabular data сначала используй collection.table.search с filters/query.\n"
                 "3. Начинай с широкого запроса, уточняй при необходимости.\n"
@@ -124,7 +124,7 @@ SEED_AGENTS = [
             ),
             "tool_use_rules": (
                 "Доступные операции для работы с коллекциями:\n\n"
-                "- collection.table.catalog_inspect — посмотреть структуру table collection, "
+                "- collection.catalog_inspect — посмотреть структуру любой collection, "
                 "поля и распределения значений по измерениям.\n"
                 "- collection.table.search — основной SQL/DSL поиск по table collection. "
                 "Параметры: query, filters, sort, limit, offset.\n"
@@ -133,7 +133,7 @@ SEED_AGENTS = [
                 "- collection.table.aggregate — агрегация данных. "
                 "Параметры: metrics, group_by, filters, time_bucket, having.\n\n"
                 "Стратегия:\n"
-                "1. Когда запрос про структуру, поля или доступные категории, начни с collection.table.catalog_inspect.\n"
+                "1. Когда запрос про структуру, поля или доступные категории, начни с collection.catalog_inspect.\n"
                 "1. Поиск тикетов -> collection.table.search.\n"
                 "2. Статистика -> collection.table.aggregate с group_by.\n"
                 "3. Детали записи -> collection.table.get по ID.\n"

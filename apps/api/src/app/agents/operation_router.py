@@ -174,6 +174,7 @@ class OperationRouter:
                 context_payload = self._build_operation_context(
                     instance=instance,
                     provider_for_execution=provider_for_execution,
+                    scope=operation.scope,
                     runtime_domain=runtime_domain,
                     collection_id=collection_id,
                     collection_slug=collection_slug,
@@ -187,8 +188,83 @@ class OperationRouter:
                     credential=credential_context,
                 )
 
+        # System tools (file.*) must be available even when no data instances exist.
+        await self._resolve_system_tools(
+            result=result,
+            graph_builder=graph_builder,
+            seen_operation_slugs=seen_operation_slugs,
+            effective_permissions=effective_permissions,
+            user_id=user_id,
+            tenant_id=tenant_id,
+        )
+
         result.execution_graph = graph_builder.build()
         return result
+
+    async def _resolve_system_tools(
+        self,
+        *,
+        result: OperationResolveResult,
+        graph_builder: RuntimeExecutionGraphBuilder,
+        seen_operation_slugs: set[str],
+        effective_permissions: Optional[EffectivePermissions],
+        user_id: UUID,
+        tenant_id: UUID,
+    ) -> None:
+        """Load global system tools and append to resolved operations."""
+        from types import SimpleNamespace
+
+        system_tools = await self.collection_tool_resolver._load_system_tools()
+        if not system_tools:
+            return
+
+        dummy = SimpleNamespace(
+            id="system",
+            slug="system",
+            name="System",
+            domain="system",
+            url=None,
+            config={},
+            is_local=True,
+            health_status="healthy",
+        )
+
+        for discovered_tool in system_tools:
+            if discovered_tool.slug in seen_operation_slugs:
+                continue
+            built = await self.operation_builder._build_single_operation(
+                discovered_tool=discovered_tool,
+                instance=dummy,
+                provider=dummy,
+                has_credentials=True,
+                runtime_domain="system",
+                context_domains=["system"],
+                effective_permissions=effective_permissions,
+                user_id=user_id,
+                tenant_id=tenant_id,
+                seen_operation_slugs=seen_operation_slugs,
+                resolve_execution_credentials=self.operation_resolver._resolve_execution_credentials,
+            )
+            if built is None:
+                continue
+            operation, credential_context = built
+            result.resolved_operations.append(operation)
+            context_payload = self._build_operation_context(
+                instance=dummy,
+                provider_for_execution=dummy,
+                scope=operation.scope,
+                runtime_domain="system",
+                collection_id=None,
+                collection_slug=None,
+                allowed_collection_slugs=[],
+                has_credentials=operation.target.has_credentials,
+                credential_scope=operation.credential_scope,
+            )
+            graph_builder.add_operation(
+                operation=operation,
+                context_payload=context_payload,
+                credential=credential_context,
+            )
 
     @staticmethod
     def _build_resolved_data_instance(
@@ -252,6 +328,7 @@ class OperationRouter:
         *,
         instance: ToolInstance,
         provider_for_execution: ToolInstance,
+        scope: str,
         runtime_domain: str,
         collection_id: Optional[str],
         collection_slug: Optional[str],
@@ -262,6 +339,7 @@ class OperationRouter:
         return {
             "instance_id": str(instance.id),
             "instance_slug": instance.slug,
+            "scope": scope,
             "collection_id": collection_id,
             "collection_slug": collection_slug,
             "allowed_collection_slugs": allowed_collection_slugs,

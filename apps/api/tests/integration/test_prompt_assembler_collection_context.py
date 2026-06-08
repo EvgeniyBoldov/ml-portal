@@ -69,6 +69,7 @@ async def test_prompt_assembler_renders_collection_description_and_entity_type_w
             )
         ]
     )
+    router.collection_tool_resolver._load_system_tools = AsyncMock(return_value=[])
 
     op = ResolvedOperation(
         operation_slug="instance.netbox-devices-instance.collection.api.search",

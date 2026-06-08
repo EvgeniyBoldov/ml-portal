@@ -366,7 +366,7 @@ def parse_native_tool_calls(
     for tc in tool_calls:
         fn = (tc.get("function") or {}) if isinstance(tc, dict) else {}
         name = str(fn.get("name") or "").strip()
-        if not name or name in seen_operations:
+        if not name:
             continue
         raw_args = fn.get("arguments") or {}
         if isinstance(raw_args, str):
@@ -376,10 +376,14 @@ def parse_native_tool_calls(
                 raw_args = {}
         if not isinstance(raw_args, dict):
             raw_args = {}
+        args_json = json.dumps(raw_args, sort_keys=True)
+        op_key = (name, args_json)
+        if op_key in seen_operations:
+            continue
         operation_calls.append(
             OperationCall.from_dict({"operation": name, "arguments": raw_args})
         )
-        seen_operations.add(name)
+        seen_operations.add(op_key)
 
     if not operation_calls:
         return None

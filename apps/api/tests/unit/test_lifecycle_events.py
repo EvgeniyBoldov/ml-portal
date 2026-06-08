@@ -241,6 +241,7 @@ class TestRuntimeEventConstructors:
             call_id="c1",
             success=True,
             data={},
+            sources=[{"source_id": "doc-1", "uri": "/api/v1/files/ragdoc_doc-1_original/download"}],
             parent_entity_type="agent_run",
             parent_entity_id="agent-run-1",
             agent_slug="ops",
@@ -248,6 +249,7 @@ class TestRuntimeEventConstructors:
         )
         assert ev.data["parent_entity_type"] == "agent_run"
         assert ev.data["parent_entity_id"] == "agent-run-1"
+        assert ev.data["sources"][0]["source_id"] == "doc-1"
 
     def test_error_carries_parent(self) -> None:
         ev = RuntimeEvent.error(

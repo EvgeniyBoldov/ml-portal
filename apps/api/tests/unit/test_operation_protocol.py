@@ -1,0 +1,39 @@
+from __future__ import annotations
+
+from app.agents.protocol import parse_native_tool_calls
+
+
+def test_parse_native_tool_calls_keeps_same_operation_with_different_arguments():
+    response = {
+        "choices": [
+            {
+                "message": {
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call-1",
+                            "function": {
+                                "name": "collection.catalog_inspect",
+                                "arguments": '{"collection_slug":"alpha"}',
+                            },
+                        },
+                        {
+                            "id": "call-2",
+                            "function": {
+                                "name": "collection.catalog_inspect",
+                                "arguments": '{"collection_slug":"beta"}',
+                            },
+                        },
+                    ],
+                }
+            }
+        ]
+    }
+
+    parsed = parse_native_tool_calls(response)
+
+    assert parsed is not None
+    assert parsed.has_operation_calls is True
+    assert len(parsed.operation_calls) == 2
+    assert parsed.operation_calls[0].arguments == {"collection_slug": "alpha"}
+    assert parsed.operation_calls[1].arguments == {"collection_slug": "beta"}

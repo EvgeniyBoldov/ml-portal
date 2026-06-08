@@ -28,6 +28,13 @@ class PublicationDecision:
 
 
 _OPERATION_SPECS: Dict[str, OperationSpec] = {
+    "collection.catalog_inspect": OperationSpec(
+        canonical_op_slug="collection.catalog_inspect",
+        domain="system",
+        title="Collection Catalog Inspect",
+        description="Inspect collection schema, metadata, and data-shape for any collection by slug",
+        result_kind="catalog",
+    ),
     "sql.execute_sql": OperationSpec(
         canonical_op_slug="sql.execute_sql",
         domain="sql",
@@ -62,34 +69,6 @@ _OPERATION_SPECS: Dict[str, OperationSpec] = {
         title="Table Get",
         description="Read a single table record by id",
         result_kind="row",
-    ),
-    "collection.table.catalog_inspect": OperationSpec(
-        canonical_op_slug="collection.table.catalog_inspect",
-        domain="collection.table",
-        title="Table Catalog Inspect",
-        description="Inspect table collection schema and metadata dimensions",
-        result_kind="catalog",
-    ),
-    "collection.document.catalog_inspect": OperationSpec(
-        canonical_op_slug="collection.document.catalog_inspect",
-        domain="collection.document",
-        title="Document Catalog Inspect",
-        description="Inspect document collection schema and metadata dimensions",
-        result_kind="catalog",
-    ),
-    "collection.sql.catalog_inspect": OperationSpec(
-        canonical_op_slug="collection.sql.catalog_inspect",
-        domain="collection.sql",
-        title="SQL Catalog Inspect",
-        description="Inspect remote SQL collection catalog (schemas/tables/fields)",
-        result_kind="catalog",
-    ),
-    "collection.api.catalog_inspect": OperationSpec(
-        canonical_op_slug="collection.api.catalog_inspect",
-        domain="collection.api",
-        title="API Catalog Inspect",
-        description="Inspect API collection catalog (entities/aliases/examples and schema hints)",
-        result_kind="catalog",
     ),
     "collection.api.get_device": OperationSpec(
         canonical_op_slug="collection.api.get_device",
@@ -209,14 +188,9 @@ _PUBLICATION_RULES: tuple[PublicationRule, ...] = (
         canonical_op_slug="collection.table.get",
     ),
     PublicationRule(
-        instance_domain="collection.table",
+        instance_domain="system",
         raw_tool_slug="collection.catalog",
-        canonical_op_slug="collection.table.catalog_inspect",
-    ),
-    PublicationRule(
-        instance_domain="collection.table",
-        raw_tool_slug="collection.table.catalog_inspect",
-        canonical_op_slug="collection.table.catalog_inspect",
+        canonical_op_slug="collection.catalog_inspect",
     ),
     PublicationRule(
         instance_domain="collection.document",
@@ -227,36 +201,6 @@ _PUBLICATION_RULES: tuple[PublicationRule, ...] = (
         instance_domain="collection.document",
         raw_tool_slug="collection.document.search",
         canonical_op_slug="collection.document.search",
-    ),
-    PublicationRule(
-        instance_domain="collection.document",
-        raw_tool_slug="collection.catalog",
-        canonical_op_slug="collection.document.catalog_inspect",
-    ),
-    PublicationRule(
-        instance_domain="collection.document",
-        raw_tool_slug="collection.document.catalog_inspect",
-        canonical_op_slug="collection.document.catalog_inspect",
-    ),
-    PublicationRule(
-        instance_domain="collection.sql",
-        raw_tool_slug="collection.catalog",
-        canonical_op_slug="collection.sql.catalog_inspect",
-    ),
-    PublicationRule(
-        instance_domain="collection.sql",
-        raw_tool_slug="collection.sql.catalog_inspect",
-        canonical_op_slug="collection.sql.catalog_inspect",
-    ),
-    PublicationRule(
-        instance_domain="collection.api",
-        raw_tool_slug="collection.catalog",
-        canonical_op_slug="collection.api.catalog_inspect",
-    ),
-    PublicationRule(
-        instance_domain="collection.api",
-        raw_tool_slug="collection.api.catalog_inspect",
-        canonical_op_slug="collection.api.catalog_inspect",
     ),
     PublicationRule(
         instance_domain="collection.api",
@@ -282,11 +226,6 @@ _PUBLICATION_RULES: tuple[PublicationRule, ...] = (
         instance_domain="collection.api",
         raw_tool_slug="netbox_search_objects",
         canonical_op_slug="collection.api.search_objects",
-    ),
-    PublicationRule(
-        instance_domain="sql",
-        raw_tool_slug="collection.catalog",
-        canonical_op_slug="collection.sql.catalog_inspect",
     ),
     PublicationRule(
         instance_domain="collection.sql",

@@ -3,19 +3,15 @@ Synthesizer — streams the final answer to the user from RuntimeTurnState.
 
 When Planner emits a FINAL step, Pipeline calls Synthesizer to produce the
 user-visible answer. Inputs:
-    * goal (from RuntimeTurnState)
-    * facts (trimmed, deduped)
-    * agent_results (summaries)
-    * optional planner-suggested final_answer (used as a hint only)
+    * canonical answer_brief prepared by planning/finalization
+    * optional files and citations to reference
 
 Output: a stream of DELTA events followed by a FINAL event carrying full text
 and accumulated sources. This is the only place in runtime that directly
 streams text to the user for orchestrated runs.
 
-For single-agent runs where we have one agent_result and no ambiguity, the
-synthesizer short-circuits: it just restreams the agent's summary as deltas,
-avoiding a redundant LLM call. Quality is preserved because the sub-agent
-already produced a user-ready answer.
+When finalization already prepared a canonical user-ready answer_brief, the
+synthesizer may short-circuit and restream it directly.
 """
 from __future__ import annotations
 
@@ -45,10 +41,47 @@ DEFAULT_SYNTH_CHUNK_SIZE = 20
 # migration not run, etc.). Admins should edit the SYNTHESIZER row in
 # `system_llm_roles` rather than this constant.
 _FALLBACK_SYSTEM_PROMPT = (
-    "Ты — старший инженер корпоративного AI-портала. Сформируй точный, "
-    "лаконичный ответ для пользователя на основе предоставленных фактов и "
-    "результатов агентов. Не придумывай ничего сверх фактов."
+    "Ты — редактор финального ответа корпоративного AI-портала. "
+    "Преобразуй answer_brief в точный и лаконичный ответ для пользователя, "
+    "не меняя смысл и не добавляя новые факты."
 )
+
+_ROLE_PROMPT_SECTIONS = [
+    ("identity", "IDENTITY"),
+    ("mission", "MISSION"),
+    ("rules", "RULES"),
+    ("safety", "SAFETY"),
+    ("output_requirements", "OUTPUT REQUIREMENTS"),
+]
+
+
+def _compile_role_prompt(role_config: Dict[str, object], role_override: Optional[Dict[str, object]]) -> str:
+    """Recompile system prompt from role config parts + optional sandbox overrides."""
+    parts: list[str] = []
+    for field, heading in _ROLE_PROMPT_SECTIONS:
+        base = role_config.get(field)
+        override_val = role_override.get(field) if isinstance(role_override, dict) else None
+        val = override_val if override_val is not None else base
+        if val:
+            parts.append(f"# {heading}\n{val}")
+
+    examples = role_config.get("examples")
+    override_examples = role_override.get("examples") if isinstance(role_override, dict) else None
+    effective_examples = override_examples if override_examples is not None else examples
+    if effective_examples:
+        parts.append("# EXAMPLES")
+        for i, example in enumerate(effective_examples, 1):
+            parts.append(f"## Example {i}")
+            if isinstance(example, dict):
+                if example.get("description"):
+                    parts.append(f"Description: {example['description']}")
+                if example.get("input"):
+                    parts.append(f"Input: {example['input']}")
+                if example.get("output"):
+                    parts.append(f"Output: {example['output']}")
+            parts.append("")
+
+    return "\n\n".join(parts) if parts else (role_config.get("prompt") or _FALLBACK_SYSTEM_PROMPT)
 
 
 class Synthesizer:
@@ -71,7 +104,7 @@ class Synthesizer:
         runtime_state: RuntimeTurnState,
         run_id: UUID,
         model: Optional[str] = None,
-        planner_hint: Optional[str] = None,
+        answer_brief: Optional[str] = None,
         final_answer_strategy: Literal["synthesize", "verbatim", "use_agent_result"] = "synthesize",
         platform_config: Optional[Dict[str, object]] = None,
         sandbox_overrides: Optional[Dict[str, object]] = None,
@@ -90,7 +123,13 @@ class Synthesizer:
 
         # Load synthesizer role config early for context snapshot
         synth_role_cfg = await self._load_role_config()
-        synth_prompt = synth_role_cfg.get("prompt", "")
+        role_override = ((sandbox_overrides or {}).get("role_overrides") or {}).get("synthesizer")
+        if isinstance(role_override, dict):
+            if role_override.get("model"):
+                synth_role_cfg["model"] = str(role_override["model"])
+            if role_override.get("temperature") is not None:
+                synth_role_cfg["temperature"] = float(role_override["temperature"])
+        synth_prompt = _compile_role_prompt(synth_role_cfg, role_override if isinstance(role_override, dict) else None)
 
         if budget_registry is not None:
             synthesis_limits = None
@@ -126,7 +165,7 @@ class Synthesizer:
             run_id=str(run_id),
             context_snapshot=compact_snapshot(
                 inputs={
-                    "planner_hint": planner_hint,
+                    "answer_brief": answer_brief,
                     "goal": runtime_state.goal,
                 },
                 prompt=prompt_snapshot(synth_prompt, logging_level),
@@ -138,17 +177,16 @@ class Synthesizer:
             ),
         )
         # Sources from memory_bundle if available
-        sources: List[str] = []
-        if runtime_state.memory_bundle and runtime_state.memory_bundle.sections:
-            for section in runtime_state.memory_bundle.sections:
-                if section.name == "sources":
-                    sources = [item.text for item in section.items[:20] if item.text]
-                    break
+        sources: List[dict] = self._extract_sources(runtime_state)
+
+        # Attachments generated by agents (file.generate results)
+        attachments = self._extract_attachments(runtime_state)
 
         # Short-circuit based on explicit strategy (structural, not heuristic)
-        if final_answer_strategy == "verbatim" and planner_hint:
-            # Stream the planner's final_answer directly without LLM synthesis
-            short_answer = planner_hint
+        resolved_answer_brief = str(answer_brief or runtime_state.answer_brief or "").strip()
+
+        if final_answer_strategy == "verbatim" and resolved_answer_brief:
+            short_answer = resolved_answer_brief
             logger.info("Synthesizer verbatim short-circuit for run=%s", run_id)
             yield RuntimeEvent.status("synthesizing", short_circuit=True, mode="verbatim")
             for i in range(0, len(short_answer), chunk_size):
@@ -161,7 +199,7 @@ class Synthesizer:
                 parent_entity_id=synthesis_run_id,
                 content=short_answer,
             )
-            yield RuntimeEvent.final(short_answer, sources=sources, run_id=str(run_id))
+            yield RuntimeEvent.final(short_answer, sources=sources, run_id=str(run_id), attachments=attachments)
             if budget_registry is not None:
                 final_payload = budget_registry.emit_snapshot(synthesis_run_id, reason="finalize") or {}
                 yield RuntimeEvent.budget_snapshot(
@@ -183,49 +221,47 @@ class Synthesizer:
             )
             return
 
-        if final_answer_strategy == "use_agent_result":
-            # Use single successful agent result directly
-            short_answer = self._short_circuit_answer(runtime_state=runtime_state)
-            if short_answer:
-                logger.info("Synthesizer use_agent_result short-circuit for run=%s", run_id)
-                yield RuntimeEvent.status("synthesizing", short_circuit=True, mode="use_agent_result")
-                for i in range(0, len(short_answer), chunk_size):
-                    yield RuntimeEvent.delta(short_answer[i : i + chunk_size])
-                runtime_state.final_answer = short_answer
-                yield RuntimeEvent.status(
-                    "final_answer_marker",
-                    producer="synthesizer_agent_result",
-                    parent_entity_type="synthesis_run",
-                    parent_entity_id=synthesis_run_id,
-                    content=short_answer,
+        if final_answer_strategy == "use_agent_result" and resolved_answer_brief:
+            short_answer = resolved_answer_brief
+            logger.info("Synthesizer use_agent_result short-circuit for run=%s", run_id)
+            yield RuntimeEvent.status("synthesizing", short_circuit=True, mode="use_agent_result")
+            for i in range(0, len(short_answer), chunk_size):
+                yield RuntimeEvent.delta(short_answer[i : i + chunk_size])
+            runtime_state.final_answer = short_answer
+            yield RuntimeEvent.status(
+                "final_answer_marker",
+                producer="synthesizer_agent_result",
+                parent_entity_type="synthesis_run",
+                parent_entity_id=synthesis_run_id,
+                content=short_answer,
+            )
+            yield RuntimeEvent.final(short_answer, sources=sources, run_id=str(run_id), attachments=attachments)
+            if budget_registry is not None:
+                final_payload = budget_registry.emit_snapshot(synthesis_run_id, reason="finalize") or {}
+                yield RuntimeEvent.budget_snapshot(
+                    entity_type="synthesis_run",
+                    entity_id=synthesis_run_id,
+                    parent_entity_type="run",
+                    parent_entity_id=str(run_id),
+                    role="synthesizer",
+                    own=final_payload.get("own", {}),
+                    limits=final_payload.get("limits"),
+                    delta={},
+                    reason="finalize",
+                    at_ms=final_payload.get("at_ms"),
                 )
-                yield RuntimeEvent.final(short_answer, sources=sources, run_id=str(run_id))
-                if budget_registry is not None:
-                    final_payload = budget_registry.emit_snapshot(synthesis_run_id, reason="finalize") or {}
-                    yield RuntimeEvent.budget_snapshot(
-                        entity_type="synthesis_run",
-                        entity_id=synthesis_run_id,
-                        parent_entity_type="run",
-                        parent_entity_id=str(run_id),
-                        role="synthesizer",
-                        own=final_payload.get("own", {}),
-                        limits=final_payload.get("limits"),
-                        delta={},
-                        reason="finalize",
-                        at_ms=final_payload.get("at_ms"),
-                    )
-                yield RuntimeEvent.synthesis_end(
-                    synthesis_id=synthesis_run_id,
-                    run_id=str(run_id),
-                    status=synthesis_status,
-                )
-                return
+            yield RuntimeEvent.synthesis_end(
+                synthesis_id=synthesis_run_id,
+                run_id=str(run_id),
+                status=synthesis_status,
+            )
+            return
 
         # Full synthesis path. Use pre-loaded role config (prompt + model +
         # temperature + max_tokens) from the SYNTHESIZER system LLM role;
         # caller-supplied `model` still wins when provided.
         role_cfg = synth_role_cfg
-        system_prompt = role_cfg["prompt"]
+        system_prompt = synth_prompt
         effective_model = model or role_cfg.get("model")
         params: Dict[str, float] = {}
         if role_cfg.get("temperature") is not None:
@@ -236,7 +272,7 @@ class Synthesizer:
         yield RuntimeEvent.status("synthesizing")
         messages = self._input_builder.build(
             runtime_state=runtime_state,
-            planner_hint=planner_hint,
+            answer_brief=resolved_answer_brief,
             system_prompt=system_prompt,
         )
         llm_call_id = f"{run_id}:synthesis-llm:1"
@@ -336,7 +372,7 @@ class Synthesizer:
             parent_entity_id=synthesis_run_id,
             content=full,
         )
-        yield RuntimeEvent.final(full, sources=sources, run_id=str(run_id))
+        yield RuntimeEvent.final(full, sources=sources, run_id=str(run_id), attachments=attachments)
         if budget_registry is not None:
             final_payload = budget_registry.emit_snapshot(synthesis_run_id, reason="finalize") or {}
             yield RuntimeEvent.budget_snapshot(
@@ -360,23 +396,34 @@ class Synthesizer:
     # ---------------------------------------------------------------- helpers --
 
     @staticmethod
-    def _short_circuit_answer(
-        *,
+    def _extract_attachments(
         runtime_state: RuntimeTurnState,
-    ) -> Optional[str]:
-        successful: List[str] = []
+    ) -> List[Dict[str, Any]]:
+        """Collect file.generate attachments from all agent results."""
+        result: List[Dict[str, Any]] = []
         for item in runtime_state.agent_results:
-            if not bool(item.get("success", True)):
+            item_attachments = item.get("attachments")
+            if isinstance(item_attachments, list):
+                for att in item_attachments:
+                    if isinstance(att, dict) and att.get("file_id"):
+                        result.append(dict(att))
+        return result
+
+    @staticmethod
+    def _extract_sources(
+        runtime_state: RuntimeTurnState,
+    ) -> List[Dict[str, Any]]:
+        result: List[Dict[str, Any]] = []
+        if not runtime_state.memory_bundle or not runtime_state.memory_bundle.sections:
+            return result
+        for section in runtime_state.memory_bundle.sections:
+            if section.name != "sources":
                 continue
-            text = str(item.get("summary") or "").strip()
-            if text:
-                successful.append(text)
-        if len(successful) != 1:
-            return None
-        text = successful[0]
-        if len(text) < 40:
-            return None
-        return text
+            for item in section.items[:20]:
+                if isinstance(item.metadata, dict) and isinstance(item.metadata.get("source"), dict):
+                    result.append(dict(item.metadata["source"]))
+            break
+        return result
 
     async def _load_role_config(self) -> Dict[str, object]:
         """Load SYNTHESIZER role config from DB with a safe fallback."""

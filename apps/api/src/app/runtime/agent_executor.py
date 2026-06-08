@@ -16,6 +16,7 @@ Design:
 from __future__ import annotations
 
 from copy import deepcopy
+import traceback
 from typing import Any, AsyncGenerator, Dict, List, Optional
 from uuid import UUID
 
@@ -33,6 +34,7 @@ from app.core.http.clients import LLMClientProtocol
 from app.core.logging import get_logger
 from app.runtime.contracts import NextStep
 from app.runtime.context_snapshot import compact_snapshot
+from app.runtime.error_surface import build_user_safe_error_message
 from app.runtime.events import RuntimeEvent, RuntimeEventType
 from app.runtime.memory.components import MemoryBundle, MemoryItem, MemorySection
 from app.runtime.operation_errors import RuntimeErrorCode
@@ -116,6 +118,7 @@ class AgentExecutor:
                 agent_version_id=agent_version_id,
             )
         except Exception as exc:
+            debug_traceback = traceback.format_exc()
             logger.warning("Sub-agent preflight failed for %s: %s", agent_slug, exc)
             state.add_agent_result(
                 {
@@ -130,9 +133,24 @@ class AgentExecutor:
                     "retryable": False,
                     "iteration": state.iter_count,
                     "phase_id": step.phase_id,
+                    "debug": {
+                        "exception_type": type(exc).__name__,
+                        "traceback": debug_traceback,
+                    },
                 }
             )
-            yield RuntimeEvent.status("sub_agent_unavailable", agent=agent_slug, error=str(exc))
+            yield RuntimeEvent.error(
+                f"Sub-agent {agent_slug} unavailable: {exc}",
+                recoverable=False,
+                error_code=RuntimeErrorCode.AGENT_PRECHECK_FAILED,
+                retryable=False,
+                stage="sub_agent_unavailable",
+                agent=agent_slug,
+                debug={
+                    "exception_type": type(exc).__name__,
+                    "traceback": debug_traceback,
+                },
+            )
             return
 
         if sub_request.mode == ExecutionMode.UNAVAILABLE:
@@ -204,6 +222,7 @@ class AgentExecutor:
         # 3. Run legacy AgentToolRuntime and translate events.
         buffered_answer: List[str] = []
         sub_sources: List[dict] = []
+        attachments: List[Dict[str, Any]] = []
         final_content = ""
         final_error: Optional[str] = None
         final_error_code: Optional[str] = None
@@ -234,9 +253,7 @@ class AgentExecutor:
                         phase_id=step.phase_id,
                     )
                 elif legacy.type == LegacyEventType.OPERATION_RESULT:
-                    result_payload = legacy.data.get("result")
-                    if not isinstance(result_payload, dict):
-                        result_payload = legacy.data.get("data")
+                    result_payload = self._unwrap_operation_result_payload(legacy.data)
                     state.record_operation_result(
                         call_id=str(legacy.data.get("call_id") or ""),
                         success=bool(legacy.data.get("success")),
@@ -244,6 +261,24 @@ class AgentExecutor:
                     )
                     if bool(legacy.data.get("reused")):
                         state.used_tool_calls = max(0, state.used_tool_calls - 1)
+
+                    for src in legacy.data.get("sources") or []:
+                        if isinstance(src, dict):
+                            sub_sources.append(dict(src))
+
+                    # Collect file.generate attachments for downstream synthesis
+                    operation_name = str(legacy.data.get("operation") or "")
+                    if operation_name in ("file.generate", "file_generate") and bool(legacy.data.get("success")):
+                        if isinstance(result_payload, dict):
+                            file_id = result_payload.get("file_id")
+                            if file_id:
+                                attachments.append({
+                                    "file_id": file_id,
+                                    "file_name": result_payload.get("file_name") or result_payload.get("filename") or "file",
+                                    "download_url": result_payload.get("download_url") or "",
+                                    "content_type": result_payload.get("content_type") or "",
+                                    "size_bytes": result_payload.get("size_bytes"),
+                                })
 
                 if legacy.type == LegacyEventType.DELTA:
                     buffered_answer.append(str(legacy.data.get("content", "")))
@@ -299,6 +334,15 @@ class AgentExecutor:
                 "error": final_error,
                 "error_code": final_error_code,
                 "retryable": final_retryable,
+                "user_safe_error": (
+                    build_user_safe_error_message(
+                        retryable=final_retryable,
+                        error_code=final_error_code,
+                    )
+                    if not success
+                    else None
+                ),
+                "attachments": attachments,
             }
         )
         for fact in facts:
@@ -328,7 +372,8 @@ class AgentExecutor:
                     text = str(src).strip()
                 if not text or text in existing_texts:
                     continue
-                sources_section.items.append(MemoryItem(text=text, source="agent"))
+                source_metadata = {"source": dict(src)} if isinstance(src, dict) else {}
+                sources_section.items.append(MemoryItem(text=text, source="agent", metadata=source_metadata))
                 existing_texts.add(text)
             # Limit to 50
             sources_section.items = sources_section.items[-50:]
@@ -420,6 +465,18 @@ class AgentExecutor:
         # DELTA, FINAL, PLANNER_ACTION, POLICY_DECISION, WAITING_INPUT, STOP:
         # these are handled at pipeline level; don't leak.
         return None
+
+    @staticmethod
+    def _unwrap_operation_result_payload(data: Dict[str, Any]) -> Any:
+        """Return the actual tool payload from legacy operation_result envelopes."""
+        result_payload = data.get("result")
+        if isinstance(result_payload, dict):
+            nested = result_payload.get("data")
+            if nested is not None:
+                return nested
+            return result_payload
+        direct_data = data.get("data")
+        return direct_data
 
     @staticmethod
     def _build_sub_messages(

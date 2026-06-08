@@ -95,15 +95,12 @@ async def test_load_discovered_tools_adds_catalog_for_bound_local_collection():
         placement="local",
     )
     local_tool = SimpleNamespace(source="local", slug="collection.search")
-    catalog_tool = SimpleNamespace(source="local", slug="collection.catalog")
-
     resolver._resolve_bound_collection = AsyncMock(
         return_value=SimpleNamespace(id="collection-1", collection_type="table")
     )
     resolver._load_local_tools_for_provider = AsyncMock(return_value=[local_tool])
-    resolver._load_local_collection_catalog_tools = AsyncMock(return_value=[catalog_tool])
     resolver._load_provider_tools = AsyncMock(return_value=[])
 
     tools = await resolver.load_discovered_tools(instance=instance, provider=provider)
 
-    assert [tool.slug for tool in tools] == ["collection.search", "collection.catalog"]
+    assert [tool.slug for tool in tools] == ["collection.search"]

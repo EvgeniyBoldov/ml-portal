@@ -66,7 +66,7 @@ class PlanningOutcomeKind(str, Enum):
 class PlanningOutcome:
     kind: PlanningOutcomeKind
     stop_reason: PipelineStopReason
-    planner_hint: Optional[str] = None      # final_answer hint from planner
+    answer_brief: Optional[str] = None
     final_answer_strategy: Literal["synthesize", "verbatim", "use_agent_result"] = "synthesize"
     error_message: Optional[str] = None
 
@@ -306,7 +306,7 @@ class PlanningStage:
                 self.outcome = PlanningOutcome(
                     kind=PlanningOutcomeKind[terminal_kind_name],
                     stop_reason=mapped.get("stop_reason") or PipelineStopReason.FAILED,
-                    planner_hint=mapped.get("planner_hint"),
+                    answer_brief=mapped.get("answer_brief"),
                     final_answer_strategy=mapped.get("final_answer_strategy", "synthesize"),
                     error_message=mapped.get("error_message"),
                 )
@@ -345,7 +345,7 @@ class PlanningStage:
                 self.outcome = PlanningOutcome(
                     kind=PlanningOutcomeKind[call_kind_name],
                     stop_reason=mapped_dispatch.get("stop_reason") or PipelineStopReason.FAILED,
-                    planner_hint=mapped_dispatch.get("planner_hint"),
+                    answer_brief=mapped_dispatch.get("answer_brief"),
                 )
                 return
 
@@ -363,7 +363,7 @@ class PlanningStage:
                 self.outcome = PlanningOutcome(
                     kind=PlanningOutcomeKind.NEEDS_FINAL,
                     stop_reason=arbiter_result.stop_reason or PipelineStopReason.LOOP_DETECTED,
-                    planner_hint=None,
+                    answer_brief=None,
                 )
                 return
 
@@ -381,7 +381,7 @@ class PlanningStage:
         self.outcome = PlanningOutcome(
             kind=PlanningOutcomeKind.NEEDS_FINAL,
             stop_reason=PipelineStopReason.MAX_ITERS,
-            planner_hint=None,
+            answer_brief=None,
         )
 
     @staticmethod

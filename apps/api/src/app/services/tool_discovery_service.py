@@ -99,8 +99,10 @@ class ToolDiscoveryService:
 
         now = datetime.now(timezone.utc)
         local_count = 0
+        system_count = 0
         if include_local:
             local_count = await self._scan_local_tools(now)
+            system_count = await self._scan_system_tools(now)
 
         mcp_count, scanned_provider_ids = await self._scan_mcp_providers(
             now,
@@ -119,6 +121,7 @@ class ToolDiscoveryService:
             "scope": "provider" if provider_instance_id else "all",
             "provider_instance_id": str(provider_instance_id) if provider_instance_id else None,
             "local_upserted": local_count,
+            "system_upserted": system_count,
             "mcp_upserted": mcp_count,
             "mcp_scanned_providers": [str(pid) for pid in scanned_provider_ids],
             "mcp_failed_providers": list(self._last_mcp_scan_failures),
@@ -269,6 +272,41 @@ class ToolDiscoveryService:
                     now=now,
                 )
                 count += 1
+        return count
+
+    async def _scan_system_tools(self, now: datetime) -> int:
+        """Upsert system tools (domains=['system']) as global discovered entries.
+
+        System tools have provider_instance_id=NULL so they are available to
+        all agents regardless of collection bindings.
+        """
+        handlers = ToolRegistry.list_all()
+        count = 0
+        for handler in handlers:
+            if handler.slug in self.INTERNAL_TOOL_SLUGS:
+                continue
+            domains = getattr(handler, "domains", []) or []
+            if "system" not in domains:
+                continue
+            descriptor = handler.to_mcp_descriptor()
+            discovered = parse_discovered_operation(
+                tool_name=handler.slug,
+                description=(descriptor.get("description") or handler.description),
+                input_schema=descriptor.get("inputSchema"),
+                output_schema=descriptor.get("outputSchema"),
+            )
+            await self._upsert(
+                slug=discovered.name,
+                name=handler.name,
+                description=discovered.description,
+                source="local",
+                provider_instance_id=None,
+                domains=domains,
+                input_schema=discovered.input_schema,
+                output_schema=discovered.output_schema,
+                now=now,
+            )
+            count += 1
         return count
 
     async def _load_local_service_providers(self) -> Dict[str, ToolInstance]:
@@ -534,7 +572,12 @@ class ToolDiscoveryService:
         """Mark tools not seen in current scan scope as inactive."""
         predicates = []
         if include_local:
-            predicates.append(DiscoveredTool.source == "local")
+            # Only mark collection-local tools as stale; system tools (provider_instance_id=NULL)
+            # are managed by _scan_system_tools and should not be deactivated here.
+            predicates.append(
+                (DiscoveredTool.source == "local")
+                & (DiscoveredTool.provider_instance_id.isnot(None))
+            )
         if full_mcp_scan:
             predicates.append(DiscoveredTool.source == "mcp")
         elif scanned_provider_ids:
