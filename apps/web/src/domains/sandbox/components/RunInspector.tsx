@@ -982,7 +982,7 @@ export default function RunInspector({ steps, selectedStepId, selectedVirtualSte
       { key: 'output', label: 'Output', fields: outputFields },
       { key: 'context', label: 'Meta', fields: contextFields },
       { key: 'budgets', label: 'Budgets', fields: [] },
-      ...(errorDetails ? [{ key: 'error', label: 'Error', fields: [] }] : []),
+      ...(errorDetails ? [{ key: 'error' as const, label: 'Error' as const, fields: [] }] : []),
       { key: 'summary', label: 'Overview', fields: summaryFields },
       { key: 'raw', label: 'Raw', fields: [] },
     ],
