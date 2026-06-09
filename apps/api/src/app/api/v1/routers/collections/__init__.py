@@ -8,11 +8,13 @@ from fastapi import APIRouter
 from .crud import router as crud_router
 from .upload import router as upload_router
 from .stream import router as stream_router
+from .templates import router as templates_router
 
 router = APIRouter(tags=["collections"])
 
 router.include_router(crud_router)
 router.include_router(upload_router)
 router.include_router(stream_router)
+router.include_router(templates_router)
 
 __all__ = ["router"]

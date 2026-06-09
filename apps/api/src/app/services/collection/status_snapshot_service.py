@@ -26,6 +26,13 @@ class CollectionStatusSnapshotService:
         CollectionStatus.DEGRADED.value,
         CollectionStatus.ERROR.value,
     )
+    _TEMPLATE_LIFECYCLE_STAGES = (
+        CollectionStatus.CREATED.value,
+        CollectionStatus.DISCOVERED.value,
+        CollectionStatus.READY.value,
+        CollectionStatus.DEGRADED.value,
+        CollectionStatus.ERROR.value,
+    )
 
     def __init__(self, session: AsyncSession):
         self.session = session
@@ -35,6 +42,8 @@ class CollectionStatusSnapshotService:
             return self.get_remote_status_snapshot(collection)
         if collection.collection_type == CollectionType.DOCUMENT.value:
             return await self.get_document_status_snapshot(collection)
+        if collection.collection_type == CollectionType.TEMPLATE.value:
+            return await self.get_template_status_snapshot(collection)
         return await self.get_table_status_snapshot(collection)
 
     async def sync_collection_status(
@@ -115,6 +124,26 @@ class CollectionStatusSnapshotService:
                 "pending_rows": pending_rows,
                 "has_vector_search": bool(collection.has_vector_search),
                 "is_fully_vectorized": bool(collection.is_fully_vectorized),
+            },
+        }
+
+    async def get_template_status_snapshot(self, collection: Collection) -> dict[str, Any]:
+        total_rows = int(collection.total_rows or 0)
+
+        if total_rows == 0:
+            status = CollectionStatus.CREATED.value
+            reason = "no_templates_uploaded"
+        else:
+            status = CollectionStatus.READY.value
+            reason = "templates_available"
+
+        return {
+            "status": status,
+            "details": {
+                "kind": CollectionType.TEMPLATE.value,
+                "lifecycle_stages": list(self._TEMPLATE_LIFECYCLE_STAGES),
+                "status_reason": reason,
+                "total_rows": total_rows,
             },
         }
 

@@ -27,6 +27,7 @@ class CollectionType(str, Enum):
     DOCUMENT = "document"
     SQL = "sql"
     API = "api"
+    TEMPLATE = "template"
 
 
 class CollectionStatus(str, Enum):

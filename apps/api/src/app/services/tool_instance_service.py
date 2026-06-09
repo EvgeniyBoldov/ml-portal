@@ -61,10 +61,12 @@ class ToolInstanceService:
 
     LOCAL_TABLE_SERVICE_SLUG = "local-table-tools"
     LOCAL_DOCUMENT_SERVICE_SLUG = "local-document-tools"
+    LOCAL_TEMPLATE_SERVICE_SLUG = "local-template-tools"
     LOCAL_RUNTIME_SERVICE_SLUG = "local-runtime"
     SYSTEM_MANAGED_INSTANCE_SLUGS = {
         LOCAL_TABLE_SERVICE_SLUG,
         LOCAL_DOCUMENT_SERVICE_SLUG,
+        LOCAL_TEMPLATE_SERVICE_SLUG,
         LOCAL_RUNTIME_SERVICE_SLUG,
     }
     logger = logger
@@ -528,7 +530,7 @@ class ToolInstanceService:
             provider_kind=provider_kind,
         )
 
-    async def ensure_local_service_instances(self) -> tuple[ToolInstance, ToolInstance, int, int]:
+    async def ensure_local_service_instances(self) -> tuple[ToolInstance, ToolInstance, ToolInstance, int, int]:
         table_instance, table_created, table_updated = await self._ensure_local_service_instance(
             slug=self.LOCAL_TABLE_SERVICE_SLUG,
             name="Local Table Tools",
@@ -543,17 +545,27 @@ class ToolInstanceService:
             domain="collection.document",
             provider_kind="local_documents",
         )
+        template_instance, template_created, template_updated = await self._ensure_local_service_instance(
+            slug=self.LOCAL_TEMPLATE_SERVICE_SLUG,
+            name="Local Template Tools",
+            description="Built-in provider for local template collections and structured form assets",
+            domain="collection.template",
+            provider_kind="local_templates",
+        )
         return (
             table_instance,
             document_instance,
-            int(table_created) + int(document_created),
-            int(table_updated) + int(document_updated),
+            template_instance,
+            int(table_created) + int(document_created) + int(template_created),
+            int(table_updated) + int(document_updated) + int(template_updated),
         )
 
     async def resolve_local_service_for_collection_type(self, collection_type: str) -> ToolInstance:
-        table_instance, document_instance, _, _ = await self.ensure_local_service_instances()
+        table_instance, document_instance, template_instance, _, _ = await self.ensure_local_service_instances()
         if collection_type == "document":
             return document_instance
+        if collection_type == "template":
+            return template_instance
         return table_instance
 
     async def delete_local_instance(self, instance_id: UUID) -> None:
@@ -588,7 +600,7 @@ class ToolInstanceService:
         result = RescanResult()
 
         try:
-            table_service, document_service, service_created, service_updated = await self.ensure_local_service_instances()
+            table_service, document_service, template_service, service_created, service_updated = await self.ensure_local_service_instances()
             result.created += service_created
             result.updated += service_updated
 
@@ -609,9 +621,12 @@ class ToolInstanceService:
             ]
 
             for coll in collections:
-                target_service = (
-                    document_service if coll.collection_type == "document" else table_service
-                )
+                if coll.collection_type == "document":
+                    target_service = document_service
+                elif coll.collection_type == "template":
+                    target_service = template_service
+                else:
+                    target_service = table_service
                 if coll.data_instance_id != target_service.id:
                     coll.data_instance_id = target_service.id
                     await self.session.flush()
