@@ -133,23 +133,18 @@ def vectorize_collection_rows(
 
             try:
                 # 1. Load collection
-                result = await session.execute(
-                    sa_text(
-                        "SELECT id, slug, table_name, fields, qdrant_collection_name, "
-                        "vector_config, tenant_id "
-                        "FROM collections WHERE id = :cid AND tenant_id = :tid"
-                    ),
-                    {"cid": collection_id, "tid": tenant_id},
-                )
-                row = result.mappings().first()
-                if not row:
+                from app.services.collection_service import CollectionService
+
+                collection_service = CollectionService(session)
+                collection = await collection_service.get_by_id(uuid.UUID(collection_id))
+                if not collection or str(collection.tenant_id) != str(tenant_id):
                     logger.error(f"Collection {collection_id} not found for tenant {tenant_id}")
                     return {"status": "error", "message": "collection_not_found"}
 
-                table_name = row["table_name"]
-                fields = row["fields"]
-                qdrant_name = row["qdrant_collection_name"]
-                vector_config = row.get("vector_config")
+                table_name = collection.table_name
+                fields = collection.fields or []
+                qdrant_name = collection.qdrant_collection_name
+                vector_config = collection.vector_config
                 chunk_size, chunk_overlap = _resolve_chunk_config(vector_config)
 
                 if not qdrant_name:

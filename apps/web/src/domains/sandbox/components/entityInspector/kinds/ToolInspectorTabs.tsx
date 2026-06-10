@@ -1,8 +1,8 @@
 import { InspectorTabs } from '@/shared/ui/Inspector';
 import { isToolData, type TraceEntity } from '@/domains/runtimeTrace/entityTypes';
 import type { RunStep } from '../../../hooks/useSandboxRun';
-import { BudgetsTab, InfoTab, RawTab, SnapshotCodeField, SnapshotJsonField, SnapshotValueField } from '../shared';
-import { InspectorFieldGroup } from '@/shared/ui/Inspector';
+import { BudgetsTab, InfoTab, RawTab, SnapshotCodeField, SnapshotJsonField, SnapshotTextField, SnapshotValueField } from '../shared';
+import { InspectorFieldGroup, InspectorFieldRow } from '@/shared/ui/Inspector';
 
 export function ToolInspectorTabs({ entity, steps }: { entity: TraceEntity; steps: RunStep[] }) {
   const data = isToolData(entity.data) ? entity.data : null;
@@ -45,7 +45,17 @@ export function ToolInspectorTabs({ entity, steps }: { entity: TraceEntity; step
     if (tab === 'output') {
       return (
         <InspectorFieldGroup>
-          <SnapshotJsonField label="Респонс" value={outputValue} />
+          {!data?.result?.success ? (
+            <>
+              <SnapshotTextField label="Сообщение" text={data?.result?.safeMessage ?? data?.result?.error ?? 'Operation failed'} />
+              <SnapshotTextField label="Техническая ошибка" text={data?.result?.operatorMessage ?? '—'} />
+              <SnapshotValueField label="Код" value={data?.result?.errorCode ?? '—'} />
+              <SnapshotValueField label="Повторяемо" value={data?.result?.retryable === undefined ? '—' : (data.result.retryable ? 'Да' : 'Нет')} />
+              <SnapshotJsonField label="Payload" value={data?.result?.envelope ?? outputValue} />
+            </>
+          ) : (
+            <SnapshotJsonField label="Респонс" value={outputValue} />
+          )}
         </InspectorFieldGroup>
       );
     }
@@ -53,10 +63,15 @@ export function ToolInspectorTabs({ entity, steps }: { entity: TraceEntity; step
     if (tab === 'errors') {
       return (
         <InspectorFieldGroup>
-          <SnapshotJsonField
-            label="Ошибки"
-            value={{ error: data?.result?.error ?? null, errorCode: data?.result?.errorCode ?? null, retryable: data?.result?.retryable ?? null, retries: data?.retries ?? [] }}
-          />
+          <SnapshotTextField label="Сообщение" text={data?.result?.safeMessage ?? data?.result?.error ?? '—'} />
+          <SnapshotTextField label="Техническая ошибка" text={data?.result?.operatorMessage ?? '—'} />
+          <SnapshotValueField label="Код" value={data?.result?.errorCode ?? '—'} />
+          <SnapshotValueField label="Повторяемо" value={data?.result?.retryable === undefined ? '—' : (data.result.retryable ? 'Да' : 'Нет')} />
+          <SnapshotJsonField label="Envelope" value={data?.result?.envelope ?? null} />
+          <InspectorFieldRow label="Ретраи">{data?.retries && data.retries.length > 0 ? String(data.retries.length) : '—'}</InspectorFieldRow>
+          {data?.retries && data.retries.length > 0 ? (
+            <SnapshotJsonField label="История" value={data.retries} />
+          ) : null}
         </InspectorFieldGroup>
       );
     }

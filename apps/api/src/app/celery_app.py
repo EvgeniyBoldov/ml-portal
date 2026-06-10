@@ -20,6 +20,8 @@ app = Celery(
         "app.workers.tasks_collection_vectorize",
         # Collection export tasks
         "app.workers.tasks_collection_export",
+        # Template analysis tasks
+        "app.workers.tasks_template_analysis",
         # RAG model/status reconcile tasks
         "app.workers.tasks_rag_model_reconcile",
         # RAG stale reindex batch tasks
@@ -164,6 +166,8 @@ app.conf.task_routes = {
     "app.workers.tasks_collection_vectorize.vectorize_collection_rows": {"queue": "ingest.embed", "priority": 4},
     "app.workers.tasks_collection_vectorize.reconcile_collection_vectorization": {"queue": "maintenance.default", "priority": 1},
     "app.workers.tasks_collection_export.export_collection_csv": {"queue": "analyze_medium", "priority": 5},
+    "app.workers.tasks_template_analysis.generate_template_description": {"queue": "analyze_medium", "priority": 5},
+    "app.workers.tasks_template_analysis.generate_template_schema": {"queue": "analyze_medium", "priority": 5},
     "app.workers.tasks_rag_model_reconcile.reconcile_rag_statuses_for_embedding_model": {
         "queue": "maintenance.default",
         "priority": 1,

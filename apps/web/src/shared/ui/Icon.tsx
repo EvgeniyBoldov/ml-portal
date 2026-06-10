@@ -29,6 +29,12 @@ const icons: Record<string, React.FC<{ size?: number; className?: string }>> = {
       <polyline points="20 6 9 17 4 12" />
     </svg>
   ),
+  'edit-2': ({ size = 16, className }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <path d="M17 3a2.8 2.8 0 1 1 4 4L7 21H3v-4Z" />
+      <path d="m15 5 4 4" />
+    </svg>
+  ),
   send: ({ size = 16, className }) => (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
       <path d="m22 2-7 20-4-9-9-4Z" />

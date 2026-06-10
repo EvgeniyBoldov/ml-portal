@@ -390,6 +390,7 @@ class RunStore:
             # Errors mode: keep only lightweight fields — step metadata, budget, error details
             _errors_keep = {"step", "kind", "code", "error", "error_code", "message",
                             "user_message", "operator_message", "recoverable", "retryable",
+                            "safe_message", "result_envelope", "call_id", "operation_slug",
                             "operation_calls_total", "consumed", "limit", "status"}
             stored_data = {k: v for k, v in safe_data.items() if k in _errors_keep}
         else:

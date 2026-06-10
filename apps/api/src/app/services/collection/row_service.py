@@ -135,6 +135,8 @@ class CollectionRowService:
         collection: Collection,
         row_id: uuid.UUID,
         payload: dict,
+        *,
+        skip_vectorization: bool = False,
     ) -> Optional[dict]:
         """Patch writable fields for a single row."""
         table_name = self._require_table_name(collection)
@@ -164,7 +166,11 @@ class CollectionRowService:
         if not result.rowcount:
             return None
 
-        if collection.has_vector_search:
+        if (
+            not skip_vectorization
+            and collection.collection_type in {CollectionType.TABLE.value, CollectionType.TEMPLATE.value}
+            and collection.has_vector_search
+        ):
             await self.session.execute(
                 text(
                     f"UPDATE {table_name} "
@@ -225,7 +231,7 @@ class CollectionRowService:
 
         collection.total_rows = max(0, collection.total_rows - deleted_count)
 
-        if deleted_count and collection.has_vector_search and collection.qdrant_collection_name:
+        if deleted_count and collection.collection_type in {CollectionType.TABLE.value, CollectionType.TEMPLATE.value} and collection.has_vector_search and collection.qdrant_collection_name:
             from app.adapters.impl.qdrant import QdrantVectorStore
 
             vector_store = QdrantVectorStore()

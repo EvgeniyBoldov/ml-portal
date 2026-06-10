@@ -28,9 +28,11 @@ def _ensure_type_specific_fields(contract, fields: List[dict], collection_type: 
     expected_subtype = _expected_data_connector_subtype(collection_type)
     if expected_subtype == "sql":
         return contract.ensure_sql_preset_fields(fields)
+    if collection_type == CollectionType.DOCUMENT.value:
+        return contract.ensure_document_preset_fields(fields)
     if collection_type == CollectionType.TEMPLATE.value:
         return contract.ensure_template_preset_fields(fields)
-    # API/table no longer auto-inject specific fields; document keeps admin-defined preset path.
+    # API/table no longer auto-inject specific fields.
     return list(fields or [])
 
 

@@ -96,7 +96,12 @@ function summarize(rawType: string, data: Record<string, unknown>): string {
   if (rawType === 'operation_result' || rawType === 'tool_result') {
     const ok = data.success;
     const status = typeof ok === 'boolean' ? (ok ? 'success' : 'failed') : 'result';
-    return `${String(data.operation_slug ?? data.tool ?? data.operation ?? 'Operation')} ${status}`;
+    const base = `${String(data.operation_slug ?? data.tool ?? data.operation ?? 'Operation')} ${status}`;
+    if (ok === false) {
+      const details = String(data.safe_message ?? data.error ?? data.message ?? data.error_code ?? '').trim();
+      return details ? `${base}: ${details}` : base;
+    }
+    return base;
   }
   if (rawType === 'llm_call' || rawType === 'llm_response' || rawType === 'llm_turn') {
     return `response_length=${String(data.response_length ?? data.tokens_out ?? 'n/a')}`;

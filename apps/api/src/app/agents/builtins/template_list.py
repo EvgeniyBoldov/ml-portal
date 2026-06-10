@@ -1,7 +1,7 @@
 """
 template.list — List templates in a template collection.
 
-Returns metadata for each template row: title, version, kind, semantic description,
+Returns metadata for each template row: title, version, source, description,
 and identifiers needed for get_schema/fill.
 """
 from __future__ import annotations
@@ -27,7 +27,7 @@ _INPUT_SCHEMA_V1 = {
         },
         "query": {
             "type": "string",
-            "description": "Optional free-text filter (matches title or semantic_description)",
+            "description": "Optional free-text filter (matches configured searchable fields)",
         },
         "limit": {
             "type": "integer",
@@ -48,9 +48,9 @@ _OUTPUT_SCHEMA_V1 = {
                 "properties": {
                     "row_id": {"type": "string"},
                     "title": {"type": "string"},
+                    "source": {"type": "string"},
                     "template_version": {"type": "string"},
-                    "template_kind": {"type": "string"},
-                    "semantic_description": {"type": "string"},
+                    "description": {"type": "string"},
                     "file_id": {"type": "string"},
                 },
             },
@@ -69,7 +69,7 @@ class TemplateListTool(VersionedTool):
     name: ClassVar[str] = "List Templates"
     description: ClassVar[str] = (
         "List templates in a template collection. Returns metadata for each template: "
-        "title, version, kind, description, and row_id needed for get_schema/fill."
+        "title, version, source, description, and row_id needed for get_schema/fill."
     )
 
     @tool_version(
@@ -128,9 +128,9 @@ class TemplateListTool(VersionedTool):
                     templates.append({
                         "row_id": str(row.get("id")),
                         "title": row.get("title") or "",
+                        "source": row.get("source") or "",
                         "template_version": row.get("template_version") or "",
-                        "template_kind": row.get("template_kind") or "",
-                        "semantic_description": row.get("semantic_description") or "",
+                        "description": row.get("description") or "",
                         "file_id": file_meta.get("file_id") or "",
                     })
 

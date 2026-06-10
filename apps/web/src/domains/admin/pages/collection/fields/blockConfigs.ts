@@ -6,6 +6,7 @@ export const COLLECTION_TYPE_OPTIONS = [
   { value: 'document', label: 'Документы (RAG)' },
   { value: 'sql', label: 'SQL' },
   { value: 'api', label: 'API' },
+  { value: 'template', label: 'Шаблоны' },
 ];
 
 export const INFO_FIELDS: FieldConfig[] = [
@@ -95,6 +96,7 @@ const CONFIG_FIELDS_BY_TYPE: Record<CollectionType, ConfigStrategy> = {
   api: ({ connectorOptions, editableDataInstance }) => [
     { ...DATA_CONNECTOR_FIELD, options: connectorOptions, editable: editableDataInstance },
   ],
+  template: () => [],
 };
 
 export function buildConfigFieldsByType(

@@ -1,6 +1,5 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Modal } from '@/shared/ui';
-import { parseValue } from './useSmartParse';
 import { SmartViewer } from './SmartViewer';
 import styles from './SmartViewer.module.css';
 
@@ -31,12 +30,13 @@ export function SmartViewerModal({
 }: SmartViewerModalProps) {
   const [copied, setCopied] = useState(false);
   const rawString = useMemo(() => tryStringifyPretty(value), [value]);
+  const [draft, setDraft] = useState(rawString);
 
-  const editParsed = useMemo(() => {
-    if (mode !== 'edit') return null;
-    if (typeof value === 'string') return parseValue(value, 0);
-    return parseValue(value, 0);
-  }, [value, mode]);
+  useEffect(() => {
+    if (mode === 'edit') {
+      setDraft(rawString);
+    }
+  }, [mode, rawString, open]);
 
   const handleCopy = () => {
     void navigator.clipboard.writeText(rawString).then(() => {
@@ -65,18 +65,20 @@ export function SmartViewerModal({
             <div className={styles.modalEditLabel}>Raw</div>
             <textarea
               className={styles.modalEditTextarea}
-              value={rawString}
-              onChange={(e) => onChange?.(e.target.value)}
+              value={draft}
+              onChange={(e) => {
+                const next = e.target.value;
+                setDraft(next);
+                onChange?.(next);
+              }}
               spellCheck={false}
             />
           </div>
           <div className={styles.modalPreviewPane}>
             <div className={styles.modalPreviewLabel}>Preview</div>
-            {editParsed && (
-              <div className={styles.root}>
-                <SmartViewer value={value} />
-              </div>
-            )}
+            <div className={styles.root}>
+              <SmartViewer value={draft} />
+            </div>
           </div>
         </div>
       )}

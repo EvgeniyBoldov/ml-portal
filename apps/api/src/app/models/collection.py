@@ -362,7 +362,7 @@ class Collection(Base, LifecycleMixin):
     @property
     def is_local(self) -> bool:
         """Local collections: platform manages storage."""
-        return self.collection_type in (CollectionType.TABLE.value, CollectionType.DOCUMENT.value, CollectionType.SQL.value)
+        return self.collection_type in (CollectionType.TABLE.value, CollectionType.DOCUMENT.value, CollectionType.SQL.value, CollectionType.TEMPLATE.value)
 
     @property
     def is_remote(self) -> bool:

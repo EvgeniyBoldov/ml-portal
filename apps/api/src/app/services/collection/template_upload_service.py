@@ -4,8 +4,8 @@ TemplateUploadService — upload a template file into a template collection.
 Flow:
 1. Validate collection is TEMPLATE
 2. Save file to S3
-3. Analyze file → extract title, version, draft schema
-4. Create a row in the collection dynamic table with file metadata + analysis results
+3. Create a row in the collection dynamic table with file metadata
+4. Async analysis tasks fill description + schema later
 """
 from __future__ import annotations
 
@@ -20,7 +20,6 @@ from app.core.config import get_settings
 from app.core.exceptions import CollectionDocumentUploadError, InvalidSchemaError
 from app.core.logging import get_logger
 from app.models.collection import Collection, CollectionType
-from app.services.collection.template_analyze_service import TemplateAnalyzeService
 from app.services.collection.row_service import CollectionRowService
 from app.storage.paths import calculate_file_checksum, get_origin_path
 
@@ -35,7 +34,6 @@ class TemplateUploadService:
     ):
         self.session = session
         self.row_service = row_service or CollectionRowService(session)
-        self.analyze = TemplateAnalyzeService()
 
     async def upload_template(
         self,
@@ -57,9 +55,6 @@ class TemplateUploadService:
         if not uploaded:
             raise CollectionDocumentUploadError(f"Failed to upload file to s3://{bucket}/{s3_key}")
 
-        # Analyze file structure
-        analysis = await self.analyze.analyze_bytes(file_content, filename)
-
         file_meta = {
             "s3_key": s3_key,
             "bucket": bucket,
@@ -71,11 +66,9 @@ class TemplateUploadService:
 
         payload = {
             "file": file_meta,
-            "title": analysis.get("title") or filename,
-            "template_version": analysis.get("version"),
-            "template_kind": analysis.get("kind_hint"),
-            "template_schema": analysis.get("draft_schema"),
-            "semantic_description": None,
+            "title": filename,
+            "source": f"s3://{bucket}/{s3_key}",
+            "status": "uploaded",
         }
 
         # Remove None values for optional fields so coercion doesn't fail
@@ -85,11 +78,12 @@ class TemplateUploadService:
 
         return {
             "row_id": str(created_row["id"]),
+            "collection_id": str(collection.id),
             "file_id": str(file_id),
             "title": payload.get("title"),
-            "template_version": payload.get("template_version"),
-            "template_kind": payload.get("template_kind"),
-            "draft_schema": payload.get("template_schema"),
+            "source": payload.get("source"),
+            "status": payload.get("status"),
+            "message": "Template uploaded successfully",
         }
 
     async def _upload_to_s3(self, content: bytes, key: str, bucket: str) -> bool:

@@ -5,13 +5,14 @@ import uuid
 from dataclasses import dataclass
 from typing import Optional
 
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.adapters.s3_client import PresignOptions, s3_manager
 from app.core.cache import get_cache
 from app.core.config import get_settings
 from app.models.chat_attachment import ChatAttachment
+from app.models.collection import Collection
 from app.models.rag_ingest import Source
 from app.repositories.factory import AsyncRepositoryFactory
 from app.services.document_artifacts import get_document_artifact_key
@@ -83,6 +84,11 @@ class FileDeliveryService:
                 export_id=export_match.group(1),
                 owner_id=owner_id,
             )
+
+        if re.fullmatch(r"[0-9a-fA-F-]{36}", file_id):
+            template_match = await self._resolve_template_upload(file_id=file_id)
+            if template_match:
+                return template_match
 
         raise FileDeliveryNotFoundError(f"Unsupported file id: {file_id}")
 
@@ -196,3 +202,46 @@ class FileDeliveryService:
             content_type=str(meta.get("content_type") or "text/csv"),
             size_bytes=int(meta.get("size_bytes") or 0),
         )
+
+    async def _resolve_template_upload(self, *, file_id: str) -> Optional[ResolvedDownload]:
+        collections_result = await self.session.execute(
+            select(Collection).where(
+                Collection.tenant_id == self.repo_factory.tenant_id,
+                Collection.collection_type == "template",
+                Collection.is_active == True,
+            )
+        )
+        collections = collections_result.scalars().all()
+        for collection in collections:
+            table_name = str(collection.table_name or "").strip()
+            if not table_name:
+                continue
+            result = await self.session.execute(
+                text(
+                    f"SELECT file FROM {table_name} "
+                    f"WHERE file->>'file_id' = :file_id "
+                    f"LIMIT 1"
+                ),
+                {"file_id": file_id},
+            )
+            row = result.mappings().first()
+            if not row:
+                continue
+            file_meta = row.get("file") or {}
+            if not isinstance(file_meta, dict):
+                continue
+            bucket = str(file_meta.get("bucket") or "").strip()
+            key = str(file_meta.get("s3_key") or "").strip()
+            filename = str(file_meta.get("filename") or f"template_{file_id}").strip()
+            content_type = str(file_meta.get("content_type") or "application/octet-stream").strip()
+            if not bucket or not key:
+                continue
+            return ResolvedDownload(
+                file_id=file_id,
+                bucket=bucket,
+                key=key,
+                file_name=filename,
+                content_type=content_type or "application/octet-stream",
+                size_bytes=int(file_meta.get("size") or 0) if str(file_meta.get("size") or "").isdigit() else None,
+            )
+        return None

@@ -25,7 +25,6 @@ class CollectionSchemaEvolutionService:
         self.host = host
         self.contract = contract
         self.field_type_to_pg = field_type_to_pg
-        self.document_specific_field_names = set(contract.document_specific_field_names)
 
     async def apply_schema_operations(self, collection: Collection, schema_ops: List[dict]) -> None:
         fields = [dict(field) for field in (collection.fields or [])]
@@ -211,7 +210,7 @@ class CollectionSchemaEvolutionService:
             "_vector_status",
             "_vector_chunk_count",
             "_vector_error",
-        } | self.document_specific_field_names:
+        } | self.contract.get_specific_field_names(collection.collection_type):
             raise InvalidSchemaError(f"Field name '{new_name}' is reserved")
 
         await self.session.execute(

@@ -1,7 +1,7 @@
 """
-Collection Text Search Tool — векторный поиск по table-коллекциям.
+Collection Text Search Tool — векторный поиск по коллекциям с retrieval-enabled text fields.
 
-Ищет в Qdrant-коллекции, привязанной к конкретной table-коллекции
+Ищет в Qdrant-коллекции, привязанной к конкретной collection-коллекции
 (collection.qdrant_collection_name). Возвращает найденные строки
 с полными данными из SQL-таблицы.
 """
@@ -22,7 +22,7 @@ _INPUT_SCHEMA_V1 = {
     "properties": {
         "collection_slug": {
             "type": "string",
-            "description": "Slug of the table collection to search in",
+            "description": "Slug of the collection to search in",
         },
         "query": {
             "type": "string",
@@ -90,9 +90,9 @@ _OUTPUT_SCHEMA_V1 = {
 @register_tool
 class CollectionTextSearchTool(VersionedTool):
     """
-    Векторный (семантический) поиск по table-коллекциям.
+    Векторный (семантический) поиск по коллекциям с retrieval-enabled text fields.
 
-    Table-коллекции могут иметь text-поля с `used_in_retrieval=true`.
+    Такие коллекции могут иметь text-поля с `used_in_retrieval=true`.
     Эти поля векторизуются и хранятся в отдельной Qdrant-коллекции.
 
     Результаты обогащаются полными данными из SQL-таблицы.
@@ -102,7 +102,7 @@ class CollectionTextSearchTool(VersionedTool):
     domains: ClassVar[list] = ["collection.table"]
     name: ClassVar[str] = "Collection Text Search"
     description: ClassVar[str] = (
-        "Semantic search within a table collection that has retrieval-enabled text fields. "
+        "Semantic search within a collection that has retrieval-enabled text fields. "
         "Finds rows with semantically similar text using vector similarity. "
         "Returns matched text, relevance score, and full row data."
     )
@@ -111,7 +111,7 @@ class CollectionTextSearchTool(VersionedTool):
         version="1.0.0",
         input_schema=_INPUT_SCHEMA_V1,
         output_schema=_OUTPUT_SCHEMA_V1,
-        description="Vector search in table collections with Qdrant + SQL row enrichment",
+        description="Vector search in collections with Qdrant + SQL row enrichment",
     )
     async def v1_0_0(self, ctx: ToolContext, args: Dict[str, Any]) -> ToolResult:
         from app.agents.runtime.rerank_client import (

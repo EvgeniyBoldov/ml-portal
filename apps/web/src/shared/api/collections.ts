@@ -4,7 +4,7 @@
 import { apiRequest } from './http';
 
 export type SearchMode = 'exact' | 'like' | 'range' | 'vector';
-export type CollectionType = 'table' | 'document' | 'sql' | 'api';
+export type CollectionType = 'table' | 'document' | 'sql' | 'api' | 'template';
 
 export interface BackendCollectionField {
   name: string;
@@ -214,6 +214,60 @@ export interface UploadDocumentResponse {
   message: string;
 }
 
+export interface UploadTemplateRequest {
+  file: File;
+}
+
+export interface UploadTemplateResponse {
+  row_id: string;
+  file_id?: string;
+  collection_id: string;
+  status?: string;
+  message?: string;
+  title?: string;
+  source?: string;
+  template_version?: string;
+  description?: string;
+  draft_schema?: Record<string, unknown>;
+  description_task_id?: string;
+  schema_task_id?: string;
+}
+
+export interface CollectionTemplate {
+  id: string;
+  file?: Record<string, unknown>;
+  title?: string | null;
+  source?: string | null;
+  template_version?: string | null;
+  template_schema?: Record<string, unknown> | null;
+  description?: string | null;
+  status?: string | null;
+}
+
+export interface UpdateTemplateRequest {
+  description?: string | null;
+  template_schema?: Record<string, unknown> | null;
+  status?: 'uploaded' | 'analyzed' | 'ready' | 'archived' | null;
+}
+
+export interface CollectionTemplatesResponse {
+  items: CollectionTemplate[];
+  total: number;
+  page: number;
+  size: number;
+}
+
+export interface AnalyzeTemplatesResponse {
+  collection_id: string;
+  queued: number;
+  missing: string[];
+  items: Array<{
+    row_id: string;
+    description_task_id: string;
+    schema_task_id: string;
+  }>;
+}
+
 export interface CollectionDocument {
   id: string;
   name: string;
@@ -286,6 +340,7 @@ function normalizeCollectionType(type?: CollectionType): CollectionType {
   if (type === 'document') return 'document';
   if (type === 'sql') return 'sql';
   if (type === 'api') return 'api';
+  if (type === 'template') return 'template';
   return 'table';
 }
 
@@ -414,9 +469,17 @@ export const collectionsApi = {
     id: string,
     data: UpdateCollectionRequest
   ): Promise<Collection> => {
+    const schemaOps = (data.schema_ops ?? []).map((op) => (
+      op.field
+        ? { ...op, field: toBackendField(op.field as CollectionField) }
+        : op
+    ));
     const updated = await apiRequest<Collection>(`/admin/collections/${id}`, {
       method: 'PUT',
-      body: data,
+      body: {
+        ...data,
+        schema_ops: schemaOps,
+      },
     });
     return toFrontendCollection(updated);
   },
@@ -519,6 +582,80 @@ export const collectionsApi = {
       { method: 'POST', body: formData }
     );
   },
+
+  uploadTemplate: async (
+    collectionId: string,
+    data: UploadTemplateRequest
+  ): Promise<UploadTemplateResponse> => {
+    const formData = new FormData();
+    formData.append('file', data.file);
+
+    return apiRequest<UploadTemplateResponse>(
+      `/collections/${collectionId}/templates/upload`,
+      { method: 'POST', body: formData }
+    );
+  },
+
+  listTemplates: async (
+    collectionId: string,
+    params?: { page?: number; size?: number }
+  ): Promise<CollectionTemplatesResponse> => {
+    const searchParams = new URLSearchParams();
+    if (params?.page) searchParams.set('page', String(params.page));
+    if (params?.size) searchParams.set('size', String(params.size));
+    const query = searchParams.toString();
+    return apiRequest<CollectionTemplatesResponse>(
+      `/collections/${collectionId}/templates${query ? `?${query}` : ''}`
+    );
+  },
+
+  getTemplate: async (
+    collectionId: string,
+    rowId: string,
+  ): Promise<CollectionTemplate> => {
+    return apiRequest<CollectionTemplate>(`/collections/${collectionId}/templates/${rowId}`);
+  },
+
+  getTemplateStatusGraph: async (
+    collectionId: string,
+    rowId: string,
+  ): Promise<Record<string, unknown>> => {
+    return apiRequest<Record<string, unknown>>(`/collections/${collectionId}/templates/${rowId}/status-graph`);
+  },
+
+  updateTemplate: async (
+    collectionId: string,
+    rowId: string,
+    data: UpdateTemplateRequest,
+  ): Promise<CollectionTemplate> => {
+    return apiRequest<CollectionTemplate>(`/collections/${collectionId}/templates/${rowId}`, {
+      method: 'PATCH',
+      body: data,
+    });
+  },
+
+  updateTemplateSchema: async (
+    collectionId: string,
+    rowId: string,
+    templateSchema: Record<string, unknown>,
+  ): Promise<CollectionTemplate> => {
+    return collectionsApi.updateTemplate(collectionId, rowId, {
+      template_schema: templateSchema,
+    });
+  },
+
+  analyzeTemplates: async (
+    collectionId: string,
+    rowIds: string[],
+  ): Promise<AnalyzeTemplatesResponse> => {
+    return apiRequest<AnalyzeTemplatesResponse>(`/collections/${collectionId}/templates/analyze`, {
+      method: 'POST',
+      body: { row_ids: rowIds },
+    });
+  },
+
+  getTemplateStatusEventsUrl: (collectionId: string, rowId: string): string =>
+    `/api/v1/collections/${collectionId}/templates/${encodeURIComponent(rowId)}/status/events`,
 
   // Tenant-level endpoints
   list: async (activeOnly = true): Promise<CollectionListResponse> => {

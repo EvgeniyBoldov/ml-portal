@@ -30,6 +30,8 @@ async def _build_collection_response(
     service: CollectionService,
     collection,
 ) -> CollectionResponse:
+    if str(getattr(collection, "collection_type", "") or "") == "template":
+        await service.ensure_contract_fields_present(collection)
     snapshot = await service.sync_collection_status(collection, persist=False)
     effective_total_rows = await service.get_effective_total_rows(collection)
     return CollectionResponse(

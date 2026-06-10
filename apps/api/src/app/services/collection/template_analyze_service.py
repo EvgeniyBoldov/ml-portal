@@ -40,12 +40,40 @@ class TemplateAnalyzeService:
     """Analyze a template file and return structured metadata + draft schema."""
 
     async def analyze_bytes(self, content: bytes, filename: str) -> dict:
+        schema_payload = await self.generate_schema(content, filename)
+        description_payload = await self.generate_description(content, filename)
+        return {
+            **schema_payload,
+            **description_payload,
+        }
+
+    async def generate_schema(self, content: bytes, filename: str) -> dict:
         ext = (filename.split(".")[-1] or "").lower()
         if ext in ("xlsx", "xlsm"):
-            return self._analyze_excel(content, filename)
-        if ext == "docx":
-            return self._analyze_docx(content, filename)
-        return self._analyze_text(content, filename)
+            analysis = self._analyze_excel(content, filename)
+        elif ext == "docx":
+            analysis = self._analyze_docx(content, filename)
+        else:
+            analysis = self._analyze_text(content, filename)
+        return {
+            "title": analysis.get("title"),
+            "version": analysis.get("version"),
+            "draft_schema": analysis.get("draft_schema"),
+        }
+
+    async def generate_description(self, content: bytes, filename: str) -> dict:
+        ext = (filename.split(".")[-1] or "").lower()
+        if ext in ("xlsx", "xlsm"):
+            analysis = self._analyze_excel(content, filename)
+        elif ext == "docx":
+            analysis = self._analyze_docx(content, filename)
+        else:
+            analysis = self._analyze_text(content, filename)
+        return {
+            "title": analysis.get("title"),
+            "version": analysis.get("version"),
+            "description": analysis.get("description"),
+        }
 
     def _analyze_excel(self, content: bytes, filename: str) -> dict:
         try:
@@ -115,6 +143,7 @@ class TemplateAnalyzeService:
             "version": version,
             "draft_schema": draft_schema,
             "kind_hint": self._infer_kind(title, all_placeholders),
+            "description": self._build_description(filename, "excel", title, all_placeholders),
         }
 
     def _analyze_docx(self, content: bytes, filename: str) -> dict:
@@ -154,6 +183,7 @@ class TemplateAnalyzeService:
             "version": version,
             "draft_schema": draft_schema,
             "kind_hint": self._infer_kind(title, all_placeholders),
+            "description": self._build_description(filename, "docx", title, all_placeholders),
         }
 
     def _analyze_text(self, content: bytes, filename: str) -> dict:
@@ -181,6 +211,7 @@ class TemplateAnalyzeService:
             "version": version,
             "draft_schema": draft_schema,
             "kind_hint": self._infer_kind(title, all_placeholders),
+            "description": self._build_description(filename, "text", title, all_placeholders),
         }
 
     @staticmethod
@@ -199,3 +230,24 @@ class TemplateAnalyzeService:
         if placeholders:
             return "form"
         return None
+
+    @staticmethod
+    def _build_description(
+        filename: str,
+        fmt: str,
+        title: Optional[str],
+        placeholders: List[dict],
+    ) -> str:
+        normalized_placeholders: list[str] = []
+        for item in placeholders:
+            placeholder = str(item.get("placeholder") or "").strip()
+            if placeholder and placeholder not in normalized_placeholders:
+                normalized_placeholders.append(placeholder)
+
+        subject = title or filename
+        if normalized_placeholders:
+            placeholder_list = ", ".join(normalized_placeholders[:12])
+            return (
+                f"Template '{subject}' ({fmt}) with placeholders: {placeholder_list}."
+            )
+        return f"Template '{subject}' ({fmt}) without detected placeholders."

@@ -21,8 +21,7 @@ class CollectionVectorLifecycleService:
     @staticmethod
     def fields_require_table_vector_search(fields: List[dict]) -> bool:
         return any(
-            field.get("category") == FieldCategory.USER.value
-            and field.get("used_in_retrieval", False)
+            field.get("used_in_retrieval", False)
             and field.get("data_type") == FieldType.TEXT.value
             for field in fields
         )
@@ -36,7 +35,7 @@ class CollectionVectorLifecycleService:
                 bool(field.get("used_in_retrieval", False)),
             )
             for field in fields
-            if field.get("category") == FieldCategory.USER.value
+            if field.get("used_in_retrieval", False)
         )
 
     async def table_has_rows(self, table_name: str) -> bool:
@@ -52,7 +51,7 @@ class CollectionVectorLifecycleService:
         return int(result.scalar() or 0)
 
     async def ensure_table_vector_infra(self, collection: Collection) -> None:
-        if collection.collection_type != CollectionType.TABLE.value:
+        if collection.collection_type not in {CollectionType.TABLE.value, CollectionType.TEMPLATE.value}:
             return
 
         if not collection.qdrant_collection_name:
@@ -80,6 +79,9 @@ class CollectionVectorLifecycleService:
         )
 
     async def drop_table_vector_infra(self, collection: Collection) -> None:
+        if collection.collection_type not in {CollectionType.TABLE.value, CollectionType.TEMPLATE.value}:
+            return
+
         if collection.qdrant_collection_name:
             from app.adapters.impl.qdrant import QdrantVectorStore
 
@@ -103,7 +105,7 @@ class CollectionVectorLifecycleService:
         collection.total_chunks = 0
 
     async def reset_table_vector_state(self, collection: Collection) -> None:
-        if collection.collection_type != CollectionType.TABLE.value or not collection.qdrant_collection_name:
+        if collection.collection_type not in {CollectionType.TABLE.value, CollectionType.TEMPLATE.value} or not collection.qdrant_collection_name:
             return
 
         from app.adapters.impl.qdrant import QdrantVectorStore

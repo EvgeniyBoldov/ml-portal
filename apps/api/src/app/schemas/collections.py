@@ -26,29 +26,11 @@ class FieldSchema(BaseModel):
 
     @model_validator(mode="after")
     def validate_field(self) -> "FieldSchema":
-        if self.category == FieldCategory.SPECIFIC.value:
-            if (
-                self.filterable
-                or self.sortable
-                or self.used_in_prompt_context
-                or self.used_in_retrieval
-            ):
-                raise ValueError(
-                    "Specific fields cannot be filterable, sortable, retrieval-enabled, or prompt-visible"
-                )
-
-        if self.data_type == FieldType.FILE.value:
-            if self.filterable or self.sortable or self.used_in_prompt_context:
-                raise ValueError("File fields cannot be filterable, sortable, or prompt-visible")
-
         if self.used_in_retrieval and self.data_type not in (FieldType.TEXT.value,):
             raise ValueError("used_in_retrieval is only available for text fields in base collection schema")
 
         if self.sortable and self.data_type in (FieldType.FILE.value, FieldType.JSON.value):
             raise ValueError("Sortable fields must not be file/json")
-
-        if self.filterable and self.data_type == FieldType.FILE.value:
-            raise ValueError("File fields cannot be filterable")
 
         return self
 
@@ -64,7 +46,7 @@ class CreateCollectionRequest(BaseModel):
     tenant_id: Optional[uuid.UUID] = None
     collection_type: str = Field(
         default=CollectionType.TABLE.value,
-        pattern=r"^(table|document|sql|api)$",
+        pattern=r"^(table|document|sql|api|template)$",
     )
     slug: Optional[str] = Field(default=None, min_length=1, max_length=50)
     name: str = Field(..., min_length=1, max_length=255)

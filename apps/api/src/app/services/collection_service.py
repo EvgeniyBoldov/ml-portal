@@ -548,6 +548,116 @@ class CollectionService:
     async def get_by_slug(self, slug: str) -> Optional[Collection]:
         return await self.query.get_by_slug(slug)
 
+    async def ensure_contract_fields_present(
+        self,
+        collection: Collection,
+        *,
+        ensure_vector_infra: bool = True,
+    ) -> Collection:
+        """Align persisted local collection schema with backend-owned specific field contract."""
+        if not collection.is_local or not collection.table_name:
+            return collection
+
+        current_fields = list(collection.fields or [])
+        collection_type = str(collection.collection_type or "").strip().lower()
+        if collection_type == CollectionType.DOCUMENT.value:
+            expected_fields = self.contract.ensure_document_preset_fields(current_fields)
+        elif collection_type == CollectionType.SQL.value:
+            expected_fields = self.contract.ensure_sql_preset_fields(current_fields)
+        elif collection_type == CollectionType.TEMPLATE.value:
+            expected_fields = self.contract.ensure_template_preset_fields(current_fields)
+        else:
+            return collection
+
+        current_by_name = {field.get("name"): field for field in current_fields}
+        missing_fields = [
+            dict(field)
+            for field in expected_fields
+            if field["name"] not in current_by_name
+        ]
+
+        for field in missing_fields:
+            pg_type = FIELD_TYPE_TO_PG.get(field["data_type"], "TEXT")
+            nullable = "NOT NULL" if field.get("required", False) else ""
+            default_sql = ""
+            if field["name"] == "status":
+                default_sql = "DEFAULT 'uploaded'"
+            await self.session.execute(
+                text(
+                    f"ALTER TABLE {collection.table_name} "
+                    f"ADD COLUMN IF NOT EXISTS {field['name']} {pg_type} {default_sql} {nullable}".strip()
+                )
+            )
+
+        actual_nullable = await self._get_table_column_nullability(collection.table_name)
+        for field in expected_fields:
+            current = current_by_name.get(field["name"])
+            if current is None and field["name"] not in actual_nullable:
+                continue
+            current_required = bool(current.get("required", False))
+            expected_required = bool(field.get("required", False))
+            column_nullable = actual_nullable.get(field["name"])
+            db_required = None if column_nullable is None else not column_nullable
+            if current_required == expected_required and (
+                db_required is None or db_required == expected_required
+            ):
+                continue
+
+            if expected_required and db_required is not True:
+                null_count = await self._count_nulls(collection.table_name, field["name"])
+                if null_count == 0:
+                    await self.session.execute(
+                        text(
+                            f"ALTER TABLE {collection.table_name} "
+                            f"ALTER COLUMN {field['name']} SET NOT NULL"
+                        )
+                    )
+            elif not expected_required and db_required is not False:
+                await self.session.execute(
+                    text(
+                        f"ALTER TABLE {collection.table_name} "
+                        f"ALTER COLUMN {field['name']} DROP NOT NULL"
+                    )
+                )
+
+        for index_sql in self._build_indexes_sql(collection.table_name, expected_fields):
+            await self.session.execute(text(index_sql))
+
+        vector_required = self._fields_require_table_vector_search(expected_fields)
+        if ensure_vector_infra and vector_required:
+            if not collection.vector_config:
+                collection.vector_config = {
+                    "chunk_strategy": "by_paragraphs",
+                    "chunk_size": 512,
+                    "overlap": 50,
+                }
+            if not collection.qdrant_collection_name:
+                collection.qdrant_collection_name = f"coll_{collection.slug}"
+            await self._ensure_table_vector_infra(collection)
+            await self._provision_qdrant_collection(collection.tenant_id, collection.qdrant_collection_name)
+
+        if expected_fields != current_fields:
+            collection.fields = expected_fields
+            self.contract.normalize_default_sort(collection, expected_fields)
+
+        await self.sync_collection_status(collection, persist=False)
+        await self.session.flush()
+        return collection
+
+    async def _get_table_column_nullability(self, table_name: str) -> dict[str, bool]:
+        result = await self.session.execute(
+            text(
+                "SELECT column_name, is_nullable "
+                "FROM information_schema.columns "
+                "WHERE table_schema = current_schema() AND table_name = :table_name"
+            ),
+            {"table_name": table_name},
+        )
+        return {
+            str(row.column_name): str(row.is_nullable).strip().upper() == "YES"
+            for row in result
+        }
+
     async def list_collections(
         self,
         tenant_id: uuid.UUID,
@@ -592,9 +702,19 @@ class CollectionService:
         return await self.rows.get_row_by_id(collection, row_id)
 
     async def update_row(
-        self, collection: Collection, row_id: uuid.UUID, payload: dict
+        self,
+        collection: Collection,
+        row_id: uuid.UUID,
+        payload: dict,
+        *,
+        skip_vectorization: bool = False,
     ) -> Optional[dict]:
-        row = await self.rows.update_row(collection, row_id, payload)
+        row = await self.rows.update_row(
+            collection,
+            row_id,
+            payload,
+            skip_vectorization=skip_vectorization,
+        )
         if row is not None:
             await self.sync_collection_status(collection, persist=False)
         return row
@@ -619,5 +739,11 @@ class CollectionService:
 
     async def delete_rows(self, collection: Collection, ids: List[uuid.UUID]) -> int:
         count = await self.rows.delete_rows(collection, ids)
+        if count and collection.collection_type == CollectionType.TEMPLATE.value:
+            from app.repositories.template_analysis_status_repo import AsyncTemplateAnalysisStatusRepository
+
+            status_repo = AsyncTemplateAnalysisStatusRepository(self.session)
+            for row_id in ids:
+                await status_repo.delete_nodes_by_row_id(collection.id, row_id)
         await self.sync_collection_status(collection, persist=False)
         return count

@@ -1,7 +1,7 @@
 import { Badge, Button, Checkbox, Input, Select } from '@/shared/ui';
 import { ADMIN_ACTION_LABELS, ADMIN_ENTITY_LABELS } from '@/shared/constants/adminLabels';
 import type { CollectionField, CollectionType, SearchMode } from '@/shared/api';
-import { DOCUMENT_FULLY_LOCKED_FIELD_NAMES, SQL_SPECIFIC_FIELD_NAMES } from './collectionFieldPresets';
+import { DOCUMENT_FULLY_LOCKED_FIELD_NAMES, SQL_SPECIFIC_FIELD_NAMES, TEMPLATE_FULLY_LOCKED_FIELD_NAMES } from './collectionFieldPresets';
 
 const FIELD_TYPES = ['text', 'integer', 'float', 'boolean', 'datetime', 'date', 'file'] as const;
 const SEARCH_MODES: SearchMode[] = ['exact', 'like', 'range', 'vector'];
@@ -23,7 +23,8 @@ interface FieldsEditorProps {
 export function FieldsEditor({ fields, onChange, collectionType }: FieldsEditorProps) {
   const isLocked = (field: CollectionField) =>
     (collectionType === 'sql' && SQL_SPECIFIC_FIELD_NAMES.has(field.name))
-    || (collectionType === 'document' && DOCUMENT_FULLY_LOCKED_FIELD_NAMES.has(field.name));
+    || (collectionType === 'document' && DOCUMENT_FULLY_LOCKED_FIELD_NAMES.has(field.name))
+    || (collectionType === 'template' && TEMPLATE_FULLY_LOCKED_FIELD_NAMES.has(field.name));
 
   const add = () => onChange([...fields, emptyField()]);
 

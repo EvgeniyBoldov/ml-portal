@@ -7,6 +7,7 @@ from .chat import Chats, ChatMessages
 from .chat_attachment import ChatAttachment
 from .rag import RAGDocument, RAGChunk
 from .rag_ingest import Source, Chunk, EmbStatus, RAGStatus, DocumentCollectionMembership
+from .template_analysis_status import TemplateAnalysisStatus
 from .model_registry import ModelRegistry
 from .events import EventOutbox
 from .prompt import Prompt, PromptVersion, PromptStatus
@@ -62,6 +63,7 @@ __all__ = [
     "EmbStatus",
     "RAGStatus",
     "DocumentCollectionMembership",
+    "TemplateAnalysisStatus",
     "ModelRegistry",
     "EventOutbox",
     "Prompt",

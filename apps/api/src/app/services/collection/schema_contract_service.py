@@ -128,6 +128,17 @@ TEMPLATE_SPECIFIC_FIELD_DEFS = (
         "data_type": FieldType.TEXT.value,
         "required": False,
         "description": "Template title extracted from headers",
+        "filterable": True,
+        "sortable": False,
+        "used_in_retrieval": False,
+        "used_in_prompt_context": True,
+    },
+    {
+        "name": "source",
+        "category": FieldCategory.SPECIFIC.value,
+        "data_type": FieldType.STRING.value,
+        "required": True,
+        "description": "Template source reference",
         "filterable": False,
         "sortable": False,
         "used_in_retrieval": False,
@@ -145,17 +156,6 @@ TEMPLATE_SPECIFIC_FIELD_DEFS = (
         "used_in_prompt_context": False,
     },
     {
-        "name": "template_kind",
-        "category": FieldCategory.SPECIFIC.value,
-        "data_type": FieldType.STRING.value,
-        "required": False,
-        "description": "Template kind (e.g., request, plan, config)",
-        "filterable": False,
-        "sortable": False,
-        "used_in_retrieval": False,
-        "used_in_prompt_context": False,
-    },
-    {
         "name": "template_schema",
         "category": FieldCategory.SPECIFIC.value,
         "data_type": FieldType.JSON.value,
@@ -167,12 +167,23 @@ TEMPLATE_SPECIFIC_FIELD_DEFS = (
         "used_in_prompt_context": False,
     },
     {
-        "name": "semantic_description",
+        "name": "description",
         "category": FieldCategory.SPECIFIC.value,
         "data_type": FieldType.TEXT.value,
         "required": False,
-        "description": "Semantic description for template discovery",
-        "filterable": False,
+        "description": "Template description for semantic discovery",
+        "filterable": True,
+        "sortable": False,
+        "used_in_retrieval": True,
+        "used_in_prompt_context": True,
+    },
+    {
+        "name": "status",
+        "category": FieldCategory.SPECIFIC.value,
+        "data_type": FieldType.STRING.value,
+        "required": True,
+        "description": "Template lifecycle status",
+        "filterable": True,
         "sortable": False,
         "used_in_retrieval": False,
         "used_in_prompt_context": False,
@@ -210,6 +221,15 @@ class CollectionSchemaContractService:
     @property
     def template_specific_field_names(self) -> set[str]:
         return TEMPLATE_SPECIFIC_FIELD_NAMES
+
+    @staticmethod
+    def get_specific_field_names(collection_type: str) -> set[str]:
+        return {
+            CollectionType.DOCUMENT.value: DOCUMENT_SPECIFIC_FIELD_NAMES,
+            CollectionType.SQL.value: SQL_SPECIFIC_FIELD_NAMES,
+            CollectionType.API.value: API_SPECIFIC_FIELD_NAMES,
+            CollectionType.TEMPLATE.value: TEMPLATE_SPECIFIC_FIELD_NAMES,
+        }.get(collection_type, set())
 
     def validate_slug(self, slug: str) -> None:
         if not slug or len(slug) > 50:
@@ -285,21 +305,10 @@ class CollectionSchemaContractService:
                 raise InvalidSchemaError(
                     f"System field '{name}' is platform-owned and must not be declared in collection schema"
                 )
-            if (
-                collection_type == CollectionType.DOCUMENT.value
-                and category == FieldCategory.USER.value
-                and name in DOCUMENT_SPECIFIC_FIELD_NAMES
-            ):
+            specific_names = self.get_specific_field_names(collection_type)
+            if category == FieldCategory.USER.value and name in specific_names:
                 raise InvalidSchemaError(
-                    f"Field name '{name}' is reserved for document-specific immutable fields"
-                )
-            if (
-                collection_type == CollectionType.TEMPLATE.value
-                and category == FieldCategory.USER.value
-                and name in TEMPLATE_SPECIFIC_FIELD_NAMES
-            ):
-                raise InvalidSchemaError(
-                    f"Field name '{name}' is reserved for template-specific immutable fields"
+                    f"Field name '{name}' is reserved for {collection_type}-specific immutable fields"
                 )
 
             field_type = field.get("data_type")
@@ -313,11 +322,6 @@ class CollectionSchemaContractService:
             used_in_retrieval = bool(field.get("used_in_retrieval", False))
             used_in_prompt_context = bool(field.get("used_in_prompt_context", False))
 
-            if field_type == FieldType.FILE.value and (filterable or sortable or used_in_prompt_context):
-                raise InvalidSchemaError(
-                    f"Field '{name}': file fields cannot be filterable, sortable, or prompt-visible"
-                )
-
             if used_in_retrieval and field_type != FieldType.TEXT.value:
                 raise InvalidSchemaError(
                     f"Field '{name}': used_in_retrieval is only available for text fields"
@@ -328,66 +332,54 @@ class CollectionSchemaContractService:
                     f"Field '{name}': sortable is not valid for data_type '{field_type}'"
                 )
 
-            if category == FieldCategory.SPECIFIC.value and (
-                filterable or sortable or used_in_prompt_context or used_in_retrieval
-            ):
-                raise InvalidSchemaError(
-                    f"Field '{name}': specific fields cannot be filterable, sortable, retrieval-enabled, or prompt-visible"
-                )
-
     def validate_admin_defined_fields(self, fields: List[dict], collection_type: str) -> None:
+        specific_names = self.get_specific_field_names(collection_type)
         for field in fields:
             category = field.get("category", FieldCategory.USER.value)
             if category not in {FieldCategory.USER.value, FieldCategory.SPECIFIC.value}:
                 raise InvalidSchemaError(
                     f"Field '{field.get('name', '<unknown>')}' must use category 'user' or 'specific'"
                 )
-            if collection_type == CollectionType.DOCUMENT.value and field.get("name") in DOCUMENT_SPECIFIC_FIELD_NAMES:
+            if field.get("name") in specific_names:
                 raise InvalidSchemaError(
-                    f"Field name '{field['name']}' is reserved for document-specific immutable fields"
-                )
-            if collection_type == CollectionType.SQL.value and field.get("name") in SQL_SPECIFIC_FIELD_NAMES:
-                raise InvalidSchemaError(
-                    f"Field name '{field['name']}' is reserved for sql-specific immutable fields"
-                )
-            if collection_type == CollectionType.API.value and field.get("name") in API_SPECIFIC_FIELD_NAMES:
-                raise InvalidSchemaError(
-                    f"Field name '{field['name']}' is reserved for api-specific immutable fields"
-                )
-            if collection_type == CollectionType.TEMPLATE.value and field.get("name") in TEMPLATE_SPECIFIC_FIELD_NAMES:
-                raise InvalidSchemaError(
-                    f"Field name '{field['name']}' is reserved for template-specific immutable fields"
+                    f"Field name '{field['name']}' is reserved for {collection_type}-specific immutable fields"
                 )
 
     def ensure_document_preset_fields(self, fields: List[dict]) -> List[dict]:
-        field_names = {f.get("name") for f in fields}
-        result = list(fields)
-        for preset_field in reversed(DOCUMENT_SPECIFIC_FIELD_DEFS):
-            if preset_field["name"] not in field_names:
-                result.insert(0, dict(preset_field))
-                field_names.add(preset_field["name"])
-        return result
+        return self._merge_preset_fields(fields, DOCUMENT_SPECIFIC_FIELD_DEFS)
 
     def ensure_sql_preset_fields(self, fields: List[dict]) -> List[dict]:
-        field_names = {f.get("name") for f in fields}
-        result = list(fields)
-        for preset_field in reversed(SQL_SPECIFIC_FIELD_DEFS):
-            if preset_field["name"] not in field_names:
-                result.insert(0, dict(preset_field))
-                field_names.add(preset_field["name"])
-        return result
+        return self._merge_preset_fields(fields, SQL_SPECIFIC_FIELD_DEFS)
 
     def ensure_api_preset_fields(self, fields: List[dict]) -> List[dict]:
         # API collections no longer auto-inject specific fields.
         return list(fields)
 
     def ensure_template_preset_fields(self, fields: List[dict]) -> List[dict]:
-        field_names = {f.get("name") for f in fields}
-        result = list(fields)
-        for preset_field in reversed(TEMPLATE_SPECIFIC_FIELD_DEFS):
-            if preset_field["name"] not in field_names:
-                result.insert(0, dict(preset_field))
-                field_names.add(preset_field["name"])
+        sanitized = [
+            dict(field)
+            for field in fields
+            if field.get("name") not in {"template_kind", "semantic_description", "description_error", "schema_error"}
+        ]
+        return self._merge_preset_fields(sanitized, TEMPLATE_SPECIFIC_FIELD_DEFS)
+
+    @staticmethod
+    def _merge_preset_fields(fields: List[dict], preset_fields: tuple[dict, ...]) -> List[dict]:
+        by_name = {field.get("name"): dict(field) for field in fields}
+        preset_names = {field["name"] for field in preset_fields}
+        result: list[dict] = []
+
+        for preset_field in preset_fields:
+            existing = by_name.pop(preset_field["name"], None)
+            if existing is None:
+                result.append(dict(preset_field))
+            else:
+                result.append({**existing, **preset_field})
+
+        for field in fields:
+            if field.get("name") not in preset_names:
+                result.append(dict(field))
+
         return result
 
     def normalize_default_sort(self, collection: Collection, fields: List[dict]) -> None:

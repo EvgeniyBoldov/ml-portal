@@ -12,8 +12,9 @@ import Input from '@shared/ui/Input';
 import Checkbox from '@shared/ui/Checkbox';
 import Badge from '@shared/ui/Badge';
 import Modal from '@shared/ui/Modal';
+import { DropdownMenu } from '@shared/ui/DropdownMenu';
 import { Skeleton } from '@shared/ui/Skeleton';
-import { Icon } from '@shared/ui/Icon';
+import { Icon, MoreVerticalIcon } from '@shared/ui/Icon';
 import { useToast } from '@shared/ui/Toast';
 import { useAppStore } from '@app/store/app.store';
 import Alert from '@shared/ui/Alert';
@@ -22,12 +23,15 @@ import {
   type Collection,
   type CollectionDocument,
   type CollectionDocumentsResponse,
+  type CollectionTemplate,
 } from '@shared/api/collections';
 import { ApiError } from '@shared/api/errors';
 import { StatusModalNew } from '@/domains/rag/components/StatusModalNew';
 import { qk } from '@shared/api/keys';
 import { SSEClient, type SSEMessage } from '@shared/lib/sse';
 import { buildFileDownloadUrl } from '@shared/api/files';
+import { summarizeTemplateSchema } from '@shared/lib/templateSchemaSummary';
+import TemplateStatusModal from './TemplateStatusModal';
 import styles from './CollectionDataPage.module.css';
 
 const PAGE_SIZES = [25, 50, 100];
@@ -56,7 +60,9 @@ function CollectionHeader({ collection, total, right }: CollectionHeaderProps) {
           <div className={styles.subtitle}>
             <span>{collection.slug}</span>
             {collection.collection_type === 'document' ? (
-            <Badge tone="warn">Документы</Badge>
+              <Badge tone="warn">Документы</Badge>
+            ) : collection.collection_type === 'template' ? (
+              <Badge tone="success">Шаблоны</Badge>
             ) : (
               <>
                 {collection.has_vector_search && (
@@ -1237,6 +1243,615 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
   );
 }
 
+type SchemaEditorState = {
+  rowId: string;
+  title: string;
+  description: string;
+} | null;
+
+function TemplateSchemaEditorModal({
+  open,
+  title,
+  draft,
+  description,
+  error,
+  saving,
+  onDraftChange,
+  onDescriptionChange,
+  onClose,
+  onSave,
+}: {
+  open: boolean;
+  title: string;
+  draft: string;
+  description: string;
+  error: string | null;
+  saving: boolean;
+  onDraftChange: (value: string) => void;
+  onDescriptionChange: (value: string) => void;
+  onClose: () => void;
+  onSave: () => void;
+}) {
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={title}
+      size="xl"
+      className={styles.schemaEditorModal}
+      bodyClassName={styles.schemaEditorBody}
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>Отмена</Button>
+          <Button onClick={onSave} disabled={saving}>
+            {saving ? 'Сохранение...' : 'Сохранить'}
+          </Button>
+        </>
+      }
+    >
+      <div className={styles.schemaEditorLayout}>
+        <div className={styles.schemaEditorPane}>
+          <div className={styles.schemaEditorLabel}>Схема</div>
+          <textarea
+            className={styles.schemaEditorTextarea}
+            value={draft}
+            onChange={(e) => onDraftChange(e.target.value)}
+            spellCheck={false}
+          />
+        </div>
+        <div className={styles.schemaEditorPane}>
+          <div className={styles.schemaEditorLabel}>Описание</div>
+          <textarea
+            className={styles.schemaEditorDescription}
+            value={description}
+            onChange={(e) => onDescriptionChange(e.target.value)}
+            spellCheck={false}
+            placeholder="Короткое семантическое описание шаблона..."
+          />
+        </div>
+      </div>
+      {error && <div className={styles.schemaEditorError}>{error}</div>}
+    </Modal>
+  );
+}
+
+// ─── Template collection view ───────────────────────────────────
+interface TemplateViewProps {
+  collection: Collection;
+  slug: string;
+}
+
+function TemplateCollectionView({ collection, slug }: TemplateViewProps) {
+  const queryClient = useQueryClient();
+  const { showToast } = useToast();
+  const showConfirmDialog = useAppStore(state => state.showConfirmDialog);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [uploadModalOpen, setUploadModalOpen] = useState(false);
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [schemaEditor, setSchemaEditor] = useState<SchemaEditorState>(null);
+  const [schemaDraft, setSchemaDraft] = useState('');
+  const [descriptionDraft, setDescriptionDraft] = useState('');
+  const [schemaError, setSchemaError] = useState<string | null>(null);
+  const [statusModalRow, setStatusModalRow] = useState<CollectionTemplate | null>(null);
+  const [actionsMenu, setActionsMenu] = useState<{ row: CollectionTemplate; anchorEl: HTMLElement } | null>(null);
+
+  const collectionId = collection.id;
+
+  const { data: templatesData, isLoading: templatesLoading } = useQuery({
+    queryKey: ['collections', 'templates', collectionId, { page: 1, size: 500 }],
+    queryFn: () => collectionsApi.listTemplates(collectionId, { page: 1, size: 500 }),
+    enabled: !!collectionId,
+    refetchInterval: 3000,
+  });
+
+  const templates = templatesData?.items ?? [];
+  const totalTemplates = templatesData?.total ?? 0;
+
+  const filteredTemplates = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    if (!query) return templates;
+      return templates.filter((item) => {
+      const fileName = String((item.file as Record<string, unknown> | undefined)?.filename ?? '').toLowerCase();
+      return (
+        String(item.title ?? '').toLowerCase().includes(query)
+        || String(item.description ?? '').toLowerCase().includes(query)
+        || String(item.source ?? '').toLowerCase().includes(query)
+        || String(item.template_version ?? '').toLowerCase().includes(query)
+        || String(item.status ?? '').toLowerCase().includes(query)
+        || fileName.includes(query)
+      );
+    });
+  }, [searchQuery, templates]);
+
+  const invalidateTemplates = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: ['collections', 'templates', collectionId] });
+    void queryClient.invalidateQueries({ queryKey: ['collections', 'detail', slug] });
+  }, [collectionId, queryClient, slug]);
+
+  const uploadMutation = useMutation({
+    mutationFn: (file: File) => collectionsApi.uploadTemplate(collectionId, { file }),
+    onSuccess: () => {
+      showToast('Шаблон загружен, анализ запущен', 'success');
+      setUploadFile(null);
+      setUploadModalOpen(false);
+      invalidateTemplates();
+    },
+    onError: (err: Error) => {
+      showToast(err.message || 'Ошибка загрузки шаблона', 'error');
+    },
+    onSettled: () => {
+      setUploading(false);
+    },
+  });
+
+  const saveSchemaMutation = useMutation({
+    mutationFn: ({
+      rowId,
+      templateSchema,
+      description,
+    }: {
+      rowId: string;
+      templateSchema: Record<string, unknown>;
+      description: string | null;
+    }) =>
+      collectionsApi.updateTemplate(collectionId, rowId, {
+        template_schema: templateSchema,
+        description,
+      }),
+    onSuccess: () => {
+      showToast('Шаблон обновлен', 'success');
+      setSchemaEditor(null);
+      setSchemaDraft('');
+      setDescriptionDraft('');
+      setSchemaError(null);
+      invalidateTemplates();
+    },
+    onError: (err: Error) => {
+      showToast(err.message || 'Ошибка обновления схемы', 'error');
+    },
+  });
+
+  const updateStatusMutation = useMutation({
+    mutationFn: ({
+      rowId,
+      status,
+    }: {
+      rowId: string;
+      status: 'uploaded' | 'analyzed' | 'ready' | 'archived';
+    }) =>
+      collectionsApi.updateTemplate(collectionId, rowId, {
+        status,
+      }),
+    onSuccess: (_, variables) => {
+      const labelMap: Record<string, string> = {
+        uploaded: 'Загружен',
+        analyzed: 'Проанализирован',
+        ready: 'Активирован',
+        archived: 'Отправлен в архив',
+      };
+      showToast(labelMap[variables.status] || 'Статус обновлен', 'success');
+      setActionsMenu(null);
+      invalidateTemplates();
+    },
+    onError: (err: Error) => {
+      showToast(err.message || 'Ошибка изменения статуса', 'error');
+    },
+  });
+
+  const analyzeMutation = useMutation({
+    mutationFn: (rowIds: string[]) => collectionsApi.analyzeTemplates(collectionId, rowIds),
+    onSuccess: (result) => {
+      const queued = result.queued ?? 0;
+      const missing = result.missing?.length ?? 0;
+      if (queued > 0) showToast(`Анализ запущен: ${queued} шаблонов`, 'success');
+      if (missing > 0) showToast(`Не найдены: ${missing} шаблонов`, 'info');
+      setSelectedIds(new Set<string>());
+      invalidateTemplates();
+    },
+    onError: (err: Error) => {
+      showToast(err.message || 'Ошибка запуска анализа', 'error');
+    },
+  });
+
+  const handleSelectAll = useCallback(() => {
+    const visibleIds = filteredTemplates.map((item) => item.id);
+    const allSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedIds.has(id));
+    setSelectedIds(allSelected ? new Set<string>() : new Set<string>(visibleIds));
+  }, [filteredTemplates, selectedIds]);
+
+  const handleSelectRow = useCallback((id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  }, []);
+
+  const handleUpload = useCallback(() => {
+    if (!uploadFile) return;
+    setUploading(true);
+    uploadMutation.mutate(uploadFile);
+  }, [uploadFile, uploadMutation]);
+
+  const handleDeleteRows = useCallback(async (ids: string[]) => {
+    if (ids.length === 0) return;
+    await collectionsApi.deleteRows(slug, ids);
+    showToast(`Удалено: ${ids.length} шаблонов`, 'success');
+    setSelectedIds(new Set<string>());
+    invalidateTemplates();
+  }, [invalidateTemplates, showToast, slug]);
+
+  const handleDeleteSelected = useCallback(() => {
+    const ids = Array.from(selectedIds);
+    showConfirmDialog({
+      title: `Удалить ${ids.length} шаблонов?`,
+      confirmLabel: 'Удалить',
+      cancelLabel: 'Отмена',
+      variant: 'danger',
+      message: (
+        <Alert
+          variant="danger"
+          title="Действие необратимо"
+          description="Выбранные шаблоны будут удалены из коллекции."
+        />
+      ),
+      onConfirm: async () => {
+        await handleDeleteRows(ids);
+      },
+    });
+  }, [handleDeleteRows, selectedIds, showConfirmDialog]);
+
+  const handleAnalyzeSelected = useCallback(() => {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
+    analyzeMutation.mutate(ids);
+  }, [analyzeMutation, selectedIds]);
+
+  const handleAnalyzeOne = useCallback((rowId: string) => {
+    analyzeMutation.mutate([rowId]);
+  }, [analyzeMutation]);
+
+  const handleSetStatus = useCallback((rowId: string, status: 'ready' | 'archived') => {
+    updateStatusMutation.mutate({ rowId, status });
+  }, [updateStatusMutation]);
+
+  const handleDeleteOne = useCallback((rowId: string, title: string) => {
+    showConfirmDialog({
+      title: `Удалить "${title}"?`,
+      confirmLabel: 'Удалить',
+      cancelLabel: 'Отмена',
+      variant: 'danger',
+      message: (
+        <Alert
+          variant="danger"
+          title="Действие необратимо"
+          description="Шаблон будет удалён из коллекции."
+        />
+      ),
+      onConfirm: async () => {
+        await handleDeleteRows([rowId]);
+      },
+    });
+  }, [handleDeleteRows, showConfirmDialog]);
+
+  const openSchemaEditor = useCallback((row: CollectionTemplate) => {
+    setSchemaEditor({
+      rowId: row.id,
+      title: row.title || 'Редактирование шаблона',
+      description: String(row.description ?? ''),
+    });
+    setSchemaDraft(JSON.stringify(row.template_schema ?? {}, null, 2));
+    setDescriptionDraft(String(row.description ?? ''));
+    setSchemaError(null);
+  }, []);
+
+  const openStatusModal = useCallback((row: CollectionTemplate) => {
+    setStatusModalRow(row);
+  }, []);
+
+  const openActionsMenu = useCallback((row: CollectionTemplate, anchorEl: HTMLElement) => {
+    setActionsMenu({ row, anchorEl });
+  }, []);
+
+  const closeActionsMenu = useCallback(() => {
+    setActionsMenu(null);
+  }, []);
+
+  const handleDownload = useCallback((row: CollectionTemplate) => {
+    const fileMeta = row.file as Record<string, unknown> | undefined;
+    const directDownloadUrl = String(fileMeta?.download_url ?? '').trim();
+    const fileId = String(fileMeta?.file_id ?? '').trim();
+    const downloadUrl = directDownloadUrl || (fileId ? buildFileDownloadUrl(fileId) : '');
+    if (!downloadUrl) {
+      showToast('Оригинальный файл не найден', 'warning');
+      return;
+    }
+    window.open(downloadUrl, '_blank', 'noopener,noreferrer');
+  }, [showToast]);
+
+  const handleSaveSchema = useCallback(() => {
+    if (!schemaEditor?.rowId) return;
+    try {
+      const parsed = JSON.parse(schemaDraft) as Record<string, unknown>;
+      setSchemaError(null);
+      saveSchemaMutation.mutate({
+        rowId: schemaEditor.rowId,
+        templateSchema: parsed,
+        description: descriptionDraft.trim() ? descriptionDraft.trim() : null,
+      });
+    } catch {
+      setSchemaError('Некорректный JSON');
+    }
+  }, [descriptionDraft, saveSchemaMutation, schemaDraft, schemaEditor?.rowId]);
+
+  const getTemplateStatusBadge = (row: CollectionTemplate) => {
+    const status = String(row.status ?? 'uploaded').toLowerCase();
+    const map: Record<string, { tone: 'success' | 'warn' | 'neutral' | 'info'; label: string }> = {
+      uploaded: { tone: 'neutral', label: 'Загружен' },
+      analyzed: { tone: 'info', label: 'Проанализирован' },
+      ready: { tone: 'success', label: 'Готов' },
+      archived: { tone: 'neutral', label: 'Архив' },
+    };
+    const cfg = map[status] ?? { tone: 'neutral' as const, label: status || '—' };
+    return <Badge tone={cfg.tone}>{cfg.label}</Badge>;
+  };
+
+  const headerRight = (
+    <>
+      <Input
+        className={styles.search}
+        placeholder="Поиск по шаблонам..."
+        value={searchQuery}
+        onChange={(e) => setSearchQuery(e.target.value)}
+      />
+      {selectedIds.size > 0 && (
+        <Button variant="danger" onClick={handleDeleteSelected}>
+          <Icon name="trash" size={16} />
+          Удалить
+        </Button>
+      )}
+      {selectedIds.size > 0 && (
+        <Button variant="ghost" onClick={handleAnalyzeSelected} disabled={analyzeMutation.isPending}>
+          <Icon name="sparkles" size={16} />
+          {analyzeMutation.isPending ? 'Анализ...' : 'Запустить анализ'}
+        </Button>
+      )}
+      <Button variant="primary" onClick={() => setUploadModalOpen(true)}>
+        <Icon name="upload" size={16} />
+        Загрузить шаблон
+      </Button>
+    </>
+  );
+
+  const visibleIds = filteredTemplates.map((item) => item.id);
+  const allSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedIds.has(id));
+
+  return (
+    <>
+      <CollectionHeader collection={collection} total={totalTemplates} right={headerRight} />
+
+      <div className={styles.tableContainer}>
+        {templatesLoading ? (
+          <div className={styles.loading}>
+            <Skeleton width="100%" height={300} />
+          </div>
+        ) : filteredTemplates.length === 0 ? (
+          <div className={styles.emptyState}>
+            <div className={styles.emptyIcon}>
+              <Icon name="file-text" size={48} />
+            </div>
+            <div className={styles.emptyTitle}>
+              {searchQuery ? 'Ничего не найдено' : 'Нет шаблонов'}
+            </div>
+            <p className={styles.emptyText}>
+              {searchQuery ? 'Попробуйте изменить поисковый запрос' : 'Загрузите первый шаблон для начала работы'}
+            </p>
+            {!searchQuery && (
+              <Button onClick={() => setUploadModalOpen(true)}>
+                <Icon name="upload" size={16} />
+                Загрузить шаблон
+              </Button>
+            )}
+          </div>
+        ) : (
+          <table className={styles.docTable}>
+            <thead>
+              <tr>
+                <th className={styles.checkboxCell}>
+                  <input type="checkbox" checked={allSelected} onChange={handleSelectAll} />
+                </th>
+                <th>Название</th>
+                <th>Статус</th>
+                <th>Описание</th>
+                <th>Версия</th>
+                <th>Схема</th>
+                <th>Действия</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredTemplates.map((row) => {
+                return (
+                  <tr key={row.id} className={selectedIds.has(row.id) ? styles.selected : ''}>
+                    <td className={styles.checkboxCell}>
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.has(row.id)}
+                        onChange={() => handleSelectRow(row.id)}
+                      />
+                    </td>
+                    <td className={styles.nameCell}>
+                      <button
+                        type="button"
+                        className={styles.templateTitleBtn}
+                        onClick={() => openStatusModal(row)}
+                        title="Открыть статус"
+                      >
+                        {row.title || 'Без названия'}
+                      </button>
+                    </td>
+                    <td>{getTemplateStatusBadge(row)}</td>
+                    <td className={`${styles.muted} ${styles.descriptionCell}`}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        <span>{row.description || '—'}</span>
+                      </div>
+                    </td>
+                    <td className={styles.muted}>{row.template_version || '—'}</td>
+                    <td>
+                      <div className={styles.schemaCell}>
+                        <input
+                          className={styles.schemaPreviewInput}
+                          type="text"
+                          value={summarizeTemplateSchema(row.template_schema)}
+                          readOnly
+                        />
+                      </div>
+                    </td>
+                    <td>
+                      <div className={styles.actions}>
+                        <button
+                          type="button"
+                          className={styles.actionBtn}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openActionsMenu(row, e.currentTarget);
+                          }}
+                          title="Действия"
+                        >
+                          <MoreVerticalIcon size={16} />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      <Modal
+        open={uploadModalOpen}
+        onClose={() => { setUploadModalOpen(false); setUploadFile(null); }}
+        title="Загрузка шаблона"
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setUploadModalOpen(false)}>Отмена</Button>
+            <Button onClick={handleUpload} disabled={!uploadFile || uploading}>
+              {uploading ? 'Загрузка...' : 'Загрузить'}
+            </Button>
+          </>
+        }
+      >
+        <div className={styles.docUploadContent}>
+          <div
+            className={styles.dropZone}
+            onClick={(e) => { e.stopPropagation(); fileInputRef.current?.click(); }}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                fileInputRef.current?.click();
+              }
+            }}
+          >
+            <Icon name="upload" size={32} />
+            <span>Нажмите, чтобы выбрать файл шаблона</span>
+            <span className={styles.dropZoneHint}>Поддерживаются Excel, Word и текстовые шаблоны</span>
+          </div>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".xlsx,.xls,.xlsm,.docx,.doc,.txt,.md"
+            style={{ display: 'none' }}
+            onChange={(e) => {
+              const file = e.target.files?.[0] ?? null;
+              setUploadFile(file);
+              if (e.target) e.target.value = '';
+            }}
+          />
+          {uploadFile && (
+            <div className={styles.fileList}>
+              <div className={styles.fileItem}>
+                <Icon name="file-text" size={16} />
+                <span className={styles.fileName}>{uploadFile.name}</span>
+                <span className={styles.fileSize}>{(uploadFile.size / 1024 / 1024).toFixed(2)} MB</span>
+                <button className={styles.fileRemove} onClick={() => setUploadFile(null)}>
+                  <Icon name="x" size={14} />
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </Modal>
+
+      <TemplateSchemaEditorModal
+        open={Boolean(schemaEditor)}
+        title={schemaEditor?.title || 'Редактирование схемы шаблона'}
+        draft={schemaDraft}
+        description={descriptionDraft}
+        error={schemaError}
+        saving={saveSchemaMutation.isPending}
+        onDraftChange={setSchemaDraft}
+        onDescriptionChange={setDescriptionDraft}
+        onClose={() => { setSchemaEditor(null); setSchemaDraft(''); setDescriptionDraft(''); setSchemaError(null); }}
+        onSave={handleSaveSchema}
+      />
+
+      <DropdownMenu
+        isOpen={Boolean(actionsMenu?.row)}
+        onClose={closeActionsMenu}
+        anchorEl={actionsMenu?.anchorEl ?? null}
+        items={actionsMenu?.row ? [
+          {
+            label: 'Скачать',
+            onClick: () => handleDownload(actionsMenu.row),
+            disabled: !String((actionsMenu.row.file as Record<string, unknown> | undefined)?.file_id ?? '').trim(),
+          },
+          {
+            label: 'Редактировать',
+            onClick: () => openSchemaEditor(actionsMenu.row),
+          },
+          {
+            label: 'Анализ',
+            onClick: () => handleAnalyzeOne(actionsMenu.row.id),
+            disabled: analyzeMutation.isPending,
+          },
+          ...(String(actionsMenu.row.status ?? '').toLowerCase() === 'analyzed' || String(actionsMenu.row.status ?? '').toLowerCase() === 'archived'
+            ? [{
+                label: 'Активировать',
+                onClick: () => handleSetStatus(actionsMenu.row.id, 'ready'),
+              }]
+            : []),
+          ...((String(actionsMenu.row.status ?? '').toLowerCase() === 'ready')
+            ? [{
+                label: 'В архив',
+                onClick: () => handleSetStatus(actionsMenu.row.id, 'archived'),
+              }]
+            : []),
+          {
+            label: 'Удалить',
+            onClick: () => handleDeleteOne(actionsMenu.row.id, actionsMenu.row.title || 'Шаблон'),
+            variant: 'danger',
+          },
+        ] : []}
+      />
+
+      {statusModalRow && (
+        <TemplateStatusModal
+          collectionId={collectionId}
+          row={statusModalRow}
+          onClose={() => setStatusModalRow(null)}
+        />
+      )}
+    </>
+  );
+}
+
 // ─── Main page component ────────────────────────────────────────
 export default function CollectionDataPage() {
   const { slug } = useParams<{ slug: string }>();
@@ -1272,11 +1887,14 @@ export default function CollectionDataPage() {
   }
 
   const isDocument = collection.collection_type === 'document';
+  const isTemplate = collection.collection_type === 'template';
 
   return (
     <div className={styles.page}>
       {isDocument ? (
         <DocumentCollectionView key={collection.id} collection={collection} />
+      ) : isTemplate ? (
+        <TemplateCollectionView key={collection.id} collection={collection} slug={slug!} />
       ) : (
         <TableCollectionView key={collection.id} collection={collection} slug={slug!} />
       )}

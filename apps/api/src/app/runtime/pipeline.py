@@ -224,8 +224,13 @@ class RuntimePipeline:
             user_id=user_id,
             tenant_id=tenant_id,
         )
-        # Sanitize: only allow agent_slug if it's in available_agents
-        effective_agent_slug = explicit_slug if explicit_slug in available_agents else None
+        # Sanitize against planner-visible slugs, not raw dict rows.
+        available_agent_slugs = {
+            str(item.get("slug") or "").strip()
+            for item in available_agents
+            if str(item.get("slug") or "").strip()
+        }
+        effective_agent_slug = explicit_slug if explicit_slug in available_agent_slugs else None
 
         # --- Memory: read path ----------------------------------------
         attachment_ids, attachments_dropped = _extract_attachment_ids(request.messages)

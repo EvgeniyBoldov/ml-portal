@@ -100,17 +100,32 @@ export function buildToolData(events: SemanticEvent[]): ToolData {
   const success = successRaw === true;
   const resultData = success ? (resultOutputs.result ?? resultOutputs.output ?? resultOutputs.data ?? rawResult.result ?? rawResult.output ?? rawResult.data) : undefined;
   const fallbackFailure = resultOutputs.result ?? resultOutputs.output ?? resultOutputs.data ?? rawResult.result ?? rawResult.output ?? rawResult.data;
+  const envelope = (
+    (rawResult.result_envelope && typeof rawResult.result_envelope === 'object' ? rawResult.result_envelope : undefined)
+    ?? (rawResult.result && typeof rawResult.result === 'object' ? rawResult.result : undefined)
+  ) as Record<string, unknown> | undefined;
   const errorMessage = !success
     ? String(
         resultOutputs.error
+        ?? resultOutputs.safe_message
         ?? resultOutputs.message
         ?? rawResult.error
+        ?? rawResult.safe_message
         ?? rawResult.message
+        ?? (typeof envelope?.safe_message === 'string' ? envelope.safe_message : undefined)
         ?? (typeof fallbackFailure === 'string' ? fallbackFailure : undefined)
         ?? (typeof (fallbackFailure as Record<string, unknown> | undefined)?.error === 'string'
           ? (fallbackFailure as Record<string, unknown>).error
           : undefined)
         ?? 'Failed'
+      )
+    : undefined;
+  const operatorMessage = !success
+    ? (
+        typeof rawResult.error === 'string' ? rawResult.error
+        : typeof rawResult.message === 'string' ? rawResult.message
+        : typeof fallbackFailure === 'string' ? fallbackFailure
+        : undefined
       )
     : undefined;
   const errorCodeRaw = resultOutputs.error_code ?? rawResult.error_code;
@@ -127,8 +142,11 @@ export function buildToolData(events: SemanticEvent[]): ToolData {
       success,
       data: resultData,
       error: errorMessage,
+      safeMessage: errorMessage,
+      operatorMessage,
       errorCode: typeof errorCodeRaw === 'string' ? errorCodeRaw : undefined,
       retryable: typeof retryableRaw === 'boolean' ? retryableRaw : undefined,
+      envelope,
     },
     retries: retries.length > 0 ? retries.map((r, i) => ({
       attempt: i + 1,

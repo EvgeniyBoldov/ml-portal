@@ -38,10 +38,10 @@ _OUTPUT_SCHEMA_V1 = {
     "properties": {
         "row_id": {"type": "string"},
         "title": {"type": "string"},
+        "source": {"type": "string"},
         "template_version": {"type": "string"},
-        "template_kind": {"type": "string"},
         "template_schema": {"type": "object"},
-        "semantic_description": {"type": "string"},
+        "description": {"type": "string"},
     },
 }
 
@@ -113,10 +113,10 @@ class TemplateGetSchemaTool(VersionedTool):
                         data={
                             "row_id": str(row["id"]),
                             "title": row.get("title") or "",
+                            "source": row.get("source") or "",
                             "template_version": row.get("template_version") or "",
-                            "template_kind": row.get("template_kind") or "",
                             "template_schema": {},
-                            "semantic_description": row.get("semantic_description") or "",
+                            "description": row.get("description") or "",
                         },
                         message="Template row exists but has no schema defined yet. Use template.fill with placeholder values.",
                         logs=log.entries_dict(),
@@ -126,10 +126,10 @@ class TemplateGetSchemaTool(VersionedTool):
                     data={
                         "row_id": str(row["id"]),
                         "title": row.get("title") or "",
+                        "source": row.get("source") or "",
                         "template_version": row.get("template_version") or "",
-                        "template_kind": row.get("template_kind") or "",
                         "template_schema": schema,
-                        "semantic_description": row.get("semantic_description") or "",
+                        "description": row.get("description") or "",
                     },
                     message=f"Schema for '{row.get('title') or row_id}' retrieved ({len(schema.get('fields', []))} field(s)).",
                     logs=log.entries_dict(),

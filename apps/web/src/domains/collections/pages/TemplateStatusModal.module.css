@@ -1,0 +1,148 @@
+.modal {
+  max-width: 1100px;
+  width: 92vw;
+}
+
+.container {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.flow {
+  display: flex;
+  align-items: stretch;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.stageNode {
+  flex: 1 1 220px;
+  min-width: 220px;
+  width: 100%;
+  appearance: none;
+  border: 1px solid var(--border-color);
+  cursor: pointer;
+  text-align: left;
+  border-radius: 14px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  transition: transform 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.stageNode:hover {
+  transform: translateY(-1px);
+  border-color: var(--border-color-hover);
+}
+
+.selected {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.15);
+}
+
+.active {
+  border-color: var(--warning);
+}
+
+.stageIcon {
+  width: 38px;
+  height: 38px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.stageIcon[data-tone='success'] {
+  color: var(--success);
+}
+
+.stageIcon[data-tone='warn'] {
+  color: var(--warning);
+}
+
+.stageIcon[data-tone='danger'] {
+  color: var(--danger);
+}
+
+.stageIcon[data-tone='neutral'] {
+  color: var(--muted);
+}
+
+.stageLabel {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.connector {
+  flex: 0 0 28px;
+  min-width: 28px;
+  align-self: center;
+  height: 2px;
+  background: linear-gradient(90deg, var(--border-color), rgba(255, 255, 255, 0));
+}
+
+.details {
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  padding: 18px;
+  background: var(--bg-secondary);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.detailsHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.detailsTitle {
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.detailsSubtitle {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.errorBox {
+  border: 1px solid rgba(220, 38, 38, 0.35);
+  background: rgba(220, 38, 38, 0.08);
+  color: var(--danger);
+  border-radius: 12px;
+  padding: 12px 14px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.grid {
+  display: grid;
+  gap: 10px;
+}
+
+.row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 14px;
+}
+
+.row span:first-child {
+  color: var(--muted);
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+}

@@ -85,6 +85,7 @@ export default function CollectionsListPage() {
           { value: 'table', label: 'Таблица' },
           { value: 'sql', label: 'SQL' },
           { value: 'api', label: 'API' },
+          { value: 'template', label: 'Шаблоны' },
         ],
         getValue: (row) => row.collection_type,
       },
@@ -95,10 +96,12 @@ export default function CollectionsListPage() {
               ? styles['type-document']
               : row.collection_type === 'sql'
                 ? styles['type-sql']
-                : styles['type-table']
+                : row.collection_type === 'template'
+                  ? styles['type-template']
+                  : styles['type-table']
           }
         >
-          {row.collection_type === 'document' ? 'Документы' : row.collection_type === 'sql' ? 'SQL' : row.collection_type === 'api' ? 'API' : 'Таблица'}
+          {row.collection_type === 'document' ? 'Документы' : row.collection_type === 'sql' ? 'SQL' : row.collection_type === 'api' ? 'API' : row.collection_type === 'template' ? 'Шаблоны' : 'Таблица'}
         </Badge>
       ),
     },

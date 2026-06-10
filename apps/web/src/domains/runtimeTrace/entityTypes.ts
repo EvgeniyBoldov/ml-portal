@@ -117,8 +117,11 @@ export interface ToolData {
     success: boolean;
     data?: unknown;
     error?: string;
+    safeMessage?: string;
+    operatorMessage?: string;
     errorCode?: string;
     retryable?: boolean;
+    envelope?: Record<string, unknown>;
   };
   retries?: Array<{
     attempt: number;

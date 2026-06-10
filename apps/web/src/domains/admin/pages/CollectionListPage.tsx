@@ -81,8 +81,8 @@ export function CollectionListPage() {
       label: 'ТИП',
       width: 120,
       render: (row) => (
-        <Badge tone={row.collection_type === 'document' ? 'warn' : row.collection_type === 'table' ? 'info' : 'neutral'}>
-          {row.collection_type === 'document' ? 'Документы' : row.collection_type === 'sql' ? 'SQL' : row.collection_type === 'api' ? 'API' : 'Таблица'}
+        <Badge tone={row.collection_type === 'document' ? 'warn' : row.collection_type === 'table' ? 'info' : row.collection_type === 'template' ? 'success' : 'neutral'}>
+          {row.collection_type === 'document' ? 'Документы' : row.collection_type === 'sql' ? 'SQL' : row.collection_type === 'api' ? 'API' : row.collection_type === 'template' ? 'Шаблоны' : 'Таблица'}
         </Badge>
       ),
     },

@@ -15,6 +15,7 @@ import {
   type CollectionField,
   type ToolInstanceDetail,
   type CollectionType,
+  type UpdateCollectionRequest,
 } from '@/shared/api';
 import { lifecycleApi } from '@/shared/api/lifecycle';
 import { qk } from '@/shared/api/keys';
@@ -47,6 +48,105 @@ import { collectionFieldColumns } from './collection/fields/fieldColumns';
 /* ─── Page-specific columns ─── */
 
 type RuntimeOperationRow = NonNullable<ToolInstanceDetail['runtime_operations']>[number];
+
+type CollectionEditorForm = {
+  slug: string;
+  name: string;
+  description: string;
+  collection_type: CollectionType;
+  tenant_id: string;
+  table_name: string;
+  data_instance_id: string;
+  is_active: boolean;
+  has_vector_search: boolean;
+  chunk_strategy: string;
+  chunk_size: number;
+  overlap: number;
+  fields: CollectionField[];
+};
+
+function normalizeEditableFields(fields: CollectionField[]): CollectionField[] {
+  return fields
+    .filter((field) => field.category !== 'specific')
+    .map((field) => ({
+      name: field.name,
+      category: field.category ?? 'user',
+      data_type: field.data_type ?? field.type ?? 'text',
+      required: field.required,
+      description: field.description ?? '',
+      filterable: field.filterable ?? (field.search_modes.includes('exact') || field.search_modes.includes('like')),
+      sortable: field.sortable ?? field.search_modes.includes('range'),
+      used_in_retrieval: field.used_in_retrieval ?? field.search_modes.includes('vector'),
+      used_in_prompt_context: field.used_in_prompt_context ?? false,
+      search_modes: [...field.search_modes],
+      type: field.type ?? 'text',
+    }));
+}
+
+function sameFieldShape(a: CollectionField, b: CollectionField): boolean {
+  return (
+    a.name === b.name
+    && (a.category ?? 'user') === (b.category ?? 'user')
+    && (a.data_type ?? a.type ?? 'text') === (b.data_type ?? b.type ?? 'text')
+    && Boolean(a.required) === Boolean(b.required)
+    && String(a.description ?? '') === String(b.description ?? '')
+    && Boolean(a.filterable ?? (a.search_modes.includes('exact') || a.search_modes.includes('like')))
+      === Boolean(b.filterable ?? (b.search_modes.includes('exact') || b.search_modes.includes('like')))
+    && Boolean(a.sortable ?? a.search_modes.includes('range'))
+      === Boolean(b.sortable ?? b.search_modes.includes('range'))
+    && Boolean(a.used_in_retrieval ?? a.search_modes.includes('vector'))
+      === Boolean(b.used_in_retrieval ?? b.search_modes.includes('vector'))
+    && Boolean(a.used_in_prompt_context)
+      === Boolean(b.used_in_prompt_context)
+  );
+}
+
+function buildSchemaOps(
+  originalFields: CollectionField[],
+  currentFields: CollectionField[],
+): NonNullable<UpdateCollectionRequest['schema_ops']> {
+  const original = normalizeEditableFields(originalFields);
+  const current = normalizeEditableFields(currentFields);
+  const originalByName = new Map(original.map((field) => [field.name, field]));
+  const currentByName = new Map(current.map((field) => [field.name, field]));
+  const removed = original.filter((field) => !currentByName.has(field.name));
+  const added = current.filter((field) => !originalByName.has(field.name));
+  const ops: NonNullable<UpdateCollectionRequest['schema_ops']> = [];
+  const consumedAdded = new Set<string>();
+  const consumedRemoved = new Set<string>();
+
+  for (let index = 0; index < Math.min(removed.length, added.length); index += 1) {
+    const oldField = removed[index];
+    const newField = added[index];
+    if (sameFieldShape({ ...oldField, name: newField.name }, newField)) {
+      ops.push({ op: 'rename', name: oldField.name, new_name: newField.name });
+      consumedRemoved.add(oldField.name);
+      consumedAdded.add(newField.name);
+    }
+  }
+
+  for (const field of removed) {
+    if (!consumedRemoved.has(field.name)) {
+      ops.push({ op: 'remove', name: field.name });
+    }
+  }
+
+  for (const field of added) {
+    if (!consumedAdded.has(field.name)) {
+      ops.push({ op: 'add', field });
+    }
+  }
+
+  for (const field of current) {
+    const previous = originalByName.get(field.name);
+    if (!previous) continue;
+    if (!sameFieldShape(previous, field)) {
+      ops.push({ op: 'alter', name: field.name, field });
+    }
+  }
+
+  return ops;
+}
 
 function fallbackOperationsByCollectionType(collectionType: CollectionType): RuntimeOperationRow[] {
   const base = (operation_slug: string, operation: string, source = 'local'): RuntimeOperationRow => ({
@@ -85,6 +185,14 @@ function fallbackOperationsByCollectionType(collectionType: CollectionType): Run
   if (collectionType === 'api') {
     return [
       base('collection.api.catalog_inspect', 'collection.catalog'),
+    ];
+  }
+  if (collectionType === 'template') {
+    return [
+      base('template.list', 'template.list'),
+      base('collection.text_search', 'collection.text_search'),
+      base('template.get_schema', 'template.get_schema'),
+      base('template.fill', 'template.fill'),
     ];
   }
   return [];
@@ -210,10 +318,14 @@ export function CollectionPage() {
       if (isRemoteType && !data.data_instance_id) {
         return 'Нужно выбрать коннектор данных';
       }
+      if (createType === 'template' && (!data.fields || data.fields.length === 0)) {
+        return 'Добавьте хотя бы одно поле в коллекцию шаблонов';
+      }
       return null;
     },
     transformCreate: (data) => {
       const isDocument = data.collection_type === 'document';
+      const isTemplate = data.collection_type === 'template';
       const isApi = data.collection_type === 'api';
       const isSql = data.collection_type === 'sql';
       const fields = (
@@ -221,7 +333,7 @@ export function CollectionPage() {
           ? []
           : isSql
             ? ensureSqlPresetFields((data.fields ?? []) as CollectionField[])
-            : isDocument
+            : isDocument || isTemplate
               ? (data.fields ?? []).filter((f: CollectionField) => f.category !== 'specific')
               : (data.fields ?? [])
       ) as CollectionField[];
@@ -241,6 +353,17 @@ export function CollectionPage() {
           chunk_size: data.chunk_size ?? 512,
           overlap: data.overlap ?? 50,
         } : undefined,
+      };
+    },
+    transformUpdate: (data: CollectionEditorForm) => {
+      const schemaOps = buildSchemaOps(collection?.fields ?? [], (data.fields ?? []) as CollectionField[]);
+      return {
+        tenant_id: data.tenant_id || undefined,
+        name: data.name,
+        description: data.description,
+        is_active: data.is_active,
+        table_name: data.table_name || undefined,
+        schema_ops: schemaOps,
       };
     },
     messages: {
@@ -296,6 +419,7 @@ export function CollectionPage() {
   const activeCollectionType = (String(blockData.collection_type || 'table') as CollectionType);
   const isApiType = activeCollectionType === 'api';
   const isDocumentType = activeCollectionType === 'document';
+  const isTemplateType = activeCollectionType === 'template';
 
   const connectorSubtypeFilter = activeCollectionType === 'sql'
     ? 'sql'
@@ -355,7 +479,7 @@ export function CollectionPage() {
   );
   const configFieldsViewEdit = buildConfigFieldsByType(
     activeCollectionType,
-    { editableCollectionType: false, editableDataInstance: true, connectorOptions },
+    { editableCollectionType: false, editableDataInstance: false, connectorOptions },
   ).map((field) => {
     if (field.key !== 'data_instance_id') return field;
     return {
@@ -445,6 +569,9 @@ export function CollectionPage() {
       } else if (nextType === 'sql') {
         handleFieldChange('fields', applyCollectionTypeFieldPreset(nextType, (formData.fields ?? []) as CollectionField[]));
         handleFieldChange('has_vector_search', false);
+      } else if (nextType === 'template') {
+        handleFieldChange('fields', applyCollectionTypeFieldPreset(nextType, (formData.fields ?? []) as CollectionField[]));
+        handleFieldChange('has_vector_search', false);
       }
     }
   };
@@ -482,6 +609,7 @@ export function CollectionPage() {
   });
 
   const isDocumentCollection = collection?.collection_type === 'document';
+  const isTemplateCollection = collection?.collection_type === 'template';
 
   const uploadMutation = useMutation({
     mutationFn: (file: File) =>
@@ -490,6 +618,18 @@ export function CollectionPage() {
         title: file.name,
         auto_ingest: true,
       }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: qk.collections.detail(collection!.id) });
+      setUploading(false);
+    },
+    onError: () => {
+      setUploading(false);
+    },
+  });
+
+  const uploadTemplateMutation = useMutation({
+    mutationFn: (file: File) =>
+      collectionsApi.uploadTemplate(collection!.id, { file }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: qk.collections.detail(collection!.id) });
       setUploading(false);
@@ -516,7 +656,11 @@ export function CollectionPage() {
     const file = e.target.files?.[0];
     if (!file) return;
     setUploading(true);
-    uploadMutation.mutate(file);
+    if (isTemplateCollection) {
+      uploadTemplateMutation.mutate(file);
+    } else {
+      uploadMutation.mutate(file);
+    }
     e.target.value = '';
   };
 
@@ -613,23 +757,25 @@ export function CollectionPage() {
               onRestore: () => restoreMutation.mutate(),
               restorePending: restoreMutation.isPending,
             }),
-            extra: mode === 'view' && isDocumentCollection
+            extra: mode === 'view' && (isDocumentCollection || isTemplateCollection)
               ? [
-                  <Button
-                    key="reindex"
-                    variant="primary"
-                    onClick={handleReindexClick}
-                    disabled={reindexMutation.isPending}
-                  >
-                    {reindexMutation.isPending ? 'Запуск...' : 'Переиндексировать'}
-                  </Button>,
+                  ...(isDocumentCollection ? [
+                    <Button
+                      key="reindex"
+                      variant="primary"
+                      onClick={handleReindexClick}
+                      disabled={reindexMutation.isPending}
+                    >
+                      {reindexMutation.isPending ? 'Запуск...' : 'Переиндексировать'}
+                    </Button>,
+                  ] : []),
                   <Button
                     key="upload"
                     variant="success"
                     onClick={handleUploadClick}
                     disabled={uploading}
                   >
-                    {uploading ? 'Загрузка...' : 'Загрузить файл'}
+                    {uploading ? 'Загрузка...' : (isTemplateCollection ? 'Загрузить шаблон' : 'Загрузить файл')}
                   </Button>,
                 ]
               : [],

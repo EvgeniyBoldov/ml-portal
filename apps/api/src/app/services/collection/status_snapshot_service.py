@@ -129,13 +129,65 @@ class CollectionStatusSnapshotService:
 
     async def get_template_status_snapshot(self, collection: Collection) -> dict[str, Any]:
         total_rows = int(collection.total_rows or 0)
-
         if total_rows == 0:
             status = CollectionStatus.CREATED.value
             reason = "no_templates_uploaded"
+            counts = {
+                "uploaded": 0,
+                "analyzed": 0,
+                "ready": 0,
+                "archived": 0,
+                "error_rows": 0,
+            }
         else:
-            status = CollectionStatus.READY.value
-            reason = "templates_available"
+            result = await self.session.execute(
+                text(
+                    f"SELECT status "
+                    f"FROM {collection.table_name}"
+                )
+            )
+            counts = {
+                "uploaded": 0,
+                "analyzed": 0,
+                "ready": 0,
+                "archived": 0,
+                "error_rows": 0,
+            }
+            for row in result.mappings().all():
+                row_status = str(row.get("status") or "uploaded").strip().lower()
+                if row_status in counts:
+                    counts[row_status] += 1
+                else:
+                    counts["uploaded"] += 1
+            from app.repositories.template_analysis_status_repo import AsyncTemplateAnalysisStatusRepository
+
+            status_repo = AsyncTemplateAnalysisStatusRepository(self.session)
+            failed_row_ids = await status_repo.get_failed_row_ids(collection.id)
+            counts["error_rows"] = len(failed_row_ids)
+
+            active_rows = total_rows - counts["archived"]
+            pending_rows = counts["uploaded"]
+            analyzed_rows = counts["analyzed"]
+            ready_rows = counts["ready"]
+
+            if counts["error_rows"] and ready_rows == 0 and analyzed_rows == 0 and pending_rows == active_rows:
+                status = CollectionStatus.ERROR.value
+                reason = "all_templates_analysis_failed"
+            elif counts["error_rows"] > 0:
+                status = CollectionStatus.DEGRADED.value
+                reason = "partial_template_analysis_failures"
+            elif active_rows == 0:
+                status = CollectionStatus.READY.value
+                reason = "all_templates_archived"
+            elif pending_rows > 0 or analyzed_rows > 0:
+                status = CollectionStatus.DISCOVERED.value
+                reason = "template_analysis_in_progress"
+            elif ready_rows == active_rows:
+                status = CollectionStatus.READY.value
+                reason = "all_templates_ready"
+            else:
+                status = CollectionStatus.READY.value
+                reason = "templates_available"
 
         return {
             "status": status,
@@ -144,6 +196,8 @@ class CollectionStatusSnapshotService:
                 "lifecycle_stages": list(self._TEMPLATE_LIFECYCLE_STAGES),
                 "status_reason": reason,
                 "total_rows": total_rows,
+                "template_statuses": ["uploaded", "analyzed", "ready", "archived"],
+                **counts,
             },
         }
 

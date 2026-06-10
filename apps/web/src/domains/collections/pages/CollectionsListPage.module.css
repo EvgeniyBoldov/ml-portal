@@ -13,6 +13,11 @@
   color: var(--text-on-primary, #ffffff) !important;
 }
 
+.type-template {
+  background: var(--status-success, #22c55e) !important;
+  color: var(--text-on-primary, #ffffff) !important;
+}
+
 .status-active {
   background: var(--status-success, #22c55e) !important;
   color: var(--text-on-primary, #ffffff) !important;
