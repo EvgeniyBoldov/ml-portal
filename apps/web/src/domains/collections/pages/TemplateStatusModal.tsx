@@ -117,7 +117,10 @@ export function TemplateStatusModal({ collectionId, row, onClose }: TemplateStat
 
   const { data: statusGraph } = useQuery<TemplateStatusGraph>({
     queryKey: statusQueryKey,
-    queryFn: async () => collectionsApi.getTemplateStatusGraph(collectionId, row.id) as TemplateStatusGraph,
+    queryFn: async () => {
+      const data = await collectionsApi.getTemplateStatusGraph(collectionId, row.id);
+      return data as unknown as TemplateStatusGraph;
+    },
     initialData: buildFallbackGraph(row),
     staleTime: Infinity,
   });
