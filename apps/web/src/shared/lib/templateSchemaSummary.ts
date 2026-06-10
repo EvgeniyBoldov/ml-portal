@@ -2,15 +2,13 @@ export function summarizeTemplateSchema(templateSchema: Record<string, unknown> 
   if (!templateSchema || typeof templateSchema !== 'object') return '—';
 
   const format = String((templateSchema as { format?: unknown }).format || '').trim().toLowerCase();
-  const sheets = Array.isArray((templateSchema as { sheets?: unknown[] }).sheets)
-    ? (templateSchema as { sheets?: unknown[] }).sheets
-    : [];
-  const placeholders = Array.isArray((templateSchema as { placeholders?: unknown[] }).placeholders)
-    ? (templateSchema as { placeholders?: unknown[] }).placeholders
-    : [];
+  const rawSheets = (templateSchema as { sheets?: unknown }).sheets;
+  const rawPlaceholders = (templateSchema as { placeholders?: unknown }).placeholders;
+  const sheets: unknown[] = Array.isArray(rawSheets) ? rawSheets : [];
+  const placeholders: unknown[] = Array.isArray(rawPlaceholders) ? rawPlaceholders : [];
 
   const sheetCount = sheets.length;
-  const totalCells = sheets.reduce((sum, sheet) => {
+  const totalCells = sheets.reduce<number>((sum, sheet) => {
     if (!sheet || typeof sheet !== 'object') return sum;
     const cellCount = Number((sheet as { cell_count?: unknown }).cell_count ?? 0);
     return sum + (Number.isFinite(cellCount) ? cellCount : 0);

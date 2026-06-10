@@ -11,6 +11,7 @@ import {
   adminApi,
   toolInstancesApi,
   type Collection,
+  type BackendCollectionField,
   type CreateCollectionRequest,
   type CollectionField,
   type ToolInstanceDetail,
@@ -65,7 +66,12 @@ type CollectionEditorForm = {
   fields: CollectionField[];
 };
 
-function normalizeEditableFields(fields: CollectionField[]): CollectionField[] {
+type EditableBackendField = BackendCollectionField & {
+  search_modes: CollectionField['search_modes'];
+  type: NonNullable<CollectionField['type']>;
+};
+
+function normalizeEditableFields(fields: CollectionField[]): EditableBackendField[] {
   return fields
     .filter((field) => field.category !== 'specific')
     .map((field) => ({
@@ -83,7 +89,7 @@ function normalizeEditableFields(fields: CollectionField[]): CollectionField[] {
     }));
 }
 
-function sameFieldShape(a: CollectionField, b: CollectionField): boolean {
+function sameFieldShape(a: EditableBackendField, b: EditableBackendField): boolean {
   return (
     a.name === b.name
     && (a.category ?? 'user') === (b.category ?? 'user')

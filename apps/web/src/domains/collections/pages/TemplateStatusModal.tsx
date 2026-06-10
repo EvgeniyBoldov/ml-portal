@@ -67,12 +67,10 @@ function stateIcon(state: StageState): string {
 
 function formatSchemaSummary(templateSchema: Record<string, unknown> | null | undefined): string {
   if (!templateSchema || typeof templateSchema !== 'object') return '—';
-  const fields = Array.isArray((templateSchema as { fields?: unknown[] }).fields)
-    ? (templateSchema as { fields?: unknown[] }).fields
-    : [];
-  const placeholders = Array.isArray((templateSchema as { placeholders?: unknown[] }).placeholders)
-    ? (templateSchema as { placeholders?: unknown[] }).placeholders
-    : [];
+  const rawFields = (templateSchema as { fields?: unknown }).fields;
+  const rawPlaceholders = (templateSchema as { placeholders?: unknown }).placeholders;
+  const fields: unknown[] = Array.isArray(rawFields) ? rawFields : [];
+  const placeholders: unknown[] = Array.isArray(rawPlaceholders) ? rawPlaceholders : [];
   if (fields.length > 0) return `${fields.length} fields`;
   if (placeholders.length > 0) return `${placeholders.length} placeholders`;
   return 'JSON';
@@ -117,9 +115,9 @@ export function TemplateStatusModal({ collectionId, row, onClose }: TemplateStat
   const [graph, setGraph] = useState<TemplateStatusGraph>(() => buildFallbackGraph(row));
   const [selectedStage, setSelectedStage] = useState<string>('analysis');
 
-  const { data: statusGraph } = useQuery({
+  const { data: statusGraph } = useQuery<TemplateStatusGraph>({
     queryKey: statusQueryKey,
-    queryFn: () => collectionsApi.getTemplateStatusGraph(collectionId, row.id),
+    queryFn: async () => collectionsApi.getTemplateStatusGraph(collectionId, row.id) as TemplateStatusGraph,
     initialData: buildFallbackGraph(row),
     staleTime: Infinity,
   });
