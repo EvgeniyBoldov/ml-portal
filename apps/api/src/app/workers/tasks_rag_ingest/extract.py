@@ -119,18 +119,43 @@ def extract_document(self: Task, source_id: str, tenant_id: str) -> Dict[str, An
             or origin_key.split("/")[-1]
         )
         ext = _detect_ext(filename)
+        logger.info(
+            "Starting extract stage: source_id=%s tenant_id=%s filename=%s ext=%s origin_key=%s size_bytes=%s",
+            source_id,
+            ctx.tenant_id_str,
+            filename,
+            ext,
+            origin_key,
+            len(file_content),
+        )
 
         extractor = await _resolve_extractor(ctx, ext)
         if extractor:
+            logger.info(
+                "Resolved extractor: source_id=%s filename=%s ext=%s extractor=%s",
+                source_id,
+                filename,
+                ext,
+                getattr(extractor, "kind", type(extractor).__name__),
+            )
             extract_res = extractor.extract(file_content, filename)
         else:
             # Fallback to registry (handles unknown extensions)
             extract_res = ExtractorRegistry.extract(file_content, filename)
 
         extracted_text = extract_res.text.strip()
+        if extract_res.warnings:
+            logger.warning(
+                "Extractor warnings: source_id=%s filename=%s extractor=%s warnings=%s",
+                source_id,
+                filename,
+                getattr(extractor, "kind", "registry"),
+                extract_res.warnings,
+            )
 
         if not extracted_text:
-            raise ValueError(f"Failed to extract text from {filename}")
+            warning_suffix = f" Warnings: {' | '.join(extract_res.warnings)}" if extract_res.warnings else ""
+            raise ValueError(f"Failed to extract text from {filename}.{warning_suffix}")
 
         # 5. Upload Artifact
         text_checksum = calculate_text_checksum(extracted_text)

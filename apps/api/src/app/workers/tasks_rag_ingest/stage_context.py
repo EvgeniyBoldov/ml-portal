@@ -32,6 +32,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+import traceback
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -276,18 +277,51 @@ def run_stage(
                 result = await execute_fn(ctx)
                 return result.to_dict() if hasattr(result, "to_dict") else result
             except Exception as exc:
-                logger.error(f"Error in {stage_name} for {source_id}: {exc}")
+                logger.error(
+                    "RAG ingest stage failed: stage=%s source_id=%s tenant_id=%s celery_task_id=%s error=%s",
+                    stage_name,
+                    source_id,
+                    tenant_id,
+                    celery_task_id,
+                    exc,
+                    exc_info=True,
+                )
+                stage_error = f"{type(exc).__name__}: {exc}"
                 try:
-                    if error_notify_fn:
-                        await error_notify_fn(source_id, tenant_id, stage_name, exc)
-                    else:
-                        await notify_stage_error(source_id, tenant_id, stage_name, exc)
-                except Exception:
-                    pass
+                    await ctx.set_failed(stage_error)
+                    await ctx.session.commit()
+                except Exception as status_exc:
+                    logger.error(
+                        "Failed to persist FAILED status in-stage: stage=%s source_id=%s error=%s",
+                        stage_name,
+                        source_id,
+                        status_exc,
+                        exc_info=True,
+                    )
+                    try:
+                        if error_notify_fn:
+                            await error_notify_fn(source_id, tenant_id, stage_name, exc)
+                        else:
+                            await notify_stage_error(source_id, tenant_id, stage_name, exc)
+                    except Exception as notify_exc:
+                        logger.error(
+                            "Fallback stage error notification failed: stage=%s source_id=%s error=%s",
+                            stage_name,
+                            source_id,
+                            notify_exc,
+                            exc_info=True,
+                        )
                 raise
 
     try:
         return asyncio.run(_run())
     except Exception as exc:
-        logger.error(f"Error in run_stage({stage_name}) for {source_id}: {exc}")
+        logger.error(
+            "run_stage bubbled exception: stage=%s source_id=%s tenant_id=%s error=%s\n%s",
+            stage_name,
+            source_id,
+            tenant_id,
+            exc,
+            traceback.format_exc(),
+        )
         raise

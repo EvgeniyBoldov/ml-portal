@@ -5,7 +5,10 @@ import re
 from io import BytesIO
 from typing import List, Set
 
+from app.core.logging import get_logger
 from app.services.extractors.base import BaseExtractor, ExtractResult
+
+logger = get_logger(__name__)
 
 
 class DocxExtractor(BaseExtractor):
@@ -63,6 +66,7 @@ class DocxExtractor(BaseExtractor):
             if not text:
                 warnings.append("DOCX parsed but no visible text was found.")
         except Exception as e:
+            logger.error("DOCX extraction failed for %s: %s", filename, e, exc_info=True)
             warnings.append(f"DOCX extraction failed: {e!r}")
             text = ""
 

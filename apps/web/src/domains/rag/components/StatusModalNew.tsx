@@ -27,6 +27,63 @@ interface StatusModalNewProps {
   downloadUrlPrefix?: string;
 }
 
+function pickDefaultSelection(
+  stages: PipelineStage[],
+  embeddings: EmbeddingModel[],
+  indexes: EmbeddingModel[],
+): { stage: string | null; model: string | null } {
+  const failedPipeline = stages.find((stage) => stage.status === 'failed');
+  if (failedPipeline) {
+    return { stage: failedPipeline.key, model: null };
+  }
+
+  const failedEmbedding = embeddings.find((model) => model.status === 'failed');
+  if (failedEmbedding) {
+    return { stage: 'embedding', model: failedEmbedding.model };
+  }
+
+  const failedIndex = indexes.find((model) => model.status === 'failed');
+  if (failedIndex) {
+    return { stage: 'index', model: failedIndex.model };
+  }
+
+  const activePipeline = [...stages].reverse().find((stage) => stage.status === 'processing' || stage.status === 'queued');
+  if (activePipeline) {
+    return { stage: activePipeline.key, model: null };
+  }
+
+  const activeEmbedding = embeddings.find((model) => model.status === 'processing' || model.status === 'queued');
+  if (activeEmbedding) {
+    return { stage: 'embedding', model: activeEmbedding.model };
+  }
+
+  const activeIndex = indexes.find((model) => model.status === 'processing' || model.status === 'queued');
+  if (activeIndex) {
+    return { stage: 'index', model: activeIndex.model };
+  }
+
+  const latestCompletedIndex = [...indexes].reverse().find((model) => model.status === 'completed');
+  if (latestCompletedIndex) {
+    return { stage: 'index', model: latestCompletedIndex.model };
+  }
+
+  const latestCompletedEmbedding = [...embeddings].reverse().find((model) => model.status === 'completed');
+  if (latestCompletedEmbedding) {
+    return { stage: 'embedding', model: latestCompletedEmbedding.model };
+  }
+
+  const latestCompletedPipeline = [...stages].reverse().find((stage) => stage.status === 'completed');
+  if (latestCompletedPipeline) {
+    return { stage: latestCompletedPipeline.key, model: null };
+  }
+
+  if (stages.length > 0) {
+    return { stage: stages[0].key, model: null };
+  }
+
+  return { stage: null, model: null };
+}
+
 export function StatusModalNew({ docId, docName, onClose, sseUrl, statusGraphUrl, retryUrlPrefix, stopUrlPrefix, downloadUrlPrefix }: StatusModalNewProps) {
   const queryClient = useQueryClient();
   const sseRef = useRef<ReturnType<typeof openSSE> | null>(null);
@@ -154,6 +211,21 @@ export function StatusModalNew({ docId, docName, onClose, sseUrl, statusGraphUrl
         finished_at: m.finished_at,
       }));
   }, [docStatus?.index_models]);
+
+  useEffect(() => {
+    const selectionIsValid =
+      (selectedStage != null && selectedStage !== 'embedding' && selectedStage !== 'index' && stages.some((stage) => stage.key === selectedStage)) ||
+      (selectedStage === 'embedding' && selectedModel != null && embeddings.some((model) => model.model === selectedModel)) ||
+      (selectedStage === 'index' && selectedModel != null && indexes.some((model) => model.model === selectedModel));
+
+    if (selectionIsValid) {
+      return;
+    }
+
+    const nextSelection = pickDefaultSelection(stages, embeddings, indexes);
+    setSelectedStage(nextSelection.stage);
+    setSelectedModel(nextSelection.model);
+  }, [selectedStage, selectedModel, stages, embeddings, indexes]);
 
   // Get selected stage/model data
   const selectedStageData = React.useMemo(() => {
