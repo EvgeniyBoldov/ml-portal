@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_valid
 
 from app.runtime.memory.components import MemoryBundle, MemorySection
 from app.runtime.memory.tool_ledger import ToolLedger
+from app.runtime.contracts import TaskJournalEntry, TaskJournalNeed, AgentAnswerStatus
 
 
 # Runtime limits — single source of truth (replaces divergent limits from legacy WorkingMemory)
@@ -68,6 +69,7 @@ class RuntimeTurnState(BaseModel):
     runtime_facts: List[RuntimeFact] = Field(default_factory=list)
     tool_ledger: ToolLedger = Field(default_factory=ToolLedger)
     open_questions: List[str] = Field(default_factory=list)
+    task_journal: List[TaskJournalEntry] = Field(default_factory=list)
 
     iter_count: int = 0
     used_tool_calls: int = 0
@@ -185,15 +187,19 @@ class RuntimeTurnState(BaseModel):
         return len(set(tail)) == 1
 
     def can_finalize(self) -> bool:
-        """True when no must_do phase remains unfinished."""
-        if not self.outline:
-            return True
-        for phase in self.outline.get("phases", []):
-            if not phase.get("must_do", True):
-                continue
-            if phase.get("allow_final_after"):
-                continue
-            if phase.get("phase_id") not in self.completed_phase_ids:
+        """True when no must_do phase remains unfinished AND no active tasks block finalization."""
+        # Legacy phase guard
+        if self.outline:
+            for phase in self.outline.get("phases", []):
+                if not phase.get("must_do", True):
+                    continue
+                if phase.get("allow_final_after"):
+                    continue
+                if phase.get("phase_id") not in self.completed_phase_ids:
+                    return False
+        # Task journal guard: cannot finalize while there are pending/in_progress/paused_need tasks
+        for task in self.task_journal:
+            if task.status in ("pending", "in_progress", "paused_need"):
                 return False
         return True
 
@@ -229,6 +235,44 @@ class RuntimeTurnState(BaseModel):
             data=data,
         )
 
+    def get_or_create_task(self, task_id: str, **defaults: Any) -> TaskJournalEntry:
+        for t in self.task_journal:
+            if t.task_id == task_id:
+                return t
+        entry = TaskJournalEntry(task_id=task_id, **defaults)
+        self.task_journal.append(entry)
+        return entry
+
+    def find_task_by_agent_and_phase(
+        self,
+        agent_slug: str,
+        phase_id: Optional[str] = None,
+        status: Optional[str] = None,
+    ) -> Optional[TaskJournalEntry]:
+        for t in reversed(self.task_journal):
+            if t.assigned_agent != agent_slug:
+                continue
+            if phase_id is not None and t.task_id != str(phase_id or ""):
+                continue
+            if status is not None and t.status != status:
+                continue
+            return t
+        return None
+
+    def pending_needs(self) -> List[TaskJournalNeed]:
+        result: List[TaskJournalNeed] = []
+        for t in self.task_journal:
+            for n in t.needs:
+                if n.status == "pending":
+                    result.append(n)
+        return result
+
+    def unresolved_tasks(self) -> List[TaskJournalEntry]:
+        return [t for t in self.task_journal if t.status in ("pending", "in_progress", "paused_need")]
+
+    def all_needs_resolved(self, task: TaskJournalEntry) -> bool:
+        return all(n.status == "resolved" for n in task.needs)
+
     def planner_snapshot(self, *, max_items: int = 10) -> Dict[str, Any]:
         return {
             "goal": self.goal,
@@ -239,6 +283,7 @@ class RuntimeTurnState(BaseModel):
             "iteration_results": [item.model_dump() for item in self.iteration_results[-max_items:]],
             "open_questions": list(self.open_questions[-max_items:]),
             "recent_actions": list(self.recent_action_signatures[-max_items:]),
+            "task_journal": [t.model_dump() for t in self.task_journal[-max_items:]],
             "recent_tool_calls": self.tool_ledger.compact_view(max_items=max_items),
             "answer_brief": (self.answer_brief or "")[:300],
         }
@@ -265,6 +310,7 @@ class RuntimeTurnState(BaseModel):
             "final_answer": (self.final_answer or "")[:300],
             "final_error": (self.final_error or "")[:300],
             "planner_steps": len(self.planner_steps),
+            "task_journal": len(self.task_journal),
             "agent_results": len(self.agent_results),
             "iteration_results": len(self.iteration_results),
             "runtime_facts": len(self.runtime_facts),

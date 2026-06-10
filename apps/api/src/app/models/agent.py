@@ -62,6 +62,12 @@ class Agent(Base, LifecycleMixin):
         comment="Whitelist of Collection IDs bound to this agent container. NULL = all collections allowed by RBAC."
     )
 
+    provides_keys: Mapped[Optional[List[str]]] = mapped_column(
+        ARRAY(String),
+        nullable=True,
+        comment="Machine-readable keys this agent can resolve (e.g. ['lun_uuid', 'vlan_id']). Used by planner to route agent needs. NULL = no explicit capability declaration."
+    )
+
     logging_level: Mapped[str] = mapped_column(
         String(10),
         default=LoggingLevel.BRIEF.value,
