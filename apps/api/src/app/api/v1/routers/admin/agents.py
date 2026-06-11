@@ -77,6 +77,7 @@ async def list_agents(
             current_version_id=a.current_version_id,
             logging_level=a.logging_level,
             allowed_collection_ids=a.allowed_collection_ids,
+            provides_keys=a.provides_keys,
             lifecycle_status=getattr(a, "lifecycle_status", "active"),
             versions_count=len(a.versions),
             created_at=a.created_at,
@@ -101,6 +102,7 @@ async def create_agent(
         logging_level=data.logging_level,
         model=data.model,
         allowed_collection_ids=data.allowed_collection_ids,
+        provides_keys=data.provides_keys,
     )
     await db.commit()
     return result
@@ -135,6 +137,7 @@ async def update_agent(
         requires_confirmation_for_write=data.requires_confirmation_for_write,
         risk_level=data.risk_level,
         allowed_collection_ids=data.allowed_collection_ids,
+        provides_keys=data.provides_keys,
     )
     await db.commit()
     return result

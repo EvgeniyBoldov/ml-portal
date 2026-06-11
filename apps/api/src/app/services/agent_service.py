@@ -67,6 +67,7 @@ class AgentService:
         logging_level: str = "brief",
         model: Optional[str] = None,
         allowed_collection_ids: Optional[List[UUID]] = None,
+        provides_keys: Optional[List[str]] = None,
     ) -> Agent:
         existing = await self.agent_repo.get_by_slug(slug)
         if existing:
@@ -80,6 +81,7 @@ class AgentService:
             logging_level=logging_level,
             model=model,
             allowed_collection_ids=allowed_collection_ids,
+            provides_keys=provides_keys,
         )
         agent = await self.agent_repo.create(agent)
 
@@ -162,6 +164,7 @@ class AgentService:
             "requires_confirmation_for_write": agent.requires_confirmation_for_write,
             "risk_level": agent.risk_level,
             "allowed_collection_ids": agent.allowed_collection_ids,
+            "provides_keys": agent.provides_keys,
             "created_at": agent.created_at,
             "updated_at": agent.updated_at,
             "versions": enriched_versions,
@@ -179,6 +182,7 @@ class AgentService:
         requires_confirmation_for_write: Optional[bool] = None,
         risk_level: Optional[str] = None,
         allowed_collection_ids: Optional[List[UUID]] = None,
+        provides_keys: Optional[List[str]] = None,
     ) -> Agent:
         agent = await self.get_agent(agent_id)
         update_data = {}
@@ -200,6 +204,8 @@ class AgentService:
             update_data['risk_level'] = risk_level
         if allowed_collection_ids is not None:
             update_data['allowed_collection_ids'] = allowed_collection_ids
+        if provides_keys is not None:
+            update_data['provides_keys'] = provides_keys
         if update_data:
             return await self.agent_repo.update(agent, update_data)
         return agent
@@ -424,10 +430,11 @@ class AgentService:
         result = await self.session.execute(stmt)
         return list(result.scalars().unique().all())
 
-    async def list_routable_agents_for_planner(self) -> List[Dict[str, str]]:
+    async def list_routable_agents_for_planner(self) -> List[Dict[str, Any]]:
         """
         Return planner-visible agents with concise planner summary.
         Source priority: AgentVersion.short_info -> AgentVersion.mission -> Agent.description.
+        Includes provides_keys for needs-aware routing.
         """
         stmt = (
             select(Agent, AgentVersion)
@@ -436,7 +443,7 @@ class AgentService:
         )
         result = await self.session.execute(stmt)
         rows = result.all()
-        items: List[Dict[str, str]] = []
+        items: List[Dict[str, Any]] = []
         seen: set[str] = set()
         for agent, version in rows:
             slug = str(getattr(agent, "slug", "") or "").strip()
@@ -451,6 +458,8 @@ class AgentService:
             items.append({
                 "slug": slug,
                 "description": description,
+                "tags": list(getattr(agent, "tags", None) or []),
+                "provides_keys": list(getattr(agent, "provides_keys", None) or []),
             })
         return items
 

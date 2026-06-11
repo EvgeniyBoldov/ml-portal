@@ -7,7 +7,7 @@ from uuid import uuid4
 
 from app.agents.context import ToolContext
 from app.core.db import get_session_factory
-from app.runtime.contracts import NextStep, PipelineRequest, PipelineStopReason
+from app.runtime.contracts import AgentAnswerStatus, NextStep, PipelineRequest, PipelineStopReason, TaskJournalNeed
 from app.runtime.context_snapshot import compact_snapshot, prompt_snapshot, serialize_limits
 from app.runtime.envelope import PhasedEvent
 from app.runtime.events import OrchestrationPhase, RuntimeEvent, RuntimeEventType
@@ -256,6 +256,43 @@ class PlannerCallAgentDispatcher:
             )
             return
 
+        # Update task journal
+        task_id = str(step.phase_id or f"{step.agent_slug}-{planner_iteration}")
+        status_str = str(last_agent_result.get("status") or "")
+        needs_data = list(last_agent_result.get("needs") or [])
+        completion_kind_str = str(last_agent_result.get("completion_kind") or "")
+
+        task = runtime_state.get_or_create_task(
+            task_id=task_id,
+            title=str((step.agent_input or {}).get("query") or runtime_state.goal or ""),
+            assigned_agent=step.agent_slug,
+            origin_agent=step.agent_slug,
+            iteration_started=planner_iteration,
+        )
+        task.attempts += 1
+        if task.status == "pending":
+            task.status = "in_progress"
+        if status_str == AgentAnswerStatus.NEEDS_INPUT.value:
+            task.status = "paused_need"
+            task.needs = [
+                TaskJournalNeed(
+                    ref=str(n.get("ref") or n.get("key") or ""),
+                    key=str(n.get("key") or ""),
+                    description=str(n.get("description") or ""),
+                    kind=str(n.get("kind") or "data"),
+                )
+                for n in needs_data
+            ]
+        elif outcome == "success" and not needs_data:
+            task.status = "resolved"
+            task.iteration_resolved = planner_iteration
+            task.summary = str(last_agent_result.get("summary") or "")
+        elif outcome != "success":
+            if task.attempts >= task.max_pauses:
+                task.status = "deferred"
+            else:
+                task.status = "failed"
+
         runtime_state.add_iteration_result(
             build_iteration_result(
                 state=runtime_state,
@@ -269,6 +306,9 @@ class PlannerCallAgentDispatcher:
                 sufficient_for_phase=bool(last_agent_result.get("sufficient_for_phase", False)),
                 retryable=retryable,
                 error_code=(error_code or None),
+                status=status_str,
+                needs=needs_data,
+                completion_kind=completion_kind_str,
             )
         )
         self.result = CallAgentDispatchResult(outcome="continue")

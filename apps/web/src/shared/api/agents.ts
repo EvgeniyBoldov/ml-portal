@@ -20,6 +20,7 @@ export interface Agent {
   risk_level?: string | null;
   logging_level?: string;
   allowed_collection_ids?: string[] | null;
+  provides_keys?: string[] | null;
   versions_count?: number;
   lifecycle_status?: string;
   created_at: string;
@@ -89,6 +90,7 @@ export interface AgentCreate {
   tags?: string[];
   logging_level?: string;
   allowed_collection_ids?: string[] | null;
+  provides_keys?: string[];
 }
 
 export interface AgentUpdate {
@@ -101,6 +103,7 @@ export interface AgentUpdate {
   tags?: string[];
   logging_level?: string;
   allowed_collection_ids?: string[] | null;
+  provides_keys?: string[];
 }
 
 export interface AgentVersionCreate {

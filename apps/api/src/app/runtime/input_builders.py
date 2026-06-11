@@ -33,6 +33,20 @@ class PlannerInputBuilder:
                     conversation_summary = section.items[0].text[:MAX_CONVERSATION_SUMMARY_CHARS]
                     break
 
+        # Collect pending needs for routing
+        pending_needs = state.pending_needs()
+
+        # Build task journal compact view (last 10 items)
+        task_journal_summary: List[Dict[str, Any]] = []
+        for t in state.task_journal[-10:]:
+            task_journal_summary.append({
+                "task_id": t.task_id,
+                "title": t.title,
+                "assigned_agent": t.assigned_agent,
+                "status": t.status,
+                "needs": [{"ref": n.ref, "key": n.key, "status": n.status} for n in t.needs],
+            })
+
         return {
             "goal": state.goal,
             "current_user_query": state.current_user_query,
@@ -45,6 +59,8 @@ class PlannerInputBuilder:
                         item.get("description", ""),
                         MAX_AGENT_DESCRIPTION_CHARS,
                     ),
+                    "tags": list(item.get("tags") or []),
+                    "provides_keys": list(item.get("provides_keys") or []),
                 }
                 for item in available_agents
                 if item.get("slug")
@@ -56,6 +72,11 @@ class PlannerInputBuilder:
                 if state.iteration_results
                 else None
             ),
+            "task_journal": task_journal_summary,
+            "pending_needs": [
+                {"ref": n.ref, "key": n.key, "description": n.description}
+                for n in pending_needs[-10:]
+            ],
             "policies": self._trim_text(
                 (platform_config or {}).get("policies_text") or "default",
                 MAX_POLICIES_TEXT_CHARS,
@@ -107,10 +128,22 @@ class SynthesizerInputBuilder:
                         }
                     )
 
+        # Build task journal summary for synthesizer
+        task_journal_summary = []
+        for t in state.task_journal:
+            task_journal_summary.append({
+                "task_id": t.task_id,
+                "title": t.title,
+                "assigned_agent": t.assigned_agent,
+                "status": t.status,
+                "summary": t.summary,
+            })
+
         payload: Dict[str, Any] = {
             "answer_brief": str(answer_brief or state.answer_brief or "").strip(),
             "generated_files": generated_files[-10:],
             "rag_sources": rag_sources[:20],
+            "task_journal": task_journal_summary,
             "language_hint": self._detect_language_hint(state.current_user_query or state.goal or ""),
             "style_constraints": {
                 "concise": True,

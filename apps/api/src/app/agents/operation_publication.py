@@ -126,6 +126,41 @@ _OPERATION_SPECS: Dict[str, OperationSpec] = {
         description="Search documents and return relevant document results",
         result_kind="documents",
     ),
+    "collection.document.list": OperationSpec(
+        canonical_op_slug="collection.document.list",
+        domain="collection.document",
+        title="List Documents",
+        description="List files in a document collection with metadata and file_ids",
+        result_kind="rows",
+    ),
+    "collection.document.get": OperationSpec(
+        canonical_op_slug="collection.document.get",
+        domain="collection.document",
+        title="Get Document",
+        description="Get a single document's metadata and file_id by document_id",
+        result_kind="row",
+    ),
+    "collection.template.list": OperationSpec(
+        canonical_op_slug="collection.template.list",
+        domain="collection.template",
+        title="List Templates",
+        description="List templates in a template collection with metadata",
+        result_kind="rows",
+    ),
+    "collection.template.get_schema": OperationSpec(
+        canonical_op_slug="collection.template.get_schema",
+        domain="collection.template",
+        title="Get Template Schema",
+        description="Retrieve the fillable schema for a template row",
+        result_kind="schema",
+    ),
+    "collection.template.fill": OperationSpec(
+        canonical_op_slug="collection.template.fill",
+        domain="collection.template",
+        title="Fill Template",
+        description="Fill a template with values and return a generated file",
+        result_kind="file",
+    ),
 }
 
 # Planner/LLM-facing retrieval operations.
@@ -201,6 +236,31 @@ _PUBLICATION_RULES: tuple[PublicationRule, ...] = (
         instance_domain="collection.document",
         raw_tool_slug="collection.document.search",
         canonical_op_slug="collection.document.search",
+    ),
+    PublicationRule(
+        instance_domain="collection.document",
+        raw_tool_slug="collection.list_documents",
+        canonical_op_slug="collection.document.list",
+    ),
+    PublicationRule(
+        instance_domain="collection.document",
+        raw_tool_slug="collection.get_document",
+        canonical_op_slug="collection.document.get",
+    ),
+    PublicationRule(
+        instance_domain="collection.template",
+        raw_tool_slug="template.list",
+        canonical_op_slug="collection.template.list",
+    ),
+    PublicationRule(
+        instance_domain="collection.template",
+        raw_tool_slug="template.get_schema",
+        canonical_op_slug="collection.template.get_schema",
+    ),
+    PublicationRule(
+        instance_domain="collection.template",
+        raw_tool_slug="template.fill",
+        canonical_op_slug="collection.template.fill",
     ),
     PublicationRule(
         instance_domain="collection.api",

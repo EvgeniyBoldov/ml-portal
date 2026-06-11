@@ -188,6 +188,20 @@ const INFO_FIELDS: FieldConfig[] = [
     placeholder: 'Описание агента...',
     rows: 3,
   },
+  {
+    key: 'tags',
+    type: 'tags',
+    label: 'Теги',
+    description: 'Категории для каталога и семантического роутинга',
+    placeholder: 'network, netbox, diagnostics',
+  },
+  {
+    key: 'provides_keys',
+    type: 'tags',
+    label: 'Provides Keys',
+    description: 'Machine-readable ключи для needs-роутинга (например: lun_uuid, vlan_id)',
+    placeholder: 'lun_uuid, vlan_id, ip_address',
+  },
 ];
 
 
@@ -281,6 +295,7 @@ export function AgentPage() {
     name: agent?.name || '',
     description: agent?.description || '',
     tags: agent?.tags || [],
+    provides_keys: agent?.provides_keys || [],
   };
 
   const execData = mode === 'edit' || mode === 'create' ? formData : {

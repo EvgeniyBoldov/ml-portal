@@ -16,6 +16,7 @@ Design:
 from __future__ import annotations
 
 from copy import deepcopy
+import json
 import traceback
 from typing import Any, AsyncGenerator, Dict, List, Optional
 from uuid import UUID
@@ -32,7 +33,7 @@ from app.agents.runtime.events import (
 )
 from app.core.http.clients import LLMClientProtocol
 from app.core.logging import get_logger
-from app.runtime.contracts import NextStep
+from app.runtime.contracts import AgentAnswerStatus, NeedSpec, NextStep
 from app.runtime.context_snapshot import compact_snapshot
 from app.runtime.error_surface import build_user_safe_error_message
 from app.runtime.events import RuntimeEvent, RuntimeEventType
@@ -313,13 +314,35 @@ class AgentExecutor:
         summary_preview = raw_summary.strip()[:800]
         facts = self._extract_facts(summary_preview, sub_sources)
 
-        result_summary = summary_preview or ("no_output" if success else (final_error or "failed"))
-        outcome = resolve_agent_outcome(success=success)
-        sufficient_for_phase = resolve_sufficient_for_phase(
-            success=success,
-            summary=summary_preview,
-            missing_inputs=[],
+        # Parse structured needs from agent output if present
+        needs = self._parse_needs_from_content(raw_summary)
+        missing_inputs = [n.key for n in needs]
+
+        # Determine status/completion_kind based on success and needs
+        if not success:
+            status = AgentAnswerStatus.FAILED
+            completion_kind = "error"
+        elif needs:
+            status = AgentAnswerStatus.NEEDS_INPUT
+            completion_kind = "paused_need"
+        else:
+            status = AgentAnswerStatus.COMPLETE
+            completion_kind = "answered"
+
+        # Invariant: paused_need never closes a phase — planner must route needs
+        sufficient_for_phase = (
+            False
+            if status == AgentAnswerStatus.NEEDS_INPUT
+            else resolve_sufficient_for_phase(
+                success=success,
+                summary=summary_preview,
+                missing_inputs=missing_inputs,
+            )
         )
+
+        outcome = resolve_agent_outcome(success=success)
+        result_summary = summary_preview or ("no_output" if success else (final_error or "failed"))
+
         state.add_agent_result(
             {
                 "agent_slug": agent_slug,
@@ -329,8 +352,11 @@ class AgentExecutor:
                 "iteration": state.iter_count,
                 "success": success,
                 "outcome": outcome,
+                "status": status.value,
+                "completion_kind": completion_kind,
                 "sufficient_for_phase": sufficient_for_phase,
-                "missing_inputs": [],
+                "missing_inputs": missing_inputs,
+                "needs": [n.model_dump() for n in needs],
                 "error": final_error,
                 "error_code": final_error_code,
                 "retryable": final_retryable,
@@ -485,7 +511,10 @@ class AgentExecutor:
         goal: str,
     ) -> List[Dict[str, Any]]:
         """Compose sub-agent messages: inherit conversation context; pass planner's
-        specific input as the last user turn."""
+        specific input as the last user turn.
+
+        For recall calls (dozvon) injects resolved_needs and prior_summary from
+        agent_input so the agent can continue its task with fresh data."""
         query = step.agent_input.get("query") if step.agent_input else None
         if not query:
             query = goal or (outer_messages[-1].get("content", "") if outer_messages else "")
@@ -520,7 +549,26 @@ class AgentExecutor:
         # Replace last user message with the focused query for this sub-agent step.
         if non_system and non_system[-1].get("role") == "user":
             non_system = non_system[:-1]
-        non_system.append({"role": "user", "content": str(query)})
+
+        # Build the final user message: inject recall context if present
+        parts: List[str] = []
+        if step.agent_input:
+            prior_summary = step.agent_input.get("prior_summary")
+            if prior_summary:
+                parts.append(f"[Previous work summary]\n{prior_summary}")
+            resolved_needs = step.agent_input.get("resolved_needs")
+            if isinstance(resolved_needs, list) and resolved_needs:
+                parts.append("[Resolved needs]")
+                for rn in resolved_needs:
+                    if isinstance(rn, dict):
+                        parts.append(f"- {rn.get('key')}: {rn.get('value')}")
+        if parts:
+            parts.append(f"[Task]\n{query}")
+            final_query = "\n\n".join(parts)
+        else:
+            final_query = str(query)
+
+        non_system.append({"role": "user", "content": final_query})
         return non_system
 
     @staticmethod
@@ -568,6 +616,71 @@ class AgentExecutor:
             if title:
                 facts.append(f"source: {title[:120]}")
         return facts
+
+    @staticmethod
+    def _parse_needs_from_content(raw: str) -> List[NeedSpec]:
+        """Extract structured needs from agent output.
+
+        Supports two shapes:
+        - Top-level JSON with a 'needs' array: {"status": "needs_input", "needs": [{"ref": "...", "key": "...", "description": "..."}]}
+        - Inline JSON block inside markdown code fences.
+        Returns empty list if no structured needs found.
+        """
+        text = (raw or "").strip()
+        if not text:
+            return []
+        # Try to find a JSON object containing 'needs' anywhere in the text
+        # Strategy: look for the last JSON block (agent typically puts structured
+        # output at the end) and validate it.
+        try:
+            # If the entire text is JSON
+            if text.startswith("{"):
+                parsed = json.loads(text)
+                if isinstance(parsed, dict):
+                    return AgentExecutor._extract_needs_from_dict(parsed)
+        except Exception:
+            pass
+        # Try extracting from markdown code fence
+        code_fence_match = None
+        if "```json" in text:
+            parts = text.split("```json")
+            if len(parts) > 1:
+                code_fence_match = parts[-1].split("```")[0].strip()
+        elif "```" in text:
+            parts = text.split("```")
+            if len(parts) > 1:
+                code_fence_match = parts[-1].split("```")[0].strip()
+        if code_fence_match:
+            try:
+                parsed = json.loads(code_fence_match)
+                if isinstance(parsed, dict):
+                    return AgentExecutor._extract_needs_from_dict(parsed)
+            except Exception:
+                pass
+        return []
+
+    @staticmethod
+    def _extract_needs_from_dict(parsed: Dict[str, Any]) -> List[NeedSpec]:
+        needs_data = parsed.get("needs")
+        if not isinstance(needs_data, list):
+            return []
+        result: List[NeedSpec] = []
+        for item in needs_data:
+            if not isinstance(item, dict):
+                continue
+            key = str(item.get("key") or "").strip()
+            if not key:
+                continue
+            result.append(
+                NeedSpec(
+                    ref=str(item.get("ref") or key),
+                    kind=str(item.get("kind") or "data"),
+                    key=key,
+                    description=str(item.get("description") or "").strip() or key,
+                    context=dict(item.get("context") or {}),
+                )
+            )
+        return result
 
     @staticmethod
     def _build_context_snapshot(

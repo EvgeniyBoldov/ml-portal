@@ -113,3 +113,54 @@ class PipelineStopReason(str, Enum):
     BUDGET_EXCEEDED = "budget_exceeded"
     MAX_ITERS = "max_iters"
     ABORTED = "aborted"
+
+
+# --------------------------------------------------------------------------- #
+# Agent answer contract (needs-aware)                                         #
+# --------------------------------------------------------------------------- #
+
+
+class AgentAnswerStatus(str, Enum):
+    COMPLETE = "complete"
+    NEEDS_INPUT = "needs_input"
+    FAILED = "failed"
+
+
+class NeedSpec(BaseModel):
+    """A machine-routable need declared by an agent."""
+    ref: str = Field(..., description="Local id of the need within the agent result (e.g. 'need-lun-uuid')")
+    kind: Literal["data", "artifact", "decision"] = "data"
+    key: str = Field(..., description="Machine key for planner routing (e.g. 'lun_uuid')")
+    description: str = Field(..., min_length=1, description="Human-readable: why this is needed")
+    context: Dict[str, Any] = Field(default_factory=dict, description="Additional routing context")
+    resolved_value: Optional[Any] = Field(default=None, description="Filled by planner after resolution")
+    resolved_by: Optional[str] = Field(default=None, description="Agent slug that resolved this need")
+    resolved_at_iteration: Optional[int] = Field(default=None)
+
+
+class TaskJournalNeed(BaseModel):
+    """Need as recorded in the task journal (immutable once resolved)."""
+    ref: str
+    key: str
+    description: str
+    kind: str = "data"
+    resolved_value: Optional[Any] = None
+    resolved_by: Optional[str] = None
+    resolved_at_iteration: Optional[int] = None
+    status: Literal["pending", "resolved", "deferred"] = "pending"
+
+
+class TaskJournalEntry(BaseModel):
+    """One task in the accumulating plan, tracked across iterations."""
+    task_id: str = Field(..., description="Stable id of the plan item")
+    title: str = ""
+    assigned_agent: Optional[str] = None
+    status: Literal["pending", "in_progress", "paused_need", "resolved", "deferred", "failed"] = "pending"
+    needs: List[TaskJournalNeed] = Field(default_factory=list)
+    attempts: int = 0
+    max_pauses: int = 3
+    summary: str = ""
+    origin_agent: Optional[str] = None
+    depends_on: List[str] = Field(default_factory=list)
+    iteration_started: Optional[int] = None
+    iteration_resolved: Optional[int] = None

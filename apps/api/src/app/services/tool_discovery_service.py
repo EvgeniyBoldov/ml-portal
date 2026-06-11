@@ -529,8 +529,9 @@ class ToolDiscoveryService:
     ) -> None:
         """Upsert a discovered tool row.
 
-        Uses partial unique index:
+        Handles both partial unique indexes:
         - uq_discovered_slug_provider (slug, provider_instance_id) WHERE provider_instance_id IS NOT NULL
+        - uq_discovered_local_slug_null_provider (slug) WHERE provider_instance_id IS NULL
         """
         stmt = pg_insert(DiscoveredTool).values(
             slug=slug,
@@ -545,20 +546,36 @@ class ToolDiscoveryService:
             last_seen_at=now,
             updated_at=now,
         )
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["slug", "provider_instance_id"],
-            index_where=DiscoveredTool.provider_instance_id.isnot(None),
-            set_={
-                "name": name,
-                "description": description,
-                "domains": domains,
-                "input_schema": input_schema,
-                "output_schema": output_schema,
-                "is_active": True,
-                "last_seen_at": now,
-                "updated_at": now,
-            },
-        )
+        if provider_instance_id is not None:
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["slug", "provider_instance_id"],
+                index_where=DiscoveredTool.provider_instance_id.isnot(None),
+                set_={
+                    "name": name,
+                    "description": description,
+                    "domains": domains,
+                    "input_schema": input_schema,
+                    "output_schema": output_schema,
+                    "is_active": True,
+                    "last_seen_at": now,
+                    "updated_at": now,
+                },
+            )
+        else:
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["slug"],
+                index_where=DiscoveredTool.provider_instance_id.is_(None),
+                set_={
+                    "name": name,
+                    "description": description,
+                    "domains": domains,
+                    "input_schema": input_schema,
+                    "output_schema": output_schema,
+                    "is_active": True,
+                    "last_seen_at": now,
+                    "updated_at": now,
+                },
+            )
         await self.session.execute(stmt)
 
     async def _mark_stale(

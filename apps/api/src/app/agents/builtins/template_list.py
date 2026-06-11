@@ -65,7 +65,7 @@ class TemplateListTool(VersionedTool):
     """List templates in a template collection."""
 
     tool_slug: ClassVar[str] = "template.list"
-    domains: ClassVar[list] = ["system"]
+    domains: ClassVar[list] = ["collection.template"]
     name: ClassVar[str] = "List Templates"
     description: ClassVar[str] = (
         "List templates in a template collection. Returns metadata for each template: "
