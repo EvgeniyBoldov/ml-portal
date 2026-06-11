@@ -264,7 +264,7 @@ class PlannerCallAgentDispatcher:
 
         task = runtime_state.get_or_create_task(
             task_id=task_id,
-            title=str(step.agent_input.get("query") or state.goal or ""),
+            title=str((step.agent_input or {}).get("query") or runtime_state.goal or ""),
             assigned_agent=step.agent_slug,
             origin_agent=step.agent_slug,
             iteration_started=planner_iteration,

@@ -1,7 +1,7 @@
 """Planner v3.2: needs-aware routing and task-journal rules.
 
-Revision ID: 0041
-Revises: 0040
+Revision ID: 0047
+Revises: 0046
 Create Date: 2026-06-11
 
 Extends PLANNER prompt with rules for handling agent-declared needs
@@ -16,8 +16,8 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "0041"
-down_revision = "0040"
+revision = "0047"
+down_revision = "0046"
 branch_labels = None
 depends_on = None
 

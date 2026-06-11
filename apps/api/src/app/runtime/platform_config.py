@@ -52,7 +52,11 @@ class PlatformSnapshot:
         so that admins can pin non-routable agents explicitly.
         """
         if explicit_slug:
-            return [{"slug": explicit_slug, "description": ""}]
+            # Preserve provides_keys if the pinned agent is in the routable set.
+            for item in self.routable_agents:
+                if str((item or {}).get("slug") or "").strip() == explicit_slug:
+                    return [dict(item)]
+            return [{"slug": explicit_slug, "description": "", "provides_keys": []}]
         return list(self.routable_agents)
 
 
@@ -93,6 +97,7 @@ class PlatformConfigLoader:
             {
                 "slug": str(item.get("slug") or "").strip(),
                 "description": str(item.get("description") or "").strip(),
+                "provides_keys": list(item.get("provides_keys") or []),
             }
             for item in agents
             if str(item.get("slug") or "").strip()

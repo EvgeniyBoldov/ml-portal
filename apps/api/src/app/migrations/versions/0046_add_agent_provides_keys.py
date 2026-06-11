@@ -1,7 +1,7 @@
 """Add provides_keys to agents table.
 
-Revision ID: 0040
-Revises: 0039
+Revision ID: 0046
+Revises: 0045
 Create Date: 2026-06-11 00:20:00
 """
 from alembic import op
@@ -9,8 +9,8 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision = "0040"
-down_revision = "0039"
+revision = "0046"
+down_revision = "0045"
 branch_labels = None
 depends_on = None
 

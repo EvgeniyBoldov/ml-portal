@@ -26,6 +26,7 @@ class AgentCreate(BaseModel):
     requires_confirmation_for_write: Optional[bool] = Field(default=None, description="Require confirmation for write ops")
     risk_level: Optional[str] = Field(default=None, description="low, medium, high")
     allowed_collection_ids: Optional[List[UUID]] = Field(default=None, description="Whitelist of Collection IDs bound to agent. NULL = all collections.")
+    provides_keys: Optional[List[str]] = Field(default=None, description="Machine keys this agent can resolve for planner needs-routing (e.g. ['lun_uuid']).")
 
 
 class AgentUpdate(BaseModel):
@@ -38,6 +39,7 @@ class AgentUpdate(BaseModel):
     requires_confirmation_for_write: Optional[bool] = None
     risk_level: Optional[str] = None
     allowed_collection_ids: Optional[List[UUID]] = None
+    provides_keys: Optional[List[str]] = None
 
 
 class AgentResponse(BaseModel):
@@ -53,6 +55,7 @@ class AgentResponse(BaseModel):
     requires_confirmation_for_write: Optional[bool] = None
     risk_level: Optional[str] = None
     allowed_collection_ids: Optional[List[UUID]] = None
+    provides_keys: Optional[List[str]] = None
     lifecycle_status: str = "active"
     created_at: datetime
     updated_at: datetime
@@ -74,6 +77,7 @@ class AgentListItem(BaseModel):
     requires_confirmation_for_write: Optional[bool] = None
     risk_level: Optional[str] = None
     allowed_collection_ids: Optional[List[UUID]] = None
+    provides_keys: Optional[List[str]] = None
     lifecycle_status: str = "active"
     versions_count: int = 0
     created_at: datetime
