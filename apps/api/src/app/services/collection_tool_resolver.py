@@ -29,6 +29,8 @@ _LOCAL_TOOL_RULES: Dict[str, _LocalToolRule] = {
         "collection.document",
         lambda ctx: bool(getattr(ctx.bound_collection, "has_vector_search", False)),
     ),
+    "collection.list_documents": ("collection.document", None),
+    "collection.get_document": ("collection.document", None),
     "collection.text_search": (
         "collection.table",
         lambda ctx: bool(getattr(ctx.bound_collection, "has_vector_search", False)),

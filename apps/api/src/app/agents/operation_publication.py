@@ -126,6 +126,20 @@ _OPERATION_SPECS: Dict[str, OperationSpec] = {
         description="Search documents and return relevant document results",
         result_kind="documents",
     ),
+    "collection.document.list": OperationSpec(
+        canonical_op_slug="collection.document.list",
+        domain="collection.document",
+        title="List Documents",
+        description="List files in a document collection with metadata and file_ids",
+        result_kind="rows",
+    ),
+    "collection.document.get": OperationSpec(
+        canonical_op_slug="collection.document.get",
+        domain="collection.document",
+        title="Get Document",
+        description="Get a single document's metadata and file_id by document_id",
+        result_kind="row",
+    ),
 }
 
 # Planner/LLM-facing retrieval operations.
@@ -201,6 +215,16 @@ _PUBLICATION_RULES: tuple[PublicationRule, ...] = (
         instance_domain="collection.document",
         raw_tool_slug="collection.document.search",
         canonical_op_slug="collection.document.search",
+    ),
+    PublicationRule(
+        instance_domain="collection.document",
+        raw_tool_slug="collection.list_documents",
+        canonical_op_slug="collection.document.list",
+    ),
+    PublicationRule(
+        instance_domain="collection.document",
+        raw_tool_slug="collection.get_document",
+        canonical_op_slug="collection.document.get",
     ),
     PublicationRule(
         instance_domain="collection.api",
