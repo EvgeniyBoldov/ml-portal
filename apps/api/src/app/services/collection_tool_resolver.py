@@ -38,6 +38,9 @@ _LOCAL_TOOL_RULES: Dict[str, _LocalToolRule] = {
     "collection.search": ("collection.table", None),
     "collection.aggregate": ("collection.table", None),
     "collection.get": ("collection.table", None),
+    "template.list": ("collection.template", None),
+    "template.get_schema": ("collection.template", None),
+    "template.fill": ("collection.template", None),
 }
 
 

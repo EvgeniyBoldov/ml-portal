@@ -51,7 +51,7 @@ class TemplateGetSchemaTool(VersionedTool):
     """Get the fillable schema for a template."""
 
     tool_slug: ClassVar[str] = "template.get_schema"
-    domains: ClassVar[list] = ["system"]
+    domains: ClassVar[list] = ["collection.template"]
     name: ClassVar[str] = "Get Template Schema"
     description: ClassVar[str] = (
         "Retrieve the fillable schema for a template row. "

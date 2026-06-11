@@ -137,7 +137,7 @@ class TemplateFillTool(VersionedTool):
     """Fill a template with values and return a generated file."""
 
     tool_slug: ClassVar[str] = "template.fill"
-    domains: ClassVar[list] = ["system"]
+    domains: ClassVar[list] = ["collection.template"]
     name: ClassVar[str] = "Fill Template"
     description: ClassVar[str] = (
         "Fill a template (Excel, Word, or text) with provided values. "
