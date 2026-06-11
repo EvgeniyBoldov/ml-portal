@@ -97,6 +97,7 @@ class PlatformConfigLoader:
             {
                 "slug": str(item.get("slug") or "").strip(),
                 "description": str(item.get("description") or "").strip(),
+                "tags": list(item.get("tags") or []),
                 "provides_keys": list(item.get("provides_keys") or []),
             }
             for item in agents

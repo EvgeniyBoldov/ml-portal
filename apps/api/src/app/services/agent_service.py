@@ -458,6 +458,7 @@ class AgentService:
             items.append({
                 "slug": slug,
                 "description": description,
+                "tags": list(getattr(agent, "tags", None) or []),
                 "provides_keys": list(getattr(agent, "provides_keys", None) or []),
             })
         return items

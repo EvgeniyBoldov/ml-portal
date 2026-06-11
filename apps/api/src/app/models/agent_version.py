@@ -74,9 +74,6 @@ class AgentVersion(Base):
     # ── Routing (for agent router) ────────────────────────────────────────
     short_info: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     tags: Mapped[Optional[List[str]]] = mapped_column(ARRAY(String), nullable=True)
-    is_routable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
-    routing_keywords: Mapped[Optional[List[str]]] = mapped_column(ARRAY(String), nullable=True)
-    routing_negative_keywords: Mapped[Optional[List[str]]] = mapped_column(ARRAY(String), nullable=True)
 
     parent_version_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),

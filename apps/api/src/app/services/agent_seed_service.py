@@ -77,17 +77,8 @@ SEED_AGENTS = [
             "max_tokens": 4096,
             "temperature": 0.2,
             "risk_level": "low",
-            "is_routable": True,
             "short_info": "Поиск по корпоративной базе знаний: регламенты, политики, инструкции",
             "tags": ["search", "documents", "knowledge-base", "policies"],
-            "routing_keywords": [
-                "документ", "регламент", "политика", "инструкция", "процедура",
-                "процесс", "правило", "стандарт", "руководство", "база знаний",
-                "найди документ", "поиск",
-            ],
-            "routing_negative_keywords": [
-                "тикет", "инцидент", "устройство", "сервер", "IP", "NetBox", "подсеть",
-            ],
         },
     },
     {
@@ -151,17 +142,8 @@ SEED_AGENTS = [
             "max_tokens": 4096,
             "temperature": 0.15,
             "risk_level": "low",
-            "is_routable": True,
             "short_info": "Анализ структурированных данных: тикеты, инциденты, статистика",
             "tags": ["data", "analytics", "tickets", "collections"],
-            "routing_keywords": [
-                "тикет", "инцидент", "заявка", "статистика", "отчёт",
-                "группировка", "агрегация", "сколько", "покажи тикеты",
-                "найди заявку", "ticket", "incident", "report",
-            ],
-            "routing_negative_keywords": [
-                "документ", "регламент", "политика", "netbox", "устройство", "сервер",
-            ],
         },
     },
     {
@@ -225,20 +207,8 @@ SEED_AGENTS = [
             "max_tokens": 4096,
             "temperature": 0.1,
             "risk_level": "low",
-            "is_routable": True,
             "short_info": "Queries NetBox for network infrastructure: devices, IPs, sites, racks",
             "tags": ["netbox", "dcim", "ipam", "network", "inventory"],
-            "routing_keywords": [
-                "netbox", "device", "switch", "router", "ip address", "subnet",
-                "prefix", "site", "datacenter", "rack", "inventory",
-                "network equipment", "infrastructure",
-                "устройство", "сервер", "коммутатор", "маршрутизатор",
-                "стойка", "площадка",
-            ],
-            "routing_negative_keywords": [
-                "ticket", "document", "policy", "regulation",
-                "тикет", "регламент", "политика",
-            ],
         },
     },
     {
@@ -303,18 +273,8 @@ SEED_AGENTS = [
             "temperature": 0.15,
             "risk_level": "medium",
             "requires_confirmation_for_write": True,
-            "is_routable": True,
             "short_info": "Validates planned work against policy documents and infrastructure (NetBox)",
             "tags": ["validation", "change-management", "netbox", "compliance", "policies"],
-            "routing_keywords": [
-                "validate", "check work", "change request", "maintenance",
-                "planned work", "approval",
-                "проверь", "валидация", "согласование", "плановые работы",
-                "техокно", "обслуживание", "изменение",
-            ],
-            "routing_negative_keywords": [
-                "search documents", "find ticket", "простой поиск",
-            ],
         },
     },
 ]

@@ -59,6 +59,7 @@ class PlannerInputBuilder:
                         item.get("description", ""),
                         MAX_AGENT_DESCRIPTION_CHARS,
                     ),
+                    "tags": list(item.get("tags") or []),
                     "provides_keys": list(item.get("provides_keys") or []),
                 }
                 for item in available_agents
