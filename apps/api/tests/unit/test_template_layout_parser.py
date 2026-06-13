@@ -131,6 +131,15 @@ def test_parse_text_mixed_scalar_and_table(parser: TemplateLayoutParser):
     assert "items" in layout.table_prefixes
 
 
+def test_parse_text_single_column_table_has_region(parser: TemplateLayoutParser):
+    # A single-column dotted token must still produce a table region so that
+    # table_prefixes and table_regions stay in sync.
+    content = b"{{items.name}}"
+    layout = parser.parse(content, "single.txt")
+    assert "items" in layout.table_prefixes
+    assert any(r.loop_prefix == "items" for r in layout.table_regions)
+
+
 # ---------------------------------------------------------------------------
 # Excel parsing
 # ---------------------------------------------------------------------------

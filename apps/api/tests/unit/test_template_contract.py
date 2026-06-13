@@ -347,3 +347,42 @@ def test_scalar_fields_and_table_fields():
     c = TemplateContract(fields=[make_scalar("x"), make_table("rows"), make_scalar("y")])
     assert len(c.scalar_fields()) == 2
     assert len(c.table_fields()) == 1
+
+
+def test_discriminated_union_table_from_dict():
+    data = {
+        "contract_version": "1.0",
+        "fields": [{
+            "key": "items", "kind": "table", "label": "Items",
+            "columns": [
+                {"key": "name", "label": "Name", "type": "string", "required": True},
+                {"key": "qty", "label": "Qty", "type": "number", "required": True},
+            ],
+        }],
+    }
+    c = TemplateContract.model_validate(data)
+    assert isinstance(c.fields[0], TableField)
+    assert len(c.fields[0].columns) == 2
+
+
+def test_round_trip_table_preserves_columns_via_validate():
+    c = TemplateContract(fields=[make_table("rows")])
+    restored = TemplateContract.model_validate(c.to_jsonb())
+    assert isinstance(restored.fields[0], TableField)
+    assert len(restored.fields[0].columns) == 2
+
+
+def test_validate_bool_rejected_as_number():
+    c = TemplateContract(fields=[
+        ScalarField(key="amount", label="Amount", type=FieldType.NUMBER, required=True)
+    ])
+    assert not c.validate_values({"amount": True}).ok
+
+
+def test_merge_preserves_existing_order():
+    existing = TemplateContract(fields=[make_scalar("a"), make_scalar("b"), make_scalar("c")])
+    proposed = TemplateContract(fields=[
+        make_scalar("c"), make_scalar("a"), make_scalar("b"), make_scalar("d"),
+    ])
+    merged = merge_contract(existing, proposed)
+    assert [f.key for f in merged.fields] == ["a", "b", "c", "d"]

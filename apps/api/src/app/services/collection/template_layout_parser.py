@@ -161,6 +161,7 @@ class TemplateLayoutParser:
                 self._detect_excel_table_regions(ws, sheet_name, row_map)
             )
 
+        sheet_names = list(wb.sheetnames)
         wb.close()
 
         title, version = _extract_title_version(first_texts)
@@ -172,7 +173,7 @@ class TemplateLayoutParser:
             version=version,
             tokens=tokens,
             table_regions=table_regions,
-            sheets=list(wb.sheetnames) if not wb.sheetnames else wb.sheetnames,
+            sheets=sheet_names,
             scalar_keys=scalar_keys,
             table_prefixes=table_prefixes,
             text_lines=text_lines[:500],  # cap for LLM builder
@@ -206,7 +207,9 @@ class TemplateLayoutParser:
                     if tp:
                         prefixes_in_row.setdefault(tp, []).append(f"{{{{{key}}}}}")
             for tp, toks in prefixes_in_row.items():
-                if len(toks) >= 2:  # ≥2 columns with the same prefix in one row
+                # A dotted prefix denotes a table column, so even a single
+                # column ({{items.name}}) constitutes a marker-loop region.
+                if len(toks) >= 1:
                     prefix_to_rows.setdefault(tp, []).append(r)
 
         for prefix, marker_rows in prefix_to_rows.items():
@@ -247,9 +250,6 @@ class TemplateLayoutParser:
             ))
 
         # --- Structural (dense rows) fallback — only if no markers found ---
-        marker_row_set = {
-            row for prefix_rows in prefix_to_rows.values() for row in prefix_rows
-        }
         if not prefix_to_rows:
             regions.extend(
                 self._detect_dense_regions(sheet_name, row_map, sorted_rows)
@@ -266,7 +266,6 @@ class TemplateLayoutParser:
         """Find dense rectangular regions (≥2 cols, ≥2 rows) as structural candidates."""
         regions: List[TableRegion] = []
         min_cols = 2
-        run_start: Optional[int] = None
         run_rows: List[int] = []
 
         def _flush(run: List[int]) -> None:
@@ -521,7 +520,7 @@ class TemplateLayoutParser:
             if t.table_prefix and t.table_prefix not in fenced_prefixes:
                 prefix_tokens.setdefault(t.table_prefix, []).append(f"{{{{{t.token}}}}}")
         for prefix, toks in prefix_tokens.items():
-            if len(set(toks)) >= 2:
+            if len(set(toks)) >= 1:
                 table_regions.append(TableRegion(
                     region_id=f"text:marker:{prefix}",
                     location={"type": "inline", "key": prefix},

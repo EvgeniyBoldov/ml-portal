@@ -15,10 +15,13 @@ Key concepts
 """
 from __future__ import annotations
 
+import logging
 from enum import Enum
-from typing import Any, Dict, List, Optional, Union
+from typing import Annotated, Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field, field_validator, model_validator
+
+logger = logging.getLogger(__name__)
 
 CONTRACT_VERSION = "1.0"
 
@@ -146,7 +149,7 @@ class TableColumn(BaseModel):
 
 class ScalarField(BaseModel):
     key: str = Field(..., min_length=1)
-    kind: FieldKind = FieldKind.SCALAR
+    kind: Literal[FieldKind.SCALAR] = FieldKind.SCALAR
     label: str = Field(..., min_length=1)
     description: Optional[str] = None
     type: FieldType = FieldType.STRING
@@ -167,7 +170,7 @@ class ScalarField(BaseModel):
 
 class TableField(BaseModel):
     key: str = Field(..., min_length=1)
-    kind: FieldKind = FieldKind.TABLE
+    kind: Literal[FieldKind.TABLE] = FieldKind.TABLE
     label: str = Field(..., min_length=1)
     description: Optional[str] = None
     orientation: Orientation = Orientation.VERTICAL
@@ -186,7 +189,7 @@ class TableField(BaseModel):
         return self
 
 
-AnyField = Union[ScalarField, TableField]
+AnyField = Annotated[Union[ScalarField, TableField], Field(discriminator="kind")]
 
 
 # ---------------------------------------------------------------------------
@@ -374,6 +377,7 @@ class TemplateContract(BaseModel):
         try:
             return cls.model_validate(data)
         except Exception:
+            logger.warning("Failed to deserialize TemplateContract; returning empty", exc_info=True)
             return cls()
 
 
@@ -417,27 +421,35 @@ def merge_contract(
       (they no longer appear in the template).
     - The top-level ``format`` is updated from *proposed* unless *existing* format
       was set by an admin (currently: always update format from proposed).
-    """
-    protected: Dict[str, AnyField] = {}
-    llm_existing: Dict[str, AnyField] = {}
 
-    for f in existing.fields:
-        if f.locked or f.source == FieldSource.ADMIN:
-            protected[f.key] = f
-        else:
-            llm_existing[f.key] = f
+    Field ordering follows the existing contract first (preserving admin/display
+    order), with brand-new proposed keys appended at the end.
+    """
+    def _is_protected(f: AnyField) -> bool:
+        return f.locked or f.source == FieldSource.ADMIN
+
+    protected_keys = {f.key for f in existing.fields if _is_protected(f)}
+    proposed_by_key: Dict[str, AnyField] = {f.key: f for f in proposed.fields}
 
     merged_fields: List[AnyField] = []
+    consumed: set = set()
 
-    # Keep protected fields in their original order
-    for key, pf in protected.items():
-        merged_fields.append(pf)
+    # 1. Walk existing fields preserving their order
+    for f in existing.fields:
+        if _is_protected(f):
+            merged_fields.append(f)  # never touched
+            consumed.add(f.key)
+        elif f.key in proposed_by_key:
+            merged_fields.append(proposed_by_key[f.key])  # llm field updated
+            consumed.add(f.key)
+        # else: unlocked llm field absent from proposed → dropped (vanished)
 
-    # Add/update from proposed (skipping protected keys)
+    # 2. Append brand-new proposed keys (skip protected and already-consumed)
     for pf in proposed.fields:
-        if pf.key in protected:
-            continue  # protected — not touched
+        if pf.key in protected_keys or pf.key in consumed:
+            continue
         merged_fields.append(pf)
+        consumed.add(pf.key)
 
     # Preserve format from proposed if available
     new_format = proposed.format or existing.format
@@ -456,7 +468,9 @@ def merge_contract(
 
 def _check_scalar_type(key: str, value: Any, expected: FieldType) -> Optional[str]:
     if expected == FieldType.NUMBER:
-        if not isinstance(value, (int, float)):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            if isinstance(value, bool):
+                return f"Scalar '{key}' expected number, got bool"
             try:
                 float(str(value))
             except (ValueError, TypeError):
