@@ -26,6 +26,7 @@ from app.repositories.template_analysis_status_repo import AsyncTemplateAnalysis
 from app.services.collection.template_upload_service import TemplateUploadService
 from app.services.collection.row_service import CollectionRowService
 from app.services.collection.status_snapshot_service import CollectionStatusSnapshotService
+from app.services.collection.template_contract import TemplateContract, FieldSource
 from app.core.sse import format_sse
 import redis.asyncio as aioredis
 
@@ -393,5 +394,47 @@ async def update_template_schema(
         collection=collection,
         row_id=row_id,
         payload={"template_schema": data.template_schema},
+        session=session,
+    )
+
+
+
+@router.patch("/{collection_id}/templates/{row_id}/schema/admin")
+async def update_template_schema_admin(
+    collection_id: uuid.UUID,
+    row_id: uuid.UUID,
+    data: UpdateTemplateSchemaRequest,
+    session: AsyncSession = Depends(db_uow),
+    user: UserCtx = Depends(get_current_user),
+):
+    """
+    Admin edit of template schema with provenance.
+    Sets source=admin and locked=true for all edited fields.
+    """
+    collection = await _resolve_template_collection(collection_id, session, user)
+    row_service = CollectionRowService(session)
+    row = await row_service.get_row_by_id(collection, row_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Template row not found")
+    
+    # Parse incoming schema and mark as admin/locked
+    raw_schema = data.template_schema
+    if "fields" in raw_schema:
+        for field in raw_schema["fields"]:
+            field["source"] = FieldSource.ADMIN.value
+            field["locked"] = True
+    
+    # Merge with existing if present
+    existing_raw = row.get("template_schema") or {}
+    if existing_raw and "fields" in existing_raw:
+        existing_contract = TemplateContract.from_jsonb(existing_raw)
+        new_contract = TemplateContract.from_jsonb(raw_schema)
+        merged = TemplateContract.merge_contract(existing_contract, new_contract)
+        raw_schema = merged.to_jsonb()
+    
+    return await _update_template_row(
+        collection=collection,
+        row_id=row_id,
+        payload={"template_schema": raw_schema},
         session=session,
     )
