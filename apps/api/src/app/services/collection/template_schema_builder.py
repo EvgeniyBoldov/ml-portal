@@ -1,4 +1,4 @@
-"""S2 TemplateSchemaBuilder stub"""
+"""S2 TemplateSchemaBuilder — LLM contract generation from RawLayout with deterministic fallback."""
 from __future__ import annotations
 import json, logging
 from typing import Any, Dict, List, Optional

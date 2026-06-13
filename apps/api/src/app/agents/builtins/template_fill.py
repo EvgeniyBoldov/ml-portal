@@ -219,24 +219,6 @@ class TemplateFillTool(VersionedTool):
                         logs=log.entries_dict(),
                     )
 
-                # Load contract and validate values
-                raw_schema = row.get("template_schema") or {}
-                contract = TemplateContract.from_jsonb(raw_schema)
-                
-                # Use TemplateFillEngine for contract-aware filling
-                engine = TemplateFillEngine(contract)
-                result = engine.fill(content, values, filename)
-                
-                if not result.success:
-                    return ToolResult.fail(
-                        f"Failed to fill template: {result.error}",
-                        logs=log.entries_dict(),
-                    )
-                
-                filled_bytes = result.content
-                filled_keys = set(result.filled_scalars + result.filled_tables)
-                missing = list(set(result.missing_scalars + result.missing_tables))
-                
                 # Determine format for response
                 ext = ""
                 if "." in filename:
@@ -247,6 +229,36 @@ class TemplateFillTool(VersionedTool):
                     fmt = "word"
                 else:
                     fmt = "text"
+
+                # Load contract
+                raw_schema = row.get("template_schema") or {}
+                contract = TemplateContract.from_jsonb(raw_schema)
+
+                if contract.fields:
+                    # Contract-aware filling with validation (preferred path)
+                    engine = TemplateFillEngine(contract)
+                    result = engine.fill(content, values, filename)
+                    if not result.success:
+                        return ToolResult.fail(
+                            f"Failed to fill template: {result.error}",
+                            logs=log.entries_dict(),
+                        )
+                    filled_bytes = result.content
+                    filled_keys = set(result.filled_scalars + result.filled_tables)
+                    missing = list(set(result.missing_scalars + result.missing_tables))
+                else:
+                    # Backward-compat fallback: template has no analyzed schema yet.
+                    # Perform naive {{key}} substitution from provided values.
+                    log.warning("No contract schema; using naive placeholder substitution")
+                    str_values = {k: str(v) for k, v in values.items()}
+                    if fmt == "excel":
+                        filled_bytes = _fill_excel(content, str_values)
+                    elif fmt == "word":
+                        filled_bytes = _fill_word(content, str_values)
+                    else:
+                        filled_bytes = _fill_text(content, str_values)
+                    filled_keys = set(str_values.keys())
+                    missing = []
 
                 # Store generated attachment
                 chat_id = str(ctx.chat_id or "")

@@ -8,7 +8,6 @@ from typing import Any
 from celery import shared_task
 
 from app.core.logging import get_logger
-from app.services.collection.template_analyze_service import TemplateAnalyzeService
 from app.services.collection.template_contract import TemplateContract
 from app.services.collection.template_description_builder import TemplateDescriptionBuilder
 from app.services.collection.template_layout_parser import TemplateLayoutParser
@@ -167,7 +166,10 @@ def generate_template_description(self, collection_id: str, row_id: str) -> dict
             # Load contract (either existing or parse new)
             raw_schema = row.get("template_schema") or {}
             contract = TemplateContract.from_jsonb(raw_schema)
-            
+
+            resolved_title = row.get("title")
+            resolved_version = row.get("template_version")
+
             if not contract.fields:
                 # Need to parse and build schema first
                 payload, filename = await _load_template_file(row)
@@ -175,18 +177,20 @@ def generate_template_description(self, collection_id: str, row_id: str) -> dict
                 layout = parser.parse(payload, filename)
                 schema_builder = TemplateSchemaBuilder(llm=None)
                 contract = await schema_builder.build(layout, title=layout.title)
-            
+                resolved_title = resolved_title or layout.title or filename
+                resolved_version = resolved_version or layout.version
+
             # Build description from contract (S3)
             desc_builder = TemplateDescriptionBuilder(llm=None)  # Can be configured with LLM
             description = await desc_builder.build(
-                contract, 
-                title=row.get("title") or contract.title,
-                version=row.get("template_version") or contract.version,
+                contract,
+                title=resolved_title,
+                version=resolved_version,
             )
 
             updates = {
-                "title": row.get("title") or contract.title or "Template",
-                "template_version": row.get("template_version") or contract.version,
+                "title": resolved_title or "Template",
+                "template_version": resolved_version,
                 "description": description,
             }
 
@@ -197,8 +201,8 @@ def generate_template_description(self, collection_id: str, row_id: str) -> dict
                 node_key="description",
                 status="completed",
                 metrics_json={
-                    "title": description_payload.get("title") or row.get("title") or filename,
-                    "version": description_payload.get("version") or row.get("template_version"),
+                    "title": resolved_title,
+                    "version": resolved_version,
                 },
                 finished_at=datetime.now(timezone.utc),
             )
@@ -297,8 +301,8 @@ def generate_template_schema(self, collection_id: str, row_id: str) -> dict[str,
                 node_key="schema",
                 status="completed",
                 metrics_json={
-                    "title": schema_payload.get("title") or row.get("title") or filename,
-                    "version": schema_payload.get("version") or row.get("template_version"),
+                    "title": layout.title or row.get("title") or filename,
+                    "version": layout.version or row.get("template_version"),
                 },
                 finished_at=datetime.now(timezone.utc),
             )

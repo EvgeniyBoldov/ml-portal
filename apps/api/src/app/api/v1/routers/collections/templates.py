@@ -417,24 +417,36 @@ async def update_template_schema_admin(
     if not row:
         raise HTTPException(status_code=404, detail="Template row not found")
     
-    # Parse incoming schema and mark as admin/locked
+    # Mark submitted fields as admin/locked (provenance)
     raw_schema = data.template_schema
-    if "fields" in raw_schema:
+    if isinstance(raw_schema.get("fields"), list):
         for field in raw_schema["fields"]:
-            field["source"] = FieldSource.ADMIN.value
-            field["locked"] = True
-    
-    # Merge with existing if present
-    existing_raw = row.get("template_schema") or {}
-    if existing_raw and "fields" in existing_raw:
-        existing_contract = TemplateContract.from_jsonb(existing_raw)
-        new_contract = TemplateContract.from_jsonb(raw_schema)
-        merged = TemplateContract.merge_contract(existing_contract, new_contract)
-        raw_schema = merged.to_jsonb()
-    
+            if isinstance(field, dict):
+                field["source"] = FieldSource.ADMIN.value
+                field["locked"] = True
+
+    # Validate structure strictly — never silently wipe the schema
+    try:
+        new_contract = TemplateContract.model_validate(raw_schema)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid template schema: {exc}")
+
+    # Admin-priority merge: admin fields win; preserve existing fields the
+    # admin did not submit (matched by key). merge_contract is NOT used here
+    # because its semantics keep *existing* protected fields, which would
+    # discard the admin's new edits.
+    existing_contract = TemplateContract.from_jsonb(row.get("template_schema") or {})
+    submitted_keys = {f.key for f in new_contract.fields}
+    preserved = [f for f in existing_contract.fields if f.key not in submitted_keys]
+    final_contract = TemplateContract(
+        contract_version=new_contract.contract_version,
+        format=new_contract.format or existing_contract.format,
+        fields=new_contract.fields + preserved,
+    )
+
     return await _update_template_row(
         collection=collection,
         row_id=row_id,
-        payload={"template_schema": raw_schema},
+        payload={"template_schema": final_contract.to_jsonb()},
         session=session,
     )

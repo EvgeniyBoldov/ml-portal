@@ -86,27 +86,29 @@ class TemplateFillEngine:
         except UnicodeDecodeError:
             text = template_bytes.decode('utf-8', errors='replace')
 
-        filled = []
-        missing = []
+        filled_scalars = []
+        missing_scalars = []
+        filled_tables = []
+        missing_tables = []
 
         for field in self.contract.scalar_fields():
             key = field.key
             token = f"{{{{{key}}}}}"
             if key in values:
                 text = text.replace(token, str(values[key]))
-                filled.append(key)
+                filled_scalars.append(key)
             else:
-                missing.append(key)
+                missing_scalars.append(key)
 
         # Simple table handling for text (no row expansion, just markers)
         for tfield in self.contract.table_fields():
             table_key = tfield.key
             if table_key not in values:
-                missing.append(table_key)
+                missing_tables.append(table_key)
                 continue
             rows = values[table_key]
             if not isinstance(rows, list):
-                missing.append(table_key)
+                missing_tables.append(table_key)
                 continue
             # Replace first occurrence with joined rows, remove markers
             marker_start = f"{{{{#{table_key}}}}}"
@@ -121,16 +123,18 @@ class TemplateFillEngine:
                 # Replace between markers
                 pattern = re.escape(marker_start) + r".*?" + re.escape(marker_end)
                 text = re.sub(pattern, replacement, text, flags=re.DOTALL)
-                filled.append(table_key)
+                filled_tables.append(table_key)
             else:
                 # No markers - simple column substitution won't work for multiple rows
-                missing.append(table_key)
+                missing_tables.append(table_key)
 
         return FillResult(
             success=True,
             content=text.encode('utf-8'),
-            filled_scalars=filled,
-            missing_scalars=missing,
+            filled_scalars=filled_scalars,
+            missing_scalars=missing_scalars,
+            filled_tables=filled_tables,
+            missing_tables=missing_tables,
         )
 
     def _fill_excel(self, template_bytes: bytes, values: Dict[str, Any]) -> FillResult:
@@ -425,9 +429,12 @@ class TemplateFillEngine:
                     template_row = table.rows[template_idx]
                     template_cells = [cell.text for cell in template_row.cells]
 
-                    # Remove marker rows and template row
+                    # Remove marker rows and template row.
+                    # <w:tr> elements belong to the table, so remove each row
+                    # via its own parent (not the table's parent / document body).
                     for _ in range(end_row - start_row + 1):
-                        table._element.getparent().remove(table.rows[start_row]._element)
+                        tr = table.rows[start_row]._element
+                        tr.getparent().remove(tr)
 
                     # Add rows for data
                     for row_data in rows:

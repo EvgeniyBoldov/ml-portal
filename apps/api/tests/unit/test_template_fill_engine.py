@@ -74,23 +74,45 @@ def test_fill_text_table_marker_loop(table_contract):
     assert "items" in result.filled_tables
 
 
-def test_fill_text_empty_table(table_contract):
+def test_fill_text_empty_required_table_fails(table_contract):
+    # items is required=True, so an empty list must fail validation.
     engine = TemplateFillEngine(table_contract)
     template = b"{{#items}}{{items.name}}{{/items}}"
     values = {"company": "Acme", "items": []}
     result = engine.fill(template, values, "test.txt")
-    # Empty table should still succeed, just produce empty content
+    assert result.success is False
+    assert "Validation failed" in result.error
+
+
+def test_fill_text_empty_optional_table_succeeds():
+    # An optional table with an empty list should pass validation and
+    # produce empty content for the loop region.
+    contract = TemplateContract(fields=[
+        ScalarField(key="company", label="Company", type=FieldType.STRING, required=True),
+        TableField(
+            key="items", label="Items", required=False, min_rows=0,
+            anchor=TableAnchor(
+                strategy=AnchorStrategy.MARKER,
+                marker=MarkerAnchor(loop_tokens=["{{items.name}}"]),
+            ),
+            columns=[TableColumn(key="name", label="Name", type=FieldType.STRING, required=True)],
+        ),
+    ])
+    engine = TemplateFillEngine(contract)
+    template = b"{{#items}}{{items.name}}{{/items}}"
+    values = {"company": "Acme", "items": []}
+    result = engine.fill(template, values, "test.txt")
     assert result.success is True
     assert result.content == b""
 
 
-def test_validation_unknown_key(scalar_contract):
+def test_validation_unknown_key_is_warning(scalar_contract):
+    # Unknown top-level keys are warnings, not errors — fill still succeeds.
     engine = TemplateFillEngine(scalar_contract)
-    template = b"test"
+    template = b"{{name}} {{amount}}"
     values = {"name": "Alice", "amount": 100, "unknown": "value"}
     result = engine.fill(template, values, "test.txt")
-    assert result.success is False
-    assert "unknown" in result.error
+    assert result.success is True
 
 
 def test_validation_type_mismatch(scalar_contract):
