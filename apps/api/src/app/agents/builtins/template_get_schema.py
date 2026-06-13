@@ -14,6 +14,7 @@ from app.core.db import get_session_factory
 from app.core.logging import get_logger
 from app.models.collection import CollectionType
 from app.services.collection.row_service import CollectionRowService
+from app.services.collection.template_contract import TemplateContract
 from app.services.collection_service import CollectionService
 
 logger = get_logger(__name__)
@@ -107,8 +108,10 @@ class TemplateGetSchemaTool(VersionedTool):
                         logs=log.entries_dict(),
                     )
 
-                schema = row.get("template_schema") or {}
-                if not schema:
+                raw_schema = row.get("template_schema") or {}
+                contract = TemplateContract.from_jsonb(raw_schema)
+                
+                if not contract.fields:
                     return ToolResult.ok(
                         data={
                             "row_id": str(row["id"]),
@@ -122,16 +125,19 @@ class TemplateGetSchemaTool(VersionedTool):
                         logs=log.entries_dict(),
                     )
 
+                # Provide both raw contract and fill-ready schema
                 return ToolResult.ok(
                     data={
                         "row_id": str(row["id"]),
                         "title": row.get("title") or "",
                         "source": row.get("source") or "",
                         "template_version": row.get("template_version") or "",
-                        "template_schema": schema,
+                        "template_schema": contract.to_fill_input_schema(),
                         "description": row.get("description") or "",
+                        "contract_version": contract.contract_version,
+                        "field_count": len(contract.fields),
                     },
-                    message=f"Schema for '{row.get('title') or row_id}' retrieved ({len(schema.get('fields', []))} field(s)).",
+                    message=f"Schema for '{row.get('title') or row_id}' retrieved ({len(contract.fields)} field(s)).",
                     logs=log.entries_dict(),
                 )
         except Exception as exc:

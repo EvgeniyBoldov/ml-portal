@@ -9,6 +9,10 @@ from celery import shared_task
 
 from app.core.logging import get_logger
 from app.services.collection.template_analyze_service import TemplateAnalyzeService
+from app.services.collection.template_contract import TemplateContract
+from app.services.collection.template_description_builder import TemplateDescriptionBuilder
+from app.services.collection.template_layout_parser import TemplateLayoutParser
+from app.services.collection.template_schema_builder import TemplateSchemaBuilder
 from app.services.collection.template_status_stream import (
     TemplateStatusPublisher,
     build_template_status_graph,
@@ -160,14 +164,30 @@ def generate_template_description(self, collection_id: str, row_id: str) -> dict
             )
             await session.commit()
 
-            payload, filename = await _load_template_file(row)
-            analyzer = TemplateAnalyzeService()
-            description_payload = await analyzer.generate_description(payload, filename)
+            # Load contract (either existing or parse new)
+            raw_schema = row.get("template_schema") or {}
+            contract = TemplateContract.from_jsonb(raw_schema)
+            
+            if not contract.fields:
+                # Need to parse and build schema first
+                payload, filename = await _load_template_file(row)
+                parser = TemplateLayoutParser()
+                layout = parser.parse(payload, filename)
+                schema_builder = TemplateSchemaBuilder(llm=None)
+                contract = await schema_builder.build(layout, title=layout.title)
+            
+            # Build description from contract (S3)
+            desc_builder = TemplateDescriptionBuilder(llm=None)  # Can be configured with LLM
+            description = await desc_builder.build(
+                contract, 
+                title=row.get("title") or contract.title,
+                version=row.get("template_version") or contract.version,
+            )
 
             updates = {
-                "title": description_payload.get("title") or row.get("title") or filename,
-                "template_version": description_payload.get("version") or row.get("template_version"),
-                "description": description_payload.get("description"),
+                "title": row.get("title") or contract.title or "Template",
+                "template_version": row.get("template_version") or contract.version,
+                "description": description,
             }
 
             await _update_analysis_node(
@@ -254,13 +274,20 @@ def generate_template_schema(self, collection_id: str, row_id: str) -> dict[str,
             await session.commit()
 
             payload, filename = await _load_template_file(row)
-            analyzer = TemplateAnalyzeService()
-            schema_payload = await analyzer.generate_schema(payload, filename)
-
+            
+            # Step 1: Parse layout (S1)
+            parser = TemplateLayoutParser()
+            layout = parser.parse(payload, filename)
+            
+            # Step 2: Build schema from layout (S2)
+            existing_contract = TemplateContract.from_jsonb(row.get("template_schema") or {})
+            schema_builder = TemplateSchemaBuilder(llm=None)  # Can be configured with LLM
+            contract = await schema_builder.build(layout, existing_contract=existing_contract, title=layout.title)
+            
             updates = {
-                "title": schema_payload.get("title") or row.get("title") or filename,
-                "template_version": schema_payload.get("version") or row.get("template_version"),
-                "template_schema": schema_payload.get("draft_schema"),
+                "title": layout.title or row.get("title") or filename,
+                "template_version": layout.version or row.get("template_version"),
+                "template_schema": contract.to_jsonb(),
             }
 
             await _update_analysis_node(

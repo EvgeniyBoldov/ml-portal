@@ -17,6 +17,8 @@ from app.core.logging import get_logger
 from app.models.collection import CollectionType
 from app.services.chat_attachment_service import ChatAttachmentService
 from app.services.collection.row_service import CollectionRowService
+from app.services.collection.template_contract import TemplateContract
+from app.services.collection.template_fill_engine import TemplateFillEngine
 from app.services.collection_service import CollectionService
 from app.services.file_delivery_service import FileDeliveryService
 from app.adapters.s3_client import s3_manager
@@ -217,56 +219,34 @@ class TemplateFillTool(VersionedTool):
                         logs=log.entries_dict(),
                     )
 
-                # Determine format
+                # Load contract and validate values
+                raw_schema = row.get("template_schema") or {}
+                contract = TemplateContract.from_jsonb(raw_schema)
+                
+                # Use TemplateFillEngine for contract-aware filling
+                engine = TemplateFillEngine(contract)
+                result = engine.fill(content, values, filename)
+                
+                if not result.success:
+                    return ToolResult.fail(
+                        f"Failed to fill template: {result.error}",
+                        logs=log.entries_dict(),
+                    )
+                
+                filled_bytes = result.content
+                filled_keys = set(result.filled_scalars + result.filled_tables)
+                missing = list(set(result.missing_scalars + result.missing_tables))
+                
+                # Determine format for response
                 ext = ""
                 if "." in filename:
                     ext = filename.rsplit(".", 1)[-1].strip().lower()
-
                 if ext in {"xlsx", "xls", "xlsm"}:
-                    filled_bytes = _fill_excel(content, values)
-                    filled_keys = set(values.keys())  # simplified
                     fmt = "excel"
                 elif ext in {"docx", "doc"}:
-                    filled_bytes = _fill_word(content, values)
-                    filled_keys = set(values.keys())  # simplified
                     fmt = "word"
                 else:
-                    filled_bytes = _fill_text(content, values)
-                    # For text we can compute missing keys properly
-                    text = filled_bytes.decode("utf-8")
-                    all_keys = set(_PLACEHOLDER_RE.findall(text))
-                    filled_keys = set(values.keys()) - all_keys
                     fmt = "text"
-
-                # Compute missing placeholders for structured formats
-                if fmt in {"excel", "word"}:
-                    # Re-scan for remaining placeholders
-                    if fmt == "excel":
-                        import openpyxl
-                        wb = openpyxl.load_workbook(io.BytesIO(filled_bytes))
-                        remaining = set()
-                        for sheet in wb.worksheets:
-                            for row_cells in sheet.iter_rows():
-                                for cell in row_cells:
-                                    if cell.value and isinstance(cell.value, str):
-                                        remaining.update(_PLACEHOLDER_RE.findall(cell.value))
-                        wb.close()
-                    else:
-                        import docx
-                        doc = docx.Document(io.BytesIO(filled_bytes))
-                        remaining = set()
-                        for para in doc.paragraphs:
-                            if para.text:
-                                remaining.update(_PLACEHOLDER_RE.findall(para.text))
-                        for table in doc.tables:
-                            for row_cells in table.rows:
-                                for cell in row_cells.cells:
-                                    if cell.text:
-                                        remaining.update(_PLACEHOLDER_RE.findall(cell.text))
-                    filled_keys = set(values.keys()) - remaining
-                    missing = list(remaining)
-                else:
-                    missing = list(all_keys)
 
                 # Store generated attachment
                 chat_id = str(ctx.chat_id or "")
