@@ -304,5 +304,11 @@ class OpenAICompatibleLLM:
 
     async def aclose(self) -> None:
         for client in self._client_cache.values():
-            await client.close()
+            try:
+                await client.close()
+            except RuntimeError as exc:
+                if "Event loop is closed" in str(exc):
+                    logger.debug("Skipping LLM client close during loop shutdown: %s", exc)
+                    continue
+                raise
         self._client_cache.clear()

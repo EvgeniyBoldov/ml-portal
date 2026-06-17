@@ -20,21 +20,21 @@ services:
       retries: 5
 
   # Remote PostgreSQL — used by SQL MCP shim (dbhub-mcp) as demo external data source
-  postgres-remote:
-    image: postgres:15-alpine
-    environment:
-      POSTGRES_DB: ${REMOTE_POSTGRES_DB}
-      POSTGRES_USER: ${REMOTE_POSTGRES_USER}
-      POSTGRES_PASSWORD: ${REMOTE_POSTGRES_PASSWORD}
-    volumes:
-      - postgres_remote_data:/var/lib/postgresql/data
-    ports:
-      - "5433:5432"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${REMOTE_POSTGRES_USER} -d ${REMOTE_POSTGRES_DB}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+  # postgres-remote:
+  #   image: postgres:15-alpine
+  #   environment:
+  #     POSTGRES_DB: ${REMOTE_POSTGRES_DB}
+  #     POSTGRES_USER: ${REMOTE_POSTGRES_USER}
+  #     POSTGRES_PASSWORD: ${REMOTE_POSTGRES_PASSWORD}
+  #   volumes:
+  #     - postgres_remote_data:/var/lib/postgresql/data
+  #   ports:
+  #     - "5433:5432"
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "pg_isready -U ${REMOTE_POSTGRES_USER} -d ${REMOTE_POSTGRES_DB}"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 5
 
   redis:
     image: redis:7-alpine
@@ -150,42 +150,42 @@ services:
   # MCP SERVERS
   # =============================================================================
 
-  netbox-mcp-custom:
-    build:
-      context: .
-      dockerfile: mcp/mcp_server.dockerfile
-      args:
-        - MCP_SERVER_DIR=netbox
-    ports:
-      - "8012:8080"
-    volumes:
-      - ./mcp/netbox/server.py:/opt/mcp/netbox/server.py:ro
-    environment:
-      - PORT=8080
-      - VERIFY_SSL=false
-      - NETBOX_TIMEOUT_SECONDS=20
-      - MCP_SECRET_BROKER_TIMEOUT_SECONDS=10
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    restart: unless-stopped
+  # netbox-mcp-custom:
+  #   build:
+  #     context: .
+  #     dockerfile: mcp/mcp_server.dockerfile
+  #     args:
+  #       - MCP_SERVER_DIR=netbox
+  #   ports:
+  #     - "8012:8080"
+  #   volumes:
+  #     - ./mcp/netbox/server.py:/opt/mcp/netbox/server.py:ro
+  #   environment:
+  #     - PORT=8080
+  #     - VERIFY_SSL=false
+  #     - NETBOX_TIMEOUT_SECONDS=20
+  #     - MCP_SECRET_BROKER_TIMEOUT_SECONDS=10
+  #   extra_hosts:
+  #     - "host.docker.internal:host-gateway"
+  #   restart: unless-stopped
 
-  dbhub-mcp:
-    build:
-      context: .
-      dockerfile: mcp/mcp_server.dockerfile
-      args:
-        - MCP_SERVER_DIR=sql
-    ports:
-      - "8011:8080"
-    environment:
-      - PORT=8080
-      - DB_DSN=postgres://${REMOTE_POSTGRES_USER}:${REMOTE_POSTGRES_PASSWORD}@${REMOTE_POSTGRES_HOST:-postgres-remote}:5432/${REMOTE_POSTGRES_DB}?sslmode=disable
-      - DB_READONLY=true
-      - DB_MAX_ROWS=200
-    depends_on:
-      postgres-remote:
-        condition: service_healthy
-    restart: unless-stopped
+  # dbhub-mcp:
+  #   build:
+  #     context: .
+  #     dockerfile: mcp/mcp_server.dockerfile
+  #     args:
+  #       - MCP_SERVER_DIR=sql
+  #   ports:
+  #     - "8011:8080"
+  #   environment:
+  #     - PORT=8080
+  #     - DB_DSN=postgres://${REMOTE_POSTGRES_USER}:${REMOTE_POSTGRES_PASSWORD}@${REMOTE_POSTGRES_HOST:-postgres-remote}:5432/${REMOTE_POSTGRES_DB}?sslmode=disable
+  #     - DB_READONLY=true
+  #     - DB_MAX_ROWS=200
+  #   depends_on:
+  #     postgres-remote:
+  #       condition: service_healthy
+  #   restart: unless-stopped
 
   # =============================================================================
   # EMBEDDING SERVICES

@@ -1479,11 +1479,11 @@ function TemplateCollectionView({ collection, slug }: TemplateViewProps) {
 
   const handleDeleteRows = useCallback(async (ids: string[]) => {
     if (ids.length === 0) return;
-    await collectionsApi.deleteRows(slug, ids);
+    await collectionsApi.deleteTemplates(collectionId, ids);
     showToast(`Удалено: ${ids.length} шаблонов`, 'success');
     setSelectedIds(new Set<string>());
     invalidateTemplates();
-  }, [invalidateTemplates, showToast, slug]);
+  }, [collectionId, invalidateTemplates, showToast]);
 
   const handleDeleteSelected = useCallback(() => {
     const ids = Array.from(selectedIds);

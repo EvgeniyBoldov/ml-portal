@@ -776,6 +776,17 @@ export const collectionsApi = {
     });
   },
 
+  deleteTemplates: async (
+    collectionId: string,
+    ids: string[],
+  ): Promise<{ deleted: number; ids: string[] }> => {
+    const params = new URLSearchParams();
+    ids.forEach((id) => params.append('ids', id));
+    return apiRequest(`/admin/collections/${collectionId}/templates?${params.toString()}`, {
+      method: 'DELETE',
+    });
+  },
+
   downloadTemplate: (slug: string): string => {
     return `/api/v1/collections/${slug}/template`;
   },

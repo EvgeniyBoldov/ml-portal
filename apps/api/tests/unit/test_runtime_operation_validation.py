@@ -40,6 +40,33 @@ def _operation(*, schema: dict) -> ResolvedOperation:
     )
 
 
+def _document_search_operation(*, schema: dict) -> ResolvedOperation:
+    target = ProviderExecutionTarget(
+        operation_slug="instance.docs.collection.document.search",
+        provider_type="local",
+        provider_instance_id=str(uuid4()),
+        provider_instance_slug="doc-runtime",
+        provider_url=None,
+        data_instance_id=str(uuid4()),
+        data_instance_slug="docs",
+        handler_slug="collection.doc_search",
+        timeout_s=20,
+    )
+    return ResolvedOperation(
+        operation_slug="instance.docs.collection.document.search",
+        operation="collection.document.search",
+        name="Document Search",
+        description="Search documents",
+        input_schema=schema,
+        data_instance_id=target.data_instance_id,
+        data_instance_slug=target.data_instance_slug,
+        provider_instance_id=target.provider_instance_id,
+        provider_instance_slug=target.provider_instance_slug,
+        source="local",
+        target=target,
+    )
+
+
 def _ctx() -> ToolContext:
     ctx = ToolContext(tenant_id=uuid4(), user_id=uuid4())
     deps = RuntimeDependencies(
@@ -153,3 +180,34 @@ async def test_operation_executor_builtin_validation_contract_without_jsonschema
     assert result.success is False
     assert result.metadata.get("error_code") == RuntimeErrorCode.OPERATION_INVALID_ARGS.value
     assert result.metadata.get("field_path") == "$.filters.limit"
+
+
+@pytest.mark.asyncio
+async def test_operation_executor_resolves_collection_doc_search_alias():
+    operation = _document_search_operation(
+        schema={
+            "type": "object",
+            "required": ["collection_slug", "query"],
+            "properties": {
+                "collection_slug": {"type": "string"},
+                "query": {"type": "string"},
+            },
+            "additionalProperties": False,
+        }
+    )
+    call = OperationCall(
+        id="c-alias",
+        operation_slug="collection.doc_search",
+        arguments={"collection_slug": "docs", "query": "nginx"},
+    )
+    executor_impl = AsyncMock(return_value=ToolResult.ok({"hits": [], "total": 0}))
+    ctx = ToolContext(tenant_id=uuid4(), user_id=uuid4())
+    deps = RuntimeDependencies(operation_executor=SimpleNamespace(execute=executor_impl))
+    ctx.set_runtime_deps(deps)
+
+    result, _ = await OperationExecutor().execute(call, ctx, [operation])
+
+    assert result.success is True
+    assert executor_impl.await_count == 1
+    resolved_call = executor_impl.await_args.args[0]
+    assert resolved_call.operation_slug == operation.operation_slug

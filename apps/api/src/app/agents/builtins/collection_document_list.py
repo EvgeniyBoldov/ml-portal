@@ -2,7 +2,7 @@
 Collection List Documents Tool — lists files in a document collection.
 
 The agent uses this to enumerate available files (e.g. templates, registers)
-within a collection after discovering the collection via collection.doc_search.
+within a collection after discovering the collection via collection.document.search.
 Each result carries a file_id that can be passed to file.read or file.analyze.
 """
 from __future__ import annotations
@@ -84,7 +84,7 @@ class CollectionDocumentListTool(VersionedTool):
     """
     List files in a document collection with their metadata.
 
-    Use this AFTER collection.doc_search found a relevant collection to
+    Use this AFTER collection.document.search found a relevant collection to
     enumerate available files (e.g. find an Excel template by filename).
     For each document a file_id is returned — pass it to file.read or file.analyze
     to inspect the actual file content.
@@ -96,7 +96,7 @@ class CollectionDocumentListTool(VersionedTool):
     description: ClassVar[str] = (
         "List all files in a document collection with their names and metadata. "
         "Use to enumerate available files (e.g. find a template by name). "
-        "For content search use collection.doc_search. "
+        "For content search use collection.document.search. "
         "Returns a file_id for each document that can be passed to file.read or file.analyze."
     )
 

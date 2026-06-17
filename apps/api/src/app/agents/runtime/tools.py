@@ -30,6 +30,7 @@ from app.agents.runtime.confirmation import (
 )
 from app.agents.runtime.tool_reuse_policy import ToolCallReusePolicy
 from app.core.logging import get_logger
+from app.agents.operation_publication import canonical_operation_name
 from app.runtime.operation_errors import (
     OperationExecutionError,
     OperationValidationError,
@@ -277,6 +278,28 @@ class OperationExecutionFacade:
         if len(short_matches) > 1:
             candidates = ", ".join(
                 operation.operation_slug for operation in short_matches[:10]
+            )
+            return None, (
+                f"Operation '{operation_slug}' is ambiguous. "
+                f"Use one of: {candidates}"
+            )
+
+        canonical_matches = []
+        for operation in operations:
+            if "." not in operation.operation:
+                continue
+            op_domain = operation.operation.rsplit(".", 1)[0]
+            try:
+                candidate = canonical_operation_name(op_domain, operation_slug)
+            except Exception:
+                continue
+            if candidate == operation.operation:
+                canonical_matches.append(operation)
+        if len(canonical_matches) == 1:
+            return canonical_matches[0], None
+        if len(canonical_matches) > 1:
+            candidates = ", ".join(
+                operation.operation_slug for operation in canonical_matches[:10]
             )
             return None, (
                 f"Operation '{operation_slug}' is ambiguous. "

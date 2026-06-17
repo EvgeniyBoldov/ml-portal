@@ -346,6 +346,24 @@ async def list_templates(
     }
 
 
+@router.delete("/{collection_id}/templates")
+async def delete_templates(
+    collection_id: uuid.UUID,
+    ids: list[uuid.UUID] = Query(...),
+    session: AsyncSession = Depends(db_uow),
+    user: UserCtx = Depends(get_current_user),
+):
+    collection = await _resolve_template_collection(collection_id, session, user)
+    if not ids:
+        raise HTTPException(status_code=400, detail="No template rows selected")
+
+    row_service = CollectionRowService(session)
+    deleted = await row_service.delete_rows(collection, ids)
+    await CollectionStatusSnapshotService(session).sync_collection_status(collection, persist=False)
+    await session.commit()
+    return {"deleted": deleted, "ids": [str(row_id) for row_id in ids]}
+
+
 @router.get("/{collection_id}/templates/{row_id}")
 async def get_template(
     collection_id: uuid.UUID,
