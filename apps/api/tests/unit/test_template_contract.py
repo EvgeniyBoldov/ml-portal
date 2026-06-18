@@ -132,6 +132,15 @@ def test_fill_schema_mixed():
     assert schema["properties"]["positions"]["type"] == "array"
 
 
+def test_fill_schema_nested_scalar():
+    c = TemplateContract(fields=[make_scalar("author.email")])
+    schema = c.to_fill_input_schema()
+    assert schema["properties"]["author"]["type"] == "object"
+    assert schema["properties"]["author"]["properties"]["email"]["type"] == "string"
+    assert "author" in schema["required"]
+    assert "email" in schema["properties"]["author"]["required"]
+
+
 def test_fill_schema_min_items():
     c = TemplateContract(fields=[make_table("rows", min_rows=2)])
     schema = c.to_fill_input_schema()
@@ -162,6 +171,12 @@ def test_validate_missing_required_scalar():
     assert any("name" in e for e in r.errors)
 
 
+def test_validate_missing_required_scalar_non_strict():
+    c = TemplateContract(fields=[make_scalar("name")])
+    r = c.validate_values({}, enforce_required=False)
+    assert r.ok
+
+
 def test_validate_empty_string_scalar():
     c = TemplateContract(fields=[make_scalar("name")])
     r = c.validate_values({"name": "   "})
@@ -171,6 +186,12 @@ def test_validate_empty_string_scalar():
 def test_validate_optional_scalar_absent_ok():
     c = TemplateContract(fields=[make_scalar("note", required=False)])
     r = c.validate_values({})
+    assert r.ok
+
+
+def test_validate_nested_scalar_ok():
+    c = TemplateContract(fields=[make_scalar("author.email")])
+    r = c.validate_values({"author": {"email": "alice@example.com"}})
     assert r.ok
 
 
@@ -221,6 +242,12 @@ def test_validate_table_missing_required_column():
     r = c.validate_values({"items": [{"name": "A"}]})  # missing qty
     assert not r.ok
     assert any("qty" in e for e in r.errors)
+
+
+def test_validate_table_missing_required_column_non_strict():
+    c = TemplateContract(fields=[make_table("items")])
+    r = c.validate_values({"items": [{"name": "A"}]}, enforce_required=False)
+    assert r.ok
 
 
 def test_validate_unknown_key_is_warning():

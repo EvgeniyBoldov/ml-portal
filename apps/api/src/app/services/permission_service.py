@@ -8,7 +8,7 @@ Default for unresolved resources: deny.
 Runtime consumers use EffectivePermissions dataclass — interface unchanged.
 """
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from uuid import UUID
 
 from sqlalchemy import select
@@ -108,6 +108,39 @@ async def _batch_resolve_slugs(
     stmt = select(model.id, model.slug).where(model.id.in_(resource_ids))
     result = await session.execute(stmt)
     return {row[0]: row[1] for row in result.all()}
+
+
+async def _batch_resolve_resource_targets(
+    session: AsyncSession,
+    resource_type: str,
+    resource_ids: set[UUID],
+) -> Dict[UUID, Tuple[str, str]]:
+    """Resolve RBAC resource ids to logical runtime targets.
+
+    Runtime RBAC consumes collection permissions by collection slug, but the
+    admin RBAC surface historically stored collection-like resources as
+    ``resource_type='instance'`` bound to ``Collection.id``. Support both:
+    - ``collection`` -> collection slug
+    - legacy ``instance`` + Collection.id -> collection slug
+    - true ``instance`` + ToolInstance.id -> instance slug
+    """
+    if not resource_ids:
+        return {}
+
+    if resource_type == "instance":
+        collection_slugs = await _batch_resolve_slugs(session, "collection", resource_ids)
+        unresolved = {rid for rid in resource_ids if rid not in collection_slugs}
+        instance_slugs = await _batch_resolve_slugs(session, "instance", unresolved)
+        resolved: Dict[UUID, Tuple[str, str]] = {
+            rid: (slug, "collection") for rid, slug in collection_slugs.items()
+        }
+        resolved.update({
+            rid: (slug, "instance") for rid, slug in instance_slugs.items()
+        })
+        return resolved
+
+    slugs = await _batch_resolve_slugs(session, resource_type, resource_ids)
+    return {rid: (slug, resource_type) for rid, slug in slugs.items()}
 
 
 class PermissionService:
@@ -241,25 +274,26 @@ class PermissionService:
         for (rtype, rid) in resolved:
             ids_by_type.setdefault(rtype, set()).add(rid)
 
-        slug_maps: Dict[str, Dict[UUID, str]] = {}
+        slug_maps: Dict[str, Dict[UUID, Tuple[str, str]]] = {}
         for rtype, ids in ids_by_type.items():
-            slug_maps[rtype] = await _batch_resolve_slugs(
+            slug_maps[rtype] = await _batch_resolve_resource_targets(
                 self.session, rtype, ids
             )
 
         # Apply resolved effects to EffectivePermissions
         for (rtype, rid), (effect, level) in resolved.items():
-            slug = slug_maps.get(rtype, {}).get(rid)
-            if not slug:
+            resolved_target = slug_maps.get(rtype, {}).get(rid)
+            if not resolved_target:
                 continue
+            slug, logical_resource_type = resolved_target
 
             is_allowed = effect == "allow"
 
-            if rtype == "instance":
+            if logical_resource_type == "instance":
                 effective.instance_permissions[slug] = is_allowed
-            elif rtype == "agent":
+            elif logical_resource_type == "agent":
                 effective.agent_permissions[slug] = is_allowed
-            elif rtype == "collection":
+            elif logical_resource_type == "collection":
                 effective.collection_permissions[slug] = is_allowed
 
             if not is_allowed:

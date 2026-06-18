@@ -782,7 +782,7 @@ export const collectionsApi = {
   ): Promise<{ deleted: number; ids: string[] }> => {
     const params = new URLSearchParams();
     ids.forEach((id) => params.append('ids', id));
-    return apiRequest(`/admin/collections/${collectionId}/templates?${params.toString()}`, {
+    return apiRequest(`/collections/${collectionId}/templates?${params.toString()}`, {
       method: 'DELETE',
     });
   },

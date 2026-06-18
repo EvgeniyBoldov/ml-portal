@@ -84,6 +84,14 @@ def test_parse_text_dotted_tokens(parser: TemplateLayoutParser):
     assert layout.scalar_keys == []
 
 
+def test_parse_text_dotted_object_tokens(parser: TemplateLayoutParser):
+    content = b"{{author.name}} {{author.email}}"
+    layout = parser.parse(content, "form.txt")
+    assert layout.table_prefixes == []
+    assert "author.name" in layout.scalar_keys
+    assert "author.email" in layout.scalar_keys
+
+
 def test_parse_text_table_region_from_dotted(parser: TemplateLayoutParser):
     content = b"{{items.name}} {{items.qty}}"
     layout = parser.parse(content, "form.txt")
@@ -236,10 +244,12 @@ def test_parse_excel_two_tables(parser, two_tables_excel_bytes):
     layout = parser.parse(two_tables_excel_bytes, "two.xlsx")
     prefixes = set(layout.table_prefixes)
     assert "items" in prefixes
-    assert "contacts" in prefixes
+    assert "contacts" not in prefixes
+    assert "contacts.name" in layout.scalar_keys
+    assert "contacts.phone" in layout.scalar_keys
     regions_by_prefix = {r.loop_prefix for r in layout.table_regions if r.loop_prefix}
     assert "items" in regions_by_prefix
-    assert "contacts" in regions_by_prefix
+    assert "contacts" not in regions_by_prefix
 
 
 def test_parse_excel_token_location(parser, table_excel_bytes):
@@ -248,6 +258,75 @@ def test_parse_excel_token_location(parser, table_excel_bytes):
     assert tok.location["sheet"] == "Заявка"
     assert "row" in tok.location
     assert "col" in tok.location
+
+
+def test_parse_excel_formula_token(parser):
+    pytest.importorskip("openpyxl")
+    import io
+    import openpyxl
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws["A1"] = "Field"
+    ws["B1"] = '="{{name}}"'
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    wb.close()
+
+    layout = parser.parse(buf.getvalue(), "formula.xlsx")
+
+    assert "name" in layout.scalar_keys
+    token = next(t for t in layout.tokens if t.token == "name")
+    assert token.location["coordinate"] == "B1"
+
+
+def test_parse_excel_typed_placeholder_scalar(parser):
+    pytest.importorskip("openpyxl")
+    import io
+    import openpyxl
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws["A1"] = "{{author.tel:int(10)}}"
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    wb.close()
+
+    layout = parser.parse(buf.getvalue(), "typed.xlsx")
+
+    assert "author.tel" in layout.scalar_keys
+    token = next(t for t in layout.tokens if t.token == "author.tel")
+    assert token.hint_type == "int"
+    assert token.hint_args == "10"
+    assert token.placeholder == "{{author.tel:int(10)}}"
+
+
+def test_parse_excel_repeated_row_detects_table(parser):
+    pytest.importorskip("openpyxl")
+    import io
+    import openpyxl
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws["A1"] = "{{contacts.name}}"
+    ws["B1"] = "{{contacts.phone}}"
+    ws["A2"] = "{{contacts.name}}"
+    ws["B2"] = "{{contacts.phone}}"
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    wb.close()
+
+    layout = parser.parse(buf.getvalue(), "repeated.xlsx")
+
+    assert "contacts" in layout.table_prefixes
+    region = next(r for r in layout.table_regions if r.loop_prefix == "contacts")
+    assert region.loop_tokens == ["{{contacts.name}}", "{{contacts.phone}}"]
 
 
 # ---------------------------------------------------------------------------

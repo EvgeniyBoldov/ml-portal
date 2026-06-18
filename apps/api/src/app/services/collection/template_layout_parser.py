@@ -25,8 +25,8 @@ from typing import Any, Dict, List, Optional, Tuple
 # Regex patterns
 # ---------------------------------------------------------------------------
 
-# Matches dotted and simple tokens: {{name}}, {{items.qty}}, {{x.y.z}}
-_TOKEN_RE = re.compile(r"\{\{([A-Za-z0-9_.\-]+)\}\}")
+# Matches any placeholder expression: {{name}}, {{author.tel:int(10)}}
+_TOKEN_RE = re.compile(r"\{\{([^{}]+)\}\}")
 # Open/close fences: {{#key}} / {{/key}}
 _FENCE_OPEN_RE = re.compile(r"\{\{#([A-Za-z0-9_.\-]+)\}\}")
 _FENCE_CLOSE_RE = re.compile(r"\{\{/([A-Za-z0-9_.\-]+)\}\}")
@@ -48,6 +48,9 @@ class TokenOccurrence:
     table_prefix: Optional[str]   # "items" if dotted, else None
     column_key: Optional[str]     # "qty" if dotted, else None
     location: Dict[str, Any]      # format-specific position info
+    placeholder: Optional[str] = None
+    hint_type: Optional[str] = None
+    hint_args: Optional[str] = None
 
 
 @dataclass
@@ -117,7 +120,10 @@ class TemplateLayoutParser:
         except ImportError as exc:
             raise RuntimeError("openpyxl is required for Excel template parsing") from exc
 
-        wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
+        # For template analysis we need the source cell text, including formulas
+        # that may produce placeholder strings. ``data_only=True`` drops formula
+        # bodies and often returns ``None`` when cached values are absent.
+        wb = openpyxl.load_workbook(io.BytesIO(content), data_only=False)
         tokens: List[TokenOccurrence] = []
         table_regions: List[TableRegion] = []
         text_lines: List[str] = []
@@ -138,7 +144,10 @@ class TemplateLayoutParser:
                     text_lines.append(val)
 
                     for m in _TOKEN_RE.finditer(val):
-                        key = m.group(1)
+                        parsed = _parse_placeholder_expr(m.group(1))
+                        if not parsed:
+                            continue
+                        key, hint_type, hint_args = parsed
                         table_prefix, col_key = _split_dotted(key)
                         tokens.append(TokenOccurrence(
                             token=key,
@@ -151,6 +160,9 @@ class TemplateLayoutParser:
                                 "coordinate": cell.coordinate,
                                 "source_text": val,
                             },
+                            placeholder=m.group(0),
+                            hint_type=hint_type,
+                            hint_args=hint_args,
                         ))
 
             if first_texts == [] and text_lines:
@@ -165,7 +177,7 @@ class TemplateLayoutParser:
         wb.close()
 
         title, version = _extract_title_version(first_texts)
-        scalar_keys, table_prefixes = _aggregate_keys(tokens)
+        scalar_keys, table_prefixes = _aggregate_keys(tokens, table_regions)
 
         return RawLayout(
             format="excel",
@@ -197,22 +209,35 @@ class TemplateLayoutParser:
 
         # --- Marker detection ---
         prefix_to_rows: Dict[str, List[int]] = {}
+        prefix_signatures: Dict[str, List[Tuple[str, ...]]] = {}
+        prefix_brackets: Dict[str, bool] = {}
         for r in sorted_rows:
             row_vals = row_map[r]
             prefixes_in_row: Dict[str, List[str]] = {}
             for val in row_vals.values():
                 for m in _TOKEN_RE.finditer(val):
-                    key = m.group(1)
-                    tp, ck = _split_dotted(key)
+                    parsed = _parse_placeholder_expr(m.group(1))
+                    if not parsed:
+                        continue
+                    key, _, _ = parsed
+                    tp, _ = _split_dotted(key)
                     if tp:
                         prefixes_in_row.setdefault(tp, []).append(f"{{{{{key}}}}}")
             for tp, toks in prefixes_in_row.items():
-                # A dotted prefix denotes a table column, so even a single
-                # column ({{items.name}}) constitutes a marker-loop region.
-                if len(toks) >= 1:
-                    prefix_to_rows.setdefault(tp, []).append(r)
+                prefix_to_rows.setdefault(tp, []).append(r)
+                prefix_signatures.setdefault(tp, []).append(tuple(dict.fromkeys(toks)))
+                if any("[" in value or "]" in value for value in row_vals.values()):
+                    prefix_brackets[tp] = True
 
         for prefix, marker_rows in prefix_to_rows.items():
+            row_signatures = prefix_signatures.get(prefix, [])
+            repeated_signature = len({sig for sig in row_signatures if sig}) < len(row_signatures)
+            if not _is_table_prefix(
+                prefix,
+                repeated_signature=repeated_signature,
+                bracketed=prefix_brackets.get(prefix, False),
+            ):
+                continue
             marker_row = marker_rows[0]
             # Collect all loop_tokens from that row
             loop_tokens: List[str] = []
@@ -221,7 +246,10 @@ class TemplateLayoutParser:
             col_end = row_cols[-1] if row_cols else 1
             for val in row_map.get(marker_row, {}).values():
                 for m in _TOKEN_RE.finditer(val):
-                    key = m.group(1)
+                    parsed = _parse_placeholder_expr(m.group(1))
+                    if not parsed:
+                        continue
+                    key, _, _ = parsed
                     tp, _ = _split_dotted(key)
                     if tp == prefix:
                         tok = f"{{{{{key}}}}}"
@@ -350,7 +378,10 @@ class TemplateLayoutParser:
                 ))
 
             for m in _TOKEN_RE.finditer(text):
-                key = m.group(1)
+                parsed = _parse_placeholder_expr(m.group(1))
+                if not parsed:
+                    continue
+                key, hint_type, hint_args = parsed
                 table_prefix, col_key = _split_dotted(key)
                 tokens.append(TokenOccurrence(
                     token=key,
@@ -361,6 +392,9 @@ class TemplateLayoutParser:
                         "paragraph_index": p_idx,
                         "source_text": text[:200],
                     },
+                    placeholder=m.group(0),
+                    hint_type=hint_type,
+                    hint_args=hint_args,
                 ))
 
         # Tables
@@ -368,8 +402,10 @@ class TemplateLayoutParser:
             region_tokens: List[str] = []
             header_texts: List[str] = []
             prefix_counts: Dict[str, int] = {}
+            prefix_row_signatures: Dict[str, List[Tuple[str, ...]]] = {}
 
             for r_idx, row in enumerate(table.rows):
+                row_prefix_tokens: Dict[str, List[str]] = {}
                 for c_idx, cell in enumerate(row.cells):
                     cell_text = cell.text.strip()
                     if not cell_text:
@@ -377,7 +413,10 @@ class TemplateLayoutParser:
                     text_lines.append(cell_text)
 
                     for m in _TOKEN_RE.finditer(cell_text):
-                        key = m.group(1)
+                        parsed = _parse_placeholder_expr(m.group(1))
+                        if not parsed:
+                            continue
+                        key, hint_type, hint_args = parsed
                         table_prefix, col_key = _split_dotted(key)
                         tok = f"{{{{{key}}}}}"
                         if tok not in region_tokens:
@@ -393,12 +432,19 @@ class TemplateLayoutParser:
                                 "col_index": c_idx,
                                 "source_text": cell_text[:200],
                             },
+                            placeholder=m.group(0),
+                            hint_type=hint_type,
+                            hint_args=hint_args,
                         ))
                         if table_prefix:
                             prefix_counts[table_prefix] = prefix_counts.get(table_prefix, 0) + 1
+                            row_prefix_tokens.setdefault(table_prefix, []).append(tok)
 
                     if r_idx == 0:
                         header_texts.append(cell_text)
+
+                for prefix, toks in row_prefix_tokens.items():
+                    prefix_row_signatures.setdefault(prefix, []).append(tuple(dict.fromkeys(toks)))
 
             if not table.rows:
                 continue
@@ -406,7 +452,14 @@ class TemplateLayoutParser:
             rows_count = len(table.rows)
             cols_count = len(table.columns)
             # Find dominant prefix (most column tokens)
-            dominant_prefix = max(prefix_counts, key=lambda k: prefix_counts[k]) if prefix_counts else None
+            dominant_prefix = None
+            if prefix_counts:
+                candidate = max(prefix_counts, key=lambda k: prefix_counts[k])
+                signatures = prefix_row_signatures.get(candidate, [])
+                repeated_signature = len({sig for sig in signatures if sig}) < len(signatures)
+                bracketed = any("[" in cell.text or "]" in cell.text for row in table.rows for cell in row.cells)
+                if _is_table_prefix(candidate, repeated_signature=repeated_signature, bracketed=bracketed):
+                    dominant_prefix = candidate
             loop_toks = [t for t in region_tokens if dominant_prefix and dominant_prefix + "." in t] if dominant_prefix else []
 
             table_regions.append(TableRegion(
@@ -429,7 +482,7 @@ class TemplateLayoutParser:
             fence_blocks.append(FenceBlock(key=key, open_position=open_pos))
 
         title, version = _extract_title_version(text_lines[:20])
-        scalar_keys, table_prefixes = _aggregate_keys(tokens)
+        scalar_keys, table_prefixes = _aggregate_keys(tokens, table_regions)
 
         return RawLayout(
             format="docx",
@@ -478,7 +531,10 @@ class TemplateLayoutParser:
                 ))
 
             for m in _TOKEN_RE.finditer(line):
-                key = m.group(1)
+                parsed = _parse_placeholder_expr(m.group(1))
+                if not parsed:
+                    continue
+                key, hint_type, hint_args = parsed
                 table_prefix, col_key = _split_dotted(key)
                 tokens.append(TokenOccurrence(
                     token=key,
@@ -489,6 +545,9 @@ class TemplateLayoutParser:
                         "line_index": line_idx,
                         "source_text": line[:200],
                     },
+                    placeholder=m.group(0),
+                    hint_type=hint_type,
+                    hint_args=hint_args,
                 ))
 
         # Table regions from fence blocks
@@ -513,14 +572,33 @@ class TemplateLayoutParser:
                     orientation="vertical",
                 ))
 
-        # Also add structural regions for dotted keys without fences
+        # Also add structural regions for dotted keys without fences when the
+        # template explicitly signals a repeating block.
         fenced_prefixes = {fb.key for fb in fence_blocks}
         prefix_tokens: Dict[str, List[str]] = {}
+        prefix_line_signatures: Dict[str, List[Tuple[str, ...]]] = {}
+        prefix_brackets: Dict[str, bool] = {}
+        for line in text_lines:
+            line_prefixes: Dict[str, List[str]] = {}
+            for m in _TOKEN_RE.finditer(line):
+                parsed = _parse_placeholder_expr(m.group(1))
+                if not parsed:
+                    continue
+                key, _, _ = parsed
+                tp, _ = _split_dotted(key)
+                if tp:
+                    line_prefixes.setdefault(tp, []).append(f"{{{{{key}}}}}")
+                    if "[" in line or "]" in line:
+                        prefix_brackets[tp] = True
+            for prefix, toks in line_prefixes.items():
+                prefix_line_signatures.setdefault(prefix, []).append(tuple(dict.fromkeys(toks)))
         for t in tokens:
             if t.table_prefix and t.table_prefix not in fenced_prefixes:
                 prefix_tokens.setdefault(t.table_prefix, []).append(f"{{{{{t.token}}}}}")
         for prefix, toks in prefix_tokens.items():
-            if len(set(toks)) >= 1:
+            signatures = prefix_line_signatures.get(prefix, [])
+            repeated_signature = len({sig for sig in signatures if sig}) < len(signatures)
+            if _is_table_prefix(prefix, repeated_signature=repeated_signature, bracketed=prefix_brackets.get(prefix, False)):
                 table_regions.append(TableRegion(
                     region_id=f"text:marker:{prefix}",
                     location={"type": "inline", "key": prefix},
@@ -530,7 +608,7 @@ class TemplateLayoutParser:
                 ))
 
         title, version = _extract_title_version(text_lines[:10])
-        scalar_keys, table_prefixes = _aggregate_keys(tokens)
+        scalar_keys, table_prefixes = _aggregate_keys(tokens, table_regions)
 
         return RawLayout(
             format="text",
@@ -586,14 +664,20 @@ def _extract_title_version(texts: List[str]) -> Tuple[Optional[str], Optional[st
 
 def _aggregate_keys(
     tokens: List[TokenOccurrence],
+    table_regions: List[TableRegion],
 ) -> Tuple[List[str], List[str]]:
     """Return (scalar_keys, table_prefixes) from token list, deduplicated, ordered."""
     scalars: List[str] = []
     prefixes: List[str] = []
     seen_s: set = set()
     seen_p: set = set()
+    table_prefix_set = {
+        region.loop_prefix
+        for region in table_regions
+        if region.loop_prefix
+    }
     for t in tokens:
-        if t.table_prefix:
+        if t.table_prefix and t.table_prefix in table_prefix_set:
             if t.table_prefix not in seen_p:
                 seen_p.add(t.table_prefix)
                 prefixes.append(t.table_prefix)
@@ -602,3 +686,21 @@ def _aggregate_keys(
                 seen_s.add(t.token)
                 scalars.append(t.token)
     return scalars, prefixes
+
+
+def _parse_placeholder_expr(expr: str) -> Optional[Tuple[str, Optional[str], Optional[str]]]:
+    raw = expr.strip()
+    if not raw or raw.startswith("#") or raw.startswith("/"):
+        return None
+    match = re.fullmatch(r"([A-Za-z0-9_.\-]+)(?::([A-Za-z]+)(?:\(([^)]*)\))?)?", raw)
+    if not match:
+        return None
+    key = match.group(1)
+    hint_type = match.group(2).lower() if match.group(2) else None
+    hint_args = match.group(3).strip() if match.group(3) else None
+    return key, hint_type, hint_args
+
+
+def _is_table_prefix(prefix: str, *, repeated_signature: bool, bracketed: bool) -> bool:
+    first_octet = prefix.split(".", 1)[0].strip().lower()
+    return first_octet in {"table", "items"} or repeated_signature or bracketed

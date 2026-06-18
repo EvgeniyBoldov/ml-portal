@@ -290,6 +290,8 @@ services:
     build:
       context: .
       dockerfile: infra/docker/worker/Dockerfile
+    profiles:
+      - scheduler
     volumes:
       - ./apps/api/src/app:/app/app
       - ./models_llm:/models_llm:ro

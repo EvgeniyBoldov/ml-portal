@@ -48,13 +48,26 @@ def test_fill_text_scalar_only(scalar_contract):
     assert "amount" in result.filled_scalars
 
 
+def test_fill_text_nested_and_typed_scalar():
+    contract = TemplateContract(fields=[
+        ScalarField(key="author.tel", label="Author tel", type=FieldType.NUMBER, required=True),
+    ])
+    engine = TemplateFillEngine(contract)
+    template = b"Phone: {{author.tel:int(10)}}"
+    result = engine.fill(template, {"author": {"tel": 12345}}, "test.txt")
+    assert result.success is True
+    assert b"12345" in result.content
+    assert "author.tel" in result.filled_scalars
+
+
 def test_fill_text_missing_required(scalar_contract):
     engine = TemplateFillEngine(scalar_contract)
     template = b"Hello {{name}}, amount {{amount}}"
     values = {"name": "Alice"}  # missing amount
     result = engine.fill(template, values, "test.txt")
-    assert result.success is False
-    assert "Validation failed" in result.error
+    assert result.success is True
+    assert b"{{amount}}" in result.content
+    assert "amount" in result.missing_scalars
 
 
 def test_fill_text_table_marker_loop(table_contract):
@@ -75,13 +88,13 @@ def test_fill_text_table_marker_loop(table_contract):
 
 
 def test_fill_text_empty_required_table_fails(table_contract):
-    # items is required=True, so an empty list must fail validation.
+    # Missing rows should not hard-fail fill; unresolved table is reported.
     engine = TemplateFillEngine(table_contract)
     template = b"{{#items}}{{items.name}}{{/items}}"
     values = {"company": "Acme", "items": []}
     result = engine.fill(template, values, "test.txt")
-    assert result.success is False
-    assert "Validation failed" in result.error
+    assert result.success is True
+    assert "items" in result.filled_tables or "items" in result.missing_tables
 
 
 def test_fill_text_empty_optional_table_succeeds():

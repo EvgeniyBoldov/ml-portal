@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from urllib.parse import quote
+
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -31,7 +33,9 @@ async def download_file_by_id(
         raise HTTPException(status_code=404, detail="File not found")
 
     media_type = resolved.content_type or "application/octet-stream"
+    ascii_name = resolved.file_name.encode("ascii", errors="ignore").decode("ascii").strip() or "download.bin"
+    encoded_name = quote(resolved.file_name, safe="")
     headers = {
-        "Content-Disposition": f'attachment; filename="{resolved.file_name}"',
+        "Content-Disposition": f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{encoded_name}",
     }
     return Response(content=payload, media_type=media_type, headers=headers)

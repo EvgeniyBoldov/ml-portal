@@ -8,7 +8,7 @@ from app.services.collection.template_contract import (
     TableAnchor, MarkerAnchor, StructuralAnchor, AnchorStrategy,
     DocumentFormat, Orientation, merge_contract,
 )
-from app.services.collection.template_layout_parser import RawLayout, TableRegion
+from app.services.collection.template_layout_parser import RawLayout, TableRegion, TokenOccurrence
 
 logger = logging.getLogger(__name__)
 SYS_PROMPT = "Analyze template and output JSON schema contract with scalar and table fields."
@@ -92,7 +92,7 @@ class TemplateSchemaBuilder:
             label=data.get("label", key),
             description=data.get("description"),
             type=FieldType(data.get("type", "string")),
-            required=data.get("required", True),
+            required=data.get("required", False),
             example=data.get("example"),
             locator=TokenLocator(token=f"{{{{{key}}}}}"),
             source=FieldSource.LLM,
@@ -113,7 +113,7 @@ class TemplateSchemaBuilder:
                 label=c.get("label", col_key),
                 description=c.get("description"),
                 type=FieldType(c.get("type", "string")),
-                required=c.get("required", True),
+                required=c.get("required", False),
                 example=c.get("example"),
                 locator=TokenLocator(token=f"{{{{{key}.{col_key}}}}}"),
                 source=FieldSource.LLM,
@@ -127,8 +127,8 @@ class TemplateSchemaBuilder:
             label=data.get("label", key),
             description=data.get("description"),
             orientation=Orientation(data.get("orientation", "vertical")),
-            required=data.get("required", True),
-            min_rows=data.get("min_rows", 1),
+            required=data.get("required", False),
+            min_rows=data.get("min_rows", 0),
             max_rows=data.get("max_rows"),
             anchor=anchor,
             columns=columns,
@@ -167,15 +167,19 @@ class TemplateSchemaBuilder:
         )
 
     def _heuristic_build(self, layout: RawLayout) -> TemplateContract:
-        """Deterministic fallback: scalars from non-dotted, tables from dotted prefixes."""
+        """Deterministic fallback for ``{{}}`` contract plus header fallback."""
         fields = []
         for key in layout.scalar_keys:
+            token = self._first_token(layout, key)
+            field_type = self._infer_field_type(token)
+            description = self._hint_description(token)
             fields.append(ScalarField(
                 key=key,
-                label=key.replace("_", " ").capitalize(),
-                type=FieldType.STRING,
-                required=True,
-                locator=TokenLocator(token=f"{{{{{key}}}}}"),
+                label=self._label_for_key(key),
+                description=description,
+                type=field_type,
+                required=False,
+                locator=TokenLocator(token=token.placeholder if token and token.placeholder else f"{{{{{key}}}}}"),
                 source=FieldSource.PARSER,
             ))
         prefix_to_region: Dict[str, TableRegion] = {}
@@ -187,21 +191,26 @@ class TemplateSchemaBuilder:
             columns = []
             if region and region.loop_tokens:
                 for tok in region.loop_tokens:
-                    col_key = tok.strip("{}").split(".", 1)[-1] if "." in tok else tok
+                    clean = tok.strip("{}")
+                    col_key = clean.split(".", 1)[-1] if "." in clean else clean
+                    token = self._first_token(layout, clean)
                     columns.append(TableColumn(
                         key=col_key,
-                        label=col_key.replace("_", " ").capitalize(),
-                        type=FieldType.STRING,
-                        required=True,
+                        label=self._label_for_key(col_key),
+                        description=self._hint_description(token),
+                        type=self._infer_field_type(token),
+                        required=False,
                         locator=TokenLocator(token=tok),
                         source=FieldSource.PARSER,
                     ))
+            elif region and region.header_row:
+                columns = self._columns_from_header(region.header_row)
             else:
                 columns.append(TableColumn(
                     key="value",
                     label="Value",
                     type=FieldType.STRING,
-                    required=True,
+                    required=False,
                     locator=TokenLocator(token="{{" + prefix + ".value}}"),
                     source=FieldSource.PARSER,
                 ))
@@ -226,13 +235,114 @@ class TemplateSchemaBuilder:
                 )
             fields.append(TableField(
                 key=prefix,
-                label=prefix.capitalize(),
+                label=self._label_for_key(prefix),
                 orientation=Orientation.VERTICAL,
-                required=True,
-                min_rows=1,
+                required=False,
+                min_rows=0,
                 anchor=anchor,
+                columns=columns,
+                source=FieldSource.PARSER,
+            ))
+
+        # Structural fallback for spreadsheets/documents without explicit
+        # placeholders. This keeps analysis useful when admins rely on
+        # header-only tabular layout instead of ``{{table.col}}`` markers.
+        table_counter = 0
+        existing_keys = {field.key for field in fields}
+        for region in layout.table_regions:
+            if region.loop_prefix and region.loop_prefix in existing_keys:
+                continue
+            if not region.header_row:
+                continue
+            columns = self._columns_from_header(region.header_row)
+            if len(columns) < 2:
+                continue
+            table_counter += 1
+            key = region.loop_prefix or f"table_{table_counter}"
+            if key in existing_keys:
+                continue
+            existing_keys.add(key)
+            fields.append(TableField(
+                key=key,
+                label=self._region_label(region, table_counter),
+                orientation=Orientation.VERTICAL,
+                required=False,
+                min_rows=0,
+                anchor=TableAnchor(
+                    sheet=region.location.get("sheet"),
+                    strategy=AnchorStrategy.STRUCTURAL,
+                    structural=StructuralAnchor(
+                        header_signature=[h for h in region.header_row if str(h).strip()],
+                        match="fuzzy",
+                        template_row="first_after_header",
+                    ),
+                ),
                 columns=columns,
                 source=FieldSource.PARSER,
             ))
         fmt = DocumentFormat(layout.format) if layout.format in ("excel", "docx", "text") else None
         return TemplateContract(fields=fields, format=fmt)
+
+    def _columns_from_header(self, header_row: List[str]) -> List[TableColumn]:
+        columns: List[TableColumn] = []
+        seen: set[str] = set()
+        for idx, raw_header in enumerate(header_row, start=1):
+            label = str(raw_header or "").strip() or f"Column {idx}"
+            key = self._normalize_field_key(label, fallback=f"column_{idx}")
+            if key in seen:
+                suffix = 2
+                while f"{key}_{suffix}" in seen:
+                    suffix += 1
+                key = f"{key}_{suffix}"
+            seen.add(key)
+            columns.append(TableColumn(
+                key=key,
+                label=label,
+                type=FieldType.STRING,
+                required=False,
+                source=FieldSource.PARSER,
+            ))
+        return columns
+
+    def _first_token(self, layout: RawLayout, key: str) -> Optional[TokenOccurrence]:
+        for token in layout.tokens:
+            if token.token == key:
+                return token
+        return None
+
+    def _infer_field_type(self, token: Optional[TokenOccurrence]) -> FieldType:
+        hint = (token.hint_type or "").strip().lower() if token else ""
+        if hint in {"int", "float", "number", "decimal"}:
+            return FieldType.NUMBER
+        if hint in {"bool", "boolean"}:
+            return FieldType.BOOL
+        if hint in {"date", "datetime"}:
+            return FieldType.DATE
+        return FieldType.STRING
+
+    def _hint_description(self, token: Optional[TokenOccurrence]) -> Optional[str]:
+        if not token or not token.hint_type:
+            return None
+        hint = token.hint_type
+        if token.hint_args:
+            hint = f"{hint}({token.hint_args})"
+        return f"Template hint: {hint}"
+
+    def _label_for_key(self, key: str) -> str:
+        tail = key.split(".")[-1]
+        return tail.replace("_", " ").capitalize()
+
+    def _region_label(self, region: TableRegion, counter: int) -> str:
+        if region.loop_prefix:
+            return region.loop_prefix.replace("_", " ").capitalize()
+        first = next((str(h).strip() for h in region.header_row if str(h).strip()), "")
+        return first or f"Table {counter}"
+
+    def _normalize_field_key(self, value: str, *, fallback: str) -> str:
+        normalized = value.strip().lower()
+        normalized = normalized.replace(".", "_")
+        normalized = "".join(ch if ch.isalnum() or ch == "_" else "_" for ch in normalized)
+        normalized = normalized.strip("_")
+        while "__" in normalized:
+            normalized = normalized.replace("__", "_")
+        return normalized or fallback

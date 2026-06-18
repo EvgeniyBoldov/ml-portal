@@ -23,6 +23,7 @@ from app.services.collection.template_contract import (
     TemplateContract,
     ValidationReport,
 )
+from app.services.collection.template_layout_parser import _parse_placeholder_expr
 
 logger = logging.getLogger(__name__)
 
@@ -57,18 +58,19 @@ class TemplateFillEngine:
 
     def fill(self, template_bytes: bytes, values: Dict[str, Any], filename: str) -> FillResult:
         """Fill template with validated values."""
+        normalized_values = self.contract.normalize_values(values)
         # Validate values against contract
-        report = self.contract.validate_values(values)
+        report = self.contract.validate_values(values, enforce_required=False)
         if not report.ok:
             return FillResult(success=False, error=f"Validation failed: {report.errors}")
 
         fmt = self._detect_format(filename)
         if fmt == DocumentFormat.EXCEL:
-            return self._fill_excel(template_bytes, values)
+            return self._fill_excel(template_bytes, normalized_values)
         elif fmt == DocumentFormat.DOCX:
-            return self._fill_docx(template_bytes, values)
+            return self._fill_docx(template_bytes, normalized_values)
         else:
-            return self._fill_text(template_bytes, values)
+            return self._fill_text(template_bytes, normalized_values)
 
     def _detect_format(self, filename: str) -> DocumentFormat:
         fn = filename.lower()
@@ -91,14 +93,12 @@ class TemplateFillEngine:
         filled_tables = []
         missing_tables = []
 
+        scalar_map = {field.key: values.get(field.key) for field in self.contract.scalar_fields()}
+        text, used_keys = _substitute_placeholders(text, scalar_map)
+        filled_scalars.extend(sorted(used_keys))
         for field in self.contract.scalar_fields():
-            key = field.key
-            token = f"{{{{{key}}}}}"
-            if key in values:
-                text = text.replace(token, str(values[key]))
-                filled_scalars.append(key)
-            else:
-                missing_scalars.append(key)
+            if field.key not in used_keys and values.get(field.key) is None:
+                missing_scalars.append(field.key)
 
         # Simple table handling for text (no row expansion, just markers)
         for tfield in self.contract.table_fields():
@@ -154,23 +154,21 @@ class TemplateFillEngine:
         missing_scalars = []
         missing_tables = []
 
-        # Fill scalars
+        scalar_map = {field.key: values.get(field.key) for field in self.contract.scalar_fields()}
+        used_scalar_keys: set[str] = set()
+        for sheet_name in wb.sheetnames:
+            sheet = wb[sheet_name]
+            for row in sheet.iter_rows():
+                for cell in row:
+                    if cell.value and isinstance(cell.value, str):
+                        new_val, keys = _substitute_placeholders(cell.value, scalar_map)
+                        if new_val != cell.value:
+                            cell.value = new_val
+                            used_scalar_keys.update(keys)
+        filled_scalars.extend(sorted(used_scalar_keys))
         for field in self.contract.scalar_fields():
-            key = field.key
-            token = f"{{{{{key}}}}}"
-            found = False
-            for sheet_name in wb.sheetnames:
-                sheet = wb[sheet_name]
-                for row in sheet.iter_rows():
-                    for cell in row:
-                        if cell.value and isinstance(cell.value, str) and token in cell.value:
-                            if key in values:
-                                cell.value = cell.value.replace(token, str(values[key]))
-                                found = True
-                            else:
-                                missing_scalars.append(key)
-            if found and key in values:
-                filled_scalars.append(key)
+            if field.key not in used_scalar_keys and values.get(field.key) is None:
+                missing_scalars.append(field.key)
 
         # Fill tables
         for tfield in self.contract.table_fields():
@@ -261,11 +259,10 @@ class TemplateFillEngine:
                 new_row = list(sheet.iter_rows(min_row=marker_row_idx, max_row=marker_row_idx))[0]
                 for cell, template_val in zip(new_row, template_values):
                     if template_val and isinstance(template_val, str):
-                        filled_val = template_val
-                        for col in tfield.columns:
-                            col_token = f"{{{{{tfield.key}.{col.key}}}}}"
-                            if col_token in filled_val:
-                                filled_val = filled_val.replace(col_token, str(row_data.get(col.key, "")))
+                        filled_val, _ = _substitute_placeholders(
+                            template_val,
+                            _table_row_values(tfield.key, row_data),
+                        )
                         cell.value = filled_val
 
             return True
@@ -362,37 +359,29 @@ class TemplateFillEngine:
         missing_scalars = []
         missing_tables = []
 
-        # Fill scalars in paragraphs
-        for field in self.contract.scalar_fields():
-            key = field.key
-            token = f"{{{{{key}}}}}"
-            found = False
-            for para in doc.paragraphs:
-                if token in para.text:
-                    if key in values:
-                        for run in para.runs:
-                            run.text = run.text.replace(token, str(values[key]))
-                        found = True
-                    else:
-                        missing_scalars.append(key)
-            if found and key in values:
-                filled_scalars.append(key)
+        scalar_map = {field.key: values.get(field.key) for field in self.contract.scalar_fields()}
+        used_scalar_keys: set[str] = set()
+        for para in doc.paragraphs:
+            if para.text:
+                new_text, keys = _substitute_placeholders(para.text, scalar_map)
+                if new_text != para.text:
+                    para.clear()
+                    para.add_run(new_text)
+                    used_scalar_keys.update(keys)
 
-        # Fill scalars in tables
         for table in doc.tables:
             for row in table.rows:
                 for cell in row.cells:
-                    for field in self.contract.scalar_fields():
-                        key = field.key
-                        token = f"{{{{{key}}}}}"
-                        if token in cell.text:
-                            if key in values:
-                                for para in cell.paragraphs:
-                                    for run in para.runs:
-                                        run.text = run.text.replace(token, str(values[key]))
-                                filled_scalars.append(key)
-                            else:
-                                missing_scalars.append(key)
+                    if cell.text:
+                        new_text, keys = _substitute_placeholders(cell.text, scalar_map)
+                        if new_text != cell.text and cell.paragraphs:
+                            cell.paragraphs[0].clear()
+                            cell.paragraphs[0].add_run(new_text)
+                            used_scalar_keys.update(keys)
+        filled_scalars.extend(sorted(used_scalar_keys))
+        for field in self.contract.scalar_fields():
+            if field.key not in used_scalar_keys and values.get(field.key) is None:
+                missing_scalars.append(field.key)
 
         # Fill tables (marker-loop only for docx)
         for tfield in self.contract.table_fields():
@@ -441,11 +430,10 @@ class TemplateFillEngine:
                         new_row = table.add_row()
                         for idx, template_text in enumerate(template_cells):
                             if idx < len(new_row.cells):
-                                filled_text = template_text
-                                for col in tfield.columns:
-                                    col_token = f"{{{{{table_key}.{col.key}}}}}"
-                                    if col_token in filled_text:
-                                        filled_text = filled_text.replace(col_token, str(row_data.get(col.key, "")))
+                                filled_text, _ = _substitute_placeholders(
+                                    template_text,
+                                    _table_row_values(table_key, row_data),
+                                )
                                 new_row.cells[idx].text = filled_text
 
                     filled_tables.append(table_key)
@@ -463,3 +451,27 @@ class TemplateFillEngine:
             missing_scalars=missing_scalars,
             missing_tables=missing_tables,
         )
+
+
+def _substitute_placeholders(text: str, values: Dict[str, Any]) -> Tuple[str, set[str]]:
+    used_keys: set[str] = set()
+
+    def _replace(match: re.Match[str]) -> str:
+        parsed = _parse_placeholder_expr(match.group(1))
+        if not parsed:
+            return match.group(0)
+        key, _, _ = parsed
+        value = values.get(key)
+        if value is None:
+            return match.group(0)
+        used_keys.add(key)
+        return str(value)
+
+    return re.sub(r"\{\{([^{}]+)\}\}", _replace, text), used_keys
+
+
+def _table_row_values(prefix: str, row_data: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        f"{prefix}.{key}": value
+        for key, value in (row_data or {}).items()
+    }

@@ -81,7 +81,9 @@ class TemplateAnalyzeService:
         except ImportError as exc:
             raise RuntimeError("openpyxl is required for Excel template analysis") from exc
 
-        wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
+        # Preserve original formulas while scanning template cells. Using
+        # ``data_only=True`` loses formula bodies and misses placeholders.
+        wb = openpyxl.load_workbook(io.BytesIO(content), data_only=False)
         sheets_meta = []
         all_placeholders = []
         first_texts = []

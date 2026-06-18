@@ -1,7 +1,7 @@
 """Tests for TemplateSchemaBuilder (S2)."""
 from __future__ import annotations
 import pytest
-from app.services.collection.template_contract import FieldKind, FieldSource, TemplateContract
+from app.services.collection.template_contract import FieldKind, FieldSource, TemplateContract, ScalarField, FieldType
 from app.services.collection.template_layout_parser import RawLayout, TokenOccurrence, TableRegion
 from app.services.collection.template_schema_builder import TemplateSchemaBuilder
 
@@ -27,12 +27,12 @@ def scalar_layout():
         format="text", title="Test", version=None,
         tokens=[
             TokenOccurrence(token="name", table_prefix=None, column_key=None, location={}),
-            TokenOccurrence(token="email", table_prefix=None, column_key=None, location={}),
+            TokenOccurrence(token="author.email", table_prefix="author", column_key="email", location={}),
         ],
-        scalar_keys=["name", "email"],
+        scalar_keys=["name", "author.email"],
         table_prefixes=[],
         table_regions=[],
-        text_lines=["Form", "{{name}} {{email}}"],
+        text_lines=["Form", "{{name}} {{author.email}}"],
     )
 
 
@@ -64,7 +64,9 @@ async def test_heuristic_scalars(builder, scalar_layout):
     contract = await builder.build(scalar_layout)
     assert len(contract.scalar_fields()) == 2
     assert contract.scalar_fields()[0].key == "name"
+    assert contract.scalar_fields()[1].key == "author.email"
     assert contract.scalar_fields()[0].source == FieldSource.PARSER
+    assert contract.scalar_fields()[0].required is False
 
 
 @pytest.mark.asyncio
@@ -77,6 +79,9 @@ async def test_heuristic_table(builder, table_layout):
     assert tf.columns[0].key == "name"
     assert tf.columns[1].key == "qty"
     assert tf.source == FieldSource.PARSER
+    assert tf.required is False
+    assert tf.min_rows == 0
+    assert all(col.required is False for col in tf.columns)
 
 
 @pytest.mark.asyncio
@@ -112,3 +117,64 @@ async def test_llm_failure_fallback_to_heuristic(table_layout):
     contract = await builder.build(table_layout)
     assert len(contract.table_fields()) == 1
     assert contract.table_fields()[0].source == FieldSource.PARSER
+
+
+@pytest.mark.asyncio
+async def test_structural_region_fallback_creates_table(builder):
+    layout = RawLayout(
+        format="excel",
+        title="Sheet",
+        version=None,
+        tokens=[],
+        scalar_keys=[],
+        table_prefixes=[],
+        table_regions=[
+            TableRegion(
+                region_id="Sheet1:structural:r1-3",
+                location={"sheet": "Sheet1", "row_start": 1, "row_end": 3, "col_start": 1, "col_end": 2},
+                loop_tokens=[],
+                loop_prefix=None,
+                header_row=["Name", "Qty"],
+            ),
+        ],
+        text_lines=["Name Qty"],
+    )
+
+    contract = await builder.build(layout)
+
+    assert len(contract.table_fields()) == 1
+    table = contract.table_fields()[0]
+    assert table.key == "table_1"
+    assert [column.key for column in table.columns] == ["name", "qty"]
+    assert table.source == FieldSource.PARSER
+
+
+@pytest.mark.asyncio
+async def test_typed_placeholder_infers_number(builder):
+    layout = RawLayout(
+        format="text",
+        title="Form",
+        version=None,
+        tokens=[
+            TokenOccurrence(
+                token="author.tel",
+                table_prefix="author",
+                column_key="tel",
+                location={},
+                placeholder="{{author.tel:int(10)}}",
+                hint_type="int",
+                hint_args="10",
+            )
+        ],
+        scalar_keys=["author.tel"],
+        table_prefixes=[],
+        table_regions=[],
+        text_lines=["{{author.tel:int(10)}}"],
+    )
+
+    contract = await builder.build(layout)
+
+    field = contract.get_field("author.tel")
+    assert field is not None
+    assert field.type == FieldType.NUMBER
+    assert field.description == "Template hint: int(10)"

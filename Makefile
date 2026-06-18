@@ -35,7 +35,7 @@ _reg_prefix = $(if $(REGISTRY),$(REGISTRY)/,)
 .PHONY: help \
         env \
         build-base build-base-ml \
-        up down restart logs ps \
+        up down restart logs ps beat-up beat-down \
         build build-dev build-prod push-prod pull-prod prod-up prod-down prod-migrate build-no-cache \
         push-base pull-base \
         migrate \
@@ -59,6 +59,8 @@ help:
 	@echo ""
 	@echo "  Dev (docker-compose.yml):"
 	@echo "    make up                Start all dev services (detached)"
+	@echo "    make beat-up           Start celery beat in dev (optional)"
+	@echo "    make beat-down         Stop celery beat in dev"
 	@echo "    make down              Stop all dev services"
 	@echo "    make restart           Restart all services"
 	@echo "    make logs              Follow logs (all services)"
@@ -150,7 +152,16 @@ pull-base:
 up:
 	@[ -f .env ] || (echo "❌ .env not found — run: make env"; exit 1)
 	$(COMPOSE) -f $(COMPOSE_FILE) up -d
-	@echo "✓ Dev stack started. API: http://localhost:8000  Frontend: http://localhost:5173"
+	@echo "✓ Dev stack started without celery beat. API: http://localhost:8000  Frontend: http://localhost:5173"
+
+beat-up:
+	@[ -f .env ] || (echo "❌ .env not found — run: make env"; exit 1)
+	$(COMPOSE) -f $(COMPOSE_FILE) --profile scheduler up -d beat
+	@echo "✓ Celery beat started in dev"
+
+beat-down:
+	$(COMPOSE) -f $(COMPOSE_FILE) stop beat
+	@echo "✓ Celery beat stopped in dev"
 
 down:
 	$(COMPOSE) -f $(COMPOSE_FILE) down

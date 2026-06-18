@@ -19,13 +19,14 @@ from app.services.chat_attachment_service import ChatAttachmentService
 from app.services.collection.row_service import CollectionRowService
 from app.services.collection.template_contract import TemplateContract
 from app.services.collection.template_fill_engine import TemplateFillEngine
+from app.services.collection.template_layout_parser import _parse_placeholder_expr
 from app.services.collection_service import CollectionService
 from app.services.file_delivery_service import FileDeliveryService
 from app.adapters.s3_client import s3_manager
 
 logger = get_logger(__name__)
 
-_PLACEHOLDER_RE = re.compile(r"\{\{([A-Za-z0-9_\-]+)\}\}")
+_PLACEHOLDER_RE = re.compile(r"\{\{([^{}]+)\}\}")
 
 _INPUT_SCHEMA_V1 = {
     "type": "object",
@@ -61,8 +62,7 @@ _OUTPUT_SCHEMA_V1 = {
 
 def _fill_text(content: bytes, values: Dict[str, str]) -> bytes:
     text = content.decode("utf-8")
-    for key, val in values.items():
-        text = text.replace(f"{{{{{key}}}}}", str(val))
+    text, _ = _substitute_placeholders(text, values)
     return text.encode("utf-8")
 
 
@@ -124,7 +124,10 @@ def _substitute_placeholders(text: str, values: Dict[str, str]) -> tuple[str, se
     keys_used = set()
 
     def replacer(match: Any) -> str:
-        key = match.group(1)
+        parsed = _parse_placeholder_expr(match.group(1))
+        if not parsed:
+            return match.group(0)
+        key, _, _ = parsed
         if key in values:
             keys_used.add(key)
             return str(values[key])
@@ -132,6 +135,17 @@ def _substitute_placeholders(text: str, values: Dict[str, str]) -> tuple[str, se
 
     result = _PLACEHOLDER_RE.sub(replacer, text)
     return result, keys_used
+
+
+def _flatten_values(values: Dict[str, Any], prefix: str = "") -> Dict[str, Any]:
+    flattened: Dict[str, Any] = {}
+    for key, value in values.items():
+        path = f"{prefix}.{key}" if prefix else str(key)
+        if isinstance(value, dict):
+            flattened.update(_flatten_values(value, path))
+        else:
+            flattened[path] = value
+    return flattened
 
 
 @register_tool
@@ -250,7 +264,11 @@ class TemplateFillTool(VersionedTool):
                     # Backward-compat fallback: template has no analyzed schema yet.
                     # Perform naive {{key}} substitution from provided values.
                     log.warning("No contract schema; using naive placeholder substitution")
-                    str_values = {k: str(v) for k, v in values.items()}
+                    str_values = {
+                        k: str(v)
+                        for k, v in _flatten_values(values).items()
+                        if not isinstance(v, (dict, list))
+                    }
                     if fmt == "excel":
                         filled_bytes = _fill_excel(content, str_values)
                     elif fmt == "word":

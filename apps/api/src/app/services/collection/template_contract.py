@@ -209,11 +209,10 @@ class TemplateContract(BaseModel):
     def to_fill_input_schema(self) -> Dict[str, Any]:
         """Return a JSON-Schema-like dict describing the ``values`` payload for fill.
 
-        Scalars  → flat typed key
+        Scalars  → nested object paths for dotted keys
         Tables   → array of objects built from column definitions
         """
-        properties: Dict[str, Any] = {}
-        required: List[str] = []
+        schema: Dict[str, Any] = {"type": "object", "properties": {}}
 
         for field in self.fields:
             if isinstance(field, ScalarField):
@@ -226,9 +225,12 @@ class TemplateContract(BaseModel):
                     prop["enum"] = field.enum
                 if field.format:
                     prop["format"] = field.format
-                properties[field.key] = prop
-                if field.required:
-                    required.append(field.key)
+                self._assign_nested_schema_property(
+                    schema,
+                    field.key.split("."),
+                    prop,
+                    required=field.required,
+                )
 
             elif isinstance(field, TableField):
                 col_props: Dict[str, Any] = {}
@@ -260,20 +262,24 @@ class TemplateContract(BaseModel):
                     table_prop["minItems"] = field.min_rows
                 if field.max_rows is not None:
                     table_prop["maxItems"] = field.max_rows
-                properties[field.key] = table_prop
-                if field.required:
-                    required.append(field.key)
-
-        schema: Dict[str, Any] = {"type": "object", "properties": properties}
-        if required:
-            schema["required"] = required
+                self._assign_nested_schema_property(
+                    schema,
+                    field.key.split("."),
+                    table_prop,
+                    required=field.required,
+                )
         return schema
 
     # ------------------------------------------------------------------
     # Validation
     # ------------------------------------------------------------------
 
-    def validate_values(self, values: Dict[str, Any]) -> "ValidationReport":
+    def validate_values(
+        self,
+        values: Dict[str, Any],
+        *,
+        enforce_required: bool = True,
+    ) -> "ValidationReport":
         """Validate ``values`` against this contract.
 
         Checks:
@@ -285,16 +291,17 @@ class TemplateContract(BaseModel):
         errors: List[str] = []
         warnings: List[str] = []
 
+        normalized = self.normalize_values(values)
         contract_keys = {f.key for f in self.fields}
-        for k in values:
-            if k not in contract_keys:
-                warnings.append(f"Unknown key '{k}' — not in contract")
+        for path in self._collect_input_paths(values):
+            if path not in contract_keys:
+                warnings.append(f"Unknown key '{path}' — not in contract")
 
         for field in self.fields:
-            val = values.get(field.key)
+            val = normalized.get(field.key)
 
             if isinstance(field, ScalarField):
-                if field.required and (val is None or (isinstance(val, str) and not val.strip())):
+                if enforce_required and field.required and (val is None or (isinstance(val, str) and not val.strip())):
                     errors.append(f"Required scalar '{field.key}' is missing or empty")
                     continue
                 if val is not None:
@@ -303,7 +310,7 @@ class TemplateContract(BaseModel):
                         errors.append(type_err)
 
             elif isinstance(field, TableField):
-                if field.required and (val is None or val == []):
+                if enforce_required and field.required and (val is None or val == []):
                     errors.append(f"Required table '{field.key}' is missing or empty")
                     continue
                 if val is not None:
@@ -330,14 +337,24 @@ class TemplateContract(BaseModel):
                                 warnings.append(
                                     f"Table '{field.key}' row[{i}] has unknown column '{ck}'"
                                 )
-                        for ck in req_cols:
-                            rv = row.get(ck)
-                            if rv is None or (isinstance(rv, str) and not rv.strip()):
-                                errors.append(
-                                    f"Table '{field.key}' row[{i}] missing required column '{ck}'"
-                                )
+                        if enforce_required:
+                            for ck in req_cols:
+                                rv = row.get(ck)
+                                if rv is None or (isinstance(rv, str) and not rv.strip()):
+                                    errors.append(
+                                        f"Table '{field.key}' row[{i}] missing required column '{ck}'"
+                                    )
 
         return ValidationReport(errors=errors, warnings=warnings)
+
+    def normalize_values(self, values: Dict[str, Any]) -> Dict[str, Any]:
+        normalized: Dict[str, Any] = {}
+        for field in self.fields:
+            if isinstance(field, ScalarField):
+                normalized[field.key] = self._lookup_nested_value(values, field.key)
+            elif isinstance(field, TableField):
+                normalized[field.key] = self._lookup_nested_value(values, field.key)
+        return normalized
 
     # ------------------------------------------------------------------
     # Field lookup helpers
@@ -354,6 +371,57 @@ class TemplateContract(BaseModel):
 
     def table_fields(self) -> List[TableField]:
         return [f for f in self.fields if isinstance(f, TableField)]
+
+    def _assign_nested_schema_property(
+        self,
+        schema: Dict[str, Any],
+        path: List[str],
+        prop: Dict[str, Any],
+        *,
+        required: bool,
+    ) -> None:
+        node = schema
+        for segment in path[:-1]:
+            node.setdefault("type", "object")
+            props = node.setdefault("properties", {})
+            child = props.get(segment)
+            if not isinstance(child, dict) or child.get("type") != "object":
+                child = {"type": "object", "properties": {}}
+                props[segment] = child
+            if required:
+                req = node.setdefault("required", [])
+                if segment not in req:
+                    req.append(segment)
+            node = child
+        node.setdefault("type", "object")
+        props = node.setdefault("properties", {})
+        props[path[-1]] = prop
+        if required:
+            req = node.setdefault("required", [])
+            if path[-1] not in req:
+                req.append(path[-1])
+
+    def _lookup_nested_value(self, values: Dict[str, Any], key: str) -> Any:
+        if key in values:
+            return values.get(key)
+        current: Any = values
+        for segment in key.split("."):
+            if not isinstance(current, dict) or segment not in current:
+                return None
+            current = current.get(segment)
+        return current
+
+    def _collect_input_paths(self, values: Dict[str, Any], prefix: str = "") -> List[str]:
+        paths: List[str] = []
+        for key, value in values.items():
+            path = f"{prefix}.{key}" if prefix else str(key)
+            if isinstance(value, dict):
+                paths.extend(self._collect_input_paths(value, path))
+            elif isinstance(value, list):
+                paths.append(path)
+            else:
+                paths.append(path)
+        return paths
 
     # ------------------------------------------------------------------
     # Serialization helpers
