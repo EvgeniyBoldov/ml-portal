@@ -2,9 +2,7 @@
 FinalizationStage — synthesizer stream + terminal state flag.
 
 Invoked by the pipeline when PlanningStage reports NEEDS_FINAL (planner
-FINAL, loop-detected, max-iters). The planner's DIRECT_ANSWER path
-emits its final event inside PlanningStage itself and does NOT come
-through here.
+FINAL, loop-detected, max-iters).
 
 Cross-turn memory is owned by FactStore + DialogueSummaryStore via
 MemoryBuilder/MemoryWriter; there is nothing left to persist at the

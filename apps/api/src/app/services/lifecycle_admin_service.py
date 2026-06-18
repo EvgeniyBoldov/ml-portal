@@ -421,7 +421,7 @@ class LifecycleAdminService:
             filtered = [cid for cid in allowed if str(cid) != collection_id_str]
             if len(filtered) == len(allowed):
                 continue
-            agent.allowed_collection_ids = filtered or None
+            agent.allowed_collection_ids = filtered
             self.session.add(agent)
 
     async def _get_entity(self, kind: LifecycleKind, entity_id: uuid.UUID):

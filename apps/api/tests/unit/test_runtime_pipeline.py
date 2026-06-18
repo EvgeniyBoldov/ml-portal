@@ -13,7 +13,7 @@ their own focused tests); it verifies the coordinator's own contract:
 
     1. Calls MemoryBuilder with the right ids + goal.
     2. Runs PlanningStage.
-    3. Skips FinalizationStage when outcome is DIRECT / PAUSED / ABORTED.
+    3. Skips FinalizationStage when outcome is PAUSED / ABORTED.
     4. Invokes FinalizationStage when outcome is NEEDS_FINAL.
     5. Always invokes MemoryWriter.finalize at the end, with the user's
        request_text and the legacy_memory.final_answer.
@@ -65,7 +65,7 @@ def _canned_platform() -> PlatformSnapshot:
 
 
 class _StubPlanningStage:
-    """Yields one synthesizing-esque event and reports the outcome."""
+    """Yields one planner event and optionally a prefilled final answer."""
 
     def __init__(self, outcome: PlanningOutcome, extra_final_answer: str = ""):
         self.outcome = outcome
@@ -79,8 +79,6 @@ class _StubPlanningStage:
             OrchestrationPhase.PLANNER,
         )
         if self._extra:
-            # DIRECT_ANSWER path writes the final answer onto memory before
-            # returning, so pipeline's _finalize_memory sees it.
             runtime_state.final_answer = self._extra
             yield PhasedEvent(
                 RuntimeEvent.final(self._extra, sources=[], run_id=str(runtime_state.run_id)),
@@ -199,11 +197,11 @@ class _Ctx:
             self.extra["sandbox_overrides"] = sandbox_overrides
 
 
-# ------------------------------------------------------------- direct_answer --
+# -------------------------------------------------------------- final path --
 
 
 @pytest.mark.asyncio
-async def test_pipeline_direct_answer_path_calls_memory_writer_and_skips_finalization():
+async def test_pipeline_final_path_calls_memory_writer_and_runs_finalization():
     chat_id, user_id, tenant_id = uuid4(), uuid4(), uuid4()
 
     pipeline = RuntimePipeline(session=AsyncMock(), llm_client=AsyncMock())
@@ -216,14 +214,13 @@ async def test_pipeline_direct_answer_path_calls_memory_writer_and_skips_finaliz
 
     # Stub stages.
     direct_outcome = PlanningOutcome(
-        kind=PlanningOutcomeKind.DIRECT,
+        kind=PlanningOutcomeKind.NEEDS_FINAL,
         stop_reason=PipelineStopReason.COMPLETED,
         answer_brief="Привет!",
     )
     planning_stub = _StubPlanningStage(direct_outcome, extra_final_answer="Привет!")
     pipeline._assembler.build_planning_stage = MagicMock(return_value=planning_stub)
-    # Finalization should NEVER be built on the DIRECT path.
-    finalization_builder = MagicMock()
+    finalization_builder = MagicMock(return_value=_StubFinalizationStage())
     pipeline._assembler.build_finalization_stage = finalization_builder
 
     with patch("app.runtime.pipeline.RUNTIME_MEMORY_INLINE", True), patch(
@@ -256,11 +253,12 @@ async def test_pipeline_direct_answer_path_calls_memory_writer_and_skips_finaliz
     assert sequences[0] == 1
     assert planning_stub.seen_memory is not None
 
-    finalization_builder.assert_not_called()
+    finalization_builder.assert_called_once()
+    pipeline._assembler.memory_writer.finalize.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_pipeline_direct_answer_emits_memory_tail_before_run_end():
+async def test_pipeline_final_path_emits_memory_tail_before_run_end():
     chat_id, user_id, tenant_id = uuid4(), uuid4(), uuid4()
 
     pipeline = RuntimePipeline(session=AsyncMock(), llm_client=AsyncMock())
@@ -298,13 +296,13 @@ async def test_pipeline_direct_answer_emits_memory_tail_before_run_end():
     pipeline._assembler.memory_writer.finalize = AsyncMock(side_effect=_finalize_memory)
 
     direct_outcome = PlanningOutcome(
-        kind=PlanningOutcomeKind.DIRECT,
+        kind=PlanningOutcomeKind.NEEDS_FINAL,
         stop_reason=PipelineStopReason.COMPLETED,
         answer_brief="Done",
     )
     planning_stub = _StubPlanningStage(direct_outcome, extra_final_answer="Done")
     pipeline._assembler.build_planning_stage = MagicMock(return_value=planning_stub)
-    pipeline._assembler.build_finalization_stage = MagicMock()
+    pipeline._assembler.build_finalization_stage = MagicMock(return_value=_StubFinalizationStage())
 
     with patch("app.runtime.pipeline.RUNTIME_MEMORY_INLINE", True), patch(
         "app.runtime.pipeline.PlatformConfigLoader"

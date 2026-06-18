@@ -65,6 +65,7 @@ export function useAgentDetail(id: string) {
       temperature: entity?.temperature ?? null,
       requires_confirmation_for_write: entity?.requires_confirmation_for_write ?? null,
       risk_level: entity?.risk_level ?? '',
+      allow_all_collections: entity?.allow_all_collections ?? false,
       logging_level: entity?.logging_level ?? 'brief',
       tags: entity?.tags ?? [],
       allowed_collection_ids: entity?.allowed_collection_ids ?? [],

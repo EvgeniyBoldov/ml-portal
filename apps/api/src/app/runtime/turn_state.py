@@ -35,7 +35,7 @@ class PlannerIterationResult(BaseModel):
     step_kind: str = ""
     agent_slug: Optional[str] = None
     phase_id: Optional[str] = None
-    outcome: str = "unknown"  # success | failed | partial | needs_input | final | aborted | direct_answer
+    outcome: str = "unknown"  # success | failed | partial | needs_input | final | aborted
     summary: str = ""
     missing_inputs: List[str] = Field(default_factory=list)
     question: Optional[str] = None

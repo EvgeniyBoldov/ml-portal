@@ -84,9 +84,9 @@ def _enrich_schema_with_contract_metadata(schema: Dict[str, Any], role: SystemLL
         if "agent_input" in props:
             props["agent_input"]["x_when"] = "kind=call_agent"
         if "question" in props:
-            props["question"]["x_when"] = "kind=clarify"
+            props["question"]["x_when"] = "kind=clarify|ask_user"
         if "final_answer" in props:
-            props["final_answer"]["x_when"] = "kind=direct_answer|final"
+            props["final_answer"]["x_when"] = "kind=final"
 
         # Add oneOf variants for discriminated union on 'kind'
         schema["oneOf"] = [
@@ -101,9 +101,9 @@ def _enrich_schema_with_contract_metadata(schema: Dict[str, Any], role: SystemLL
                 "properties": {"kind": {"enum": ["clarify", "ask_user"]}},
             },
             {
-                "title": "direct_or_final",
+                "title": "final",
                 "required": ["kind", "rationale", "final_answer"],
-                "properties": {"kind": {"enum": ["direct_answer", "final"]}},
+                "properties": {"kind": {"const": "final"}},
             },
             {
                 "title": "abort",

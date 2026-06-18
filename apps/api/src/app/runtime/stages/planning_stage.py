@@ -7,6 +7,7 @@ For each iteration:
     3. Dispatch on kind:
          CALL_AGENT → AgentExecutionPort.execute(...) → stream events
          ASK_USER   → terminal (waiting_input)
+         CLARIFY    → terminal (waiting_input)
          FINAL      → terminal (completed) — finalization runs next
          ABORT      → terminal (aborted)
     4. Loop detection → terminal (loop_detected).
@@ -56,7 +57,6 @@ logger = get_logger(__name__)
 
 class PlanningOutcomeKind(str, Enum):
     NEEDS_FINAL = "needs_final"        # synthesizer should run
-    DIRECT = "direct"                  # planner answered directly; final already emitted
     PAUSED = "paused"                  # ASK_USER / CLARIFY — stop, no synth
     ABORTED = "aborted"                # planner-driven abort
     FAILED = "failed"                  # planner raised

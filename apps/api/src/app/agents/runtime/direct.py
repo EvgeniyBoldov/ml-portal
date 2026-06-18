@@ -145,7 +145,7 @@ class DirectRuntime(BaseRuntime):
                 "tokens_in": prompt_tokens,
                 "tokens_out": completion_tokens,
                 "tokens_total": total_tokens,
-                "purpose": "direct_answer",
+                "purpose": "direct_runtime_response",
                 "actor_type": "direct",
                 "actor_entity_id": str(run_session.run_id) if run_session.run_id else None,
             }, duration_ms=llm_duration, tokens_in=prompt_tokens, tokens_out=completion_tokens)
@@ -166,7 +166,7 @@ class DirectRuntime(BaseRuntime):
                 tokens_out=completion_tokens,
                 tokens_total=total_tokens,
                 duration_ms=llm_duration,
-                purpose="direct_answer",
+                purpose="direct_runtime_response",
                 actor_type="direct",
                 actor_entity_id=str(run_session.run_id) if run_session.run_id else None,
             )

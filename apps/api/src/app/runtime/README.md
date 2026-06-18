@@ -7,7 +7,7 @@
 1. `pipeline.py` receives `PipelineRequest`.
 2. `assembler.py` builds per-turn dependencies (`PipelineAssembler`).
 3. Stages execute in order:
-   - `stages/planning_stage.py` — single decision engine (absorbed direct_answer/clarify)
+   - `stages/planning_stage.py` — single decision engine (clarify + agent routing + finalization intent)
    - `stages/finalization_stage.py` — synthesizer for NEEDS_FINAL outcomes
 4. State is persisted through ports (`ports.py`) and adapters (services/repos).
 5. Output events are normalized in `events.py` and wrapped with envelope (`envelope.py`).

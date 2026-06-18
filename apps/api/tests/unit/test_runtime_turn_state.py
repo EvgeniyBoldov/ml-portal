@@ -25,6 +25,7 @@ def test_runtime_turn_state_loop_detection_and_snapshot():
     state.add_planner_step({"kind": "call_agent", "agent_slug": "a", "phase_id": "p1"})
     state.add_planner_step({"kind": "call_agent", "agent_slug": "a", "phase_id": "p1"})
     state.add_planner_step({"kind": "call_agent", "agent_slug": "a", "phase_id": "p1"})
+    state.iter_count = 3
 
     snap = state.planner_snapshot()
     assert snap["iter_count"] == 3

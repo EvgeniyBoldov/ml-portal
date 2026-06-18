@@ -8,14 +8,13 @@ Responsibilities (and NOTHING else):
        persisted FactStore + SummaryStore.
     4. Initialize `RuntimeTurnState` as the single source of truth.
     5. Run the PlanningStage — single decision engine:
-           DIRECT_ANSWER → planner streamed answer, outcome=DIRECT
            CLARIFY/ASK_USER → pause (waiting_input)
            CALL_AGENT loop → eventually FINAL / ABORT / max_iters
     6. Run FinalizationStage for NEEDS_FINAL outcomes (synthesizer).
     7. Hand off to `MemoryWriter.finalize` to persist extracted facts
        and the updated DialogueSummary for next-turn memory.
 
-Triage is gone. The planner absorbs direct_answer + clarify. The
+Triage is gone. The planner absorbs clarify. The
 rolling summary job is delegated to MemoryWriter + SummaryCompactor.
 """
 from __future__ import annotations
@@ -506,9 +505,6 @@ class RuntimePipeline:
                 logging_level=run_logging_level,
             ):
                 yield ev
-        # PlanningOutcomeKind.DIRECT already emitted delta+final inside
-        # the stage; nothing to finalize beyond memory write-back below.
-
         if self._run_store is not None:
             try:
                 await self._run_store.finish_run(

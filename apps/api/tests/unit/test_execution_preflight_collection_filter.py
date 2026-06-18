@@ -77,6 +77,7 @@ def _execution_graph(operations: list[ResolvedOperation]) -> RuntimeExecutionGra
 def _build_preflight(
     *,
     allowed_collection_ids,
+    allow_all_collections=False,
     rbac_allow_fn,
     instances: list[ResolvedDataInstance],
 ):
@@ -94,7 +95,11 @@ def _build_preflight(
     preflight.agent_resolver = SimpleNamespace(
         resolve=AsyncMock(
             return_value=SimpleNamespace(
-                agent=SimpleNamespace(slug="agent-a", allowed_collection_ids=allowed_collection_ids),
+                agent=SimpleNamespace(
+                    slug="agent-a",
+                    allowed_collection_ids=allowed_collection_ids,
+                    allow_all_collections=allow_all_collections,
+                ),
                 agent_version=SimpleNamespace(compiled_prompt="prompt"),
             )
         ),
@@ -118,6 +123,7 @@ async def test_collection_filter_keeps_all_when_agent_allows_any_and_rbac_allows
     c2 = str(uuid4())
     preflight = _build_preflight(
         allowed_collection_ids=None,
+        allow_all_collections=True,
         rbac_allow_fn=lambda _slug: True,
         instances=[
             _resolved_instance(slug="alpha", collection_id=c1, collection_slug="collection.alpha"),
@@ -171,6 +177,7 @@ async def test_collection_filter_applies_rbac_denied_slug():
     c2 = str(uuid4())
     preflight = _build_preflight(
         allowed_collection_ids=None,
+        allow_all_collections=True,
         rbac_allow_fn=lambda slug: slug != "collection.beta",
         instances=[
             _resolved_instance(slug="alpha", collection_id=c1, collection_slug="collection.alpha"),
@@ -188,6 +195,30 @@ async def test_collection_filter_applies_rbac_denied_slug():
     assert [inst.slug for inst in result.resolved_data_instances] == ["alpha"]
     assert [op.data_instance_slug for op in result.resolved_operations] == ["alpha"]
     assert set(result.execution_graph.bindings.keys()) == {"instance.alpha.search"}
+
+
+@pytest.mark.asyncio
+async def test_collection_filter_denies_all_when_agent_has_no_bindings_and_allow_all_disabled():
+    c1 = str(uuid4())
+    preflight = _build_preflight(
+        allowed_collection_ids=None,
+        allow_all_collections=False,
+        rbac_allow_fn=lambda _slug: True,
+        instances=[
+            _resolved_instance(slug="alpha", collection_id=c1, collection_slug="collection.alpha"),
+        ],
+    )
+
+    result = await preflight.prepare(
+        agent_slug="agent-a",
+        user_id=uuid4(),
+        tenant_id=uuid4(),
+        include_routable_agents=False,
+    )
+
+    assert result.resolved_data_instances == []
+    assert result.resolved_operations == []
+    assert result.execution_graph.bindings == {}
 
 
 @pytest.mark.asyncio

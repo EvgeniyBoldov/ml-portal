@@ -1,7 +1,7 @@
 """Pipeline stages — the two discrete phases of a runtime turn.
 
-Post-M5: triage is dead. The planner absorbed direct_answer / clarify /
-resume, so the pipeline is:
+Post-M5: triage is dead. The planner absorbed clarify / resume, so the
+pipeline is:
 
     MemoryBuilder → PlanningStage → FinalizationStage? → MemoryWriter
 """

@@ -12,7 +12,7 @@ from app.runtime.turn_state import RuntimeTurnState
 
 @dataclass
 class TerminalDispatchResult:
-    outcome_kind: Literal["direct", "needs_final", "paused", "aborted"]
+    outcome_kind: Literal["needs_final", "paused", "aborted"]
     stop_reason: PipelineStopReason
     answer_brief: Optional[str] = None
     final_answer_strategy: Literal["synthesize", "verbatim", "use_agent_result"] = "synthesize"
@@ -33,88 +33,6 @@ class PlannerStepDispatcher:
         orchestrator_id: str,
     ) -> tuple[list[PhasedEvent], Optional[TerminalDispatchResult]]:
         events: list[PhasedEvent] = []
-
-        if step.kind == NextStepKind.DIRECT_ANSWER:
-            answer = (step.final_answer or "").strip()
-            if not answer:
-                answer = (step.rationale or "").strip() or "Не удалось сформировать ответ."
-            synthesis_id = f"{run_id}:planner-direct"
-            runtime_state.answer_brief = answer
-            runtime_state.final_answer = answer
-            runtime_state.status = PipelineStopReason.COMPLETED.value
-            events.append(
-                PhasedEvent(
-                    RuntimeEvent.synthesis_start(
-                        synthesis_id=synthesis_id,
-                        run_id=str(run_id),
-                        role="planner_direct",
-                    ),
-                    OrchestrationPhase.SYNTHESIS,
-                )
-            )
-            if answer:
-                events.append(
-                    PhasedEvent(
-                        RuntimeEvent.delta(answer),
-                        OrchestrationPhase.SYNTHESIS,
-                    )
-                )
-            events.append(
-                PhasedEvent(
-                    RuntimeEvent.status(
-                        "final_answer_marker",
-                        producer="planner_direct",
-                        parent_entity_type="synthesis_run",
-                        parent_entity_id=synthesis_id,
-                        content=answer,
-                    ),
-                    OrchestrationPhase.SYNTHESIS,
-                )
-            )
-            events.append(
-                PhasedEvent(
-                    RuntimeEvent.final(answer, sources=[], run_id=str(run_id)),
-                    OrchestrationPhase.SYNTHESIS,
-                )
-            )
-            events.append(
-                PhasedEvent(
-                    RuntimeEvent.synthesis_end(
-                        synthesis_id=synthesis_id,
-                        run_id=str(run_id),
-                        status="completed",
-                    ),
-                    OrchestrationPhase.SYNTHESIS,
-                )
-            )
-            events.append(
-                PhasedEvent(
-                    RuntimeEvent.planner_iteration_end(
-                        iteration_id=planner_iteration_id,
-                        orchestrator_id=orchestrator_id,
-                        iteration=planner_iteration,
-                        status="completed",
-                    ),
-                    OrchestrationPhase.PLANNER,
-                )
-            )
-            runtime_state.add_iteration_result(
-                build_iteration_result(
-                    state=runtime_state,
-                    iteration=planner_iteration,
-                    step_kind=step.kind.value,
-                    agent_slug=step.agent_slug,
-                    phase_id=step.phase_id,
-                    outcome="direct_answer",
-                    summary=answer,
-                    sufficient_for_phase=True,
-                )
-            )
-            return events, TerminalDispatchResult(
-                outcome_kind="direct",
-                stop_reason=PipelineStopReason.COMPLETED,
-                answer_brief=answer,
-            )
 
         if step.kind == NextStepKind.FINAL:
             runtime_state.status = PipelineStopReason.COMPLETED.value

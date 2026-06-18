@@ -53,7 +53,6 @@ class PlannerLLMOutput(BaseModel):
 
     kind: Literal[
         "call_agent",
-        "direct_answer",
         "clarify",
         "ask_user",
         "final",
@@ -221,7 +220,6 @@ class Planner:
     def _to_next_step(raw: PlannerLLMOutput) -> NextStep:
         kind_map = {
             "call_agent": NextStepKind.CALL_AGENT,
-            "direct_answer": NextStepKind.DIRECT_ANSWER,
             "clarify": NextStepKind.CLARIFY,
             "ask_user": NextStepKind.ASK_USER,
             "final": NextStepKind.FINAL,

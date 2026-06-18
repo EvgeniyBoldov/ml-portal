@@ -59,10 +59,6 @@ def validate_next_step(
         if has_previous_sufficient_call_agent(runtime_state):
             return f"{step.kind.value} step blocked: previous agent result is already sufficient"
 
-    if step.kind == NextStepKind.DIRECT_ANSWER:
-        if not (step.final_answer or "").strip():
-            return "direct_answer step missing final_answer"
-
     if step.kind == NextStepKind.FINAL:
         if not (step.final_answer or "").strip():
             return "final step missing final_answer"

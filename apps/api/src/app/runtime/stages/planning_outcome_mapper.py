@@ -9,7 +9,6 @@ from app.runtime.stages.planner_step_dispatcher import TerminalDispatchResult
 
 class PlanningOutcomeMapper:
     TERMINAL_KIND_MAP = {
-        "direct": "DIRECT",
         "needs_final": "NEEDS_FINAL",
         "paused": "PAUSED",
         "aborted": "ABORTED",

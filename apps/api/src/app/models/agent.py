@@ -59,7 +59,15 @@ class Agent(Base, LifecycleMixin):
     allowed_collection_ids: Mapped[Optional[List[uuid.UUID]]] = mapped_column(
         ARRAY(UUID(as_uuid=True)),
         nullable=True,
-        comment="Whitelist of Collection IDs bound to this agent container. NULL = all collections allowed by RBAC."
+        comment="Whitelist of Collection IDs bound to this agent container. Empty/NULL with allow_all_collections=false means no collection access."
+    )
+
+    allow_all_collections: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+        comment="If true, agent may access all current and future collections still allowed by RBAC."
     )
 
     provides_keys: Mapped[Optional[List[str]]] = mapped_column(

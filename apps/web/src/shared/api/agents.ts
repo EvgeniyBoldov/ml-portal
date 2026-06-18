@@ -18,6 +18,7 @@ export interface Agent {
   temperature?: number | null;
   requires_confirmation_for_write?: boolean | null;
   risk_level?: string | null;
+  allow_all_collections?: boolean;
   logging_level?: string;
   allowed_collection_ids?: string[] | null;
   provides_keys?: string[] | null;
@@ -87,6 +88,7 @@ export interface AgentCreate {
   temperature?: number | null;
   requires_confirmation_for_write?: boolean | null;
   risk_level?: string | null;
+  allow_all_collections?: boolean;
   tags?: string[];
   logging_level?: string;
   allowed_collection_ids?: string[] | null;
@@ -100,6 +102,7 @@ export interface AgentUpdate {
   temperature?: number | null;
   requires_confirmation_for_write?: boolean | null;
   risk_level?: string | null;
+  allow_all_collections?: boolean;
   tags?: string[];
   logging_level?: string;
   allowed_collection_ids?: string[] | null;

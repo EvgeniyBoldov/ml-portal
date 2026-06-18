@@ -342,7 +342,8 @@ class ExecutionPreflight:
         default_collection_allow: bool,
     ) -> tuple[Optional[str], Dict[str, Any]]:
         """Step 2b: filter data instances/operations by agent capability + RBAC. Returns a log reason or None."""
-        capability_ids: Optional[set] = None
+        allow_all_collections = bool(getattr(agent, "allow_all_collections", False)) if agent else False
+        capability_ids: Optional[set] = None if allow_all_collections else set()
         if agent and getattr(agent, "allowed_collection_ids", None):
             capability_ids = {str(cid) for cid in agent.allowed_collection_ids}
 
@@ -385,6 +386,7 @@ class ExecutionPreflight:
         audit_payload = {
             "agent_slug": agent_slug,
             "default_collection_allow": bool(default_collection_allow),
+            "allow_all_collections": allow_all_collections,
             "capability_bound_collection_ids": sorted(capability_ids) if capability_ids is not None else [],
             "capability_bound_collections": bound_collections,
             "candidates": all_candidates,

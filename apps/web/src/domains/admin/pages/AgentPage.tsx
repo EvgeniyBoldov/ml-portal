@@ -152,6 +152,12 @@ const AGENT_EXEC_FIELDS: FieldConfig[] = [
       { value: 'full', label: 'Full — всё включая промты и ответы' },
     ],
   },
+  {
+    key: 'allow_all_collections',
+    type: 'boolean',
+    label: 'Разрешить все коллекции',
+    description: 'Автоматически разрешает агенту все текущие и будущие коллекции, которые не заблокированы RBAC.',
+  },
 ];
 
 const AGENT_LIMIT_FIELDS: FieldConfig[] = [
@@ -304,6 +310,7 @@ export function AgentPage() {
     requires_confirmation_for_write: agent?.requires_confirmation_for_write ?? false,
     risk_level: agent?.risk_level || '',
     logging_level: agent?.logging_level || 'brief',
+    allow_all_collections: agent?.allow_all_collections ?? false,
   };
 
   // Version data (read-only from current version)
@@ -327,6 +334,11 @@ export function AgentPage() {
     tags: [], notes: ''
   };
 
+  const allowAllCollections = Boolean(
+    mode === 'edit' || mode === 'create'
+      ? formData.allow_all_collections
+      : agent?.allow_all_collections,
+  );
   const allowedCollectionIds = useMemo(
     () => Array.isArray(agent?.allowed_collection_ids) ? agent.allowed_collection_ids : [],
     [agent?.allowed_collection_ids],
@@ -376,11 +388,9 @@ export function AgentPage() {
   ];
 
   const updateBindingsMutation = useMutation({
-    mutationFn: async (nextCollectionIds: string[]) => {
+    mutationFn: async (payload: { allowed_collection_ids?: string[]; allow_all_collections?: boolean }) => {
       if (!id) return;
-      await agentsApi.update(id, {
-        allowed_collection_ids: nextCollectionIds,
-      });
+      await agentsApi.update(id, payload);
     },
     onSuccess: async () => {
       if (!id) return;
@@ -398,7 +408,10 @@ export function AgentPage() {
     const selectedCollection = collectionsWithBindings.find((collection) => collection.id === selectedCollectionId);
     if (!selectedCollection) return;
     const next = Array.from(new Set([...allowedCollectionIds, selectedCollection.id]));
-    await updateBindingsMutation.mutateAsync(next);
+    await updateBindingsMutation.mutateAsync({
+      allowed_collection_ids: next,
+      allow_all_collections: false,
+    });
     setIsAddDataModalOpen(false);
   };
 
@@ -406,7 +419,10 @@ export function AgentPage() {
     const toRemove = selectedCollectionIds;
     if (toRemove.size === 0) return;
     const next = allowedCollectionIds.filter((collectionId) => !toRemove.has(collectionId));
-    await updateBindingsMutation.mutateAsync(next);
+    await updateBindingsMutation.mutateAsync({
+      allowed_collection_ids: next,
+      allow_all_collections: false,
+    });
   };
 
   // ─── Render ───
@@ -561,7 +577,7 @@ export function AgentPage() {
             <Button
               key="add-data-binding"
               onClick={openAddDataModal}
-              disabled={availableCollectionOptions.length === 0 || updateBindingsMutation.isPending}
+              disabled={allowAllCollections || availableCollectionOptions.length === 0 || updateBindingsMutation.isPending}
             >
                 Добавить коллекцию
               </Button>,
@@ -569,25 +585,28 @@ export function AgentPage() {
                 key="remove-data-binding"
                 variant="danger"
                 onClick={handleRemoveSelectedBindings}
-                disabled={selectedCollectionIds.size === 0 || updateBindingsMutation.isPending}
+                disabled={allowAllCollections || selectedCollectionIds.size === 0 || updateBindingsMutation.isPending}
               >
                 Удалить
               </Button>,
             ]}
           >
             <div style={{ marginBottom: 12, color: 'var(--text-secondary)', fontSize: 13 }}>
-              Пустой список означает, что агент может работать с любыми коллекциями,
-              разрешёнными через `permission_set`. Итоговый набор всегда вычисляется как
-              пересечение прав пользователя и списка агента.
+              {allowAllCollections
+                ? 'Для этого агента включен режим "разрешить все коллекции". Ему доступны все текущие и будущие коллекции, которые не запрещены RBAC.'
+                : 'Пустой список означает, что агенту не разрешена ни одна коллекция. В этом режиме ему остаются только системные операции без collection binding.'}
             </div>
             <DataTable
               columns={dataBindingColumns}
               data={dataBindingRows}
               keyField="id"
-              emptyText="Нет связанных данных. Добавьте связь с коллекцией."
+              emptyText={allowAllCollections ? 'Доступ ко всем коллекциям включен переключателем.' : 'Нет разрешенных коллекций. Добавьте связь с коллекцией или включите доступ ко всем коллекциям.'}
               selectable
               selectedKeys={selectedCollectionIds}
-              onSelectionChange={(keys) => setSelectedCollectionIds(new Set(Array.from(keys).map(String)))}
+              onSelectionChange={(keys) => {
+                if (allowAllCollections) return;
+                setSelectedCollectionIds(new Set(Array.from(keys).map(String)));
+              }}
             />
           </Tab>
         )}

@@ -14,6 +14,7 @@ def _planner_examples() -> ExamplesV2:
             "goal": "Понять, какие источники данных доступны для вопроса пользователя",
             "conversation_summary": "Пользователь спрашивает про доступные источники данных.",
             "available_agents": [
+                {"slug": "other_answer", "description": "Отвечает на общие и non-domain вопросы без доступа к доменным системам"},
                 {"slug": "viewer", "description": "Отвечает по структуре и метаданным источников"},
                 {"slug": "netbox", "description": "Работает с API инвентаря инфраструктуры"},
             ],
@@ -33,9 +34,9 @@ def _planner_examples() -> ExamplesV2:
         "outputs": {
             "call_agent": {
                 "kind": "call_agent",
-                "rationale": "Нужно получить структурный ответ по коллекциям через viewer.",
-                "agent_slug": "viewer",
-                "agent_input": {"question": "Какие источники данных доступны?"},
+                "rationale": "Нужно делегировать ответ non-domain агенту, чтобы сохранить единый путь через agent result и synthesizer.",
+                "agent_slug": "other_answer",
+                "agent_input": {"query": "Какие источники данных доступны?"},
                 "risk": "low",
                 "requires_confirmation": False,
             },
@@ -46,7 +47,7 @@ def _planner_examples() -> ExamplesV2:
                 "risk": "low",
                 "requires_confirmation": False,
             },
-            "direct_or_final": {
+            "final": {
                 "kind": "final",
                 "rationale": "Данных уже достаточно для ответа без дополнительных вызовов.",
                 "final_answer": "Доступны источники: документные коллекции и API-инвентарь NetBox.",

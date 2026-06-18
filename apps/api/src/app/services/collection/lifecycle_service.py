@@ -395,5 +395,5 @@ class CollectionLifecycleService:
             filtered = [cid for cid in allowed if str(cid) != str(collection_id)]
             if len(filtered) == len(allowed):
                 continue
-            agent.allowed_collection_ids = filtered or None
+            agent.allowed_collection_ids = filtered
             self.session.add(agent)

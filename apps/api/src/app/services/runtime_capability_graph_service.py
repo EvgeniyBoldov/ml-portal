@@ -143,11 +143,13 @@ class RuntimeCapabilityGraphService:
                 str(getattr(agent, "name", "") or agent_slug),
                 {
                     "slug": agent_slug,
+                    "allow_all_collections": bool(getattr(agent, "allow_all_collections", False)),
                     "allowed_collection_ids": [
                         str(value) for value in (getattr(agent, "allowed_collection_ids", None) or [])
                     ],
                 },
             )
+            allow_all_collections = bool(getattr(agent, "allow_all_collections", False))
             allowed_collection_ids = self._normalize_uuid_set(getattr(agent, "allowed_collection_ids", None))
             for operation_slug, operation in operations_by_slug.items():
                 if operation.scope == "system":
@@ -158,7 +160,11 @@ class RuntimeCapabilityGraphService:
                     data = data_by_id.get(operation.data_instance_id)
                 if data is None:
                     continue
-                if not self._agent_allows_data_instance(data, allowed_collection_ids):
+                if not self._agent_allows_data_instance(
+                    data,
+                    allowed_collection_ids=allowed_collection_ids,
+                    allow_all_collections=allow_all_collections,
+                ):
                     continue
                 add_edge(agent_node_id, f"operation:{operation_slug}", "can_call")
 
@@ -192,8 +198,13 @@ class RuntimeCapabilityGraphService:
         return normalized
 
     @staticmethod
-    def _agent_allows_data_instance(data: Any, allowed_collection_ids: Set[str]) -> bool:
-        if not allowed_collection_ids:
+    def _agent_allows_data_instance(
+        data: Any,
+        *,
+        allowed_collection_ids: Set[str],
+        allow_all_collections: bool,
+    ) -> bool:
+        if allow_all_collections:
             return True
         collection_id = str(getattr(data, "collection_id", "") or "").strip()
         return bool(collection_id and collection_id in allowed_collection_ids)

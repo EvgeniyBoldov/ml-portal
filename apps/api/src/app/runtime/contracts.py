@@ -3,7 +3,7 @@ Runtime v3 contracts.
 
 Key primitives:
     * PipelineRequest — incoming turn from chat/sandbox
-    * NextStep        — planner decision: call_agent | ask_user | final | abort
+    * NextStep        — planner decision: call_agent | ask_user | clarify | final | abort
     * PipelineStopReason — terminal reasons (waiting_*, completed, failed...)
     * RuntimeTurnState — canonical turn state (replaces legacy WorkingMemory)
 
@@ -61,7 +61,6 @@ class NextStepKind(str, Enum):
     # --- non-terminal ---
     CALL_AGENT = "call_agent"   # delegate to a sub-agent (the only way to touch tools)
     # --- terminal ---
-    DIRECT_ANSWER = "direct_answer"  # answer without touching any agent; streamed verbatim
     ASK_USER = "ask_user"       # pause for user input (legacy name for CLARIFY)
     CLARIFY = "clarify"         # ask user a focused question — alias-kind with semantically
                                 # identical handling to ASK_USER; kept separate so planner

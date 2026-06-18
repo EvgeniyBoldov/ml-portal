@@ -76,6 +76,7 @@ async def list_agents(
             tags=a.tags,
             current_version_id=a.current_version_id,
             logging_level=a.logging_level,
+            allow_all_collections=a.allow_all_collections,
             allowed_collection_ids=a.allowed_collection_ids,
             provides_keys=a.provides_keys,
             lifecycle_status=getattr(a, "lifecycle_status", "active"),
@@ -101,6 +102,7 @@ async def create_agent(
         tags=data.tags,
         logging_level=data.logging_level,
         model=data.model,
+        allow_all_collections=data.allow_all_collections,
         allowed_collection_ids=data.allowed_collection_ids,
         provides_keys=data.provides_keys,
     )
@@ -136,6 +138,7 @@ async def update_agent(
         temperature=data.temperature,
         requires_confirmation_for_write=data.requires_confirmation_for_write,
         risk_level=data.risk_level,
+        allow_all_collections=data.allow_all_collections,
         allowed_collection_ids=data.allowed_collection_ids,
         provides_keys=data.provides_keys,
     )

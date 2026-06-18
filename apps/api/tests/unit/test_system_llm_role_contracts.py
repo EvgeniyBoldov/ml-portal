@@ -15,7 +15,6 @@ def test_planner_contract_has_json_format_and_kind_enum() -> None:
     assert "kind" in schema["properties"]
     # Use set comparison - order doesn't matter for enum values
     assert set(schema["properties"]["kind"]["enum"]) == {
-        "direct_answer",
         "clarify",
         "call_agent",
         "ask_user",
@@ -54,8 +53,8 @@ def test_planner_contract_has_conditional_markers() -> None:
 
     assert props["agent_slug"].get("x_when") == "kind=call_agent"
     assert props["agent_input"].get("x_when") == "kind=call_agent"
-    assert props["question"].get("x_when") == "kind=clarify"
-    assert props["final_answer"].get("x_when") == "kind=direct_answer|final"
+    assert props["question"].get("x_when") == "kind=clarify|ask_user"
+    assert props["final_answer"].get("x_when") == "kind=final"
 
 
 def test_fact_extractor_contract_is_json_from_pydantic() -> None:

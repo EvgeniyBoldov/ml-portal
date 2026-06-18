@@ -66,6 +66,7 @@ class AgentService:
         tags: Optional[List[str]] = None,
         logging_level: str = "brief",
         model: Optional[str] = None,
+        allow_all_collections: bool = False,
         allowed_collection_ids: Optional[List[UUID]] = None,
         provides_keys: Optional[List[str]] = None,
     ) -> Agent:
@@ -80,6 +81,7 @@ class AgentService:
             tags=tags,
             logging_level=logging_level,
             model=model,
+            allow_all_collections=bool(allow_all_collections),
             allowed_collection_ids=allowed_collection_ids,
             provides_keys=provides_keys,
         )
@@ -163,6 +165,7 @@ class AgentService:
             "temperature": agent.temperature,
             "requires_confirmation_for_write": agent.requires_confirmation_for_write,
             "risk_level": agent.risk_level,
+            "allow_all_collections": agent.allow_all_collections,
             "allowed_collection_ids": agent.allowed_collection_ids,
             "provides_keys": agent.provides_keys,
             "created_at": agent.created_at,
@@ -181,6 +184,7 @@ class AgentService:
         temperature: Optional[float] = None,
         requires_confirmation_for_write: Optional[bool] = None,
         risk_level: Optional[str] = None,
+        allow_all_collections: Optional[bool] = None,
         allowed_collection_ids: Optional[List[UUID]] = None,
         provides_keys: Optional[List[str]] = None,
     ) -> Agent:
@@ -202,6 +206,8 @@ class AgentService:
             update_data['requires_confirmation_for_write'] = requires_confirmation_for_write
         if risk_level is not None:
             update_data['risk_level'] = risk_level
+        if allow_all_collections is not None:
+            update_data['allow_all_collections'] = bool(allow_all_collections)
         if allowed_collection_ids is not None:
             update_data['allowed_collection_ids'] = allowed_collection_ids
         if provides_keys is not None:

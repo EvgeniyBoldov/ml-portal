@@ -25,7 +25,8 @@ class AgentCreate(BaseModel):
     temperature: Optional[float] = Field(default=None, description="LLM temperature (orchestration default if None)")
     requires_confirmation_for_write: Optional[bool] = Field(default=None, description="Require confirmation for write ops")
     risk_level: Optional[str] = Field(default=None, description="low, medium, high")
-    allowed_collection_ids: Optional[List[UUID]] = Field(default=None, description="Whitelist of Collection IDs bound to agent. NULL = all collections.")
+    allow_all_collections: bool = Field(default=False, description="If true, agent may access all current and future collections allowed by RBAC.")
+    allowed_collection_ids: Optional[List[UUID]] = Field(default=None, description="Whitelist of Collection IDs bound to agent. Empty/NULL with allow_all_collections=false means no collection access.")
     provides_keys: Optional[List[str]] = Field(default=None, description="Machine keys this agent can resolve for planner needs-routing (e.g. ['lun_uuid']).")
 
 
@@ -38,6 +39,7 @@ class AgentUpdate(BaseModel):
     temperature: Optional[float] = None
     requires_confirmation_for_write: Optional[bool] = None
     risk_level: Optional[str] = None
+    allow_all_collections: Optional[bool] = None
     allowed_collection_ids: Optional[List[UUID]] = None
     provides_keys: Optional[List[str]] = None
 
@@ -54,6 +56,7 @@ class AgentResponse(BaseModel):
     temperature: Optional[float] = None
     requires_confirmation_for_write: Optional[bool] = None
     risk_level: Optional[str] = None
+    allow_all_collections: bool = False
     allowed_collection_ids: Optional[List[UUID]] = None
     provides_keys: Optional[List[str]] = None
     lifecycle_status: str = "active"
@@ -76,6 +79,7 @@ class AgentListItem(BaseModel):
     temperature: Optional[float] = None
     requires_confirmation_for_write: Optional[bool] = None
     risk_level: Optional[str] = None
+    allow_all_collections: bool = False
     allowed_collection_ids: Optional[List[UUID]] = None
     provides_keys: Optional[List[str]] = None
     lifecycle_status: str = "active"

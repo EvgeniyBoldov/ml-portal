@@ -43,7 +43,7 @@ from app.runtime.turn_state import RuntimeTurnState
 # --------------------------------------------------------------------------- #
 #
 # Post-M5: TriageServicePort removed. The planner is the sole decision
-# engine — direct_answer / clarify / call_agent / final / abort all come
+# engine — clarify / call_agent / final / abort all come
 # from a single `next_step` call. SummaryPort removed too — rolling
 # summary is owned by `MemoryWriter` + `SummaryCompactor` now.
 
