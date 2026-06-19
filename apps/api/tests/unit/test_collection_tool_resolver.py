@@ -80,6 +80,46 @@ def test_catalog_tool_supported_for_bound_api_collection():
     assert supported is True
 
 
+def test_text_search_tool_supported_for_bound_template_collection():
+    instance = _instance(config={}, domain="collection.template")
+    tool = SimpleNamespace(source="local", slug="collection.text_search")
+    bound_collection = SimpleNamespace(id="any", has_vector_search=True)
+
+    supported = CollectionToolResolver._is_tool_supported_for_context(
+        tool=tool,
+        context=CollectionToolResolutionContext(
+            instance=instance,
+            provider=SimpleNamespace(),
+            bound_collection=bound_collection,
+            runtime_domain="collection.template",
+            provider_kind="local",
+            is_service_instance=False,
+        ),
+    )
+
+    assert supported is True
+
+
+def test_text_search_tool_rejected_for_template_without_vector_search():
+    instance = _instance(config={}, domain="collection.template")
+    tool = SimpleNamespace(source="local", slug="collection.text_search")
+    bound_collection = SimpleNamespace(id="any", has_vector_search=False)
+
+    supported = CollectionToolResolver._is_tool_supported_for_context(
+        tool=tool,
+        context=CollectionToolResolutionContext(
+            instance=instance,
+            provider=SimpleNamespace(),
+            bound_collection=bound_collection,
+            runtime_domain="collection.template",
+            provider_kind="local",
+            is_service_instance=False,
+        ),
+    )
+
+    assert supported is False
+
+
 @pytest.mark.asyncio
 async def test_load_discovered_tools_adds_catalog_for_bound_local_collection():
     resolver = CollectionToolResolver(session=SimpleNamespace())

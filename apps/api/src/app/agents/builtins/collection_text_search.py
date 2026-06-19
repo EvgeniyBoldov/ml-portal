@@ -99,10 +99,10 @@ class CollectionTextSearchTool(VersionedTool):
     """
 
     tool_slug: ClassVar[str] = "collection.text_search"
-    domains: ClassVar[list] = ["collection.table"]
+    domains: ClassVar[list] = ["collection.table", "collection.template"]
     name: ClassVar[str] = "Collection Text Search"
     description: ClassVar[str] = (
-        "Semantic search within a collection that has retrieval-enabled text fields. "
+        "Semantic search within a table or template collection that has retrieval-enabled text fields. "
         "Finds rows with semantically similar text using vector similarity. "
         "Returns matched text, relevance score, and full row data."
     )

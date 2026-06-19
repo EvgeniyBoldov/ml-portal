@@ -147,6 +147,13 @@ _OPERATION_SPECS: Dict[str, OperationSpec] = {
         description="List templates in a template collection with metadata",
         result_kind="rows",
     ),
+    "collection.template.search": OperationSpec(
+        canonical_op_slug="collection.template.search",
+        domain="collection.template",
+        title="Search Templates",
+        description="Semantic search over templates in a template collection by template description",
+        result_kind="rows",
+    ),
     "collection.template.get_schema": OperationSpec(
         canonical_op_slug="collection.template.get_schema",
         domain="collection.template",
@@ -169,6 +176,7 @@ _OPERATION_SPECS: Dict[str, OperationSpec] = {
 PUBLIC_RETRIEVAL_OPERATIONS: tuple[str, ...] = (
     "collection.document.search",
     "collection.table.search",
+    "collection.template.search",
 )
 
 _PUBLICATION_RULES: tuple[PublicationRule, ...] = (
@@ -251,6 +259,11 @@ _PUBLICATION_RULES: tuple[PublicationRule, ...] = (
         instance_domain="collection.template",
         raw_tool_slug="template.list",
         canonical_op_slug="collection.template.list",
+    ),
+    PublicationRule(
+        instance_domain="collection.template",
+        raw_tool_slug="collection.text_search",
+        canonical_op_slug="collection.template.search",
     ),
     PublicationRule(
         instance_domain="collection.template",

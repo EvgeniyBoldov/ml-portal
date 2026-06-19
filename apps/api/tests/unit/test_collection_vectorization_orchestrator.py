@@ -151,3 +151,21 @@ async def test_reconcile_pending_collections_enqueues_only_vectorizable(monkeypa
     assert result["queued_count"] == 1
     assert result["queued"][0]["collection_id"] == str(collection_ready.id)
     assert result["queued"][0]["task_id"] == "task-1"
+
+
+@pytest.mark.asyncio
+async def test_reconcile_pending_collections_queries_template_collections_too():
+    session = MagicMock()
+    execute_result = MagicMock()
+    execute_result.scalars.return_value.all.return_value = []
+    session.execute = AsyncMock(return_value=execute_result)
+
+    orchestrator = CollectionVectorizationOrchestrator(session=session)
+
+    result = await orchestrator.reconcile_pending_collections(limit=5, countdown=1)
+
+    assert result["queued_count"] == 0
+    stmt = session.execute.await_args.args[0]
+    stmt_text = str(stmt)
+    assert "collections.collection_type = :collection_type_1" in stmt_text
+    assert "collections.collection_type = :collection_type_2" in stmt_text

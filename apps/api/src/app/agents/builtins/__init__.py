@@ -7,7 +7,7 @@ in the VersionedTool tool_registry upon import.
 Collection builtin handler slugs (internal):
 - collection.search          — SQL search with DSL filters, sorting, pagination
 - collection.doc_search      — internal handler slug for collection.document.search
-- collection.text_search     — semantic search in table collections (retrieval-enabled text fields)
+- collection.text_search     — semantic search in table/template collections (retrieval-enabled text fields)
 - collection.list_documents  — list files in a document collection with metadata
 - collection.get_document    — get single document metadata and file_id
 - collection.get             — get single record by primary key
@@ -22,6 +22,7 @@ Collection builtin handler slugs (internal):
 Runtime publishes canonical operation names for LLM/planner:
 - collection.document.search
 - collection.table.search
+- collection.template.search
 - collection.table.get
 - collection.table.aggregate
 - collection.catalog_inspect

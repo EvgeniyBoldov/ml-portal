@@ -33,6 +33,13 @@ def test_collection_document_operation_canonicalization():
     )
 
 
+def test_collection_template_operation_canonicalization():
+    assert (
+        canonical_operation_name("collection.template", "collection.text_search")
+        == "collection.template.search"
+    )
+
+
 def test_collection_sql_catalog_operation_canonicalization():
     assert (
         canonical_operation_name("system", "collection.catalog")
@@ -58,6 +65,16 @@ def test_collection_domain_unknown_raw_tool_is_not_published():
 
 def test_collection_table_semantic_tool_is_internal_not_published():
     assert resolve_publication(instance_domain="collection.table", raw_slug="collection.text_search") is None
+
+
+def test_collection_template_semantic_tool_is_published():
+    decision = resolve_publication(
+        instance_domain="collection.template",
+        raw_slug="collection.text_search",
+    )
+
+    assert decision is not None
+    assert decision.canonical_op_slug == "collection.template.search"
 
 
 def test_non_collection_domain_unknown_prefix_is_not_published():

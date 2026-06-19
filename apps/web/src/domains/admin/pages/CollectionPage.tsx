@@ -196,7 +196,7 @@ function fallbackOperationsByCollectionType(collectionType: CollectionType): Run
   if (collectionType === 'template') {
     return [
       base('template.list', 'template.list'),
-      base('collection.text_search', 'collection.text_search'),
+      base('collection.template.search', 'collection.text_search'),
       base('template.get_schema', 'template.get_schema'),
       base('template.fill', 'template.fill'),
     ];

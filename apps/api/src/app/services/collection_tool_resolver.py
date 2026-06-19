@@ -22,25 +22,25 @@ from app.services.collection_linking import (
 )
 from app.services.instance_capabilities import is_mcp_service_instance
 
-_LocalToolRule = Tuple[str, Optional[Callable[["CollectionToolResolutionContext"], bool]]]
+_LocalToolRule = Tuple[Tuple[str, ...], Optional[Callable[["CollectionToolResolutionContext"], bool]]]
 
 _LOCAL_TOOL_RULES: Dict[str, _LocalToolRule] = {
     "collection.doc_search": (
-        "collection.document",
+        ("collection.document",),
         lambda ctx: bool(getattr(ctx.bound_collection, "has_vector_search", False)),
     ),
-    "collection.list_documents": ("collection.document", None),
-    "collection.get_document": ("collection.document", None),
+    "collection.list_documents": (("collection.document",), None),
+    "collection.get_document": (("collection.document",), None),
     "collection.text_search": (
-        "collection.table",
+        ("collection.table", "collection.template"),
         lambda ctx: bool(getattr(ctx.bound_collection, "has_vector_search", False)),
     ),
-    "collection.search": ("collection.table", None),
-    "collection.aggregate": ("collection.table", None),
-    "collection.get": ("collection.table", None),
-    "template.list": ("collection.template", None),
-    "template.get_schema": ("collection.template", None),
-    "template.fill": ("collection.template", None),
+    "collection.search": (("collection.table",), None),
+    "collection.aggregate": (("collection.table",), None),
+    "collection.get": (("collection.table",), None),
+    "template.list": (("collection.template",), None),
+    "template.get_schema": (("collection.template",), None),
+    "template.fill": (("collection.template",), None),
 }
 
 
@@ -223,8 +223,8 @@ class CollectionToolResolver:
         rule = _LOCAL_TOOL_RULES.get(raw_slug)
         if rule is None:
             return True
-        required_domain, capability_check = rule
-        if required_domain and context.runtime_domain != required_domain:
+        required_domains, capability_check = rule
+        if required_domains and context.runtime_domain not in required_domains:
             return False
         if capability_check and not capability_check(context):
             return False

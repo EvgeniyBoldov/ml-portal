@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from typing import Iterable, Optional
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
@@ -117,7 +117,10 @@ class CollectionVectorizationOrchestrator:
         stmt = (
             select(Collection)
             .where(
-                Collection.collection_type == "table",
+                or_(
+                    Collection.collection_type == "table",
+                    Collection.collection_type == "template",
+                ),
                 Collection.is_active.is_(True),
                 Collection.qdrant_collection_name.is_not(None),
                 Collection.total_rows > (Collection.vectorized_rows + Collection.failed_rows),
