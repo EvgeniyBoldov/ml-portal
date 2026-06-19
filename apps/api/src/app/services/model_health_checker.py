@@ -25,6 +25,7 @@ from app.models.model_registry import Model, ModelType, HealthStatus
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.services.credential_service import CredentialService, CredentialError
+from app.services.model_connector_profiles import build_model_auth_headers, get_healthcheck_paths
 
 logger = get_logger(__name__)
 
@@ -116,7 +117,11 @@ class ModelHealthChecker:
                         latency_ms=0,
                         error="No base URL configured (no instance linked)"
                     )
-                result = await self._check_http_endpoint(base_url)
+                result = await self._check_http_endpoint(
+                    base_url,
+                    connector=model.connector,
+                    extra_config=model.extra_config,
+                )
             
             latency_ms = int((time.monotonic() - start_time) * 1000)
             
@@ -158,8 +163,13 @@ class ModelHealthChecker:
         api_key = await self._resolve_api_key(model, session)
         
         headers = {"Content-Type": "application/json"}
-        if api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
+        headers.update(
+            build_model_auth_headers(
+                model.connector,
+                api_key,
+                extra_config=model.extra_config,
+            )
+        )
         
         # Minimal request - just check if model responds
         payload = {
@@ -215,8 +225,13 @@ class ModelHealthChecker:
         api_key = await self._resolve_api_key(model, session)
         
         headers = {"Content-Type": "application/json"}
-        if api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
+        headers.update(
+            build_model_auth_headers(
+                model.connector,
+                api_key,
+                extra_config=model.extra_config,
+            )
+        )
         
         payload = {
             "model": model.provider_model_name,
@@ -313,15 +328,21 @@ class ModelHealthChecker:
                 errors.append(f"{url}: HTTP {response.status_code}")
             return False, {"error": " ; ".join(errors) or f"Cannot connect to {base_url}"}
     
-    async def _check_http_endpoint(self, url: str) -> Tuple[bool, dict]:
+    async def _check_http_endpoint(
+        self,
+        url: str,
+        *,
+        connector: str | None = None,
+        extra_config: dict | None = None,
+    ) -> Tuple[bool, dict]:
         """Simple HTTP health check"""
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             try:
-                # Try health endpoint first
-                health_url = f"{url.rstrip('/')}/health"
-                response = await client.get(health_url)
-                if response.status_code == 200:
-                    return True, {"endpoint": health_url}
+                for path in get_healthcheck_paths(connector, extra_config=extra_config):
+                    health_url = f"{url.rstrip('/')}/{path.lstrip('/')}"
+                    response = await client.get(health_url)
+                    if response.status_code == 200:
+                        return True, {"endpoint": health_url}
                 
                 # Fallback to root
                 response = await client.get(url)

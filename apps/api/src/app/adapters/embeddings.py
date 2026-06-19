@@ -14,6 +14,7 @@ from app.core.logging import get_logger
 import httpx
 from app.adapters.interfaces.embeddings import EmbeddingInterface, EmbeddingModelInfo
 from app.core.config import get_settings
+from app.services.model_connector_profiles import build_model_auth_headers
 
 logger = get_logger(__name__)
 
@@ -139,7 +140,9 @@ class OpenAIEmbeddingProvider(EmbeddingInterface):
         provider_model_name: str,
         base_url: str,
         api_key: Optional[str] = None,
-        dimensions: Optional[int] = None
+        dimensions: Optional[int] = None,
+        connector: Optional[str] = None,
+        extra_config: Optional[Dict[str, Any]] = None,
     ):
         self._model_alias = model_alias
         self._provider_model_name = provider_model_name
@@ -147,6 +150,8 @@ class OpenAIEmbeddingProvider(EmbeddingInterface):
         self._api_key = api_key
         self._dimensions = dimensions or self.MODEL_DIMENSIONS.get(provider_model_name, 1536)
         self._version = "1.0"
+        self._connector = connector
+        self._extra_config = extra_config or {}
         
     def get_model_info(self) -> EmbeddingModelInfo:
         return EmbeddingModelInfo(
@@ -162,11 +167,14 @@ class OpenAIEmbeddingProvider(EmbeddingInterface):
         if not texts:
             return []
         
-        headers = {
-            "Content-Type": "application/json",
-        }
-        if self._api_key:
-            headers["Authorization"] = f"Bearer {self._api_key}"
+        headers = {"Content-Type": "application/json"}
+        headers.update(
+            build_model_auth_headers(
+                self._connector,
+                self._api_key,
+                extra_config=self._extra_config,
+            )
+        )
         
         payload = {
             "input": texts,
@@ -386,13 +394,15 @@ class EmbeddingServiceFactory:
                 dimensions=config.dimensions or 384
             )
         
-        elif connector == "openai_http" or connector == "azure_openai_http" or (not connector and provider == "openai"):
+        elif connector in {"openai_http", "azure_openai_http", "litellm_http"} or (not connector and provider == "openai"):
             return OpenAIEmbeddingProvider(
                 model_alias=config.alias,
                 provider_model_name=config.provider_model_name,
                 base_url=config.base_url,
                 api_key=config.api_key,
-                dimensions=config.dimensions
+                dimensions=config.dimensions,
+                connector=config.connector,
+                extra_config=config.extra_config,
             )
         
         elif not connector and provider == "local":
@@ -535,7 +545,8 @@ class EmbeddingServiceFactory:
                             base_url=base_url,
                             api_key=api_key,
                             dimensions=model.extra_config.get('vector_dim') if model.extra_config else None,
-                            extra_config=model.extra_config
+                            extra_config=model.extra_config,
+                            connector=getattr(model, "connector", None),
                         )
                     return None
             

@@ -5,6 +5,7 @@ No file system scanning - models are added manually.
 """
 from __future__ import annotations
 import uuid
+import os
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, Tuple
 import httpx
@@ -28,6 +29,8 @@ from app.schemas.model_registry import (
     HealthCheckResponse,
 )
 from app.core.logging import get_logger
+from app.services.credential_service import CredentialService, CredentialError
+from app.services.model_connector_profiles import build_model_auth_headers, get_healthcheck_paths
 
 logger = get_logger(__name__)
 router = APIRouter(tags=["models"])
@@ -46,23 +49,60 @@ def _map_modality_to_model_type(modality: str | None) -> Optional[str]:
     return None
 
 
-async def _probe_manifest(base_url: str) -> Tuple[Dict[str, Any], str]:
+async def _resolve_model_api_key(model: Model, session: AsyncSession) -> Optional[str]:
+    if model.instance_id:
+        try:
+            decrypted = await CredentialService(session).resolve_credentials(
+                instance_id=model.instance_id,
+                strategy="PLATFORM_FIRST",
+            )
+            if decrypted:
+                payload = decrypted.payload or {}
+                if decrypted.auth_type == "api_key":
+                    return payload.get("api_key")
+                if decrypted.auth_type == "token":
+                    return payload.get("token")
+                if decrypted.auth_type == "basic":
+                    return payload.get("password")
+        except CredentialError as exc:
+            logger.warning("Failed to resolve model credentials for %s: %s", model.alias, exc)
+
+    if model.instance and isinstance(model.instance.config, dict):
+        api_key = model.instance.config.get("api_key")
+        if api_key:
+            return api_key
+        api_key_ref = model.instance.config.get("api_key_ref")
+        if api_key_ref:
+            return os.getenv(api_key_ref)
+    return None
+
+
+async def _probe_manifest(
+    base_url: str,
+    *,
+    connector: str | None = None,
+    api_key: str | None = None,
+    extra_config: Dict[str, Any] | None = None,
+) -> Tuple[Dict[str, Any], str]:
     normalized = base_url.rstrip("/")
     health_status = "unavailable"
     health_payload: Dict[str, Any] = {}
+    headers = build_model_auth_headers(connector, api_key, extra_config=extra_config)
     async with httpx.AsyncClient(timeout=8.0) as client:
-        try:
-            health = await client.get(f"{normalized}/health")
-            if health.status_code == 200:
-                health_status = "healthy"
-                if health.headers.get("content-type", "").startswith("application/json"):
-                    health_payload = health.json()
-        except Exception:
-            health_status = "unavailable"
+        for path in get_healthcheck_paths(connector, extra_config=extra_config):
+            try:
+                health = await client.get(f"{normalized}/{path.lstrip('/')}", headers=headers)
+                if health.status_code == 200:
+                    health_status = "healthy"
+                    if health.headers.get("content-type", "").startswith("application/json"):
+                        health_payload = health.json()
+                    break
+            except Exception:
+                continue
 
         first: Dict[str, Any] | None = None
         try:
-            desc_resp = await client.get(f"{normalized}/description")
+            desc_resp = await client.get(f"{normalized}/description", headers=headers)
             if desc_resp.status_code == 200:
                 desc_data = desc_resp.json()
                 if isinstance(desc_data, dict):
@@ -71,12 +111,27 @@ async def _probe_manifest(base_url: str) -> Tuple[Dict[str, Any], str]:
             first = None
 
         if first is None:
-            resp = await client.get(f"{normalized}/models")
+            model_paths = ["/models"]
+            if str(connector or "").strip().lower() == "litellm_http":
+                model_paths = ["/v1/models", "/models"]
+
+            resp = None
+            for path in model_paths:
+                candidate = await client.get(f"{normalized}/{path.lstrip('/')}", headers=headers)
+                if candidate.status_code < 400:
+                    resp = candidate
+                    break
+            if resp is None:
+                raise ValueError("models_manifest_unreachable")
             resp.raise_for_status()
             data = resp.json()
             if not isinstance(data, list) or not data:
-                raise ValueError("models_manifest_empty")
-            first = data[0] or {}
+                if isinstance(data, dict) and isinstance(data.get("data"), list) and data["data"]:
+                    first = data["data"][0] or {}
+                else:
+                    raise ValueError("models_manifest_empty")
+            else:
+                first = data[0] or {}
             if not isinstance(first, dict):
                 raise ValueError("models_manifest_invalid")
         first["_health"] = health_payload
@@ -96,6 +151,8 @@ def _resolve_connector(model: Model) -> str:
         return "local_rerank_http"
     if provider == "local" and model_type == "llm_chat":
         return "local_llm_http"
+    if provider == "litellm":
+        return "litellm_http"
     if provider == "azure":
         return "azure_openai_http"
     return "openai_http"
@@ -281,7 +338,13 @@ async def verify_model(
         if not base_url:
             raise HTTPException(status_code=400, detail="Model has no base_url/instance URL")
 
-        manifest, health_status = await _probe_manifest(base_url)
+        api_key = await _resolve_model_api_key(model, session)
+        manifest, health_status = await _probe_manifest(
+            base_url,
+            connector=_resolve_connector(model),
+            api_key=api_key,
+            extra_config=model.extra_config,
+        )
         model_type = _map_modality_to_model_type(str(manifest.get("modality") or ""))
         update_data: Dict[str, Any] = {
             "provider_model_name": str(manifest.get("alias") or manifest.get("name") or model.provider_model_name),

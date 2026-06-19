@@ -41,6 +41,7 @@ const MODEL_STATUSES: { value: ModelStatus; label: string }[] = [
 
 const PROTOCOLS: { value: ModelConnector; label: string }[] = [
   { value: 'openai_http', label: 'OpenAI HTTP' },
+  { value: 'litellm_http', label: 'LiteLLM' },
   { value: 'azure_openai_http', label: 'Azure OpenAI' },
   { value: 'grpc', label: 'gRPC' },
 ];

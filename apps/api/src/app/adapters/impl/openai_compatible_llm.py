@@ -8,8 +8,21 @@ import os
 from app.core.logging import get_logger
 from openai import AsyncOpenAI
 from app.core.config import get_settings
+from app.services.model_connector_profiles import build_model_auth_headers
 
 logger = get_logger(__name__)
+
+
+class ProfiledAsyncOpenAI(AsyncOpenAI):
+    def __init__(self, *args: Any, auth_headers_override: Optional[dict[str, str]] = None, **kwargs: Any) -> None:
+        self._auth_headers_override = auth_headers_override or {}
+        super().__init__(*args, **kwargs)
+
+    @property
+    def auth_headers(self) -> dict[str, str]:
+        if self._auth_headers_override:
+            return dict(self._auth_headers_override)
+        return super().auth_headers
 
 
 class OpenAICompatibleLLM:
@@ -28,21 +41,41 @@ class OpenAICompatibleLLM:
     
     def __init__(self):
         self.settings = get_settings()
-        self._client_cache: dict[tuple[str, Optional[str]], AsyncOpenAI] = {}
+        self._client_cache: dict[tuple[str, Optional[str], tuple[tuple[str, str], ...]], AsyncOpenAI] = {}
         self.client: Optional[AsyncOpenAI] = None
         self.provider = "connector"
         logger.info("Initialized LLM client via connector chain")
 
-    def _get_or_create_client(self, *, base_url: str, api_key: Optional[str]) -> AsyncOpenAI:
-        cache_key = (base_url.rstrip("/"), api_key)
+    def _get_or_create_client(
+        self,
+        *,
+        base_url: str,
+        api_key: Optional[str],
+        connector: Optional[str],
+        extra_config: Optional[dict[str, Any]],
+    ) -> AsyncOpenAI:
+        default_headers = build_model_auth_headers(connector, api_key, extra_config=extra_config)
+        cache_key = (
+            base_url.rstrip("/"),
+            api_key,
+            tuple(sorted(default_headers.items())),
+        )
         client = self._client_cache.get(cache_key)
         if client is not None:
             return client
 
-        client = AsyncOpenAI(
+        auth_headers_override = default_headers or None
+        openai_api_key = api_key
+        if default_headers and "Authorization" not in default_headers:
+            openai_api_key = None
+
+        client = ProfiledAsyncOpenAI(
             base_url=base_url,
-            api_key=api_key,
+            api_key=openai_api_key,
             timeout=self.settings.LLM_TIMEOUT or 30.0,
+            default_headers=None,
+            auth_headers_override=auth_headers_override,
+            _enforce_credentials=False,
         )
         self._client_cache[cache_key] = client
         return client
@@ -62,7 +95,7 @@ class OpenAICompatibleLLM:
             return payload.get("password")
         return None
 
-    async def _resolve_model_connection(self, model_name: Optional[str]) -> tuple[str, Optional[str], str]:
+    async def _resolve_model_connection(self, model_name: Optional[str]) -> tuple[str, Optional[str], str, Optional[str], dict[str, Any]]:
         try:
             from sqlalchemy import or_, select
             from app.core.db import get_session_factory
@@ -137,7 +170,13 @@ class OpenAICompatibleLLM:
                         if api_key_ref:
                             resolved_api_key = os.getenv(api_key_ref)
 
-                return resolved_base_url, resolved_api_key, str(model.provider_model_name or model.alias)
+                return (
+                    resolved_base_url,
+                    resolved_api_key,
+                    str(model.provider_model_name or model.alias),
+                    getattr(model, "connector", None),
+                    dict(model.extra_config or {}),
+                )
         except Exception as exc:
             logger.error(
                 "Failed to resolve runtime LLM connection for model '%s': %s",
@@ -169,13 +208,15 @@ class OpenAICompatibleLLM:
             
             logger.info(f"Sending chat request: provider={self.provider}, model={request_params['model']}")
 
-            runtime_base_url, runtime_api_key, resolved_model_name = await self._resolve_model_connection(
+            runtime_base_url, runtime_api_key, resolved_model_name, runtime_connector, runtime_extra_config = await self._resolve_model_connection(
                 request_params.get("model")
             )
             request_params["model"] = resolved_model_name
             client = self._get_or_create_client(
                 base_url=runtime_base_url,
                 api_key=runtime_api_key,
+                connector=runtime_connector,
+                extra_config=runtime_extra_config,
             )
 
             # Make the request
@@ -225,13 +266,15 @@ class OpenAICompatibleLLM:
             
             logger.info(f"Sending streaming chat request: provider={self.provider}, model={request_params['model']}")
 
-            runtime_base_url, runtime_api_key, resolved_model_name = await self._resolve_model_connection(
+            runtime_base_url, runtime_api_key, resolved_model_name, runtime_connector, runtime_extra_config = await self._resolve_model_connection(
                 request_params.get("model")
             )
             request_params["model"] = resolved_model_name
             client = self._get_or_create_client(
                 base_url=runtime_base_url,
                 api_key=runtime_api_key,
+                connector=runtime_connector,
+                extra_config=runtime_extra_config,
             )
 
             # Make the streaming request

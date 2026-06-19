@@ -280,7 +280,7 @@ export type TenantUpdate = Partial<TenantCreate>;
 
 // New Model architecture
 export type ModelType = 'llm_chat' | 'embedding' | 'reranker';
-export type ModelConnector = 'openai_http' | 'azure_openai_http' | 'local_emb_http' | 'local_rerank_http' | 'local_llm_http' | 'grpc';
+export type ModelConnector = 'openai_http' | 'litellm_http' | 'azure_openai_http' | 'local_emb_http' | 'local_rerank_http' | 'local_llm_http' | 'grpc';
 export type ModelStatus = 'available' | 'unavailable' | 'deprecated' | 'maintenance';
 export type HealthStatus = 'healthy' | 'degraded' | 'unavailable';
 

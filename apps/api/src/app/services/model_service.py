@@ -52,6 +52,8 @@ class ModelService:
                 connector = "local_rerank_http"
             elif provider == "local" and model_type_value == "llm_chat":
                 connector = "local_llm_http"
+            elif provider == "litellm":
+                connector = "litellm_http"
             elif provider == "azure":
                 connector = "azure_openai_http"
             else:

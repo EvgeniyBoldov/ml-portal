@@ -39,6 +39,7 @@ class HealthStatusEnum(str, Enum):
 class ModelConnectorEnum(str, Enum):
     """Model connector kind"""
     OPENAI_HTTP = "openai_http"
+    LITELLM_HTTP = "litellm_http"
     AZURE_OPENAI_HTTP = "azure_openai_http"
     LOCAL_EMB_HTTP = "local_emb_http"
     LOCAL_RERANK_HTTP = "local_rerank_http"
