@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from urllib.parse import quote, urlparse
 
+from app.core.http.tls import outbound_http_verify
 from app.services.credential_service import CredentialService
 from app.services.mcp_jsonrpc_client import mcp_call_tool, mcp_initialize, mcp_result_error_message
 from app.services.tool_instance.types import HealthCheckResult
@@ -56,7 +57,7 @@ class ToolInstanceHealthService:
         try:
             import httpx
 
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            async with httpx.AsyncClient(timeout=10.0, verify=outbound_http_verify()) as client:
                 response = await client.get(url, follow_redirects=True)
                 if response.status_code < 500:
                     return HealthCheckResult(

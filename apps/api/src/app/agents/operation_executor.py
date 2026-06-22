@@ -12,6 +12,7 @@ from app.agents.contracts import OperationCredentialContext, ProviderExecutionTa
 from app.agents.registry import ToolRegistry
 from app.agents.runtime_graph import OperationExecutionBinding, RuntimeExecutionGraph
 from app.core.config import get_settings
+from app.core.http.tls import outbound_http_verify
 from app.services.mcp_credential_broker_service import MCPCredentialBrokerService
 from app.services.mcp_jsonrpc_client import parse_mcp_response as _parse_mcp_response_body
 
@@ -406,7 +407,7 @@ class DirectOperationExecutor:
             existing = self._clients.get(provider_url)
             if existing is not None:
                 return existing
-            client = httpx.AsyncClient(timeout=timeout_s)
+            client = httpx.AsyncClient(timeout=timeout_s, verify=outbound_http_verify())
             self._clients[provider_url] = client
             return client
 

@@ -4,7 +4,7 @@ import json
 from typing import Any, Dict, Optional
 
 import httpx
-from app.core.config import get_settings
+from app.core.http.tls import outbound_http_verify
 
 
 MCP_ACCEPT_HEADER = "application/json, text/event-stream"
@@ -12,11 +12,7 @@ MCP_PROTOCOL_VERSION = "2024-11-05"
 
 
 def _mcp_http_verify() -> bool | str:
-    settings = get_settings()
-    ca_bundle = str(getattr(settings, "MCP_HTTP_CA_BUNDLE", "") or "").strip()
-    if ca_bundle:
-        return ca_bundle
-    return bool(getattr(settings, "MCP_HTTP_VERIFY_SSL", True))
+    return outbound_http_verify()
 
 
 def parse_mcp_response(body: str) -> Dict[str, Any]:
