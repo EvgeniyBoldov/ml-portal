@@ -371,6 +371,10 @@ class SandboxRunStepRepository:
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
+    async def get_max_order_num(self, run_id: UUID) -> int:
+        stmt = select(func.max(SandboxRunStep.order_num)).where(SandboxRunStep.run_id == run_id)
+        return int(await self.session.scalar(stmt) or 0)
+
 
 class SandboxBranchRepository:
     def __init__(self, session: AsyncSession):

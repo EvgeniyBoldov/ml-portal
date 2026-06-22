@@ -411,6 +411,9 @@ class SandboxService:
     async def get_run_steps_count(self, run_id: UUID) -> int:
         return await self.run_manager.get_run_steps_count(run_id)
 
+    async def get_next_run_step_order(self, run_id: UUID) -> int:
+        return await self.run_manager.get_next_run_step_order(run_id)
+
     # ── Run Steps ────────────────────────────────────────────────────────
 
     async def add_run_step(

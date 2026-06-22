@@ -1,7 +1,7 @@
 import { InspectorTabs } from '@/shared/ui/Inspector';
 import { isErrorData, type TraceEntity } from '@/domains/runtimeTrace/entityTypes';
 import type { RunStep } from '../../../hooks/useSandboxRun';
-import { InfoTab, RawTab, SnapshotJsonField } from '../shared';
+import { InfoTab, RawTab, SnapshotJsonField, SnapshotValueField } from '../shared';
 import { InspectorFieldGroup } from '@/shared/ui/Inspector';
 
 export function ErrorInspectorTabs({ entity, steps }: { entity: TraceEntity; steps: RunStep[] }) {
@@ -14,7 +14,15 @@ export function ErrorInspectorTabs({ entity, steps }: { entity: TraceEntity; ste
   ];
 
   return <InspectorTabs entityId={entity.id} tabs={tabs} render={(tab) => {
-    if (tab === 'info') return <InfoTab entity={entity} steps={steps} />;
+    if (tab === 'info') return (
+      <>
+        <InfoTab entity={entity} steps={steps} />
+        <InspectorFieldGroup>
+          <SnapshotValueField label="Источник" value={data?.sourceLabel ?? '—'} />
+          <SnapshotValueField label="Код" value={data?.code ?? '—'} />
+        </InspectorFieldGroup>
+      </>
+    );
     if (tab === 'summary') return <InspectorFieldGroup><SnapshotJsonField label="Сводка" value={{ code: data?.code, userMessage: data?.userMessage, operatorMessage: data?.operatorMessage }} /></InspectorFieldGroup>;
     if (tab === 'context') return <InspectorFieldGroup><SnapshotJsonField label="Контекст" value={data?.debug ?? '—'} /></InspectorFieldGroup>;
     return <RawTab value={entity.data} entity={entity} steps={steps} />;

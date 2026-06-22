@@ -16,12 +16,12 @@ import Button from '@/shared/ui/Button';
 import { sandboxApi } from '../api';
 import SessionSidebar from '../components/SessionSidebar';
 import RunChat from '../components/RunChat';
-import type { VirtualInspectorStep } from '../components/RunChat';
 import ConfigPanel from '../components/ConfigPanel';
 import ConfirmWriteDialog from '../components/ConfirmWriteDialog';
 import type { SandboxSelectedItem } from '../types';
 import type { RunStep } from '../hooks/useSandboxRun';
 import type { TraceEntity } from '@/domains/runtimeTrace/entityTypes';
+import type { ExecutionMode } from '@/shared/api/types';
 import styles from './SandboxSessionPage.module.css';
 
 const SIDEBAR_WIDTH_KEY = 'sandbox.sidebar.width';
@@ -60,7 +60,6 @@ export default function SandboxSessionPage() {
   
   // Inspector state: steps + selected step for right panel
   const [inspectorSteps, setInspectorSteps] = useState<RunStep[]>([]);
-  const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
   const [selectedEntity, setSelectedEntity] = useState<TraceEntity | null>(null); // New hierarchical entity
   
   const sandboxRun = useSandboxRun(sessionId ?? '');
@@ -131,18 +130,17 @@ export default function SandboxSessionPage() {
   const isOwner = user?.id === session?.owner_id;
   const isReadOnly = !isOwner;
 
-  const handleRun = (text: string, parentRunId?: string | null, attachmentIds?: string[]) => {
+  const handleRun = (text: string, parentRunId?: string | null, attachmentIds?: string[], executionMode: ExecutionMode = 'normal') => {
     if (isReadOnly) return;
-    sandboxRun.run(text, parentRunId, activeBranchId || undefined, attachmentIds);
+    sandboxRun.run(text, parentRunId, activeBranchId || undefined, attachmentIds, executionMode);
   };
 
   const handleSelectRun = (runId?: string) => {
     setSelectedItem({ type: 'run', id: runId ?? 'active', name: 'Лог выполнения' });
   };
 
-  const handleSelectStep = async (runId: string, stepId: string, virtualStep: VirtualInspectorStep, steps: RunStep[], entity?: TraceEntity) => {
+  const handleSelectStep = async (runId: string, _stepId: string, steps: RunStep[], entity?: TraceEntity) => {
     setInspectorSteps(steps);
-    setSelectedStepId(stepId);
     setSelectedEntity(entity ?? null);
     setSelectedItem({ type: 'run', id: runId, name: 'Детали шага' });
   };
@@ -308,8 +306,8 @@ export default function SandboxSessionPage() {
           onResumeSubmit={(text) => sandboxRun.confirmAction(true, text)}
           onStop={sandboxRun.stop}
           onSelectRun={handleSelectRun}
-          onSelectStep={(runId, stepId, virtualStep, steps, entity) => {
-            void handleSelectStep(runId, stepId, virtualStep, steps, entity);
+          onSelectStep={(runId, stepId, steps, entity) => {
+            void handleSelectStep(runId, stepId, steps, entity);
           }}
         />
       </div>

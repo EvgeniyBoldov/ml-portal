@@ -88,6 +88,12 @@ class PlannerActionPayload(BaseModel):
     kind: Optional[str] = None
     rationale: Optional[str] = None
     risk: Optional[str] = None
+    execution_mode: Optional[str] = None
+    hypotheses: Optional[List[Dict[str, Any]]] = None
+    selected_hypothesis_index: Optional[int] = None
+    selected_action_kind: Optional[str] = None
+    selected_action_summary: Optional[str] = None
+    selection_rationale: Optional[str] = None
     contract_version: int = 1
     # Legacy/compat fields
     action_type: Optional[str] = None

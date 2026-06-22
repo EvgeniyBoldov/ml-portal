@@ -8,6 +8,27 @@
   border-top: 1px solid var(--border-color);
 }
 
+.modeRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.modeLabel {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.modeSelect {
+  min-width: 120px;
+  padding: 6px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-hover);
+  color: var(--text);
+  font-size: 12px;
+}
+
 /* Attachments preview */
 .attachments {
   display: flex;

@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { Icon } from '@/shared/ui/Icon';
+import type { ExecutionMode } from '@/shared/api/types';
 import styles from './ChatComposer.module.css';
 
 interface Attachment {
@@ -9,7 +10,7 @@ interface Attachment {
 }
 
 interface ChatComposerProps {
-  onSend: (message: string, options: { agentSlug?: string; attachments?: File[] }) => void;
+  onSend: (message: string, options: { agentSlug?: string; executionMode: ExecutionMode; attachments?: File[] }) => void;
   onStop?: () => void;
   isStreaming?: boolean;
   disabled?: boolean;
@@ -18,6 +19,7 @@ interface ChatComposerProps {
 
 export function ChatComposer({ onSend, onStop, isStreaming, disabled, placeholder }: ChatComposerProps) {
   const [text, setText] = useState('');
+  const [executionMode, setExecutionMode] = useState<ExecutionMode>('normal');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [showMenu, setShowMenu] = useState(false);
@@ -71,6 +73,7 @@ export function ChatComposer({ onSend, onStop, isStreaming, disabled, placeholde
 
     const toSend = [...attachments];
     onSend(text.trim(), {
+      executionMode,
       attachments: toSend.map(a => a.file),
     });
 
@@ -164,6 +167,19 @@ export function ChatComposer({ onSend, onStop, isStreaming, disabled, placeholde
 
   return (
     <div className={styles.composer}>
+      <div className={styles.modeRow}>
+        <label className={styles.modeLabel} htmlFor="chat-execution-mode">Режим</label>
+        <select
+          id="chat-execution-mode"
+          className={styles.modeSelect}
+          value={executionMode}
+          onChange={(e) => setExecutionMode(e.target.value as ExecutionMode)}
+          disabled={disabled || isStreaming}
+        >
+          <option value="normal">Normal</option>
+          <option value="thinking">Thinking</option>
+        </select>
+      </div>
       {/* Attachments preview */}
       {attachments.length > 0 && (
         <div className={styles.attachments}>

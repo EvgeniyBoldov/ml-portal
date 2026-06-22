@@ -17,6 +17,7 @@ export type EntityKind =
   | 'orchestrator'
   | 'planner'
   | 'agent'
+  | 'dialog'
   | 'interaction'
   | 'llm'
   | 'tool'
@@ -73,6 +74,8 @@ export interface LLMData {
   parentEntityType?: string;
   parentEntityId?: string;
   purpose?: string;
+  llmRole?: 'reasoning' | 'planner_decision' | 'agent_answer' | 'tool_protocol' | 'memory' | 'final_answer' | 'generic';
+  llmRoleLabel?: string;
   prompt?: {
     messages?: Array<Record<string, unknown>>;
     systemPrompt?: string;
@@ -190,6 +193,22 @@ export interface AgentData {
   partialModeWarning?: string;
 }
 
+export interface DialogItem {
+  question?: string;
+  answer?: string;
+  resumeAction?: string;
+  sourceRunId?: string;
+  llmSummary?: string;
+}
+
+export interface DialogData {
+  kind: 'dialog';
+  interactionKind: 'clarify' | 'confirm' | 'resume' | string;
+  question?: string;
+  answer?: string;
+  items?: DialogItem[];
+}
+
 export interface InteractionData {
   kind: 'interaction';
   interactionKind: 'clarify' | 'confirm' | 'resume' | string;
@@ -204,6 +223,19 @@ export interface PlannerData {
   stepKind: string; // 'call_agent' | 'direct_answer' | 'final' | 'ask_user' | 'abort' | ...
   rationale?: string;
   contextSnapshot?: TraceContextSnapshot;
+  thinking?: {
+    executionMode?: string;
+    hypotheses?: Array<{
+      summary: string;
+      rationale?: string;
+      risks?: string[];
+      expectedOutcome?: string;
+    }>;
+    selectedHypothesisIndex?: number;
+    selectedActionKind?: string;
+    selectedActionSummary?: string;
+    selectionRationale?: string;
+  };
   alternatives?: Array<{
     kind: string;
     agentSlug?: string;
@@ -258,6 +290,8 @@ export interface ErrorData {
   code?: string;
   userMessage?: string;
   operatorMessage?: string;
+  source?: 'tool' | 'runtime' | 'llm' | 'policy' | 'unknown';
+  sourceLabel?: string;
   debug?: {
     stack?: string;
     context?: Record<string, unknown>;
@@ -275,6 +309,7 @@ export type EntityData =
   | LLMData
   | ToolData
   | AgentData
+  | DialogData
   | InteractionData
   | PlannerData
   | OrchestratorData
@@ -370,6 +405,10 @@ export function isToolData(data: EntityData): data is ToolData {
 
 export function isAgentData(data: EntityData): data is AgentData {
   return data.kind === 'agent';
+}
+
+export function isDialogData(data: EntityData): data is DialogData {
+  return data.kind === 'dialog';
 }
 
 export function isInteractionData(data: EntityData): data is InteractionData {

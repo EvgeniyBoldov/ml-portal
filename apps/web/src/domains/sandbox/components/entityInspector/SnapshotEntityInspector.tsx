@@ -1,5 +1,6 @@
 import {
   AgentInspectorTabs,
+  DialogInspectorTabs,
   InteractionInspectorTabs,
   OrchestratorInspectorTabs,
   PlannerInspectorTabs,
@@ -20,6 +21,9 @@ export function SnapshotEntityInspector({ entity, steps }: SnapshotInspectorCont
   }
   if (entity.kind === 'agent') {
     return <AgentInspectorTabs entity={entity} steps={steps} />;
+  }
+  if (entity.kind === 'dialog') {
+    return <DialogInspectorTabs entity={entity} steps={steps} />;
   }
   if (entity.kind === 'interaction') {
     return <InteractionInspectorTabs entity={entity} steps={steps} />;

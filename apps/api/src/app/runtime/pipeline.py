@@ -33,7 +33,7 @@ from app.core.http.clients import LLMClientProtocol
 from app.core.logging import get_logger
 from app.runtime.assembler import PipelineAssembler
 from app.runtime.budgets import BudgetRegistry, BudgetResolver
-from app.runtime.contracts import PipelineRequest, PipelineStopReason
+from app.runtime.contracts import ExecutionMode, PipelineRequest, PipelineStopReason
 from app.runtime.context_snapshot import compact_snapshot, prompt_snapshot, serialize_limits
 from app.runtime.envelope import EventEnvelopeStamper, PhasedEvent
 from app.runtime.entity_ids import (
@@ -131,6 +131,29 @@ def _extract_effective_user_query(request: PipelineRequest, checkpoint: Optional
     return str(request.request_text or "").strip()
 
 
+def _extract_execution_mode(request: PipelineRequest, checkpoint: Optional[Dict[str, Any]]) -> ExecutionMode:
+    if isinstance(getattr(request, "execution_mode", None), ExecutionMode):
+        return request.execution_mode
+    requested = str(getattr(request, "execution_mode", "") or "").strip().lower()
+    if requested == ExecutionMode.THINKING.value:
+        return ExecutionMode.THINKING
+    if requested == ExecutionMode.NORMAL.value:
+        return ExecutionMode.NORMAL
+
+    if isinstance(checkpoint, dict):
+        source_snapshot = checkpoint.get("source_context_snapshot")
+        if isinstance(source_snapshot, dict):
+            meta = source_snapshot.get("meta")
+            if isinstance(meta, dict):
+                value = str(meta.get("execution_mode") or "").strip().lower()
+                if value == ExecutionMode.THINKING.value:
+                    return ExecutionMode.THINKING
+        value = str(checkpoint.get("execution_mode") or "").strip().lower()
+        if value == ExecutionMode.THINKING.value:
+            return ExecutionMode.THINKING
+    return ExecutionMode.NORMAL
+
+
 def _build_question_answer_event(
     *,
     run_id: str,
@@ -213,6 +236,7 @@ class RuntimePipeline:
         effective_goal = _extract_effective_goal(request, resume_checkpoint)
         continuation_state = _build_continuation_state(request, resume_checkpoint)
         effective_user_query = _extract_effective_user_query(request, resume_checkpoint)
+        execution_mode = _extract_execution_mode(request, resume_checkpoint)
 
         # --- RBAC resolve FIRST (before memory build) -----------------
         # If agent_slug is denied by RBAC, we treat it as None (fallback to default)
@@ -271,6 +295,7 @@ class RuntimePipeline:
             memory_bundle=turn_mem.memory_bundle,
             continuation=continuation_state,
         )
+        runtime_state.execution_mode = execution_mode
         run_id_str = str(run_id)
         emitter = RuntimeEventEmitter(stamper=envelope, run_id=run_id_str)
         orchestrator_id = planner_orchestrator_id(run_id_str)
@@ -300,6 +325,7 @@ class RuntimePipeline:
             meta={
                 "agent_slug": effective_agent_slug or explicit_slug,
                 "model": request.model,
+                "execution_mode": execution_mode.value,
                 "continuation": continuation_state or None,
             },
         )
@@ -313,6 +339,7 @@ class RuntimePipeline:
             meta={
                 "role": "planner",
                 "model": planner_model or request.model,
+                "execution_mode": execution_mode.value,
                 "explicit_agent_slug": explicit_slug,
                 "continuation": continuation_state or None,
             },

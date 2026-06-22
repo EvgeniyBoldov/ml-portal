@@ -3,6 +3,7 @@
  */
 import type { RunTrace } from '@/domains/runtimeTrace/types';
 import type { ResponseContract } from '@/shared/api/admin';
+import type { ExecutionMode } from '@/shared/api/types';
 
 // ── Session ─────────────────────────────────────────────────────────────────
 
@@ -144,6 +145,7 @@ export interface SandboxRunCreate {
   branch_id?: string | null;
   parent_run_id?: string | null;
   attachment_ids?: string[] | null;
+  execution_mode?: ExecutionMode;
 }
 
 // ── Run Step ────────────────────────────────────────────────────────────────

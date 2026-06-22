@@ -21,17 +21,20 @@ import type {
   SubAgentRun,
   TraceEntity,
   AgentData,
+  DialogItem,
   OrchestratorData,
   PhaseData,
   TraceContextSnapshot,
   UnknownData,
 } from './entityTypes';
+import { isInteractionData, isLLMData } from './entityTypes';
 import type { SemanticEvent } from './types';
 import { hashEntityIds as hashIds } from './traceIds';
 import {
   buildAgentData,
   buildErrorData,
   buildInteractionData,
+  buildDialogData,
   buildLLMData,
   buildPlannerData,
   buildRunData,
@@ -133,6 +136,146 @@ function setEntityDepthRecursive(entity: TraceEntity, depth: number): void {
   }
 }
 
+function walkEntities(root: TraceEntity, visit: (entity: TraceEntity) => void): void {
+  visit(root);
+  for (const child of root.children) {
+    walkEntities(child, visit);
+  }
+}
+
+function parseJsonObject(value: unknown): Record<string, unknown> | undefined {
+  if (typeof value !== 'string') return undefined;
+  try {
+    const parsed = JSON.parse(value);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
+    return parsed as Record<string, unknown>;
+  } catch {
+    return undefined;
+  }
+}
+
+function extractClarifyQuestionFromLlm(entity: TraceEntity): string | undefined {
+  if (entity.kind !== 'llm' || entity.data.kind !== 'llm') return undefined;
+  const rawContent = entity.data.response?.content ?? entity.data.response?.rawResponse;
+  const parsed = parseJsonObject(rawContent);
+  if (!parsed) return undefined;
+  const kind = String(parsed.kind ?? '').trim().toLowerCase();
+  if (kind !== 'clarify' && kind !== 'ask_user') return undefined;
+  const question = typeof parsed.question === 'string' ? parsed.question.trim() : '';
+  return question || undefined;
+}
+
+function deriveDialogStatus(children: TraceEntity[]): TraceEntity['status'] {
+  if (children.some((child) => child.status === 'error')) return 'error';
+  if (children.some((child) => child.status === 'warn')) return 'warn';
+  if (children.some((child) => child.status === 'pending')) return 'pending';
+  if (children.some((child) => child.status === 'ok')) return 'ok';
+  return 'info';
+}
+
+function groupClarifyDialogs(treeRoot: TraceEntity): void {
+  const allEntities: TraceEntity[] = [];
+  walkEntities(treeRoot, (entity) => allEntities.push(entity));
+
+  const interactionLeaves = allEntities.filter((entity) => (
+    entity.kind === 'interaction'
+    && entity.data.kind === 'interaction'
+    && (entity.data.interactionKind === 'clarify' || entity.data.interactionKind === 'ask_user')
+  ));
+
+  const usedLeafIds = new Set<string>();
+
+  for (const planner of allEntities) {
+    if (planner.kind !== 'planner' || planner.data.kind !== 'planner') continue;
+    const clarifyLlmChildren = planner.children.filter((child) => extractClarifyQuestionFromLlm(child));
+    if (clarifyLlmChildren.length === 0) continue;
+
+    const dialogItems: DialogItem[] = [];
+    const dialogChildren: TraceEntity[] = [];
+
+    for (const llmChild of clarifyLlmChildren) {
+      const question = extractClarifyQuestionFromLlm(llmChild);
+      if (!question) continue;
+
+      const matchingLeaves = interactionLeaves.filter((leaf) => {
+        if (usedLeafIds.has(leaf.id)) return false;
+        if (leaf.parentId === null) return false;
+        return isInteractionData(leaf.data) && String(leaf.data.question ?? '').trim() === question;
+      });
+
+      const chosenLeaf = matchingLeaves[0];
+      const chosenLeafData = chosenLeaf && isInteractionData(chosenLeaf.data) ? chosenLeaf.data : undefined;
+      const llmChildData = isLLMData(llmChild.data) ? llmChild.data : undefined;
+      dialogChildren.push(llmChild);
+      dialogItems.push({
+        question,
+        answer: chosenLeafData?.answer,
+        resumeAction: chosenLeafData?.resumeAction,
+        sourceRunId: chosenLeafData?.sourceRunId,
+        llmSummary: llmChildData?.response?.content,
+      });
+      if (chosenLeaf) {
+        dialogChildren.push(chosenLeaf);
+        usedLeafIds.add(chosenLeaf.id);
+      }
+    }
+
+    if (dialogItems.length === 0 || dialogChildren.length === 0) continue;
+
+    const dialogContainer: TraceEntity = {
+      id: hashIds([
+        planner.id,
+        ...dialogChildren.flatMap((child) => child.sourceEventIds),
+        'dialog',
+      ]),
+      kind: 'dialog',
+      parentId: planner.id,
+      depth: planner.depth + 1,
+      children: [],
+      title: dialogItems.length > 1 ? `Уточнение · ${dialogItems.length}` : 'Уточнение',
+      status: deriveDialogStatus(dialogChildren),
+      startedAt: (() => {
+        const starts = dialogChildren
+          .map((child) => (child.startedAt ? new Date(child.startedAt).getTime() : undefined))
+          .filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
+        if (starts.length === 0) return undefined;
+        return new Date(Math.min(...starts)).toISOString();
+      })(),
+      durationMs: (() => {
+        const starts = dialogChildren
+          .map((child) => (child.startedAt ? new Date(child.startedAt).getTime() : undefined))
+          .filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
+        if (starts.length === 0) return undefined;
+        const ends = dialogChildren
+          .map((child) => {
+            if (!child.startedAt) return undefined;
+            const start = new Date(child.startedAt).getTime();
+            const duration = typeof child.durationMs === 'number' ? child.durationMs : 0;
+            return start + duration;
+          })
+          .filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
+        if (ends.length === 0) return undefined;
+        return Math.max(...ends) - Math.min(...starts);
+      })(),
+      sourceEventIds: Array.from(new Set(dialogChildren.flatMap((child) => child.sourceEventIds))),
+      data: buildDialogData('clarify', dialogItems),
+    };
+
+    dialogChildren.forEach((child) => {
+      const currentParent = child.parentId ? allEntities.find((entity) => entity.id === child.parentId) : undefined;
+      if (currentParent) {
+        currentParent.children = currentParent.children.filter((nested) => nested.id !== child.id);
+      }
+      child.parentId = dialogContainer.id;
+      setEntityDepthRecursive(child, dialogContainer.depth + 1);
+      dialogContainer.children.push(child);
+    });
+
+    planner.children.push(dialogContainer);
+    allEntities.push(dialogContainer);
+  }
+}
+
 function normalizeRunPhaseLayout(runRoot: TraceEntity): void {
   if (runRoot.kind !== 'run') return;
   const getRole = (node: TraceEntity): string => (
@@ -149,6 +292,7 @@ function normalizeRunPhaseLayout(runRoot: TraceEntity): void {
     if (role === 'memory') return false;
     if (role === 'planner') return true;
     if (role === 'synthesizer') return true;
+    if (child.kind === 'dialog') return true;
     if (child.kind === 'interaction') return true;
     return child.kind === 'planner';
   });
@@ -632,15 +776,15 @@ function _buildEntityTree3Pass(
       continue;
     }
 
-    // --- error ---
-    if (rawType === 'question_answer') {
+    // --- interaction events ---
+    if (rawType === 'waiting_input' || rawType === 'confirmation_required' || rawType === 'question_answer') {
       const interactionEntity: TraceEntity = {
         id: String(raw.entity_id ?? hashIds([event.id])),
         kind: 'interaction',
         parentId: resolvedParent.id,
         depth: resolvedParent.depth + 1,
         children: [],
-        title: event.summary ?? 'Question answered',
+        title: event.summary ?? (rawType === 'confirmation_required' ? 'Confirmation requested' : 'Interaction'),
         status: event.status,
         startedAt: event.started_at,
         durationMs: event.duration_ms,
@@ -727,6 +871,7 @@ function _buildEntityTree3Pass(
   }
 
   // ------- Pass 3: aggregate budgets bottom-up -------
+  groupClarifyDialogs(treeRoot);
   applyBudgetSnapshots(indexEntitiesById(treeRoot), events);
   aggregateBudgetsBottomUp(treeRoot);
   sortTreeChronologically(treeRoot, buildEventOrderIndex(events));
@@ -1367,15 +1512,15 @@ export function buildEntityTree(
       continue;
     }
 
-    // --- Handle error events ---
-    if (rawType === 'question_answer') {
+    // --- Handle interaction events ---
+    if (rawType === 'waiting_input' || rawType === 'confirmation_required' || rawType === 'question_answer') {
       const interactionEntity: TraceEntity = {
         id: String((event.raw?.raw?.entity_id as string | undefined) ?? hashIds([event.id])),
         kind: 'interaction',
         parentId: null,
         depth: 0,
         children: [],
-        title: event.summary ?? 'Question answered',
+        title: event.summary ?? (rawType === 'confirmation_required' ? 'Confirmation requested' : 'Interaction'),
         status: event.status,
         startedAt: event.started_at,
         durationMs: event.duration_ms,
@@ -1515,6 +1660,7 @@ export function buildEntityTree(
     }
   }
 
+  groupClarifyDialogs(root);
   applyBudgetSnapshots(indexEntitiesById(root), events);
   aggregateBudgetsBottomUp(root);
   sortTreeChronologically(root, buildEventOrderIndex(events));

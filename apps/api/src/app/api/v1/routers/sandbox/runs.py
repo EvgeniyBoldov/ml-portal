@@ -15,6 +15,7 @@ from app.agents.runtime_sandbox_resolver import RuntimeSandboxResolver
 from app.agents.runtime_trace_logger import RuntimeTraceLogger
 from app.core.db import get_session_factory
 from app.runtime import PipelineRequest, RuntimeEventType, RuntimePipeline
+from app.runtime.contracts import ExecutionMode
 from app.core.di import get_llm_client
 from app.core.http.clients import LLMClientProtocol
 from app.core.logging import get_logger
@@ -51,6 +52,15 @@ logger = get_logger(__name__)
 
 router = APIRouter()
 SANDBOX_UPLOAD_CHAT_PREFIX = "__sandbox_uploads__:"
+
+
+def _is_pause_transport_step(evt_type: str, evt_data: dict) -> bool:
+    reason = str(evt_data.get("reason") or "").strip().lower()
+    if evt_type == "run_paused":
+        return True
+    if evt_type == "stop" and reason in {"waiting_input", "waiting_confirmation"}:
+        return True
+    return False
 
 
 
@@ -360,8 +370,9 @@ async def run_sandbox(
                 agent_slug=agent_slug,
                 agent_version_id=str(agent_version_id) if agent_version_id else None,
                 sandbox_overrides=sandbox_overrides,
+                execution_mode=ExecutionMode(data.execution_mode or ExecutionMode.NORMAL.value),
             )
-            step_num = 0
+            step_num = await SandboxService(stream_db).get_next_run_step_order(run_id) - 1
             final_status = "completed"
             final_error: Optional[str] = None
             stream_enricher = SandboxStepEnrichmentService(stream_db)
@@ -373,6 +384,8 @@ async def run_sandbox(
 
             async def _persist_step(evt_type: str, evt_data: dict) -> None:
                 nonlocal step_num
+                if _is_pause_transport_step(evt_type, evt_data):
+                    return
                 step_num += 1
                 try:
                     svc_inner = SandboxService(stream_db)
@@ -459,7 +472,6 @@ async def run_sandbox(
                             "run_id": str(run_id),
                         }
                         yield f"data: {json.dumps(pause_event, ensure_ascii=False)}\n\n"
-                        await _persist_step("run_paused", pause_event)
                     elif event.type == RuntimeEventType.FINAL:
                         final_status = "completed"
                         final_error = None
@@ -765,7 +777,7 @@ async def resume_sandbox_run(
                 confirmation_tokens=confirmed_fingerprints,
             )
 
-            step_num = 0
+            step_num = await SandboxService(stream_db).get_next_run_step_order(run_id) - 1
             final_status = "completed"
             final_error: Optional[str] = None
             stream_enricher = SandboxStepEnrichmentService(stream_db)
@@ -777,6 +789,8 @@ async def resume_sandbox_run(
 
             async def _persist_step(evt_type: str, evt_data: dict) -> None:
                 nonlocal step_num
+                if _is_pause_transport_step(evt_type, evt_data):
+                    return
                 step_num += 1
                 try:
                     svc_inner = SandboxService(stream_db)
@@ -860,7 +874,6 @@ async def resume_sandbox_run(
                             "run_id": str(run_id),
                         }
                         yield f'data: {json.dumps(pause_event, ensure_ascii=False)}\n\n'
-                        await _persist_step("run_paused", pause_event)
                     elif event.type == RuntimeEventType.FINAL:
                         final_status = "completed"
                         final_error = None

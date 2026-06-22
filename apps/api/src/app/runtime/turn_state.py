@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_valid
 
 from app.runtime.memory.components import MemoryBundle, MemorySection
 from app.runtime.memory.tool_ledger import ToolLedger
-from app.runtime.contracts import TaskJournalEntry, TaskJournalNeed, AgentAnswerStatus
+from app.runtime.contracts import AgentAnswerStatus, ExecutionMode, TaskJournalEntry, TaskJournalNeed
 
 
 # Runtime limits — single source of truth (replaces divergent limits from legacy WorkingMemory)
@@ -52,6 +52,7 @@ class RuntimeTurnState(BaseModel):
     chat_id: Optional[UUID] = None
     user_id: Optional[UUID] = None
     tenant_id: Optional[UUID] = None
+    execution_mode: ExecutionMode = ExecutionMode.NORMAL
 
     goal: str = ""
     current_user_query: str = ""
@@ -130,6 +131,7 @@ class RuntimeTurnState(BaseModel):
             chat_id=chat_id,
             user_id=user_id,
             tenant_id=tenant_id,
+            execution_mode=ExecutionMode.NORMAL,
             goal=goal,
             current_user_query=current_user_query,
             memory_bundle=memory_bundle,
@@ -276,6 +278,7 @@ class RuntimeTurnState(BaseModel):
     def planner_snapshot(self, *, max_items: int = 10) -> Dict[str, Any]:
         return {
             "goal": self.goal,
+            "execution_mode": self.execution_mode.value,
             "iter_count": self.iter_count,
             "continuation": dict(self.continuation or {}),
             "facts": [item.text for item in self.runtime_facts[-max_items:]],
@@ -300,6 +303,7 @@ class RuntimeTurnState(BaseModel):
             "chat_id": str(self.chat_id) if self.chat_id else None,
             "user_id": str(self.user_id) if self.user_id else None,
             "tenant_id": str(self.tenant_id) if self.tenant_id else None,
+            "execution_mode": self.execution_mode.value,
             "goal": self.goal,
             "current_user_query": self.current_user_query,
             "continuation": dict(self.continuation or {}),

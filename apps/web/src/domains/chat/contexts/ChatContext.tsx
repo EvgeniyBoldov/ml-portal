@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useCallback, useRef, ReactNode, useMemo } from 'react';
 import { useChats } from '@shared/api/hooks/useChats';
 import { useQueryClient } from '@tanstack/react-query';
-import type { Chat, ChatMessage } from '@shared/api/types';
+import type { Chat, ChatMessage, ExecutionMode } from '@shared/api/types';
 import { qk } from '@/shared/api/keys';
 
 type MessageMeta = Record<string, unknown> & {
@@ -100,6 +100,7 @@ interface ChatActions {
     onChunk: (chunk: string) => void,
     onError: (error: string) => void,
     agentSlug?: string,
+    executionMode?: ExecutionMode,
     attachmentIds?: string[],
     attachmentMeta?: unknown[],
     confirmationTokens?: string[]
@@ -288,6 +289,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     onChunk: (chunk: string) => void,
     onError: (error: string) => void,
     agentSlug?: string,
+    executionMode: ExecutionMode = 'normal',
     attachmentIds?: string[],
     attachmentMeta?: unknown[],
     confirmationTokens?: string[]
@@ -363,6 +365,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           content: message,
           use_rag: useRag,
           agent_slug: agentSlug,
+          execution_mode: executionMode,
           attachment_ids: attachmentIds ?? [],
           confirmation_tokens: confirmationTokens ?? [],
         },
@@ -552,6 +555,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                 'thinking_step_1': 'Анализирую запрос...',
                 'thinking_step_2': 'Обрабатываю результаты...',
                 'thinking_step_3': 'Формирую ответ...',
+                'planner_thinking': 'Сравниваю варианты...',
                 'streaming': 'Генерирую ответ...',
                 'rbac_agent_invoke_denied': 'Нет прав на запуск агента...',
                 'completed': '',
@@ -692,7 +696,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               const iteration = Number(parsed.iteration || 0);
               const agentSlug = String(parsed.agent_slug || parsed.tool_slug || '').trim();
               const phaseTitle = String(parsed.phase_title || '').trim();
-              if ((actionType === 'agent_call' || stepType === 'call_agent') && agentSlug) {
+              const stepKind = String(parsed.step_type || parsed.step_kind || parsed.kind || '').trim();
+              if (stepKind === 'thinking' || String(parsed.execution_mode || '') === 'thinking' && Array.isArray(parsed.hypotheses)) {
+                updateStreamStatus('Сравниваю варианты...');
+                appendProgressEvent('Сравниваю варианты', { source: 'thinking' });
+              }
+              else if ((actionType === 'agent_call' || stepType === 'call_agent') && agentSlug) {
                 if (phaseTitle) {
                   updateStreamStatus(`Шаг ${iteration}: ${agentSlug} (${phaseTitle})...`);
                   appendProgressEvent(`Шаг ${iteration}: ${agentSlug} (${phaseTitle})`, { source: 'planner' });

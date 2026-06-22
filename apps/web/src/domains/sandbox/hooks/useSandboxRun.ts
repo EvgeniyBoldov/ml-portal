@@ -7,6 +7,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { qk } from '@/shared/api/keys';
 import { sandboxApi } from '../api';
 import type { SandboxSSEEvent, SandboxRunCreate } from '../types';
+import type { ExecutionMode } from '@/shared/api/types';
 
 export type RunStepType =
   | 'user_request'
@@ -46,6 +47,7 @@ export interface RunStep {
   type: RunStepType;
   data: Record<string, unknown>;
   timestamp: number;
+  orderNumber?: number;
 }
 
 export interface ActiveRun {
@@ -82,15 +84,18 @@ export interface SandboxRun {
 export function useSandboxRun(sessionId: string) {
   const [activeRun, setActiveRun] = useState<ActiveRun>(INITIAL_RUN);
   const abortRef = useRef<AbortController | null>(null);
+  const stepCounterRef = useRef(0);
   const qc = useQueryClient();
 
   const addStep = useCallback(
     (type: RunStepType, data: Record<string, unknown>) => {
+      stepCounterRef.current += 1;
       const step: RunStep = {
         id: crypto.randomUUID(),
         type,
         data,
         timestamp: Date.now(),
+        orderNumber: stepCounterRef.current,
       };
       setActiveRun((prev) => ({
         ...prev,
@@ -105,7 +110,8 @@ export function useSandboxRun(sessionId: string) {
       requestText: string,
       parentRunIdOrLegacy?: string | null | unknown,
       branchId?: string | null,
-      attachmentIds?: string[]
+      attachmentIds?: string[],
+      executionMode: ExecutionMode = 'normal',
     ) => {
       // Abort previous run if any
       abortRef.current?.abort();
@@ -125,6 +131,7 @@ export function useSandboxRun(sessionId: string) {
         status: 'running',
         pendingConfirmation: null,
       });
+      stepCounterRef.current = 0;
 
       const controller = new AbortController();
       abortRef.current = controller;
@@ -134,6 +141,7 @@ export function useSandboxRun(sessionId: string) {
         branch_id: branchId ?? undefined,
         parent_run_id: parentRunId ?? undefined,
         attachment_ids: attachmentIds?.length ? attachmentIds : undefined,
+        execution_mode: executionMode,
       };
 
       try {
@@ -202,7 +210,7 @@ export function useSandboxRun(sessionId: string) {
                   finalContent: '',
                 }));
                 finalContent = '';
-                // Don't add confirmation_required to steps — show in input header only
+                addStep(type as RunStepType, data);
                 continue;
               }
 
@@ -214,7 +222,7 @@ export function useSandboxRun(sessionId: string) {
                   finalContent: '',
                 }));
                 finalContent = '';
-                // Don't add waiting_input to steps - it shows in input field only
+                addStep(type as RunStepType, data);
                 continue;
               }
 
@@ -232,7 +240,6 @@ export function useSandboxRun(sessionId: string) {
                   finalContent: isPaused ? '' : prev.finalContent,
                 }));
                 if (isPaused) finalContent = '';
-                addStep(type as RunStepType, data);
                 continue;
               }
 
@@ -249,7 +256,7 @@ export function useSandboxRun(sessionId: string) {
                 } else {
                   setActiveRun((prev) => ({ ...prev, status: reason as ActiveRun['status'] }));
                 }
-                addStep(type as RunStepType, data);
+                if (!isPaused) addStep(type as RunStepType, data);
                 continue;
               }
 
@@ -375,6 +382,7 @@ export function useSandboxRun(sessionId: string) {
                   status: reason === 'waiting_confirmation' ? 'waiting_confirmation' : 'waiting_input',
                   pendingConfirmation: event,
                 }));
+                continue;
               }
 
               if (type === 'confirmation_required') {
@@ -385,6 +393,8 @@ export function useSandboxRun(sessionId: string) {
                   finalContent: '',
                 }));
                 finalContent = '';
+                addStep(type as RunStepType, data);
+                continue;
               }
 
               if (type === 'waiting_input') {
@@ -395,6 +405,8 @@ export function useSandboxRun(sessionId: string) {
                   finalContent: '',
                 }));
                 finalContent = '';
+                addStep(type as RunStepType, data);
+                continue;
               }
 
               if (type === 'run_paused') {
@@ -407,6 +419,7 @@ export function useSandboxRun(sessionId: string) {
                   }));
                   finalContent = '';
                 }
+                continue;
               }
 
               if (type === 'error') {

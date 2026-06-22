@@ -30,6 +30,7 @@ export function getTraceEntityKindLabel(entity: TraceEntity): string {
   if (entity.kind === 'phase') return 'Фаза';
   if (entity.kind === 'orchestrator') return 'Оркестратор';
   if (entity.kind === 'planner') return 'Шаг';
+  if (entity.kind === 'dialog') return 'Диалог';
   if (entity.kind === 'interaction') return 'Диалог';
   if (entity.kind === 'agent') return 'Агент';
   if (entity.kind === 'llm') return 'LLM';
@@ -57,11 +58,27 @@ export function getTraceEntityTitle(entity: TraceEntity): string {
   if (entity.kind === 'planner' && entity.data.kind === 'planner') {
     const planner = entity.data as PlannerData;
     if (planner.stepKind === 'iteration') return shortName(entity.title);
+    if (planner.stepKind === 'thinking') {
+      return shortName(planner.thinking?.selectedActionSummary?.trim() || planner.thinking?.selectionRationale?.trim() || 'Thinking');
+    }
     if (planner.stepKind === 'call_agent') return 'Выбор агента';
     if (planner.stepKind === 'final' || planner.stepKind === 'direct_answer') return 'Финальный ответ';
     if (planner.stepKind === 'ask_user' || planner.stepKind === 'clarify') return 'Уточнение';
     if (planner.stepKind === 'abort') return 'Прерывание';
     return 'Шаг';
+  }
+  if (entity.kind === 'dialog' && entity.data.kind === 'dialog') {
+    const dialog = entity.data;
+    if (dialog.interactionKind === 'confirm') return 'Подтверждение';
+    if (dialog.interactionKind === 'clarify') {
+      const count = dialog.items?.length ?? 0;
+      if (count > 1) return `Уточнение · ${count}`;
+      const question = dialog.items?.[0]?.question ?? dialog.question;
+      if (question) return shortName(question);
+      return 'Уточнение';
+    }
+    if (dialog.interactionKind === 'resume') return 'Возобновление';
+    return 'Диалог';
   }
   if (entity.kind === 'agent' && entity.data.kind === 'agent') {
     const agent = entity.data as AgentData;
@@ -75,13 +92,15 @@ export function getTraceEntityTitle(entity: TraceEntity): string {
     if (entity.data.interactionKind === 'clarify') return 'Уточнение';
     return 'Вопрос-ответ';
   }
-  if (entity.kind === 'llm') return 'LLM';
+  if (entity.kind === 'llm' && entity.data.kind === 'llm') {
+    return shortName(entity.data.llmRoleLabel || 'LLM');
+  }
   if (entity.kind === 'tool' && entity.data.kind === 'tool') {
     const tool = entity.data as ToolData;
     return compactSlug(tool.toolSlug || entity.title);
   }
   if (entity.kind === 'error' && entity.data.kind === 'error') {
-    return shortName(entity.data.userMessage || entity.title);
+    return shortName(entity.data.userMessage || entity.data.sourceLabel || entity.title);
   }
   return shortName(entity.title);
 }
@@ -90,7 +109,7 @@ export function getTraceSnapshotInspectorKind(entity: TraceEntity): TraceSnapsho
   if (entity.kind === 'phase') return 'phase';
   if (entity.kind === 'llm' || entity.kind === 'tool') return 'call';
   if (entity.kind === 'error') return 'error';
-  if (entity.kind === 'run' || entity.kind === 'agent' || entity.kind === 'orchestrator' || entity.kind === 'planner' || entity.kind === 'interaction') {
+  if (entity.kind === 'run' || entity.kind === 'agent' || entity.kind === 'orchestrator' || entity.kind === 'planner' || entity.kind === 'dialog' || entity.kind === 'interaction') {
     return 'entity';
   }
   return 'unknown';

@@ -35,3 +35,18 @@ async def test_pause_run_uses_provided_status():
     assert updated["obj"] is run_obj
     assert updated["data"]["status"] == "waiting_input"
     assert updated["data"]["paused_action"] == {"kind": "input"}
+
+
+@pytest.mark.asyncio
+async def test_get_next_run_step_order_appends_after_existing_steps():
+    run_id = uuid4()
+
+    class _StepsRepo:
+        async def get_max_order_num(self, _rid):
+            assert _rid == run_id
+            return 7
+
+    host = SimpleNamespace(steps=_StepsRepo())
+    manager = SandboxRunManager(host)
+
+    assert await manager.get_next_run_step_order(run_id) == 8

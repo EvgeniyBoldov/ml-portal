@@ -68,6 +68,7 @@ export function LlmInspectorTabs({ entity, steps }: { entity: TraceEntity; steps
       <>
         <InfoTab entity={entity} steps={steps} />
         <InspectorFieldGroup>
+          <SnapshotValueField label="Роль" value={data?.llmRoleLabel ?? '—'} />
           <SnapshotValueField label="Назначение" value={data?.purpose ?? '—'} />
           <SnapshotValueField label="Модель" value={data?.params?.model ?? '—'} />
           <SnapshotValueField label="Токены in" value={data?.tokensIn ?? '—'} />

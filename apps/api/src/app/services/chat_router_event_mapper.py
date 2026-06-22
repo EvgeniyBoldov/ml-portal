@@ -85,7 +85,7 @@ def map_service_event_to_sse(event: Dict[str, Any]) -> Optional[str]:
                 data=event.get("data"),
             ),
         )
-    if et == "planner_action":
+    if et in {"planner_action", "planner_decision"}:
         agent_slug = event.get("agent_slug")
         kind = event.get("kind")
         step_type = event.get("step_type") or kind
@@ -99,13 +99,19 @@ def map_service_event_to_sse(event: Dict[str, Any]) -> Optional[str]:
                 risk=event.get("risk"),
                 contract_version=int(event.get("contract_version") or 1),
                 action_type=_legacy_action_type(kind, event.get("action_type")),
-                step_type=step_type,
+                step_type=step_type or event.get("step_kind"),
                 agent_slug=agent_slug,
                 phase_id=event.get("phase_id"),
                 phase_title=event.get("phase_title"),
                 why=event.get("why") or rationale,
                 tool_slug=event.get("tool_slug") or agent_slug,
                 op=event.get("op") or step_type or event.get("action_type") or kind,
+                execution_mode=event.get("execution_mode"),
+                hypotheses=event.get("hypotheses"),
+                selected_hypothesis_index=event.get("selected_hypothesis_index"),
+                selected_action_kind=event.get("selected_action_kind"),
+                selected_action_summary=event.get("selected_action_summary"),
+                selection_rationale=event.get("selection_rationale"),
                 orchestration_envelope=event.get("orchestration_envelope"),
                 orchestration_state=event.get("orchestration_state"),
             ),

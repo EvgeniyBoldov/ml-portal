@@ -27,6 +27,7 @@ from app.agents.context import ToolContext
 from app.core.logging import get_logger
 from app.runtime.budgets import BudgetRegistry, BudgetResolver
 from app.runtime.contracts import (
+    ExecutionMode,
     NextStep,
     NextStepKind,
     PipelineRequest,
@@ -188,6 +189,17 @@ class PlanningStage:
                 yield step_budget.snapshot_event
 
             try:
+                if getattr(runtime_state, "execution_mode", ExecutionMode.NORMAL) == ExecutionMode.THINKING:
+                    yield PhasedEvent(
+                        RuntimeEvent.status(
+                            "planner_thinking",
+                            execution_mode=ExecutionMode.THINKING.value,
+                            planner_run_id=planner_run_id,
+                            planner_iteration_id=planner_iteration_id,
+                            iteration=planner_iteration,
+                        ),
+                        OrchestrationPhase.PLANNER,
+                    )
                 step, planner_llm_traces = await PlannerNextStepInvoker.invoke(
                     planner=self._planner,
                     runtime_state=runtime_state,
@@ -233,6 +245,18 @@ class PlanningStage:
                     planner_iteration_id=planner_event_ctx["planner_iteration_id"],
                     planner_run_id=planner_event_ctx["planner_run_id"],
                 )
+                if (
+                    str(getattr(planner_llm_trace, "step_kind", "")) == "thinking"
+                    and bool(getattr(planner_llm_trace, "success", False))
+                    and isinstance(getattr(planner_llm_trace, "parsed_response", None), dict)
+                ):
+                    yield PlannerStepEmitter.persist_and_emit_thinking(
+                        runtime_state=runtime_state,
+                        planner_iteration=planner_iteration,
+                        planner_iteration_id=planner_iteration_id,
+                        planner_run_id=planner_run_id,
+                        thinking_payload=dict(planner_llm_trace.parsed_response),
+                    )
                 if not bool(getattr(planner_llm_trace, "success", True)):
                     yield PhasedEvent(
                         RuntimeEvent(

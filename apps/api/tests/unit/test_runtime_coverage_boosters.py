@@ -18,7 +18,7 @@ from app.agents.execution_preflight import ExecutionMode
 from app.agents.context import OperationCall, ToolContext, ToolResult
 from app.agents.runtime.agent import AgentToolRuntime
 from app.runtime.agent_executor import AgentExecutor
-from app.runtime.contracts import NextStep, NextStepKind
+from app.runtime.contracts import ExecutionMode as RuntimeExecutionMode, NextStep, NextStepKind
 from app.runtime.events import RuntimeEventType
 from app.runtime.budgets import BudgetLimitsResolver, RunBudgetLedger
 from app.runtime.llm.structured import StructuredCallError
@@ -562,6 +562,57 @@ async def test_planner_emits_direct_answer_kind_when_llm_returns_one():
     )
     assert step.kind == NextStepKind.DIRECT_ANSWER
     assert step.final_answer == "Привет! Чем могу помочь?"
+
+
+@pytest.mark.asyncio
+async def test_planner_thinking_mode_adds_deliberation_trace_before_decision():
+    planner = Planner(session=AsyncMock(), llm_client=AsyncMock())
+    planner.llm.invoke = AsyncMock(
+        side_effect=[
+            SimpleNamespace(
+                value=SimpleNamespace(
+                    hypotheses=[
+                        SimpleNamespace(summary="Use analyst", expected_outcome="Get facts", risks=["latency"], fit="Best for current need"),
+                        SimpleNamespace(summary="Ask clarify question", expected_outcome="Reduce ambiguity", risks=["extra turn"], fit="Safer if scope unclear"),
+                    ],
+                    selected_hypothesis_index=0,
+                    selected_action_kind="call_agent",
+                    selected_action_summary="Delegate to analyst first",
+                    selection_rationale="Facts are missing but agent is available",
+                ),
+                model="planner-thinking-model",
+                request_messages=[],
+                raw_response='{"thinking":true}',
+                duration_ms=2,
+            ),
+            SimpleNamespace(
+                value=PlannerLLMOutput(
+                    kind="call_agent",
+                    rationale="Use analyst",
+                    agent_slug="analyst",
+                    agent_input={"query": "q"},
+                ),
+                model="planner-model",
+                request_messages=[],
+                raw_response='{"kind":"call_agent"}',
+                duration_ms=1,
+            ),
+        ]
+    )
+
+    state = ensure_runtime_turn_state(_memory())
+    state.execution_mode = RuntimeExecutionMode.THINKING
+
+    step, traces = await planner.next_step(
+        runtime_state=state,
+        available_agents=[{"slug": "analyst", "description": "A"}],
+    )
+
+    assert step.kind == NextStepKind.CALL_AGENT
+    assert len(traces) == 2
+    assert traces[0].step_kind == "thinking"
+    assert traces[0].parsed_response["selected_action_kind"] == "call_agent"
+    assert traces[1].step_kind == "decision"
 
 
 @pytest.mark.asyncio

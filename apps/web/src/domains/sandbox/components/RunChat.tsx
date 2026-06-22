@@ -14,6 +14,7 @@ import type { SandboxBranchListItem, SandboxRunListItem } from '../types';
 import { normalizeTraceEvent } from '@/domains/runtimeTrace/normalize';
 import type { TraceEntity } from '@/domains/runtimeTrace/entityTypes';
 import { sandboxApi } from '../api';
+import type { ExecutionMode } from '@/shared/api/types';
 import ChatQuestionCard from './ChatQuestionCard';
 import ChatAnswerCard from './ChatAnswerCard';
 import { TraceSteps } from './TraceSteps';
@@ -22,27 +23,6 @@ import styles from './RunChat.module.css';
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 const HIDDEN_STEP_TYPES = new Set(['delta', 'final_content', 'done']);
-
-export interface VirtualInspectorBudgetItem {
-  key: string;
-  label: string;
-  used: number;
-  limit?: number;
-}
-
-export interface VirtualInspectorStep {
-  id: string;
-  kind: string;
-  label: string;
-  title: string;
-  summary: string;
-  budget: VirtualInspectorBudgetItem[];
-  input: unknown;
-  output: unknown;
-  partition: unknown;
-  context: Record<string, unknown>;
-  raw: unknown[];
-}
 
 type Tone = 'neutral' | 'info' | 'warn' | 'success' | 'danger';
 type BudgetTone = 'neutral' | 'warn' | 'danger';
@@ -66,7 +46,7 @@ function getSemantic(step: RunStep, index: number) {
     id: step.id,
     raw_type: step.type,
     data: step.data,
-    step_number: index,
+    step_number: step.orderNumber ?? index,
     duration_ms: typeof step.data.duration_ms === 'number' ? step.data.duration_ms : undefined,
   });
 }
@@ -109,13 +89,14 @@ function extractFinalContent(
 }
 
 function apiStepsToRunSteps(
-  apiSteps: Array<{ id: string; step_type: string; step_data: Record<string, unknown>; created_at: string }>,
+  apiSteps: Array<{ id: string; step_type: string; step_data: Record<string, unknown>; created_at: string; order_num?: number }>,
 ): RunStep[] {
   return apiSteps.map((s) => ({
     id: s.id,
     type: s.step_type as RunStep['type'],
     data: s.step_data,
     timestamp: new Date(s.created_at).getTime(),
+    orderNumber: typeof s.order_num === 'number' ? s.order_num : undefined,
   }));
 }
 
@@ -141,7 +122,7 @@ function ExpandableSteps({
   steps: RunStep[];
   isRunning: boolean;
   selectedDisplayStepId: string | null;
-  onSelectStep: (displayStepId: string, rawStepId: string, virtualStep: VirtualInspectorStep, inspectorSteps: RunStep[], entity?: TraceEntity) => void;
+  onSelectStep: (displayStepId: string, rawStepId: string, inspectorSteps: RunStep[], entity?: TraceEntity) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const toolCalls = useMemo(() => buildToolSummary(steps), [steps]);
@@ -195,21 +176,7 @@ function ExpandableSteps({
             selectedEntityId={selectedDisplayStepId}
             onSelectEntity={(entity) => {
               const sourceStepId = entity.sourceEventIds[0] ?? entity.id;
-              // Create legacy VirtualInspectorStep for backward compatibility during transition
-              const virtual: VirtualInspectorStep = {
-                id: entity.id,
-                kind: entity.kind,
-                label: entity.title,
-                title: entity.title,
-                summary: entity.status,
-                budget: [], // TODO: map from entity.budget
-                input: null,
-                output: null,
-                partition: null,
-                context: { kind: entity.kind },
-                raw: [],
-              };
-              onSelectStep(entity.id, sourceStepId, virtual, visibleSteps, entity);
+              onSelectStep(entity.id, sourceStepId, visibleSteps, entity);
             }}
           />
         </div>
@@ -231,7 +198,6 @@ interface HistoricalRunItemProps {
     runId: string,
     displayStepId: string,
     rawStepId: string,
-    virtualStep: VirtualInspectorStep,
     steps: RunStep[],
     entity?: TraceEntity,
   ) => void;
@@ -278,8 +244,8 @@ function HistoricalRunItem(props: HistoricalRunItemProps) {
         steps={runSteps}
         isRunning={false}
         selectedDisplayStepId={selectedDisplayStepId}
-        onSelectStep={(displayStepId, rawStepId, virtualStep, inspectorSteps, entity) => 
-          onSelectStep(run.id, displayStepId, rawStepId, virtualStep, inspectorSteps, entity)
+        onSelectStep={(displayStepId, rawStepId, inspectorSteps, entity) => 
+          onSelectStep(run.id, displayStepId, rawStepId, inspectorSteps, entity)
         }
       />
 
@@ -321,11 +287,11 @@ interface Props {
   isCreatingBranch?: boolean;
   onSelectBranch: (branchId: string) => void;
   onCreateBranchFromMessage: (sourceText: string, parentRunId?: string | null) => Promise<void>;
-  onRun: (text: string, parentRunId?: string | null, attachmentIds?: string[]) => void;
+  onRun: (text: string, parentRunId?: string | null, attachmentIds?: string[], executionMode?: ExecutionMode) => void;
   onResumeSubmit: (text: string) => void;
   onStop: () => void;
   onSelectRun?: (runId?: string) => void;
-  onSelectStep?: (runId: string, stepId: string, virtualStep: VirtualInspectorStep, steps: RunStep[], entity?: TraceEntity) => void;
+  onSelectStep?: (runId: string, stepId: string, steps: RunStep[], entity?: TraceEntity) => void;
 }
 
 // ── RunChat ──────────────────────────────────────────────────────────────────
@@ -350,6 +316,7 @@ export default function RunChat({
 }: Props) {
   type PendingAttachment = { id: string; file: File };
   const [input, setInput] = useState('');
+  const [executionMode, setExecutionMode] = useState<ExecutionMode>('normal');
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
@@ -455,7 +422,7 @@ export default function RunChat({
     setAttachments([]);
     setUploadError(null);
     setIsUploading(false);
-    onRun(text, isWaitingInput ? activeRun.runId : undefined, attachmentIds);
+    onRun(text, isWaitingInput ? activeRun.runId : undefined, attachmentIds, executionMode);
   };
 
   const handleFileSelect = (e: ChangeEvent<HTMLInputElement>) => {
@@ -540,13 +507,12 @@ export default function RunChat({
     runId: string,
     displayStepId: string,
     rawStepId: string,
-    virtualStep: VirtualInspectorStep,
     steps: RunStep[],
     entity?: TraceEntity,
   ) => {
     setSelectedDisplayStepId(displayStepId);
     setSelectedStepId(rawStepId);
-    onSelectStep?.(runId, rawStepId, virtualStep, steps, entity);
+    onSelectStep?.(runId, rawStepId, steps, entity);
   };
 
   const handleForkBranch = (parentRunId: string, sourceText: string) => {
@@ -633,10 +599,10 @@ export default function RunChat({
               steps={activeRun.steps}
               isRunning={isRunning}
               selectedDisplayStepId={selectedDisplayStepId}
-              onSelectStep={(displayStepId, rawStepId, virtualStep, inspectorSteps, entity) => {
+              onSelectStep={(displayStepId, rawStepId, inspectorSteps, entity) => {
                 setSelectedDisplayStepId(displayStepId);
                 setSelectedStepId(rawStepId);
-                onSelectStep?.('active', rawStepId, virtualStep, inspectorSteps, entity);
+                onSelectStep?.('active', rawStepId, inspectorSteps, entity);
               }}
             />
 
@@ -713,6 +679,16 @@ export default function RunChat({
             </div>
           </div>
           <div className={styles['input-row']}>
+            <select
+              className={styles['mode-select']}
+              value={executionMode}
+              onChange={(e) => setExecutionMode(e.target.value as ExecutionMode)}
+              disabled={isRunning || isUploading || isWaitingInput}
+              aria-label="Execution mode"
+            >
+              <option value="normal">Normal</option>
+              <option value="thinking">Thinking</option>
+            </select>
             <button
               type="button"
               className={styles['upload-btn']}

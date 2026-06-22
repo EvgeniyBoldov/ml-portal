@@ -42,6 +42,7 @@ class ChatEventMapper:
             return {
                 "type": "status",
                 "stage": event.data.get("stage"),
+                "execution_mode": event.data.get("execution_mode"),
                 "orchestration_envelope": env,
             }
 
@@ -102,8 +103,15 @@ class ChatEventMapper:
                 "type": "planner_decision",
                 "iteration": event.data.get("iteration"),
                 "kind": kind,
+                "step_kind": event.data.get("stepKind"),
                 "rationale": rationale,
                 "risk": event.data.get("risk"),
+                "execution_mode": event.data.get("execution_mode"),
+                "hypotheses": event.data.get("hypotheses"),
+                "selected_hypothesis_index": event.data.get("selected_hypothesis_index"),
+                "selected_action_kind": event.data.get("selected_action_kind"),
+                "selected_action_summary": event.data.get("selected_action_summary"),
+                "selection_rationale": event.data.get("selection_rationale"),
                 "contract_version": 1,
                 "agent_slug": event.data.get("agent_slug"),
                 "phase_id": event.data.get("phase_id"),

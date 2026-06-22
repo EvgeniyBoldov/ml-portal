@@ -35,6 +35,7 @@ from app.services.chat_stream_service import ChatStreamService
 from app.services.runtime_resume_checkpoint_service import RuntimeResumeCheckpointService
 from app.services.runtime_terminal_status import normalize_run_status_for_storage
 from app.agents.runtime.confirmation import get_confirmation_service
+from app.runtime.contracts import ExecutionMode
 
 router = APIRouter()
 logger = get_logger(__name__)
@@ -142,6 +143,7 @@ async def send_message_stream(
     agent_slug = body.agent_slug
     attachment_ids = body.attachment_ids or []
     confirmation_tokens = body.confirmation_tokens or []
+    execution_mode = ExecutionMode(body.execution_mode or ExecutionMode.NORMAL.value)
 
     if not content:
         raise HTTPException(status_code=400, detail="Content is required")
@@ -168,6 +170,7 @@ async def send_message_stream(
                 content=content,
                 attachment_ids=attachment_ids,
                 confirmation_tokens=confirmation_tokens,
+                execution_mode=execution_mode,
                 idempotency_key=idempotency_key,
                 model=model,
                 agent_slug=agent_slug,

@@ -54,6 +54,7 @@ class ChatMessageStreamRequest(BaseModel):
     use_rag: Optional[bool] = Field(default=None)
     model: Optional[str] = Field(default=None)
     agent_slug: Optional[str] = Field(default=None)
+    execution_mode: Optional[Literal["normal", "thinking"]] = Field(default=None)
     attachment_ids: Optional[List[str]] = Field(default=None, description="Uploaded chat attachment IDs")
     confirmation_tokens: Optional[List[str]] = Field(default=None, description="Confirmation tokens for gated operations")
 

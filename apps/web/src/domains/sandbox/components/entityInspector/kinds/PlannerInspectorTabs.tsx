@@ -51,6 +51,7 @@ function PlannerDecisionTab({ entity, steps }: { entity: TraceEntity; steps: Run
   const actionLabel = PLANNER_ACTION_LABELS[actionKey] ?? actionKey;
   const agentSlug = String(decisionData.agent_slug ?? data?.decision?.chosenAgentSlug ?? '—');
   const phaseId = String(decisionData.phase_id ?? '—');
+  const thinking = data?.thinking;
 
   return (
     <InspectorFieldGroup>
@@ -60,6 +61,19 @@ function PlannerDecisionTab({ entity, steps }: { entity: TraceEntity; steps: Run
       <SnapshotValueField label="Фаза" value={phaseId !== 'null' ? phaseId : '—'} />
       <SnapshotBadgeField label="Риск" tone={RISK_TONE[String(decisionData.risk ?? 'unknown')] ?? 'neutral'} text={String(decisionData.risk ?? 'unknown')} />
       <InspectorFieldRow label="Обоснование">{String(data?.rationale ?? decisionData.rationale ?? '—')}</InspectorFieldRow>
+      {actionKey === 'thinking' && (
+        <>
+          <SnapshotValueField label="Выбранный индекс" value={thinking?.selectedHypothesisIndex ?? '—'} />
+          <SnapshotValueField label="Выбранное действие" value={thinking?.selectedActionKind ?? '—'} />
+          <InspectorFieldRow label="Краткий итог">{thinking?.selectedActionSummary ?? '—'}</InspectorFieldRow>
+          <InspectorFieldRow label="Почему выбрано">{thinking?.selectionRationale ?? '—'}</InspectorFieldRow>
+          <InspectorFieldRow label="Гипотезы">
+            {thinking?.hypotheses?.length
+              ? thinking.hypotheses.map((item, index) => `${index}. ${item.summary}`).join('\n')
+              : '—'}
+          </InspectorFieldRow>
+        </>
+      )}
     </InspectorFieldGroup>
   );
 }

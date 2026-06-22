@@ -1,7 +1,7 @@
 import type { SemanticEvent } from './types';
 
 const PHASE_ROUTED = new Set(['planner', 'agent', 'synthesis', 'triage', 'preflight', 'pipeline']);
-const RUNTIME_NOISE = new Set(['delta', 'waiting_input', 'stop', 'done']);
+const RUNTIME_NOISE = new Set(['delta', 'stop', 'done', 'run_paused']);
 const TERMINAL_PLANNER_STEPS = new Set(['final', 'abort', 'ask_user', 'direct_answer']);
 
 export function isPhaseRoutedEvent(event: SemanticEvent): boolean {

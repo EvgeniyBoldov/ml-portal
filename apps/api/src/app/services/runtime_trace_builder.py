@@ -230,6 +230,10 @@ class RuntimeTraceBuilder:
             return str(data.get("content") or data.get("request") or "User request")
         if raw_type == "protocol_retry":
             return str(data.get("reason") or "Protocol retry")
+        if raw_type == "confirmation_required":
+            return str(data.get("summary") or data.get("message") or "Confirmation required")
+        if raw_type == "waiting_input":
+            return str(data.get("question") or data.get("message") or "Waiting for input")
         if raw_type == "question_answer":
             question = str(data.get("question") or "").strip()
             answer = str(data.get("user_answer") or "").strip()
@@ -248,6 +252,8 @@ class RuntimeTraceBuilder:
             return str(data.get("status") or "Preflight complete")
         if raw_type == "intent":
             return str(data.get("description") or "Intent")
+        if raw_type == "planner_decision" and str(data.get("kind") or "") == "thinking":
+            return str(data.get("selected_action_summary") or data.get("selection_rationale") or "Thinking")
         if raw_type in {"operation_call", "tool_call"}:
             return str(data.get("operation_slug") or data.get("tool") or data.get("operation") or "Operation call")
         if raw_type in {"operation_result", "tool_result"}:
@@ -255,10 +261,19 @@ class RuntimeTraceBuilder:
             op = data.get("operation_slug") or data.get("tool") or data.get("operation") or "Operation"
             return f"{op} {status}"
         if raw_type in {"llm_call", "llm_response", "llm_turn"}:
-            metric = data.get("response_length")
-            if metric is None:
-                metric = data.get("tokens_out")
-            return f"response_length={metric if metric is not None else 'n/a'}"
+            if isinstance(data.get("parsed_response"), dict):
+                selected = str(data["parsed_response"].get("selected_action_summary") or "").strip()
+                if selected:
+                    return selected
+            purpose = str(data.get("purpose") or data.get("step_kind") or data.get("stepKind") or "").strip()
+            if purpose:
+                model = str(data.get("model") or data.get("provider_model") or "").strip()
+                return f"{purpose} · {model}" if model else purpose
+            metric = data.get("tokens_out", data.get("response_length"))
+            if metric is not None:
+                return f"tokens_out={metric}"
+            model = str(data.get("model") or data.get("provider_model") or "").strip()
+            return f"model={model}" if model else "LLM"
         if raw_type == "budget_snapshot":
             owner = data.get("owner_scope") or data.get("scope") or "unknown"
             return f"{owner}: snapshot"

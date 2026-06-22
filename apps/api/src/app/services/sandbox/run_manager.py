@@ -162,6 +162,9 @@ class SandboxRunManager:
     async def get_run_steps_count(self, run_id: UUID) -> int:
         return await self.host.runs.get_steps_count(run_id)
 
+    async def get_next_run_step_order(self, run_id: UUID) -> int:
+        return await self.host.steps.get_max_order_num(run_id) + 1
+
     async def add_run_step(
         self,
         *,

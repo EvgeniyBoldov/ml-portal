@@ -55,6 +55,59 @@ function asRecord(value: unknown): Record<string, unknown> {
     : {};
 }
 
+function parseJsonRecord(value: unknown): Record<string, unknown> | undefined {
+  if (typeof value !== 'string') return undefined;
+  try {
+    const parsed = JSON.parse(value);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
+    return parsed as Record<string, unknown>;
+  } catch {
+    return undefined;
+  }
+}
+
+function inferLlmRole(data: Record<string, unknown>): { role: string; label: string } {
+  const purpose = String(data.purpose ?? '').trim().toLowerCase();
+  const parsed = asRecord(data.parsed_response);
+  const contentText = typeof data.content === 'string'
+    ? data.content
+    : typeof data.response === 'string'
+      ? data.response
+      : typeof data.text === 'string'
+        ? data.text
+        : undefined;
+  const parsedFromContent = parseJsonRecord(contentText);
+  if (purpose === 'planning_decision' && (Array.isArray(parsed.hypotheses) || Array.isArray(parsedFromContent?.hypotheses))) {
+    return { role: 'reasoning', label: 'Рассуждение' };
+  }
+  if (purpose === 'planning_decision') {
+    return { role: 'planner_decision', label: 'Следующий шаг' };
+  }
+  if (purpose === 'tool_decision_or_answer' && String(contentText ?? '').trim().startsWith('```operation_call')) {
+    return { role: 'tool_protocol', label: 'Протокол инструмента' };
+  }
+  if (purpose === 'tool_decision_or_answer') {
+    return { role: 'agent_answer', label: 'Ответ агента' };
+  }
+  if (purpose === 'fact_extractor' || purpose === 'summary_compactor') {
+    return { role: 'memory', label: purpose === 'fact_extractor' ? 'Извлечение фактов' : 'Сводка памяти' };
+  }
+  if (purpose === 'final_answer') {
+    return { role: 'final_answer', label: 'Финальный ответ' };
+  }
+  return { role: 'generic', label: 'LLM вызов' };
+}
+
+function inferErrorLabel(data: Record<string, unknown>): string {
+  const code = String(data.error_code ?? '').trim().toLowerCase();
+  const phase = String(asRecord(data._envelope).phase ?? '').trim().toLowerCase();
+  if (code === 'agent_required_operation_call_missing') return 'Нарушение контракта агента';
+  if (code.startsWith('tool_') || code.includes('operation')) return 'Ошибка инструмента';
+  if (code.startsWith('llm_')) return 'Ошибка LLM';
+  if (phase === 'agent' || phase === 'planner' || code.startsWith('agent_') || code.startsWith('runtime_')) return 'Ошибка рантайма';
+  return 'Ошибка';
+}
+
 function pickIteration(step: TraceSourceStep): number {
   const data = step.data;
   const direct = data.iteration ?? data.step;
@@ -73,8 +126,16 @@ function pickIteration(step: TraceSourceStep): number {
 }
 
 function summarize(rawType: string, data: Record<string, unknown>): string {
+  const llmPurpose = String(data.purpose ?? data.step_kind ?? data.stepKind ?? '').trim();
+  const llmModel = String(data.model ?? data.provider_model ?? '').trim();
   if (rawType === 'user_request') return String(data.content ?? data.request ?? 'User request');
   if (rawType === 'protocol_retry') return String(data.reason ?? 'Protocol retry');
+  if (rawType === 'confirmation_required') {
+    return String(data.summary ?? data.message ?? 'Confirmation required');
+  }
+  if (rawType === 'waiting_input') {
+    return String(data.question ?? data.message ?? 'Waiting for input');
+  }
   if (rawType === 'question_answer') {
     const question = String(data.question ?? '').trim();
     const answer = String(data.user_answer ?? data.answer ?? '').trim();
@@ -84,6 +145,9 @@ function summarize(rawType: string, data: Record<string, unknown>): string {
   if (rawType === 'routing') return String(data.agent_slug ?? data.mode ?? 'Routing decision');
   if (rawType === 'planner_action' || rawType === 'planner_step' || rawType === 'planner_decision') {
     const kind = String(data.kind ?? data.action_type ?? data.action ?? 'planner_decision');
+    if (kind === 'thinking') {
+      return String(data.selected_action_summary ?? data.selection_rationale ?? 'Thinking');
+    }
     const rationale = String(data.rationale ?? '').trim();
     return rationale ? `${kind}: ${rationale}` : kind;
   }
@@ -104,7 +168,20 @@ function summarize(rawType: string, data: Record<string, unknown>): string {
     return base;
   }
   if (rawType === 'llm_call' || rawType === 'llm_response' || rawType === 'llm_turn') {
-    return `response_length=${String(data.response_length ?? data.tokens_out ?? 'n/a')}`;
+    const roleMeta = inferLlmRole(data);
+    const parsed = asRecord(data.parsed_response);
+    const thinkingSummary = String(parsed.selected_action_summary ?? data.selected_action_summary ?? '').trim();
+    const error = String(data.error ?? data.error_code ?? '').trim();
+    if (thinkingSummary) return thinkingSummary;
+    if (roleMeta.role === 'reasoning') return roleMeta.label;
+    if (roleMeta.role === 'planner_decision') return roleMeta.label;
+    if (roleMeta.role === 'tool_protocol') return roleMeta.label;
+    if (roleMeta.role === 'memory') return roleMeta.label;
+    if (roleMeta.role === 'final_answer') return roleMeta.label;
+    if (llmPurpose) return llmModel ? `${llmPurpose} · ${llmModel}` : llmPurpose;
+    if (error) return error;
+    const tokensOut = data.tokens_out ?? data.response_length;
+    return tokensOut !== undefined ? `tokens_out=${String(tokensOut)}` : (llmModel ? `model=${llmModel}` : 'LLM');
   }
   if (rawType === 'llm_request') {
     const model = String(data.model ?? data.provider_model ?? 'unknown');
@@ -117,7 +194,7 @@ function summarize(rawType: string, data: Record<string, unknown>): string {
   if (rawType === 'final' || rawType === 'final_response') {
     return String(data.content ?? data.answer ?? 'Final response');
   }
-  if (rawType === 'error') return String(data.error ?? data.message ?? 'Error');
+  if (rawType === 'error') return String(data.error ?? data.message ?? inferErrorLabel(data));
   // Lifecycle events
   if (rawType === 'planner_iteration_start') {
     return `Iteration ${String(data.iteration ?? 1)}`;
@@ -169,7 +246,7 @@ function phaseFromEnvelopeOrCategory(data: Record<string, unknown>, category: Tr
   return phaseOf(category);
 }
 
-function titleOf(rawType: string, category: TraceCategory): string {
+function titleOf(rawType: string, category: TraceCategory, data?: Record<string, unknown>): string {
   const titles: Record<string, string> = {
     user_request: 'Запрос',
     budget_snapshot: 'Снимок бюджета',
@@ -191,6 +268,7 @@ function titleOf(rawType: string, category: TraceCategory): string {
     intent: 'Интент',
     policy_decision: 'Решение политики',
     confirmation_required: 'Требуется подтверждение',
+    waiting_input: 'Запрос уточнения',
     question_answer: 'Вопрос-ответ',
     final: 'Финальный ответ',
     final_response: 'Финальный ответ',
@@ -204,7 +282,11 @@ function titleOf(rawType: string, category: TraceCategory): string {
     synthesis_start: 'Синтез: старт',
     synthesis_end: 'Синтез: конец',
     final_answer_marker: 'Маркер финального ответа',
+    run_paused: 'Пауза выполнения',
+    stop: 'Остановлено',
   };
+  if (rawType === 'llm_turn' && data) return inferLlmRole(data).label;
+  if (rawType === 'error' && data) return inferErrorLabel(data);
   return titles[rawType] ?? `${category}: ${rawType}`;
 }
 
@@ -237,6 +319,8 @@ export function normalizeTraceEvent(step: TraceSourceStep): SemanticEvent {
     ? { result: step.data.result ?? step.data.output ?? step.data.data }
     : rawType === 'llm_response' || rawType === 'llm_turn'
       ? { content: step.data.response ?? step.data.raw_response ?? step.data.content, parsed_response: step.data.parsed_response }
+    : rawType === 'question_answer'
+      ? { answer: step.data.user_answer ?? step.data.answer }
     : rawType === 'final_response' || rawType === 'final'
       ? { content: step.data.content ?? step.data.answer ?? step.data.response }
       : undefined;
@@ -248,6 +332,14 @@ export function normalizeTraceEvent(step: TraceSourceStep): SemanticEvent {
         system_prompt: step.data.system_prompt ?? step.data.compiled_prompt ?? step.data.prompt,
         model: step.data.model ?? step.data.provider_model,
       }
+    : rawType === 'waiting_input' || rawType === 'confirmation_required'
+      ? {
+          question: step.data.question ?? step.data.message,
+          action: step.data.action,
+          context: step.data.context,
+        }
+    : rawType === 'question_answer'
+      ? { question: step.data.question }
     : undefined;
 
   const budget = extractBudgetPayload(rawType, step.data);
@@ -269,7 +361,7 @@ export function normalizeTraceEvent(step: TraceSourceStep): SemanticEvent {
     id: step.id,
     raw_type: rawType,
     category,
-    title: titleOf(rawType, category),
+    title: titleOf(rawType, category, step.data),
     summary,
     status: statusOf(rawType, step.data),
     phase: phaseFromEnvelopeOrCategory(step.data, category),

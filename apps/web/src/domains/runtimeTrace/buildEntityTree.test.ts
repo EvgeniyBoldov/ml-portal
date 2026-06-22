@@ -369,6 +369,181 @@ describe('buildEntityTree', () => {
     });
   });
 
+  describe('interaction request handling', () => {
+    const events: SemanticEvent[] = [
+      makeEvent({ id: 'run-start', raw_type: 'run_start', category: 'system', raw: { id: 'run-start', raw_type: 'run_start', raw: { entity_id: 'run-1', entity_type: 'run' } } }),
+      makeEvent({
+        id: 'wait-1',
+        raw_type: 'waiting_input',
+        category: 'system',
+        title: 'Запрос уточнения',
+        summary: 'Укажите VLAN',
+        raw: {
+          id: 'wait-1',
+          raw_type: 'waiting_input',
+          raw: {
+            question: 'Укажите VLAN',
+            reason: 'waiting_input',
+            parent_entity_id: 'run-1',
+          },
+        },
+        refs: { parent_entity_id: 'run-1' },
+      }),
+    ];
+
+    it('keeps waiting_input as an interaction entity instead of runtime noise', () => {
+      const tree = buildEntityTree(events);
+      const interaction = flattenEntityTree(tree).find((entity) => entity.kind === 'interaction');
+      expect(interaction).toBeDefined();
+      expect(interaction?.parentId).toBeTruthy();
+      const parent = interaction?.parentId ? findEntityById(tree, interaction.parentId) : undefined;
+      expect(parent).toBeDefined();
+      expect(parent?.kind === 'run' || parent?.kind === 'phase').toBe(true);
+      if (interaction?.data.kind === 'interaction') {
+        expect(interaction.data.interactionKind).toBe('clarify');
+        expect(interaction.data.question).toBe('Укажите VLAN');
+      }
+    });
+  });
+
+  describe('clarify dialog grouping', () => {
+    const RUN_ID = 'run-clarify';
+    const ORCH_ID = `${RUN_ID}:orchestrator`;
+    const ITER_ID = `${RUN_ID}:planner:1`;
+    const QUESTION = 'Пожалуйста, уточните, что именно нужно проверить?';
+
+    const events: SemanticEvent[] = [
+      makeEvent({
+        id: RUN_ID,
+        raw_type: 'run_start',
+        category: 'system',
+        raw: { id: RUN_ID, raw_type: 'run_start', raw: { entity_id: RUN_ID, entity_type: 'run' } },
+      }),
+      makeEvent({
+        id: `${RUN_ID}:orch-start`,
+        raw_type: 'orchestrator_start',
+        category: 'system',
+        raw: {
+          id: `${RUN_ID}:orch-start`,
+          raw_type: 'orchestrator_start',
+          raw: {
+            entity_id: ORCH_ID,
+            parent_entity_id: RUN_ID,
+            slug: 'orchestrator',
+            role: 'planner',
+          },
+        },
+      }),
+      makeEvent({
+        id: `${RUN_ID}:iter-start`,
+        raw_type: 'planner_iteration_start',
+        category: 'system',
+        raw: {
+          id: `${RUN_ID}:iter-start`,
+          raw_type: 'planner_iteration_start',
+          raw: {
+            entity_id: ITER_ID,
+            parent_entity_id: ORCH_ID,
+          },
+        },
+      }),
+      makeEvent({
+        id: `${RUN_ID}:llm-clarify`,
+        raw_type: 'llm_turn',
+        category: 'llm',
+        raw: {
+          id: `${RUN_ID}:llm-clarify`,
+          raw_type: 'llm_turn',
+          raw: {
+            parent_entity_id: ITER_ID,
+            content: JSON.stringify({ kind: 'clarify', question: QUESTION }),
+          },
+        },
+        refs: { parent_entity_id: ITER_ID },
+      }),
+      makeEvent({
+        id: `${RUN_ID}:decision`,
+        raw_type: 'planner_decision',
+        category: 'planner',
+        raw: {
+          id: `${RUN_ID}:decision`,
+          raw_type: 'planner_decision',
+          raw: {
+            parent_entity_id: ITER_ID,
+            kind: 'clarify',
+            rationale: 'Need clarification',
+          },
+        },
+        decision: { kind: 'clarify', rationale: 'Need clarification' },
+      }),
+      makeEvent({
+        id: `${RUN_ID}:qa`,
+        raw_type: 'question_answer',
+        category: 'system',
+        raw: {
+          id: `${RUN_ID}:qa`,
+          raw_type: 'question_answer',
+          raw: {
+            entity_id: `${RUN_ID}:question-answer`,
+            parent_entity_id: ORCH_ID,
+            question: QUESTION,
+            user_answer: 'уточнил',
+            question_kind: 'clarify',
+            resume_action: 'input',
+            source_run_id: RUN_ID,
+          },
+        },
+        refs: { parent_entity_id: ORCH_ID },
+      }),
+      makeEvent({
+        id: `${RUN_ID}:iter-end`,
+        raw_type: 'planner_iteration_end',
+        category: 'system',
+        raw: {
+          id: `${RUN_ID}:iter-end`,
+          raw_type: 'planner_iteration_end',
+          raw: {
+            entity_id: ITER_ID,
+            parent_entity_id: ORCH_ID,
+            status: 'paused',
+          },
+        },
+      }),
+      makeEvent({
+        id: `${RUN_ID}:orch-end`,
+        raw_type: 'orchestrator_end',
+        category: 'system',
+        raw: {
+          id: `${RUN_ID}:orch-end`,
+          raw_type: 'orchestrator_end',
+          raw: {
+            entity_id: ORCH_ID,
+            parent_entity_id: RUN_ID,
+            status: 'waiting_input',
+          },
+        },
+      }),
+    ];
+
+    it('groups clarify llm and answer into a dialog container', () => {
+      const tree = buildEntityTree(events);
+      const dialog = flattenEntityTree(tree).find((entity) => entity.kind === 'dialog');
+      expect(dialog).toBeDefined();
+      expect(dialog?.parentId).toBe(ITER_ID);
+      if (dialog?.data.kind === 'dialog') {
+        expect(dialog.data.interactionKind).toBe('clarify');
+        expect(dialog.data.items?.length).toBe(1);
+        expect(dialog.data.items?.[0]?.question).toBe(QUESTION);
+        expect(dialog.data.items?.[0]?.answer).toBe('уточнил');
+      }
+      const llm = dialog?.children.find((child) => child.kind === 'llm');
+      const interaction = dialog?.children.find((child) => child.kind === 'interaction');
+      expect(llm).toBeDefined();
+      expect(interaction).toBeDefined();
+      expect(interaction?.parentId).toBe(dialog?.id);
+    });
+  });
+
   describe('budget extraction', () => {
     const events: SemanticEvent[] = [
       makeEvent({

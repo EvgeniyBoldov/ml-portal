@@ -36,11 +36,11 @@ describe('tracePresentation', () => {
   it('maps llm entities to call inspection', () => {
     const entity = makeEntity({
       kind: 'llm',
-      data: { kind: 'llm' },
+      data: { kind: 'llm', llmRole: 'reasoning', llmRoleLabel: 'Рассуждение' },
     });
 
     expect(getTraceEntityKindLabel(entity)).toBe('LLM');
-    expect(getTraceEntityTitle(entity)).toBe('LLM');
+    expect(getTraceEntityTitle(entity)).toBe('Рассуждение');
     expect(getTraceSnapshotInspectorKind(entity)).toBe('call');
   });
 
@@ -66,5 +66,31 @@ describe('tracePresentation', () => {
     expect(getTraceEntityKindLabel(entity)).toBe('Диалог');
     expect(getTraceEntityTitle(entity)).toBe('Уточнение');
     expect(getTraceSnapshotInspectorKind(entity)).toBe('entity');
+  });
+
+  it('maps dialog containers to dialog inspection', () => {
+    const entity = makeEntity({
+      kind: 'dialog',
+      title: 'Clarify dialog',
+      data: {
+        kind: 'dialog',
+        interactionKind: 'clarify',
+        items: [{ question: 'Какой регламент?', answer: 'HR' }],
+      },
+    });
+
+    expect(getTraceEntityKindLabel(entity)).toBe('Диалог');
+    expect(getTraceEntityTitle(entity)).toBe('Какой регламент?');
+    expect(getTraceSnapshotInspectorKind(entity)).toBe('entity');
+  });
+
+  it('uses error source label in title fallback', () => {
+    const entity = makeEntity({
+      kind: 'error',
+      title: 'Ошибка',
+      data: { kind: 'error', sourceLabel: 'Ошибка рантайма' },
+    });
+
+    expect(getTraceEntityTitle(entity)).toBe('Ошибка рантайма');
   });
 });

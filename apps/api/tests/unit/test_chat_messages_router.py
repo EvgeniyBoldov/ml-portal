@@ -118,6 +118,7 @@ async def test_send_message_stream_passes_confirmation_tokens(monkeypatch):
         chat_id=chat_id,
         body=ChatMessageStreamRequest(
             content="hello",
+            execution_mode="thinking",
             confirmation_tokens=["tok-1", "tok-2"],
             attachment_ids=[str(uuid4())],
             agent_slug="default",
@@ -136,5 +137,6 @@ async def test_send_message_stream_passes_confirmation_tokens(monkeypatch):
 
     stream_kwargs = captured["stream_kwargs"]
     assert stream_kwargs["confirmation_tokens"] == ["tok-1", "tok-2"]
+    assert str(stream_kwargs["execution_mode"].value) == "thinking"
     assert stream_kwargs["idempotency_key"] == "idem-123"
     assert any("event: done" in chunk for chunk in chunks)

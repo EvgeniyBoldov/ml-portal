@@ -19,7 +19,8 @@ from app.repositories.chats_repo import AsyncChatsRepository, AsyncChatMessagesR
 from app.core.http.clients import LLMClientProtocol
 from app.services.run_store import RunStore
 from app.agents import ToolContext
-from app.runtime import RuntimePipeline, PipelineRequest, RuntimeEvent, RuntimeEventType
+from app.runtime import PipelineRequest, RuntimeEvent, RuntimeEventType, RuntimePipeline
+from app.runtime.contracts import ExecutionMode
 from app.agents.execution_preflight import AgentUnavailableError
 from app.core.logging import get_logger
 from app.core.idempotency import IdempotencyManager
@@ -168,6 +169,7 @@ class ChatStreamService:
         tenant_id: Optional[str] = None,
         attachment_ids: Optional[list[str]] = None,
         confirmation_tokens: Optional[list[str]] = None,
+        execution_mode: ExecutionMode = ExecutionMode.NORMAL,
         idempotency_key: Optional[str] = None,
         model: Optional[str] = None,
         agent_slug: Optional[str] = None,
@@ -264,6 +266,7 @@ class ChatStreamService:
                 content=content,
                 attachment_ids=attachment_ids,
                 confirmation_tokens=confirmation_tokens or [],
+                execution_mode=execution_mode,
                 attachment_meta=self.attachment_service.to_meta(attachment_rows),
                 attachment_prompt_context=attachment_prompt_context,
                 idempotency_key=idempotency_key,
@@ -291,6 +294,7 @@ class ChatStreamService:
         tool_ctx: ToolContext,
         model: Optional[str],
         content: str,
+        execution_mode: ExecutionMode = ExecutionMode.NORMAL,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """Run the turn via runtime v3 Pipeline, translating events to SSE payloads."""
         try:
@@ -317,6 +321,7 @@ class ChatStreamService:
                 continuation_meta=(tool_ctx.extra or {}).get("continuation_meta", {}) if hasattr(tool_ctx, "extra") else {},
                 confirmation_tokens=list((tool_ctx.extra or {}).get("confirmation_tokens") or []),
                 await_background_tail=False,
+                execution_mode=execution_mode,
             )
 
             async for event in pipeline.execute(pipeline_request, tool_ctx):
@@ -388,4 +393,3 @@ class ChatStreamService:
         except Exception as e:
             logger.error(f"Router error: {e}", exc_info=True)
             yield _safe_stream_error("routing_failed", "Routing failed")
-

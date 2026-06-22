@@ -19,6 +19,11 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 
+class ExecutionMode(str, Enum):
+    NORMAL = "normal"
+    THINKING = "thinking"
+
+
 # --------------------------------------------------------------------------- #
 # Pipeline inputs                                                             #
 # --------------------------------------------------------------------------- #
@@ -50,6 +55,7 @@ class PipelineRequest(BaseModel):
     continuation_meta: Dict[str, Any] = Field(default_factory=dict)
     confirmation_tokens: List[str] = Field(default_factory=list)
     await_background_tail: bool = True
+    execution_mode: ExecutionMode = ExecutionMode.NORMAL
 
 
 # --------------------------------------------------------------------------- #

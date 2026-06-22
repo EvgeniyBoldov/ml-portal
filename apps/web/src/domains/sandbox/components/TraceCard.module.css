@@ -57,6 +57,30 @@
   border-left: 3px solid #eab308;
 }
 
+.llmReasoning {
+  border-left: 3px solid #f97316;
+}
+
+.llmDecision {
+  border-left: 3px solid #d97706;
+}
+
+.llmAnswer {
+  border-left: 3px solid #eab308;
+}
+
+.llmProtocol {
+  border-left: 3px solid #64748b;
+}
+
+.llmMemory {
+  border-left: 3px solid #a855f7;
+}
+
+.llmFinal {
+  border-left: 3px solid #14b8a6;
+}
+
 .tool {
   border-left: 3px solid #6b7280;
 }

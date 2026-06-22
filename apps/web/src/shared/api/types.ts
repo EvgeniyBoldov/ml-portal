@@ -1,4 +1,6 @@
 /** Shared API types */
+export type ExecutionMode = 'normal' | 'thinking';
+
 export interface Pagination {
   page?: number;
   size?: number;
@@ -75,6 +77,7 @@ export interface ChatMessageCreateRequest {
   content: string;
   use_rag?: boolean;
   response_stream?: boolean;
+  execution_mode?: ExecutionMode;
   attachment_ids?: string[];
   confirmation_tokens?: string[];
 }

@@ -6,7 +6,7 @@ Pattern: Create, Update, ListItem, DetailResponse.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -164,6 +164,7 @@ class SandboxRunCreate(BaseModel):
     parent_run_id: Optional[UUID] = None
     attachment_ids: Optional[list[UUID]] = None
     confirmed_fingerprints: Optional[list[str]] = None
+    execution_mode: Optional[Literal["normal", "thinking"]] = None
 
 
 class SandboxRunListItem(BaseModel):

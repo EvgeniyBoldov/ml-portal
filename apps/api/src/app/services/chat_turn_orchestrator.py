@@ -10,6 +10,7 @@ from app.services.chat_persistence_service import ChatPersistenceService
 from app.services.chat_title_service import ChatTitleService
 from app.services.chat_turn_service import ChatTurnService
 from app.services.chat_turn_state import ChatTurnState, TurnPhase
+from app.runtime.contracts import ExecutionMode
 
 logger = get_logger(__name__)
 
@@ -39,6 +40,7 @@ class ChatTurnOrchestrator:
         content: str,
         attachment_ids: list[str],
         confirmation_tokens: Optional[list[str]] = None,
+        execution_mode: ExecutionMode = ExecutionMode.NORMAL,
         attachment_meta: list[dict[str, Any]],
         attachment_prompt_context: str,
         idempotency_key: Optional[str],
@@ -150,6 +152,7 @@ class ChatTurnOrchestrator:
                 tool_ctx=tool_ctx,
                 model=model,
                 content=content,
+                execution_mode=execution_mode,
             ):
                 if isinstance(event_data.get("run_id"), str):
                     last_run_id = str(event_data.get("run_id"))

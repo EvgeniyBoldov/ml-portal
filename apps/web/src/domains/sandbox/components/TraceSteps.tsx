@@ -5,7 +5,7 @@
  */
 
 import * as React from 'react';
-import { buildEntityTree, flattenEntityTree, findEntityById } from '@/domains/runtimeTrace/buildEntityTree';
+import { buildEntityTree } from '@/domains/runtimeTrace/buildEntityTree';
 import { normalizeTraceEvent } from '@/domains/runtimeTrace/normalize';
 import type { ContainerDebugRecord, TraceEntity } from '@/domains/runtimeTrace/entityTypes';
 import type { RunStep } from '../hooks/useSandboxRun';
@@ -25,7 +25,7 @@ function convertRunStepsToSemanticEvents(steps: RunStep[]) {
       id: step.id,
       raw_type: step.type,
       data: step.data,
-      step_number: index,
+      step_number: step.orderNumber ?? index,
       created_at: new Date(step.timestamp).toISOString(),
       duration_ms: typeof step.data.duration_ms === 'number' ? step.data.duration_ms : undefined,
     })

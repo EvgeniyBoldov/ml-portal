@@ -55,6 +55,15 @@ const resolveToneMeta = (entity: TraceEntity): ToneMeta => {
     return { className: styles.orchestrator };
   }
   if (entity.kind === 'planner') return { className: styles.planner };
+  if (entity.kind === 'dialog') return { className: styles.planner };
+  if (entity.kind === 'llm' && entity.data.kind === 'llm') {
+    if (entity.data.llmRole === 'reasoning') return { className: styles.llmReasoning };
+    if (entity.data.llmRole === 'planner_decision') return { className: styles.llmDecision };
+    if (entity.data.llmRole === 'tool_protocol') return { className: styles.llmProtocol };
+    if (entity.data.llmRole === 'memory') return { className: styles.llmMemory };
+    if (entity.data.llmRole === 'final_answer') return { className: styles.llmFinal };
+    return { className: styles.llmAnswer };
+  }
   if (entity.kind === 'llm') return { className: styles.llm };
   if (entity.kind === 'agent') return { className: styles.agent };
   if (entity.kind === 'tool') return { className: styles.tool };
@@ -72,6 +81,7 @@ const BUDGET_KINDS: Record<string, Array<'planner_steps' | 'agent_steps' | 'tool
   llm: ['tokens_total'],
   tool: ['tool_calls', 'retries', 'wall_time_ms'],
   planner: ['planner_steps', 'wall_time_ms'],
+  dialog: ['tokens_total', 'wall_time_ms'],
   decision: ['planner_steps'],
   error: [],
   unknown: [],
@@ -106,7 +116,7 @@ export function TraceCard({
     }
     return BUDGET_KINDS[kind] ?? [];
   })();
-  const showAggregated = kind === 'run' || kind === 'orchestrator' || kind === 'agent' || kind === 'phase';
+  const showAggregated = kind === 'run' || kind === 'orchestrator' || kind === 'agent' || kind === 'phase' || kind === 'dialog';
   const pillsUsed = showAggregated ? entity.budget?.aggregated : entity.budget?.own;
   const pillsLimits = entity.budget?.limits ?? null;
   const isUnknown = kind === 'unknown';

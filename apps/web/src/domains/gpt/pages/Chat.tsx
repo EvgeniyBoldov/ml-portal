@@ -4,6 +4,7 @@ import { useParams } from 'react-router-dom';
 import { useChatActions, useChatMessagesState } from '@/domains/chat/contexts/ChatContext';
 import { ChatMessage } from '@/domains/chat/components/ChatMessage';
 import { ChatComposer } from '@/domains/chat/components/ChatComposer';
+import type { ExecutionMode } from '@/shared/api/types';
 import { ConfirmationPrompt } from '@/domains/chat/components/ConfirmationPrompt/ConfirmationPrompt';
 import { Icon } from '@/shared/ui/Icon';
 
@@ -87,7 +88,7 @@ export default function Chat() {
   // Handle send with agent support
   const handleSend = async (
     message: string,
-    options: { agentSlug?: string; attachments?: File[] }
+    options: { agentSlug?: string; executionMode: ExecutionMode; attachments?: File[] }
   ) => {
     if (!chatId) return;
     setBusy(true);
@@ -124,6 +125,7 @@ export default function Chat() {
           setStreamError(friendlyErr);
         },
         options.agentSlug,
+        options.executionMode,
         attachmentIds,
         attachmentMeta
       );
@@ -165,7 +167,7 @@ export default function Chat() {
         );
       } else {
         // Triage clarify path has no resumable run_id; continue as a normal user message.
-        await handleSend(userInput, {});
+        await handleSend(userInput, { executionMode: 'normal' });
       }
       
       if (chatId) {
@@ -181,7 +183,7 @@ export default function Chat() {
           await loadMessages(chatId);
         }
         if (message) {
-          await handleSend(message, {});
+          await handleSend(message, { executionMode: 'normal' });
           return;
         }
       }

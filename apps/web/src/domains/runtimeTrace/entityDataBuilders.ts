@@ -1,6 +1,8 @@
 import type {
   AgentData,
   ErrorData,
+  DialogData,
+  DialogItem,
   InteractionData,
   LLMData,
   PlannerData,
@@ -11,6 +13,72 @@ import type {
   UnknownData,
 } from './entityTypes';
 import type { SemanticEvent } from './types';
+
+function parseJsonRecord(value: unknown): Record<string, unknown> | undefined {
+  if (typeof value !== 'string') return undefined;
+  try {
+    const parsed = JSON.parse(value);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
+    return parsed as Record<string, unknown>;
+  } catch {
+    return undefined;
+  }
+}
+
+function inferLlmRole(
+  purpose: string | undefined,
+  parsedResponse: Record<string, unknown> | undefined,
+  responseContent: string | undefined,
+): { llmRole: NonNullable<LLMData['llmRole']>; llmRoleLabel: string } {
+  const normalizedPurpose = String(purpose ?? '').trim().toLowerCase();
+  const parsedFromContent = parseJsonRecord(responseContent);
+  const selectedActionSummary = typeof parsedResponse?.selected_action_summary === 'string'
+    ? parsedResponse.selected_action_summary
+    : typeof parsedFromContent?.selected_action_summary === 'string'
+      ? parsedFromContent.selected_action_summary
+      : undefined;
+  const hypotheses = parsedResponse?.hypotheses ?? parsedFromContent?.hypotheses;
+  const parsedKind = String(parsedResponse?.kind ?? parsedFromContent?.kind ?? '').trim().toLowerCase();
+  const trimmedContent = String(responseContent ?? '').trim();
+
+  if (normalizedPurpose === 'planning_decision' && (Array.isArray(hypotheses) || selectedActionSummary)) {
+    return { llmRole: 'reasoning', llmRoleLabel: 'Рассуждение' };
+  }
+  if (normalizedPurpose === 'planning_decision' || parsedKind === 'call_agent' || parsedKind === 'clarify' || parsedKind === 'final') {
+    return { llmRole: 'planner_decision', llmRoleLabel: 'Следующий шаг' };
+  }
+  if (normalizedPurpose === 'tool_decision_or_answer' && trimmedContent.startsWith('```operation_call')) {
+    return { llmRole: 'tool_protocol', llmRoleLabel: 'Протокол инструмента' };
+  }
+  if (normalizedPurpose === 'tool_decision_or_answer') {
+    return { llmRole: 'agent_answer', llmRoleLabel: 'Ответ агента' };
+  }
+  if (normalizedPurpose === 'fact_extractor' || normalizedPurpose === 'summary_compactor') {
+    return { llmRole: 'memory', llmRoleLabel: normalizedPurpose === 'fact_extractor' ? 'Извлечение фактов' : 'Сводка памяти' };
+  }
+  if (normalizedPurpose === 'final_answer') {
+    return { llmRole: 'final_answer', llmRoleLabel: 'Финальный ответ' };
+  }
+  return { llmRole: 'generic', llmRoleLabel: 'LLM вызов' };
+}
+
+function inferErrorSource(raw: Record<string, unknown>): { source: NonNullable<ErrorData['source']>; sourceLabel: string } {
+  const code = String(raw.error_code ?? '').trim().toLowerCase();
+  const phase = String((raw._envelope as Record<string, unknown> | undefined)?.phase ?? '').trim().toLowerCase();
+  if (code.startsWith('tool_') || code.includes('operation')) {
+    return { source: 'tool', sourceLabel: 'Ошибка инструмента' };
+  }
+  if (code.startsWith('llm_')) {
+    return { source: 'llm', sourceLabel: 'Ошибка LLM' };
+  }
+  if (code.startsWith('policy_') || code.includes('confirmation')) {
+    return { source: 'policy', sourceLabel: 'Ошибка политики' };
+  }
+  if (phase === 'agent' || phase === 'planner' || code.startsWith('agent_') || code.startsWith('runtime_')) {
+    return { source: 'runtime', sourceLabel: 'Ошибка рантайма' };
+  }
+  return { source: 'unknown', sourceLabel: 'Неизвестный источник' };
+}
 
 export function buildLLMData(events: SemanticEvent[]): LLMData {
   const request = events.find(e => e.raw_type === 'llm_request' || e.raw_type === 'llm_call' || e.raw_type === 'llm_turn');
@@ -36,6 +104,7 @@ export function buildLLMData(events: SemanticEvent[]): LLMData {
   const responseContent = (respOutputs.content ?? respOutputs.response ?? respOutputs.text ?? respRaw.content ?? respRaw.response ?? respRaw.text) as string | undefined;
   const rawResponse = (respRaw.content ?? respRaw.response ?? respRaw.text ?? respOutputs.content ?? respOutputs.response ?? respOutputs.text) as string | undefined;
   const parsedResponse = (respOutputs.parsed_response ?? respOutputs.parsedResponse ?? respRaw.parsed_response ?? respRaw.parsedResponse) as Record<string, unknown> | undefined;
+  const roleMeta = inferLlmRole(typeof purpose === 'string' ? purpose : undefined, parsedResponse, responseContent ?? rawResponse);
   const toolCalls: Array<{ tool: string; arguments: Record<string, unknown>; callId?: string }> = [];
   if (parsedResponse?.tool_calls && Array.isArray(parsedResponse.tool_calls)) {
     for (const tc of parsedResponse.tool_calls) {
@@ -64,6 +133,8 @@ export function buildLLMData(events: SemanticEvent[]): LLMData {
     parentEntityType: typeof parentEntityType === 'string' ? parentEntityType : undefined,
     parentEntityId: typeof parentEntityId === 'string' ? parentEntityId : undefined,
     purpose: typeof purpose === 'string' ? purpose : undefined,
+    llmRole: roleMeta.llmRole,
+    llmRoleLabel: roleMeta.llmRoleLabel,
     prompt: messages || systemPrompt || messagesHash || systemPromptHash ? { messages, systemPrompt, isBriefMode, messagesHash, systemPromptHash } : undefined,
     response: responseContent || rawResponse ? {
       content: responseContent,
@@ -167,10 +238,29 @@ export function buildPlannerData(event: SemanticEvent): PlannerData {
   const alternatives = (raw.alternatives ?? decision.alternatives) as PlannerData['alternatives'] ?? undefined;
   const agentSlug = raw.agent_slug ?? raw.agent ?? decision.agent_slug ?? decision.agent ?? decision.chosenAgentSlug ?? '';
   const agentInput = raw.agent_input ?? decision.agent_input ?? decision.agentInput ?? decision.chosenAgentInput ?? undefined;
+  const hypothesesRaw = raw.hypotheses ?? decision.hypotheses;
+  const hypotheses = Array.isArray(hypothesesRaw)
+    ? hypothesesRaw
+        .filter((item): item is Record<string, unknown> => typeof item === 'object' && item !== null)
+        .map((item) => ({
+          summary: String(item.summary ?? ''),
+          rationale: typeof item.rationale === 'string' ? item.rationale : undefined,
+          risks: Array.isArray(item.risks) ? item.risks.map(String) : undefined,
+          expectedOutcome: typeof item.expected_outcome === 'string' ? item.expected_outcome : undefined,
+        }))
+    : undefined;
   return {
     kind: 'planner',
     stepKind: kind,
     rationale,
+    thinking: kind === 'thinking' ? {
+      executionMode: typeof raw.execution_mode === 'string' ? raw.execution_mode : undefined,
+      hypotheses,
+      selectedHypothesisIndex: typeof raw.selected_hypothesis_index === 'number' ? raw.selected_hypothesis_index : undefined,
+      selectedActionKind: typeof raw.selected_action_kind === 'string' ? raw.selected_action_kind : undefined,
+      selectedActionSummary: typeof raw.selected_action_summary === 'string' ? raw.selected_action_summary : undefined,
+      selectionRationale: typeof raw.selection_rationale === 'string' ? raw.selection_rationale : undefined,
+    } : undefined,
     alternatives,
     inputs: {
       goal,
@@ -217,26 +307,52 @@ export function buildInteractionData(event: SemanticEvent): InteractionData {
   const resumeAction = typeof raw.resume_action === 'string' ? raw.resume_action : undefined;
   const questionKind = typeof raw.question_kind === 'string' ? raw.question_kind : undefined;
   const interactionKind = typeof raw.interaction_kind === 'string' ? raw.interaction_kind : undefined;
+  const fallbackKind = event.raw_type === 'confirmation_required'
+    ? 'confirm'
+    : event.raw_type === 'waiting_input' || event.raw_type === 'question_answer'
+      ? 'clarify'
+      : 'resume';
   const answerText = typeof raw.user_answer === 'string' ? raw.user_answer
     : typeof raw.answer === 'string' ? raw.answer
     : undefined;
   return {
     kind: 'interaction',
-    interactionKind: interactionKind ?? questionKind ?? resumeAction ?? 'resume',
-    question: typeof raw.question === 'string' ? raw.question : undefined,
+    interactionKind: interactionKind ?? questionKind ?? resumeAction ?? fallbackKind,
+    question: typeof raw.question === 'string'
+      ? raw.question
+      : typeof raw.message === 'string'
+        ? raw.message
+        : undefined,
     answer: answerText,
     resumeAction,
     sourceRunId: typeof raw.source_run_id === 'string' ? raw.source_run_id : undefined,
   };
 }
 
+export function buildDialogData(
+  interactionKind: DialogData['interactionKind'],
+  items: DialogItem[],
+): DialogData {
+  const primary = items[0];
+  return {
+    kind: 'dialog',
+    interactionKind,
+    question: primary?.question,
+    answer: primary?.answer,
+    items: items.length > 0 ? items : undefined,
+  };
+}
+
 export function buildErrorData(event: SemanticEvent): ErrorData {
   const raw = event.raw?.raw ?? {};
+  const sourceMeta = inferErrorSource(raw);
   return {
     kind: 'error',
     code: typeof raw.error_code === 'string' ? raw.error_code : undefined,
     userMessage: String(raw.user_message ?? raw.message ?? raw.error ?? 'Unknown error'),
     operatorMessage: typeof raw.operator_message === 'string' ? raw.operator_message : undefined,
+    source: sourceMeta.source,
+    sourceLabel: sourceMeta.sourceLabel,
     debug: raw.debug as ErrorData['debug'] ?? undefined,
   };
 }
