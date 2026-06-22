@@ -5,9 +5,11 @@ Supports: OpenAI, Groq, Azure OpenAI, LocalAI, vLLM, Ollama, etc.
 from __future__ import annotations
 from typing import Any, AsyncIterator, Mapping, Optional
 import os
+import httpx
 from app.core.logging import get_logger
 from openai import AsyncOpenAI
 from app.core.config import get_settings
+from app.core.http.tls import outbound_http_verify
 from app.services.model_connector_profiles import build_model_auth_headers
 
 logger = get_logger(__name__)
@@ -73,6 +75,10 @@ class OpenAICompatibleLLM:
             base_url=base_url,
             api_key=openai_api_key,
             timeout=self.settings.LLM_TIMEOUT or 30.0,
+            http_client=httpx.AsyncClient(
+                timeout=self.settings.LLM_TIMEOUT or 30.0,
+                verify=outbound_http_verify(),
+            ),
             default_headers=None,
             auth_headers_override=auth_headers_override,
             _enforce_credentials=False,
