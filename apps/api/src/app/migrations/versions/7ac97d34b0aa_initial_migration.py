@@ -626,7 +626,7 @@ def upgrade() -> None:
     sa.Column('is_active', sa.Boolean(), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
-    sa.CheckConstraint("auth_type IN ('token', 'basic', 'oauth', 'api_key', 'litellm_api_key')", name='ck_credential_auth_type'),
+    sa.CheckConstraint("auth_type IN ('token', 'basic', 'oauth', 'api_key')", name='ck_credential_auth_type'),
     sa.CheckConstraint('\n            (owner_platform::int +\n             (owner_user_id IS NOT NULL)::int +\n             (owner_tenant_id IS NOT NULL)::int) = 1\n            ', name='ck_credential_single_owner'),
     sa.PrimaryKeyConstraint('id')
     )
