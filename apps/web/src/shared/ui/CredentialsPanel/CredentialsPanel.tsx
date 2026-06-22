@@ -33,7 +33,8 @@ export interface CredentialsPanelProps {
 const AUTH_TYPE_LABELS: Record<string, string> = {
   token: 'Bearer Token',
   basic: 'Basic Auth',
-  api_key: 'API Key',
+  api_key: 'API Key Header',
+  litellm_api_key: 'LiteLLM API Key',
   oauth: 'OAuth 2.0',
 };
 

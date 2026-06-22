@@ -59,7 +59,7 @@ class ModelHealthChecker:
                 if decrypted:
                     payload = decrypted.payload
                     # Support different auth types
-                    if decrypted.auth_type == "api_key":
+                    if decrypted.auth_type in {"api_key", "litellm_api_key"}:
                         return payload.get("api_key")
                     elif decrypted.auth_type == "token":
                         return payload.get("token")

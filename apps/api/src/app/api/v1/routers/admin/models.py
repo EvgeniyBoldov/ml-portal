@@ -18,6 +18,7 @@ from app.api.deps import db_uow, get_current_user, require_admin
 from app.core.security import UserCtx
 from app.services.model_service import ModelService
 from app.models.model_registry import Model, HealthStatus
+from app.repositories.tool_instance_repository import ToolInstanceRepository
 from app.schemas.model_registry import (
     Model as ModelSchema,
     ModelCreate,
@@ -58,7 +59,7 @@ async def _resolve_model_api_key(model: Model, session: AsyncSession) -> Optiona
             )
             if decrypted:
                 payload = decrypted.payload or {}
-                if decrypted.auth_type == "api_key":
+                if decrypted.auth_type in {"api_key", "litellm_api_key"}:
                     return payload.get("api_key")
                 if decrypted.auth_type == "token":
                     return payload.get("token")
@@ -116,13 +117,34 @@ async def _probe_manifest(
                 model_paths = ["/v1/models", "/models"]
 
             resp = None
+            last_error: str | None = None
             for path in model_paths:
-                candidate = await client.get(f"{normalized}/{path.lstrip('/')}", headers=headers)
+                try:
+                    candidate = await client.get(f"{normalized}/{path.lstrip('/')}", headers=headers)
+                except Exception as exc:
+                    last_error = str(exc)
+                    continue
                 if candidate.status_code < 400:
                     resp = candidate
                     break
+                if candidate.status_code == 401:
+                    raise ValueError("Authentication failed while probing model manifest")
+                if candidate.status_code == 403:
+                    raise ValueError("Access forbidden while probing model manifest")
+                try:
+                    body = candidate.json()
+                    if isinstance(body, dict):
+                        error = body.get("error")
+                        if isinstance(error, dict):
+                            last_error = str(error.get("message") or error.get("code") or candidate.text[:200])
+                        else:
+                            last_error = str(error or body.get("message") or candidate.text[:200])
+                    else:
+                        last_error = candidate.text[:200]
+                except Exception:
+                    last_error = candidate.text[:200]
             if resp is None:
-                raise ValueError("models_manifest_unreachable")
+                raise ValueError(last_error or "models_manifest_unreachable")
             resp.raise_for_status()
             data = resp.json()
             if not isinstance(data, list) or not data:
@@ -305,11 +327,50 @@ async def probe_model_info(
     admin_user = Depends(require_admin),
 ):
     base_url = str(payload.get("base_url") or "").strip()
+    connector = str(payload.get("connector") or "").strip() or None
+    instance_id_raw = str(payload.get("instance_id") or "").strip()
+    extra_config = payload.get("extra_config")
+    if not isinstance(extra_config, dict):
+        extra_config = None
+
+    api_key: str | None = None
+    if instance_id_raw:
+        try:
+            instance_id = uuid.UUID(instance_id_raw)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid instance_id: {exc}") from exc
+
+        try:
+            decrypted = await CredentialService(session).resolve_credentials(
+                instance_id=instance_id,
+                strategy="PLATFORM_FIRST",
+            )
+            if decrypted:
+                credential_payload = decrypted.payload or {}
+                if decrypted.auth_type in {"api_key", "litellm_api_key"}:
+                    api_key = credential_payload.get("api_key")
+                elif decrypted.auth_type == "token":
+                    api_key = credential_payload.get("token")
+                elif decrypted.auth_type == "basic":
+                    api_key = credential_payload.get("password")
+        except CredentialError as exc:
+            logger.warning("Failed to resolve credentials for probe-info instance %s: %s", instance_id_raw, exc)
+
+        if not base_url:
+            instance = await ToolInstanceRepository(session).get_by_id(instance_id)
+            if instance and getattr(instance, "url", None):
+                base_url = str(instance.url).strip()
+
     if not base_url:
-        raise HTTPException(status_code=400, detail="base_url is required")
+        raise HTTPException(status_code=400, detail="base_url or instance_id with URL is required")
 
     try:
-        first, health_status = await _probe_manifest(base_url)
+        first, health_status = await _probe_manifest(
+            base_url,
+            connector=connector,
+            api_key=api_key,
+            extra_config=extra_config,
+        )
         return {
             "provider_model_name": str(first.get("alias") or first.get("name") or ""),
             "model_version": str(first.get("version") or ""),

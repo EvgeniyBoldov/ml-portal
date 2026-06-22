@@ -520,7 +520,7 @@ class EmbeddingServiceFactory:
                                     strategy="PLATFORM_FIRST",
                                 )
                                 if decrypted:
-                                    if decrypted.auth_type == "api_key":
+                                    if decrypted.auth_type in {"api_key", "litellm_api_key"}:
                                         api_key = decrypted.payload.get("api_key")
                                     elif decrypted.auth_type == "token":
                                         api_key = decrypted.payload.get("token")

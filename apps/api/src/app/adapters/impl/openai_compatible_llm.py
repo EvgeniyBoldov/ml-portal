@@ -87,7 +87,7 @@ class OpenAICompatibleLLM:
 
     @staticmethod
     def _extract_secret(payload: dict, auth_type: str) -> Optional[str]:
-        if auth_type == "api_key":
+        if auth_type in {"api_key", "litellm_api_key"}:
             return payload.get("api_key")
         if auth_type == "token":
             return payload.get("token")

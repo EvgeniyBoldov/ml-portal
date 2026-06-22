@@ -259,3 +259,6 @@ class CredentialService:
         elif auth_type == AuthType.API_KEY.value:
             if "api_key" not in payload:
                 raise CredentialError("API key auth requires 'api_key' in payload")
+        elif auth_type == AuthType.LITELLM_API_KEY.value:
+            if "api_key" not in payload:
+                raise CredentialError("LiteLLM API key auth requires 'api_key' in payload")

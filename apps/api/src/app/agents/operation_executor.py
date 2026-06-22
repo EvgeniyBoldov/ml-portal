@@ -494,7 +494,7 @@ def _apply_credential_hints(
     payload = credential_context.payload or {}
     merged_args.setdefault("credentials", payload)
 
-    token = payload.get("token") or payload.get("api_key") or payload.get("access_token")
+    token = payload.get("token") or payload.get("api_key") or payload.get("litellm_api_key") or payload.get("access_token")
     if token:
         for field_name in ("token", "api_token", "api_key", "access_token"):
             merged_args.setdefault(field_name, token)

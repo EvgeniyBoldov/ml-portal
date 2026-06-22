@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field, ConfigDict
 
 class CredentialCreate(BaseModel):
     instance_id: UUID
-    auth_type: str = Field(..., description="token | basic | oauth | api_key")
+    auth_type: str = Field(..., description="token | basic | oauth | api_key | litellm_api_key")
     payload: Dict[str, Any] = Field(..., description="Credentials payload (will be encrypted)")
     owner_user_id: Optional[UUID] = None
     owner_tenant_id: Optional[UUID] = None

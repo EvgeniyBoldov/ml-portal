@@ -18,7 +18,8 @@ import { Badge, Button, ConfirmDialog } from '@/shared/ui';
 const AUTH_TYPE_LABELS: Record<string, string> = {
   token: 'Bearer Token',
   basic: 'Basic Auth',
-  api_key: 'API Key',
+  api_key: 'API Key Header',
+  litellm_api_key: 'LiteLLM API Key',
   oauth: 'OAuth 2.0',
 };
 
@@ -26,6 +27,7 @@ const AUTH_TYPE_OPTIONS = [
   { value: 'token', label: AUTH_TYPE_LABELS.token },
   { value: 'basic', label: AUTH_TYPE_LABELS.basic },
   { value: 'api_key', label: AUTH_TYPE_LABELS.api_key },
+  { value: 'litellm_api_key', label: AUTH_TYPE_LABELS.litellm_api_key },
   { value: 'oauth', label: AUTH_TYPE_LABELS.oauth },
 ];
 
@@ -43,6 +45,9 @@ const getPayloadFields = (authType: string): FieldConfig[] => {
     ],
     api_key: [
       { key: 'payload.api_key', type: 'password', label: 'API Key', required: true },
+    ],
+    litellm_api_key: [
+      { key: 'payload.api_key', type: 'password', label: 'LiteLLM API Key', required: true },
     ],
     oauth: [
       { key: 'payload.client_id', type: 'text', label: 'Client ID', required: true },

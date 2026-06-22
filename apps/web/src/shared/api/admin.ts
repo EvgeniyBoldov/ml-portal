@@ -386,6 +386,13 @@ export interface ModelProbeInfoResponse {
   important_params?: Record<string, unknown>;
 }
 
+export interface ModelProbeInfoRequest {
+  base_url?: string;
+  connector?: ModelConnector;
+  instance_id?: string;
+  extra_config?: Record<string, unknown>;
+}
+
 export interface EmbeddingUsageTenantRow {
   tenant_id: string;
   tenant_name: string;
@@ -619,10 +626,10 @@ export const adminApi = {
     });
   },
 
-  async probeModelInfo(base_url: string): Promise<ModelProbeInfoResponse> {
+  async probeModelInfo(payload: ModelProbeInfoRequest): Promise<ModelProbeInfoResponse> {
     return apiRequest('/admin/models/probe-info', {
       method: 'POST',
-      body: JSON.stringify({ base_url }),
+      body: JSON.stringify(payload),
     });
   },
 

@@ -528,11 +528,19 @@ export function ModelPage() {
         };
       } else {
         const current = String((isEditable ? formData.base_url : viewData.base_url) || '').trim();
-        if (!current) {
-          showToast('Укажите URL local-сервиса', 'warning');
+        const currentConnector = ((isEditable ? formData.connector : viewData.connector) || 'openai_http') as ModelConnector;
+        const currentInstanceId = String((isEditable ? formData.instance_id : viewData.instance_id) || '').trim();
+        const currentExtraConfig = (isEditable ? formData.extra_config : undefined) as Record<string, unknown> | undefined;
+        if (!current && !currentInstanceId) {
+          showToast('Укажите URL или выберите коннектор с URL', 'warning');
           return;
         }
-        info = await adminApi.probeModelInfo(current);
+        info = await adminApi.probeModelInfo({
+          base_url: current || undefined,
+          connector: currentConnector,
+          instance_id: currentInstanceId || undefined,
+          extra_config: currentExtraConfig,
+        });
       }
 
       if (info.provider_model_name) handleFieldChange('provider_model_name', info.provider_model_name);

@@ -31,6 +31,15 @@ def test_build_model_auth_headers_for_openai():
     assert headers == {"Authorization": "Bearer secret"}
 
 
+def test_build_model_auth_headers_for_custom_header_api_key():
+    headers = build_model_auth_headers(
+        "openai_http",
+        "secret",
+        extra_config={"auth_header_name": "x-litellm-api-key", "auth_scheme": "raw"},
+    )
+    assert headers == {"x-litellm-api-key": "secret"}
+
+
 def test_get_healthcheck_paths_for_litellm():
     assert get_healthcheck_paths("litellm_http") == [
         "/health/liveliness",
