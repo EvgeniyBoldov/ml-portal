@@ -15,6 +15,7 @@ from sqlalchemy.exc import ProgrammingError
 from sqlalchemy import inspect
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import db_uow, get_current_user, require_admin
+from app.core.http.tls import outbound_http_verify
 from app.core.security import UserCtx
 from app.services.model_service import ModelService
 from app.models.model_registry import Model, HealthStatus
@@ -89,7 +90,7 @@ async def _probe_manifest(
     health_status = "unavailable"
     health_payload: Dict[str, Any] = {}
     headers = build_model_auth_headers(connector, api_key, extra_config=extra_config)
-    async with httpx.AsyncClient(timeout=8.0) as client:
+    async with httpx.AsyncClient(timeout=8.0, verify=outbound_http_verify()) as client:
         for path in get_healthcheck_paths(connector, extra_config=extra_config):
             try:
                 health = await client.get(f"{normalized}/{path.lstrip('/')}", headers=headers)

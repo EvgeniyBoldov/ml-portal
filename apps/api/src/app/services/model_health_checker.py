@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.model_registry import Model, ModelType, HealthStatus
 from app.core.config import get_settings
+from app.core.http.tls import outbound_http_verify
 from app.core.logging import get_logger
 from app.services.credential_service import CredentialService, CredentialError
 from app.services.model_connector_profiles import build_model_auth_headers, get_healthcheck_paths
@@ -181,7 +182,7 @@ class ModelHealthChecker:
         
         url = f"{base_url.rstrip('/')}/chat/completions"
         
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with httpx.AsyncClient(timeout=self.timeout, verify=outbound_http_verify()) as client:
             response = await client.post(url, json=payload, headers=headers)
             
             if response.status_code == 200:
@@ -240,7 +241,7 @@ class ModelHealthChecker:
         
         url = f"{base_url.rstrip('/')}/embeddings"
         
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with httpx.AsyncClient(timeout=self.timeout, verify=outbound_http_verify()) as client:
             response = await client.post(url, json=payload, headers=headers)
             
             if response.status_code == 200:
@@ -275,7 +276,7 @@ class ModelHealthChecker:
             "text": "test"
         }
         
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with httpx.AsyncClient(timeout=self.timeout, verify=outbound_http_verify()) as client:
             try:
                 response = await client.post(url, json=payload)
                 
@@ -313,7 +314,7 @@ class ModelHealthChecker:
             "top_k": 1
         }
 
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with httpx.AsyncClient(timeout=self.timeout, verify=outbound_http_verify()) as client:
             errors: list[str] = []
             for candidate in deduped_candidates:
                 url = f"{candidate.rstrip('/')}/rerank"
@@ -336,7 +337,7 @@ class ModelHealthChecker:
         extra_config: dict | None = None,
     ) -> Tuple[bool, dict]:
         """Simple HTTP health check"""
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with httpx.AsyncClient(timeout=self.timeout, verify=outbound_http_verify()) as client:
             try:
                 for path in get_healthcheck_paths(connector, extra_config=extra_config):
                     health_url = f"{url.rstrip('/')}/{path.lstrip('/')}"
