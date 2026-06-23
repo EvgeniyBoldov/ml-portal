@@ -221,6 +221,11 @@ def build_operations_prompt(
 
 {rules_block}
 
+Правила выбора операций:
+- Сначала сопоставь задачу с нужной коллекцией или системной возможностью из capability card выше.
+- Для collection-bound операций не меняй коллекцию вручную: выбирай exact call name у операции, которая уже привязана к нужной collection_slug.
+- Каноническое имя операции и описание нужны для понимания смысла, но в поле `operation` нужно передавать точное имя из `function.name`.
+
 {call_heading}
 
 ```operation_call

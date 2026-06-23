@@ -45,7 +45,14 @@ def test_planner_input_builder_prefers_runtime_turn_state_snapshot():
     assert payload["goal"] == "canonical goal"
     assert payload["current_user_query"] == "canonical q"
     assert payload["memory"]["facts"] == ["runtime fact"]
-    assert payload["available_agents"] == [{"slug": "a", "description": "agent"}]
+    assert payload["available_agents"] == [
+        {
+            "slug": "a",
+            "description": "agent",
+            "tags": [],
+            "provides_keys": [],
+        }
+    ]
 
 
 def test_planner_input_builder_includes_structured_continuation():

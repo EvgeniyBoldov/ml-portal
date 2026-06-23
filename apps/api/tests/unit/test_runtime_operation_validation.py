@@ -183,7 +183,7 @@ async def test_operation_executor_builtin_validation_contract_without_jsonschema
 
 
 @pytest.mark.asyncio
-async def test_operation_executor_resolves_collection_doc_search_alias():
+async def test_operation_executor_requires_exact_invoke_name():
     operation = _document_search_operation(
         schema={
             "type": "object",
@@ -207,7 +207,6 @@ async def test_operation_executor_resolves_collection_doc_search_alias():
 
     result, _ = await OperationExecutor().execute(call, ctx, [operation])
 
-    assert result.success is True
-    assert executor_impl.await_count == 1
-    resolved_call = executor_impl.await_args.args[0]
-    assert resolved_call.operation_slug == operation.operation_slug
+    assert result.success is False
+    assert executor_impl.await_count == 0
+    assert result.metadata.get("error_code") == RuntimeErrorCode.OPERATION_UNAVAILABLE.value

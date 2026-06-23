@@ -7,12 +7,17 @@ The resolver uses Collection.data_instance_id as single source of truth.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import List, Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.agents.registry import ToolRegistry
+from app.agents.operation_publication import (
+    is_operation_allowed_for_collection_type,
+    resolve_publication,
+)
 from app.models.discovered_tool import DiscoveredTool
 from app.models.tool_instance import ToolInstance
 from app.models.collection import Collection
@@ -21,28 +26,6 @@ from app.services.collection_linking import (
     runtime_domain_for_collection,
 )
 from app.services.instance_capabilities import is_mcp_service_instance
-
-_LocalToolRule = Tuple[Tuple[str, ...], Optional[Callable[["CollectionToolResolutionContext"], bool]]]
-
-_LOCAL_TOOL_RULES: Dict[str, _LocalToolRule] = {
-    "collection.doc_search": (
-        ("collection.document",),
-        lambda ctx: bool(getattr(ctx.bound_collection, "has_vector_search", False)),
-    ),
-    "collection.list_documents": (("collection.document",), None),
-    "collection.get_document": (("collection.document",), None),
-    "collection.text_search": (
-        ("collection.table", "collection.template"),
-        lambda ctx: bool(getattr(ctx.bound_collection, "has_vector_search", False)),
-    ),
-    "collection.search": (("collection.table",), None),
-    "collection.aggregate": (("collection.table",), None),
-    "collection.get": (("collection.table",), None),
-    "template.list": (("collection.template",), None),
-    "template.get_schema": (("collection.template",), None),
-    "template.fill": (("collection.template",), None),
-}
-
 
 @dataclass(frozen=True)
 class CollectionToolResolutionContext:
@@ -171,7 +154,12 @@ class CollectionToolResolver:
             .order_by(DiscoveredTool.slug)
         )
         result = await self.session.execute(stmt)
-        return list(result.scalars().all())
+        tools = list(result.scalars().all())
+        return [
+            tool
+            for tool in tools
+            if self._is_current_system_handler(tool)
+        ]
 
     @staticmethod
     def _dedupe_tools(tools: List[DiscoveredTool]) -> List[DiscoveredTool]:
@@ -188,6 +176,13 @@ class CollectionToolResolver:
     @staticmethod
     def _is_mcp_provider(provider: ToolInstance) -> bool:
         return is_mcp_service_instance(provider)
+
+    @staticmethod
+    def _is_current_system_handler(tool: DiscoveredTool) -> bool:
+        handler = ToolRegistry.get(str(getattr(tool, "slug", "") or "").strip())
+        if handler is None:
+            return "system" in (list(getattr(tool, "domains", None) or []))
+        return "system" in (list(getattr(handler, "domains", None) or []))
 
     @staticmethod
     def _resolve_local_domains(instance: ToolInstance) -> List[str]:
@@ -219,13 +214,22 @@ class CollectionToolResolver:
     ) -> bool:
         if tool.source != "local":
             return True
-        raw_slug = str(tool.slug or "").strip()
-        rule = _LOCAL_TOOL_RULES.get(raw_slug)
-        if rule is None:
-            return True
-        required_domains, capability_check = rule
-        if required_domains and context.runtime_domain not in required_domains:
+        publication = resolve_publication(
+            raw_slug=str(tool.slug or "").strip(),
+            discovered_domains=getattr(tool, "domains", None) or [],
+            context_domains=[context.runtime_domain] if context.runtime_domain else None,
+        )
+        if publication is None:
             return False
-        if capability_check and not capability_check(context):
+        if publication.scope_kind == "system":
+            return True
+        if not is_operation_allowed_for_collection_type(
+            publication,
+            collection_type=getattr(context.bound_collection, "collection_type", None),
+        ):
+            return False
+        if publication.spec.requires_vector_search and not bool(
+            getattr(context.bound_collection, "has_vector_search", False)
+        ):
             return False
         return True

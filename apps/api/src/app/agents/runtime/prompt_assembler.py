@@ -30,7 +30,12 @@ class CollectionPromptRenderer:
     def render(payload: Dict[str, Any]) -> str:
         name = _text(payload.get("name")) or _text(payload.get("slug")) or "collection"
         slug = _text(payload.get("slug"))
-        collection_type = _text(payload.get("domain")) or _text(payload.get("instance_kind")) or "data"
+        collection_type = (
+            _text(payload.get("collection_type"))
+            or _text(payload.get("domain"))
+            or _text(payload.get("instance_kind"))
+            or "data"
+        )
         description = _text(payload.get("description"))
         entity_type = _text(payload.get("entity_type"))
 
@@ -47,24 +52,12 @@ class CollectionPromptRenderer:
 
 
 class OperationPromptRenderer:
-    MAX_DESCRIPTION_CHARS = 220
+    MAX_DESCRIPTION_CHARS = 240
 
     @staticmethod
     def render_schema(op: "ResolvedOperation") -> Dict[str, Any]:
-        description_parts: List[str] = []
-        if op.description:
-            description_parts.append(op.description)
-        elif op.name:
-            description_parts.append(op.name)
-        if getattr(op, "resource", None):
-            description_parts.append(f"Resource: {op.resource}")
-        if getattr(op, "systems", None):
-            description_parts.append(f"Systems: {', '.join(op.systems)}")
-        if getattr(op, "return_summary", None):
-            description_parts.append(f"Returns: {op.return_summary}")
-        description = " | ".join(description_parts) if description_parts else op.operation_slug
-        if len(description) > OperationPromptRenderer.MAX_DESCRIPTION_CHARS:
-            description = description[:OperationPromptRenderer.MAX_DESCRIPTION_CHARS].rstrip()
+        prompt_meta = OperationPromptRenderer._build_prompt_metadata(op)
+        description = OperationPromptRenderer._build_description(op, prompt_meta)
         return {
             "type": "function",
             "function": {
@@ -73,6 +66,53 @@ class OperationPromptRenderer:
                 "parameters": _compact_json_schema(op.input_schema or {}),
             },
         }
+
+    @staticmethod
+    def _build_prompt_metadata(op: "ResolvedOperation") -> Dict[str, Any]:
+        published = getattr(op, "published", None)
+        canonical_name = _text(getattr(published, "canonical_name", None)) or op.operation
+        collection_slug = (
+            _text(getattr(published, "collection_slug", None))
+            or _text(getattr(op, "collection_slug", None))
+            or (_text(getattr(op, "data_instance_slug", None)) if op.scope == "collection" else "")
+        )
+        collection_type = _text(getattr(published, "collection_type", None))
+        result_kind = _text(getattr(published, "result_kind", None)) or _text(getattr(op, "result_kind", None))
+        title = _text(getattr(published, "title", None)) or _text(getattr(op, "name", None))
+        description = _text(getattr(published, "description", None)) or _text(getattr(op, "description", None))
+        return {
+            "canonical_name": canonical_name,
+            "scope_kind": op.scope,
+            "collection_slug": collection_slug or None,
+            "collection_type": collection_type or None,
+            "result_kind": result_kind or None,
+            "title": title or None,
+            "description": description or None,
+        }
+
+    @staticmethod
+    def _build_description(op: "ResolvedOperation", prompt_meta: Dict[str, Any]) -> str:
+        description_parts: List[str] = []
+        title = _text(prompt_meta.get("title"))
+        if title:
+            description_parts.append(title)
+        if prompt_meta.get("scope_kind") == "collection":
+            collection_slug = _text(prompt_meta.get("collection_slug"))
+            collection_type = _text(prompt_meta.get("collection_type"))
+            if collection_slug and collection_type:
+                description_parts.append(f"collection: {collection_slug} ({collection_type})")
+            elif collection_slug:
+                description_parts.append(f"collection: {collection_slug}")
+        description = _text(prompt_meta.get("description"))
+        if description:
+            description_parts.append(description)
+        result_kind = _text(prompt_meta.get("result_kind"))
+        if result_kind:
+            description_parts.append(f"result: {result_kind}")
+        rendered = " | ".join(description_parts) if description_parts else op.operation_slug
+        if len(rendered) > OperationPromptRenderer.MAX_DESCRIPTION_CHARS:
+            rendered = rendered[: OperationPromptRenderer.MAX_DESCRIPTION_CHARS].rstrip()
+        return rendered
 
 
 class PromptAssembler:

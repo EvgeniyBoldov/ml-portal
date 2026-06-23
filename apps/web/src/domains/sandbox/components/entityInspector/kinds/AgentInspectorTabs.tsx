@@ -1,5 +1,10 @@
 import { InspectorFieldGroup, InspectorFieldRow, InspectorNotice, InspectorTabs } from '@/shared/ui/Inspector';
-import { isAgentData, type TraceEntity } from '@/domains/runtimeTrace/entityTypes';
+import {
+  isAgentData,
+  type PublishedCollectionSnapshot,
+  type PublishedOperationSnapshot,
+  type TraceEntity,
+} from '@/domains/runtimeTrace/entityTypes';
 import type { RunStep } from '../../../hooks/useSandboxRun';
 import {
   BudgetsTab,
@@ -14,42 +19,72 @@ import {
   getPromptSnapshot,
 } from '../shared';
 
-function prettifySegment(value: string): string {
-  return value
-    .replace(/[_-]+/g, ' ')
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(' ');
+function normalizeOperation(value: unknown): PublishedOperationSnapshot | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const rec = value as Record<string, unknown>;
+  const slug = rec.operation_slug ?? rec.operation ?? rec.tool ?? rec.name;
+  if (typeof slug !== 'string' || slug.trim().length === 0) return null;
+  return {
+    operation_slug: slug.trim(),
+    canonical_name: typeof rec.canonical_name === 'string' ? rec.canonical_name : undefined,
+    scope_kind: rec.scope_kind === 'system' || rec.scope_kind === 'collection' ? rec.scope_kind : undefined,
+    domain: typeof rec.domain === 'string' ? rec.domain : undefined,
+    title: typeof rec.title === 'string' ? rec.title : undefined,
+    description: typeof rec.description === 'string' ? rec.description : undefined,
+    result_kind: typeof rec.result_kind === 'string' ? rec.result_kind : undefined,
+    collection_slug: typeof rec.collection_slug === 'string' ? rec.collection_slug : undefined,
+    collection_type: typeof rec.collection_type === 'string' ? rec.collection_type : undefined,
+    collection_purpose: typeof rec.collection_purpose === 'string' ? rec.collection_purpose : undefined,
+    collection_readiness: typeof rec.collection_readiness === 'string' ? rec.collection_readiness : undefined,
+    schema_freshness: typeof rec.schema_freshness === 'string' ? rec.schema_freshness : undefined,
+    provider_kind: typeof rec.provider_kind === 'string' ? rec.provider_kind : undefined,
+    input_schema_summary: Array.isArray(rec.input_schema_summary) ? rec.input_schema_summary.map(String) : undefined,
+    side_effects: typeof rec.side_effects === 'boolean' ? rec.side_effects : undefined,
+    risk_level: rec.risk_level === 'safe' || rec.risk_level === 'write' || rec.risk_level === 'destructive'
+      ? rec.risk_level
+      : undefined,
+  };
 }
 
-function splitOperationSlug(slug: string): { collection: string; label: string } {
-  const cleaned = slug.trim();
-  if (!cleaned) return { collection: 'Общее', label: 'unknown' };
-  const parts = cleaned.split(/[./:]/).filter(Boolean);
-  if (parts.length <= 1) {
-    return { collection: 'Общее', label: prettifySegment(parts[0] ?? cleaned) };
-  }
-  const label = prettifySegment(parts.pop() ?? cleaned);
-  const collection = prettifySegment(parts.join(' '));
-  return { collection, label };
+function normalizeCollection(value: unknown): PublishedCollectionSnapshot | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const rec = value as Record<string, unknown>;
+  if (typeof rec.collection_slug !== 'string' || rec.collection_slug.trim().length === 0) return null;
+  return {
+    collection_slug: rec.collection_slug.trim(),
+    collection_type: typeof rec.collection_type === 'string' ? rec.collection_type : undefined,
+    title: typeof rec.title === 'string' ? rec.title : undefined,
+    purpose: typeof rec.purpose === 'string' ? rec.purpose : undefined,
+    data_description: typeof rec.data_description === 'string' ? rec.data_description : undefined,
+    readiness_status: typeof rec.readiness_status === 'string' ? rec.readiness_status : undefined,
+    schema_freshness: typeof rec.schema_freshness === 'string' ? rec.schema_freshness : undefined,
+    missing_requirements: Array.isArray(rec.missing_requirements) ? rec.missing_requirements.map(String) : undefined,
+    available_operation_slugs: Array.isArray(rec.available_operation_slugs) ? rec.available_operation_slugs.map(String) : undefined,
+  };
 }
 
-function groupOperationLabels(slugs: string[]): Array<{ collection: string; labels: string[] }> {
-  const groups = new Map<string, Set<string>>();
-  for (const slug of slugs) {
-    const { collection, label } = splitOperationSlug(slug);
-    const current = groups.get(collection) ?? new Set<string>();
-    current.add(label);
-    groups.set(collection, current);
+function normalizeUsedOperation(value: unknown): PublishedOperationSnapshot | null {
+  const normalized = normalizeOperation(value);
+  if (normalized) return normalized;
+  if (typeof value === 'string' && value.trim().length > 0) {
+    return { operation_slug: value.trim() };
   }
-  return Array.from(groups.entries())
-    .map(([collection, labels]) => ({
-      collection,
-      labels: Array.from(labels).sort((a, b) => a.localeCompare(b)),
-    }))
-    .sort((a, b) => a.collection.localeCompare(b.collection));
+  return null;
+}
+
+function describeOperation(operation: PublishedOperationSnapshot): string {
+  const title = operation.title?.trim() || operation.canonical_name?.trim() || operation.operation_slug;
+  const parts = [];
+  if (operation.description?.trim()) parts.push(operation.description.trim());
+  if (operation.result_kind?.trim()) parts.push(`результат: ${operation.result_kind.trim()}`);
+  if (operation.input_schema_summary && operation.input_schema_summary.length > 0) {
+    parts.push(`аргументы: ${operation.input_schema_summary.join(', ')}`);
+  }
+  if (typeof operation.side_effects === 'boolean') {
+    parts.push(operation.side_effects ? 'есть side effects' : 'без side effects');
+  }
+  if (operation.risk_level) parts.push(`риск: ${operation.risk_level}`);
+  return parts.length > 0 ? `${title} — ${parts.join('; ')}` : title;
 }
 
 export function AgentInspectorTabs({ entity, steps }: { entity: TraceEntity; steps: RunStep[] }) {
@@ -98,14 +133,6 @@ export function AgentInspectorTabs({ entity, steps }: { entity: TraceEntity; ste
       ? [{ key: 'info', label: 'Параметры' }, { key: 'result', label: 'Результат' }, { key: 'prompt', label: 'Промпт' }, { key: 'budgets', label: 'Бюджет' }, { key: 'raw', label: 'RAW' }]
       : [{ key: 'info', label: 'Параметры' }, { key: 'task', label: 'Задание' }, { key: 'prompt', label: 'Промпт' }, { key: 'tools', label: 'Инструменты' }, { key: 'rbac', label: 'RBAC' }, { key: 'budgets', label: 'Бюджет' }, { key: 'raw', label: 'RAW' }];
 
-  const extractOperationSlug = (value: unknown): string | null => {
-    if (typeof value === 'string' && value.trim().length > 0) return value.trim();
-    if (!value || typeof value !== 'object') return null;
-    const rec = value as Record<string, unknown>;
-    const slug = rec.operation_slug ?? rec.operation ?? rec.tool ?? rec.name;
-    return typeof slug === 'string' && slug.trim().length > 0 ? slug.trim() : null;
-  };
-
   const stepAvailableOperations = steps.flatMap((step) => {
     const stepData = (step.data ?? {}) as Record<string, unknown>;
     const direct = Array.isArray(stepData.available_operations) ? stepData.available_operations : [];
@@ -113,25 +140,66 @@ export function AgentInspectorTabs({ entity, steps }: { entity: TraceEntity; ste
     const fromSnapshot = (nestedSnapshot?.meta as Record<string, unknown> | undefined)?.available_operations;
     const nested = Array.isArray(fromSnapshot) ? fromSnapshot : [];
     return [...direct, ...nested]
-      .map(extractOperationSlug)
-      .filter((item): item is string => !!item);
+      .map(normalizeOperation)
+      .filter((item): item is PublishedOperationSnapshot => !!item);
   });
 
   const snapshotAvailableOperations = Array.isArray(snapshotMeta?.available_operations)
-    ? snapshotMeta.available_operations.map(String)
+    ? snapshotMeta.available_operations.map(normalizeOperation).filter((item): item is PublishedOperationSnapshot => !!item)
     : [];
-  const availableOperations = Array.from(new Set([...(data?.toolsAvailable ?? []), ...snapshotAvailableOperations, ...stepAvailableOperations])).sort((a, b) => a.localeCompare(b));
-  const usedOperations = Array.from(new Set(
+  const snapshotAvailableCollections = Array.isArray(snapshotMeta?.available_collections)
+    ? snapshotMeta.available_collections.map(normalizeCollection).filter((item): item is PublishedCollectionSnapshot => !!item)
+    : [];
+  const availableOperationsMap = new Map<string, PublishedOperationSnapshot>();
+  for (const operation of [...(data?.availableOperations ?? []), ...snapshotAvailableOperations, ...stepAvailableOperations]) {
+    availableOperationsMap.set(operation.operation_slug, {
+      ...availableOperationsMap.get(operation.operation_slug),
+      ...operation,
+    });
+  }
+  for (const slug of data?.toolsAvailable ?? []) {
+    if (!availableOperationsMap.has(slug)) {
+      availableOperationsMap.set(slug, { operation_slug: slug });
+    }
+  }
+  const availableOperations = Array.from(availableOperationsMap.values()).sort((a, b) => a.operation_slug.localeCompare(b.operation_slug));
+  const usedOperations = Array.from(new Map(
     steps
       .filter((step) => step.type === 'operation_call' || step.type === 'tool_call')
       .map((step) => {
         const stepData = (step.data ?? {}) as Record<string, unknown>;
-        return extractOperationSlug(stepData.operation_slug ?? stepData.operation ?? stepData.tool);
+        return normalizeUsedOperation(stepData.operation ?? stepData);
       })
-      .filter((item): item is string => !!item),
-  )).sort((a, b) => a.localeCompare(b));
-  const availableOperationGroups = groupOperationLabels(availableOperations);
-  const usedOperationGroups = groupOperationLabels(usedOperations);
+      .filter((item): item is PublishedOperationSnapshot => !!item)
+      .map((item) => [item.operation_slug, item] as const),
+  ).values()).sort((a, b) => a.operation_slug.localeCompare(b.operation_slug));
+  const collectionsMap = new Map<string, PublishedCollectionSnapshot>();
+  for (const collection of [...(data?.availableCollections ?? []), ...snapshotAvailableCollections]) {
+    collectionsMap.set(collection.collection_slug, collection);
+  }
+  for (const operation of availableOperations) {
+    if (!operation.collection_slug || collectionsMap.has(operation.collection_slug)) continue;
+    collectionsMap.set(operation.collection_slug, {
+      collection_slug: operation.collection_slug,
+      collection_type: operation.collection_type,
+      purpose: operation.collection_purpose,
+      readiness_status: operation.collection_readiness,
+      schema_freshness: operation.schema_freshness,
+    });
+  }
+  const availableCollections = Array.from(collectionsMap.values()).sort((a, b) => a.collection_slug.localeCompare(b.collection_slug));
+  const operationsByCollection = new Map<string, PublishedOperationSnapshot[]>();
+  const systemOperations: PublishedOperationSnapshot[] = [];
+  for (const operation of availableOperations) {
+    if (operation.scope_kind === 'system' || !operation.collection_slug) {
+      systemOperations.push(operation);
+      continue;
+    }
+    const current = operationsByCollection.get(operation.collection_slug) ?? [];
+    current.push(operation);
+    operationsByCollection.set(operation.collection_slug, current);
+  }
+  const usedOperationSlugs = new Set(usedOperations.map((item) => item.operation_slug));
 
   const rbac = (snapshotRbac ?? null) as Record<string, unknown> | null;
   const taskInput = snapshotInputs?.agent_input;
@@ -197,20 +265,44 @@ export function AgentInspectorTabs({ entity, steps }: { entity: TraceEntity; ste
     if (tab === 'tools') {
       return (
         <InspectorFieldGroup>
-          <SnapshotValueField label="Доступно всего" value={String(availableOperations.length)} />
-          <SnapshotValueField label="Использовано всего" value={String(usedOperations.length)} />
-          {availableOperationGroups.map((group) => (
-            <InspectorFieldRow key={`available-${group.collection}`} label={`Доступно: ${group.collection}`}>
-              {group.labels.join(', ')}
-            </InspectorFieldRow>
-          ))}
-          {availableOperationGroups.length === 0 ? <InspectorFieldRow label="Доступно">—</InspectorFieldRow> : null}
-          {usedOperationGroups.map((group) => (
-            <InspectorFieldRow key={`used-${group.collection}`} label={`Использовано: ${group.collection}`}>
-              {group.labels.join(', ')}
-            </InspectorFieldRow>
-          ))}
-          {usedOperationGroups.length === 0 ? <InspectorFieldRow label="Использовано">—</InspectorFieldRow> : null}
+          <SnapshotValueField label="Доступно операций" value={String(availableOperations.length)} />
+          <SnapshotValueField label="Использовано операций" value={String(usedOperations.length)} />
+          <SnapshotValueField label="Коллекций" value={String(availableCollections.length)} />
+          {availableCollections.map((collection) => {
+            const collectionOps = (operationsByCollection.get(collection.collection_slug) ?? [])
+              .sort((a, b) => a.operation_slug.localeCompare(b.operation_slug));
+            return (
+              <InspectorFieldGroup key={collection.collection_slug}>
+                <InspectorFieldRow label={`Коллекция: ${collection.collection_slug}`}>
+                  {[collection.collection_type, collection.readiness_status, collection.schema_freshness]
+                    .filter(Boolean)
+                    .join(' · ') || '—'}
+                </InspectorFieldRow>
+                <InspectorFieldRow label="Назначение">
+                  {collection.purpose ?? collection.data_description ?? '—'}
+                </InspectorFieldRow>
+                <InspectorFieldRow label="Операции">
+                  {collectionOps.length > 0
+                    ? collectionOps.map((operation) => {
+                      const prefix = usedOperationSlugs.has(operation.operation_slug) ? '[used] ' : '';
+                      return `${prefix}${describeOperation(operation)}`;
+                    }).join('\n')
+                    : '—'}
+                </InspectorFieldRow>
+              </InspectorFieldGroup>
+            );
+          })}
+          {availableCollections.length === 0 ? <InspectorFieldRow label="Коллекции">—</InspectorFieldRow> : null}
+          <InspectorFieldRow label="Системные операции">
+            {systemOperations.length > 0
+              ? systemOperations
+                .sort((a, b) => a.operation_slug.localeCompare(b.operation_slug))
+                .map((operation) => {
+                  const prefix = usedOperationSlugs.has(operation.operation_slug) ? '[used] ' : '';
+                  return `${prefix}${describeOperation(operation)}`;
+                }).join('\n')
+              : '—'}
+          </InspectorFieldRow>
         </InspectorFieldGroup>
       );
     }

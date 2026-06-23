@@ -5,6 +5,7 @@ from uuid import UUID
 
 from app.agents.contracts import OperationCredentialContext, ProviderExecutionTarget, ResolvedOperation
 from app.agents.operation_publication import build_runtime_operation_slug
+from app.agents.runtime.published_capabilities import summarize_input_schema
 from app.agents.runtime_rbac_resolver import RuntimeRbacResolver
 from app.agents.tool_resolver import ResolvedTool, ToolResolver
 from app.core.logging import get_logger
@@ -95,23 +96,20 @@ class OperationBuilder:
             return None
         publication = resolution.publication
         if publication is None:
-            operation_name = resolution.operation_name
             logger.info(
-                "operation_publication_rule_missing_fallback_raw",
+                "operation_builder_skip_unpublished_tool",
                 extra={
                     "instance_slug": instance.slug,
                     "instance_domain": runtime_domain,
                     "raw_slug": raw_operation_name,
                 },
             )
-        else:
-            operation_name = publication.canonical_op_slug
+            return None
+        operation_name = publication.canonical_op_slug
 
-        # System tools (file.generate, file.read) are global and should not be
-        # prefixed with instance slug; they share a single canonical slug.
-        is_system_tool = "system" in (getattr(discovered_tool, "domains", None) or [])
+        is_system_tool = publication.scope_kind == "system"
         if is_system_tool:
-            operation_slug = operation_name if publication is not None else raw_operation_name
+            operation_slug = operation_name
         else:
             operation_slug = build_runtime_operation_slug(instance.slug, operation_name)
         if operation_slug in seen_operation_slugs:
@@ -231,6 +229,10 @@ class OperationBuilder:
             resource=None,
             systems=[],
             risk_flags=list(resolution.risk_flags),
+            raw_tool_slug=raw_operation_name,
+            published_domain=resolution.domain,
+            result_kind=resolution.result_kind,
+            input_schema_summary=summarize_input_schema(resolution.input_schema),
             target=target,
         )
         return operation, credential_context

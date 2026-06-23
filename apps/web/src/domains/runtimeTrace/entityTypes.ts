@@ -137,6 +137,37 @@ export interface ToolData {
   };
 }
 
+export interface PublishedOperationSnapshot {
+  operation_slug: string;
+  canonical_name?: string;
+  scope_kind?: 'system' | 'collection';
+  domain?: string;
+  title?: string;
+  description?: string;
+  result_kind?: string;
+  collection_slug?: string;
+  collection_type?: string;
+  collection_purpose?: string;
+  collection_readiness?: string;
+  schema_freshness?: string;
+  provider_kind?: string;
+  input_schema_summary?: string[];
+  side_effects?: boolean;
+  risk_level?: 'safe' | 'write' | 'destructive';
+}
+
+export interface PublishedCollectionSnapshot {
+  collection_slug: string;
+  collection_type?: string;
+  title?: string;
+  purpose?: string;
+  data_description?: string;
+  readiness_status?: string;
+  schema_freshness?: string;
+  missing_requirements?: string[];
+  available_operation_slugs?: string[];
+}
+
 export interface TraceContextSnapshot {
   inputs?: {
     user_request?: string;
@@ -162,7 +193,8 @@ export interface TraceContextSnapshot {
     agent_slug?: string;
     version_label?: string;
     explicit_agent_slug?: string;
-    available_operations?: string[];
+    available_operations?: Array<string | PublishedOperationSnapshot>;
+    available_collections?: PublishedCollectionSnapshot[];
     available_agents?: string[];
     components?: string[];
     attempt?: number;
@@ -189,6 +221,8 @@ export interface AgentData {
   };
   contextSnapshot?: TraceContextSnapshot;
   toolsAvailable?: string[];
+  availableOperations?: PublishedOperationSnapshot[];
+  availableCollections?: PublishedCollectionSnapshot[];
   deniedTools?: string[]; // Future (after backend Stage 1)
   partialModeWarning?: string;
 }

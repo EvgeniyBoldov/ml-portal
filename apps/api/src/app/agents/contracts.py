@@ -183,6 +183,37 @@ class CollectionRuntimeReadiness(BaseModel):
     last_sync_at: Optional[str] = None
 
 
+class PublishedOperationSummary(BaseModel):
+    operation_slug: str = Field(..., min_length=1)
+    canonical_name: str = Field(..., min_length=1)
+    scope_kind: Literal["system", "collection"] = "collection"
+    domain: Optional[str] = None
+    title: Optional[str] = None
+    description: Optional[str] = None
+    result_kind: Optional[str] = None
+    collection_slug: Optional[str] = None
+    collection_type: Optional[str] = None
+    collection_purpose: Optional[str] = None
+    collection_readiness: Optional[str] = None
+    schema_freshness: Optional[str] = None
+    provider_kind: Optional[str] = None
+    input_schema_summary: List[str] = Field(default_factory=list)
+    side_effects: bool = False
+    risk_level: Literal["safe", "write", "destructive"] = "safe"
+
+
+class PublishedCollectionSummary(BaseModel):
+    collection_slug: str = Field(..., min_length=1)
+    collection_type: Optional[str] = None
+    title: Optional[str] = None
+    purpose: Optional[str] = None
+    data_description: Optional[str] = None
+    readiness_status: Optional[str] = None
+    schema_freshness: Optional[str] = None
+    missing_requirements: List[str] = Field(default_factory=list)
+    available_operation_slugs: List[str] = Field(default_factory=list)
+
+
 class ResolvedDataInstance(BaseModel):
     instance_id: str = Field(..., min_length=1)
     slug: str = Field(..., min_length=1)
@@ -251,6 +282,11 @@ class ResolvedOperation(BaseModel):
     return_summary: Optional[str] = None
     risk_flags: List[str] = Field(default_factory=list)
     supports_partial_mode: bool = True
+    raw_tool_slug: Optional[str] = None
+    published_domain: Optional[str] = None
+    result_kind: Optional[str] = None
+    input_schema_summary: List[str] = Field(default_factory=list)
+    published: Optional[PublishedOperationSummary] = None
     target: ProviderExecutionTarget
 
 

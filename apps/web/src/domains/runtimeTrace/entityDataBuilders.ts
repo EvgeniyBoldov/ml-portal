@@ -5,6 +5,8 @@ import type {
   DialogItem,
   InteractionData,
   LLMData,
+  PublishedCollectionSnapshot,
+  PublishedOperationSnapshot,
   PlannerData,
   RunData,
   SubAgentRun,
@@ -78,6 +80,50 @@ function inferErrorSource(raw: Record<string, unknown>): { source: NonNullable<E
     return { source: 'runtime', sourceLabel: 'Ошибка рантайма' };
   }
   return { source: 'unknown', sourceLabel: 'Неизвестный источник' };
+}
+
+function normalizePublishedOperation(value: unknown): PublishedOperationSnapshot | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const operationSlug = record.operation_slug ?? record.operation ?? record.tool ?? record.name;
+  if (typeof operationSlug !== 'string' || operationSlug.trim().length === 0) return null;
+  return {
+    operation_slug: operationSlug.trim(),
+    canonical_name: typeof record.canonical_name === 'string' ? record.canonical_name : undefined,
+    scope_kind: record.scope_kind === 'system' || record.scope_kind === 'collection' ? record.scope_kind : undefined,
+    domain: typeof record.domain === 'string' ? record.domain : undefined,
+    title: typeof record.title === 'string' ? record.title : undefined,
+    description: typeof record.description === 'string' ? record.description : undefined,
+    result_kind: typeof record.result_kind === 'string' ? record.result_kind : undefined,
+    collection_slug: typeof record.collection_slug === 'string' ? record.collection_slug : undefined,
+    collection_type: typeof record.collection_type === 'string' ? record.collection_type : undefined,
+    collection_purpose: typeof record.collection_purpose === 'string' ? record.collection_purpose : undefined,
+    collection_readiness: typeof record.collection_readiness === 'string' ? record.collection_readiness : undefined,
+    schema_freshness: typeof record.schema_freshness === 'string' ? record.schema_freshness : undefined,
+    provider_kind: typeof record.provider_kind === 'string' ? record.provider_kind : undefined,
+    input_schema_summary: Array.isArray(record.input_schema_summary) ? record.input_schema_summary.map(String) : undefined,
+    side_effects: typeof record.side_effects === 'boolean' ? record.side_effects : undefined,
+    risk_level: record.risk_level === 'safe' || record.risk_level === 'write' || record.risk_level === 'destructive'
+      ? record.risk_level
+      : undefined,
+  };
+}
+
+function normalizePublishedCollection(value: unknown): PublishedCollectionSnapshot | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (typeof record.collection_slug !== 'string' || record.collection_slug.trim().length === 0) return null;
+  return {
+    collection_slug: record.collection_slug.trim(),
+    collection_type: typeof record.collection_type === 'string' ? record.collection_type : undefined,
+    title: typeof record.title === 'string' ? record.title : undefined,
+    purpose: typeof record.purpose === 'string' ? record.purpose : undefined,
+    data_description: typeof record.data_description === 'string' ? record.data_description : undefined,
+    readiness_status: typeof record.readiness_status === 'string' ? record.readiness_status : undefined,
+    schema_freshness: typeof record.schema_freshness === 'string' ? record.schema_freshness : undefined,
+    missing_requirements: Array.isArray(record.missing_requirements) ? record.missing_requirements.map(String) : undefined,
+    available_operation_slugs: Array.isArray(record.available_operation_slugs) ? record.available_operation_slugs.map(String) : undefined,
+  };
 }
 
 export function buildLLMData(events: SemanticEvent[]): LLMData {
@@ -288,8 +334,27 @@ export function buildAgentData(events: SemanticEvent[], subAgentRun?: SubAgentRu
   const userRequest = events.find(e => e.raw_type === 'user_request');
   const hasOverrides = !!userRequest?.raw?.raw?.has_overrides;
   const contextSnapshot = userRequest?.raw?.raw?.context_snapshot as Record<string, unknown> | undefined;
-  const toolsAvailable = Array.isArray(contextSnapshot?.available_operations)
-    ? contextSnapshot.available_operations.map(op => typeof op === 'string' ? op : String(op.operation_slug ?? op.tool ?? op))
+  const snapshotMeta = contextSnapshot?.meta && typeof contextSnapshot.meta === 'object'
+    ? contextSnapshot.meta as Record<string, unknown>
+    : undefined;
+  const availableOperationsRaw = Array.isArray(snapshotMeta?.available_operations)
+    ? snapshotMeta.available_operations
+    : Array.isArray(contextSnapshot?.available_operations)
+      ? contextSnapshot.available_operations
+      : [];
+  const availableOperations = availableOperationsRaw
+    .map(normalizePublishedOperation)
+    .filter((item): item is PublishedOperationSnapshot => item !== null);
+  const availableCollectionsRaw = Array.isArray(snapshotMeta?.available_collections)
+    ? snapshotMeta.available_collections
+    : Array.isArray(contextSnapshot?.available_collections)
+      ? contextSnapshot.available_collections
+      : [];
+  const availableCollections = availableCollectionsRaw
+    .map(normalizePublishedCollection)
+    .filter((item): item is PublishedCollectionSnapshot => item !== null);
+  const toolsAvailable = availableOperations.length > 0
+    ? availableOperations.map(op => op.operation_slug)
     : undefined;
   return {
     kind: 'agent',
@@ -298,6 +363,8 @@ export function buildAgentData(events: SemanticEvent[], subAgentRun?: SubAgentRu
     versionLabel: subAgentRun ? 'sub-agent' : undefined,
     hasOverrides,
     toolsAvailable,
+    availableOperations: availableOperations.length > 0 ? availableOperations : undefined,
+    availableCollections: availableCollections.length > 0 ? availableCollections : undefined,
     partialModeWarning,
   };
 }

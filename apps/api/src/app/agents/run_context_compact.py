@@ -19,6 +19,7 @@ from app.agents.contracts import (
     Observation,
     ObservationStatus,
 )
+from app.agents.runtime.published_capabilities import build_published_operation_summary
 
 
 MAX_FACTS = 20
@@ -129,6 +130,7 @@ class RunContextCompact:
                 "description": t.description or "",
                 "side_effects": t.side_effects,
                 "risk_level": t.risk_level,
+                "published": build_published_operation_summary(t).model_dump(mode="json"),
             }
             for t in available_actions.operations
         ]

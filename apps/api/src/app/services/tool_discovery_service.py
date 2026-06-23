@@ -33,10 +33,12 @@ class LocalProviderKind:
     """Known provider_kind values for local (platform-managed) MCP instances."""
     DOCUMENTS = "local_documents"
     TABLES = "local_tables"
+    TEMPLATES = "local_templates"
 
     _DOMAIN_MAP: Dict[str, str] = {
         DOCUMENTS: "collection.document",
         TABLES: "collection.table",
+        TEMPLATES: "collection.template",
     }
 
     @classmethod

@@ -53,6 +53,7 @@ class ToolInstanceValidationService:
         slug: str,
         local_table_service_slug: str,
         local_document_service_slug: str,
+        local_template_service_slug: str,
         local_runtime_service_slug: str,
     ) -> Optional[str]:
         normalized_domain = str(domain or "").strip().lower()
@@ -65,6 +66,8 @@ class ToolInstanceValidationService:
                 return "local_tables"
             if normalized_domain == "collection.document" or normalized_slug == local_document_service_slug:
                 return "local_documents"
+            if normalized_domain == "collection.template" or normalized_slug == local_template_service_slug:
+                return "local_templates"
             if normalized_slug == local_runtime_service_slug or normalized_domain == "local":
                 return "local_runtime"
         return None
@@ -80,6 +83,7 @@ class ToolInstanceValidationService:
         config: Optional[Dict[str, Any]],
         local_table_service_slug: str,
         local_document_service_slug: str,
+        local_template_service_slug: str,
         local_runtime_service_slug: str,
     ) -> Optional[Dict[str, Any]]:
         normalized: Dict[str, Any] = dict(config or {})
@@ -92,6 +96,7 @@ class ToolInstanceValidationService:
                     slug=slug,
                     local_table_service_slug=local_table_service_slug,
                     local_document_service_slug=local_document_service_slug,
+                    local_template_service_slug=local_template_service_slug,
                     local_runtime_service_slug=local_runtime_service_slug,
                 )
                 if inferred:
@@ -141,7 +146,7 @@ class ToolInstanceValidationService:
         if instance.is_local and slug in system_managed_slugs:
             return True
         provider_kind = resolve_provider_kind(instance.config)
-        if instance.is_local and provider_kind in {"local_tables", "local_documents", "local_runtime"}:
+        if instance.is_local and provider_kind in {"local_tables", "local_documents", "local_templates", "local_runtime"}:
             return True
         return False
 

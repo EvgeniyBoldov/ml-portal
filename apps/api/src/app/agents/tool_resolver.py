@@ -63,6 +63,9 @@ class ResolvedTool:
     description: str
     input_schema: Dict[str, Any]
     output_schema: Optional[Dict[str, Any]]
+    domain: Optional[str] = None
+    result_kind: Optional[str] = None
+    scope_kind: Literal["system", "collection"] = "collection"
     # Runtime metadata defaults are sourced from MCP schema extension x-runtime.
     side_effects: bool = False
     risk_level: Literal["safe", "write", "destructive"] = "safe"
@@ -81,6 +84,9 @@ class ResolvedTool:
             "published": self.published,
             "title": self.title,
             "description": self.description,
+            "domain": self.domain,
+            "result_kind": self.result_kind,
+            "scope_kind": self.scope_kind,
             "side_effects": self.side_effects,
             "risk_level": self.risk_level,
             "idempotent": self.idempotent,
@@ -113,15 +119,21 @@ class ToolResolver:
             discovered_domains=discovered_tool.domains or [],
             context_domains=context_domains,
         )
-        operation_name = publication.canonical_op_slug if publication else raw_operation_name
-        title = _build_title(discovered_tool.name, discovered_tool.slug)
-        description = _build_description(
-            slug=discovered_tool.slug,
-            description=discovered_tool.description,
-            domains=discovered_tool.domains or [],
-            instance_slug=instance.slug,
-            instance_domain=runtime_domain,
-        )
+        if publication is None:
+            logger.info(
+                "tool_publication_missing_skip",
+                extra={
+                    "instance_slug": instance.slug,
+                    "provider_slug": provider.slug,
+                    "runtime_domain": runtime_domain,
+                    "raw_slug": raw_operation_name,
+                    "discovered_domains": list(discovered_tool.domains or []),
+                },
+            )
+            return None
+        operation_name = publication.canonical_op_slug
+        title = publication.spec.title
+        description = publication.spec.description
         container = ToolPublicationContainerView(
             id=None,
             slug=discovered_tool.slug,
@@ -149,6 +161,9 @@ class ToolResolver:
             description=description,
             input_schema=discovered_operation.input_schema,
             output_schema=discovered_operation.output_schema,
+            domain=publication.spec.domain,
+            result_kind=publication.spec.result_kind,
+            scope_kind=publication.scope_kind,  # type: ignore[arg-type]
             risk_level=discovered_operation.risk_level,
             side_effects=discovered_operation.side_effects,
             requires_confirmation=discovered_operation.requires_confirmation,

@@ -35,6 +35,10 @@ from app.core.http.clients import LLMClientProtocol
 from app.core.logging import get_logger
 from app.runtime.contracts import AgentAnswerStatus, NeedSpec, NextStep
 from app.runtime.context_snapshot import compact_snapshot
+from app.agents.runtime.published_capabilities import (
+    serialize_published_collections,
+    serialize_published_operations,
+)
 from app.runtime.error_surface import build_user_safe_error_message
 from app.runtime.events import RuntimeEvent, RuntimeEventType
 from app.runtime.memory.components import MemoryBundle, MemoryItem, MemorySection
@@ -713,8 +717,10 @@ class AgentExecutor:
                 "agent_slug": sub_request.agent_slug,
                 "model": model or getattr(sub_request.agent, "model", None),
                 "version_label": version_label,
-                "available_operations": [
-                    item.operation_slug for item in (sub_request.resolved_operations or [])
-                ],
+                "available_operations": serialize_published_operations(sub_request.resolved_operations or []),
+                "available_collections": serialize_published_collections(
+                    sub_request.resolved_data_instances or [],
+                    sub_request.resolved_operations or [],
+                ),
             },
         ) or {}

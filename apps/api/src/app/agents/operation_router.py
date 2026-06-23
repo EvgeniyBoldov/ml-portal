@@ -18,6 +18,7 @@ from app.agents.operation_resolver import RuntimeOperationResolver
 from app.agents.operation_builder import OperationBuilder
 from app.agents.runtime_graph import RuntimeExecutionGraph
 from app.agents.runtime_graph_builder import RuntimeExecutionGraphBuilder
+from app.agents.runtime.published_capabilities import attach_published_operation_summaries
 from app.agents.runtime_rbac_resolver import RuntimeRbacResolver
 from app.agents.tool_resolver import ToolResolver
 from app.core.logging import get_logger
@@ -198,6 +199,10 @@ class OperationRouter:
             tenant_id=tenant_id,
         )
 
+        attach_published_operation_summaries(
+            result.resolved_operations,
+            result.resolved_data_instances,
+        )
         result.execution_graph = graph_builder.build()
         return result
 

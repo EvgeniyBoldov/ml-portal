@@ -218,7 +218,8 @@ class DirectOperationExecutor:
                 f"Allowed: {allowed_slugs}"
             )
 
-        # Backward-compatible fallback: if LLM did not provide a slug, use the binding one.
+        # Collection-bound operations inherit their bound collection slug when
+        # the model omits it from arguments.
         if not request_slug:
             if binding_collection_slug:
                 merged_args["collection_slug"] = binding_collection_slug
@@ -255,7 +256,8 @@ class DirectOperationExecutor:
                 f"Allowed: {allowed_slugs}"
             )
 
-        # Backward-compatible fallback: if LLM did not provide a slug, use the binding one.
+        # Collection-bound operations inherit their bound collection slug when
+        # the model omits it from arguments.
         if not request_slug:
             if binding_collection_slug:
                 merged_args["collection_slug"] = binding_collection_slug

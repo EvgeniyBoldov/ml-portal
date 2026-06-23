@@ -12,6 +12,10 @@ class OperationSpec:
     title: str
     description: str
     result_kind: str
+    scope_kind: str
+    collection_types: Tuple[str, ...] = ()
+    requires_collection_binding: bool = False
+    requires_vector_search: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,6 +30,10 @@ class PublicationDecision:
     canonical_op_slug: str
     spec: OperationSpec
 
+    @property
+    def scope_kind(self) -> str:
+        return self.spec.scope_kind
+
 
 _OPERATION_SPECS: Dict[str, OperationSpec] = {
     "collection.catalog_inspect": OperationSpec(
@@ -34,6 +42,7 @@ _OPERATION_SPECS: Dict[str, OperationSpec] = {
         title="Collection Catalog Inspect",
         description="Inspect collection schema, metadata, and data-shape for any collection by slug",
         result_kind="catalog",
+        scope_kind="system",
     ),
     "sql.execute_sql": OperationSpec(
         canonical_op_slug="sql.execute_sql",
@@ -41,6 +50,7 @@ _OPERATION_SPECS: Dict[str, OperationSpec] = {
         title="SQL Execute",
         description="Execute read-only SQL against curated external database",
         result_kind="rows",
+        scope_kind="system",
     ),
     "sql.search_objects": OperationSpec(
         canonical_op_slug="sql.search_objects",
@@ -48,6 +58,7 @@ _OPERATION_SPECS: Dict[str, OperationSpec] = {
         title="SQL Search Objects",
         description="Search available schemas, tables, columns, and views in external database",
         result_kind="schema_search",
+        scope_kind="system",
     ),
     "collection.table.search": OperationSpec(
         canonical_op_slug="collection.table.search",
@@ -55,6 +66,9 @@ _OPERATION_SPECS: Dict[str, OperationSpec] = {
         title="Table Search",
         description="Filter and retrieve records from table collection",
         result_kind="rows",
+        scope_kind="collection",
+        collection_types=("table",),
+        requires_collection_binding=True,
     ),
     "collection.table.aggregate": OperationSpec(
         canonical_op_slug="collection.table.aggregate",
@@ -62,6 +76,9 @@ _OPERATION_SPECS: Dict[str, OperationSpec] = {
         title="Table Aggregate",
         description="Compute grouped metrics over table collection",
         result_kind="aggregation",
+        scope_kind="collection",
+        collection_types=("table",),
+        requires_collection_binding=True,
     ),
     "collection.table.get": OperationSpec(
         canonical_op_slug="collection.table.get",
@@ -69,6 +86,9 @@ _OPERATION_SPECS: Dict[str, OperationSpec] = {
         title="Table Get",
         description="Read a single table record by id",
         result_kind="row",
+        scope_kind="collection",
+        collection_types=("table",),
+        requires_collection_binding=True,
     ),
     "collection.api.get_device": OperationSpec(
         canonical_op_slug="collection.api.get_device",
@@ -76,6 +96,9 @@ _OPERATION_SPECS: Dict[str, OperationSpec] = {
         title="Get Device",
         description="Get a single device by name from NetBox DCIM inventory",
         result_kind="row",
+        scope_kind="collection",
+        collection_types=("api",),
+        requires_collection_binding=True,
     ),
     "collection.api.search_devices": OperationSpec(
         canonical_op_slug="collection.api.search_devices",
@@ -83,6 +106,9 @@ _OPERATION_SPECS: Dict[str, OperationSpec] = {
         title="Search Devices",
         description="Search NetBox devices by query string (name, role, site, etc.)",
         result_kind="rows",
+        scope_kind="collection",
+        collection_types=("api",),
+        requires_collection_binding=True,
     ),
     "collection.api.list_sites": OperationSpec(
         canonical_op_slug="collection.api.list_sites",
@@ -90,6 +116,9 @@ _OPERATION_SPECS: Dict[str, OperationSpec] = {
         title="List Sites",
         description="List all sites in NetBox DCIM (locations/datacenters)",
         result_kind="rows",
+        scope_kind="collection",
+        collection_types=("api",),
+        requires_collection_binding=True,
     ),
     "collection.api.get_objects": OperationSpec(
         canonical_op_slug="collection.api.get_objects",
@@ -97,6 +126,9 @@ _OPERATION_SPECS: Dict[str, OperationSpec] = {
         title="Get Objects",
         description="Get objects from NetBox by type (dcim.device, ipam.prefix, dcim.rack, etc.) with optional filters",
         result_kind="rows",
+        scope_kind="collection",
+        collection_types=("api",),
+        requires_collection_binding=True,
     ),
     "collection.api.search_objects": OperationSpec(
         canonical_op_slug="collection.api.search_objects",
@@ -104,6 +136,9 @@ _OPERATION_SPECS: Dict[str, OperationSpec] = {
         title="Search Objects",
         description="Search NetBox objects across multiple types by query string",
         result_kind="rows",
+        scope_kind="collection",
+        collection_types=("api",),
+        requires_collection_binding=True,
     ),
     "collection.sql.execute": OperationSpec(
         canonical_op_slug="collection.sql.execute",
@@ -111,6 +146,9 @@ _OPERATION_SPECS: Dict[str, OperationSpec] = {
         title="SQL Execute",
         description="Execute read-only SQL against the collection's remote database",
         result_kind="rows",
+        scope_kind="collection",
+        collection_types=("sql",),
+        requires_collection_binding=True,
     ),
     "collection.sql.search_objects": OperationSpec(
         canonical_op_slug="collection.sql.search_objects",
@@ -118,6 +156,9 @@ _OPERATION_SPECS: Dict[str, OperationSpec] = {
         title="SQL Search Objects",
         description="Search available schemas, tables, columns in the collection's remote database",
         result_kind="schema_search",
+        scope_kind="collection",
+        collection_types=("sql",),
+        requires_collection_binding=True,
     ),
     "collection.document.search": OperationSpec(
         canonical_op_slug="collection.document.search",
@@ -125,6 +166,10 @@ _OPERATION_SPECS: Dict[str, OperationSpec] = {
         title="Document Search",
         description="Search documents and return relevant document results",
         result_kind="documents",
+        scope_kind="collection",
+        collection_types=("document",),
+        requires_collection_binding=True,
+        requires_vector_search=True,
     ),
     "collection.document.list": OperationSpec(
         canonical_op_slug="collection.document.list",
@@ -132,6 +177,9 @@ _OPERATION_SPECS: Dict[str, OperationSpec] = {
         title="List Documents",
         description="List files in a document collection with metadata and file_ids",
         result_kind="rows",
+        scope_kind="collection",
+        collection_types=("document",),
+        requires_collection_binding=True,
     ),
     "collection.document.get": OperationSpec(
         canonical_op_slug="collection.document.get",
@@ -139,6 +187,9 @@ _OPERATION_SPECS: Dict[str, OperationSpec] = {
         title="Get Document",
         description="Get a single document's metadata and file_id by document_id",
         result_kind="row",
+        scope_kind="collection",
+        collection_types=("document",),
+        requires_collection_binding=True,
     ),
     "collection.template.list": OperationSpec(
         canonical_op_slug="collection.template.list",
@@ -146,6 +197,9 @@ _OPERATION_SPECS: Dict[str, OperationSpec] = {
         title="List Templates",
         description="List templates in a template collection with metadata",
         result_kind="rows",
+        scope_kind="collection",
+        collection_types=("template",),
+        requires_collection_binding=True,
     ),
     "collection.template.search": OperationSpec(
         canonical_op_slug="collection.template.search",
@@ -153,6 +207,10 @@ _OPERATION_SPECS: Dict[str, OperationSpec] = {
         title="Search Templates",
         description="Semantic search over templates in a template collection by template description",
         result_kind="rows",
+        scope_kind="collection",
+        collection_types=("template",),
+        requires_collection_binding=True,
+        requires_vector_search=True,
     ),
     "collection.template.get_schema": OperationSpec(
         canonical_op_slug="collection.template.get_schema",
@@ -160,6 +218,9 @@ _OPERATION_SPECS: Dict[str, OperationSpec] = {
         title="Get Template Schema",
         description="Retrieve the fillable schema for a template row",
         result_kind="schema",
+        scope_kind="collection",
+        collection_types=("template",),
+        requires_collection_binding=True,
     ),
     "collection.template.fill": OperationSpec(
         canonical_op_slug="collection.template.fill",
@@ -167,6 +228,9 @@ _OPERATION_SPECS: Dict[str, OperationSpec] = {
         title="Fill Template",
         description="Fill a template with values and return a generated file",
         result_kind="file",
+        scope_kind="collection",
+        collection_types=("template",),
+        requires_collection_binding=True,
     ),
 }
 
@@ -390,9 +454,22 @@ def resolve_publication(
                 title=canonical_non_collection,
                 description=f"Published operation for domain '{domain}'",
                 result_kind="generic",
+                scope_kind="system",
             ),
         )
     return None
+
+
+def is_operation_allowed_for_collection_type(
+    publication: PublicationDecision,
+    *,
+    collection_type: Optional[str],
+) -> bool:
+    supported = tuple(publication.spec.collection_types or ())
+    if not supported:
+        return publication.scope_kind != "collection"
+    normalized = str(collection_type or "").strip().lower()
+    return bool(normalized) and normalized in supported
 
 
 def _build_domain_candidates(

@@ -30,7 +30,6 @@ from app.agents.runtime.confirmation import (
 )
 from app.agents.runtime.tool_reuse_policy import ToolCallReusePolicy
 from app.core.logging import get_logger
-from app.agents.operation_publication import canonical_operation_name
 from app.runtime.operation_errors import (
     OperationExecutionError,
     OperationValidationError,
@@ -267,58 +266,14 @@ class OperationExecutionFacade:
         for operation in operations:
             if operation.operation_slug == operation_slug:
                 return operation, None
-
-        short_matches = [
-            operation
-            for operation in operations
-            if operation.operation == operation_slug
-        ]
-        if len(short_matches) == 1:
-            return short_matches[0], None
-        if len(short_matches) > 1:
-            candidates = ", ".join(
-                operation.operation_slug for operation in short_matches[:10]
-            )
+        candidates = ", ".join(
+            operation.operation_slug for operation in operations[:10]
+        )
+        if candidates:
             return None, (
-                f"Operation '{operation_slug}' is ambiguous. "
-                f"Use one of: {candidates}"
+                f"Operation '{operation_slug}' is unavailable. "
+                f"Use exact invoke name from the prompt. Available examples: {candidates}"
             )
-
-        canonical_matches = []
-        for operation in operations:
-            if "." not in operation.operation:
-                continue
-            op_domain = operation.operation.rsplit(".", 1)[0]
-            try:
-                candidate = canonical_operation_name(op_domain, operation_slug)
-            except Exception:
-                continue
-            if candidate == operation.operation:
-                canonical_matches.append(operation)
-        if len(canonical_matches) == 1:
-            return canonical_matches[0], None
-        if len(canonical_matches) > 1:
-            candidates = ", ".join(
-                operation.operation_slug for operation in canonical_matches[:10]
-            )
-            return None, (
-                f"Operation '{operation_slug}' is ambiguous. "
-                f"Use one of: {candidates}"
-            )
-
-        # Fallback: try underscore→dot normalization (e.g. netbox_get_objects → netbox.get_objects)
-        if "_" in operation_slug and "." not in operation_slug:
-            normalized = operation_slug.replace("_", ".", 1)
-            dot_matches = [op for op in operations if op.operation == normalized]
-            if len(dot_matches) == 1:
-                return dot_matches[0], None
-            if len(dot_matches) > 1:
-                candidates = ", ".join(op.operation_slug for op in dot_matches[:10])
-                return None, (
-                    f"Operation '{operation_slug}' is ambiguous. "
-                    f"Use one of: {candidates}"
-                )
-
         return None, None
 
     @staticmethod

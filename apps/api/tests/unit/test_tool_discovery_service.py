@@ -7,7 +7,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.services.tool_discovery_service import ToolDiscoveryService
+from app.services.tool_discovery_service import LocalProviderKind, ToolDiscoveryService
 
 
 @pytest.mark.asyncio
@@ -302,3 +302,8 @@ async def test_resolve_mcp_domains_prefers_collection_fk_runtime_domain():
     domains = await service._resolve_mcp_domains(provider)
 
     assert domains == ["collection.table", "jira"]
+
+
+def test_local_provider_kind_includes_templates():
+    assert LocalProviderKind.to_domain("local_templates") == "collection.template"
+    assert "local_templates" in LocalProviderKind.known_kinds()

@@ -13,6 +13,7 @@ def _collection(collection_type: str):
 def test_runtime_domain_maps_known_collection_types():
     assert runtime_domain_for_collection(collection=_collection("table"), fallback_domain="rag") == "collection.table"
     assert runtime_domain_for_collection(collection=_collection("document"), fallback_domain="rag") == "collection.document"
+    assert runtime_domain_for_collection(collection=_collection("template"), fallback_domain="rag") == "collection.template"
     assert runtime_domain_for_collection(collection=_collection("sql"), fallback_domain="rag") == "collection.sql"
     assert runtime_domain_for_collection(collection=_collection("api"), fallback_domain="rag") == "collection.api"
 
@@ -25,5 +26,6 @@ def test_runtime_domain_falls_back_for_missing_or_unknown_collection():
 def test_context_domain_returns_only_collection_specific_domain():
     assert context_domain_for_collection(_collection("table")) == "collection.table"
     assert context_domain_for_collection(_collection("document")) == "collection.document"
+    assert context_domain_for_collection(_collection("template")) == "collection.template"
     assert context_domain_for_collection(_collection("unknown")) is None
     assert context_domain_for_collection(None) is None

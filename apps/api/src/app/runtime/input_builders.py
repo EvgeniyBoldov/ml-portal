@@ -62,6 +62,26 @@ class PlannerInputBuilder:
                     ),
                     "tags": list(item.get("tags") or []),
                     "provides_keys": list(item.get("provides_keys") or []),
+                    **(
+                        {
+                            "capability_summary": self._trim_text(
+                                item.get("capability_summary", ""),
+                                MAX_AGENT_DESCRIPTION_CHARS,
+                            )
+                        }
+                        if item.get("capability_summary")
+                        else {}
+                    ),
+                    **(
+                        {"collections": list(item.get("collections") or [])}
+                        if item.get("collections")
+                        else {}
+                    ),
+                    **(
+                        {"system_operations": list(item.get("system_operations") or [])}
+                        if item.get("system_operations")
+                        else {}
+                    ),
                 }
                 for item in available_agents
                 if item.get("slug")

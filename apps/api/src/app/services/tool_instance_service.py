@@ -84,6 +84,7 @@ class ToolInstanceService:
             slug=slug,
             local_table_service_slug=ToolInstanceService.LOCAL_TABLE_SERVICE_SLUG,
             local_document_service_slug=ToolInstanceService.LOCAL_DOCUMENT_SERVICE_SLUG,
+            local_template_service_slug=ToolInstanceService.LOCAL_TEMPLATE_SERVICE_SLUG,
             local_runtime_service_slug=ToolInstanceService.LOCAL_RUNTIME_SERVICE_SLUG,
         )
 
@@ -105,6 +106,7 @@ class ToolInstanceService:
             config=config,
             local_table_service_slug=cls.LOCAL_TABLE_SERVICE_SLUG,
             local_document_service_slug=cls.LOCAL_DOCUMENT_SERVICE_SLUG,
+            local_template_service_slug=cls.LOCAL_TEMPLATE_SERVICE_SLUG,
             local_runtime_service_slug=cls.LOCAL_RUNTIME_SERVICE_SLUG,
         )
 

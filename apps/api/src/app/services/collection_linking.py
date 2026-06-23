@@ -12,6 +12,7 @@ from app.models.collection import Collection
 _DOMAIN_BY_COLLECTION_TYPE = {
     "table": "collection.table",
     "document": "collection.document",
+    "template": "collection.template",
     "sql": "collection.sql",
     "api": "collection.api",
 }

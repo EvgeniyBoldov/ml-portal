@@ -53,7 +53,37 @@ export interface AgentRunContextSnapshot {
     streaming_enabled?: boolean;
   };
   tools?: Array<{ slug: string; instance_id?: string; has_credentials?: boolean }>;
-  available_operations?: Array<string | { operation_slug?: string; operation?: string; tool?: string; name?: string }>;
+  available_operations?: Array<string | {
+    operation_slug?: string;
+    operation?: string;
+    tool?: string;
+    name?: string;
+    canonical_name?: string;
+    scope_kind?: 'system' | 'collection';
+    title?: string;
+    description?: string;
+    result_kind?: string;
+    collection_slug?: string;
+    collection_type?: string;
+    collection_purpose?: string;
+    collection_readiness?: string;
+    schema_freshness?: string;
+    provider_kind?: string;
+    input_schema_summary?: string[];
+    side_effects?: boolean;
+    risk_level?: 'safe' | 'write' | 'destructive';
+  }>;
+  available_collections?: Array<{
+    collection_slug: string;
+    collection_type?: string;
+    title?: string;
+    purpose?: string;
+    data_description?: string;
+    readiness_status?: string;
+    schema_freshness?: string;
+    missing_requirements?: string[];
+    available_operation_slugs?: string[];
+  }>;
   routing_duration_ms?: number;
   routing_reasons?: string[];
   request_text?: string;

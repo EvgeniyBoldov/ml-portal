@@ -43,9 +43,14 @@ from app.agents.protocol import (
 from app.agents.runtime.tools import ConfirmationRequiredError
 from app.agents.runtime.base import BaseRuntime
 from app.agents.runtime.events import RuntimeEvent, RuntimeEventType
+from app.agents.runtime.published_capabilities import (
+    serialize_published_collections,
+    serialize_published_operations,
+)
 from app.agents.runtime.policy import GenerationParams, PolicyLimits
 from app.core.logging import get_logger
 from app.models.execution_limit import ExecutionLimitScope
+from app.runtime.context_snapshot import compact_snapshot
 from app.runtime.budgets import RunBudgetLedger
 from app.runtime.llm.limits import LLMLimitExceededError, apply_llm_limits
 from app.runtime.operation_errors import OperationResultEnvelope, RuntimeErrorCode
@@ -176,9 +181,15 @@ class AgentToolRuntime(BaseRuntime):
             agent_slug=agent.slug,
             mode="agent_with_operations",
             logging_level=resolved_logging_level.value,
-            context_snapshot={
-                "available_operations": [item.operation_slug for item in available_operations]
-            },
+            context_snapshot=compact_snapshot(
+                meta={
+                    "available_operations": serialize_published_operations(available_operations),
+                    "available_collections": serialize_published_collections(
+                        exec_request.resolved_data_instances,
+                        available_operations,
+                    ),
+                },
+            ),
             enable_logging=enable_logging,
         )
         await run_session.start()
@@ -473,9 +484,7 @@ class AgentToolRuntime(BaseRuntime):
                             {
                                 "step": step + 1,
                                 "reason": "no_operation_call_before_answer",
-                                "available_operations": [
-                                    item.operation_slug for item in available_operations
-                                ],
+                                "available_operations": serialize_published_operations(available_operations),
                             },
                         )
                         loop_state.retry_count += 1

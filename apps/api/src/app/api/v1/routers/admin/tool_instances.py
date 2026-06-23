@@ -77,6 +77,8 @@ def _materialize_runtime_operations(
         )
         if publication is None:
             continue
+        if publication.scope_kind != "collection":
+            continue
         canonical_name = publication.canonical_op_slug
         operation_slug = build_runtime_operation_slug(instance.slug, canonical_name)
         if operation_slug in seen:
