@@ -278,6 +278,11 @@ export function buildPlannerData(event: SemanticEvent): PlannerData {
   const inputs = event.inputs ?? {};
   const kind = String(raw.kind ?? raw.action_type ?? raw.action ?? decision.kind ?? decision.action_type ?? decision.action ?? 'planner_decision');
   const rationale = typeof raw.rationale === 'string' ? raw.rationale : typeof decision.rationale === 'string' ? decision.rationale : typeof event.summary === 'string' ? event.summary : undefined;
+  const question = typeof raw.question === 'string'
+    ? raw.question
+    : typeof decision.question === 'string'
+      ? decision.question
+      : undefined;
   const availableAgents = raw.available_agents ?? raw.availableAgents ?? decision.available_agents ?? decision.availableAgents ?? inputs.available_agents ?? inputs.availableAgents;
   const previousResults = raw.previous_results ?? raw.previousResults ?? raw.facts ?? decision.previous_results ?? decision.previousResults ?? decision.facts ?? inputs.previous_results ?? inputs.previousResults;
   const goal = typeof raw.goal === 'string' ? raw.goal : typeof inputs.goal === 'string' ? inputs.goal : typeof decision.goal === 'string' ? decision.goal : undefined;
@@ -299,6 +304,7 @@ export function buildPlannerData(event: SemanticEvent): PlannerData {
     kind: 'planner',
     stepKind: kind,
     rationale,
+    question,
     thinking: kind === 'thinking' ? {
       executionMode: typeof raw.execution_mode === 'string' ? raw.execution_mode : undefined,
       hypotheses,

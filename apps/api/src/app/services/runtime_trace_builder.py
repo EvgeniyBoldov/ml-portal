@@ -252,8 +252,13 @@ class RuntimeTraceBuilder:
             return str(data.get("status") or "Preflight complete")
         if raw_type == "intent":
             return str(data.get("description") or "Intent")
-        if raw_type == "planner_decision" and str(data.get("kind") or "") == "thinking":
-            return str(data.get("selected_action_summary") or data.get("selection_rationale") or "Thinking")
+        if raw_type in {"planner_action", "planner_step", "planner_decision"}:
+            kind = str(data.get("kind") or data.get("action_type") or data.get("action") or "").strip()
+            question = str(data.get("question") or "").strip()
+            if kind in {"clarify", "ask_user"} and question:
+                return question
+            if kind == "thinking":
+                return str(data.get("selected_action_summary") or data.get("selection_rationale") or "Thinking")
         if raw_type in {"operation_call", "tool_call"}:
             return str(data.get("operation_slug") or data.get("tool") or data.get("operation") or "Operation call")
         if raw_type in {"operation_result", "tool_result"}:

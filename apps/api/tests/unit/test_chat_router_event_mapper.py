@@ -21,6 +21,7 @@ def test_planner_action_payload_contains_modern_and_legacy_fields():
             "agent_slug": "netbox",
             "phase_id": "collect",
             "phase_title": "Сбор данных",
+            "question": "Уточните VLAN",
         }
     )
     assert frame is not None
@@ -38,6 +39,7 @@ def test_planner_action_payload_contains_modern_and_legacy_fields():
     assert payload["phase_id"] == "collect"
     assert payload["phase_title"] == "Сбор данных"
     assert payload["why"] == "Нужно получить устройства"
+    assert payload["question"] == "Уточните VLAN"
     assert payload["tool_slug"] == "netbox"
     assert payload["op"] == "call_agent"
 

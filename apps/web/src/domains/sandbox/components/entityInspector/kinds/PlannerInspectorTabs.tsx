@@ -35,6 +35,9 @@ function PlannerIntentTab({ entity, steps }: { entity: TraceEntity; steps: RunSt
       <SnapshotTextField label="Намерение" text={String(snapshotInputs?.iteration_intent ?? data?.rationale ?? '—')} />
       <SnapshotValueField label="Попытка" value={snapshotMeta?.attempt ?? '—'} />
       <SnapshotValueField label="Максимум попыток" value={snapshotMeta?.max_attempts ?? '—'} />
+      {(data?.stepKind === 'ask_user' || data?.stepKind === 'clarify') && (
+        <SnapshotTextField label="Вопрос" text={data?.question ?? data?.rationale ?? '—'} />
+      )}
       <SnapshotValueField label="Фактов в памяти" value={facts ?? '—'} />
       <SnapshotValueField label="Размер summary" value={summaryChars ?? '—'} />
       <InspectorFieldRow label="Доступные агенты">{availableAgents.length ? availableAgents.join(', ') : '—'}</InspectorFieldRow>
@@ -52,6 +55,7 @@ function PlannerDecisionTab({ entity, steps }: { entity: TraceEntity; steps: Run
   const agentSlug = String(decisionData.agent_slug ?? data?.decision?.chosenAgentSlug ?? '—');
   const phaseId = String(decisionData.phase_id ?? '—');
   const thinking = data?.thinking;
+  const question = String(data?.question ?? decisionData.question ?? '').trim();
 
   return (
     <InspectorFieldGroup>
@@ -61,6 +65,9 @@ function PlannerDecisionTab({ entity, steps }: { entity: TraceEntity; steps: Run
       <SnapshotValueField label="Фаза" value={phaseId !== 'null' ? phaseId : '—'} />
       <SnapshotBadgeField label="Риск" tone={RISK_TONE[String(decisionData.risk ?? 'unknown')] ?? 'neutral'} text={String(decisionData.risk ?? 'unknown')} />
       <InspectorFieldRow label="Обоснование">{String(data?.rationale ?? decisionData.rationale ?? '—')}</InspectorFieldRow>
+      {(actionKey === 'ask_user' || actionKey === 'clarify') && (
+        <InspectorFieldRow label="Вопрос">{question || '—'}</InspectorFieldRow>
+      )}
       {actionKey === 'thinking' && (
         <>
           <SnapshotValueField label="Выбранный индекс" value={thinking?.selectedHypothesisIndex ?? '—'} />

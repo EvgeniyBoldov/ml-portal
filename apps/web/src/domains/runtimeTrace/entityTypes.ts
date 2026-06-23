@@ -256,6 +256,7 @@ export interface PlannerData {
   kind: 'planner';
   stepKind: string; // 'call_agent' | 'direct_answer' | 'final' | 'ask_user' | 'abort' | ...
   rationale?: string;
+  question?: string;
   contextSnapshot?: TraceContextSnapshot;
   thinking?: {
     executionMode?: string;

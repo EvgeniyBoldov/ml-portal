@@ -73,6 +73,8 @@ class PlannerStepEmitter:
             "rationale": step.rationale,
             "phase_id": step.phase_id,
             "risk": step.risk,
+            "question": step.question,
+            "final_answer": step.final_answer,
         }
         return PhasedEvent(
             RuntimeEvent.planner_step(

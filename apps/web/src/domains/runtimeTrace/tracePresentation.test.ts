@@ -68,6 +68,16 @@ describe('tracePresentation', () => {
     expect(getTraceSnapshotInspectorKind(entity)).toBe('entity');
   });
 
+  it('shows clarify planner questions in the title', () => {
+    const entity = makeEntity({
+      kind: 'planner',
+      title: 'Planner step',
+      data: { kind: 'planner', stepKind: 'clarify', question: 'Какой именно регламент?' },
+    });
+
+    expect(getTraceEntityTitle(entity)).toBe('Какой именно регламент?');
+  });
+
   it('maps dialog containers to dialog inspection', () => {
     const entity = makeEntity({
       kind: 'dialog',

@@ -104,6 +104,7 @@ def map_service_event_to_sse(event: Dict[str, Any]) -> Optional[str]:
                 phase_id=event.get("phase_id"),
                 phase_title=event.get("phase_title"),
                 why=event.get("why") or rationale,
+                question=event.get("question"),
                 tool_slug=event.get("tool_slug") or agent_slug,
                 op=event.get("op") or step_type or event.get("action_type") or kind,
                 execution_mode=event.get("execution_mode"),

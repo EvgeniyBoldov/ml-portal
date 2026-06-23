@@ -697,6 +697,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               const agentSlug = String(parsed.agent_slug || parsed.tool_slug || '').trim();
               const phaseTitle = String(parsed.phase_title || '').trim();
               const stepKind = String(parsed.step_type || parsed.step_kind || parsed.kind || '').trim();
+              const questionText = String(parsed.question || '').trim();
               if (stepKind === 'thinking' || String(parsed.execution_mode || '') === 'thinking' && Array.isArray(parsed.hypotheses)) {
                 updateStreamStatus('Сравниваю варианты...');
                 appendProgressEvent('Сравниваю варианты', { source: 'thinking' });
@@ -712,9 +713,21 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               } else if (actionType === 'final' || stepType === 'finalize') {
                 updateStreamStatus('Формирую ответ...');
                 appendProgressEvent('Формирую ответ', { source: 'planner' });
-              } else if (actionType === 'ask_user' || stepType === 'ask_user') {
+              } else if (actionType === 'ask_user' || actionType === 'clarify' || stepType === 'ask_user' || stepType === 'clarify') {
                 updateStreamStatus('Нужно уточнение...');
-                appendProgressEvent('Нужно уточнение', { source: 'planner', level: 'warn' });
+                appendProgressEvent(
+                  questionText ? `Нужно уточнение: ${questionText}` : 'Нужно уточнение',
+                  { source: 'planner', level: 'warn' },
+                );
+                if (questionText) {
+                  applyPausedState({
+                    runId: typeof parsed.run_id === 'string' ? parsed.run_id : null,
+                    reason: 'waiting_input',
+                    question: questionText,
+                    message: questionText,
+                    action: parsed as Record<string, unknown>,
+                  });
+                }
               } else {
                 updateStreamStatus(`Планирую шаг ${iteration}...`);
                 appendProgressEvent(`Планирую шаг ${iteration}`, { source: 'planner' });

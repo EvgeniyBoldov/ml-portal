@@ -61,9 +61,11 @@ export function getTraceEntityTitle(entity: TraceEntity): string {
     if (planner.stepKind === 'thinking') {
       return shortName(planner.thinking?.selectedActionSummary?.trim() || planner.thinking?.selectionRationale?.trim() || 'Thinking');
     }
+    if (planner.stepKind === 'ask_user' || planner.stepKind === 'clarify') {
+      return shortName(planner.question?.trim() || planner.rationale?.trim() || 'Уточнение');
+    }
     if (planner.stepKind === 'call_agent') return 'Выбор агента';
     if (planner.stepKind === 'final' || planner.stepKind === 'direct_answer') return 'Финальный ответ';
-    if (planner.stepKind === 'ask_user' || planner.stepKind === 'clarify') return 'Уточнение';
     if (planner.stepKind === 'abort') return 'Прерывание';
     return 'Шаг';
   }

@@ -102,6 +102,7 @@ class PlannerActionPayload(BaseModel):
     phase_id: Optional[str] = None
     phase_title: Optional[str] = None
     why: Optional[str] = None
+    question: Optional[str] = None
     # Legacy fields kept for backward compatibility with old clients.
     tool_slug: Optional[str] = None
     op: Optional[str] = None
