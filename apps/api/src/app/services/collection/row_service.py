@@ -233,12 +233,31 @@ class CollectionRowService:
 
         if deleted_count and collection.collection_type in {CollectionType.TABLE.value, CollectionType.TEMPLATE.value} and collection.has_vector_search and collection.qdrant_collection_name:
             from app.adapters.impl.qdrant import QdrantVectorStore
+            from app.services.collection.vector_lifecycle import (
+                build_model_scoped_qdrant_collections,
+                get_vector_config_model_aliases,
+            )
 
             vector_store = QdrantVectorStore()
-            await vector_store.delete_by_filter(
+            target_collections = {
                 collection.qdrant_collection_name,
-                {"row_id": [str(id_val) for id_val in ids]},
-            )
+                *[
+                    scoped_name
+                    for _, scoped_name in build_model_scoped_qdrant_collections(
+                        collection.qdrant_collection_name,
+                        get_vector_config_model_aliases(collection.vector_config),
+                    )
+                ],
+            }
+            for collection_name in target_collections:
+                if not collection_name:
+                    continue
+                if not await vector_store.collection_exists(collection_name):
+                    continue
+                await vector_store.delete_by_filter(
+                    collection_name,
+                    {"row_id": [str(id_val) for id_val in ids]},
+                )
 
             stats_result = await self.session.execute(
                 text(

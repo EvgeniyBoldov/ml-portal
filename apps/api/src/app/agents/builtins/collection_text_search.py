@@ -122,6 +122,10 @@ class CollectionTextSearchTool(VersionedTool):
         from app.adapters.embeddings import EmbeddingServiceFactory
         from app.adapters.impl.qdrant import QdrantVectorStore
         from app.core.db import get_session_factory
+        from app.services.collection.vector_lifecycle import (
+            CollectionVectorLifecycleService,
+            build_model_scoped_qdrant_collections,
+        )
         from app.services.collection_service import CollectionService
 
         log = ctx.tool_logger("collection.text_search")
@@ -196,24 +200,16 @@ class CollectionTextSearchTool(VersionedTool):
                         logs=log.entries_dict(),
                     )
 
-                # 2. Resolve embedding model and embed query
+                # 2. Resolve effective embedding target models and search across all model-scoped collections
                 vector_store = QdrantVectorStore()
-                embedding_alias = await self._resolve_embedding_alias(
-                    vector_store, collection.qdrant_collection_name
-                )
-                if not embedding_alias:
+                vector_lifecycle = CollectionVectorLifecycleService(session)
+                target_models = await vector_lifecycle.resolve_target_vector_models(collection.tenant_id)
+                if not target_models:
                     log.error("No embedding models")
                     return ToolResult.fail(
                         "Cannot determine embedding model for this collection.",
                         logs=log.entries_dict(),
                     )
-
-                await EmbeddingServiceFactory.ensure_model_registered_async(session, embedding_alias)
-                embedding_service = EmbeddingServiceFactory.get_service(embedding_alias)
-                query_embedding = await asyncio.to_thread(
-                    embedding_service.embed_texts, [query]
-                )
-                query_embedding = query_embedding[0]
 
                 # 3. Build Qdrant filter
                 qdrant_filter_must: List[tuple] = []
@@ -225,9 +221,33 @@ class CollectionTextSearchTool(VersionedTool):
 
                 search_filter = {"must": qdrant_filter_must} if qdrant_filter_must else None
 
-                # 4. Search in Qdrant
-                exists = await vector_store.collection_exists(collection.qdrant_collection_name)
-                if not exists:
+                # 4. Search across all model-scoped Qdrant collections
+                results: list[dict[str, Any]] = []
+                existing_collections = 0
+                for model_alias, scoped_collection_name in build_model_scoped_qdrant_collections(
+                    collection.qdrant_collection_name,
+                    target_models,
+                ):
+                    exists = await vector_store.collection_exists(scoped_collection_name)
+                    if not exists:
+                        continue
+                    existing_collections += 1
+                    await EmbeddingServiceFactory.ensure_model_registered_async(session, model_alias)
+                    embedding_service = EmbeddingServiceFactory.get_service(model_alias)
+                    query_embedding = await asyncio.to_thread(embedding_service.embed_texts, [query])
+                    model_results = await vector_store.search(
+                        collection=scoped_collection_name,
+                        query=query_embedding[0],
+                        top_k=limit * 2,
+                        filter=search_filter,
+                    )
+                    for hit in model_results:
+                        payload = hit.setdefault("payload", {})
+                        payload.setdefault("embed_model_alias", model_alias)
+                        payload.setdefault("qdrant_collection_name", scoped_collection_name)
+                    results.extend(model_results)
+
+                if existing_collections == 0:
                     log.warning("Qdrant collection does not exist yet")
                     return ToolResult.ok(
                         data={
@@ -239,13 +259,6 @@ class CollectionTextSearchTool(VersionedTool):
                         message="Collection exists but has not been vectorized yet.",
                         logs=log.entries_dict(),
                     )
-
-                results = await vector_store.search(
-                    collection=collection.qdrant_collection_name,
-                    query=query_embedding,
-                    top_k=limit * 2,
-                    filter=search_filter,
-                )
 
                 if not results:
                     log.info("No results found")
@@ -372,49 +385,6 @@ class CollectionTextSearchTool(VersionedTool):
             logger.error(f"Collection text search failed: {e}", exc_info=True)
             log.error("Search failed", error=str(e))
             return ToolResult.fail(f"Search failed: {str(e)}", logs=log.entries_dict())
-
-    async def _resolve_embedding_alias(
-        self, vector_store: Any, qdrant_collection_name: str
-    ) -> Optional[str]:
-        """
-        Resolve embedding model alias by sampling a point from the Qdrant collection.
-        Falls back to default embedding model from DB if no points exist.
-        """
-        try:
-            client = vector_store._client
-            scroll_result = await client.scroll(
-                collection_name=qdrant_collection_name,
-                limit=1,
-                with_payload=True,
-                with_vectors=False,
-            )
-            points = scroll_result[0] if scroll_result else []
-            if points:
-                alias = points[0].payload.get("embed_model_alias")
-                if alias:
-                    return alias
-        except Exception as e:
-            logger.warning(f"Failed to sample point from {qdrant_collection_name}: {e}")
-
-        # Fallback: get default embedding model from DB
-        try:
-            from sqlalchemy import select
-            from app.core.db import get_session_factory
-            from app.models.model_registry import ModelRegistry, ModelType, ModelStatus
-
-            session_factory = get_session_factory()
-            async with session_factory() as session:
-                result = await session.execute(
-                    select(ModelRegistry.alias).where(
-                        ModelRegistry.type == ModelType.EMBEDDING,
-                        ModelRegistry.enabled == True,
-                        ModelRegistry.status == ModelStatus.AVAILABLE,
-                    ).limit(1)
-                )
-                return result.scalar_one_or_none()
-        except Exception as e:
-            logger.warning(f"Failed to get default embedding model: {e}")
-            return None
 
     async def _fetch_full_rows(
         self,

@@ -79,10 +79,16 @@ def _chunk_text_for_embedding(text: str, chunk_size: int, overlap: int) -> list[
 
 
 def _needs_revectorization_for_model(vector_config: Any, model_alias: str) -> bool:
-    if not isinstance(vector_config, dict):
-        return True
-    current = str(vector_config.get("embed_model_alias") or "").strip()
-    return current != str(model_alias).strip()
+    target = [str(model_alias or "").strip()] if str(model_alias or "").strip() else []
+    return _needs_revectorization_for_models(vector_config, target)
+
+
+def _needs_revectorization_for_models(vector_config: Any, model_aliases: list[str]) -> bool:
+    from app.services.collection.vector_lifecycle import get_vector_config_model_aliases
+
+    current = get_vector_config_model_aliases(vector_config)
+    target = [str(alias or "").strip() for alias in model_aliases if str(alias or "").strip()]
+    return current != target
 
 
 @celery_app.task(
@@ -115,6 +121,11 @@ def vectorize_collection_rows(
         from app.adapters.embeddings import EmbeddingServiceFactory
         from app.adapters.impl.qdrant import QdrantVectorStore
         from app.services.collection_service import CollectionService
+        from app.services.collection.vector_lifecycle import (
+            CollectionVectorLifecycleService,
+            build_model_scoped_qdrant_collections,
+            get_vector_config_model_aliases,
+        )
         from app.workers.session_factory import get_worker_session
 
         async with get_worker_session() as session:
@@ -182,32 +193,30 @@ def vectorize_collection_rows(
                 if not pending_rows:
                     return {"status": "ok", "vectorized": 0, "message": "no_pending_rows"}
 
-                # 4. Resolve embedding model from DB
-                emb_row = await session.execute(
-                    sa_text(
-                        "SELECT alias FROM models "
-                        "WHERE type = 'EMBEDDING' AND enabled = true "
-                        "AND status = 'AVAILABLE' "
-                        "ORDER BY created_at LIMIT 1"
-                    )
+                # 4. Resolve effective embedding target models for tenant
+                vector_lifecycle = CollectionVectorLifecycleService(session)
+                target_model_aliases = await vector_lifecycle.resolve_target_vector_models(
+                    uuid.UUID(tenant_id)
                 )
-                model_alias = emb_row.scalar_one_or_none()
-                if not model_alias:
-                    logger.error("No embedding models available in model_registry")
+                if not target_model_aliases:
+                    logger.error("No embedding target models available for tenant %s", tenant_id)
                     return {"status": "error", "message": "no_embedding_models"}
 
-                if _needs_revectorization_for_model(vector_config, model_alias):
+                current_model_aliases = get_vector_config_model_aliases(vector_config)
+                if _needs_revectorization_for_models(vector_config, target_model_aliases):
                     logger.info(
-                        "collection_vectorization_model_changed_revectorize",
+                        "collection_vectorization_models_changed_revectorize",
                         extra={
                             "collection_id": collection_id,
-                            "previous_model_alias": (
-                                vector_config.get("embed_model_alias")
-                                if isinstance(vector_config, dict)
-                                else None
-                            ),
-                            "new_model_alias": model_alias,
+                            "previous_model_aliases": current_model_aliases,
+                            "new_model_aliases": target_model_aliases,
                         },
+                    )
+                    await vector_lifecycle.cleanup_model_scoped_qdrant_collections(
+                        qdrant_name,
+                        model_aliases=list(
+                            dict.fromkeys(current_model_aliases + target_model_aliases)
+                        ),
                     )
                     await session.execute(
                         sa_text(
@@ -228,7 +237,8 @@ def vectorize_collection_rows(
                         if isinstance(vector_config, dict)
                         else {}
                     )
-                    next_vector_config["embed_model_alias"] = str(model_alias)
+                    next_vector_config["embed_model_aliases"] = list(target_model_aliases)
+                    next_vector_config["embed_model_alias"] = str(target_model_aliases[0])
                     await session.execute(
                         sa_text(
                             "UPDATE collections SET vector_config = CAST(:vconf AS JSONB) "
@@ -236,19 +246,22 @@ def vectorize_collection_rows(
                         ),
                         {"vconf": json.dumps(next_vector_config), "cid": collection_id},
                     )
+                    vector_config = next_vector_config
 
-                await EmbeddingServiceFactory.ensure_model_registered_async(session, model_alias)
-                embedding_service = EmbeddingServiceFactory.get_service(model_alias)
-                model_info = embedding_service.get_model_info()
-
-                # 5. Ensure Qdrant collection
+                embedding_services: dict[str, Any] = {}
+                scoped_collections = build_model_scoped_qdrant_collections(
+                    qdrant_name,
+                    target_model_aliases,
+                )
                 vector_store = QdrantVectorStore()
-                if _needs_revectorization_for_model(vector_config, model_alias):
-                    if await vector_store.collection_exists(qdrant_name):
-                        await vector_store.delete_collection(qdrant_name)
-                await vector_store.ensure_collection(qdrant_name, model_info.dimensions)
+                for model_alias, scoped_collection_name in scoped_collections:
+                    await EmbeddingServiceFactory.ensure_model_registered_async(session, model_alias)
+                    embedding_service = EmbeddingServiceFactory.get_service(model_alias)
+                    embedding_services[model_alias] = embedding_service
+                    model_info = embedding_service.get_model_info()
+                    await vector_store.ensure_collection(scoped_collection_name, model_info.dimensions)
 
-                # 6. Process rows
+                # 5. Process rows
                 vectorized = 0
                 failed = 0
                 total_chunks = 0
@@ -256,54 +269,60 @@ def vectorize_collection_rows(
                 for prow in pending_rows:
                     rid = prow["id"]
                     try:
-                        points_vectors: List[List[float]] = []
-                        points_payloads: List[Dict[str, Any]] = []
-                        points_ids: List[str] = []
-
-                        # Drop previous points for this row before writing the current state.
-                        await vector_store.delete_by_filter(
-                            qdrant_name,
-                            {"row_id": rid},
-                        )
-
+                        field_chunks: dict[str, list[str]] = {}
                         for fname in vector_field_names:
                             text_val = prow.get(fname)
                             if not text_val or not str(text_val).strip():
                                 continue
-
                             text_val = str(text_val).strip()[:MAX_TEXT_LENGTH]
-                            chunks = _chunk_text_for_embedding(
+                            field_chunks[fname] = _chunk_text_for_embedding(
                                 text_val,
                                 chunk_size=chunk_size,
                                 overlap=chunk_overlap,
                             )
-                            if not chunks:
-                                continue
 
-                            # Embed all chunks for this retrieval-enabled field.
-                            vectors = await asyncio.to_thread(
-                                embedding_service.embed_texts, chunks
+                        row_chunk_count = 0
+                        for model_alias, scoped_collection_name in scoped_collections:
+                            points_vectors: List[List[float]] = []
+                            points_payloads: List[Dict[str, Any]] = []
+                            points_ids: List[str] = []
+
+                            await vector_store.delete_by_filter(
+                                scoped_collection_name,
+                                {"row_id": rid},
                             )
 
-                            for chunk_idx, chunk_text in enumerate(chunks):
-                                point_id = _build_point_id(collection_id, rid, fname, chunk_idx)
-                                points_vectors.append(vectors[chunk_idx])
-                                points_ids.append(point_id)
-                                points_payloads.append({
-                                    "row_id": rid,
-                                    "field_name": fname,
-                                    "chunk_idx": chunk_idx,
-                                    "text": chunk_text[:2000],
-                                    "embed_model_alias": model_alias,
-                                    "tenant_id": tenant_id,
-                                    "collection_id": collection_id,
-                                })
+                            embedding_service = embedding_services[model_alias]
+                            for fname, chunks in field_chunks.items():
+                                if not chunks:
+                                    continue
+                                vectors = await asyncio.to_thread(
+                                    embedding_service.embed_texts, chunks
+                                )
+                                for chunk_idx, chunk_text in enumerate(chunks):
+                                    point_id = _build_point_id(collection_id, rid, fname, chunk_idx)
+                                    points_vectors.append(vectors[chunk_idx])
+                                    points_ids.append(point_id)
+                                    points_payloads.append({
+                                        "row_id": rid,
+                                        "field_name": fname,
+                                        "chunk_idx": chunk_idx,
+                                        "text": chunk_text[:2000],
+                                        "embed_model_alias": model_alias,
+                                        "tenant_id": tenant_id,
+                                        "collection_id": collection_id,
+                                    })
 
-                        if points_vectors:
-                            await vector_store.upsert(
-                                qdrant_name, points_vectors, points_payloads, points_ids
-                            )
-                            total_chunks += len(points_vectors)
+                            if points_vectors:
+                                await vector_store.upsert(
+                                    scoped_collection_name,
+                                    points_vectors,
+                                    points_payloads,
+                                    points_ids,
+                                )
+                                row_chunk_count += len(points_vectors)
+
+                        total_chunks += row_chunk_count
 
                         # Mark row as vectorized
                         await session.execute(
@@ -312,7 +331,7 @@ def vectorize_collection_rows(
                                 f"_vector_chunk_count = :cnt, _vector_error = NULL "
                                 f"WHERE id::text = :rid"
                             ),
-                            {"cnt": len(points_vectors), "rid": rid},
+                            {"cnt": row_chunk_count, "rid": rid},
                         )
                         vectorized += 1
 

@@ -13,6 +13,7 @@ from app.models.agent import Agent
 from app.models.rbac import ResourceType
 from app.models.tool_instance import ToolInstance
 from app.services.rbac_cleanup_service import RbacCleanupService
+from app.services.collection.vector_lifecycle import get_vector_config_model_aliases
 
 
 def _expected_data_connector_subtype(collection_type: str) -> Optional[str]:
@@ -370,11 +371,10 @@ class CollectionLifecycleService:
             await self.session.execute(text(f"DROP TABLE IF EXISTS {table_name} CASCADE"))
 
         if qdrant_collection_name:
-            from app.adapters.impl.qdrant import QdrantVectorStore
-
-            vector_store = QdrantVectorStore()
-            if await vector_store.collection_exists(qdrant_collection_name):
-                await vector_store.delete_collection(qdrant_collection_name)
+            await self.host.vector.cleanup_model_scoped_qdrant_collections(
+                qdrant_collection_name,
+                model_aliases=get_vector_config_model_aliases(collection.vector_config),
+            )
 
         return True
 

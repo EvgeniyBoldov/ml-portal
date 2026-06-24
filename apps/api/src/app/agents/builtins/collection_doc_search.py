@@ -121,6 +121,11 @@ class CollectionDocSearchTool(VersionedTool):
         from app.adapters.embeddings import EmbeddingServiceFactory
         from app.adapters.impl.qdrant import QdrantVectorStore
         from app.core.db import get_session_factory
+        from app.services.collection.vector_lifecycle import (
+            CollectionVectorLifecycleService,
+            build_model_scoped_qdrant_collections,
+            get_model_scoped_qdrant_collection_name,
+        )
         from app.services.collection_service import CollectionService
 
         log = ctx.tool_logger("collection.doc_search")
@@ -187,15 +192,42 @@ class CollectionDocSearchTool(VersionedTool):
                 if validation_error:
                     return ToolResult.fail(validation_error, logs=log.entries_dict())
 
-                # 2. Check Qdrant collection exists
+                # 2. Resolve effective embedding target models and model-scoped collections
                 vector_store = QdrantVectorStore()
-                exists = await vector_store.collection_exists(collection.qdrant_collection_name)
-                log.info(
-                    "Qdrant collection existence check",
-                    qdrant_collection_name=collection.qdrant_collection_name,
-                    exists=exists,
+                vector_lifecycle = CollectionVectorLifecycleService(session)
+                target_models = await vector_lifecycle.resolve_target_vector_models(collection.tenant_id)
+                if not target_models:
+                    log.error("Cannot determine embedding target models")
+                    return ToolResult.fail(
+                        "Cannot determine embedding model for this collection.",
+                        logs=log.entries_dict(),
+                    )
+
+                model_scoped_collections = build_model_scoped_qdrant_collections(
+                    collection.qdrant_collection_name,
+                    target_models,
                 )
-                if not exists:
+                search_targets: list[tuple[str, str]] = []
+                for model_alias, scoped_collection_name in model_scoped_collections:
+                    candidate_names = [scoped_collection_name]
+                    fallback_name = get_model_scoped_qdrant_collection_name(
+                        collection.qdrant_collection_name,
+                        model_alias,
+                        None,
+                    )
+                    if fallback_name and fallback_name not in candidate_names:
+                        candidate_names.append(fallback_name)
+                    for candidate_name in candidate_names:
+                        exists = await vector_store.collection_exists(candidate_name)
+                        log.info(
+                            "Qdrant collection existence check",
+                            qdrant_collection_name=candidate_name,
+                            exists=exists,
+                            model_alias=model_alias,
+                        )
+                        if exists:
+                            search_targets.append((model_alias, candidate_name))
+                if not search_targets:
                     log.warning("Qdrant collection does not exist yet")
                     return ToolResult.ok(
                         data={
@@ -208,42 +240,35 @@ class CollectionDocSearchTool(VersionedTool):
                         logs=log.entries_dict(),
                     )
 
-                # 3. Resolve embedding model from Qdrant points metadata
-                embedding_alias = await self._resolve_embedding_alias(
-                    vector_store, collection.qdrant_collection_name, collection=collection
-                )
-                if not embedding_alias:
-                    log.error("Cannot determine embedding model")
-                    return ToolResult.fail(
-                        "Cannot determine embedding model for this collection.",
-                        logs=log.entries_dict(),
-                    )
-
-                # 4. Embed query
-                await EmbeddingServiceFactory.ensure_model_registered_async(session, embedding_alias)
-                embedding_service = EmbeddingServiceFactory.get_service(embedding_alias)
-                model_info = embedding_service.get_model_info()
-                log.info(
-                    "Embedding model resolved",
-                    alias=embedding_alias,
-                    provider=model_info.provider if hasattr(model_info, "provider") else "unknown",
-                    dimensions=model_info.dimensions if hasattr(model_info, "dimensions") else None,
-                )
-
-                query_embedding = await asyncio.to_thread(
-                    embedding_service.embed_texts, [query]
-                )
-                query_embedding = query_embedding[0]
-                log.info("Query embedded", embedding_dim=len(query_embedding))
-
-                # 5. Search in dedicated Qdrant collection with payload-level prefilter
+                # 3. Search in all target Qdrant collections with payload-level prefilter
                 qdrant_prefilter = self._build_qdrant_prefilter(filters) if filters else None
-                results = await vector_store.search(
-                    collection=collection.qdrant_collection_name,
-                    query=query_embedding,
-                    top_k=k * 2,
-                    filter=qdrant_prefilter,
-                )
+                results: list[dict[str, Any]] = []
+                for model_alias, candidate_name in search_targets:
+                    await EmbeddingServiceFactory.ensure_model_registered_async(session, model_alias)
+                    embedding_service = EmbeddingServiceFactory.get_service(model_alias)
+                    model_info = embedding_service.get_model_info()
+                    log.info(
+                        "Embedding model resolved",
+                        alias=model_alias,
+                        provider=model_info.provider if hasattr(model_info, "provider") else "unknown",
+                        dimensions=model_info.dimensions if hasattr(model_info, "dimensions") else None,
+                        qdrant_collection_name=candidate_name,
+                    )
+                    query_embedding = await asyncio.to_thread(
+                        embedding_service.embed_texts, [query]
+                    )
+                    log.info("Query embedded", embedding_dim=len(query_embedding[0]), model_alias=model_alias)
+                    model_results = await vector_store.search(
+                        collection=candidate_name,
+                        query=query_embedding[0],
+                        top_k=k * 2,
+                        filter=qdrant_prefilter,
+                    )
+                    for hit in model_results:
+                        payload = hit.setdefault("payload", {})
+                        payload.setdefault("embed_model_alias", model_alias)
+                        payload.setdefault("qdrant_collection_name", candidate_name)
+                    results.extend(model_results)
                 log.info(
                     "Qdrant search completed",
                     qdrant_collection_name=collection.qdrant_collection_name,
@@ -266,12 +291,23 @@ class CollectionDocSearchTool(VersionedTool):
                             "Filters are too broad. Please narrow filters to 2000 rows or fewer.",
                             logs=log.entries_dict(),
                         )
-                    results = await vector_store.search(
-                        collection=collection.qdrant_collection_name,
-                        query=query_embedding,
-                        top_k=k * 2,
-                        filter={"row_id": row_ids},
-                    )
+                    results = []
+                    for model_alias, candidate_name in search_targets:
+                        embedding_service = EmbeddingServiceFactory.get_service(model_alias)
+                        query_embedding = await asyncio.to_thread(
+                            embedding_service.embed_texts, [query]
+                        )
+                        model_results = await vector_store.search(
+                            collection=candidate_name,
+                            query=query_embedding[0],
+                            top_k=k * 2,
+                            filter={"row_id": row_ids},
+                        )
+                        for hit in model_results:
+                            payload = hit.setdefault("payload", {})
+                            payload.setdefault("embed_model_alias", model_alias)
+                            payload.setdefault("qdrant_collection_name", candidate_name)
+                        results.extend(model_results)
 
                 if not results:
                     log.info("No results found")
@@ -389,65 +425,6 @@ class CollectionDocSearchTool(VersionedTool):
         if not sid:
             return None
         return f"/api/v1/files/{FileDeliveryService.make_rag_document_file_id(sid, 'original')}/download"
-
-    async def _resolve_embedding_alias(
-        self, vector_store: Any, qdrant_collection_name: str, collection: Any = None,
-    ) -> Optional[str]:
-        """
-        Resolve embedding model alias.
-        1. Try collection.vector_config (most reliable)
-        2. Sample a Qdrant point payload
-        3. Fallback to default embedding model from DB
-        """
-        # 1. Collection vector config (reliable, no network call)
-        if collection is not None:
-            vc = collection.vector_config
-            if isinstance(vc, dict):
-                alias = vc.get("embed_model_alias")
-                if alias:
-                    logger.debug("Resolved embedding alias from collection.vector_config: %s", alias)
-                    return alias
-
-        # 2. Sample a Qdrant point
-        try:
-            client = vector_store._client
-            scroll_result = await client.scroll(
-                collection_name=qdrant_collection_name,
-                limit=1,
-                with_payload=True,
-                with_vectors=False,
-            )
-            points = scroll_result[0] if scroll_result else []
-            if points:
-                alias = points[0].payload.get("embed_model_alias")
-                if alias:
-                    logger.debug("Resolved embedding alias from Qdrant payload: %s", alias)
-                    return alias
-        except Exception as e:
-            logger.warning(f"Failed to sample point from {qdrant_collection_name}: {e}")
-
-        # 3. Fallback: get default embedding model from DB
-        try:
-            from sqlalchemy import select
-            from app.core.db import get_session_factory
-            from app.models.model_registry import ModelRegistry, ModelType, ModelStatus
-
-            session_factory = get_session_factory()
-            async with session_factory() as session:
-                result = await session.execute(
-                    select(ModelRegistry.alias).where(
-                        ModelRegistry.type == ModelType.EMBEDDING,
-                        ModelRegistry.enabled == True,
-                        ModelRegistry.status == ModelStatus.AVAILABLE,
-                    ).limit(1)
-                )
-                row = result.scalar_one_or_none()
-                if row:
-                    logger.debug("Resolved embedding alias from DB default: %s", row)
-                return row
-        except Exception as e:
-            logger.warning(f"Failed to get default embedding model: {e}")
-            return None
 
     async def _get_source_names(
         self, session: Any, source_ids: List[str]

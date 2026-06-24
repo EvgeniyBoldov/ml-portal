@@ -148,17 +148,10 @@ class CollectionService:
         tenant_id: uuid.UUID,
         qdrant_collection_name: str,
     ) -> None:
-        """Create dedicated Qdrant collection for a platform collection."""
+        """Create dedicated Qdrant collection(s) for a platform collection."""
         if not qdrant_collection_name:
             return
-
-        from app.adapters.impl.qdrant import QdrantVectorStore
-
-        model_alias = await self._resolve_primary_vector_model(tenant_id)
-        vector_dim = await self._resolve_embedding_dimensions(model_alias) if model_alias else 384
-
-        vector_store = QdrantVectorStore()
-        await vector_store.ensure_collection(qdrant_collection_name, vector_dim)
+        await self.vector.provision_qdrant_collection(tenant_id, qdrant_collection_name)
 
     async def _cleanup_qdrant_collection(self, qdrant_collection_name: str) -> None:
         """Best-effort cleanup for partially provisioned Qdrant collections."""
