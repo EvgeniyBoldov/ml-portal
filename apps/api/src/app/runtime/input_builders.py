@@ -142,6 +142,7 @@ class SynthesizerInputBuilder:
                     generated_files.append(
                         {
                             "file_id": att.get("file_id"),
+                            "storage_uri": att.get("storage_uri") or "",
                             "file_name": att.get("file_name") or att.get("name") or "file",
                             "download_url": (
                                 att.get("download_url")

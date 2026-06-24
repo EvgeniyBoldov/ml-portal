@@ -262,6 +262,7 @@ class ChatAttachmentService:
         return {
             "id": str(row.id),
             "file_id": file_id,
+            "storage_uri": FileDeliveryService.make_storage_uri(row.storage_bucket, row.storage_key),
             "file_name": row.file_name,
             "content_type": row.content_type,
             "size_bytes": row.size_bytes,
@@ -277,6 +278,7 @@ class ChatAttachmentService:
         return {
             "id": str(row.id),
             "file_id": FileDeliveryService.make_chat_attachment_file_id(str(row.id)),
+            "storage_uri": FileDeliveryService.make_storage_uri(row.storage_bucket, row.storage_key),
             "file_name": row.file_name,
             "file_ext": row.file_ext,
             "content_type": row.content_type,
@@ -297,8 +299,9 @@ class ChatAttachmentService:
         ]
         for item in attachments:
             file_id = FileDeliveryService.make_chat_attachment_file_id(str(item.id))
+            storage_uri = FileDeliveryService.make_storage_uri(item.storage_bucket, item.storage_key)
             lines.append(
-                f"- file_id={file_id}; name={item.file_name}; type={item.content_type or 'unknown'}; size={item.size_bytes}"
+                f"- storage_uri={storage_uri}; file_id={file_id}; name={item.file_name}; type={item.content_type or 'unknown'}; size={item.size_bytes}"
             )
             text_snippet = await self._load_text_content(item, max_chars=max_chars_per_file)
             if text_snippet:

@@ -8,14 +8,14 @@ Collection builtin handler slugs (internal):
 - collection.search          — SQL search with DSL filters, sorting, pagination
 - collection.doc_search      — internal handler slug for collection.document.search
 - collection.text_search     — semantic search in table/template collections (retrieval-enabled text fields)
-- collection.list_documents  — list files in a document collection with metadata
-- collection.get_document    — get single document metadata and file_id
+- collection.list_documents  — list files in a document collection with metadata and storage_uri
+- collection.get_document    — get single document metadata and storage_uri
 - collection.get             — get single record by primary key
 - collection.aggregate       — aggregations (count, sum, avg, min, max, group_by, having)
 - collection.catalog         — schema/data-shape inspection for any collection type
-- file.generate              — persist generated file (csv/json/txt/md) to chat storage
-- file.read                  — read a file by file_id (chat attachment, collection doc, or export)
-- file.analyze               — inspect spreadsheet structure (Excel/CSV): sheets, headers, types, sample rows
+- file.generate              — persist generated file (csv/json/txt/md) to chat storage and return storage_uri
+- file.read                  — read a file by canonical storage_uri (s3://bucket/key)
+- file.analyze               — inspect spreadsheet structure (Excel/CSV) by canonical storage_uri
 - file.list                  — list all files in the current chat
 - file.delete                — delete a file from chat storage by file_id
 

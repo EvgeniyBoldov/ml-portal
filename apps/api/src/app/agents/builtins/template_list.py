@@ -15,6 +15,7 @@ from app.core.logging import get_logger
 from app.models.collection import CollectionType
 from app.services.collection.row_service import CollectionRowService
 from app.services.collection_service import CollectionService
+from app.services.file_delivery_service import FileDeliveryService
 
 logger = get_logger(__name__)
 
@@ -52,6 +53,7 @@ _OUTPUT_SCHEMA_V1 = {
                     "template_version": {"type": "string"},
                     "description": {"type": "string"},
                     "file_id": {"type": "string"},
+                    "storage_uri": {"type": "string"},
                 },
             },
         },
@@ -69,7 +71,7 @@ class TemplateListTool(VersionedTool):
     name: ClassVar[str] = "List Templates"
     description: ClassVar[str] = (
         "List templates in a template collection. Returns metadata for each template: "
-        "title, version, source, description, and row_id needed for get_schema/fill."
+        "title, version, source, description, row_id, and canonical storage_uri needed for file.read/file.analyze."
     )
 
     @tool_version(
@@ -125,6 +127,8 @@ class TemplateListTool(VersionedTool):
                 templates = []
                 for row in rows:
                     file_meta = row.get("file") or {}
+                    bucket = str(file_meta.get("bucket") or "").strip()
+                    s3_key = str(file_meta.get("s3_key") or "").strip()
                     templates.append({
                         "row_id": str(row.get("id")),
                         "title": row.get("title") or "",
@@ -132,6 +136,11 @@ class TemplateListTool(VersionedTool):
                         "template_version": row.get("template_version") or "",
                         "description": row.get("description") or "",
                         "file_id": file_meta.get("file_id") or "",
+                        "storage_uri": (
+                            FileDeliveryService.make_storage_uri(bucket, s3_key)
+                            if bucket and s3_key
+                            else ""
+                        ),
                     })
 
                 return ToolResult.ok(

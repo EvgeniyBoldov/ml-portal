@@ -280,6 +280,7 @@ class AgentExecutor:
                                 download_url = result_payload.get("download_url") or f"/api/v1/files/{file_id}/download"
                                 attachments.append({
                                     "file_id": file_id,
+                                    "storage_uri": result_payload.get("storage_uri") or "",
                                     "file_name": result_payload.get("file_name") or result_payload.get("filename") or "file",
                                     "download_url": download_url,
                                     "content_type": result_payload.get("content_type") or "",

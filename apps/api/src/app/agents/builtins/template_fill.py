@@ -2,7 +2,7 @@
 template.fill — Fill a template with values and return a generated file.
 
 Supports Excel, Word, and plain text templates via placeholder substitution.
-The filled result is stored as a chat attachment and its file_id is returned.
+The filled result is stored as a chat attachment and its canonical storage_uri is returned.
 """
 from __future__ import annotations
 
@@ -51,6 +51,7 @@ _OUTPUT_SCHEMA_V1 = {
     "type": "object",
     "properties": {
         "file_id": {"type": "string"},
+        "storage_uri": {"type": "string"},
         "download_url": {"type": "string"},
         "filename": {"type": "string"},
         "size_bytes": {"type": "integer"},
@@ -159,7 +160,7 @@ class TemplateFillTool(VersionedTool):
     description: ClassVar[str] = (
         "Fill a template (Excel, Word, or text) with provided values. "
         "Placeholders like {{field_name}} are replaced. "
-        "Returns a generated file_id that can be downloaded or passed to other tools."
+        "Returns a generated file storage_uri that can be passed to file.read or file.analyze, plus download info."
     )
 
     @tool_version(
@@ -304,6 +305,7 @@ class TemplateFillTool(VersionedTool):
                 return ToolResult.ok(
                     data={
                         "file_id": file_id,
+                        "storage_uri": attachment.get("storage_uri"),
                         "download_url": f"/api/v1/files/{file_id}/download",
                         "filename": safe_filename,
                         "size_bytes": len(filled_bytes),

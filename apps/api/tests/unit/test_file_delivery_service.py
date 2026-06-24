@@ -44,6 +44,52 @@ async def test_resolve_collection_export_success(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_resolve_storage_uri_for_collection_export_success(monkeypatch):
+    tenant_id = uuid.uuid4()
+    owner_id = uuid.uuid4()
+    export_id = str(uuid.uuid4())
+    key = f"tenants/{tenant_id}/exports/collections/{uuid.uuid4()}/{export_id}.csv"
+    meta = {
+        "status": "ready",
+        "tenant_id": str(tenant_id),
+        "owner_id": str(owner_id),
+        "bucket": "artifacts",
+        "key": key,
+        "file_name": "collection_export.csv",
+        "content_type": "text/csv",
+        "size_bytes": 128,
+    }
+
+    cache = SimpleNamespace(get=AsyncMock(return_value=meta))
+
+    async def _fake_get_cache():
+        return cache
+
+    monkeypatch.setattr("app.services.file_delivery_service.get_cache", _fake_get_cache)
+
+    service = FileDeliveryService(
+        session=AsyncMock(),
+        repo_factory=SimpleNamespace(tenant_id=tenant_id),
+    )
+    resolved = await service.resolve_storage_uri(
+        f"s3://artifacts/{key}",
+        owner_id=str(owner_id),
+    )
+    assert resolved.file_id == FileDeliveryService.make_collection_export_file_id(export_id)
+    assert resolved.bucket == "artifacts"
+    assert resolved.key == key
+
+
+def test_make_storage_uri_roundtrip():
+    uri = FileDeliveryService.make_storage_uri("artifacts", "tenant/doc/original/file.txt")
+    assert uri == "s3://artifacts/tenant/doc/original/file.txt"
+    assert FileDeliveryService.parse_storage_uri(uri) == (
+        "artifacts",
+        "tenant/doc/original/file.txt",
+    )
+
+
+@pytest.mark.asyncio
 async def test_resolve_collection_export_rejects_wrong_owner(monkeypatch):
     tenant_id = uuid.uuid4()
     export_id = str(uuid.uuid4())

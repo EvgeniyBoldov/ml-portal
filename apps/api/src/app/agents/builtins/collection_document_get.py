@@ -1,8 +1,8 @@
 """
-Collection Get Document Tool — get metadata and file_id for a single document.
+Collection Get Document Tool — get metadata and canonical storage reference for a document.
 
-Returns a file_id that can be passed to file.read or file.analyze to inspect
-the actual file content (e.g. an Excel template).
+Returns storage_uri that can be passed to file.read or file.analyze to inspect
+the actual file content.
 """
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ from app.core.logging import get_logger
 from app.models.rag import RAGDocument
 from app.models.rag_ingest import DocumentCollectionMembership, Source
 from app.services.file_delivery_service import FileDeliveryService
+from app.core.config import get_settings
 
 logger = get_logger(__name__)
 
@@ -37,6 +38,7 @@ _OUTPUT_SCHEMA_V1 = {
     "properties": {
         "document_id": {"type": "string"},
         "file_id": {"type": "string"},
+        "storage_uri": {"type": "string"},
         "filename": {"type": "string"},
         "title": {"type": "string"},
         "status": {"type": "string"},
@@ -51,9 +53,9 @@ _OUTPUT_SCHEMA_V1 = {
 @register_tool
 class CollectionDocumentGetTool(VersionedTool):
     """
-    Get a document's metadata and a file_id pointing to its original file.
+    Get a document's metadata and a storage_uri pointing to its original file.
 
-    Pass the returned file_id to file.read or file.analyze to inspect the
+    Pass the returned storage_uri to file.read or file.analyze to inspect the
     actual content (e.g. an Excel template).
     """
 
@@ -61,8 +63,8 @@ class CollectionDocumentGetTool(VersionedTool):
     domains: ClassVar[list] = ["collection.document"]
     name: ClassVar[str] = "Get Collection Document"
     description: ClassVar[str] = (
-        "Get a single document's metadata and a file_id pointing to its original file. "
-        "Pass that file_id to file.read or file.analyze to inspect the actual content "
+        "Get a single document's metadata and a storage_uri pointing to its original file. "
+        "Pass that storage_uri to file.read or file.analyze to inspect the actual content "
         "(e.g. an Excel template)."
     )
 
@@ -160,6 +162,10 @@ class CollectionDocumentGetTool(VersionedTool):
                                     }
 
                 file_id = FileDeliveryService.make_rag_document_file_id(doc_id_str, "original")
+                storage_uri = FileDeliveryService.make_storage_uri(
+                    get_settings().S3_BUCKET_RAG,
+                    str(doc.s3_key_raw or ""),
+                )
 
                 log.info("Document fetched", document_id=doc_id_str, collection=collection_slug)
 
@@ -167,6 +173,7 @@ class CollectionDocumentGetTool(VersionedTool):
                     data={
                         "document_id": doc_id_str,
                         "file_id": file_id,
+                        "storage_uri": storage_uri,
                         "filename": doc.filename,
                         "title": doc.title or doc.filename,
                         "status": doc.status,

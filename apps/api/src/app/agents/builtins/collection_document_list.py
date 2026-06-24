@@ -3,7 +3,7 @@ Collection List Documents Tool — lists files in a document collection.
 
 The agent uses this to enumerate available files (e.g. templates, registers)
 within a collection after discovering the collection via collection.document.search.
-Each result carries a file_id that can be passed to file.read or file.analyze.
+Each result carries storage_uri that can be passed to file.read or file.analyze.
 """
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ from app.models.rag import RAGDocument
 from app.models.rag_ingest import DocumentCollectionMembership, Source
 from app.services.collection_service import CollectionService
 from app.services.file_delivery_service import FileDeliveryService
+from app.core.config import get_settings
 
 logger = get_logger(__name__)
 
@@ -63,6 +64,7 @@ _OUTPUT_SCHEMA_V1 = {
                 "properties": {
                     "document_id": {"type": "string"},
                     "file_id": {"type": "string"},
+                    "storage_uri": {"type": "string"},
                     "filename": {"type": "string"},
                     "title": {"type": "string"},
                     "status": {"type": "string"},
@@ -86,7 +88,7 @@ class CollectionDocumentListTool(VersionedTool):
 
     Use this AFTER collection.document.search found a relevant collection to
     enumerate available files (e.g. find an Excel template by filename).
-    For each document a file_id is returned — pass it to file.read or file.analyze
+    For each document a storage_uri is returned — pass it to file.read or file.analyze
     to inspect the actual file content.
     """
 
@@ -97,7 +99,7 @@ class CollectionDocumentListTool(VersionedTool):
         "List all files in a document collection with their names and metadata. "
         "Use to enumerate available files (e.g. find a template by name). "
         "For content search use collection.document.search. "
-        "Returns a file_id for each document that can be passed to file.read or file.analyze."
+        "Returns a storage_uri for each document that can be passed to file.read or file.analyze."
     )
 
     @tool_version(
@@ -236,15 +238,18 @@ class CollectionDocumentListTool(VersionedTool):
                                 }
 
                 documents: List[Dict[str, Any]] = []
+                rag_bucket = get_settings().S3_BUCKET_RAG
                 for doc, _ in rows:
                     doc_id_str = str(doc.id)
                     collection_row_id = row_id_map.get(doc_id_str)
                     file_id = FileDeliveryService.make_rag_document_file_id(doc_id_str, "original")
+                    storage_uri = FileDeliveryService.make_storage_uri(rag_bucket, str(doc.s3_key_raw or ""))
                     meta = meta_fields_map.get(collection_row_id) if collection_row_id else None
 
                     documents.append({
                         "document_id": doc_id_str,
                         "file_id": file_id,
+                        "storage_uri": storage_uri,
                         "filename": doc.filename,
                         "title": doc.title or doc.filename,
                         "status": doc.status,

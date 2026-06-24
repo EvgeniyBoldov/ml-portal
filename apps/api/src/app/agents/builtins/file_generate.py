@@ -1,5 +1,5 @@
 """
-File Generate Tool — saves a generated file to chat storage and returns download info.
+File Generate Tool — saves a generated file to chat storage and returns canonical artifact info.
 
 The agent (not the orchestrator) owns content creation. This tool is a thin
 write-through to ChatAttachmentService: it persists the agent-generated body
@@ -53,6 +53,7 @@ _OUTPUT_SCHEMA_V1 = {
     "type": "object",
     "properties": {
         "file_id": {"type": "string", "description": "Stable file identifier (e.g. chatatt_<uuid>)"},
+        "storage_uri": {"type": "string", "description": "Canonical storage URI in the form s3://bucket/key"},
         "download_url": {"type": "string", "description": "Absolute download endpoint for the file"},
         "file_name": {"type": "string"},
         "content_type": {"type": "string"},
@@ -75,7 +76,7 @@ class FileGenerateTool(VersionedTool):
     domains: ClassVar[list] = ["system"]
     name: ClassVar[str] = "Generate File"
     description: ClassVar[str] = (
-        "Save a generated file (csv, json, txt, md) to chat storage and return a download link. "
+        "Save a generated file (csv, json, txt, md) to chat storage and return its canonical storage_uri and download link. "
         "The agent must provide the fully formatted file body."
     )
 
@@ -168,6 +169,7 @@ class FileGenerateTool(VersionedTool):
                 return ToolResult.ok(
                     data={
                         "file_id": attachment.get("file_id"),
+                        "storage_uri": attachment.get("storage_uri"),
                         "download_url": f"/api/v1/files/{attachment.get('file_id')}/download",
                         "file_name": attachment.get("file_name"),
                         "content_type": content_type,

@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import csv
 import io
-import re
 from typing import Any, ClassVar, Dict, List, Optional
 
 from app.agents.context import ToolContext, ToolResult
@@ -27,28 +26,29 @@ _MAX_READ_BYTES = 2 * 1024 * 1024
 _SAMPLE_ROWS = 5
 _MAX_COLS = 100
 
-_FILE_ID_RE = re.compile(
-    r"^(?:chatatt_([0-9a-fA-F-]{36})|ragdoc_([0-9a-fA-F-]{36})_(original|canonical)|colexp_([0-9a-fA-F-]{36}))$"
-)
-
 _INPUT_SCHEMA_V1 = {
     "type": "object",
     "properties": {
-        "file_id": {
+        "storage_uri": {
             "type": "string",
             "description": (
-                "File ID to analyze. Supported: 'chatatt_<uuid>', "
-                "'ragdoc_<uuid>_original', 'colexp_<uuid>'. "
-                "Use collection.get_document to obtain file_id for a collection document."
+                "Canonical storage URI to analyze, in the form "
+                "'s3://<bucket>/<key>'. "
+                "Pass the exact storage_uri returned by producer tools."
             ),
         },
+        "file_id": {
+            "type": "string",
+            "description": "Deprecated legacy delivery id. Use storage_uri instead.",
+        },
     },
-    "required": ["file_id"],
 }
 
 _OUTPUT_SCHEMA_V1 = {
     "type": "object",
     "properties": {
+        "storage_uri": {"type": "string"},
+        "file_id": {"type": "string"},
         "format": {"type": "string", "description": "'excel' or 'csv'"},
         "file_name": {"type": "string"},
         "sheets": {
@@ -239,7 +239,7 @@ class FileAnalyzeTool(VersionedTool):
     description: ClassVar[str] = (
         "Inspect spreadsheet structure (Excel/CSV): sheets, column headers, data types, sample rows, row counts. "
         "Use BEFORE filling a template to learn what fields it expects. "
-        "Accepts any file_id supported by file.read."
+        "Accepts canonical storage_uri in the form s3://bucket/key."
     )
 
     @tool_version(
@@ -256,18 +256,11 @@ class FileAnalyzeTool(VersionedTool):
 
         log = ctx.tool_logger("file.analyze")
 
-        file_id = str(args.get("file_id") or "").strip()
-        if not file_id:
-            log.error("Missing file_id")
-            return ToolResult.fail("Missing 'file_id' argument", logs=log.entries_dict())
-
-        if not _FILE_ID_RE.match(file_id):
-            log.error("Invalid file_id format", file_id=file_id)
-            return ToolResult.fail(
-                f"Invalid file_id format '{file_id}'. "
-                f"Expected 'chatatt_<uuid>', 'ragdoc_<uuid>_original', or 'colexp_<uuid>'.",
-                logs=log.entries_dict(),
-            )
+        storage_uri = str(args.get("storage_uri") or "").strip()
+        legacy_file_id = str(args.get("file_id") or "").strip()
+        if not storage_uri and not legacy_file_id:
+            log.error("Missing storage_uri")
+            return ToolResult.fail("Missing 'storage_uri' argument", logs=log.entries_dict())
 
         user_id = ctx.user_id
         if not user_id:
@@ -277,7 +270,7 @@ class FileAnalyzeTool(VersionedTool):
                 logs=log.entries_dict(),
             )
 
-        log.info("Analyzing file", file_id=file_id)
+        log.info("Analyzing file", storage_uri=storage_uri or None, file_id=legacy_file_id or None)
 
         try:
             session_factory = get_session_factory()
@@ -286,13 +279,17 @@ class FileAnalyzeTool(VersionedTool):
                     session, tenant_id=ctx.tenant_id, user_id=user_id
                 )
                 service = FileDeliveryService(session, repo_factory)
-                resolved = await service.resolve(file_id, owner_id=str(user_id))
+                if storage_uri:
+                    resolved = await service.resolve_storage_uri(storage_uri, owner_id=str(user_id))
+                else:
+                    resolved = await service.resolve(legacy_file_id, owner_id=str(user_id))
+                    storage_uri = FileDeliveryService.make_storage_uri(resolved.bucket, resolved.key)
 
                 payload = await s3_manager.get_object(resolved.bucket, resolved.key)
                 if payload is None:
-                    log.error("Failed to load file from storage", file_id=file_id)
+                    log.error("Failed to load file from storage", storage_uri=storage_uri)
                     return ToolResult.fail(
-                        f"File '{file_id}' exists in database but could not be loaded from storage.",
+                        f"File '{storage_uri}' exists in storage metadata but could not be loaded from storage.",
                         logs=log.entries_dict(),
                     )
 
@@ -328,12 +325,17 @@ class FileAnalyzeTool(VersionedTool):
 
                 log.info(
                     "File analyzed",
-                    file_id=file_id,
+                    file_id=resolved.file_id,
+                    storage_uri=storage_uri,
                     format=result["format"],
                     sheets=len(result["sheets"]),
                 )
                 return ToolResult.ok(
-                    data=result,
+                    data={
+                        "storage_uri": storage_uri,
+                        "file_id": resolved.file_id,
+                        **result,
+                    },
                     message=f"Analyzed '{fname}' ({result['format']}, {len(result['sheets'])} sheet(s)).",
                     logs=log.entries_dict(),
                 )

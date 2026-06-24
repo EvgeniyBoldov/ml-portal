@@ -24,6 +24,7 @@ async def test_file_generate_commits_created_attachment(monkeypatch):
     attachment_payload = {
         "id": str(uuid4()),
         "file_id": f"chatatt_{uuid4()}",
+        "storage_uri": "s3://chat-bucket/chats/example/generated/example.txt",
         "file_name": "example.txt",
         "size_bytes": 5,
     }
@@ -57,5 +58,6 @@ async def test_file_generate_commits_created_attachment(monkeypatch):
     )
 
     assert result.success is True
+    assert result.data["storage_uri"] == "s3://chat-bucket/chats/example/generated/example.txt"
     create_generated_attachment.assert_awaited_once()
     session.commit.assert_awaited_once()
