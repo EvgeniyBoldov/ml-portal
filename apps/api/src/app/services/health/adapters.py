@@ -8,7 +8,8 @@ from app.models.model_registry import Model
 from app.models.tool_instance import ToolInstance
 from app.services.health.base import HealthCheckAdapter, HealthProbeResult, HealthStatus
 from app.services.mcp_jsonrpc_client import mcp_initialize
-from app.adapters.interfaces.embeddings import EmbeddingInterface, EmbeddingServiceFactory
+from app.adapters.interfaces.embeddings import EmbeddingInterface
+from app.adapters.embeddings import EmbeddingServiceFactory
 from app.adapters.interfaces.llm import LLMClient
 from app.agents.runtime.rerank_client import rerank_scores
 from app.core.logging import get_logger
