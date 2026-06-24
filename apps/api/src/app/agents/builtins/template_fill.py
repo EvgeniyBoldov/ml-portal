@@ -51,6 +51,7 @@ _OUTPUT_SCHEMA_V1 = {
     "type": "object",
     "properties": {
         "file_id": {"type": "string"},
+        "download_url": {"type": "string"},
         "filename": {"type": "string"},
         "size_bytes": {"type": "integer"},
         "format": {"type": "string"},
@@ -303,13 +304,17 @@ class TemplateFillTool(VersionedTool):
                 return ToolResult.ok(
                     data={
                         "file_id": file_id,
+                        "download_url": f"/api/v1/files/{file_id}/download",
                         "filename": safe_filename,
                         "size_bytes": len(filled_bytes),
                         "format": fmt,
                         "filled_placeholders": len(filled_keys),
                         "missing_placeholders": missing,
                     },
-                    message=f"Filled template '{filename}' ({fmt}, {len(filled_keys)} placeholders). Generated file_id: {file_id}.",
+                    message=(
+                        f"Filled template '{filename}' ({fmt}, {len(filled_keys)} placeholders). "
+                        f"Generated file_id: {file_id}."
+                    ),
                     logs=log.entries_dict(),
                 )
         except Exception as exc:

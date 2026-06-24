@@ -44,9 +44,6 @@ def build_iteration_result(
     sufficient_for_phase: bool = False,
     retryable: Optional[bool] = None,
     error_code: Optional[str] = None,
-    status: Optional[str] = None,
-    needs: Optional[list[Dict[str, Any]]] = None,
-    completion_kind: Optional[str] = None,
 ) -> Dict[str, Any]:
     return {
         "iteration": iteration,
@@ -60,9 +57,6 @@ def build_iteration_result(
         "sufficient_for_phase": bool(sufficient_for_phase),
         "retryable": retryable,
         "error_code": error_code,
-        "status": status,
-        "needs": list(needs or []),
-        "completion_kind": completion_kind,
         "signature": latest_iteration_signature(state),
     }
 
@@ -133,9 +127,6 @@ def latest_call_agent_iteration(state: RuntimeTurnState) -> Dict[str, Any]:
         "sufficient_for_phase": bool(last.sufficient_for_phase),
         "retryable": last.retryable,
         "error_code": last.error_code or "",
-        "status": last.status or "",
-        "needs": list(last.needs or []),
-        "completion_kind": last.completion_kind or "",
     }
 
 

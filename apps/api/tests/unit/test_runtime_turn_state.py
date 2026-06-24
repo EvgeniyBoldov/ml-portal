@@ -4,6 +4,7 @@ from uuid import uuid4
 
 from app.runtime.memory.components import MemoryBundle
 from app.runtime.turn_state import RuntimeTurnState
+from app.runtime.planner.iteration_policy import build_iteration_result, latest_call_agent_iteration
 
 
 def _state() -> RuntimeTurnState:
@@ -84,3 +85,25 @@ def test_runtime_turn_state_can_finalize_with_outline():
     assert state.can_finalize() is False
     state.completed_phase_ids = ["p1"]
     assert state.can_finalize() is True
+
+
+def test_runtime_turn_state_exposes_canonical_iteration_fields_for_planner_policy():
+    state = _state()
+    state.add_iteration_result(
+        build_iteration_result(
+            state=state,
+            iteration=2,
+            step_kind="call_agent",
+            agent_slug="ops",
+            phase_id="phase-1",
+            outcome="failed",
+            summary="temporary failure",
+            missing_inputs=["site"],
+            retryable=True,
+        )
+    )
+
+    latest = latest_call_agent_iteration(state)
+    assert latest["outcome"] == "failed"
+    assert latest["missing_inputs"] == ["site"]
+    assert latest["retryable"] is True

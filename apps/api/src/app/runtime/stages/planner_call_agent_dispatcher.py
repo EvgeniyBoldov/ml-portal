@@ -306,9 +306,6 @@ class PlannerCallAgentDispatcher:
                 sufficient_for_phase=bool(last_agent_result.get("sufficient_for_phase", False)),
                 retryable=retryable,
                 error_code=(error_code or None),
-                status=status_str,
-                needs=needs_data,
-                completion_kind=completion_kind_str,
             )
         )
         self.result = CallAgentDispatchResult(outcome="continue")

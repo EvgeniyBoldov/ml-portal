@@ -143,7 +143,15 @@ class SynthesizerInputBuilder:
                         {
                             "file_id": att.get("file_id"),
                             "file_name": att.get("file_name") or att.get("name") or "file",
-                            "download_url": att.get("download_url") or att.get("url") or "",
+                            "download_url": (
+                                att.get("download_url")
+                                or att.get("url")
+                                or (
+                                    f"/api/v1/files/{att.get('file_id')}/download"
+                                    if att.get("file_id")
+                                    else ""
+                                )
+                            ),
                             "content_type": att.get("content_type") or "",
                             "size_bytes": att.get("size_bytes"),
                         }

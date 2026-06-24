@@ -277,10 +277,11 @@ class AgentExecutor:
                         if isinstance(result_payload, dict):
                             file_id = result_payload.get("file_id")
                             if file_id:
+                                download_url = result_payload.get("download_url") or f"/api/v1/files/{file_id}/download"
                                 attachments.append({
                                     "file_id": file_id,
                                     "file_name": result_payload.get("file_name") or result_payload.get("filename") or "file",
-                                    "download_url": result_payload.get("download_url") or "",
+                                    "download_url": download_url,
                                     "content_type": result_payload.get("content_type") or "",
                                     "size_bytes": result_payload.get("size_bytes"),
                                 })

@@ -166,6 +166,11 @@ class CapabilityCardBuilder:
                     lines.append(
                         f"    - `{operation.operation}` ({self._text(summary_op.title) or operation.name}){suffix}"
                     )
+                if collection_type == "template":
+                    lines.append(
+                        "  - правило для template: `row_id` для `template.get_schema` и `template.fill` "
+                        "берётся только из `template.list.row_id`; не придумывай промежуточные метки или поиск-результаты."
+                    )
             else:
                 lines.append("  - доступные действия: нет")
 

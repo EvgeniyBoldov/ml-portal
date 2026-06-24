@@ -56,6 +56,8 @@ class StructuredAnswerService:
         for att in attachments or []:
             file_id = att.get("file_id")
             download_url = att.get("download_url") or att.get("url")
+            if not download_url and file_id:
+                download_url = f"/api/v1/files/{file_id}/download"
             name = att.get("file_name") or att.get("name") or "file"
             if not file_id and not download_url:
                 continue
