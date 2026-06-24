@@ -222,20 +222,13 @@ class CollectionDocSearchTool(VersionedTool):
                 # 4. Embed query
                 await EmbeddingServiceFactory.ensure_model_registered_async(session, embedding_alias)
                 embedding_service = EmbeddingServiceFactory.get_service(embedding_alias)
-                is_mock = embedding_service.__class__.__name__ == "MockEmbeddingService"
                 model_info = embedding_service.get_model_info()
                 log.info(
                     "Embedding model resolved",
                     alias=embedding_alias,
                     provider=model_info.provider if hasattr(model_info, "provider") else "unknown",
                     dimensions=model_info.dimensions if hasattr(model_info, "dimensions") else None,
-                    is_mock=is_mock,
                 )
-                if is_mock:
-                    log.warning(
-                        "Using mock embedding service — this will produce random vectors and empty search results",
-                        alias=embedding_alias,
-                    )
 
                 query_embedding = await asyncio.to_thread(
                     embedding_service.embed_texts, [query]

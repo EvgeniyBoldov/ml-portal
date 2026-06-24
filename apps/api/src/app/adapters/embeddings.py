@@ -1,11 +1,10 @@
 """
-Embedding service factory and implementations
+Embedding service factory and implementations.
 
 Supports:
 - Local SentenceTransformer models
-- OpenAI API (text-embedding-3-large, etc.)
+- OpenAI-compatible API embeddings
 - Local embedding service (HTTP API)
-- Mock for testing
 """
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
@@ -304,44 +303,6 @@ class LocalEmbeddingServiceProvider(EmbeddingInterface):
             raise
 
 
-class MockEmbeddingService(EmbeddingInterface):
-    """Mock embedding service for development"""
-    
-    def __init__(self, model_alias: str = "all-MiniLM-L6-v2", dimensions: int = 384):
-        self._model_alias = model_alias
-        self._version = "v1"
-        self._dimensions = dimensions
-    
-    def get_model_info(self) -> EmbeddingModelInfo:
-        """Get model information"""
-        return EmbeddingModelInfo(
-            alias=self._model_alias,
-            version=self._version,
-            dimensions=self._dimensions,
-            max_tokens=512,
-            description=f"Mock embedding model {self._model_alias}"
-        )
-    
-    def embed_texts(self, texts: List[str]) -> List[List[float]]:
-        """Generate mock embeddings"""
-        import random
-        random.seed(42)  # For deterministic results
-        
-        embeddings = []
-        for text in texts:
-            # Generate deterministic mock embedding based on text hash
-            text_hash = hash(text) % (2**32)
-            random.seed(text_hash)
-            embedding = [random.uniform(-1, 1) for _ in range(self._dimensions)]
-            embeddings.append(embedding)
-        
-        return embeddings
-    
-    def embed_text(self, text: str) -> List[float]:
-        """Embed single text"""
-        return self.embed_texts([text])[0]
-
-
 @dataclass
 class ModelConfig:
     """Model configuration from database"""
@@ -364,6 +325,13 @@ class EmbeddingServiceFactory:
     
     _services: Dict[str, EmbeddingInterface] = {}
     _model_configs: Dict[str, ModelConfig] = {}
+
+    @classmethod
+    def _raise_unconfigured_model(cls, model_alias: str) -> None:
+        raise RuntimeError(
+            f"Embedding model '{model_alias}' is not configured or could not be resolved. "
+            "Check model registry record, connector/provider mapping, instance/base_url, and credentials."
+        )
     
     @classmethod
     def _resolve_api_key(cls, api_key_ref: Optional[str]) -> Optional[str]:
@@ -376,13 +344,6 @@ class EmbeddingServiceFactory:
     @classmethod
     def _create_provider(cls, config: ModelConfig) -> EmbeddingInterface:
         """Create embedding provider based on config"""
-        settings = get_settings()
-        
-        # Mock mode
-        if getattr(settings, 'EMB_USE_MOCK', False):
-            dimensions = config.dimensions or 384
-            return MockEmbeddingService(config.alias, dimensions)
-        
         connector = (config.connector or "").lower()
         provider = config.provider.lower()
         
@@ -412,8 +373,10 @@ class EmbeddingServiceFactory:
             return LocalSentenceTransformerProvider(config.provider_model_name)
         
         else:
-            logger.warning(f"Unknown connector '{connector}'/provider '{provider}' for {config.alias}, using mock")
-            return MockEmbeddingService(config.alias, config.dimensions or 384)
+            raise RuntimeError(
+                f"Unsupported embedding connector/provider for model '{config.alias}': "
+                f"connector='{connector}', provider='{provider}'"
+            )
     
     @classmethod
     def register_model(cls, config: ModelConfig) -> None:
@@ -440,7 +403,7 @@ class EmbeddingServiceFactory:
         )
         mdata = result.mappings().first()
         if not mdata:
-            return
+            cls._raise_unconfigured_model(model_alias)
 
         extra = mdata["extra_config"] or {}
         cls.register_model(
@@ -478,11 +441,7 @@ class EmbeddingServiceFactory:
             cls._services[model_alias] = service
             return service
         
-        # Ultimate fallback: mock service
-        logger.warning(f"Model '{model_alias}' not found, using mock")
-        service = MockEmbeddingService(model_alias)
-        cls._services[model_alias] = service
-        return service
+        cls._raise_unconfigured_model(model_alias)
     
     @classmethod
     def _load_model_config_sync(cls, model_alias: str) -> Optional[ModelConfig]:

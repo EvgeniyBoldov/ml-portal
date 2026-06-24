@@ -65,7 +65,6 @@ class Settings(BaseSettings):
     LLM_TIMEOUT: int = Field(default=30, description="Request timeout in seconds")
     
     # Embedding runtime behavior flags.
-    EMB_USE_MOCK: bool = Field(default=False)
     EMB_OFFLINE: bool = Field(default=True, description="Disallow network downloads for embedding models")
     EMB_CACHE_DIR: str = Field(default="/tmp/sentence_transformers")
     
