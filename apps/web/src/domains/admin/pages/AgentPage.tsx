@@ -266,7 +266,7 @@ export function AgentPage() {
     if (field.key === 'status') {
       return {
         ...field,
-        badgeTone: agent?.lifecycle_status === 'deprecated' ? 'warn' : 'success',
+        badgeTone: (agent?.lifecycle_status === 'deprecated' ? 'warn' : 'success') as 'warn' | 'success',
       };
     }
     return field;
