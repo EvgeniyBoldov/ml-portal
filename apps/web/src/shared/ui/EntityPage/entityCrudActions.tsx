@@ -62,7 +62,7 @@ export function buildEntityCrudActions({
         </Button>,
       );
     }
-    if (onEdit) {
+    if (onEdit && lifecycleStatus !== 'deprecated') {
       actions.push(
         <Button key="edit" variant={primaryVariant} onClick={onEdit}>
           {editLabel}

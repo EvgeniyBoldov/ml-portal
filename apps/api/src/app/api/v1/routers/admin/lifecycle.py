@@ -25,6 +25,7 @@ class SoftDeleteBody(BaseModel):
 async def get_dependencies(
     kind: LifecycleKind,
     entity_id: uuid.UUID,
+    mode: Literal["soft", "hard"] = Query("hard"),
     cascade: bool = Query(False),
     full_entities: bool = Query(False, description="Return full entity list instead of sample"),
     session: AsyncSession = Depends(db_uow),
@@ -32,7 +33,13 @@ async def get_dependencies(
 ):
     svc = LifecycleAdminService(session)
     try:
-        dependencies = await svc.get_dependencies(kind, entity_id, cascade=cascade, full_entities=full_entities)
+        dependencies = await svc.get_dependencies(
+            kind,
+            entity_id,
+            mode=mode,
+            cascade=cascade,
+            full_entities=full_entities,
+        )
         return {"kind": kind, "entity_id": str(entity_id), "dependencies": dependencies}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

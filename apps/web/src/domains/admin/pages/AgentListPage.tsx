@@ -6,7 +6,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAgentList } from '@/shared/api/hooks';
 import { type Agent } from '@/shared/api/agents';
 import { EntityPageV2, Tab } from '@/shared/ui/EntityPage';
-import { DataTable, type DataTableColumn, Badge, Button, Input } from '@/shared/ui';
+import { DataTable, type DataTableColumn, Button, Input, LifecycleStatusBadge } from '@/shared/ui';
 
 export function AgentListPage() {
   const navigate = useNavigate();
@@ -30,29 +30,40 @@ export function AgentListPage() {
       ),
     },
     {
-      key: 'current_version_id',
-      label: 'ВЕРСИЯ',
+      key: 'lifecycle_status',
+      label: 'СТАТУС',
+      width: 120,
+      filter: {
+        kind: 'select',
+        placeholder: 'Все статусы',
+        options: [
+          { value: 'active', label: 'Active' },
+          { value: 'deprecated', label: 'Deprecated' },
+        ],
+        getValue: (agent) => agent.lifecycle_status ?? 'active',
+      },
+      render: (agent) => (
+        <LifecycleStatusBadge
+          lifecycleStatus={agent.lifecycle_status}
+          deprecatedAt={agent.deprecated_at}
+          retentionDays={agent.retention_days}
+        />
+      ),
+    },
+    {
+      key: 'current_version_number',
+      label: 'ОСН. ВЕРСИЯ',
       width: 120,
       filter: {
         kind: 'select',
         placeholder: 'Все варианты',
         options: [
-          { value: 'has_version', label: 'Есть версия' },
-          { value: 'no_version', label: 'Нет версии' },
+          { value: 'has_version', label: 'Есть основная версия' },
+          { value: 'no_version', label: 'Нет основной версии' },
         ],
-        getValue: (agent) => (agent.current_version_id ? 'has_version' : 'no_version'),
+        getValue: (agent) => (agent.current_version_number != null ? 'has_version' : 'no_version'),
       },
-      render: (agent) => agent.current_version_id ? (
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-          <Badge tone="success">Активна</Badge>
-          {agent.lifecycle_status === 'deprecated' && <Badge tone="warn">Deprecated</Badge>}
-        </div>
-      ) : (
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-          <Badge tone="neutral">Нет версии</Badge>
-          {agent.lifecycle_status === 'deprecated' && <Badge tone="warn">Deprecated</Badge>}
-        </div>
-      ),
+      render: (agent) => agent.current_version_number != null ? `v${agent.current_version_number}` : '—',
     },
     {
       key: 'description',

@@ -8,7 +8,7 @@ import { useUsers } from '@shared/api/hooks/useAdmin';
 import { useTenants } from '@shared/hooks/useTenants';
 import type { Tenant } from '@shared/api/tenant';
 import { EntityPageV2, Tab } from '@/shared/ui/EntityPage';
-import { DataTable, type DataTableColumn, Badge, Button, Input } from '@/shared/ui';
+import { DataTable, type DataTableColumn, Badge, Button, Input, LifecycleStatusBadge } from '@/shared/ui';
 import { ADMIN_ACTION_LABELS, ADMIN_ENTITY_LABELS } from '@/shared/constants/adminLabels';
 
 const ROLE_CONFIG: Record<string, { label: string; tone: 'danger' | 'warn' | 'info' | 'neutral' }> = {
@@ -133,7 +133,13 @@ export function UsersListPage() {
           <Badge tone={user.is_active ? 'success' : 'neutral'}>
             {user.is_active ? 'Активен' : 'Неактивен'}
           </Badge>
-          {user.lifecycle_status === 'deprecated' && <Badge tone="warn">Deprecated</Badge>}
+          {user.lifecycle_status === 'deprecated' && (
+            <LifecycleStatusBadge
+              lifecycleStatus={user.lifecycle_status}
+              deprecatedAt={user.deprecated_at}
+              retentionDays={user.retention_days}
+            />
+          )}
         </div>
       ),
     },

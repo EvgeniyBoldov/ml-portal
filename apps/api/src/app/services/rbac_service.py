@@ -78,6 +78,8 @@ class RbacService:
     ) -> RbacRule:
         """Update rule fields."""
         rule = await self.get_rule(rule_id)
+        if getattr(rule, "lifecycle_status", "active") != "active":
+            raise ValidationError("deprecated")
         next_resource_type = resource_type or rule.resource_type
         next_resource_id = resource_id or rule.resource_id
         await self._validate_resource_binding(next_resource_type, next_resource_id)

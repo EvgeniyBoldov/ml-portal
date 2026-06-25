@@ -74,6 +74,8 @@ class AsyncTenantsService:
         existing = await self.repo.get_by_id(uuid.UUID(tenant_id))
         if not existing:
             return None
+        if getattr(existing, "lifecycle_status", "active") != "active":
+            raise ValueError("deprecated")
         prev_alias = getattr(existing, "embedding_model_alias", None) if existing else None
         default_flag = update_data.pop("is_default", None)
 

@@ -188,6 +188,13 @@ const INFO_FIELDS: FieldConfig[] = [
     placeholder: 'network-assistant',
   },
   {
+    key: 'status',
+    type: 'badge',
+    label: 'Статус',
+    badgeTone: 'success',
+    editable: false,
+  },
+  {
     key: 'description',
     type: 'textarea',
     label: 'Описание',
@@ -256,6 +263,12 @@ export function AgentPage() {
     if (field.key === 'slug') {
       return { ...field, editable: mode === 'create' };
     }
+    if (field.key === 'status') {
+      return {
+        ...field,
+        badgeTone: agent?.lifecycle_status === 'deprecated' ? 'warn' : 'success',
+      };
+    }
     return field;
   });
 
@@ -288,13 +301,19 @@ export function AgentPage() {
   const primaryVersion = agent?.versions?.find((v: AgentVersionInfo) => v.status === 'published') || agent?.versions?.[0];
 
   // ─── Derived data for blocks ───
-  const infoData = mode === 'edit' || mode === 'create' ? formData : {
-    slug: agent?.slug || '',
-    name: agent?.name || '',
-    description: agent?.description || '',
-    tags: agent?.tags || [],
-    provides_keys: agent?.provides_keys || [],
-  };
+  const infoData = mode === 'edit' || mode === 'create'
+    ? {
+        ...formData,
+        status: agent?.lifecycle_status === 'deprecated' ? 'Deprecated' : 'Active',
+      }
+    : {
+        slug: agent?.slug || '',
+        name: agent?.name || '',
+        status: agent?.lifecycle_status === 'deprecated' ? 'Deprecated' : 'Active',
+        description: agent?.description || '',
+        tags: agent?.tags || [],
+        provides_keys: agent?.provides_keys || [],
+      };
 
   const execData = mode === 'edit' || mode === 'create' ? formData : {
     model: agent?.model || '',
@@ -430,6 +449,13 @@ export function AgentPage() {
         onSave={handleSave}
         onCancel={handleCancel}
         onDelete={handleDelete}
+        headerActions={
+          mode === 'view' && agent?.lifecycle_status === 'deprecated' ? (
+            <Button variant="outline" onClick={() => setShowRestoreConfirm(true)}>
+              Восстановить
+            </Button>
+          ) : undefined
+        }
       >
       <Tab
         title="Обзор"
@@ -444,8 +470,6 @@ export function AgentPage() {
             onSave: handleSave,
             onCancel: handleCancel,
             onDelete: () => setShowDeleteConfirm(true),
-            onRestore: () => setShowRestoreConfirm(true),
-            restorePending: showRestoreConfirm,
           })}
         >
           {/* Row 1: Basic Info (1/2) + Routing (1/2) */}

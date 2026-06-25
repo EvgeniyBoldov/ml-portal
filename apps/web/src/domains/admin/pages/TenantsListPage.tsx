@@ -8,7 +8,7 @@ import React, { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTenants } from '@shared/hooks/useTenants';
 import { EntityPageV2, Tab } from '@/shared/ui/EntityPage';
-import { DataTable, type DataTableColumn, Badge, Button, Input } from '@/shared/ui';
+import { DataTable, type DataTableColumn, Badge, Button, Input, LifecycleStatusBadge } from '@/shared/ui';
 import { ADMIN_ACTION_LABELS, ADMIN_ENTITY_LABELS } from '@/shared/constants/adminLabels';
 import type { Tenant } from '@shared/api/admin';
 
@@ -88,7 +88,13 @@ export function TenantsListPage() {
           <Badge tone={tenant.is_active ? 'success' : 'neutral'}>
             {tenant.is_active ? 'Активен' : 'Неактивен'}
           </Badge>
-          {tenant.lifecycle_status === 'deprecated' && <Badge tone="warn">Deprecated</Badge>}
+          {tenant.lifecycle_status === 'deprecated' && (
+            <LifecycleStatusBadge
+              lifecycleStatus={tenant.lifecycle_status}
+              deprecatedAt={tenant.deprecated_at}
+              retentionDays={tenant.retention_days}
+            />
+          )}
         </div>
       ),
     },

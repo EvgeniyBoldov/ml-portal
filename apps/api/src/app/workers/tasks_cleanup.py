@@ -12,6 +12,7 @@ from sqlalchemy import delete, select, func, text
 
 from app.models.audit_log import AuditLog
 from app.models.agent_run import AgentRun
+from app.models.chat import Chats
 from app.models.sandbox import SandboxSession
 from app.models.tenant import Tenants
 from app.models.user import Users
@@ -35,6 +36,8 @@ LIFECYCLE_MODELS = (
     ("collection", Collection),
     ("agent", Agent),
     ("rbac_rule", RbacRule),
+    ("chat", Chats),
+    ("sandbox_session", SandboxSession),
 )
 
 
@@ -168,6 +171,10 @@ def cleanup_deprecated_entities(self):
                     .where(model.lifecycle_status == "deprecated")
                     .where(model.deprecated_at.is_not(None))
                     .where(
+                        (model.deprecated_root_id.is_(None))
+                        | (model.deprecated_root_id == model.id)
+                    )
+                    .where(
                         now_expr
                         >= model.deprecated_at
                         + text(
@@ -183,7 +190,14 @@ def cleanup_deprecated_entities(self):
                 deleted_count = 0
                 for entity_id in expired_ids:
                     try:
-                        await LifecycleAdminService(session).hard_delete(kind, entity_id)
+                        entity = await session.get(model, entity_id)
+                        if entity is None:
+                            continue
+                        await LifecycleAdminService(session).hard_delete(
+                            kind,
+                            entity_id,
+                            cascade=bool(getattr(entity, "delete_cascade", False)),
+                        )
                         await session.commit()
                         deleted_count += 1
                     except ValueError as exc:

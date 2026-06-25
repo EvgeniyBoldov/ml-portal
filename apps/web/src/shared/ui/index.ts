@@ -10,6 +10,7 @@ export { default as Toggle } from './Toggle';
 export { default as ConfirmDialog } from './ConfirmDialog';
 export { default as LifecycleDeleteDialog } from './LifecycleDeleteDialog';
 export { default as LifecycleRestoreDialog } from './LifecycleRestoreDialog';
+export { default as LifecycleStatusBadge } from './LifecycleStatusBadge';
 export { DropdownMenu } from './DropdownMenu';
 export type { DropdownMenuItem, DropdownMenuProps } from './DropdownMenu';
 export { default as EmptyState } from './EmptyState';

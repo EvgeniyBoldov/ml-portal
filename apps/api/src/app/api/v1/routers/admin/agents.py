@@ -80,7 +80,13 @@ async def list_agents(
             allowed_collection_ids=a.allowed_collection_ids,
             provides_keys=a.provides_keys,
             lifecycle_status=getattr(a, "lifecycle_status", "active"),
+            deprecated_at=getattr(a, "deprecated_at", None),
+            retention_days=getattr(a, "retention_days", 14),
             versions_count=len(a.versions),
+            current_version_number=next(
+                (v.version for v in a.versions if str(v.id) == str(a.current_version_id)),
+                None,
+            ),
             created_at=a.created_at,
             updated_at=a.updated_at,
         )

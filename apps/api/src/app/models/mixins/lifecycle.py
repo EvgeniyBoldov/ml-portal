@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -30,6 +30,15 @@ class LifecycleMixin:
     deprecated_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     retention_days: Mapped[int] = mapped_column(
         Integer, nullable=False, default=14, server_default="14"
+    )
+    delete_cascade: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    deprecated_root_kind: Mapped[Optional[str]] = mapped_column(
+        String(32), nullable=True, index=True
+    )
+    deprecated_root_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), nullable=True, index=True
     )
 
     @property

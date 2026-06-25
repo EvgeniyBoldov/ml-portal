@@ -1,5 +1,5 @@
 import React from 'react';
-import { Badge, type DataTableColumn } from '@/shared/ui';
+import { Badge, LifecycleStatusBadge, type DataTableColumn } from '@/shared/ui';
 import {
   RBAC_EFFECT_LABELS,
   RBAC_EFFECT_TONES,
@@ -107,6 +107,23 @@ export function buildRbacRuleColumns({
 
   columns.push(
     {
+      key: 'effect',
+      label: 'Эффект',
+      width: 120,
+      sortable: true,
+      sortValue: (row) => row.effect,
+      filter: {
+        kind: 'select',
+        placeholder: 'Все эффекты',
+        options: [
+          { value: 'allow', label: 'Разрешён' },
+          { value: 'deny', label: 'Запрещён' },
+        ],
+        getValue: (row) => row.effect,
+      },
+      render: (row) => effectBadge(row.effect),
+    },
+    {
       key: 'resource',
       label: 'Ресурс',
       width: 240,
@@ -133,21 +150,27 @@ export function buildRbacRuleColumns({
       },
     },
     {
-      key: 'effect',
-      label: 'Эффект',
-      width: 120,
+      key: 'lifecycle_status',
+      label: 'Статус',
+      width: 150,
       sortable: true,
-      sortValue: (row) => row.effect,
+      sortValue: (row) => row.lifecycle_status ?? 'active',
       filter: {
         kind: 'select',
-        placeholder: 'Все эффекты',
+        placeholder: 'Все статусы',
         options: [
-          { value: 'allow', label: 'Разрешён' },
-          { value: 'deny', label: 'Запрещён' },
+          { value: 'active', label: 'Active' },
+          { value: 'deprecated', label: 'Deprecated' },
         ],
-        getValue: (row) => row.effect,
+        getValue: (row) => row.lifecycle_status ?? 'active',
       },
-      render: (row) => effectBadge(row.effect),
+      render: (row) => (
+        <LifecycleStatusBadge
+          lifecycleStatus={row.lifecycle_status}
+          deprecatedAt={row.deprecated_at}
+          retentionDays={row.retention_days}
+        />
+      ),
     },
     {
       key: 'created_at',

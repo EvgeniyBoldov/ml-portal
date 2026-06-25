@@ -11,8 +11,9 @@ from sqlalchemy.sql import func
 import uuid
 
 from .base import Base
+from .mixins.lifecycle import LifecycleMixin
 
-class Chats(Base):
+class Chats(Base, LifecycleMixin):
     """Chats table model"""
     __tablename__ = "chats"
     

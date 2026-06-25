@@ -3,6 +3,7 @@ import { apiRequest } from './http';
 export type LifecycleKind = 'tenant' | 'user' | 'collection' | 'agent' | 'rbac_rule';
 export type LifecycleMode = 'soft' | 'hard';
 export type DependencyWillBe =
+  | 'cascade_deprecated'
   | 'cascade_deleted'
   | 'migrated'
   | 'set_null'
@@ -49,11 +50,12 @@ export const lifecycleApi = {
   async getDependencies(
     kind: LifecycleKind,
     entityId: string,
-    params?: { cascade?: boolean; fullEntities?: boolean },
+    params?: { mode?: LifecycleMode; cascade?: boolean; fullEntities?: boolean },
   ): Promise<DependencyGraphResponse> {
+    const mode = params?.mode ?? 'hard';
     const cascade = Boolean(params?.cascade);
     const fullEntities = Boolean(params?.fullEntities);
-    return apiRequest(`/admin/lifecycle/${kind}/${entityId}/dependencies?cascade=${cascade}&full_entities=${fullEntities}`);
+    return apiRequest(`/admin/lifecycle/${kind}/${entityId}/dependencies?mode=${mode}&cascade=${cascade}&full_entities=${fullEntities}`);
   },
 
   async deleteEntity(

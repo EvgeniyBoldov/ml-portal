@@ -25,7 +25,7 @@ from app.services.tenant_migration_service import TenantMigrationService
 from app.services.tenants_service import AsyncTenantsService
 from app.services.sandbox_service import SandboxService
 
-LifecycleKind = Literal["tenant", "user", "collection", "agent", "rbac_rule"]
+LifecycleKind = Literal["tenant", "user", "collection", "agent", "rbac_rule", "chat", "sandbox_session"]
 
 
 @dataclass
@@ -64,21 +64,43 @@ class LifecycleAdminService:
     def __init__(self, session: AsyncSession):
         self.session = session
 
+    RESOURCE_KIND_MAP: dict[str, LifecycleKind] = {
+        "users": "user",
+        "collections": "collection",
+        "agents": "agent",
+        "rbac_rules": "rbac_rule",
+        "chats": "chat",
+        "sandbox_sessions": "sandbox_session",
+    }
+
+    LIFECYCLE_DEPENDENCY_RESOURCES = {
+        "users",
+        "collections",
+        "agents",
+        "rbac_rules",
+        "chats",
+        "sandbox_sessions",
+    }
+
     async def get_dependencies(
         self,
         kind: LifecycleKind,
         entity_id: uuid.UUID,
         *,
+        mode: Literal["soft", "hard"] = "hard",
         cascade: bool = False,
         full_entities: bool = False,
     ) -> list[dict[str, Any]]:
         direct = await self._get_direct_dependencies(kind, entity_id, full_entities=full_entities)
-        if not cascade:
-            return direct
-
-        visited: set[tuple[str, str]] = {(kind, str(entity_id))}
-        expanded = await self._expand_cascade_dependencies(direct, visited=visited, full_entities=full_entities)
-        return direct + expanded
+        expanded: list[dict[str, Any]] = []
+        if cascade:
+            visited: set[tuple[str, str]] = {(kind, str(entity_id))}
+            expanded = await self._expand_cascade_dependencies(direct, visited=visited, full_entities=full_entities)
+        return self._apply_dependency_mode_semantics(
+            [*direct, *expanded],
+            mode=mode,
+            cascade=cascade,
+        )
 
     async def _get_direct_dependencies(self, kind: LifecycleKind, entity_id: uuid.UUID, *, full_entities: bool = False) -> list[dict[str, Any]]:
         if kind == "tenant":
@@ -89,7 +111,7 @@ class LifecycleAdminService:
             return await self._collection_dependencies(entity_id, full_entities=full_entities)
         if kind == "agent":
             return await self._agent_dependencies(entity_id, full_entities=full_entities)
-        if kind == "rbac_rule":
+        if kind in {"rbac_rule", "chat", "sandbox_session"}:
             return []
         raise ValueError(f"Unsupported lifecycle kind: {kind}")
 
@@ -101,16 +123,10 @@ class LifecycleAdminService:
         full_entities: bool = False,
     ) -> list[dict[str, Any]]:
         expanded: list[dict[str, Any]] = []
-        resource_kind_map: dict[str, LifecycleKind] = {
-            "users": "user",
-            "collections": "collection",
-            "agents": "agent",
-            "rbac_rules": "rbac_rule",
-        }
 
         for dep in direct:
             resource_type = str(dep.get("resource_type") or "")
-            child_kind = resource_kind_map.get(resource_type)
+            child_kind = self.RESOURCE_KIND_MAP.get(resource_type)
             if child_kind is None:
                 continue
             entities = dep.get("entities") or []
@@ -141,6 +157,88 @@ class LifecycleAdminService:
                 expanded.extend(nested)
         return expanded
 
+    def _apply_dependency_mode_semantics(
+        self,
+        dependencies: list[dict[str, Any]],
+        *,
+        mode: Literal["soft", "hard"],
+        cascade: bool,
+    ) -> list[dict[str, Any]]:
+        if not cascade:
+            return dependencies
+
+        normalized: list[dict[str, Any]] = []
+        for dep in dependencies:
+            entry = dict(dep)
+            resource_type = str(entry.get("resource_type") or "")
+            if resource_type not in self.LIFECYCLE_DEPENDENCY_RESOURCES:
+                normalized.append(entry)
+                continue
+            if entry.get("will_be") == "blocker":
+                normalized.append(entry)
+                continue
+            entry["action"] = "cascade"
+            entry["will_be"] = "cascade_deprecated" if mode == "soft" else "cascade_deleted"
+            normalized.append(entry)
+        return normalized
+
+    @staticmethod
+    def _resource_counter_key(kind: LifecycleKind) -> str:
+        return {
+            "tenant": "tenants",
+            "user": "users",
+            "collection": "collections",
+            "agent": "agents",
+            "rbac_rule": "rbac_rules",
+            "chat": "chats",
+            "sandbox_session": "sandbox_sessions",
+        }[kind]
+
+    async def _apply_deprecated_state(
+        self,
+        kind: LifecycleKind,
+        entity_id: uuid.UUID,
+        *,
+        actor_id: uuid.UUID | None,
+        reason: str | None,
+        retention_days: int | None,
+        delete_cascade: bool,
+        root_kind: LifecycleKind,
+        root_id: uuid.UUID,
+        counts: dict[str, int] | None = None,
+    ) -> bool:
+        entity = await self._get_entity(kind, entity_id)
+        if entity is None:
+            return False
+        if kind == "tenant" and bool(getattr(entity, "is_platform_default", False)):
+            raise ValueError("cannot_delete_default_tenant")
+        if getattr(entity, "lifecycle_status", "active") == "deprecated":
+            if kind == root_kind and entity_id == root_id:
+                entity.delete_cascade = delete_cascade
+                if retention_days is not None:
+                    entity.retention_days = retention_days
+                if reason is not None:
+                    entity.deprecated_reason = reason
+            return False
+
+        entity.lifecycle_status = "deprecated"
+        entity.deprecated_at = datetime.now(timezone.utc)
+        entity.deprecated_by = actor_id
+        entity.deprecated_reason = reason
+        if retention_days is not None:
+            entity.retention_days = retention_days
+        entity.delete_cascade = delete_cascade
+        entity.deprecated_root_kind = root_kind
+        entity.deprecated_root_id = root_id
+
+        if kind in {"tenant", "user", "collection"} and hasattr(entity, "is_active"):
+            entity.is_active = False
+
+        if counts is not None:
+            resource_key = self._resource_counter_key(kind)
+            counts[resource_key] = counts.get(resource_key, 0) + 1
+        return True
+
     async def soft_delete(
         self,
         kind: LifecycleKind,
@@ -154,30 +252,64 @@ class LifecycleAdminService:
         entity = await self._get_entity(kind, entity_id)
         if entity is None:
             raise ValueError("not_found")
-        if kind == "tenant" and bool(getattr(entity, "is_platform_default", False)):
-            raise ValueError("cannot_delete_default_tenant")
+        await self._apply_deprecated_state(
+            kind,
+            entity_id,
+            actor_id=actor_id,
+            reason=reason,
+            retention_days=retention_days,
+            delete_cascade=cascade,
+            root_kind=kind,
+            root_id=entity_id,
+        )
 
-        entity.lifecycle_status = "deprecated"
-        entity.deprecated_at = datetime.now(timezone.utc)
-        entity.deprecated_by = actor_id
-        entity.deprecated_reason = reason
-        if retention_days is not None:
-            entity.retention_days = retention_days
-
-        if kind in {"tenant", "user", "collection"} and hasattr(entity, "is_active"):
-            entity.is_active = False
-
-        if kind == "collection":
-            await self._remove_collection_from_agent_bindings(entity_id)
+        cascaded_counts: dict[str, int] = {}
+        if cascade:
+            dependencies = await self.get_dependencies(
+                kind,
+                entity_id,
+                mode="soft",
+                cascade=True,
+                full_entities=True,
+            )
+            visited: set[tuple[LifecycleKind, str]] = {(kind, str(entity_id))}
+            for dep in dependencies:
+                resource_type = str(dep.get("resource_type") or "")
+                dep_kind = self.RESOURCE_KIND_MAP.get(resource_type)
+                if dep_kind is None:
+                    continue
+                for entity_data in dep.get("entities") or []:
+                    dep_id = str(entity_data.get("uuid") or "")
+                    if not dep_id:
+                        continue
+                    key = (dep_kind, dep_id)
+                    if key in visited:
+                        continue
+                    visited.add(key)
+                    try:
+                        dep_uuid = uuid.UUID(dep_id)
+                    except ValueError:
+                        continue
+                    await self._apply_deprecated_state(
+                        dep_kind,
+                        dep_uuid,
+                        actor_id=actor_id,
+                        reason=reason,
+                        retention_days=retention_days,
+                        delete_cascade=True,
+                        root_kind=kind,
+                        root_id=entity_id,
+                        counts=cascaded_counts,
+                    )
 
         return LifecycleReport(
             kind=kind,
             entity_id=str(entity_id),
             mode="soft",
             lifecycle_status="deprecated",
-            details={"retention_days": entity.retention_days},
+            details={"retention_days": entity.retention_days, "delete_cascade": cascade},
             migrated={},
-            cascaded={},
+            cascaded=cascaded_counts,
             set_null={},
             rbac_rules_removed=0,
             renamed=[],
@@ -190,33 +322,10 @@ class LifecycleAdminService:
             raise ValueError("not_found")
 
         restored_counts: dict[str, int] = {}
-        visited: set[tuple[str, str]] = {(kind, str(entity_id))}
         await self._restore_entity_state(kind, entity_id, restored_counts=restored_counts)
-
-        dependencies = await self.get_dependencies(kind, entity_id, cascade=True, full_entities=False)
-        resource_kind_map: dict[str, LifecycleKind] = {
-            "users": "user",
-            "collections": "collection",
-            "agents": "agent",
-            "rbac_rules": "rbac_rule",
-        }
-        for dep in dependencies:
-            resource_type = str(dep.get("resource_type") or "")
-            dep_kind = resource_kind_map.get(resource_type)
-            if dep_kind is None:
-                continue
-            for entity_data in dep.get("entities") or []:
-                dep_id = str(entity_data.get("uuid") or "")
-                if not dep_id:
-                    continue
-                key = (dep_kind, dep_id)
-                if key in visited:
-                    continue
-                visited.add(key)
-                try:
-                    await self._restore_entity_state(dep_kind, uuid.UUID(dep_id), restored_counts=restored_counts)
-                except ValueError:
-                    continue
+        for dep_kind in ("tenant", "user", "collection", "agent", "rbac_rule", "chat", "sandbox_session"):
+            for dep_id in await self._find_cascaded_entity_ids(dep_kind, root_kind=kind, root_id=entity_id):
+                await self._restore_entity_state(dep_kind, dep_id, restored_counts=restored_counts)
 
         await self.session.flush()
 
@@ -312,20 +421,19 @@ class LifecycleAdminService:
 
             await self.session.delete(entity)
             await self.session.flush()
-
-        return LifecycleReport(
-            kind=kind,
-            entity_id=str(entity_id),
-            mode="hard",
-            lifecycle_status="deleted",
-            details={} if cascade else {"migrated_to_tenant_id": str(default_tenant.id)},
-            migrated=migrated_counts,
-            cascaded=cascaded_counts,
-            set_null={},
-            rbac_rules_removed=removed_rules,
-            renamed=[{"old": old, "new": new} for (old, new) in renamed_collections],
-            restored={},
-        )
+            return LifecycleReport(
+                kind=kind,
+                entity_id=str(entity_id),
+                mode="hard",
+                lifecycle_status="deleted",
+                details={} if cascade else {"migrated_to_tenant_id": str(default_tenant.id)},
+                migrated=migrated_counts,
+                cascaded=cascaded_counts,
+                set_null={},
+                rbac_rules_removed=removed_rules,
+                renamed=[{"old": old, "new": new} for (old, new) in renamed_collections],
+                restored={},
+            )
 
         if kind == "user":
             entity = await self.session.get(Users, entity_id)
@@ -437,6 +545,46 @@ class LifecycleAdminService:
                 restored={},
             )
 
+        if kind == "chat":
+            entity = await self.session.get(Chats, entity_id)
+            if entity is None:
+                raise ValueError("not_found")
+            await self.session.delete(entity)
+            await self.session.flush()
+            return LifecycleReport(
+                kind=kind,
+                entity_id=str(entity_id),
+                mode="hard",
+                lifecycle_status="deleted",
+                details={},
+                migrated={},
+                cascaded={},
+                set_null={},
+                rbac_rules_removed=0,
+                renamed=[],
+                restored={},
+            )
+
+        if kind == "sandbox_session":
+            entity = await self.session.get(SandboxSession, entity_id)
+            if entity is None:
+                raise ValueError("not_found")
+            sandbox_service = SandboxService(self.session)
+            await sandbox_service.delete_session(entity_id)
+            return LifecycleReport(
+                kind=kind,
+                entity_id=str(entity_id),
+                mode="hard",
+                lifecycle_status="deleted",
+                details={},
+                migrated={},
+                cascaded={},
+                set_null={},
+                rbac_rules_removed=0,
+                renamed=[],
+                restored={},
+            )
+
         raise ValueError(f"Unsupported lifecycle kind: {kind}")
 
     async def _remove_collection_from_agent_bindings(self, collection_id: uuid.UUID) -> None:
@@ -462,11 +610,40 @@ class LifecycleAdminService:
             "collection": Collection,
             "agent": Agent,
             "rbac_rule": RbacRule,
+            "chat": Chats,
+            "sandbox_session": SandboxSession,
         }
         model = model_map.get(kind)
         if model is None:
             return None
         return await self.session.get(model, entity_id)
+
+    async def _find_cascaded_entity_ids(
+        self,
+        kind: LifecycleKind,
+        *,
+        root_kind: LifecycleKind,
+        root_id: uuid.UUID,
+    ) -> list[uuid.UUID]:
+        model_map = {
+            "tenant": Tenants,
+            "user": Users,
+            "collection": Collection,
+            "agent": Agent,
+            "rbac_rule": RbacRule,
+            "chat": Chats,
+            "sandbox_session": SandboxSession,
+        }
+        model = model_map[kind]
+        result = await self.session.execute(
+            select(model.id).where(
+                model.lifecycle_status == "deprecated",
+                model.deprecated_root_kind == root_kind,
+                model.deprecated_root_id == root_id,
+                model.id != root_id,
+            )
+        )
+        return list(result.scalars().all())
 
     async def _restore_entity_state(
         self,
@@ -485,6 +662,9 @@ class LifecycleAdminService:
         entity.deprecated_at = None
         entity.deprecated_by = None
         entity.deprecated_reason = None
+        entity.delete_cascade = False
+        entity.deprecated_root_kind = None
+        entity.deprecated_root_id = None
         if kind in {"tenant", "user", "collection"} and hasattr(entity, "is_active"):
             entity.is_active = True
 
@@ -494,6 +674,8 @@ class LifecycleAdminService:
             "collection": "collections",
             "agent": "agents",
             "rbac_rule": "rbac_rules",
+            "chat": "chats",
+            "sandbox_session": "sandbox_sessions",
         }.get(kind)
         if resource_key is not None:
             restored_counts[resource_key] = restored_counts.get(resource_key, 0) + 1
@@ -737,6 +919,7 @@ class LifecycleAdminService:
         mapping = {
             "users": f"/admin/users/{entity_id}",
             "collections": f"/admin/collections/{entity_id}",
+            "agents": f"/admin/agents/{entity_id}",
             "sandbox_sessions": f"/sandbox/{entity_id}",
             "rbac_rules": f"/admin/rbac/{entity_id}",
             "tenants": f"/admin/tenants/{entity_id}",

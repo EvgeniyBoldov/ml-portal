@@ -16,7 +16,7 @@ import { buildEntityCrudActions } from '@/shared/ui/EntityPage/entityCrudActions
 import { useRbacRuleEditor } from '@/shared/hooks/useRbacRuleEditor';
 import { EntityPageV2, Tab, type BreadcrumbItem } from '@/shared/ui/EntityPage';
 import { Block } from '@/shared/ui/GridLayout';
-import { Badge, LifecycleDeleteDialog, Select } from '@/shared/ui';
+import { Badge, Button, LifecycleDeleteDialog, Select } from '@/shared/ui';
 import LifecycleRestoreDialog from '@/shared/ui/LifecycleRestoreDialog';
 import { useSuccessToast } from '@/shared/ui/Toast';
 import {
@@ -283,6 +283,13 @@ export function RbacRulePage() {
         onEdit={handleEdit}
         onSave={handleSave}
         onCancel={handleCancel}
+        headerActions={
+          mode === 'view' && rule?.lifecycle_status === 'deprecated' ? (
+            <Button variant="outline" onClick={() => setShowRestoreConfirm(true)}>
+              Восстановить
+            </Button>
+          ) : undefined
+        }
         actionButtons={
           mode === 'view'
             ? buildEntityCrudActions({
@@ -291,8 +298,6 @@ export function RbacRulePage() {
                 lifecycleStatus: rule?.lifecycle_status,
                 onEdit: handleEdit,
                 onDelete: handleDelete,
-                onRestore: () => setShowRestoreConfirm(true),
-                restorePending: showRestoreConfirm,
               })
             : undefined
         }
@@ -432,6 +437,11 @@ export function RbacRulePage() {
         entityLabel="RBAC правило"
         onCancel={() => setShowDeleteConfirm(false)}
         onSuccess={() => {
+          queryClient.invalidateQueries({ queryKey: qk.rbac.all() });
+          if (id) {
+            queryClient.invalidateQueries({ queryKey: qk.rbac.detail(id) });
+          }
+          queryClient.invalidateQueries({ queryKey: qk.rbac.enrichedRules({}) });
           setShowDeleteConfirm(false);
           handleCancel();
         }}

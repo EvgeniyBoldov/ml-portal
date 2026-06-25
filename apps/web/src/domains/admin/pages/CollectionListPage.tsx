@@ -20,6 +20,7 @@ import {
   Badge,
   Button,
   Input,
+  LifecycleStatusBadge,
   useToast,
   type DataTableColumn,
 } from '@/shared/ui';
@@ -77,6 +78,18 @@ export function CollectionListPage() {
       ),
     },
     {
+      key: 'lifecycle_status',
+      label: 'LIFECYCLE',
+      width: 150,
+      render: (row) => (
+        <LifecycleStatusBadge
+          lifecycleStatus={row.lifecycle_status}
+          deprecatedAt={row.deprecated_at}
+          retentionDays={row.retention_days}
+        />
+      ),
+    },
+    {
       key: 'collection_type',
       label: 'ТИП',
       width: 120,
@@ -127,16 +140,6 @@ export function CollectionListPage() {
       render: (row) => (
         <Badge tone={row.is_active ? 'success' : 'danger'}>
           {row.is_active ? 'Активна' : 'Неактивна'}
-        </Badge>
-      ),
-    },
-    {
-      key: 'lifecycle_status',
-      label: 'LIFECYCLE',
-      width: 130,
-      render: (row) => (
-        <Badge tone={row.lifecycle_status === 'deprecated' ? 'warn' : 'neutral'}>
-          {row.lifecycle_status === 'deprecated' ? 'Deprecated' : 'Active'}
         </Badge>
       ),
     },

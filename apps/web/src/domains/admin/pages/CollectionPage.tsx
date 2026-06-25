@@ -293,7 +293,7 @@ export function CollectionPage() {
       delete: (id) => collectionsApi.delete(id),
     },
     queryKeys: {
-      list: qk.collections.adminList(),
+      list: qk.collections.all(),
       detail: (id) => qk.collections.detail(id),
     },
     getInitialFormData: (col) => ({
@@ -735,6 +735,13 @@ export function CollectionPage() {
         onEdit={handleEdit}
         onSave={handleSave}
         onCancel={handleCancel}
+        headerActions={
+          mode === 'view' && collection?.lifecycle_status === 'deprecated' ? (
+            <Button variant="outline" onClick={() => setShowRestoreConfirm(true)}>
+              Восстановить
+            </Button>
+          ) : undefined
+        }
       >
         <Tab
           title="Обзор"
@@ -754,8 +761,6 @@ export function CollectionPage() {
               onSave: handleSave,
               onCancel: handleCancel,
               onDelete: handleDelete,
-              onRestore: () => setShowRestoreConfirm(true),
-              restorePending: showRestoreConfirm,
             }),
             extra: mode === 'view' && (isDocumentCollection || isTemplateCollection)
               ? [

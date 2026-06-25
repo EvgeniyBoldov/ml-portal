@@ -60,6 +60,8 @@ class AgentResponse(BaseModel):
     allowed_collection_ids: Optional[List[UUID]] = None
     provides_keys: Optional[List[str]] = None
     lifecycle_status: str = "active"
+    deprecated_at: Optional[datetime] = None
+    retention_days: int = 14
     created_at: datetime
     updated_at: datetime
 
@@ -83,7 +85,10 @@ class AgentListItem(BaseModel):
     allowed_collection_ids: Optional[List[UUID]] = None
     provides_keys: Optional[List[str]] = None
     lifecycle_status: str = "active"
+    deprecated_at: Optional[datetime] = None
+    retention_days: int = 14
     versions_count: int = 0
+    current_version_number: Optional[int] = None
     created_at: datetime
     updated_at: datetime
 

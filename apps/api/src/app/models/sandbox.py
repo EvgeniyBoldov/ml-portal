@@ -18,9 +18,10 @@ from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
+from app.models.mixins.lifecycle import LifecycleMixin
 
 
-class SandboxSession(Base):
+class SandboxSession(Base, LifecycleMixin):
     """
     Admin sandbox workspace with phantom overrides and runs.
     Sliding TTL: expires_at = last_activity_at + ttl_days.

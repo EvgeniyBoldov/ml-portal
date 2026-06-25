@@ -77,6 +77,8 @@ class AsyncUsersService:
         user = await self.users_repo.get_by_id(user_id)
         if not user:
             raise ValueError("User not found")
+        if getattr(user, "lifecycle_status", "active") != "active":
+            raise ValueError("deprecated")
         
         # Update fields
         if "email" in user_data:

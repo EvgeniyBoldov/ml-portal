@@ -60,6 +60,7 @@ export function useAgentDetail(id: string) {
     getInitialFormData: (entity) => ({
       slug: entity?.slug ?? '',
       name: entity?.name ?? '',
+      status: entity?.lifecycle_status === 'deprecated' ? 'Deprecated' : 'Active',
       description: entity?.description ?? '',
       model: entity?.model ?? '',
       temperature: entity?.temperature ?? null,

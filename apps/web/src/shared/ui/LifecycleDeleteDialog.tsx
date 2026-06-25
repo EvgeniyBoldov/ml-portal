@@ -24,6 +24,7 @@ type Props = {
 };
 
 const GROUP_ORDER: Array<DependencyEntry['will_be']> = [
+  'cascade_deprecated',
   'cascade_deleted',
   'migrated',
   'set_null',
@@ -32,6 +33,7 @@ const GROUP_ORDER: Array<DependencyEntry['will_be']> = [
 ];
 
 const GROUP_TITLE: Record<string, string> = {
+  cascade_deprecated: 'Будет помечено на удаление',
   cascade_deleted: 'Будет удалено',
   migrated: 'Будет перенесено',
   set_null: 'Будет отвязано',
@@ -40,6 +42,7 @@ const GROUP_TITLE: Record<string, string> = {
 };
 
 const RESTORE_GROUP_TITLE: Record<string, string> = {
+  cascade_deprecated: 'Будет восстановлено',
   cascade_deleted: 'Будет восстановлено',
   migrated: 'Будет возвращено',
   set_null: 'Будет привязано',
@@ -63,6 +66,7 @@ function resourceLabel(type: string): string {
 }
 
 function groupAckLabel(groupType: string): string {
+  if (groupType === 'cascade_deprecated') return 'Подтверждаю каскадную пометку на удаление';
   if (groupType === 'cascade_deleted') return 'Подтверждаю каскадное удаление';
   if (groupType === 'migrated') return 'Подтверждаю перенос зависимостей';
   if (groupType === 'set_null') return 'Подтверждаю отвязку зависимостей';
@@ -167,7 +171,11 @@ export default function LifecycleDeleteDialog({
     let cancelled = false;
     setLoadingDeps(true);
     lifecycleApi
-      .getDependencies(kind, entityId, { cascade: action === 'restore' ? true : deleteDependents, fullEntities: true })
+      .getDependencies(kind, entityId, {
+        mode: action === 'restore' ? 'soft' : (deleteNow ? 'hard' : 'soft'),
+        cascade: action === 'restore' ? true : deleteDependents,
+        fullEntities: true,
+      })
       .then((res) => {
         if (!cancelled) setDeps(res.dependencies || []);
       })
@@ -180,7 +188,7 @@ export default function LifecycleDeleteDialog({
     return () => {
       cancelled = true;
     };
-  }, [open, action, kind, entityId, deleteDependents]);
+  }, [open, action, kind, entityId, deleteDependents, deleteNow]);
 
   const renderGroups = useMemo(() => {
     // Filter out technical join tables that shouldn't be shown in UI
@@ -189,11 +197,9 @@ export default function LifecycleDeleteDialog({
     visibleDeps.forEach((item) => {
       // Skip technical join tables from processing
       if (item.resource_type === 'tenant_bindings') return;
-      const isDirect = !item.details?.cascade_parent;
-      const targetType = deleteDependents && isDirect ? 'cascade_deleted' : item.will_be;
-      const arr = byType.get(targetType) ?? [];
+      const arr = byType.get(item.will_be) ?? [];
       arr.push(item);
-      byType.set(targetType, arr);
+      byType.set(item.will_be, arr);
     });
     return GROUP_ORDER
       .map((groupType) => {
@@ -204,7 +210,7 @@ export default function LifecycleDeleteDialog({
         return { groupType, entries: filteredEntries, total };
       })
       .filter((g) => g.entries.length > 0 && g.total > 0);
-  }, [deps, deleteDependents]);
+  }, [deps]);
 
   const requiresAckKeys = useMemo(() => {
     if (action === 'restore') return [];

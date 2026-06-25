@@ -67,12 +67,18 @@ class AgentRepository:
     async def list_agents(
         self,
         skip: int = 0,
-        limit: int = 100
+        limit: int = 100,
+        include_deprecated: bool = False,
     ) -> Tuple[List[Agent], int]:
         count_stmt = select(func.count()).select_from(Agent)
+        if not include_deprecated:
+            count_stmt = count_stmt.where(Agent.lifecycle_status != "deprecated")
         total = await self.session.scalar(count_stmt) or 0
 
-        stmt = select(Agent).order_by(Agent.slug).offset(skip).limit(limit)
+        stmt = select(Agent)
+        if not include_deprecated:
+            stmt = stmt.where(Agent.lifecycle_status != "deprecated")
+        stmt = stmt.order_by(Agent.slug).offset(skip).limit(limit)
         result = await self.session.execute(stmt)
 
         return list(result.scalars().all()), total

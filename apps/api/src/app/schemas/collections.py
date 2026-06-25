@@ -144,6 +144,8 @@ class CollectionResponse(BaseModel):
     source_contract: Optional[dict] = None
     status: str
     lifecycle_status: str = "active"
+    deprecated_at: Optional[str] = None
+    retention_days: int = 14
     status_details: Optional[dict] = None
     runtime_readiness: Optional[dict] = None
     table_name: Optional[str] = None

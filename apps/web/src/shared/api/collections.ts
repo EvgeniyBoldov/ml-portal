@@ -115,6 +115,8 @@ export interface Collection {
   source_contract?: Record<string, unknown> | null;
   status?: string;
   status_details?: Record<string, unknown> | null;
+  deprecated_at?: string | null;
+  retention_days?: number;
   table_name?: string;
   table_schema?: Record<string, unknown> | null;
   data_instance_id: string;

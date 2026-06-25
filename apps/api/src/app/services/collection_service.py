@@ -377,6 +377,8 @@ class CollectionService:
         collection = await self.get_by_id(collection_id)
         if not collection:
             raise CollectionNotFoundError(f"Collection {collection_id} not found")
+        if getattr(collection, "lifecycle_status", "active") != "active":
+            raise ConflictError("deprecated")
 
         if tenant_id is not _UNSET and tenant_id != collection.tenant_id:
             await self._reassign_collection_tenant(collection, tenant_id)

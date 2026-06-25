@@ -19,7 +19,7 @@ class DependencyEntry(BaseModel):
     resource_type: str
     count: int = Field(ge=0)
     action: str
-    will_be: Literal["cascade_deleted", "migrated", "set_null", "blocker", "already_deprecated"] = "cascade_deleted"
+    will_be: Literal["cascade_deprecated", "cascade_deleted", "migrated", "set_null", "blocker", "already_deprecated"] = "cascade_deleted"
     entities: list[DependencyEntity] = Field(default_factory=list, max_length=5)
     migration_target: str | None = None
     details: dict[str, Any] = Field(default_factory=dict)

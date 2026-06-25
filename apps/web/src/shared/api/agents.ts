@@ -24,6 +24,9 @@ export interface Agent {
   provides_keys?: string[] | null;
   versions_count?: number;
   lifecycle_status?: string;
+  deprecated_at?: string | null;
+  retention_days?: number;
+  current_version_number?: number | null;
   created_at: string;
   updated_at: string;
 }
