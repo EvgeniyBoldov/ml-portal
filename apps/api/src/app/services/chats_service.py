@@ -9,6 +9,7 @@ from app.adapters.s3_client import s3_manager
 from app.core.logging import get_logger
 from app.models.chat import Chats
 from app.models.chat_attachment import ChatAttachment
+from app.services.chat_visibility import is_sandbox_upload_chat
 
 logger = get_logger(__name__)
 
@@ -23,7 +24,7 @@ class ChatsService:
                 select(Chats).where(Chats.id == chat_id, Chats.owner_id == owner_id)
             )
         ).scalar_one_or_none()
-        if not chat:
+        if not chat or is_sandbox_upload_chat(chat):
             return False
 
         attachments = (

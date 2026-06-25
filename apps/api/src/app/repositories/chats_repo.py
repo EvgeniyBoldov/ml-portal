@@ -9,6 +9,7 @@ import uuid
 from app.models.chat import Chats, ChatMessages
 from app.repositories.base import AsyncTenantRepository
 from app.core.logging import get_logger
+from app.services.chat_visibility import is_sandbox_upload_chat, visible_chat_clause
 
 logger = get_logger(__name__)
 
@@ -27,12 +28,20 @@ class AsyncChatsRepository(AsyncTenantRepository[Chats]):
         await self.session.flush()
         return chat
     
-    async def get_user_chats(self, user_id: str, query: Optional[str] = None, 
-                            limit: int = 50, offset: int = 0) -> List[Chats]:
+    async def get_user_chats(
+        self,
+        user_id: str,
+        query: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+        include_internal: bool = False,
+    ) -> List[Chats]:
         """Get chats for a user with optional search"""
         stmt = select(Chats).where(
             Chats.owner_id == user_id
         ).order_by(desc(Chats.created_at))
+        if not include_internal:
+            stmt = stmt.where(visible_chat_clause(Chats))
         
         if query:
             search_term = f"%{query}%"
@@ -46,9 +55,12 @@ class AsyncChatsRepository(AsyncTenantRepository[Chats]):
         stmt = stmt.offset(offset).limit(limit)
         
         result = await self.session.execute(stmt)
-        return result.scalars().all()
+        chats = list(result.scalars().all())
+        if include_internal:
+            return chats
+        return [chat for chat in chats if not is_sandbox_upload_chat(chat)]
     
-    async def get_chat_by_id(self, chat_id: str) -> Optional[Chats]:
+    async def get_chat_by_id(self, chat_id: str, include_internal: bool = False) -> Optional[Chats]:
         """Get chat by ID"""
         result = await self.session.execute(
             select(Chats).where(Chats.id == chat_id)
@@ -57,6 +69,8 @@ class AsyncChatsRepository(AsyncTenantRepository[Chats]):
         if not chat:
             return None
         if self.user_id and chat.owner_id != self.user_id:
+            return None
+        if not include_internal and is_sandbox_upload_chat(chat):
             return None
         return chat
     

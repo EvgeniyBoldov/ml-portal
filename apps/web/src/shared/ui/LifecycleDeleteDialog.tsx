@@ -10,8 +10,11 @@ import {
 } from '@/shared/api/lifecycle';
 import { ApiError } from '@/shared/api/errors';
 
+type LifecycleAction = 'delete' | 'restore';
+
 type Props = {
   open: boolean;
+  action?: LifecycleAction;
   kind: LifecycleKind;
   entityId: string;
   entityLabel: string;
@@ -34,6 +37,14 @@ const GROUP_TITLE: Record<string, string> = {
   set_null: 'Будет отвязано',
   already_deprecated: 'Уже помечено',
   blocker: 'Блокирует удаление',
+};
+
+const RESTORE_GROUP_TITLE: Record<string, string> = {
+  cascade_deleted: 'Будет восстановлено',
+  migrated: 'Будет возвращено',
+  set_null: 'Будет привязано',
+  already_deprecated: 'Уже восстановлено',
+  blocker: 'Блокирует восстановление',
 };
 
 const RESOURCE_TITLE: Record<string, string> = {
@@ -125,6 +136,7 @@ function buildGroupTree(entries: DependencyEntry[]): TreeNode[] {
 
 export default function LifecycleDeleteDialog({
   open,
+  action = 'delete',
   kind,
   entityId,
   entityLabel,
@@ -146,6 +158,7 @@ export default function LifecycleDeleteDialog({
     setError('');
     setAck({});
     setDeleteNow(false);
+    setRetentionDays(14);
     setDeleteDependents(false);
   }, [open]);
 
@@ -154,7 +167,7 @@ export default function LifecycleDeleteDialog({
     let cancelled = false;
     setLoadingDeps(true);
     lifecycleApi
-      .getDependencies(kind, entityId, { cascade: deleteDependents, fullEntities: true })
+      .getDependencies(kind, entityId, { cascade: action === 'restore' ? true : deleteDependents, fullEntities: true })
       .then((res) => {
         if (!cancelled) setDeps(res.dependencies || []);
       })
@@ -167,7 +180,7 @@ export default function LifecycleDeleteDialog({
     return () => {
       cancelled = true;
     };
-  }, [open, kind, entityId, deleteDependents]);
+  }, [open, action, kind, entityId, deleteDependents]);
 
   const renderGroups = useMemo(() => {
     // Filter out technical join tables that shouldn't be shown in UI
@@ -194,9 +207,8 @@ export default function LifecycleDeleteDialog({
   }, [deps, deleteDependents]);
 
   const requiresAckKeys = useMemo(() => {
-    return renderGroups
-      .filter((g) => g.groupType !== 'blocker')
-      .map((g) => g.groupType);
+    if (action === 'restore') return [];
+    return renderGroups.filter((g) => g.groupType !== 'blocker').map((g) => g.groupType);
   }, [renderGroups]);
 
   const hasBlockers = useMemo(
@@ -206,26 +218,45 @@ export default function LifecycleDeleteDialog({
 
   const hasAllAcks = useMemo(() => requiresAckKeys.every((k) => ack[k] === true), [requiresAckKeys, ack]);
 
-  const confirmLabel = deleteNow ? 'Удалить сейчас' : 'Пометить на удаление';
-  const isDeleteDisabled = isPlatformDefault || saving || (deleteNow && (hasBlockers || !hasAllAcks));
+  const confirmLabel = action === 'restore'
+    ? 'Восстановить сейчас'
+    : deleteNow
+      ? 'Удалить сейчас'
+      : 'Пометить на удаление';
+  const isDeleteDisabled = action === 'restore'
+    ? saving
+    : isPlatformDefault || saving || (hasBlockers || !hasAllAcks);
   const dialogSize: 'md' | 'half' | 'lg' | 'xl' = 'lg';
+  const dialogTitle = action === 'restore' ? `Восстановление: ${entityLabel}` : `Удаление: ${entityLabel}`;
+  const dialogMessage = action === 'restore'
+    ? 'Проверьте зависимые элементы перед восстановлением.'
+    : 'Выберите режим удаления и проверьте последствия.';
+  const groupTitles = action === 'restore' ? RESTORE_GROUP_TITLE : GROUP_TITLE;
 
   const handleConfirm = async () => {
     setSaving(true);
     setError('');
     try {
-      const report = await lifecycleApi.deleteEntity(kind, entityId, {
-        mode: deleteNow ? 'hard' : 'soft',
-        force: deleteNow,
-        cascade: deleteDependents,
-        retention_days: !deleteNow ? retentionDays : undefined,
-      });
+      const report = action === 'restore'
+        ? await lifecycleApi.restoreEntity(kind, entityId)
+        : await lifecycleApi.deleteEntity(kind, entityId, {
+          mode: deleteNow ? 'hard' : 'soft',
+          force: deleteNow,
+          cascade: deleteDependents,
+          retention_days: !deleteNow ? retentionDays : undefined,
+        });
       onSuccess(report);
     } catch (e) {
       if (e instanceof ApiError && e.status === 409) {
-        setError(typeof e.details === 'string' ? e.details : 'Удаление заблокировано зависимостями');
+        setError(
+          typeof e.details === 'string'
+            ? e.details
+            : action === 'restore'
+              ? 'Восстановление заблокировано зависимостями'
+              : 'Удаление заблокировано зависимостями',
+        );
       } else {
-        setError(e instanceof Error ? e.message : 'Не удалось выполнить удаление');
+        setError(e instanceof Error ? e.message : action === 'restore' ? 'Не удалось выполнить восстановление' : 'Не удалось выполнить удаление');
       }
     } finally {
       setSaving(false);
@@ -235,59 +266,70 @@ export default function LifecycleDeleteDialog({
   return (
     <ConfirmDialog
       open={open}
-      title={`Удаление: ${entityLabel}`}
+      title={dialogTitle}
       confirmLabel={confirmLabel}
       cancelLabel="Отмена"
-      variant="danger"
+      variant={action === 'restore' ? 'info' : 'danger'}
       size={dialogSize}
-      confirmDisabled={isDeleteDisabled}
+      confirmDisabled={isDeleteDisabled || loadingDeps}
       confirmLoading={saving}
       onConfirm={handleConfirm}
       onCancel={onCancel}
-      message="Выберите режим удаления и проверьте последствия."
+      message={dialogMessage}
     >
       <div className={styles.stack}>
-        <div className={styles.section}>
-          <div className={styles.sectionTitle}>Режим удаления</div>
-          <label className={styles.modeCheckbox}>
-            <input
-              type="checkbox"
-              checked={deleteNow}
-              onChange={(e) => setDeleteNow(e.target.checked)}
-            />
-            <span>Удалить сейчас</span>
-          </label>
-          {!deleteNow && (
-            <label className={`${styles.fieldRow} ${styles.fieldRowInline}`}>
-              <span className={styles.label}>Срок хранения (дней)</span>
+        {action === 'delete' && (
+          <div className={styles.section}>
+            <div className={styles.sectionTitle}>Режим удаления</div>
+            <label className={styles.modeCheckbox}>
               <input
-                className={styles.input}
-                type="number"
-                min={0}
-                max={3650}
-                value={retentionDays}
-                onChange={(e) => setRetentionDays(Number(e.target.value || 14))}
+                type="checkbox"
+                checked={deleteNow}
+                onChange={(e) => setDeleteNow(e.target.checked)}
               />
-              <span className={styles.hint}>Через сколько дней GC удалит запись окончательно</span>
+              <span>Удалить сейчас</span>
             </label>
-          )}
-          <label className={styles.modeCheckbox}>
-            <input
-              type="checkbox"
-              checked={deleteDependents}
-              onChange={(e) => setDeleteDependents(e.target.checked)}
-            />
-            <span>Удалить зависимые</span>
-          </label>
-        </div>
+            {!deleteNow && (
+              <label className={`${styles.fieldRow} ${styles.fieldRowInline}`}>
+                <span className={styles.label}>Срок хранения (дней)</span>
+                <input
+                  className={styles.input}
+                  type="number"
+                  min={0}
+                  max={3650}
+                  value={retentionDays}
+                  onChange={(e) => setRetentionDays(Number(e.target.value || 14))}
+                />
+                <span className={styles.hint}>Через сколько дней GC удалит запись окончательно</span>
+              </label>
+            )}
+            <label className={styles.modeCheckbox}>
+              <input
+                type="checkbox"
+                checked={deleteDependents}
+                onChange={(e) => setDeleteDependents(e.target.checked)}
+              />
+              <span>Удалить зависимые</span>
+            </label>
+          </div>
+        )}
 
-        {isPlatformDefault && (
+        {action === 'restore' && (
+          <div className={styles.section}>
+            <div className={styles.sectionTitle}>Режим восстановления</div>
+            <div className={styles.depMeta}>Будут восстановлены только сущности в состоянии deprecated. Удалённые записи восстановить нельзя.</div>
+          </div>
+        )}
+
+        {action === 'delete' && isPlatformDefault && (
           <div className={styles.warningBox}>Нельзя удалить платформенный тенант по умолчанию</div>
         )}
 
         <div className={`${styles.section} ${styles.depsSection}`}>
           <div className={styles.hardHeaderRow}>
-            <div className={styles.sectionTitle}>Последствия удаления сейчас</div>
+            <div className={styles.sectionTitle}>
+              {action === 'restore' ? 'Что будет восстановлено' : 'Последствия удаления сейчас'}
+            </div>
           </div>
           {loadingDeps && <div className={styles.depMeta}>Загрузка зависимостей...</div>}
           {!loadingDeps && renderGroups.length === 0 && <div className={styles.depMeta}>Зависимости не найдены</div>}
@@ -300,25 +342,27 @@ export default function LifecycleDeleteDialog({
                     <div key={groupType} className={styles.groupWrap}>
                       <div className={`${styles.groupCard} ${styles[`group_${groupType}`]} ${groupType === 'blocker' ? styles.groupBlocker : ''}`}>
                         <div className={styles.groupHeader}>
-                          <span className={styles.groupTitle}>{GROUP_TITLE[groupType] ?? groupType}</span>
+                          <span className={styles.groupTitle}>{groupTitles[groupType] ?? groupType}</span>
                           <strong className={styles.groupTotal}>{total}</strong>
                         </div>
                         <div className={styles.groupBody}>
                           <AccordionTree nodes={tree} />
                         </div>
                       </div>
-                      <label className={styles.groupAck}>
-                        <input
-                          type="checkbox"
-                          checked={groupType === 'blocker' ? true : ack[groupType] === true}
-                          onChange={(e) => {
-                            if (groupType === 'blocker') return;
-                            setAck((prev) => ({ ...prev, [groupType]: e.target.checked }));
-                          }}
-                          disabled={groupType === 'blocker'}
-                        />
-                        <span>{groupType === 'blocker' ? 'Требует устранения блокера' : groupAckLabel(groupType)}</span>
-                      </label>
+                      {action === 'delete' && (
+                        <label className={styles.groupAck}>
+                          <input
+                            type="checkbox"
+                            checked={groupType === 'blocker' ? true : ack[groupType] === true}
+                            onChange={(e) => {
+                              if (groupType === 'blocker') return;
+                              setAck((prev) => ({ ...prev, [groupType]: e.target.checked }));
+                            }}
+                            disabled={groupType === 'blocker'}
+                          />
+                          <span>{groupType === 'blocker' ? 'Требует устранения блокера' : groupAckLabel(groupType)}</span>
+                        </label>
+                      )}
                     </div>
                   );
               })}

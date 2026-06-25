@@ -18,13 +18,13 @@ import {
   type CollectionType,
   type UpdateCollectionRequest,
 } from '@/shared/api';
-import { lifecycleApi } from '@/shared/api/lifecycle';
 import { qk } from '@/shared/api/keys';
 import { useEntityEditor } from '@/shared/hooks/useEntityEditor';
 import { EntityPageV2, Tab } from '@/shared/ui';
 import { Block, type FieldConfig } from '@/shared/ui/GridLayout';
 import { VersionsBlock } from '@/shared/ui/VersionsBlock';
 import { Button, LifecycleDeleteDialog } from '@/shared/ui';
+import LifecycleRestoreDialog from '@/shared/ui/LifecycleRestoreDialog';
 import { buildEntityCrudActions, composeEntityActions } from '@/shared/ui/EntityPage/entityCrudActions';
 import { Select } from '@/shared/ui/Select';
 import DataTable, { type DataTableColumn } from '@/shared/ui/DataTable/DataTable';
@@ -606,13 +606,7 @@ export function CollectionPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useReactState(false);
   const queryClient = useQueryClient();
-  const restoreMutation = useMutation({
-    mutationFn: () => lifecycleApi.restoreEntity('collection', String(collection!.id)),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.collections.adminList() });
-      queryClient.invalidateQueries({ queryKey: qk.collections.detail(String(collection!.id)) });
-    },
-  });
+  const [showRestoreConfirm, setShowRestoreConfirm] = useReactState(false);
 
   const isDocumentCollection = collection?.collection_type === 'document';
   const isTemplateCollection = collection?.collection_type === 'template';
@@ -760,8 +754,8 @@ export function CollectionPage() {
               onSave: handleSave,
               onCancel: handleCancel,
               onDelete: handleDelete,
-              onRestore: () => restoreMutation.mutate(),
-              restorePending: restoreMutation.isPending,
+              onRestore: () => setShowRestoreConfirm(true),
+              restorePending: showRestoreConfirm,
             }),
             extra: mode === 'view' && (isDocumentCollection || isTemplateCollection)
               ? [
@@ -995,6 +989,19 @@ export function CollectionPage() {
           }
           setShowDeleteConfirm(false);
           navigate('/admin/collections');
+        }}
+      />
+
+      <LifecycleRestoreDialog
+        open={showRestoreConfirm}
+        kind="collection"
+        entityId={String(collection?.id || '')}
+        entityLabel={collection?.name || 'Коллекция'}
+        onCancel={() => setShowRestoreConfirm(false)}
+        onSuccess={() => {
+          queryClient.invalidateQueries({ queryKey: qk.collections.adminList() });
+          queryClient.invalidateQueries({ queryKey: qk.collections.detail(String(collection?.id || '')) });
+          setShowRestoreConfirm(false);
         }}
       />
     </>

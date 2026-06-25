@@ -42,6 +42,7 @@ export interface LifecycleReportResponse {
   set_null: Record<string, number>;
   rbac_rules_removed: number;
   renamed: Array<{ old: string; new: string }>;
+  restored: Record<string, number>;
 }
 
 export const lifecycleApi = {

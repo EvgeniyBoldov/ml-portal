@@ -7,16 +7,16 @@
  */
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQueryClient } from '@tanstack/react-query';
 import { useUser, useUpdateUser, useCreateUser, useSetUserPassword } from '@shared/api/hooks/useAdmin';
 import { useTenants } from '@shared/hooks/useTenants';
 import { qk } from '@shared/api/keys';
-import { lifecycleApi } from '@shared/api/lifecycle';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
 import { EntityPageV2, Tab, type BreadcrumbItem, type EntityPageMode } from '@/shared/ui/EntityPage';
 import { buildEntityCrudActions, composeEntityActions } from '@/shared/ui/EntityPage/entityCrudActions';
 import { Block, type FieldConfig } from '@/shared/ui/GridLayout';
 import { Button, LifecycleDeleteDialog, Modal } from '@/shared/ui';
+import LifecycleRestoreDialog from '@/shared/ui/LifecycleRestoreDialog';
 import Input from '@/shared/ui/Input';
 import { RBACRulesTable } from '@/shared/ui/RBACRulesTable';
 import type { User, Tenant } from '@shared/api/admin';
@@ -210,6 +210,7 @@ export function UserPage() {
   });
   const [saving, setSaving] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [showRestoreConfirm, setShowRestoreConfirm] = useState(false);
   const [showSetPassword, setShowSetPassword] = useState(false);
   const [setPasswordSaving, setSetPasswordSaving] = useState(false);
 
@@ -241,15 +242,6 @@ export function UserPage() {
   const createMutation = useCreateUser();
   const updateMutation = useUpdateUser();
   const setPasswordMutation = useSetUserPassword();
-  const restoreMutation = useMutation({
-    mutationFn: () => lifecycleApi.restoreEntity('user', id!),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.admin.users.all() });
-      queryClient.invalidateQueries({ queryKey: qk.admin.users.detail(id!) });
-      showSuccess('Пользователь восстановлен');
-    },
-    onError: (err: Error) => showError(err.message),
-  });
 
   // ─── Handlers ───
   const handleFieldChange = (key: string, value: any) => {
@@ -462,8 +454,8 @@ export function UserPage() {
               onSave: handleSave,
               onCancel: handleCancel,
               onDelete: handleDelete,
-              onRestore: () => restoreMutation.mutate(),
-              restorePending: restoreMutation.isPending,
+              onRestore: () => setShowRestoreConfirm(true),
+              restorePending: showRestoreConfirm,
             }),
             extra: mode === 'view' && isLocalAccount
               ? [
@@ -538,6 +530,20 @@ export function UserPage() {
           showSuccess('Операция удаления выполнена');
           setShowDeleteConfirm(false);
           navigate('/admin/users');
+        }}
+      />
+
+      <LifecycleRestoreDialog
+        open={showRestoreConfirm}
+        kind="user"
+        entityId={id || ''}
+        entityLabel={user?.login || 'Пользователь'}
+        onCancel={() => setShowRestoreConfirm(false)}
+        onSuccess={() => {
+          queryClient.invalidateQueries({ queryKey: qk.admin.users.all() });
+          queryClient.invalidateQueries({ queryKey: qk.admin.users.detail(id || '') });
+          showSuccess('Пользователь восстановлен');
+          setShowRestoreConfirm(false);
         }}
       />
     </>

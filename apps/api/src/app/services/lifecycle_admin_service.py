@@ -57,6 +57,7 @@ class LifecycleReport:
     set_null: dict[str, int]
     rbac_rules_removed: int
     renamed: list[dict[str, str]]
+    restored: dict[str, int] = field(default_factory=dict)
 
 
 class LifecycleAdminService:
@@ -180,6 +181,7 @@ class LifecycleAdminService:
             set_null={},
             rbac_rules_removed=0,
             renamed=[],
+            restored={},
         )
 
     async def restore(self, kind: LifecycleKind, entity_id: uuid.UUID) -> LifecycleReport:
@@ -187,25 +189,49 @@ class LifecycleAdminService:
         if entity is None:
             raise ValueError("not_found")
 
-        entity.lifecycle_status = "active"
-        entity.deprecated_at = None
-        entity.deprecated_by = None
-        entity.deprecated_reason = None
+        restored_counts: dict[str, int] = {}
+        visited: set[tuple[str, str]] = {(kind, str(entity_id))}
+        await self._restore_entity_state(kind, entity_id, restored_counts=restored_counts)
 
-        if kind in {"tenant", "user", "collection"} and hasattr(entity, "is_active"):
-            entity.is_active = True
+        dependencies = await self.get_dependencies(kind, entity_id, cascade=True, full_entities=False)
+        resource_kind_map: dict[str, LifecycleKind] = {
+            "users": "user",
+            "collections": "collection",
+            "agents": "agent",
+            "rbac_rules": "rbac_rule",
+        }
+        for dep in dependencies:
+            resource_type = str(dep.get("resource_type") or "")
+            dep_kind = resource_kind_map.get(resource_type)
+            if dep_kind is None:
+                continue
+            for entity_data in dep.get("entities") or []:
+                dep_id = str(entity_data.get("uuid") or "")
+                if not dep_id:
+                    continue
+                key = (dep_kind, dep_id)
+                if key in visited:
+                    continue
+                visited.add(key)
+                try:
+                    await self._restore_entity_state(dep_kind, uuid.UUID(dep_id), restored_counts=restored_counts)
+                except ValueError:
+                    continue
+
+        await self.session.flush()
 
         return LifecycleReport(
             kind=kind,
             entity_id=str(entity_id),
             mode="restore",
             lifecycle_status="active",
-            details={},
+            details={"restored_dependents": sum(restored_counts.values())},
             migrated={},
             cascaded={},
             set_null={},
             rbac_rules_removed=0,
             renamed=[],
+            restored=restored_counts,
         )
 
     async def hard_delete(self, kind: LifecycleKind, entity_id: uuid.UUID, *, cascade: bool = False) -> LifecycleReport:
@@ -287,18 +313,19 @@ class LifecycleAdminService:
             await self.session.delete(entity)
             await self.session.flush()
 
-            return LifecycleReport(
-                kind=kind,
-                entity_id=str(entity_id),
-                mode="hard",
-                lifecycle_status="deleted",
-                details={} if cascade else {"migrated_to_tenant_id": str(default_tenant.id)},
-                migrated=migrated_counts,
-                cascaded=cascaded_counts,
-                set_null={},
-                rbac_rules_removed=removed_rules,
-                renamed=[{"old": old, "new": new} for (old, new) in renamed_collections],
-            )
+        return LifecycleReport(
+            kind=kind,
+            entity_id=str(entity_id),
+            mode="hard",
+            lifecycle_status="deleted",
+            details={} if cascade else {"migrated_to_tenant_id": str(default_tenant.id)},
+            migrated=migrated_counts,
+            cascaded=cascaded_counts,
+            set_null={},
+            rbac_rules_removed=removed_rules,
+            renamed=[{"old": old, "new": new} for (old, new) in renamed_collections],
+            restored={},
+        )
 
         if kind == "user":
             entity = await self.session.get(Users, entity_id)
@@ -334,6 +361,7 @@ class LifecycleAdminService:
                 set_null={},
                 rbac_rules_removed=removed_rules,
                 renamed=[],
+                restored={},
             )
 
         if kind == "collection":
@@ -361,6 +389,7 @@ class LifecycleAdminService:
                 set_null={},
                 rbac_rules_removed=removed_rules,
                 renamed=[],
+                restored={},
             )
 
         if kind == "agent":
@@ -385,6 +414,7 @@ class LifecycleAdminService:
                 set_null={},
                 rbac_rules_removed=removed_rules,
                 renamed=[],
+                restored={},
             )
 
         if kind == "rbac_rule":
@@ -404,6 +434,7 @@ class LifecycleAdminService:
                 set_null={},
                 rbac_rules_removed=0,
                 renamed=[],
+                restored={},
             )
 
         raise ValueError(f"Unsupported lifecycle kind: {kind}")
@@ -436,6 +467,37 @@ class LifecycleAdminService:
         if model is None:
             return None
         return await self.session.get(model, entity_id)
+
+    async def _restore_entity_state(
+        self,
+        kind: LifecycleKind,
+        entity_id: uuid.UUID,
+        *,
+        restored_counts: dict[str, int],
+    ) -> bool:
+        entity = await self._get_entity(kind, entity_id)
+        if entity is None:
+            return False
+        if getattr(entity, "lifecycle_status", "active") != "deprecated":
+            return False
+
+        entity.lifecycle_status = "active"
+        entity.deprecated_at = None
+        entity.deprecated_by = None
+        entity.deprecated_reason = None
+        if kind in {"tenant", "user", "collection"} and hasattr(entity, "is_active"):
+            entity.is_active = True
+
+        resource_key = {
+            "tenant": "tenants",
+            "user": "users",
+            "collection": "collections",
+            "agent": "agents",
+            "rbac_rule": "rbac_rules",
+        }.get(kind)
+        if resource_key is not None:
+            restored_counts[resource_key] = restored_counts.get(resource_key, 0) + 1
+        return True
 
     async def _tenant_dependencies(self, tenant_id: uuid.UUID, *, full_entities: bool = False) -> list[dict[str, Any]]:
         limit = None if full_entities else 5

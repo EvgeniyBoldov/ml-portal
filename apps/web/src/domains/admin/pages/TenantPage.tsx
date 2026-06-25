@@ -11,12 +11,12 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTenant, useModels } from '@shared/api/hooks/useAdmin';
 import { tenantApi } from '@shared/api/tenant';
 import { qk } from '@shared/api/keys';
-import { lifecycleApi } from '@shared/api/lifecycle';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
 import { EntityPageV2, Tab, type BreadcrumbItem, type EntityPageMode } from '@/shared/ui/EntityPage';
 import { buildEntityCrudActions } from '@/shared/ui/EntityPage/entityCrudActions';
 import { Block, type FieldConfig } from '@/shared/ui/GridLayout';
 import { LifecycleDeleteDialog } from '@/shared/ui';
+import LifecycleRestoreDialog from '@/shared/ui/LifecycleRestoreDialog';
 import { RBACRulesTable } from '@/shared/ui/RBACRulesTable';
 import type { Tenant, TenantCreate, TenantUpdate } from '@shared/api/tenant';
 
@@ -99,6 +99,7 @@ export function TenantPage() {
   });
   const [saving, setSaving] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [showRestoreConfirm, setShowRestoreConfirm] = useState(false);
 
   // ─── Queries ───
   const { data: tenant, isLoading, refetch } = useTenant(id);
@@ -141,17 +142,6 @@ export function TenantPage() {
     },
     onError: (err: Error) => showError(err.message),
   });
-
-  const restoreMutation = useMutation({
-    mutationFn: () => lifecycleApi.restoreEntity('tenant', id!),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.admin.tenants.all() });
-      queryClient.invalidateQueries({ queryKey: qk.admin.tenants.detail(id!) });
-      showSuccess('Тенант восстановлен');
-    },
-    onError: (err: Error) => showError(err.message),
-  });
-
 
   // ─── Handlers ───
   const handleFieldChange = (key: string, value: any) => {
@@ -324,8 +314,8 @@ export function TenantPage() {
             onSave: handleSave,
             onCancel: handleCancel,
             onDelete: handleDelete,
-            onRestore: () => restoreMutation.mutate(),
-            restorePending: restoreMutation.isPending,
+            onRestore: () => setShowRestoreConfirm(true),
+            restorePending: showRestoreConfirm,
           })}
         >
           <Block
@@ -383,6 +373,20 @@ export function TenantPage() {
           showSuccess('Операция удаления выполнена');
           setShowDeleteConfirm(false);
           navigate('/admin/tenants');
+        }}
+      />
+
+      <LifecycleRestoreDialog
+        open={showRestoreConfirm}
+        kind="tenant"
+        entityId={id || ''}
+        entityLabel={tenant?.name || 'Тенант'}
+        onCancel={() => setShowRestoreConfirm(false)}
+        onSuccess={() => {
+          queryClient.invalidateQueries({ queryKey: qk.admin.tenants.all() });
+          queryClient.invalidateQueries({ queryKey: qk.admin.tenants.detail(id || '') });
+          showSuccess('Тенант восстановлен');
+          setShowRestoreConfirm(false);
         }}
       />
     </>

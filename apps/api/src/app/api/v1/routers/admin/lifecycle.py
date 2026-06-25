@@ -94,6 +94,7 @@ async def delete_entity(
         "set_null": report.set_null,
         "rbac_rules_removed": report.rbac_rules_removed,
         "renamed": report.renamed,
+        "restored": report.restored,
     }
 
 
@@ -123,4 +124,5 @@ async def restore_entity(
         "set_null": report.set_null,
         "rbac_rules_removed": report.rbac_rules_removed,
         "renamed": report.renamed,
+        "restored": report.restored,
     }

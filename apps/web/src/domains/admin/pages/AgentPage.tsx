@@ -21,7 +21,6 @@ import {
   type Collection,
   type Model,
 } from '@/shared/api';
-import { lifecycleApi } from '@/shared/api/lifecycle';
 import { qk } from '@/shared/api/keys';
 import { useAgentDetail } from '@/shared/api/hooks/useAgents';
 import { useAgentExecutionLimits, useUpdateAgentExecutionLimits } from '@/shared/api/hooks/usePlatformSettings';
@@ -33,6 +32,7 @@ import { VersionsBlock } from '@/shared/ui/VersionsBlock';
 import DataTable, { type DataTableColumn } from '@/shared/ui/DataTable';
 import Button from '@/shared/ui/Button';
 import LifecycleDeleteDialog from '@/shared/ui/LifecycleDeleteDialog';
+import LifecycleRestoreDialog from '@/shared/ui/LifecycleRestoreDialog';
 import FormModal from '@/shared/ui/FormModal';
 import { Select } from '@/shared/ui/Select';
 
@@ -218,6 +218,7 @@ export function AgentPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [showRestoreConfirm, setShowRestoreConfirm] = useState(false);
   const [limitsMode, setLimitsMode] = useState<'view' | 'edit'>('view');
   const [limitsForm, setLimitsForm] = useState<Record<string, unknown>>({});
   const [isAddDataModalOpen, setIsAddDataModalOpen] = useState(false);
@@ -231,15 +232,6 @@ export function AgentPage() {
   } = useAgentDetail(id ?? 'new');
 
   const handleDelete = () => setShowDeleteConfirm(true);
-  const restoreMutation = useMutation({
-    mutationFn: () => lifecycleApi.restoreEntity('agent', id!),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.agents.list({}) });
-      if (id) {
-        queryClient.invalidateQueries({ queryKey: qk.agents.detail(id) });
-      }
-    },
-  });
 
   // Load LLM models for dropdown
   const { data: modelsData } = useQuery({
@@ -452,8 +444,8 @@ export function AgentPage() {
             onSave: handleSave,
             onCancel: handleCancel,
             onDelete: () => setShowDeleteConfirm(true),
-            onRestore: () => restoreMutation.mutate(),
-            restorePending: restoreMutation.isPending,
+            onRestore: () => setShowRestoreConfirm(true),
+            restorePending: showRestoreConfirm,
           })}
         >
           {/* Row 1: Basic Info (1/2) + Routing (1/2) */}
@@ -639,6 +631,21 @@ export function AgentPage() {
           }
           setShowDeleteConfirm(false);
           navigate('/admin/agents');
+        }}
+      />
+
+      <LifecycleRestoreDialog
+        open={showRestoreConfirm}
+        kind="agent"
+        entityId={id || ''}
+        entityLabel={agent?.name || 'Агент'}
+        onCancel={() => setShowRestoreConfirm(false)}
+        onSuccess={() => {
+          queryClient.invalidateQueries({ queryKey: qk.agents.list({}) });
+          if (id) {
+            queryClient.invalidateQueries({ queryKey: qk.agents.detail(id) });
+          }
+          setShowRestoreConfirm(false);
         }}
       />
 

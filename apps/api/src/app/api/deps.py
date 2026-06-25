@@ -15,6 +15,7 @@ from app.core.redis import get_redis
 from app.core.security import UserCtx
 from app.models.chat import Chats
 from app.models.tenant import UserTenants, Tenants
+from app.services.chat_visibility import is_sandbox_upload_chat
 
 # Re-export for routers/services
 async def db_session() -> AsyncGenerator[AsyncSession, None]:
@@ -263,6 +264,8 @@ async def resolve_chat_context(
     if not chat_row:
         raise HTTPException(status_code=404, detail="Chat not found")
     if str(chat_row.owner_id) != str(current_user.id):
+        raise HTTPException(status_code=404, detail="Chat not found")
+    if is_sandbox_upload_chat(chat_row):
         raise HTTPException(status_code=404, detail="Chat not found")
     tenant_id = None
     candidate_ids: list[_uuid.UUID] = []

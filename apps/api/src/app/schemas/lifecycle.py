@@ -42,3 +42,4 @@ class LifecycleReportResponse(BaseModel):
     set_null: dict[str, int] = Field(default_factory=dict)
     rbac_rules_removed: int = 0
     renamed: list[dict[str, str]] = Field(default_factory=list)
+    restored: dict[str, int] = Field(default_factory=dict)

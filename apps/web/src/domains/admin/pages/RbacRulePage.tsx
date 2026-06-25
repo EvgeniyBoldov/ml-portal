@@ -5,20 +5,20 @@
  * default -> platform -> tenant -> user
  * and renders only human-readable names in the UI.
  */
-import { useMemo } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMemo, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { adminApi } from '@/shared/api/admin';
 import { agentsApi } from '@/shared/api/agents';
 import collectionsApi from '@/shared/api/collections';
 import { rbacApi, type RbacEffect } from '@/shared/api/rbac';
-import { lifecycleApi } from '@/shared/api/lifecycle';
 import { qk } from '@/shared/api/keys';
 import { buildEntityCrudActions } from '@/shared/ui/EntityPage/entityCrudActions';
 import { useRbacRuleEditor } from '@/shared/hooks/useRbacRuleEditor';
 import { EntityPageV2, Tab, type BreadcrumbItem } from '@/shared/ui/EntityPage';
 import { Block } from '@/shared/ui/GridLayout';
 import { Badge, LifecycleDeleteDialog, Select } from '@/shared/ui';
-import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
+import LifecycleRestoreDialog from '@/shared/ui/LifecycleRestoreDialog';
+import { useSuccessToast } from '@/shared/ui/Toast';
 import {
   RBAC_EFFECT_LABELS,
   RBAC_EFFECT_TONES,
@@ -60,7 +60,6 @@ function layerTone(layerKey: InheritanceLayerKey) {
 export function RbacRulePage() {
   const queryClient = useQueryClient();
   const showSuccess = useSuccessToast();
-  const showError = useErrorToast();
   const {
     id,
     rule,
@@ -80,15 +79,7 @@ export function RbacRulePage() {
     handleCancel,
     handleDelete,
   } = useRbacRuleEditor();
-  const restoreMutation = useMutation({
-    mutationFn: () => lifecycleApi.restoreEntity('rbac_rule', id!),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.rbac.all() });
-      queryClient.invalidateQueries({ queryKey: qk.rbac.detail(id!) });
-      showSuccess('RBAC правило восстановлено');
-    },
-    onError: (err: Error) => showError(err.message),
-  });
+  const [showRestoreConfirm, setShowRestoreConfirm] = useState(false);
 
   const { data: resourceRules = [] } = useQuery({
     queryKey: qk.rbac.enrichedRules({ resource_type: resourceType, resource_id: resourceId ?? undefined }),
@@ -300,8 +291,8 @@ export function RbacRulePage() {
                 lifecycleStatus: rule?.lifecycle_status,
                 onEdit: handleEdit,
                 onDelete: handleDelete,
-                onRestore: () => restoreMutation.mutate(),
-                restorePending: restoreMutation.isPending,
+                onRestore: () => setShowRestoreConfirm(true),
+                restorePending: showRestoreConfirm,
               })
             : undefined
         }
@@ -443,6 +434,20 @@ export function RbacRulePage() {
         onSuccess={() => {
           setShowDeleteConfirm(false);
           handleCancel();
+        }}
+      />
+
+      <LifecycleRestoreDialog
+        open={showRestoreConfirm}
+        kind="rbac_rule"
+        entityId={id || ''}
+        entityLabel="RBAC правило"
+        onCancel={() => setShowRestoreConfirm(false)}
+        onSuccess={() => {
+          queryClient.invalidateQueries({ queryKey: qk.rbac.all() });
+          queryClient.invalidateQueries({ queryKey: qk.rbac.detail(id!) });
+          showSuccess('RBAC правило восстановлено');
+          setShowRestoreConfirm(false);
         }}
       />
     </>
