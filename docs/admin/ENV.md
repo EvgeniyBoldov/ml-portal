@@ -75,7 +75,6 @@ make env
 - `DEFAULT_ADMIN_EMAIL` — email bootstrap-админа.
 
 ## Runtime / RBAC
-- `RUNTIME_RBAC_ENFORCE_RULES` — жесткий режим RBAC в runtime.
 - `RUNTIME_RBAC_ALLOW_UNDEFINED` — поведение для неописанных правил.
 
 ## LLM

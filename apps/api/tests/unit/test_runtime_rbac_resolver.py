@@ -13,11 +13,11 @@ from app.services.permission_service import EffectivePermissions
 
 @pytest.mark.asyncio
 async def test_runtime_rbac_resolver_uses_passed_defaults_when_test_mode_disabled(monkeypatch):
-    monkeypatch.setenv("RUNTIME_RBAC_ENFORCE_RULES", "false")
     monkeypatch.setenv("RUNTIME_RBAC_ALLOW_UNDEFINED", "false")
     get_settings.cache_clear()
 
-    resolver = RuntimeRbacResolver(permission_service=SimpleNamespace(resolve_permissions=AsyncMock()))
+    permission_service = SimpleNamespace(resolve_permissions=AsyncMock(return_value=SimpleNamespace(default_collection_allow=True)))
+    resolver = RuntimeRbacResolver(permission_service=permission_service)
     effective = await resolver.resolve_effective_permissions(
         user_id=uuid4(),
         tenant_id=uuid4(),
@@ -25,43 +25,25 @@ async def test_runtime_rbac_resolver_uses_passed_defaults_when_test_mode_disable
     )
 
     assert effective.default_collection_allow is True
+    permission_service.resolve_permissions.assert_awaited_once()
     get_settings.cache_clear()
 
 
 @pytest.mark.asyncio
 async def test_runtime_rbac_resolver_overrides_defaults_in_allow_undefined_mode(monkeypatch):
-    monkeypatch.setenv("RUNTIME_RBAC_ENFORCE_RULES", "false")
-    monkeypatch.setenv("RUNTIME_RBAC_ALLOW_UNDEFINED", "true")
-    get_settings.cache_clear()
-
-    resolver = RuntimeRbacResolver(permission_service=SimpleNamespace(resolve_permissions=AsyncMock()))
-    effective = await resolver.resolve_effective_permissions(
-        user_id=uuid4(),
-        tenant_id=uuid4(),
-        default_collection_allow=False,
-    )
-
-    assert effective.default_collection_allow is True
-    get_settings.cache_clear()
-
-
-@pytest.mark.asyncio
-async def test_runtime_rbac_resolver_calls_permission_service_when_enforced(monkeypatch):
-    monkeypatch.setenv("RUNTIME_RBAC_ENFORCE_RULES", "true")
     monkeypatch.setenv("RUNTIME_RBAC_ALLOW_UNDEFINED", "true")
     get_settings.cache_clear()
 
     expected = SimpleNamespace(default_collection_allow=True)
     permission_service = SimpleNamespace(resolve_permissions=AsyncMock(return_value=expected))
     resolver = RuntimeRbacResolver(permission_service=permission_service)
-
-    result = await resolver.resolve_effective_permissions(
+    effective = await resolver.resolve_effective_permissions(
         user_id=uuid4(),
         tenant_id=uuid4(),
         default_collection_allow=False,
     )
 
-    assert result is expected
+    assert effective is expected
     permission_service.resolve_permissions.assert_awaited_once()
     call = permission_service.resolve_permissions.await_args
     assert call.kwargs["default_collection_allow"] is True
@@ -69,7 +51,6 @@ async def test_runtime_rbac_resolver_calls_permission_service_when_enforced(monk
 
 
 def test_runtime_rbac_resolver_filter_agents_by_slug_respects_explicit_rules(monkeypatch):
-    monkeypatch.setenv("RUNTIME_RBAC_ENFORCE_RULES", "true")
     monkeypatch.setenv("RUNTIME_RBAC_ALLOW_UNDEFINED", "false")
     get_settings.cache_clear()
 
@@ -85,7 +66,31 @@ def test_runtime_rbac_resolver_filter_agents_by_slug_respects_explicit_rules(mon
         agents,
         effective_permissions=perms,
         slug_getter=lambda item: item.slug,
-        default_allow=True,
+        default_allow=False,
+    )
+
+    assert [a.slug for a in filtered] == ["allowed-agent"]
+    assert denied == ["denied-agent", "undefined-agent"]
+    get_settings.cache_clear()
+
+
+def test_runtime_rbac_resolver_filter_agents_by_slug_allows_undefined_only_in_dev_mode(monkeypatch):
+    monkeypatch.setenv("RUNTIME_RBAC_ALLOW_UNDEFINED", "true")
+    get_settings.cache_clear()
+
+    resolver = RuntimeRbacResolver(permission_service=SimpleNamespace(resolve_permissions=AsyncMock()))
+    perms = EffectivePermissions(agent_permissions={"allowed-agent": True, "denied-agent": False})
+    agents = [
+        SimpleNamespace(slug="allowed-agent"),
+        SimpleNamespace(slug="denied-agent"),
+        SimpleNamespace(slug="undefined-agent"),
+    ]
+
+    filtered, denied = resolver.filter_agents_by_slug(
+        agents,
+        effective_permissions=perms,
+        slug_getter=lambda item: item.slug,
+        default_allow=False,
     )
 
     assert [a.slug for a in filtered] == ["allowed-agent", "undefined-agent"]

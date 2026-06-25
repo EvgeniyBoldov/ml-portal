@@ -323,7 +323,7 @@ class ExecutionPreflight:
         if not self.runtime_rbac_resolver.is_agent_allowed(
             effective_permissions=operation_result.effective_permissions,
             agent_slug=agent_slug,
-            default_allow=True,
+            default_allow=False,
         ):
             raise AgentUnavailableError(
                 f"Access denied for agent '{agent_slug}' by RBAC policy",
@@ -447,7 +447,7 @@ class ExecutionPreflight:
                 routable_agents,
                 effective_permissions=operation_result.effective_permissions,
                 slug_getter=lambda item: getattr(item, "slug", None),
-                default_allow=True,
+                default_allow=False,
             )
             if denied_slugs:
                 reasons.append("RBAC filtered routable agents: " + ", ".join(sorted(denied_slugs)))

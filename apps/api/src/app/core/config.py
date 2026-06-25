@@ -194,11 +194,6 @@ class Settings(BaseSettings):
         description="Optional CA bundle path for outbound MCP HTTP requests",
     )
 
-    # Runtime RBAC behavior
-    RUNTIME_RBAC_ENFORCE_RULES: bool = Field(
-        default=False,
-        description="Enable DB-backed RBAC rule enforcement in runtime resolution",
-    )
     RUNTIME_RBAC_ALLOW_UNDEFINED: bool = Field(
         default=False,
         description="Test mode: allow undefined tools/collections by default",

@@ -12,9 +12,9 @@ TAgent = TypeVar("TAgent")
 class RuntimeRbacResolver:
     """Runtime RBAC facade.
 
-    Keeps RBAC behavior in one place:
-    - computes fallback policy for undefined resources
-    - optionally resolves DB-backed RBAC rules
+    Keeps runtime RBAC behavior in one place:
+    - resolves DB-backed RBAC rules
+    - computes fallback policy for unresolved resources
     """
 
     _STRICT_ENVS = frozenset({"prod", "production", "staging"})
@@ -22,13 +22,12 @@ class RuntimeRbacResolver:
     def __init__(self, permission_service: PermissionService) -> None:
         self.permission_service = permission_service
         settings = get_settings()
-        self.enforce_rules = bool(getattr(settings, "RUNTIME_RBAC_ENFORCE_RULES", False))
         self.allow_undefined = bool(getattr(settings, "RUNTIME_RBAC_ALLOW_UNDEFINED", False))
         env = str(getattr(settings, "ENV", "local") or "local").strip().lower()
         if self.allow_undefined and env in self._STRICT_ENVS:
             raise ValueError(
                 f"RUNTIME_RBAC_ALLOW_UNDEFINED=true is not allowed in {env!r} environment. "
-                "This setting is for local/test only and would bypass RBAC in production."
+                "This setting is for local/test only and must not weaken production RBAC defaults."
             )
 
     async def resolve_effective_permissions(
@@ -39,16 +38,7 @@ class RuntimeRbacResolver:
         default_collection_allow: bool,
         **_legacy_kwargs,
     ) -> EffectivePermissions:
-        effective_default_collection_allow = bool(default_collection_allow)
-
-        # Test mode: for any undefined resource fallback to allow.
-        if self.allow_undefined:
-            effective_default_collection_allow = True
-
-        if not self.enforce_rules:
-            return EffectivePermissions(
-                default_collection_allow=effective_default_collection_allow,
-            )
+        effective_default_collection_allow = bool(default_collection_allow or self.allow_undefined)
 
         return await self.permission_service.resolve_permissions(
             user_id=user_id,
@@ -72,7 +62,7 @@ class RuntimeRbacResolver:
         effective_permissions: Optional[EffectivePermissions],
         agent_slug: str,
         *,
-        default_allow: bool = True,
+        default_allow: bool = False,
     ) -> bool:
         if not agent_slug.strip():
             return False
@@ -88,7 +78,7 @@ class RuntimeRbacResolver:
         *,
         effective_permissions: Optional[EffectivePermissions],
         slug_getter: Callable[[TAgent], Optional[str]],
-        default_allow: bool = True,
+        default_allow: bool = False,
     ) -> Tuple[list[TAgent], list[str]]:
         allowed: list[TAgent] = []
         denied_slugs: list[str] = []

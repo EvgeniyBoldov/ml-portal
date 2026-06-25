@@ -1043,7 +1043,7 @@ class RuntimePipeline:
             candidates,
             effective_permissions=effective,
             slug_getter=lambda item: str((item or {}).get("slug") or "").strip() or None,
-            default_allow=True,
+            default_allow=False,
         )
         candidate_slugs = sorted({
             str((item or {}).get("slug") or "").strip()
