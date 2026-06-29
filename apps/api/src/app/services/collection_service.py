@@ -472,12 +472,14 @@ class CollectionService:
         *,
         data_description: Optional[str] = None,
         usage_purpose: Optional[str] = None,
+        usage_rules: Optional[str] = None,
         notes: Optional[str] = None,
     ) -> CollectionVersion:
         return await self.versions.create_version(
             collection_id,
             data_description=data_description,
             usage_purpose=usage_purpose,
+            usage_rules=usage_rules,
             notes=notes,
         )
 
@@ -488,6 +490,7 @@ class CollectionService:
         *,
         data_description: Any = _UNSET,
         usage_purpose: Any = _UNSET,
+        usage_rules: Any = _UNSET,
         notes: Any = _UNSET,
     ) -> CollectionVersion:
         return await self.versions.update_version(
@@ -495,6 +498,7 @@ class CollectionService:
             version,
             data_description=data_description if data_description is not _UNSET else _UNSET,
             usage_purpose=usage_purpose if usage_purpose is not _UNSET else _UNSET,
+            usage_rules=usage_rules if usage_rules is not _UNSET else _UNSET,
             notes=notes if notes is not _UNSET else _UNSET,
             _UNSET=_UNSET,
         )
