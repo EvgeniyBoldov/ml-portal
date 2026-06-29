@@ -1,5 +1,5 @@
 """
-template.fill — Fill a template with values and return a generated file.
+collection.template.fill — Fill a template with values and return a generated file.
 
 Supports Excel, Word, and plain text templates via placeholder substitution.
 The filled result is stored as a chat attachment and its canonical storage_uri is returned.
@@ -154,7 +154,7 @@ def _flatten_values(values: Dict[str, Any], prefix: str = "") -> Dict[str, Any]:
 class TemplateFillTool(VersionedTool):
     """Fill a template with values and return a generated file."""
 
-    tool_slug: ClassVar[str] = "template.fill"
+    tool_slug: ClassVar[str] = "collection.template.fill"
     domains: ClassVar[list] = ["collection.template"]
     name: ClassVar[str] = "Fill Template"
     description: ClassVar[str] = (
@@ -170,7 +170,7 @@ class TemplateFillTool(VersionedTool):
         description="Fill template and return file",
     )
     async def v1_0_0(self, ctx: ToolContext, args: Dict[str, Any]) -> ToolResult:
-        log = ctx.tool_logger("template.fill")
+        log = ctx.tool_logger("collection.template.fill")
 
         collection_id = str(args.get("collection_id") or "").strip()
         row_id = str(args.get("row_id") or "").strip()
@@ -320,6 +320,6 @@ class TemplateFillTool(VersionedTool):
                     logs=log.entries_dict(),
                 )
         except Exception as exc:
-            logger.error("template.fill failed: %s", exc, exc_info=True)
-            log.error("template.fill failed", error=str(exc))
+            logger.error("collection.template.fill failed: %s", exc, exc_info=True)
+            log.error("collection.template.fill failed", error=str(exc))
             return ToolResult.fail(f"Failed to fill template: {exc}", logs=log.entries_dict())

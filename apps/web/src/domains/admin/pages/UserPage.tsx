@@ -18,7 +18,7 @@ import { Block, type FieldConfig } from '@/shared/ui/GridLayout';
 import { Button, LifecycleDeleteDialog, Modal } from '@/shared/ui';
 import LifecycleRestoreDialog from '@/shared/ui/LifecycleRestoreDialog';
 import Input from '@/shared/ui/Input';
-import { RBACRulesTable } from '@/shared/ui/RBACRulesTable';
+import { RBACRulesTable } from '@/shared/ui/RBACRulesTable/RBACRulesTable';
 import type { User, Tenant } from '@shared/api/admin';
 
 /* ─── SetPasswordModal ─── */

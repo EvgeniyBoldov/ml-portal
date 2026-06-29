@@ -1,8 +1,8 @@
 """Tool resolver.
 
-Translates a DiscoveredTool (raw MCP/local capability snapshot) into a
-runtime-ready ResolvedTool. The MCP-published schema is the single source
-of truth; there is no separate semantic layer on top of it.
+Translates a discovered implementation binding into a runtime-ready
+ResolvedTool. Canonical capability semantics come from the publication
+registry; discovered schemas provide concrete execution contracts.
 """
 from __future__ import annotations
 

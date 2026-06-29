@@ -33,6 +33,15 @@ const DETAILS_FIELDS: FieldConfig[] = [
     rows: 4,
   },
   {
+    key: 'usage_rules',
+    type: 'textarea',
+    label: 'Правила работы',
+    description: 'Как агент должен работать с этой коллекцией: порядок вызова операций, обязательные проверки, запреты.',
+    placeholder:
+      'Например: сначала вызови collection.info, затем используй только найденные поля и значения фильтров.',
+    rows: 5,
+  },
+  {
     key: 'notes',
     type: 'textarea',
     label: 'Заметки к версии',

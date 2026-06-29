@@ -17,8 +17,8 @@ def test_collection_table_operation_canonicalization():
     )
     assert canonical_operation_name("collection.table", "collection.get") == "collection.table.get"
     assert (
-        canonical_operation_name("system", "collection.catalog")
-        == "collection.catalog_inspect"
+        canonical_operation_name("collection.table", "collection.info")
+        == "collection.info"
     )
 
 
@@ -28,29 +28,29 @@ def test_collection_document_operation_canonicalization():
         == "collection.document.search"
     )
     assert (
-        canonical_operation_name("system", "collection.catalog")
-        == "collection.catalog_inspect"
+        canonical_operation_name("collection.document", "collection.info")
+        == "collection.info"
     )
 
 
 def test_collection_template_operation_canonicalization():
     assert (
-        canonical_operation_name("collection.template", "collection.text_search")
+        canonical_operation_name("collection.template", "collection.template.search")
         == "collection.template.search"
     )
 
 
 def test_collection_sql_catalog_operation_canonicalization():
     assert (
-        canonical_operation_name("system", "collection.catalog")
-        == "collection.catalog_inspect"
+        canonical_operation_name("collection.sql", "collection.info")
+        == "collection.info"
     )
 
 
 def test_collection_api_catalog_operation_canonicalization():
     assert (
-        canonical_operation_name("system", "collection.catalog")
-        == "collection.catalog_inspect"
+        canonical_operation_name("collection.api", "collection.info")
+        == "collection.info"
     )
 
 
@@ -70,7 +70,7 @@ def test_collection_table_semantic_tool_is_internal_not_published():
 def test_collection_template_semantic_tool_is_published():
     decision = resolve_publication(
         instance_domain="collection.template",
-        raw_slug="collection.text_search",
+        raw_slug="collection.template.search",
     )
 
     assert decision is not None

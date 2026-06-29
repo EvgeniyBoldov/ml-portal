@@ -13,6 +13,7 @@ def test_collections_card_includes_remote_tables_preview():
         entity_type=None,
         usage_purpose="purpose",
         data_description="description",
+        usage_rules="Сначала inspect, потом search",
         description="fallback",
         remote_tables=["tenwork_tickets", "services"],
     )
@@ -20,6 +21,7 @@ def test_collections_card_includes_remote_tables_preview():
     card = builder._build_collections_card([item], [])  # noqa: SLF001
 
     assert "таблицы:" in card
+    assert "правила работы: Сначала inspect, потом search" in card
     assert "`tenwork_tickets`" in card
     assert "`services`" in card
 
@@ -84,7 +86,7 @@ def test_collections_card_groups_collection_operations_with_descriptions():
     card = builder._build_collections_card([item], [operation])  # noqa: SLF001
 
     assert "доступные действия:" in card
-    assert "`collection.template.fill`" in card
-    assert "вызов: instance.template.collection.template.fill" in card
+    assert "`instance.template.collection.template.fill`" in card
+    assert "каноническое имя: collection.template.fill" in card
     assert "Fill a template with values and return a generated file" in card
     assert "результат: file" in card

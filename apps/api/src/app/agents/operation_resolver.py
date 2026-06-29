@@ -3,12 +3,11 @@ from __future__ import annotations
 from typing import List, Optional
 from uuid import UUID
 
+from app.agents.capability_resolver import CollectionCapabilityResolver
 from app.agents.contracts import OperationCredentialContext, ResolvedOperation
 from app.agents.credential_resolver import RuntimeCredentialResolver
 from app.agents.operation_builder import OperationBuilder
-from app.models.discovered_tool import DiscoveredTool
 from app.models.tool_instance import ToolInstance
-from app.services.collection_tool_resolver import CollectionToolResolver
 from app.services.permission_service import EffectivePermissions
 
 
@@ -19,11 +18,11 @@ class RuntimeOperationResolver:
         self,
         *,
         operation_builder: OperationBuilder,
-        collection_tool_resolver: CollectionToolResolver,
+        collection_capability_resolver: CollectionCapabilityResolver,
         credential_resolver: RuntimeCredentialResolver,
     ) -> None:
         self.operation_builder = operation_builder
-        self.collection_tool_resolver = collection_tool_resolver
+        self.collection_capability_resolver = collection_capability_resolver
         self.credential_resolver = credential_resolver
 
     async def resolve_for_instance(
@@ -45,6 +44,10 @@ class RuntimeOperationResolver:
             if resolved_runtime_domain.startswith("collection.")
             else None
         )
+        capability_candidates = await self.collection_capability_resolver.resolve_for_instance(
+            instance=instance,
+            provider=provider,
+        )
         return await self.operation_builder.build_operations_for_instance(
             instance=instance,
             provider=provider,
@@ -54,7 +57,7 @@ class RuntimeOperationResolver:
             effective_permissions=effective_permissions,
             user_id=user_id,
             tenant_id=tenant_id,
-            load_discovered_capabilities=self._load_discovered_capabilities,
+            capability_candidates=capability_candidates,
             resolve_execution_credentials=self._resolve_execution_credentials,
         )
 
@@ -81,15 +84,4 @@ class RuntimeOperationResolver:
             risk_level=risk_level,
             side_effects=side_effects,
             requires_confirmation=requires_confirmation,
-        )
-
-    async def _load_discovered_capabilities(
-        self,
-        *,
-        instance: ToolInstance,
-        provider: ToolInstance,
-    ) -> List[DiscoveredTool]:
-        return await self.collection_tool_resolver.load_discovered_tools(
-            instance=instance,
-            provider=provider,
         )

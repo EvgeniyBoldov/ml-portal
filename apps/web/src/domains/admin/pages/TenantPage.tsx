@@ -17,7 +17,7 @@ import { buildEntityCrudActions } from '@/shared/ui/EntityPage/entityCrudActions
 import { Block, type FieldConfig } from '@/shared/ui/GridLayout';
 import { LifecycleDeleteDialog } from '@/shared/ui';
 import LifecycleRestoreDialog from '@/shared/ui/LifecycleRestoreDialog';
-import { RBACRulesTable } from '@/shared/ui/RBACRulesTable';
+import { RBACRulesTable } from '@/shared/ui/RBACRulesTable/RBACRulesTable';
 import type { Tenant, TenantCreate, TenantUpdate } from '@shared/api/tenant';
 
 type TenantFormData = Partial<TenantCreate & { is_default?: boolean }>;

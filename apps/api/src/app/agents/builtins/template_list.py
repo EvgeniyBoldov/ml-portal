@@ -1,5 +1,5 @@
 """
-template.list — List templates in a template collection.
+collection.template.list — List templates in a template collection.
 
 Returns metadata for each template row: title, version, source, description,
 and identifiers needed for get_schema/fill.
@@ -66,7 +66,7 @@ _OUTPUT_SCHEMA_V1 = {
 class TemplateListTool(VersionedTool):
     """List templates in a template collection."""
 
-    tool_slug: ClassVar[str] = "template.list"
+    tool_slug: ClassVar[str] = "collection.template.list"
     domains: ClassVar[list] = ["collection.template"]
     name: ClassVar[str] = "List Templates"
     description: ClassVar[str] = (
@@ -81,7 +81,7 @@ class TemplateListTool(VersionedTool):
         description="List templates in a collection",
     )
     async def v1_0_0(self, ctx: ToolContext, args: Dict[str, Any]) -> ToolResult:
-        log = ctx.tool_logger("template.list")
+        log = ctx.tool_logger("collection.template.list")
 
         collection_id = str(args.get("collection_id") or "").strip()
         if not collection_id:
@@ -149,6 +149,6 @@ class TemplateListTool(VersionedTool):
                     logs=log.entries_dict(),
                 )
         except Exception as exc:
-            logger.error("template.list failed: %s", exc, exc_info=True)
-            log.error("template.list failed", error=str(exc))
+            logger.error("collection.template.list failed: %s", exc, exc_info=True)
+            log.error("collection.template.list failed", error=str(exc))
             return ToolResult.fail(f"Failed to list templates: {exc}", logs=log.entries_dict())

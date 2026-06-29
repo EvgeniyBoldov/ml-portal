@@ -7,12 +7,12 @@ in the VersionedTool tool_registry upon import.
 Collection builtin handler slugs (internal):
 - collection.search          — SQL search with DSL filters, sorting, pagination
 - collection.doc_search      — internal handler slug for collection.document.search
-- collection.text_search     — semantic search in table/template collections (retrieval-enabled text fields)
+- collection.template.search — semantic search in template collections (retrieval-enabled text fields)
 - collection.list_documents  — list files in a document collection with metadata and storage_uri
 - collection.get_document    — get single document metadata and storage_uri
 - collection.get             — get single record by primary key
 - collection.aggregate       — aggregations (count, sum, avg, min, max, group_by, having)
-- collection.catalog         — schema/data-shape inspection for any collection type
+- collection.info           — collection structure, metadata, and observed filter values for bound collection
 - file.generate              — persist generated file (csv/json/txt/md) to chat storage and return storage_uri
 - file.read                  — read a file by canonical storage_uri (s3://bucket/key)
 - file.analyze               — inspect spreadsheet structure (Excel/CSV) by canonical storage_uri
@@ -25,7 +25,7 @@ Runtime publishes canonical operation names for LLM/planner:
 - collection.template.search
 - collection.table.get
 - collection.table.aggregate
-- collection.catalog_inspect
+- collection.info
 """
 
 

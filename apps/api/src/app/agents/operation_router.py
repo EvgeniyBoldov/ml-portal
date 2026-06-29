@@ -18,6 +18,7 @@ from app.agents.operation_resolver import RuntimeOperationResolver
 from app.agents.operation_builder import OperationBuilder
 from app.agents.runtime_graph import RuntimeExecutionGraph
 from app.agents.runtime_graph_builder import RuntimeExecutionGraphBuilder
+from app.agents.capability_resolver import CollectionCapabilityResolver, SystemCapabilityResolver
 from app.agents.runtime.published_capabilities import attach_published_operation_summaries
 from app.agents.runtime_rbac_resolver import RuntimeRbacResolver
 from app.agents.tool_resolver import ToolResolver
@@ -55,6 +56,8 @@ class OperationRouter:
             runtime_rbac_resolver=self.runtime_rbac_resolver,
         )
         self.collection_tool_resolver = CollectionToolResolver(self.session)
+        self.collection_capability_resolver = CollectionCapabilityResolver(self.collection_tool_resolver)
+        self.system_capability_resolver = SystemCapabilityResolver(self.collection_tool_resolver)
         settings = get_settings()
         self.mcp_credential_broker_enabled = bool(
             getattr(settings, "MCP_CREDENTIAL_BROKER_ENABLED", False)
@@ -69,7 +72,7 @@ class OperationRouter:
         )
         self.operation_resolver = RuntimeOperationResolver(
             operation_builder=self.operation_builder,
-            collection_tool_resolver=self.collection_tool_resolver,
+            collection_capability_resolver=self.collection_capability_resolver,
             credential_resolver=self.runtime_credential_resolver,
         )
         self.collection_status_snapshot = CollectionStatusSnapshotService(self.session)
@@ -219,8 +222,8 @@ class OperationRouter:
         """Load global system tools and append to resolved operations."""
         from types import SimpleNamespace
 
-        system_tools = await self.collection_tool_resolver._load_system_tools()
-        if not system_tools:
+        system_capabilities = await self.system_capability_resolver.resolve()
+        if not system_capabilities:
             return
 
         dummy = SimpleNamespace(
@@ -234,11 +237,12 @@ class OperationRouter:
             health_status="healthy",
         )
 
-        for discovered_tool in system_tools:
-            if discovered_tool.slug in seen_operation_slugs:
+        for capability in system_capabilities:
+            discovered_tool = capability.discovered_tool
+            if str(getattr(discovered_tool, "slug", "") or "") in seen_operation_slugs:
                 continue
             built = await self.operation_builder._build_single_operation(
-                discovered_tool=discovered_tool,
+                capability=capability,
                 instance=dummy,
                 provider=dummy,
                 has_credentials=True,
@@ -289,6 +293,7 @@ class OperationRouter:
         collection_type: Optional[str] = None
         data_description: Optional[str] = None
         usage_purpose: Optional[str] = None
+        usage_rules: Optional[str] = None
         remote_tables: List[str] = []
         if collection is not None:
             description = collection.description or None
@@ -307,6 +312,7 @@ class OperationRouter:
             if current_version is not None:
                 data_description = getattr(current_version, "data_description", None) or None
                 usage_purpose = getattr(current_version, "usage_purpose", None) or None
+                usage_rules = getattr(current_version, "usage_rules", None) or None
         if not description:
             description = instance.description or None
         return ResolvedDataInstance(
@@ -324,6 +330,7 @@ class OperationRouter:
             collection_type=collection_type,
             data_description=data_description,
             usage_purpose=usage_purpose,
+            usage_rules=usage_rules,
             remote_tables=remote_tables,
             readiness=readiness,
         )

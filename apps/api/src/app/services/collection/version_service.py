@@ -57,6 +57,7 @@ class CollectionVersionService:
         *,
         data_description: str | None = None,
         usage_purpose: str | None = None,
+        usage_rules: str | None = None,
         notes: str | None = None,
     ) -> CollectionVersion:
         """Create a new draft version."""
@@ -73,6 +74,7 @@ class CollectionVersionService:
             status=CollectionVersionStatus.DRAFT.value,
             data_description=data_description,
             usage_purpose=usage_purpose,
+            usage_rules=usage_rules,
             notes=notes,
         )
         self.session.add(version)
@@ -86,6 +88,7 @@ class CollectionVersionService:
         *,
         data_description: object = None,
         usage_purpose: object = None,
+        usage_rules: object = None,
         notes: object = None,
         _UNSET: object = None,
     ) -> CollectionVersion:
@@ -98,6 +101,8 @@ class CollectionVersionService:
             version_obj.data_description = data_description
         if usage_purpose is not _UNSET:
             version_obj.usage_purpose = usage_purpose
+        if usage_rules is not _UNSET:
+            version_obj.usage_rules = usage_rules
         if notes is not _UNSET:
             version_obj.notes = notes
 
@@ -197,6 +202,7 @@ class CollectionVersionService:
             prompt_context_params={},
             data_description=collection.description,
             usage_purpose="Initial version",
+            usage_rules=None,
             notes="Initial version",
         )
 

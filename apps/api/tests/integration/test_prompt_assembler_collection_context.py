@@ -37,6 +37,11 @@ async def test_prompt_assembler_renders_collection_description_and_entity_type_w
         status=CollectionStatus.READY.value,
         fields=[],
     )
+    collection.current_version = SimpleNamespace(
+        data_description=None,
+        usage_purpose=None,
+        usage_rules="Сначала проверь доступные поля, потом используй поиск.",
+    )
 
     instance = ToolInstance(
         id=uuid4(),
@@ -94,6 +99,7 @@ async def test_prompt_assembler_renders_collection_description_and_entity_type_w
     prompt = PromptAssembler().assemble_collection_prompt(result.resolved_data_instances)
 
     assert "- Description: Netbox devices inventory" in prompt
+    assert "- Usage rules: Сначала проверь доступные поля, потом используй поиск." in prompt
     assert "- Entity type: device" in prompt
     assert "summary" not in prompt.lower()
     assert "use_cases" not in prompt.lower()

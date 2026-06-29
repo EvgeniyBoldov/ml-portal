@@ -17,7 +17,7 @@ import {
 import { buildEntityCrudActions } from '@/shared/ui/EntityPage/entityCrudActions';
 import { Block, EntityPageV2, Tab } from '@/shared/ui';
 import type { GridFieldConfig as FieldConfig } from '@/shared/ui';
-import { ContractAwareEditor } from '@/shared/ui/ContractAwareEditor';
+import { ContractAwareEditor } from '@/shared/ui/ContractAwareEditor/ContractAwareEditor';
 import {
   FACT_EXTRACTOR_INPUT_CONTRACT,
   PLANNER_INPUT_CONTRACT,

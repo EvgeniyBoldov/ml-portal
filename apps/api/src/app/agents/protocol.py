@@ -7,7 +7,7 @@
 Формат:
 ```operation_call
 {
-    "operation": "instance.docs.collection.doc_search",
+    "operation": "instance.docs.collection.document.search",
     "arguments": {
         "query": "как настроить nginx"
     }
@@ -24,6 +24,7 @@ from dataclasses import dataclass
 
 from app.agents.context import OperationCall
 from app.agents.json_utils import extract_balanced_json
+from app.agents.runtime.prompt_contract import build_prompt_input_schema, build_prompt_operation_description
 from app.services.platform_settings_defaults import PLATFORM_OPERATION_RULES_TEXT
 
 if TYPE_CHECKING:
@@ -221,9 +222,9 @@ def build_operations_prompt(
 
 {rules_block}
 
-Правила выбора операций:
+    Правила выбора операций:
 - Сначала сопоставь задачу с нужной коллекцией или системной возможностью из capability card выше.
-- Для collection-bound операций не меняй коллекцию вручную: выбирай exact call name у операции, которая уже привязана к нужной collection_slug.
+- Для collection-bound операций используй exact call name у операции, которая уже привязана к нужной коллекции. Не передавай и не меняй `collection_slug`/`collection_id`, если операция явно не требует это в своей схеме.
 - Каноническое имя операции и описание нужны для понимания смысла, но в поле `operation` нужно передавать точное имя из `function.name`.
 
 {call_heading}
@@ -323,7 +324,7 @@ def build_tools_payload(
     """
     tools: List[Dict[str, Any]] = []
     for op in operations:
-        raw = dict(op.input_schema) if op.input_schema else {}
+        raw = build_prompt_input_schema(op)
         schema = _sanitize_tool_schema(raw)
         schema.setdefault("type", "object")
         schema.setdefault("properties", {})
@@ -331,7 +332,11 @@ def build_tools_payload(
             "type": "function",
             "function": {
                 "name": op.operation_slug,
-                "description": (op.description or op.name or op.operation_slug)[:512],
+                "description": build_prompt_operation_description(
+                    op,
+                    summary=getattr(op, "published", None),
+                    max_chars=512,
+                ),
                 "parameters": schema,
             },
         }

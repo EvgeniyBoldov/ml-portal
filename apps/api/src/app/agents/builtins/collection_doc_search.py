@@ -178,7 +178,7 @@ class CollectionDocSearchTool(VersionedTool):
                     log.error("Not a document collection", type=collection.collection_type)
                     return ToolResult.fail(
                         f"Collection '{collection_slug}' is not a document collection "
-                        f"(type={collection.collection_type}). Use collection.text_search for table collections.",
+                        f"(type={collection.collection_type}). Use collection.table.search for table collections.",
                         logs=log.entries_dict(),
                     )
 

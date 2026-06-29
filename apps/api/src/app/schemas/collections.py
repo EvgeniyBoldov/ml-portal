@@ -287,6 +287,10 @@ class CollectionVersionCreate(BaseModel):
         default=None,
         description="Зачем эти данные нужны в рантайме и какие задачи покрывают.",
     )
+    usage_rules: Optional[str] = Field(
+        default=None,
+        description="Как агент должен использовать коллекцию: порядок вызова операций, обязательные проверки, запреты.",
+    )
     notes: Optional[str] = None
 
 
@@ -299,6 +303,10 @@ class CollectionVersionUpdate(BaseModel):
         default=None,
         description="Зачем эти данные нужны в рантайме и какие задачи покрывают.",
     )
+    usage_rules: Optional[str] = Field(
+        default=None,
+        description="Как агент должен использовать коллекцию: порядок вызова операций, обязательные проверки, запреты.",
+    )
     notes: Optional[str] = None
 
 
@@ -309,6 +317,7 @@ class CollectionVersionResponse(BaseModel):
     status: str = CollectionVersionStatus.DRAFT.value
     data_description: Optional[str] = None
     usage_purpose: Optional[str] = None
+    usage_rules: Optional[str] = None
     notes: Optional[str] = None
     created_at: str
     updated_at: str

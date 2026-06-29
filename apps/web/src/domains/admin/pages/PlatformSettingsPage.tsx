@@ -13,7 +13,7 @@ import { DataTable, type DataTableColumn, Badge, Button } from '@/shared/ui';
 import { EntityPageV2, Tab } from '@/shared/ui';
 import { buildEntityCrudActions } from '@/shared/ui/EntityPage/entityCrudActions';
 import { ADMIN_ACTION_LABELS, ADMIN_ENTITY_LABELS } from '@/shared/constants/adminLabels';
-import { RBACRulesTable } from '@/shared/ui/RBACRulesTable';
+import { RBACRulesTable } from '@/shared/ui/RBACRulesTable/RBACRulesTable';
 import { CredentialsPanel } from '@/shared/ui/CredentialsPanel';
 import { Block, type FieldConfig } from '@/shared/ui/GridLayout';
 import { usePlatformSettings, useUpdatePlatformSettings, useFillPlatformSettingsDefaults, usePlatformExecutionLimits, useUpdatePlatformExecutionLimits } from '@/shared/api/hooks/usePlatformSettings';

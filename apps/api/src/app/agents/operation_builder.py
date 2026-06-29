@@ -3,9 +3,10 @@ from __future__ import annotations
 from typing import Awaitable, Callable, List, Optional
 from uuid import UUID
 
+from app.agents.capability_resolver import CapabilityCandidate
 from app.agents.contracts import OperationCredentialContext, ProviderExecutionTarget, ResolvedOperation
 from app.agents.operation_publication import build_runtime_operation_slug
-from app.agents.runtime.published_capabilities import summarize_input_schema
+from app.agents.runtime.prompt_contract import build_prompt_input_schema, summarize_prompt_input_schema
 from app.agents.runtime_rbac_resolver import RuntimeRbacResolver
 from app.agents.tool_resolver import ResolvedTool, ToolResolver
 from app.core.logging import get_logger
@@ -39,18 +40,14 @@ class OperationBuilder:
         effective_permissions: Optional[EffectivePermissions] = None,
         user_id: Optional[UUID] = None,
         tenant_id: Optional[UUID] = None,
-        load_discovered_capabilities: Callable[..., Awaitable[List[DiscoveredTool]]],  # (instance, provider) -> List[DiscoveredTool]
+        capability_candidates: List[CapabilityCandidate],
         resolve_execution_credentials: Callable[..., Awaitable[Optional[OperationCredentialContext]]],
     ) -> List[tuple[ResolvedOperation, Optional[OperationCredentialContext]]]:
-        discovered_tools = await load_discovered_capabilities(
-            instance=instance,
-            provider=provider,
-        )
         operations: List[tuple[ResolvedOperation, Optional[OperationCredentialContext]]] = []
         seen_operation_slugs: set[str] = set()
-        for discovered_tool in discovered_tools:
+        for capability in capability_candidates:
             built = await self._build_single_operation(
-                discovered_tool=discovered_tool,
+                capability=capability,
                 instance=instance,
                 provider=provider,
                 has_credentials=has_credentials,
@@ -69,7 +66,7 @@ class OperationBuilder:
     async def _build_single_operation(
         self,
         *,
-        discovered_tool: DiscoveredTool,
+        capability: CapabilityCandidate,
         instance: ToolInstance,
         provider: ToolInstance,
         has_credentials: Optional[bool],
@@ -81,7 +78,8 @@ class OperationBuilder:
         seen_operation_slugs: set[str],
         resolve_execution_credentials: Callable[..., Awaitable[Optional[OperationCredentialContext]]],
     ) -> Optional[tuple[ResolvedOperation, Optional[OperationCredentialContext]]]:
-        raw_operation_name = discovered_tool.slug
+        discovered_tool = capability.discovered_tool
+        raw_operation_name = str(getattr(discovered_tool, "slug", "") or "")
         if not raw_operation_name.strip():
             return None
 
@@ -232,7 +230,8 @@ class OperationBuilder:
             raw_tool_slug=raw_operation_name,
             published_domain=resolution.domain,
             result_kind=resolution.result_kind,
-            input_schema_summary=summarize_input_schema(resolution.input_schema),
+            input_schema_summary=[],
             target=target,
         )
+        operation.input_schema_summary = summarize_prompt_input_schema(build_prompt_input_schema(operation))
         return operation, credential_context

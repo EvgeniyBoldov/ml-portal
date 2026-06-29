@@ -74,7 +74,7 @@ def default_runtime_eval_cases() -> tuple[RuntimeEvaluationCase, ...]:
         RuntimeEvaluationCase(
             key="table_or_sql_retrieval",
             title="Table or SQL retrieval path",
-            required_operations=("collection.catalog_inspect",),
+            required_operations=("collection.info",),
         ),
         RuntimeEvaluationCase(
             key="missing_credential_path",
@@ -99,8 +99,8 @@ def default_runtime_eval_cases() -> tuple[RuntimeEvaluationCase, ...]:
         RuntimeEvaluationCase(
             key="duplicate_tool_reuse",
             title="Repeated identical calls should be reused",
-            required_operations=("collection.catalog_inspect",),
-            forbidden_operations=("collection.catalog_inspect.duplicate",),
+            required_operations=("collection.info",),
+            forbidden_operations=("collection.info.duplicate",),
         ),
     )
 

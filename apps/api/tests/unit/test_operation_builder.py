@@ -6,6 +6,7 @@ from uuid import uuid4
 
 import pytest
 
+from app.agents.capability_resolver import CapabilityCandidate
 from app.agents.operation_builder import OperationBuilder
 
 
@@ -39,7 +40,12 @@ async def test_system_tool_uses_stable_data_instance_sentinel() -> None:
     discovered_tool = SimpleNamespace(slug="file.read", source="local", domains=["system"])
 
     built = await builder._build_single_operation(
-        discovered_tool=discovered_tool,
+        capability=CapabilityCandidate(
+            canonical_op_slug="file.read",
+            raw_tool_slug="file.read",
+            scope_kind="system",
+            discovered_tool=discovered_tool,
+        ),
         instance=instance,
         provider=instance,
         has_credentials=True,
@@ -89,10 +95,15 @@ async def test_template_builtin_is_published_as_collection_operation() -> None:
     )
 
     instance = SimpleNamespace(id=uuid4(), slug="template-data", url=None, is_local=True, health_status="healthy")
-    discovered_tool = SimpleNamespace(slug="template.fill", source="local", domains=["system"])
+    discovered_tool = SimpleNamespace(slug="collection.template.fill", source="local", domains=["collection.template"])
 
     built = await builder._build_single_operation(
-        discovered_tool=discovered_tool,
+        capability=CapabilityCandidate(
+            canonical_op_slug="collection.template.fill",
+            raw_tool_slug="collection.template.fill",
+            scope_kind="collection",
+            discovered_tool=discovered_tool,
+        ),
         instance=instance,
         provider=instance,
         has_credentials=True,
@@ -110,6 +121,6 @@ async def test_template_builtin_is_published_as_collection_operation() -> None:
     assert operation.scope == "collection"
     assert operation.operation == "collection.template.fill"
     assert operation.operation_slug == "instance.template-data.collection.template.fill"
-    assert operation.raw_tool_slug == "template.fill"
+    assert operation.raw_tool_slug == "collection.template.fill"
     assert operation.result_kind == "file"
     assert operation.data_instance_slug == "template-data"

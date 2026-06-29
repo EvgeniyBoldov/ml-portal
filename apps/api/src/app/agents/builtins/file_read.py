@@ -3,9 +3,6 @@ File Read Tool — reads a file by canonical storage_uri.
 
 Preferred input is an exact S3/MinIO URI in canonical form:
 - s3://<bucket>/<key>
-
-Legacy file_id inputs are still accepted for backward compatibility, but
-agents should use storage_uri returned by producer tools.
 """
 from __future__ import annotations
 
@@ -30,14 +27,12 @@ _INPUT_SCHEMA_V1 = {
                 "Canonical storage URI to read, in the form "
                 "'s3://<bucket>/<key>'. "
                 "Pass the exact storage_uri returned by producer tools such as "
-                "collection.get_document, collection.list_documents, template.list, template.fill, or file.generate."
+                "collection.document.get, collection.document.list, collection.template.list, "
+                "collection.template.fill, or file.generate."
             ),
         },
-        "file_id": {
-            "type": "string",
-            "description": "Deprecated legacy delivery id. Use storage_uri instead.",
-        },
     },
+    "required": ["storage_uri"],
 }
 
 _OUTPUT_SCHEMA_V1 = {
@@ -57,7 +52,7 @@ _OUTPUT_SCHEMA_V1 = {
 @register_tool
 class FileReadTool(VersionedTool):
     """
-    Read a file by its file_id from chat storage or document collections.
+    Read a file by its canonical storage_uri from chat storage or collection outputs.
 
     Use this to inspect the contents of a previously uploaded/generated chat file,
     or to read an original file from a document collection (e.g. an Excel template).
@@ -87,8 +82,7 @@ class FileReadTool(VersionedTool):
         log = ctx.tool_logger("file.read")
 
         storage_uri = str(args.get("storage_uri") or "").strip()
-        legacy_file_id = str(args.get("file_id") or "").strip()
-        if not storage_uri and not legacy_file_id:
+        if not storage_uri:
             log.error("Missing storage_uri")
             return ToolResult.fail("Missing 'storage_uri' argument", logs=log.entries_dict())
 
@@ -100,7 +94,7 @@ class FileReadTool(VersionedTool):
                 logs=log.entries_dict(),
             )
 
-        log.info("Reading file", storage_uri=storage_uri or None, file_id=legacy_file_id or None)
+        log.info("Reading file", storage_uri=storage_uri)
 
         try:
             session_factory = get_session_factory()
@@ -109,11 +103,7 @@ class FileReadTool(VersionedTool):
                     session, tenant_id=ctx.tenant_id, user_id=user_id
                 )
                 service = FileDeliveryService(session, repo_factory)
-                if storage_uri:
-                    resolved = await service.resolve_storage_uri(storage_uri, owner_id=str(user_id))
-                else:
-                    resolved = await service.resolve(legacy_file_id, owner_id=str(user_id))
-                    storage_uri = FileDeliveryService.make_storage_uri(resolved.bucket, resolved.key)
+                resolved = await service.resolve_storage_uri(storage_uri, owner_id=str(user_id))
 
                 # Load from S3
                 payload = await s3_manager.get_object(resolved.bucket, resolved.key)

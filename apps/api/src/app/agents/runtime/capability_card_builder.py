@@ -134,6 +134,9 @@ class CapabilityCardBuilder:
             data_description = self._text(summary.data_description)
             if data_description:
                 lines.append(f"  - {self._label(labels, 'data_label', 'данные')}: {data_description}")
+            usage_rules = self._text(getattr(summary, "usage_rules", None))
+            if usage_rules:
+                lines.append(f"  - {self._label(labels, 'usage_rules_label', 'правила работы')}: {usage_rules}")
             remote_tables = [self._text(v) for v in (item.remote_tables or []) if self._text(v)]
             if remote_tables:
                 preview = ", ".join(f"`{name}`" for name in remote_tables[:5])
@@ -155,21 +158,23 @@ class CapabilityCardBuilder:
                     descriptor = self._text(summary_op.description)
                     result_kind = self._text(summary_op.result_kind)
                     details = []
-                    invoke_as = self._text(getattr(operation, "operation_slug", None))
-                    if invoke_as and invoke_as != operation.operation:
-                        details.append(f"вызов: {invoke_as}")
+                    invoke_as = self._text(getattr(operation, "operation_slug", None)) or self._text(operation.operation)
+                    canonical_name = self._text(getattr(summary_op, "canonical_name", None)) or self._text(operation.operation)
+                    if canonical_name and canonical_name != invoke_as:
+                        details.append(f"каноническое имя: {canonical_name}")
                     if descriptor:
                         details.append(descriptor)
                     if result_kind:
                         details.append(f"результат: {result_kind}")
                     suffix = f" — {'; '.join(details)}" if details else ""
                     lines.append(
-                        f"    - `{operation.operation}` ({self._text(summary_op.title) or operation.name}){suffix}"
+                        f"    - `{invoke_as}` ({self._text(summary_op.title) or operation.name}){suffix}"
                     )
                 if collection_type == "template":
                     lines.append(
-                        "  - правило для template: `row_id` для `template.get_schema` и `template.fill` "
-                        "берётся только из `template.list.row_id`; не придумывай промежуточные метки или поиск-результаты."
+                        "  - правило для template: `row_id` для `collection.template.get_schema` и "
+                        "`collection.template.fill` берётся только из `collection.template.list`; "
+                        "не придумывай промежуточные метки или поиск-результаты."
                     )
             else:
                 lines.append("  - доступные действия: нет")
@@ -203,15 +208,16 @@ class CapabilityCardBuilder:
             shown += 1
             summary = op.published or build_published_operation_summary(op)
             details: List[str] = []
+            canonical_name = self._text(getattr(summary, "canonical_name", None)) or self._text(op.operation)
+            invoke_as = self._text(getattr(op, "operation_slug", None)) or canonical_name
+            if canonical_name and canonical_name != invoke_as:
+                details.append(f"каноническое имя: {canonical_name}")
             if self._text(summary.description):
                 details.append(self._text(summary.description))
             if self._text(summary.result_kind):
                 details.append(f"результат: {self._text(summary.result_kind)}")
-            invoke_as = self._text(getattr(op, "operation_slug", None))
-            if invoke_as and invoke_as != op.operation:
-                details.append(f"вызов: {invoke_as}")
             suffix = f" - {'; '.join(details)}" if details else ""
-            lines.append(f"- `{op.operation}` ({self._text(summary.title) or op.name}){suffix}")
+            lines.append(f"- `{invoke_as}` ({self._text(summary.title) or op.name}){suffix}")
 
         total = len([item for item in operations if item.scope == "system"])
         if total == 0:

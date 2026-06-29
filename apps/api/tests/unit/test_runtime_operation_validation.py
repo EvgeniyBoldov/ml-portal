@@ -8,8 +8,10 @@ import pytest
 
 from app.agents.context import OperationCall, RuntimeDependencies, ToolContext, ToolResult
 from app.agents.contracts import ProviderExecutionTarget, ResolvedOperation
+from app.agents.operation_executor import DirectOperationExecutor
 from app.agents.runtime import tools as runtime_tools
 from app.agents.runtime.tools import OperationExecutor
+from app.agents.runtime_graph import OperationExecutionBinding, OperationRuntimeContext
 from app.runtime.operation_errors import RuntimeErrorCode
 
 
@@ -210,3 +212,92 @@ async def test_operation_executor_requires_exact_invoke_name():
     assert result.success is False
     assert executor_impl.await_count == 0
     assert result.metadata.get("error_code") == RuntimeErrorCode.OPERATION_UNAVAILABLE.value
+
+
+def test_merge_local_args_injects_bound_collection_identifiers():
+    target = ProviderExecutionTarget(
+        operation_slug="instance.templates.collection.template.fill",
+        provider_type="local",
+        provider_instance_id=str(uuid4()),
+        provider_instance_slug="template-runtime",
+        provider_url=None,
+        data_instance_id=str(uuid4()),
+        data_instance_slug="template",
+        handler_slug="collection.template_fill",
+    )
+    collection_id = str(uuid4())
+    binding = OperationExecutionBinding(
+        operation_slug=target.operation_slug,
+        target=target,
+        context=OperationRuntimeContext(
+            instance_id=str(uuid4()),
+            instance_slug="template",
+            scope="collection",
+            collection_id=collection_id,
+            collection_slug="template",
+            allowed_collection_slugs=["template"],
+            provider_instance_id=str(uuid4()),
+            provider_instance_slug="template-runtime",
+            config={},
+            provider_config={},
+            domain="collection.template",
+            data_instance_url=None,
+            provider_url=None,
+        ),
+        credential=None,
+    )
+
+    merged = DirectOperationExecutor._merge_local_args(
+        target,
+        {"row_id": "row-1", "values": {"src_ip": "10.10.10.2"}},
+        ToolContext(tenant_id=uuid4(), user_id=uuid4()),
+        binding=binding,
+    )
+
+    assert merged["collection_slug"] == "template"
+    assert merged["collection_id"] == collection_id
+
+
+def test_merge_local_args_rejects_mismatched_bound_collection_id():
+    target = ProviderExecutionTarget(
+        operation_slug="instance.templates.collection.template.fill",
+        provider_type="local",
+        provider_instance_id=str(uuid4()),
+        provider_instance_slug="template-runtime",
+        provider_url=None,
+        data_instance_id=str(uuid4()),
+        data_instance_slug="template",
+        handler_slug="collection.template_fill",
+    )
+    binding = OperationExecutionBinding(
+        operation_slug=target.operation_slug,
+        target=target,
+        context=OperationRuntimeContext(
+            instance_id=str(uuid4()),
+            instance_slug="template",
+            scope="collection",
+            collection_id=str(uuid4()),
+            collection_slug="template",
+            allowed_collection_slugs=["template"],
+            provider_instance_id=str(uuid4()),
+            provider_instance_slug="template-runtime",
+            config={},
+            provider_config={},
+            domain="collection.template",
+            data_instance_url=None,
+            provider_url=None,
+        ),
+        credential=None,
+    )
+
+    with pytest.raises(ValueError, match="does not match the bound collection id"):
+        DirectOperationExecutor._merge_local_args(
+            target,
+            {
+                "collection_id": str(uuid4()),
+                "row_id": "row-1",
+                "values": {"src_ip": "10.10.10.2"},
+            },
+            ToolContext(tenant_id=uuid4(), user_id=uuid4()),
+            binding=binding,
+        )

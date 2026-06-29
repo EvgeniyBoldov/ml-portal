@@ -98,13 +98,13 @@ class CollectionTextSearchTool(VersionedTool):
     Результаты обогащаются полными данными из SQL-таблицы.
     """
 
-    tool_slug: ClassVar[str] = "collection.text_search"
-    domains: ClassVar[list] = ["collection.table", "collection.template"]
-    name: ClassVar[str] = "Collection Text Search"
+    tool_slug: ClassVar[str] = "collection.template.search"
+    domains: ClassVar[list] = ["collection.template"]
+    name: ClassVar[str] = "Template Search"
     description: ClassVar[str] = (
-        "Semantic search within a table or template collection that has retrieval-enabled text fields. "
-        "Finds rows with semantically similar text using vector similarity. "
-        "Returns matched text, relevance score, and full row data."
+        "Semantic search within a template collection that has retrieval-enabled text fields. "
+        "Use it to find the right template row by meaning before calling collection.template.get_schema "
+        "or collection.template.fill. Returns matched text, relevance score, and full row data."
     )
 
     @tool_version(
@@ -128,7 +128,7 @@ class CollectionTextSearchTool(VersionedTool):
         )
         from app.services.collection_service import CollectionService
 
-        log = ctx.tool_logger("collection.text_search")
+        log = ctx.tool_logger("collection.template.search")
 
         collection_slug = args["collection_slug"]
         query = args["query"]

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import re
-from typing import Dict, Iterable, Optional, Tuple
+from typing import Dict, Iterable, Optional, Tuple, Literal
 
 
 @dataclass(frozen=True, slots=True)
@@ -16,6 +16,9 @@ class OperationSpec:
     collection_types: Tuple[str, ...] = ()
     requires_collection_binding: bool = False
     requires_vector_search: bool = False
+
+    def to_publication_decision(self) -> "PublicationDecision":
+        return PublicationDecision(canonical_op_slug=self.canonical_op_slug, spec=self)
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,14 +38,23 @@ class PublicationDecision:
         return self.spec.scope_kind
 
 
+@dataclass(frozen=True, slots=True)
+class CollectionCapabilityBinding:
+    canonical_op_slug: str
+    raw_tool_slugs: Tuple[str, ...]
+    source: Literal["local", "mcp", "any"] = "any"
+
+
 _OPERATION_SPECS: Dict[str, OperationSpec] = {
-    "collection.catalog_inspect": OperationSpec(
-        canonical_op_slug="collection.catalog_inspect",
-        domain="system",
-        title="Collection Catalog Inspect",
-        description="Inspect collection schema, metadata, and data-shape for any collection by slug",
+    "collection.info": OperationSpec(
+        canonical_op_slug="collection.info",
+        domain="collection",
+        title="Collection Info",
+        description="Inspect the bound collection schema, metadata, filterable fields, and observed values",
         result_kind="catalog",
-        scope_kind="system",
+        scope_kind="collection",
+        collection_types=("table", "document", "template", "sql", "api"),
+        requires_collection_binding=True,
     ),
     "sql.execute_sql": OperationSpec(
         canonical_op_slug="sql.execute_sql",
@@ -235,8 +247,7 @@ _OPERATION_SPECS: Dict[str, OperationSpec] = {
 }
 
 # Planner/LLM-facing retrieval operations.
-# Raw builtin tool slugs (collection.doc_search / collection.search / collection.text_search)
-# are adapter-level implementation details and must not leak into prompts.
+# Raw builtin tool slugs are adapter-level implementation details and must not leak into prompts.
 PUBLIC_RETRIEVAL_OPERATIONS: tuple[str, ...] = (
     "collection.document.search",
     "collection.table.search",
@@ -295,9 +306,29 @@ _PUBLICATION_RULES: tuple[PublicationRule, ...] = (
         canonical_op_slug="collection.table.get",
     ),
     PublicationRule(
-        instance_domain="system",
-        raw_tool_slug="collection.catalog",
-        canonical_op_slug="collection.catalog_inspect",
+        instance_domain="collection.table",
+        raw_tool_slug="collection.info",
+        canonical_op_slug="collection.info",
+    ),
+    PublicationRule(
+        instance_domain="collection.document",
+        raw_tool_slug="collection.info",
+        canonical_op_slug="collection.info",
+    ),
+    PublicationRule(
+        instance_domain="collection.template",
+        raw_tool_slug="collection.info",
+        canonical_op_slug="collection.info",
+    ),
+    PublicationRule(
+        instance_domain="collection.sql",
+        raw_tool_slug="collection.info",
+        canonical_op_slug="collection.info",
+    ),
+    PublicationRule(
+        instance_domain="collection.api",
+        raw_tool_slug="collection.info",
+        canonical_op_slug="collection.info",
     ),
     PublicationRule(
         instance_domain="collection.document",
@@ -321,22 +352,22 @@ _PUBLICATION_RULES: tuple[PublicationRule, ...] = (
     ),
     PublicationRule(
         instance_domain="collection.template",
-        raw_tool_slug="template.list",
+        raw_tool_slug="collection.template.list",
         canonical_op_slug="collection.template.list",
     ),
     PublicationRule(
         instance_domain="collection.template",
-        raw_tool_slug="collection.text_search",
+        raw_tool_slug="collection.template.search",
         canonical_op_slug="collection.template.search",
     ),
     PublicationRule(
         instance_domain="collection.template",
-        raw_tool_slug="template.get_schema",
+        raw_tool_slug="collection.template.get_schema",
         canonical_op_slug="collection.template.get_schema",
     ),
     PublicationRule(
         instance_domain="collection.template",
-        raw_tool_slug="template.fill",
+        raw_tool_slug="collection.template.fill",
         canonical_op_slug="collection.template.fill",
     ),
     PublicationRule(
@@ -385,6 +416,41 @@ _PUBLICATION_RULES: tuple[PublicationRule, ...] = (
         canonical_op_slug="collection.sql.search_objects",
     ),
 )
+
+_COLLECTION_CAPABILITY_BINDINGS: Dict[str, Tuple[CollectionCapabilityBinding, ...]] = {
+    "document": (
+        CollectionCapabilityBinding("collection.info", ("collection.info",), source="local"),
+        CollectionCapabilityBinding("collection.document.search", ("collection.document.search", "collection.doc_search")),
+        CollectionCapabilityBinding("collection.document.list", ("collection.list_documents",)),
+        CollectionCapabilityBinding("collection.document.get", ("collection.get_document",)),
+    ),
+    "table": (
+        CollectionCapabilityBinding("collection.info", ("collection.info",), source="local"),
+        CollectionCapabilityBinding("collection.table.search", ("collection.table.search", "collection.search")),
+        CollectionCapabilityBinding("collection.table.aggregate", ("collection.table.aggregate", "collection.aggregate")),
+        CollectionCapabilityBinding("collection.table.get", ("collection.table.get", "collection.get")),
+    ),
+    "template": (
+        CollectionCapabilityBinding("collection.info", ("collection.info",), source="local"),
+        CollectionCapabilityBinding("collection.template.list", ("collection.template.list",), source="local"),
+        CollectionCapabilityBinding("collection.template.search", ("collection.template.search",), source="local"),
+        CollectionCapabilityBinding("collection.template.get_schema", ("collection.template.get_schema",), source="local"),
+        CollectionCapabilityBinding("collection.template.fill", ("collection.template.fill",), source="local"),
+    ),
+    "sql": (
+        CollectionCapabilityBinding("collection.info", ("collection.info",), source="local"),
+        CollectionCapabilityBinding("collection.sql.search_objects", ("sql.search_objects", "search_objects"), source="mcp"),
+        CollectionCapabilityBinding("collection.sql.execute", ("sql.execute_sql", "execute_sql"), source="mcp"),
+    ),
+    "api": (
+        CollectionCapabilityBinding("collection.info", ("collection.info",), source="local"),
+        CollectionCapabilityBinding("collection.api.get_device", ("netbox_get_device",), source="mcp"),
+        CollectionCapabilityBinding("collection.api.search_devices", ("netbox_search_devices",), source="mcp"),
+        CollectionCapabilityBinding("collection.api.list_sites", ("netbox_list_sites",), source="mcp"),
+        CollectionCapabilityBinding("collection.api.get_objects", ("netbox_get_objects",), source="mcp"),
+        CollectionCapabilityBinding("collection.api.search_objects", ("netbox_search_objects",), source="mcp"),
+    ),
+}
 
 _RULE_MAP: Dict[Tuple[str, str], str] = {
     (rule.instance_domain, rule.raw_tool_slug): rule.canonical_op_slug
@@ -538,6 +604,8 @@ def _resolve_non_collection_canonical(
 def _is_domain_allowed(op_domain: str, candidate_domains: tuple[str, ...]) -> bool:
     if not candidate_domains:
         return True
+    if "system" in candidate_domains and not op_domain.startswith("collection."):
+        return True
     return op_domain in candidate_domains
 
 
@@ -557,3 +625,13 @@ def canonical_operation_identity(
 ) -> Tuple[str, str]:
     canonical_name = canonical_operation_name(instance_domain, raw_slug)
     return canonical_name, build_runtime_operation_slug(instance_slug, canonical_name)
+
+
+def get_operation_spec(canonical_op_slug: str) -> Optional[OperationSpec]:
+    return _OPERATION_SPECS.get(str(canonical_op_slug or "").strip())
+
+
+def get_collection_capability_bindings(
+    collection_type: str,
+) -> Tuple[CollectionCapabilityBinding, ...]:
+    return _COLLECTION_CAPABILITY_BINDINGS.get(str(collection_type or "").strip().lower(), ())

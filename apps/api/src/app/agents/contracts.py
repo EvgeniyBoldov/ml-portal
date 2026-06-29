@@ -208,6 +208,7 @@ class PublishedCollectionSummary(BaseModel):
     title: Optional[str] = None
     purpose: Optional[str] = None
     data_description: Optional[str] = None
+    usage_rules: Optional[str] = None
     readiness_status: Optional[str] = None
     schema_freshness: Optional[str] = None
     missing_requirements: List[str] = Field(default_factory=list)
@@ -232,6 +233,7 @@ class ResolvedDataInstance(BaseModel):
     collection_type: Optional[str] = None
     data_description: Optional[str] = None
     usage_purpose: Optional[str] = None
+    usage_rules: Optional[str] = None
     remote_tables: List[str] = Field(default_factory=list)
     readiness: Optional[CollectionRuntimeReadiness] = None
 

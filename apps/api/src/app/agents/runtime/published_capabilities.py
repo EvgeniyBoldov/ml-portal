@@ -8,34 +8,7 @@ from app.agents.contracts import (
     ResolvedDataInstance,
     ResolvedOperation,
 )
-
-
-def summarize_input_schema(schema: dict | None, *, max_items: int = 4) -> list[str]:
-    if not isinstance(schema, dict):
-        return []
-    properties = schema.get("properties")
-    if not isinstance(properties, dict):
-        return []
-    required = {
-        str(item).strip()
-        for item in (schema.get("required") or [])
-        if str(item).strip()
-    }
-    summary: list[str] = []
-    for key, value in properties.items():
-        name = str(key).strip()
-        if not name:
-            continue
-        if len(summary) >= max_items:
-            break
-        field_type = ""
-        if isinstance(value, dict):
-            raw_type = str(value.get("type") or "").strip()
-            if raw_type:
-                field_type = f": {raw_type}"
-        suffix = " (required)" if name in required else ""
-        summary.append(f"{name}{field_type}{suffix}")
-    return summary
+from app.agents.runtime.prompt_contract import build_prompt_input_schema, summarize_prompt_input_schema
 
 
 def build_published_operation_summary(
@@ -58,7 +31,9 @@ def build_published_operation_summary(
         collection_readiness=str(getattr(readiness, "status", "") or "").strip() or None,
         schema_freshness=str(getattr(readiness, "schema_freshness", "") or "").strip() or None,
         provider_kind=operation.source,
-        input_schema_summary=list(operation.input_schema_summary or summarize_input_schema(operation.input_schema)),
+        input_schema_summary=list(
+            operation.input_schema_summary or summarize_prompt_input_schema(build_prompt_input_schema(operation))
+        ),
         side_effects=operation.side_effects,
         risk_level=operation.risk_level,
     )
@@ -83,6 +58,7 @@ def build_published_collection_summary(
         title=str(getattr(collection, "name", "") or "").strip() or None,
         purpose=collection.usage_purpose,
         data_description=collection.data_description or collection.description,
+        usage_rules=getattr(collection, "usage_rules", None),
         readiness_status=str(getattr(readiness, "status", "") or "").strip() or None,
         schema_freshness=str(getattr(readiness, "schema_freshness", "") or "").strip() or None,
         missing_requirements=[

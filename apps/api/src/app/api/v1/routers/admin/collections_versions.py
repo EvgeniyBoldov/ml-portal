@@ -33,6 +33,7 @@ def _serialize_version(entity) -> CollectionVersionResponse:
         status=entity.status,
         data_description=entity.data_description,
         usage_purpose=entity.usage_purpose,
+        usage_rules=entity.usage_rules,
         notes=entity.notes,
         created_at=entity.created_at.isoformat(),
         updated_at=entity.updated_at.isoformat(),
@@ -76,6 +77,7 @@ async def create_collection_version(
         collection_id,
         data_description=body.data_description,
         usage_purpose=body.usage_purpose,
+        usage_rules=body.usage_rules,
         notes=body.notes,
     )
     await session.commit()
@@ -100,6 +102,9 @@ async def update_collection_version(
         ),
         usage_purpose=(
             body.usage_purpose if "usage_purpose" in body.model_fields_set else _UNSET
+        ),
+        usage_rules=(
+            body.usage_rules if "usage_rules" in body.model_fields_set else _UNSET
         ),
         notes=body.notes if "notes" in body.model_fields_set else _UNSET,
     )

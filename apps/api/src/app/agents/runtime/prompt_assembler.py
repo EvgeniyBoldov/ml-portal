@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, TYPE_CHECKING
 
 from app.agents.protocol import build_operations_prompt
+from app.agents.runtime.prompt_contract import build_prompt_input_schema, build_prompt_operation_description
 from app.agents.runtime.agent_prompt_renderer import AgentPromptRenderer
 from app.agents.runtime.capability_card_builder import CapabilityCardBuilder
 from app.agents.runtime.policy import PolicyLimits
@@ -38,6 +39,7 @@ class CollectionPromptRenderer:
         )
         description = _text(payload.get("description"))
         entity_type = _text(payload.get("entity_type"))
+        usage_rules = _text(payload.get("usage_rules"))
 
         lines: List[str] = [f"### {name}"]
         if slug:
@@ -48,6 +50,8 @@ class CollectionPromptRenderer:
             lines.append(f"- Entity type: {entity_type}")
         if description:
             lines.append(f"- Description: {description}")
+        if usage_rules:
+            lines.append(f"- Usage rules: {usage_rules}")
         return "\n".join(lines)
 
 
@@ -57,13 +61,13 @@ class OperationPromptRenderer:
     @staticmethod
     def render_schema(op: "ResolvedOperation") -> Dict[str, Any]:
         prompt_meta = OperationPromptRenderer._build_prompt_metadata(op)
-        description = OperationPromptRenderer._build_description(op, prompt_meta)
+        description = build_prompt_operation_description(op, summary=getattr(op, "published", None), max_chars=OperationPromptRenderer.MAX_DESCRIPTION_CHARS)
         return {
             "type": "function",
             "function": {
                 "name": op.operation_slug,
                 "description": description,
-                "parameters": _compact_json_schema(op.input_schema or {}),
+                "parameters": _compact_json_schema(build_prompt_input_schema(op)),
             },
         }
 
@@ -89,31 +93,6 @@ class OperationPromptRenderer:
             "title": title or None,
             "description": description or None,
         }
-
-    @staticmethod
-    def _build_description(op: "ResolvedOperation", prompt_meta: Dict[str, Any]) -> str:
-        description_parts: List[str] = []
-        title = _text(prompt_meta.get("title"))
-        if title:
-            description_parts.append(title)
-        if prompt_meta.get("scope_kind") == "collection":
-            collection_slug = _text(prompt_meta.get("collection_slug"))
-            collection_type = _text(prompt_meta.get("collection_type"))
-            if collection_slug and collection_type:
-                description_parts.append(f"collection: {collection_slug} ({collection_type})")
-            elif collection_slug:
-                description_parts.append(f"collection: {collection_slug}")
-        description = _text(prompt_meta.get("description"))
-        if description:
-            description_parts.append(description)
-        result_kind = _text(prompt_meta.get("result_kind"))
-        if result_kind:
-            description_parts.append(f"result: {result_kind}")
-        rendered = " | ".join(description_parts) if description_parts else op.operation_slug
-        if len(rendered) > OperationPromptRenderer.MAX_DESCRIPTION_CHARS:
-            rendered = rendered[: OperationPromptRenderer.MAX_DESCRIPTION_CHARS].rstrip()
-        return rendered
-
 
 class PromptAssembler:
     def __init__(

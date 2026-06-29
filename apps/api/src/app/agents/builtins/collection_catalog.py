@@ -1,5 +1,5 @@
 """
-Collection Catalog Tool - schema/data-shape inspection for any collection type.
+Collection Info Tool - schema/data-shape inspection for any collection type.
 """
 from __future__ import annotations
 
@@ -46,6 +46,7 @@ _OUTPUT_SCHEMA_V1 = {
     "properties": {
         "collection": {"type": "object"},
         "schema": {"type": "object"},
+        "filter_hints": {"type": "object"},
         "stats": {"type": "object"},
         "dimensions": {"type": "object"},
         "remote_catalog": {"type": "object"},
@@ -54,7 +55,7 @@ _OUTPUT_SCHEMA_V1 = {
 
 
 @register_tool
-class CollectionCatalogTool(VersionedTool):
+class CollectionInfoTool(VersionedTool):
     """
     Inspect collection structure and metadata slice:
     - schema fields and flags
@@ -63,9 +64,15 @@ class CollectionCatalogTool(VersionedTool):
     - remote SQL catalog tables (sql collections)
     """
 
-    tool_slug: ClassVar[str] = "collection.catalog"
-    domains: ClassVar[list] = ["system"]
-    name: ClassVar[str] = "Collection Catalog"
+    tool_slug: ClassVar[str] = "collection.info"
+    domains: ClassVar[list] = [
+        "collection.table",
+        "collection.document",
+        "collection.template",
+        "collection.sql",
+        "collection.api",
+    ]
+    name: ClassVar[str] = "Collection Info"
     description: ClassVar[str] = (
         "Inspect collection schema and data shape: fields, metadata, dimensions, and remote catalog tables."
     )
@@ -80,7 +87,7 @@ class CollectionCatalogTool(VersionedTool):
         from app.core.db import get_session_factory
         from app.services.collection_service import CollectionService
 
-        log = ctx.tool_logger("collection.catalog")
+        log = ctx.tool_logger("collection.info")
 
         collection_slug = str(args.get("collection_slug") or "").strip()
         if not collection_slug:
@@ -126,35 +133,66 @@ class CollectionCatalogTool(VersionedTool):
                     collection_type=collection.collection_type,
                 )
 
+                user_fields = [self._field_view(field) for field in collection.get_user_fields()]
+                specific_fields = [self._field_view(field) for field in collection.get_specific_fields()]
+                system_fields = [self._field_view(field) for field in collection.get_system_fields()]
+                all_fields = [*specific_fields, *user_fields, *system_fields]
+                filterable_fields = [field["name"] for field in collection.get_filterable_fields()]
+                sortable_fields = [field["name"] for field in collection.get_sortable_fields()]
                 schema_payload = {
-                    "user_fields": [self._field_view(field) for field in collection.get_user_fields()],
-                    "specific_fields": [self._field_view(field) for field in collection.get_specific_fields()],
-                    "system_fields": [self._field_view(field) for field in collection.get_system_fields()],
-                    "filterable_fields": [field["name"] for field in collection.get_filterable_fields()],
-                    "sortable_fields": [field["name"] for field in collection.get_sortable_fields()],
+                    "fields": all_fields,
+                    "user_fields": user_fields,
+                    "specific_fields": specific_fields,
+                    "system_fields": system_fields,
+                    "filterable_fields": filterable_fields,
+                    "sortable_fields": sortable_fields,
                     "retrieval_fields": list(collection.vector_fields),
                     "prompt_context_fields": [field["name"] for field in collection.get_prompt_context_fields()],
                 }
 
                 stats_payload: Dict[str, Any] = {}
                 dimensions_payload: Dict[str, Any] = {}
+                filter_hints_payload: Dict[str, Any] = {
+                    "usage_rule": (
+                        "Use these field contracts and observed values before applying filters. "
+                        "Do not invent filter field names or values that are not present here."
+                    ),
+                    "fields": {},
+                }
 
                 if collection.table_name and self._is_safe_identifier(collection.table_name):
                     stats_payload = await self._collect_local_stats(session, collection.table_name)
-                    if dimensions:
-                        allowed_dimensions = self._resolve_allowed_dimensions(collection)
-                        for dimension in dimensions:
-                            if dimension not in allowed_dimensions:
-                                continue
-                            if not self._is_safe_identifier(dimension):
-                                continue
-                            values = await self._collect_dimension_values(
-                                session=session,
-                                table_name=collection.table_name,
-                                field_name=dimension,
-                                limit=limit_per_dimension,
-                            )
-                            dimensions_payload[dimension] = values
+                    allowed_dimensions = self._resolve_allowed_dimensions(collection)
+                    inspect_dimensions = self._resolve_dimensions_to_inspect(
+                        collection=collection,
+                        requested_dimensions=dimensions,
+                        allowed_dimensions=allowed_dimensions,
+                    )
+                    for dimension in inspect_dimensions:
+                        if not self._is_safe_identifier(dimension):
+                            continue
+                        values = await self._collect_dimension_values(
+                            session=session,
+                            table_name=collection.table_name,
+                            field_name=dimension,
+                            limit=limit_per_dimension,
+                        )
+                        dimensions_payload[dimension] = values
+
+                    for field in collection.get_filterable_fields():
+                        field_name = str(field.get("name") or "").strip()
+                        if not field_name or field_name not in allowed_dimensions or not self._is_safe_identifier(field_name):
+                            continue
+                        hint = await self._build_filter_hint(
+                            session=session,
+                            collection=collection,
+                            field=field,
+                            table_name=collection.table_name,
+                            limit=limit_per_dimension,
+                            precomputed_values=dimensions_payload.get(field_name),
+                        )
+                        if hint is not None:
+                            filter_hints_payload["fields"][field_name] = hint
 
                 remote_catalog = {
                     "tables": self._extract_remote_tables(
@@ -175,6 +213,7 @@ class CollectionCatalogTool(VersionedTool):
                             "table_name": collection.table_name,
                         },
                         "schema": schema_payload,
+                        "filter_hints": filter_hints_payload,
                         "stats": stats_payload,
                         "dimensions": dimensions_payload,
                         "remote_catalog": remote_catalog,
@@ -199,6 +238,23 @@ class CollectionCatalogTool(VersionedTool):
             "used_in_retrieval": bool(field.get("used_in_retrieval", False)),
             "used_in_prompt_context": bool(field.get("used_in_prompt_context", False)),
         }
+
+    @staticmethod
+    def _resolve_dimensions_to_inspect(
+        *,
+        collection: Any,
+        requested_dimensions: List[str],
+        allowed_dimensions: set[str],
+    ) -> List[str]:
+        if requested_dimensions:
+            return [item for item in requested_dimensions if item in allowed_dimensions]
+        if getattr(collection, "collection_type", None) == "document":
+            return sorted({
+                str(field.get("name") or "").strip()
+                for field in collection.get_filterable_fields()
+                if str(field.get("name") or "").strip() in allowed_dimensions
+            })
+        return []
 
     @staticmethod
     def _is_safe_identifier(value: str) -> bool:
@@ -240,6 +296,101 @@ class CollectionCatalogTool(VersionedTool):
             {"value": item.get("value"), "hits": int(item.get("hits") or 0)}
             for item in rows
         ]
+
+    async def _build_filter_hint(
+        self,
+        *,
+        session: Any,
+        collection: Any,
+        field: Dict[str, Any],
+        table_name: str,
+        limit: int,
+        precomputed_values: List[Dict[str, Any]] | None = None,
+    ) -> Dict[str, Any] | None:
+        field_name = str(field.get("name") or "").strip()
+        data_type = str(field.get("data_type") or "").strip()
+        if not field_name:
+            return None
+
+        top_values = list(precomputed_values or [])
+        if not top_values:
+            top_values = await self._collect_dimension_values(
+                session=session,
+                table_name=table_name,
+                field_name=field_name,
+                limit=limit,
+            )
+        distinct_count = await self._count_distinct_values(
+            session=session,
+            table_name=table_name,
+            field_name=field_name,
+        )
+        coverage = "none"
+        choices: List[Any] = []
+        if distinct_count == 0:
+            coverage = "none"
+        elif distinct_count <= limit:
+            coverage = "complete"
+            choices = [item.get("value") for item in top_values]
+        else:
+            coverage = "top_values"
+
+        operators = ["eq", "in"]
+        if getattr(collection, "collection_type", None) != "document":
+            operators = ["eq", "in", "see_operation_contract"]
+
+        return {
+            "field": field_name,
+            "data_type": data_type,
+            "filterable": bool(field.get("filterable", False)),
+            "operators": operators,
+            "coverage": coverage,
+            "distinct_count": distinct_count,
+            "choices": choices,
+            "top_values": top_values,
+            "notes": self._build_filter_hint_note(
+                collection_type=str(getattr(collection, "collection_type", "") or "").strip(),
+                field_name=field_name,
+                coverage=coverage,
+            ),
+        }
+
+    @staticmethod
+    async def _count_distinct_values(
+        *,
+        session: Any,
+        table_name: str,
+        field_name: str,
+    ) -> int:
+        q = text(
+            f"SELECT COUNT(DISTINCT {field_name})::bigint AS distinct_count "
+            f"FROM {table_name} "
+            f"WHERE {field_name} IS NOT NULL"
+        )
+        row = (await session.execute(q)).mappings().first() or {}
+        return int(row.get("distinct_count") or 0)
+
+    @staticmethod
+    def _build_filter_hint_note(
+        *,
+        collection_type: str,
+        field_name: str,
+        coverage: str,
+    ) -> str:
+        if coverage == "complete":
+            return (
+                f"Use only values listed for '{field_name}'. "
+                f"They cover all observed non-null values in this {collection_type or 'collection'}."
+            )
+        if coverage == "top_values":
+            return (
+                f"Only the most frequent observed values for '{field_name}' are shown. "
+                "Do not invent values; if the needed value is missing, search/list first or refine the request."
+            )
+        return (
+            f"No observed values are available for '{field_name}'. "
+            "Do not guess values from memory."
+        )
 
     @staticmethod
     def _resolve_allowed_dimensions(collection: Any) -> set[str]:

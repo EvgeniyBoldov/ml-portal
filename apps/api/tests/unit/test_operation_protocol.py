@@ -13,14 +13,14 @@ def test_parse_native_tool_calls_keeps_same_operation_with_different_arguments()
                         {
                             "id": "call-1",
                             "function": {
-                                "name": "collection.catalog_inspect",
+                                "name": "collection.info",
                                 "arguments": '{"collection_slug":"alpha"}',
                             },
                         },
                         {
                             "id": "call-2",
                             "function": {
-                                "name": "collection.catalog_inspect",
+                                "name": "collection.info",
                                 "arguments": '{"collection_slug":"beta"}',
                             },
                         },

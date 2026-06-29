@@ -471,13 +471,13 @@ def test_llm_adapter_coerces_tool_choice_mismatch_into_operation_call_block():
     err = RuntimeError(
         "Error code: 400 - {'error': {'message': 'Tool choice is none, but model called a tool', "
         "'type': 'invalid_request_error', 'code': 'tool_use_failed', "
-        "'failed_generation': '{\"name\": \"collection.catalog_inspect\", "
+        "'failed_generation': '{\"name\": \"collection.info\", "
         "\"arguments\": {\"collection_slug\": \"ticket_network\", \"limit_per_dimension\": 10}}'}}"
     )
     block = LLMAdapter._coerce_tool_choice_error_to_operation_call(err)  # noqa: SLF001
     assert block is not None
     assert "```operation_call" in block
-    assert '"operation": "collection.catalog_inspect"' in block
+    assert '"operation": "collection.info"' in block
     assert '"collection_slug": "ticket_network"' in block
 
 

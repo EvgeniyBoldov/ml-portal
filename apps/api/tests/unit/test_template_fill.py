@@ -1,4 +1,4 @@
-"""Unit tests for template.fill helpers."""
+"""Unit tests for collection.template.fill helpers."""
 from __future__ import annotations
 
 import pytest

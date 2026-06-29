@@ -169,3 +169,50 @@ def test_merge_mcp_args_allows_raw_credentials_when_fallback_enabled():
     merged = executor._merge_mcp_args(target, {"name": "sw01"}, ctx, binding=binding)
     instance_ctx = merged.get("instance_context") or {}
     assert instance_ctx.get("credentials", {}).get("token") == "raw-secret"
+
+
+def test_merge_mcp_args_injects_bound_collection_identifiers():
+    operation_slug = "instance.docs.collection.document.search"
+    target = ProviderExecutionTarget(
+        operation_slug=operation_slug,
+        provider_type="mcp",
+        provider_instance_id=str(uuid4()),
+        provider_instance_slug="docs-mcp",
+        provider_url="http://docs-mcp:8080/mcp",
+        data_instance_id=str(uuid4()),
+        data_instance_slug="docs",
+        mcp_tool_name="document_search",
+    )
+    collection_id = str(uuid4())
+    ctx = ToolContext(tenant_id=uuid4(), user_id=uuid4())
+    binding = OperationExecutionBinding(
+        operation_slug=operation_slug,
+        target=target,
+        context=OperationRuntimeContext(
+            instance_id=str(uuid4()),
+            instance_slug="docs",
+            scope="collection",
+            collection_id=collection_id,
+            collection_slug="reglament",
+            allowed_collection_slugs=["reglament"],
+            provider_instance_id=str(uuid4()),
+            provider_instance_slug="docs-mcp",
+            has_credentials=False,
+            credential_scope="auto",
+            config={},
+            provider_config={},
+            domain="collection.document",
+            data_instance_url=None,
+            provider_url=target.provider_url,
+        ),
+        credential=None,
+    )
+    deps = RuntimeDependencies(execution_graph=RuntimeExecutionGraph(bindings={operation_slug: binding}))
+    ctx.set_runtime_deps(deps)
+
+    executor = DirectOperationExecutor()
+    binding, _ = executor._resolve_target_binding(operation_slug, ctx)
+    merged = executor._merge_mcp_args(target, {"query": "nginx"}, ctx, binding=binding)
+
+    assert merged["collection_slug"] == "reglament"
+    assert merged["collection_id"] == collection_id

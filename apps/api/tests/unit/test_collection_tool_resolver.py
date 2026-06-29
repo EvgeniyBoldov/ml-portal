@@ -40,10 +40,10 @@ def test_resolve_local_domains_falls_back_to_instance_domain():
     assert domains == ["sql"]
 
 
-def test_system_catalog_tool_is_rejected_from_collection_bound_local_provider():
+def test_collection_catalog_tool_is_supported_for_collection_bound_local_provider():
     instance = _instance(config={}, domain="collection.document")
-    tool = SimpleNamespace(source="local", slug="collection.catalog")
-    bound_collection = SimpleNamespace(id="any")
+    tool = SimpleNamespace(source="local", slug="collection.info")
+    bound_collection = SimpleNamespace(id="any", collection_type="document")
 
     supported = CollectionToolResolver._is_tool_supported_for_context(
         tool=tool,
@@ -57,13 +57,13 @@ def test_system_catalog_tool_is_rejected_from_collection_bound_local_provider():
         ),
     )
 
-    assert supported is False
+    assert supported is True
 
 
-def test_system_catalog_tool_is_rejected_from_api_collection_provider():
+def test_collection_catalog_tool_is_supported_for_api_collection_provider():
     instance = _instance(config={}, domain="collection.api")
-    tool = SimpleNamespace(source="local", slug="collection.catalog")
-    bound_collection = SimpleNamespace(id="any")
+    tool = SimpleNamespace(source="local", slug="collection.info")
+    bound_collection = SimpleNamespace(id="any", collection_type="api")
 
     supported = CollectionToolResolver._is_tool_supported_for_context(
         tool=tool,
@@ -77,12 +77,12 @@ def test_system_catalog_tool_is_rejected_from_api_collection_provider():
         ),
     )
 
-    assert supported is False
+    assert supported is True
 
 
 def test_text_search_tool_supported_for_bound_template_collection():
     instance = _instance(config={}, domain="collection.template")
-    tool = SimpleNamespace(source="local", slug="collection.text_search")
+    tool = SimpleNamespace(source="local", slug="collection.template.search")
     bound_collection = SimpleNamespace(id="any", collection_type="template", has_vector_search=True)
 
     supported = CollectionToolResolver._is_tool_supported_for_context(
@@ -102,7 +102,7 @@ def test_text_search_tool_supported_for_bound_template_collection():
 
 def test_text_search_tool_rejected_for_template_without_vector_search():
     instance = _instance(config={}, domain="collection.template")
-    tool = SimpleNamespace(source="local", slug="collection.text_search")
+    tool = SimpleNamespace(source="local", slug="collection.template.search")
     bound_collection = SimpleNamespace(id="any", collection_type="template", has_vector_search=False)
 
     supported = CollectionToolResolver._is_tool_supported_for_context(
@@ -152,7 +152,7 @@ async def test_load_system_tools_skips_stale_non_system_template_handlers(monkey
     execute_result = SimpleNamespace(
         scalars=lambda: SimpleNamespace(
             all=lambda: [
-                SimpleNamespace(slug="template.fill", domains=["system"]),
+                SimpleNamespace(slug="collection.template.fill", domains=["system"]),
                 SimpleNamespace(slug="file.read", domains=["system"]),
             ]
         )
@@ -161,7 +161,7 @@ async def test_load_system_tools_skips_stale_non_system_template_handlers(monkey
 
     monkeypatch.setattr(
         "app.services.collection_tool_resolver.ToolRegistry.get",
-        lambda slug: SimpleNamespace(domains=["collection.template"]) if slug == "template.fill" else SimpleNamespace(domains=["system"]),
+        lambda slug: SimpleNamespace(domains=["collection.template"]) if slug == "collection.template.fill" else SimpleNamespace(domains=["system"]),
     )
 
     tools = await resolver._load_system_tools()  # noqa: SLF001

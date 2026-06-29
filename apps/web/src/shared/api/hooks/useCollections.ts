@@ -42,11 +42,13 @@ export function useCollectionVersionEditor(collectionId: string, versionParam: s
     getInitialFormData: (version) => ({
       data_description: version?.data_description ?? '',
       usage_purpose: version?.usage_purpose ?? '',
+      usage_rules: version?.usage_rules ?? '',
       notes: version?.notes ?? '',
     }),
     buildCreatePayload: (formData) => ({
       data_description: toNullableString(formData.data_description),
       usage_purpose: toNullableString(formData.usage_purpose),
+      usage_rules: toNullableString(formData.usage_rules),
       notes: toNullableString(formData.notes),
     }),
     basePath: '/admin/collections',

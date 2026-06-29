@@ -12,7 +12,7 @@ import {
   type BreadcrumbItem,
 } from '@/shared/ui';
 import { AIGenerateButton } from '@/shared/ui/AIGenerateButton';
-import { ContractAwareEditor } from '@/shared/ui/ContractAwareEditor';
+import { ContractAwareEditor } from '@/shared/ui/ContractAwareEditor/ContractAwareEditor';
 import {
   Block,
   type FieldConfig,

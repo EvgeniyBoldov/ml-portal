@@ -13,17 +13,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.agents.operation_publication import build_runtime_operation_slug, resolve_publication
+from app.agents.capability_resolver import CollectionCapabilityResolver
+from app.agents.operation_publication import build_runtime_operation_slug
 from app.agents.mcp_discovery import parse_discovered_operation
 from app.api.deps import db_session, require_admin
 from app.core.security import UserCtx
 from app.models.discovered_tool import DiscoveredTool
 from app.models.tool_instance import ToolInstance
-from app.services.collection_linking import (
-    resolve_bound_collection_by_instance_id,
-    runtime_domain_for_collection,
-)
-from app.services.instance_capabilities import is_mcp_service_instance
 from app.services.collection_tool_resolver import CollectionToolResolver
 from app.services.tool_discovery_service import ToolDiscoveryService
 from app.services.tool_instance_service import ToolInstanceService, _UNSET
@@ -50,65 +46,6 @@ async def _resolve_provider_instance(db: AsyncSession, instance: ToolInstance) -
     stmt = select(ToolInstance).where(ToolInstance.id == instance.access_via_instance_id)
     result = await db.execute(stmt)
     return result.scalar_one_or_none()
-
-
-def _materialize_runtime_operations(
-    *,
-    instance: ToolInstance,
-    provider: ToolInstance,
-    discovered_tools: List[DiscoveredTool],
-    runtime_domain: Optional[str] = None,
-) -> List[RuntimeOperationListItem]:
-    items: List[RuntimeOperationListItem] = []
-    seen: set[str] = set()
-    resolved_runtime_domain = str(
-        runtime_domain if runtime_domain is not None else (instance.domain or "")
-    ).strip()
-    context_domains = (
-        [resolved_runtime_domain]
-        if resolved_runtime_domain.startswith("collection.")
-        else None
-    )
-    for discovered_tool in discovered_tools:
-        publication = resolve_publication(
-            raw_slug=discovered_tool.slug,
-            discovered_domains=discovered_tool.domains or [],
-            context_domains=context_domains,
-        )
-        if publication is None:
-            continue
-        if publication.scope_kind != "collection":
-            continue
-        canonical_name = publication.canonical_op_slug
-        operation_slug = build_runtime_operation_slug(instance.slug, canonical_name)
-        if operation_slug in seen:
-            continue
-        seen.add(operation_slug)
-
-        discovered_operation = parse_discovered_operation(
-            tool_name=discovered_tool.slug,
-            description=discovered_tool.description,
-            input_schema=discovered_tool.input_schema,
-            output_schema=discovered_tool.output_schema,
-        )
-        risk_level = discovered_operation.risk_level
-        side_effects = discovered_operation.side_effects
-        idempotent = True
-        requires_confirmation = discovered_operation.requires_confirmation
-        items.append(
-            RuntimeOperationListItem(
-                operation_slug=operation_slug,
-                operation=canonical_name,
-                source=discovered_tool.source,
-                discovered_tool_slug=discovered_tool.slug,
-                provider_instance_slug=provider.slug if provider else None,
-                risk_level=risk_level,
-                side_effects=side_effects,
-                idempotent=idempotent,
-                requires_confirmation=requires_confirmation,
-            )
-        )
-    return items
 
 
 def _provider_kind_from_instance(instance: ToolInstance) -> Optional[str]:
@@ -143,24 +80,40 @@ async def _runtime_tool_summary(
     if not provider:
         return 0, 0, []
 
+    tool_loader = CollectionToolResolver(db)
+    capability_resolver = CollectionCapabilityResolver(tool_loader)
     discovered_tools = await _load_discovered_tools_for_instance(db, instance, provider)
-    runtime_domain = str(instance.domain or "").strip()
-    instance_id = getattr(instance, "id", None)
-    if instance_id:
-        bound_collection = await resolve_bound_collection_by_instance_id(
-            db,
-            data_instance_id=instance_id,
-        )
-        runtime_domain = runtime_domain_for_collection(
-            collection=bound_collection,
-            fallback_domain=runtime_domain,
-        )
-    runtime_operations = _materialize_runtime_operations(
+    capability_candidates = await capability_resolver.resolve_for_instance(
         instance=instance,
         provider=provider,
-        discovered_tools=discovered_tools,
-        runtime_domain=runtime_domain,
     )
+    runtime_operations: List[RuntimeOperationListItem] = []
+    seen: set[str] = set()
+    for capability in capability_candidates:
+        discovered_tool = capability.discovered_tool
+        operation_slug = build_runtime_operation_slug(instance.slug, capability.canonical_op_slug)
+        if operation_slug in seen:
+            continue
+        seen.add(operation_slug)
+        discovered_operation = parse_discovered_operation(
+            tool_name=str(getattr(discovered_tool, "slug", "") or ""),
+            description=getattr(discovered_tool, "description", None),
+            input_schema=getattr(discovered_tool, "input_schema", None),
+            output_schema=getattr(discovered_tool, "output_schema", None),
+        )
+        runtime_operations.append(
+            RuntimeOperationListItem(
+                operation_slug=operation_slug,
+                operation=capability.canonical_op_slug,
+                source=str(getattr(discovered_tool, "source", "") or ""),
+                discovered_tool_slug=str(getattr(discovered_tool, "slug", "") or ""),
+                provider_instance_slug=provider.slug if provider else None,
+                risk_level=discovered_operation.risk_level,
+                side_effects=discovered_operation.side_effects,
+                idempotent=True,
+                requires_confirmation=discovered_operation.requires_confirmation,
+            )
+        )
     return len(discovered_tools), len(runtime_operations), runtime_operations
 
 

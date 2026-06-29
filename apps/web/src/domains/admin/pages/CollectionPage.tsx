@@ -169,36 +169,39 @@ function fallbackOperationsByCollectionType(collectionType: CollectionType): Run
 
   if (collectionType === 'document') {
     return [
-      base('collection.document.catalog_inspect', 'collection.catalog'),
-      base('collection.document.search', 'collection.doc_search'),
+      base('collection.info', 'collection.info'),
+      base('collection.document.search', 'collection.document.search'),
+      base('collection.document.list', 'collection.document.list'),
+      base('collection.document.get', 'collection.document.get'),
     ];
   }
   if (collectionType === 'table') {
     return [
-      base('collection.table.catalog_inspect', 'collection.catalog'),
-      base('collection.table.search', 'collection.search'),
-      base('collection.table.aggregate', 'collection.aggregate'),
-      base('collection.table.get', 'collection.get'),
+      base('collection.info', 'collection.info'),
+      base('collection.table.search', 'collection.table.search'),
+      base('collection.table.aggregate', 'collection.table.aggregate'),
+      base('collection.table.get', 'collection.table.get'),
     ];
   }
   if (collectionType === 'sql') {
     return [
-      base('collection.sql.catalog_inspect', 'collection.catalog'),
-      base('collection.sql.search_objects', 'search_objects'),
-      base('collection.sql.execute', 'execute_sql'),
+      base('collection.info', 'collection.info'),
+      base('collection.sql.search_objects', 'collection.sql.search_objects'),
+      base('collection.sql.execute', 'collection.sql.execute'),
     ];
   }
   if (collectionType === 'api') {
     return [
-      base('collection.api.catalog_inspect', 'collection.catalog'),
+      base('collection.info', 'collection.info'),
     ];
   }
   if (collectionType === 'template') {
     return [
-      base('template.list', 'template.list'),
-      base('collection.template.search', 'collection.text_search'),
-      base('template.get_schema', 'template.get_schema'),
-      base('template.fill', 'template.fill'),
+      base('collection.info', 'collection.info'),
+      base('collection.template.list', 'collection.template.list'),
+      base('collection.template.search', 'collection.template.search'),
+      base('collection.template.get_schema', 'collection.template.get_schema'),
+      base('collection.template.fill', 'collection.template.fill'),
     ];
   }
   return [];

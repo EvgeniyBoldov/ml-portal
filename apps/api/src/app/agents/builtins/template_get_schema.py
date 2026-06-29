@@ -1,5 +1,5 @@
 """
-template.get_schema — Retrieve the fillable schema for a template row.
+collection.template.get_schema — Retrieve the fillable schema for a template row.
 
 Given a collection and row_id, returns the template_schema JSON blob,
 which describes the fillable structure (fields, placeholders, expected types).
@@ -51,7 +51,7 @@ _OUTPUT_SCHEMA_V1 = {
 class TemplateGetSchemaTool(VersionedTool):
     """Get the fillable schema for a template."""
 
-    tool_slug: ClassVar[str] = "template.get_schema"
+    tool_slug: ClassVar[str] = "collection.template.get_schema"
     domains: ClassVar[list] = ["collection.template"]
     name: ClassVar[str] = "Get Template Schema"
     description: ClassVar[str] = (
@@ -66,7 +66,7 @@ class TemplateGetSchemaTool(VersionedTool):
         description="Get template schema",
     )
     async def v1_0_0(self, ctx: ToolContext, args: Dict[str, Any]) -> ToolResult:
-        log = ctx.tool_logger("template.get_schema")
+        log = ctx.tool_logger("collection.template.get_schema")
 
         collection_id = str(args.get("collection_id") or "").strip()
         row_id = str(args.get("row_id") or "").strip()
@@ -121,7 +121,7 @@ class TemplateGetSchemaTool(VersionedTool):
                             "template_schema": {},
                             "description": row.get("description") or "",
                         },
-                        message="Template row exists but has no schema defined yet. Use template.fill with placeholder values.",
+                        message="Template row exists but has no schema defined yet. Use collection.template.fill with placeholder values.",
                         logs=log.entries_dict(),
                     )
 
@@ -141,6 +141,6 @@ class TemplateGetSchemaTool(VersionedTool):
                     logs=log.entries_dict(),
                 )
         except Exception as exc:
-            logger.error("template.get_schema failed: %s", exc, exc_info=True)
-            log.error("template.get_schema failed", error=str(exc))
+            logger.error("collection.template.get_schema failed: %s", exc, exc_info=True)
+            log.error("collection.template.get_schema failed", error=str(exc))
             return ToolResult.fail(f"Failed to get schema: {exc}", logs=log.entries_dict())

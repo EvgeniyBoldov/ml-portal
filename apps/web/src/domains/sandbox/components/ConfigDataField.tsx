@@ -2,7 +2,7 @@ import type { ChangeEvent } from 'react';
 import type { ResponseContract } from '@/shared/api/admin';
 import Toggle from '@/shared/ui/Toggle';
 import { Select, type SelectOption } from '@/shared/ui/Select';
-import { ContractAwareEditor } from '@/shared/ui/ContractAwareEditor';
+import { ContractAwareEditor } from '@/shared/ui/ContractAwareEditor/ContractAwareEditor';
 import styles from './ConfigDataField.module.css';
 
 export type SandboxConfigFieldType = 'tags' | 'select' | 'json' | 'text' | 'integer' | 'float' | 'boolean';
