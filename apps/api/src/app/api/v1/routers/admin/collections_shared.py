@@ -33,7 +33,6 @@ async def build_collection_response(service: CollectionService, collection) -> C
         collection_type=collection.collection_type,
         slug=collection.slug,
         name=collection.name,
-        description=collection.description,
         fields=collection.fields,
         source_contract=collection.source_contract,
         status=snapshot["status"],

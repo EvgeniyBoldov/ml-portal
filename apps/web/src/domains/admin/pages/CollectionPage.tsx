@@ -53,7 +53,6 @@ type RuntimeOperationRow = NonNullable<ToolInstanceDetail['runtime_operations']>
 type CollectionEditorForm = {
   slug: string;
   name: string;
-  description: string;
   collection_type: CollectionType;
   tenant_id: string;
   table_name: string;
@@ -225,6 +224,14 @@ const ACTIVE_VERSION_CONTENT_FIELDS: FieldConfig[] = [
     editable: false,
   },
   {
+    key: 'usage_rules',
+    type: 'textarea',
+    label: 'Правила работы',
+    description: 'Как агент должен работать с коллекцией: порядок вызова операций, обязательные проверки, запреты.',
+    rows: 6,
+    editable: false,
+  },
+  {
     key: 'notes',
     type: 'textarea',
     label: 'Заметки версии',
@@ -302,7 +309,6 @@ export function CollectionPage() {
     getInitialFormData: (col) => ({
       slug: col?.slug ?? '',
       name: col?.name ?? '',
-      description: col?.description ?? '',
       collection_type: (col?.collection_type ?? 'table') as CollectionType,
       tenant_id: col?.tenant_id ?? '',
       table_name: col?.table_name ?? '',
@@ -354,7 +360,6 @@ export function CollectionPage() {
         collection_type: data.collection_type ?? 'table',
         slug: data.slug?.trim() || undefined,
         name: data.name,
-        description: data.description,
         fields,
         data_instance_id: data.data_instance_id || undefined,
         vector_config: needsVectorConfig ? {
@@ -369,7 +374,6 @@ export function CollectionPage() {
       return {
         tenant_id: data.tenant_id || undefined,
         name: data.name,
-        description: data.description,
         is_active: data.is_active,
         table_name: data.table_name || undefined,
         schema_ops: schemaOps,
@@ -400,7 +404,6 @@ export function CollectionPage() {
   const viewData = {
     slug: collection?.slug ?? '',
     name: collection?.name ?? '',
-    description: collection?.description ?? '',
     collection_type: collection?.collection_type ?? 'table',
     tenant_id: collection?.tenant_id ?? '',
     table_name: collection?.table_name ?? '',
@@ -549,6 +552,7 @@ export function CollectionPage() {
     updated_at: activeVersion?.updated_at ?? '',
     data_description: activeVersion?.data_description ?? '—',
     usage_purpose: activeVersion?.usage_purpose ?? '—',
+    usage_rules: activeVersion?.usage_rules ?? '—',
     notes: activeVersion?.notes ?? '—',
   };
 
@@ -860,12 +864,12 @@ export function CollectionPage() {
             id="active-version"
           >
             <Block
-              title="Описание версии"
-              icon="file-text"
-              iconVariant="info"
-              width="2/3"
-              fields={ACTIVE_VERSION_CONTENT_FIELDS}
-              data={activeVersionData}
+            title="Семантика версии"
+            icon="file-text"
+            iconVariant="info"
+            width="2/3"
+            fields={ACTIVE_VERSION_CONTENT_FIELDS}
+            data={activeVersionData}
               editable={false}
             />
             <Block

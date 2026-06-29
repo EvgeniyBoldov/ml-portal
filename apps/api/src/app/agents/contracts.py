@@ -226,8 +226,8 @@ class ResolvedDataInstance(BaseModel):
     placement: Literal["local", "remote"]
     provider_instance_id: Optional[str] = None
     provider_instance_slug: Optional[str] = None
-    # LLM-facing description of the collection / data asset.
-    # Source of truth: Collection.description on the bound collection (nullable).
+    # LLM-facing semantic description of the bound collection.
+    # Source of truth: Collection.current_version.data_description.
     description: Optional[str] = None
     entity_type: Optional[str] = None
     collection_type: Optional[str] = None

@@ -37,7 +37,8 @@ class CollectionPromptRenderer:
             or _text(payload.get("instance_kind"))
             or "data"
         )
-        description = _text(payload.get("description"))
+        description = _text(payload.get("data_description")) or _text(payload.get("description"))
+        purpose = _text(payload.get("usage_purpose"))
         entity_type = _text(payload.get("entity_type"))
         usage_rules = _text(payload.get("usage_rules"))
 
@@ -50,6 +51,8 @@ class CollectionPromptRenderer:
             lines.append(f"- Entity type: {entity_type}")
         if description:
             lines.append(f"- Description: {description}")
+        if purpose:
+            lines.append(f"- Purpose: {purpose}")
         if usage_rules:
             lines.append(f"- Usage rules: {usage_rules}")
         return "\n".join(lines)

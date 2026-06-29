@@ -122,17 +122,18 @@ class CollectionCapabilityResolver:
         handler = ToolRegistry.get("collection.info")
         if handler is None:
             return None
-        latest = handler.get_latest_version()
-        if latest is None:
-            return None
         return SyntheticDiscoveredTool(
-            slug="collection.info",
-            name=handler.name,
-            description=handler.description,
+            slug=str(getattr(handler, "slug", "collection.info") or "collection.info"),
+            name=str(getattr(handler, "name", "") or "Collection Info"),
+            description=str(getattr(handler, "description", "") or ""),
             source="local",
             domains=[runtime_domain] if runtime_domain else list(getattr(handler, "domains", []) or []),
-            input_schema=dict(latest.input_schema or {}),
-            output_schema=dict(latest.output_schema or {}) if isinstance(latest.output_schema, dict) else None,
+            input_schema=dict(getattr(handler, "input_schema", None) or {}),
+            output_schema=(
+                dict(getattr(handler, "output_schema", None) or {})
+                if isinstance(getattr(handler, "output_schema", None), dict)
+                else None
+            ),
         )
 
 

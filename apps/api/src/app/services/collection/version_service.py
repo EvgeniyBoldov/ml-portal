@@ -200,8 +200,8 @@ class CollectionVersionService:
             status=CollectionVersionStatus.PUBLISHED.value,
             retrieval_params={},
             prompt_context_params={},
-            data_description=collection.description,
-            usage_purpose="Initial version",
+            data_description=None,
+            usage_purpose=None,
             usage_rules=None,
             notes="Initial version",
         )

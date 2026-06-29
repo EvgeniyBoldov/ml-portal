@@ -16,7 +16,7 @@ from app.services.permission_service import EffectivePermissions
 
 
 @pytest.mark.asyncio
-async def test_prompt_assembler_renders_collection_description_and_entity_type_without_semantic_layer():
+async def test_prompt_assembler_renders_collection_semantics_from_current_version_only():
     router = OperationRouter(session=MagicMock())
 
     effective_permissions = EffectivePermissions(
@@ -31,15 +31,15 @@ async def test_prompt_assembler_renders_collection_description_and_entity_type_w
         tenant_id=tenant_id,
         slug="netbox_devices",
         name="Netbox devices",
-        description="Netbox devices inventory",
+        description="legacy collection description",
         entity_type="device",
         collection_type="table",
         status=CollectionStatus.READY.value,
         fields=[],
     )
     collection.current_version = SimpleNamespace(
-        data_description=None,
-        usage_purpose=None,
+        data_description="Netbox devices inventory",
+        usage_purpose="Поиск устройств и атрибутов инвентаря",
         usage_rules="Сначала проверь доступные поля, потом используй поиск.",
     )
 
@@ -99,8 +99,11 @@ async def test_prompt_assembler_renders_collection_description_and_entity_type_w
     prompt = PromptAssembler().assemble_collection_prompt(result.resolved_data_instances)
 
     assert "- Description: Netbox devices inventory" in prompt
+    assert "- Purpose: Поиск устройств и атрибутов инвентаря" in prompt
     assert "- Usage rules: Сначала проверь доступные поля, потом используй поиск." in prompt
     assert "- Entity type: device" in prompt
+    assert "legacy collection description" not in prompt
+    assert "fallback instance description" not in prompt
     assert "summary" not in prompt.lower()
     assert "use_cases" not in prompt.lower()
     assert "limitations" not in prompt.lower()

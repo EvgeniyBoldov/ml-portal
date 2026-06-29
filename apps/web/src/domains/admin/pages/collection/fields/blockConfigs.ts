@@ -26,13 +26,6 @@ export const INFO_FIELDS: FieldConfig[] = [
     placeholder: 'Данные клиентов',
   },
   {
-    key: 'description',
-    type: 'textarea',
-    label: 'Описание',
-    placeholder: 'Описание коллекции...',
-    rows: 3,
-  },
-  {
     key: 'tenant_id',
     type: 'select',
     label: 'Тенант',

@@ -59,8 +59,7 @@ export function CollectionListPage() {
     const q = search.toLowerCase();
     return collections.filter((c: Collection) =>
       c.name.toLowerCase().includes(q) ||
-      c.slug.toLowerCase().includes(q) ||
-      c.description?.toLowerCase().includes(q)
+      c.slug.toLowerCase().includes(q)
     );
   }, [collections, search]);
 

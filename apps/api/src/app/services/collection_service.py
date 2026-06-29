@@ -280,7 +280,6 @@ class CollectionService:
         slug: str,
         name: str,
         fields: List[dict],
-        description: Optional[str] = None,
         source_contract: Optional[dict] = None,
         vector_config: Optional[dict] = None,
         collection_type: str = CollectionType.TABLE.value,
@@ -293,7 +292,6 @@ class CollectionService:
             slug=slug,
             name=name,
             fields=fields,
-            description=description,
             source_contract=source_contract,
             vector_config=vector_config,
             collection_type=collection_type,
@@ -308,7 +306,6 @@ class CollectionService:
         slug: str,
         name: str,
         fields: List[dict],
-        description: Optional[str] = None,
         source_contract: Optional[dict] = None,
         vector_config: Optional[dict] = None,
         collection_type: str = CollectionType.TABLE.value,
@@ -319,7 +316,6 @@ class CollectionService:
             slug=slug,
             name=name,
             fields=fields,
-            description=description,
             source_contract=source_contract,
             vector_config=vector_config,
             collection_type=collection_type,
@@ -332,7 +328,6 @@ class CollectionService:
         slug: str,
         name: str,
         fields: List[dict],
-        description: Optional[str] = None,
         source_contract: Optional[dict] = None,
         collection_type: str = CollectionType.SQL.value,
         data_instance_id: Optional[uuid.UUID] = None,
@@ -344,7 +339,6 @@ class CollectionService:
             slug=slug,
             name=name,
             fields=fields,
-            description=description,
             source_contract=source_contract,
             collection_type=collection_type,
             data_instance_id=data_instance_id,
@@ -361,7 +355,6 @@ class CollectionService:
         *,
         tenant_id: Any = _UNSET,
         name: Any = _UNSET,
-        description: Any = _UNSET,
         is_active: Any = _UNSET,
         data_instance_id: Any = _UNSET,
         table_name: Any = _UNSET,
@@ -377,7 +370,8 @@ class CollectionService:
         collection = await self.get_by_id(collection_id)
         if not collection:
             raise CollectionNotFoundError(f"Collection {collection_id} not found")
-        if getattr(collection, "lifecycle_status", "active") != "active":
+        lifecycle_status = getattr(collection, "lifecycle_status", None) or "active"
+        if lifecycle_status != "active":
             raise ConflictError("deprecated")
 
         if tenant_id is not _UNSET and tenant_id != collection.tenant_id:
@@ -385,8 +379,6 @@ class CollectionService:
 
         if name is not _UNSET:
             collection.name = name
-        if description is not _UNSET:
-            collection.description = description
         if is_active is not _UNSET:
             collection.is_active = is_active
         if data_instance_id is not _UNSET:

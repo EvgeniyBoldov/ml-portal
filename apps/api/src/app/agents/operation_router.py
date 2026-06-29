@@ -286,8 +286,6 @@ class OperationRouter:
         collection_slug: Optional[str],
         readiness: Optional[Any],
     ) -> ResolvedDataInstance:
-        # LLM-facing description: prefer collection.description (curated asset doc)
-        # and fall back to instance.description (provider-level blurb).
         description: Optional[str] = None
         entity_type: Optional[str] = None
         collection_type: Optional[str] = None
@@ -296,7 +294,6 @@ class OperationRouter:
         usage_rules: Optional[str] = None
         remote_tables: List[str] = []
         if collection is not None:
-            description = collection.description or None
             entity_type = collection.entity_type or None
             collection_type = (
                 str(collection.collection_type).strip()
@@ -313,8 +310,7 @@ class OperationRouter:
                 data_description = getattr(current_version, "data_description", None) or None
                 usage_purpose = getattr(current_version, "usage_purpose", None) or None
                 usage_rules = getattr(current_version, "usage_rules", None) or None
-        if not description:
-            description = instance.description or None
+                description = data_description
         return ResolvedDataInstance(
             instance_id=str(instance.id),
             slug=instance.slug,

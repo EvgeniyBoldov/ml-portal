@@ -50,7 +50,6 @@ class CreateCollectionRequest(BaseModel):
     )
     slug: Optional[str] = Field(default=None, min_length=1, max_length=50)
     name: str = Field(..., min_length=1, max_length=255)
-    description: Optional[str] = None
     fields: List[FieldSchema] = Field(default_factory=list)
     source_contract: Optional[dict] = None
     vector_config: Optional[VectorConfigSchema] = None
@@ -108,7 +107,6 @@ class SchemaOperation(BaseModel):
 class UpdateCollectionRequest(BaseModel):
     tenant_id: Optional[uuid.UUID] = None
     name: Optional[str] = Field(default=None, min_length=1, max_length=255)
-    description: Optional[str] = None
     is_active: Optional[bool] = None
     table_name: Optional[str] = None
     table_schema: Optional[dict] = None
@@ -126,7 +124,7 @@ class UpdateCollectionRequest(BaseModel):
 
         has_metadata_patch = bool(
             self.model_fields_set
-            & {"tenant_id", "name", "description", "is_active", "table_name", "table_schema"}
+            & {"tenant_id", "name", "is_active", "table_name", "table_schema"}
         )
         if not has_metadata_patch and not self.schema_ops:
             raise ValueError("At least one mutable collection property or schema operation is required")
@@ -139,7 +137,6 @@ class CollectionResponse(BaseModel):
     collection_type: str = CollectionType.TABLE.value
     slug: str
     name: str
-    description: Optional[str]
     fields: List[dict]
     source_contract: Optional[dict] = None
     status: str

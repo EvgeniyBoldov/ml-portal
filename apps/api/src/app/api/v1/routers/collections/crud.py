@@ -39,7 +39,6 @@ async def _build_collection_response(
         collection_type=collection.collection_type,
         slug=collection.slug,
         name=collection.name,
-        description=collection.description,
         fields=collection.fields,
         status=snapshot["status"],
         status_details=snapshot["details"],
@@ -143,7 +142,6 @@ class CollectionResponse(BaseModel):
     collection_type: str = "table"
     slug: str
     name: str
-    description: Optional[str]
     fields: List[dict]
     status: str
     status_details: Optional[dict] = None

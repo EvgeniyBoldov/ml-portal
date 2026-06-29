@@ -113,7 +113,6 @@ export interface Collection {
   collection_type: CollectionType;
   slug: string;
   name: string;
-  description?: string;
   fields: CollectionField[];
   source_contract?: Record<string, unknown> | null;
   status?: string;
@@ -160,7 +159,6 @@ export interface CreateCollectionRequest {
   collection_type?: CollectionType;
   slug?: string;
   name: string;
-  description?: string;
   fields: CollectionField[];
   vector_config?: VectorConfig;
   table_schema?: Record<string, unknown> | null;
@@ -177,7 +175,6 @@ export interface SchemaOperation {
 export interface UpdateCollectionRequest {
   tenant_id?: string | null;
   name?: string;
-  description?: string | null;
   is_active?: boolean;
   data_instance_id?: string | null;
   table_name?: string | null;

@@ -57,7 +57,7 @@ def build_published_collection_summary(
         collection_type=collection.collection_type,
         title=str(getattr(collection, "name", "") or "").strip() or None,
         purpose=collection.usage_purpose,
-        data_description=collection.data_description or collection.description,
+        data_description=collection.data_description,
         usage_rules=getattr(collection, "usage_rules", None),
         readiness_status=str(getattr(readiness, "status", "") or "").strip() or None,
         schema_freshness=str(getattr(readiness, "schema_freshness", "") or "").strip() or None,

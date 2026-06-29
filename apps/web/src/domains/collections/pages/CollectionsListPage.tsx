@@ -34,8 +34,7 @@ export default function CollectionsListPage() {
     return collections.filter(
       c =>
         c.name.toLowerCase().includes(q) ||
-        c.slug.toLowerCase().includes(q) ||
-        c.description?.toLowerCase().includes(q)
+        c.slug.toLowerCase().includes(q)
     );
   }, [collections, search]);
 
