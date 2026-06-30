@@ -71,16 +71,18 @@ async def _runtime_tool_summary(
     db: AsyncSession,
     instance: ToolInstance,
 ) -> tuple[int, int, List[RuntimeOperationListItem]]:
-    if not instance.is_data:
-        return 0, 0, []
     if not getattr(instance, "is_active", False):
         return 0, 0, []
 
-    provider = await _resolve_provider_instance(db, instance)
-    if not provider:
+    tool_loader = CollectionToolResolver(db)
+    bound_collection = await tool_loader._resolve_bound_collection(instance)
+    if instance.is_data:
+        provider = await _resolve_provider_instance(db, instance)
+    else:
+        provider = instance if bound_collection is not None else None
+    if not provider or bound_collection is None:
         return 0, 0, []
 
-    tool_loader = CollectionToolResolver(db)
     capability_resolver = CollectionCapabilityResolver(tool_loader)
     discovered_tools = await _load_discovered_tools_for_instance(db, instance, provider)
     capability_candidates = await capability_resolver.resolve_for_instance(

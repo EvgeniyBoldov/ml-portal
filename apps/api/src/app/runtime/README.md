@@ -72,6 +72,27 @@ Runtime preflight exposes canonical collection readiness contract via
 This payload is attached to `ResolvedDataInstance.readiness` and propagated into
 capability cards/admin diagnostics.
 
+## Agent Prompt Surface
+
+LLM-facing agent prompts use a collection-centered structure:
+
+- base agent prompt
+- `Доступные коллекции`
+- for each collection:
+  - slug/name/type/purpose/data from current version
+  - no per-collection operation contracts in the initial prompt
+  - the model must call `collection.info` first before using that collection
+- `Системные операции`
+- machine-oriented `operation_call` JSON contract for:
+  - system operations
+  - `collection.info` bindings only
+
+Rules:
+- Diagnostic/runtime readiness data must not be rendered into the LLM prompt.
+- Collections without bound operations must not appear in the LLM prompt.
+- System operations must be rendered separately from collection-bound operations.
+- Detailed collection-bound operation contracts must come from `collection.info` results, not from the initial prompt.
+
 ## Trace-Pack v2 and Replay
 
 - Trace pack version: `runtime.trace_pack.v2`.
@@ -119,5 +140,10 @@ CI gates:
 
 ## TODO
 
+- Remove legacy operation transport from agent-facing LLM flow:
+  stop exposing operation-shaped contracts to models, move to tool-first prompting/protocol,
+  and keep operation resolution as an internal runtime concern only.
 - Add `QueryRewriter` stage (behind a feature flag) before planner input assembly.
 - Persist both `original_query` and `rewritten_query` in runtime trace.
+- Implement remote `collection.info` runtime enrichment for `sql` / `api` collections:
+  return provider-aware field/value profiling, remote freshness signals, and safe distinct/top-value hints without relying on local table profiling.

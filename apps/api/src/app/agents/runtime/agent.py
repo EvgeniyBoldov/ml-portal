@@ -48,6 +48,7 @@ from app.agents.runtime.published_capabilities import (
     serialize_published_operations,
 )
 from app.agents.runtime.policy import GenerationParams, PolicyLimits
+from app.agents.runtime.prompt_assembler import filter_prompt_visible_operations
 from app.core.logging import get_logger
 from app.models.execution_limit import ExecutionLimitScope
 from app.runtime.context_snapshot import compact_snapshot
@@ -158,6 +159,9 @@ class AgentToolRuntime(BaseRuntime):
         )
 
         available_operations = exec_request.resolved_operations
+        deps = ctx.get_runtime_deps()
+        deps.resolved_operations = list(available_operations or [])
+        ctx.set_runtime_deps(deps)
 
         # System prompt
         sandbox_ov = ctx.get_runtime_deps().sandbox_overrides
@@ -263,7 +267,8 @@ class AgentToolRuntime(BaseRuntime):
         native_tool_calling = bool(
             platform_config.get("native_tool_calling", False)
         ) and bool(available_operations)
-        tools_payload = build_tools_payload(available_operations) if native_tool_calling else None
+        prompt_visible_operations = filter_prompt_visible_operations(available_operations)
+        tools_payload = build_tools_payload(prompt_visible_operations) if native_tool_calling else None
         runtime_budget = ctx.extra.get("runtime_budget_ledger")
         if isinstance(runtime_budget, RunBudgetLedger):
             budget_payload["shared_budget"] = runtime_budget.snapshot()

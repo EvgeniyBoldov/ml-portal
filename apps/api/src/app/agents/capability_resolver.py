@@ -9,23 +9,9 @@ from app.agents.operation_publication import (
     get_operation_spec,
     is_operation_allowed_for_collection_type,
 )
-from app.agents.registry import ToolRegistry
 from app.models.discovered_tool import DiscoveredTool
 from app.models.tool_instance import ToolInstance
-from app.services.collection_tool_resolver import CollectionToolResolver
-
-
-@dataclass(frozen=True, slots=True)
-class SyntheticDiscoveredTool:
-    slug: str
-    name: str
-    description: str
-    source: str
-    domains: List[str]
-    input_schema: dict
-    output_schema: Optional[dict]
-    is_active: bool = True
-    provider_instance_id: Optional[str] = None
+from app.services.collection_tool_resolver import CollectionToolResolver, VirtualDiscoveredTool
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,7 +19,7 @@ class CapabilityCandidate:
     canonical_op_slug: str
     raw_tool_slug: str
     scope_kind: Literal["collection", "system"]
-    discovered_tool: DiscoveredTool | SyntheticDiscoveredTool
+    discovered_tool: DiscoveredTool | VirtualDiscoveredTool
 
 
 class CollectionCapabilityResolver:
@@ -53,16 +39,12 @@ class CollectionCapabilityResolver:
             instance=instance,
             provider=provider,
         )
-        discovered_with_helpers = list(discovered_tools)
-        catalog_helper = self._build_collection_catalog_helper(runtime_domain=context.runtime_domain)
-        if catalog_helper is not None:
-            discovered_with_helpers.append(catalog_helper)
 
         collection_type = str(getattr(context.bound_collection, "collection_type", "") or "").strip().lower()
         if not collection_type:
             return []
 
-        discovered_index = self._index_by_slug(discovered_with_helpers)
+        discovered_index = self._index_by_slug(discovered_tools)
         resolved: List[CapabilityCandidate] = []
         seen_canonical: set[str] = set()
         for binding in get_collection_capability_bindings(collection_type):
@@ -88,9 +70,9 @@ class CollectionCapabilityResolver:
 
     @staticmethod
     def _index_by_slug(
-        discovered_tools: Iterable[DiscoveredTool | SyntheticDiscoveredTool],
-    ) -> dict[str, List[DiscoveredTool | SyntheticDiscoveredTool]]:
-        index: dict[str, List[DiscoveredTool | SyntheticDiscoveredTool]] = {}
+        discovered_tools: Iterable[DiscoveredTool | VirtualDiscoveredTool],
+    ) -> dict[str, List[DiscoveredTool | VirtualDiscoveredTool]]:
+        index: dict[str, List[DiscoveredTool | VirtualDiscoveredTool]] = {}
         for tool in discovered_tools:
             slug = str(getattr(tool, "slug", "") or "").strip()
             if not slug:
@@ -101,7 +83,7 @@ class CollectionCapabilityResolver:
     @staticmethod
     def _match_binding(
         binding: CollectionCapabilityBinding,
-        discovered_index: dict[str, List[DiscoveredTool | SyntheticDiscoveredTool]],
+        discovered_index: dict[str, List[DiscoveredTool | VirtualDiscoveredTool]],
     ) -> Optional[CapabilityCandidate]:
         for raw_slug in binding.raw_tool_slugs:
             matches = discovered_index.get(raw_slug) or []
@@ -116,25 +98,6 @@ class CollectionCapabilityResolver:
                     discovered_tool=tool,
                 )
         return None
-
-    @staticmethod
-    def _build_collection_catalog_helper(runtime_domain: str) -> Optional[SyntheticDiscoveredTool]:
-        handler = ToolRegistry.get("collection.info")
-        if handler is None:
-            return None
-        return SyntheticDiscoveredTool(
-            slug=str(getattr(handler, "slug", "collection.info") or "collection.info"),
-            name=str(getattr(handler, "name", "") or "Collection Info"),
-            description=str(getattr(handler, "description", "") or ""),
-            source="local",
-            domains=[runtime_domain] if runtime_domain else list(getattr(handler, "domains", []) or []),
-            input_schema=dict(getattr(handler, "input_schema", None) or {}),
-            output_schema=(
-                dict(getattr(handler, "output_schema", None) or {})
-                if isinstance(getattr(handler, "output_schema", None), dict)
-                else None
-            ),
-        )
 
 
 class SystemCapabilityResolver:

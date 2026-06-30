@@ -121,7 +121,7 @@ def test_text_search_tool_rejected_for_template_without_vector_search():
 
 
 @pytest.mark.asyncio
-async def test_load_discovered_tools_adds_catalog_for_bound_local_collection():
+async def test_load_discovered_tools_adds_builtin_collection_info_for_bound_local_collection(monkeypatch):
     resolver = CollectionToolResolver(session=SimpleNamespace())
     instance = _instance(
         config={},
@@ -136,14 +136,69 @@ async def test_load_discovered_tools_adds_catalog_for_bound_local_collection():
     )
     local_tool = SimpleNamespace(source="local", slug="collection.search")
     resolver._resolve_bound_collection = AsyncMock(
-        return_value=SimpleNamespace(id="collection-1", collection_type="table")
+        return_value=SimpleNamespace(id="collection-1", collection_type="table", has_vector_search=False)
     )
     resolver._load_local_tools_for_provider = AsyncMock(return_value=[local_tool])
     resolver._load_provider_tools = AsyncMock(return_value=[])
+    monkeypatch.setattr(
+        "app.services.collection_tool_resolver.ToolRegistry.list_all",
+        lambda: [
+            SimpleNamespace(
+                slug="collection.info",
+                name="Collection Info",
+                description="Inspect collection",
+                domains=["collection.table"],
+                to_mcp_descriptor=lambda: {
+                    "description": "Inspect collection",
+                    "inputSchema": {"type": "object"},
+                    "outputSchema": {"type": "object"},
+                },
+            )
+        ],
+    )
 
     tools = await resolver.load_discovered_tools(instance=instance, provider=provider)
 
-    assert [tool.slug for tool in tools] == ["collection.search"]
+    assert [tool.slug for tool in tools] == ["collection.search", "collection.info"]
+
+
+@pytest.mark.asyncio
+async def test_load_discovered_tools_adds_builtin_collection_info_for_mcp_backed_api_collection(monkeypatch):
+    resolver = CollectionToolResolver(session=SimpleNamespace())
+    instance = SimpleNamespace(id="data-1", is_data=True, config={}, domain="collection.api")
+    provider = SimpleNamespace(
+        id="provider-1",
+        slug="netbox-mcp",
+        instance_kind="service",
+        config={"provider_kind": "mcp"},
+        connector_type="mcp",
+        placement="remote",
+    )
+    resolver._resolve_bound_collection = AsyncMock(
+        return_value=SimpleNamespace(id="collection-1", collection_type="api", has_vector_search=False)
+    )
+    resolver._load_local_tools_for_provider = AsyncMock(return_value=[])
+    resolver._load_provider_tools = AsyncMock(return_value=[])
+    monkeypatch.setattr(
+        "app.services.collection_tool_resolver.ToolRegistry.list_all",
+        lambda: [
+            SimpleNamespace(
+                slug="collection.info",
+                name="Collection Info",
+                description="Inspect collection",
+                domains=["collection.api"],
+                to_mcp_descriptor=lambda: {
+                    "description": "Inspect collection",
+                    "inputSchema": {"type": "object"},
+                    "outputSchema": {"type": "object"},
+                },
+            )
+        ],
+    )
+
+    tools = await resolver.load_discovered_tools(instance=instance, provider=provider)
+
+    assert [tool.slug for tool in tools] == ["collection.info"]
 
 
 @pytest.mark.asyncio
@@ -167,3 +222,21 @@ async def test_load_system_tools_skips_stale_non_system_template_handlers(monkey
     tools = await resolver._load_system_tools()  # noqa: SLF001
 
     assert [tool.slug for tool in tools] == ["file.read"]
+
+
+@pytest.mark.asyncio
+async def test_resolve_bound_collection_for_service_backed_local_collection(monkeypatch):
+    resolver = CollectionToolResolver(session=SimpleNamespace())
+    instance = SimpleNamespace(id="svc-1", is_data=False, instance_kind="service")
+    bound = SimpleNamespace(id="collection-1", slug="reglament", collection_type="document")
+
+    mocked = AsyncMock(return_value=bound)
+    monkeypatch.setattr(
+        "app.services.collection_tool_resolver.resolve_bound_collection_by_instance_id",
+        mocked,
+    )
+
+    result = await resolver._resolve_bound_collection(instance)  # noqa: SLF001
+
+    assert result is bound
+    mocked.assert_awaited_once_with(resolver.session, data_instance_id="svc-1")

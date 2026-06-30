@@ -65,9 +65,8 @@ def test_fill_text_missing_required(scalar_contract):
     template = b"Hello {{name}}, amount {{amount}}"
     values = {"name": "Alice"}  # missing amount
     result = engine.fill(template, values, "test.txt")
-    assert result.success is True
-    assert b"{{amount}}" in result.content
-    assert "amount" in result.missing_scalars
+    assert result.success is False
+    assert "required scalar 'amount'" in result.error.lower()
 
 
 def test_fill_text_table_marker_loop(table_contract):
@@ -88,13 +87,21 @@ def test_fill_text_table_marker_loop(table_contract):
 
 
 def test_fill_text_empty_required_table_fails(table_contract):
-    # Missing rows should not hard-fail fill; unresolved table is reported.
     engine = TemplateFillEngine(table_contract)
     template = b"{{#items}}{{items.name}}{{/items}}"
     values = {"company": "Acme", "items": []}
     result = engine.fill(template, values, "test.txt")
-    assert result.success is True
-    assert "items" in result.filled_tables or "items" in result.missing_tables
+    assert result.success is False
+    assert "required table 'items'" in result.error.lower()
+
+
+def test_fill_text_fails_when_no_placeholders_were_replaced(scalar_contract):
+    engine = TemplateFillEngine(scalar_contract)
+    template = b"Static content without placeholders"
+    values = {"name": "Alice", "amount": 100}
+    result = engine.fill(template, values, "test.txt")
+    assert result.success is False
+    assert "no placeholders were filled" in result.error.lower()
 
 
 def test_fill_text_empty_optional_table_succeeds():

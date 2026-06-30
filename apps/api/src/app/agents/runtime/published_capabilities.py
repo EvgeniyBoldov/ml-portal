@@ -8,6 +8,7 @@ from app.agents.contracts import (
     ResolvedDataInstance,
     ResolvedOperation,
 )
+from app.agents.operation_publication import build_collection_workflow_steps
 from app.agents.runtime.prompt_contract import build_prompt_input_schema, summarize_prompt_input_schema
 
 
@@ -18,25 +19,71 @@ def build_published_operation_summary(
 ) -> PublishedOperationSummary:
     readiness = getattr(collection, "readiness", None)
     return PublishedOperationSummary(
-        operation_slug=operation.operation_slug,
-        canonical_name=operation.operation,
-        scope_kind=operation.scope,
-        domain=operation.published_domain,
-        title=operation.name,
-        description=operation.description,
-        result_kind=operation.result_kind,
-        collection_slug=operation.collection_slug or getattr(collection, "collection_slug", None),
+        operation_slug=str(getattr(operation, "operation_slug", "") or "").strip(),
+        canonical_name=str(getattr(operation, "operation", "") or "").strip(),
+        scope_kind=getattr(operation, "scope", "collection"),
+        domain=getattr(operation, "published_domain", None),
+        title=getattr(operation, "name", None),
+        description=getattr(operation, "description", None),
+        result_kind=getattr(operation, "result_kind", None),
+        collection_slug=getattr(operation, "collection_slug", None) or getattr(collection, "collection_slug", None),
         collection_type=getattr(collection, "collection_type", None),
         collection_purpose=getattr(collection, "usage_purpose", None),
         collection_readiness=str(getattr(readiness, "status", "") or "").strip() or None,
         schema_freshness=str(getattr(readiness, "schema_freshness", "") or "").strip() or None,
-        provider_kind=operation.source,
+        provider_kind=getattr(operation, "source", None),
         input_schema_summary=list(
-            operation.input_schema_summary or summarize_prompt_input_schema(build_prompt_input_schema(operation))
+            getattr(operation, "input_schema_summary", None)
+            or summarize_prompt_input_schema(build_prompt_input_schema(operation))
         ),
-        side_effects=operation.side_effects,
-        risk_level=operation.risk_level,
+        side_effects=bool(getattr(operation, "side_effects", False)),
+        risk_level=getattr(operation, "risk_level", "safe"),
     )
+
+
+def _resolve_operation_summary(
+    operation: ResolvedOperation,
+    *,
+    collection: ResolvedDataInstance | None = None,
+) -> PublishedOperationSummary:
+    published = getattr(operation, "published", None)
+    if isinstance(published, PublishedOperationSummary):
+        return published
+    if published is not None:
+        readiness = getattr(collection, "readiness", None)
+        return PublishedOperationSummary(
+            operation_slug=str(
+                getattr(published, "operation_slug", None)
+                or getattr(operation, "operation_slug", "")
+                or ""
+            ).strip(),
+            canonical_name=str(
+                getattr(published, "canonical_name", None)
+                or getattr(operation, "operation", "")
+                or ""
+            ).strip(),
+            scope_kind=getattr(published, "scope_kind", None) or getattr(operation, "scope", "collection"),
+            domain=getattr(published, "domain", None) or getattr(operation, "published_domain", None),
+            title=getattr(published, "title", None) or getattr(operation, "name", None),
+            description=getattr(published, "description", None) or getattr(operation, "description", None),
+            result_kind=getattr(published, "result_kind", None) or getattr(operation, "result_kind", None),
+            collection_slug=getattr(published, "collection_slug", None)
+            or getattr(operation, "collection_slug", None)
+            or getattr(collection, "collection_slug", None),
+            collection_type=getattr(published, "collection_type", None) or getattr(collection, "collection_type", None),
+            collection_purpose=getattr(published, "collection_purpose", None) or getattr(collection, "usage_purpose", None),
+            collection_readiness=str(getattr(readiness, "status", "") or "").strip() or None,
+            schema_freshness=str(getattr(readiness, "schema_freshness", "") or "").strip() or None,
+            provider_kind=getattr(published, "provider_kind", None) or getattr(operation, "source", None),
+            input_schema_summary=list(
+                getattr(published, "input_schema_summary", None)
+                or getattr(operation, "input_schema_summary", None)
+                or summarize_prompt_input_schema(build_prompt_input_schema(operation))
+            ),
+            side_effects=bool(getattr(published, "side_effects", getattr(operation, "side_effects", False))),
+            risk_level=getattr(published, "risk_level", getattr(operation, "risk_level", "safe")),
+        )
+    return build_published_operation_summary(operation, collection=collection)
 
 
 def build_published_collection_summary(
@@ -46,15 +93,24 @@ def build_published_collection_summary(
 ) -> PublishedCollectionSummary:
     readiness = getattr(collection, "readiness", None)
     collection_slug = str(collection.collection_slug or collection.slug).strip()
-    op_slugs = [
-        str(getattr(item, "operation_slug", "")).strip()
+    collection_operations = [
+        item
         for item in operations
         if str(getattr(item, "collection_slug", "")).strip() == collection_slug
-        and str(getattr(item, "operation_slug", "")).strip()
     ]
+    operation_summaries = [
+        _resolve_operation_summary(item, collection=collection)
+        for item in collection_operations
+    ]
+    op_slugs = [
+        str(getattr(item, "operation_slug", "")).strip()
+        for item in operation_summaries
+        if str(getattr(item, "operation_slug", "")).strip()
+    ]
+    collection_type = getattr(collection, "collection_type", None)
     return PublishedCollectionSummary(
         collection_slug=collection_slug,
-        collection_type=collection.collection_type,
+        collection_type=collection_type,
         title=str(getattr(collection, "name", "") or "").strip() or None,
         purpose=collection.usage_purpose,
         data_description=collection.data_description,
@@ -67,6 +123,14 @@ def build_published_collection_summary(
             if str(item).strip()
         ],
         available_operation_slugs=sorted(set(op_slugs)),
+        available_operations=operation_summaries,
+        recommended_flow=build_collection_workflow_steps(
+            collection_type=str(collection_type or "").strip().lower(),
+            canonical_operations=[
+                str(getattr(item, "canonical_name", "")).strip()
+                for item in operation_summaries
+            ],
+        ),
     )
 
 
@@ -82,7 +146,7 @@ def attach_published_operation_summaries(
     summaries: list[PublishedOperationSummary] = []
     for operation in operations:
         collection = collection_map.get(str(operation.collection_slug or "").strip())
-        summary = build_published_operation_summary(operation, collection=collection)
+        summary = _resolve_operation_summary(operation, collection=collection)
         operation.published = summary
         summaries.append(summary)
     return summaries
@@ -104,7 +168,7 @@ def serialize_published_operations(
 ) -> list[dict]:
     payload: list[dict] = []
     for operation in operations:
-        summary = operation.published or build_published_operation_summary(operation)
+        summary = _resolve_operation_summary(operation)
         payload.append(summary.model_dump(mode="json"))
     return payload
 

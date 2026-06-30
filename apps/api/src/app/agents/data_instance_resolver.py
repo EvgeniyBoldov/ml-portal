@@ -116,7 +116,7 @@ class RuntimeDataInstanceResolver:
         if collection_type == CollectionType.DOCUMENT.value:
             return "collection.document"
         if collection_type == CollectionType.TEMPLATE.value:
-            return "collection.table"
+            return "collection.template"
         if collection_type == CollectionType.SQL.value:
             return "collection.sql"
         if collection_type == CollectionType.API.value:

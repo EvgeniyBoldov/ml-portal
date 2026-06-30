@@ -133,7 +133,6 @@ class ToolResolver:
             return None
         operation_name = publication.canonical_op_slug
         title = publication.spec.title
-        description = publication.spec.description
         container = ToolPublicationContainerView(
             id=None,
             slug=discovered_tool.slug,
@@ -152,6 +151,11 @@ class ToolResolver:
             description=discovered_tool.description,
             input_schema=discovered_tool.input_schema,
             output_schema=discovered_tool.output_schema,
+        )
+        description = (
+            discovered_operation.description.strip()
+            if discovered_operation.description and discovered_operation.description.strip()
+            else publication.spec.description
         )
         return ResolvedTool(
             raw_slug=raw_operation_name,

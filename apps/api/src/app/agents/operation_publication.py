@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import re
-from typing import Dict, Iterable, Optional, Tuple, Literal
+from typing import Dict, Iterable, List, Optional, Tuple, Literal
 
 
 @dataclass(frozen=True, slots=True)
@@ -518,7 +518,7 @@ def resolve_publication(
                 canonical_op_slug=canonical_non_collection,
                 domain=domain,
                 title=canonical_non_collection,
-                description=f"Published operation for domain '{domain}'",
+                description="",
                 result_kind="generic",
                 scope_kind="system",
             ),
@@ -635,3 +635,92 @@ def get_collection_capability_bindings(
     collection_type: str,
 ) -> Tuple[CollectionCapabilityBinding, ...]:
     return _COLLECTION_CAPABILITY_BINDINGS.get(str(collection_type or "").strip().lower(), ())
+
+
+def build_collection_workflow_steps(
+    *,
+    collection_type: str,
+    canonical_operations: Iterable[str],
+) -> List[str]:
+    ops = {
+        str(item or "").strip()
+        for item in canonical_operations
+        if str(item or "").strip()
+    }
+    steps: List[str] = []
+
+    if "collection.info" in ops:
+        if collection_type in {"table", "document", "template"}:
+            steps.append(
+                "Сначала вызови `collection.info`, если нужно понять поля, фильтры, наблюдаемые значения или структуру данных."
+            )
+        elif collection_type in {"sql", "api"}:
+            steps.append(
+                "Сначала вызови `collection.info`, чтобы понять доступную структуру, сущности и ограничения источника."
+            )
+
+    if collection_type == "document":
+        if "collection.document.search" in ops:
+            steps.append(
+                "Для поиска содержимого начни с `collection.document.search` и получи `document_id` из результата."
+            )
+        if "collection.document.get" in ops:
+            steps.append(
+                "Используй `collection.document.get` только с `document_id`, полученным из `collection.document.search` или `collection.document.list`."
+            )
+        elif "collection.document.list" in ops:
+            steps.append(
+                "Используй `collection.document.list`, когда нужно перечислить документы, а не искать по смыслу."
+            )
+    elif collection_type == "template":
+        if "collection.template.search" in ops:
+            steps.append(
+                "Если шаблон неочевиден, начни с `collection.template.search`, чтобы найти подходящий `row_id` по смыслу."
+            )
+        if "collection.template.list" in ops:
+            steps.append(
+                "Используй `collection.template.list`, чтобы получить точные `row_id`, названия шаблонов и связанные файлы."
+            )
+        if "collection.template.get_schema" in ops:
+            steps.append(
+                "Перед заполнением вызови `collection.template.get_schema` с реальным `row_id`, чтобы узнать поля и placeholders."
+            )
+        if "collection.template.fill" in ops:
+            steps.append(
+                "`collection.template.fill` вызывай только с `row_id`, найденным через `collection.template.list` или `collection.template.search`; не придумывай `row_id`."
+            )
+    elif collection_type == "table":
+        if "collection.table.search" in ops:
+            steps.append(
+                "Основной вход — `collection.table.search`; сначала найди нужные строки, потом переходи к точечным операциям."
+            )
+        if "collection.table.get" in ops:
+            steps.append("`collection.table.get` используй только когда уже известен идентификатор записи.")
+        if "collection.table.aggregate" in ops:
+            steps.append(
+                "`collection.table.aggregate` используй для метрик и сводок, а не для чтения конкретных строк."
+            )
+    elif collection_type == "sql":
+        if "collection.sql.search_objects" in ops:
+            steps.append(
+                "Сначала вызови `collection.sql.search_objects`, чтобы найти нужные таблицы, представления и колонки."
+            )
+        if "collection.sql.execute" in ops:
+            steps.append(
+                "После этого используй `collection.sql.execute` только для read-only SQL по уже найденным объектам."
+            )
+    elif collection_type == "api":
+        if "collection.api.search_objects" in ops or "collection.api.get_objects" in ops:
+            steps.append(
+                "Сначала определи нужный тип сущности, затем используй поиск или выборку объектов по этому типу."
+            )
+        if "collection.api.search_devices" in ops or "collection.api.get_device" in ops:
+            steps.append(
+                "Для устройств: `collection.api.search_devices` для поиска, `collection.api.get_device` — когда уже известно точное имя."
+            )
+        if "collection.api.list_sites" in ops:
+            steps.append(
+                "`collection.api.list_sites` используй для выбора площадок и контекста, а не для поиска устройств."
+            )
+
+    return steps

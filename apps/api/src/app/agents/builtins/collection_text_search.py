@@ -8,7 +8,10 @@ Collection Text Search Tool — векторный поиск по коллек�
 from __future__ import annotations
 
 import asyncio
+import re
 import uuid
+from datetime import date, datetime
+from decimal import Decimal
 from typing import Any, ClassVar, Dict, List, Optional
 
 from app.agents.context import ToolContext, ToolResult
@@ -16,6 +19,7 @@ from app.agents.handlers.versioned_tool import VersionedTool, register_tool, too
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
+_TOKEN_RE = re.compile(r"[^\W_]+", re.UNICODE)
 
 _INPUT_SCHEMA_V1 = {
     "type": "object",
@@ -249,26 +253,50 @@ class CollectionTextSearchTool(VersionedTool):
 
                 if existing_collections == 0:
                     log.warning("Qdrant collection does not exist yet")
+                    fallback_hits = await self._fallback_keyword_hits(
+                        session=session,
+                        collection=collection,
+                        query=query,
+                        limit=limit,
+                        vector_fields=vector_fields,
+                    )
                     return ToolResult.ok(
                         data={
-                            "hits": [],
-                            "total": 0,
+                            "hits": fallback_hits,
+                            "total": len(fallback_hits),
                             "collection": collection.slug,
                             "vector_fields": vector_fields,
                         },
-                        message="Collection exists but has not been vectorized yet.",
+                        message=(
+                            "Collection exists but has not been vectorized yet. "
+                            "Returned fallback lexical matches."
+                            if fallback_hits
+                            else "Collection exists but has not been vectorized yet."
+                        ),
                         logs=log.entries_dict(),
                     )
 
                 if not results:
                     log.info("No results found")
+                    fallback_hits = await self._fallback_keyword_hits(
+                        session=session,
+                        collection=collection,
+                        query=query,
+                        limit=limit,
+                        vector_fields=vector_fields,
+                    )
                     return ToolResult.ok(
                         data={
-                            "hits": [],
-                            "total": 0,
+                            "hits": fallback_hits,
+                            "total": len(fallback_hits),
                             "collection": collection.slug,
                             "vector_fields": vector_fields,
                         },
+                        message=(
+                            "No vector hits; returned fallback lexical matches."
+                            if fallback_hits
+                            else None
+                        ),
                         logs=log.entries_dict(),
                     )
 
@@ -386,6 +414,101 @@ class CollectionTextSearchTool(VersionedTool):
             log.error("Search failed", error=str(e))
             return ToolResult.fail(f"Search failed: {str(e)}", logs=log.entries_dict())
 
+    async def _fallback_keyword_hits(
+        self,
+        *,
+        session: Any,
+        collection: Any,
+        query: str,
+        limit: int,
+        vector_fields: List[str],
+    ) -> List[Dict[str, Any]]:
+        from app.services.collection.row_service import CollectionRowService
+
+        row_service = CollectionRowService(session)
+        rows = await row_service.search(
+            collection,
+            limit=max(limit * 10, 50),
+            offset=0,
+            query=None,
+        )
+
+        preferred_fields = [
+            field_name
+            for field_name in (
+                "title",
+                "description",
+                "semantic_description",
+                *vector_fields,
+            )
+            if isinstance(field_name, str) and field_name.strip()
+        ]
+        query_text = query.strip().lower()
+        query_tokens = {
+            token
+            for token in _TOKEN_RE.findall(query_text)
+            if token
+        }
+        if not query_text or not query_tokens:
+            return []
+
+        scored_rows: List[Dict[str, Any]] = []
+        for row in rows:
+            best_field = ""
+            best_fragment = ""
+            best_score = 0.0
+
+            for field_name in preferred_fields:
+                raw_value = row.get(field_name)
+                if not isinstance(raw_value, str):
+                    continue
+                value = raw_value.strip()
+                if not value:
+                    continue
+                normalized = value.lower()
+                field_tokens = {
+                    token
+                    for token in _TOKEN_RE.findall(normalized)
+                    if token
+                }
+                overlap = len(query_tokens & field_tokens)
+                if overlap == 0 and query_text not in normalized:
+                    continue
+
+                score = 0.0
+                if query_text in normalized:
+                    score += 5.0
+                score += overlap / max(len(query_tokens), 1)
+                if field_name == "title":
+                    score += 1.5
+                elif field_name == "description":
+                    score += 1.0
+                elif field_name == "semantic_description":
+                    score += 0.8
+
+                if score > best_score:
+                    best_score = score
+                    best_field = field_name
+                    best_fragment = value[:500]
+
+            if best_score <= 0:
+                continue
+
+            scored_rows.append(
+                {
+                    "row_id": str(row.get("id") or ""),
+                    "score": round(best_score, 3),
+                    "matched_fields": [best_field] if best_field else [],
+                    "matched_fragments": [best_fragment] if best_fragment else [],
+                    "primary_field": best_field,
+                    "primary_fragment": best_fragment,
+                    "row_data": self._serialize_row_payload(collection, row),
+                }
+            )
+
+        scored_rows.sort(key=lambda item: item["score"], reverse=True)
+        return scored_rows[:limit]
+
     async def _fetch_full_rows(
         self,
         session: Any,
@@ -409,19 +532,45 @@ class CollectionTextSearchTool(VersionedTool):
         result: Dict[str, Dict[str, Any]] = {}
         for row in rows:
             rid = str(row.get("id", ""))
-            row_data: Dict[str, Any] = {}
-            for field_def in collection.fields:
-                fname = field_def["name"]
-                ftype = field_def["data_type"]
-                val = row.get(fname)
-                if val is None:
-                    continue
-                if ftype == "file":
-                    continue
-                if isinstance(val, uuid.UUID):
-                    val = str(val)
-                if isinstance(val, str) and len(val) > 500:
-                    val = val[:497] + "..."
-                row_data[fname] = val
-            result[rid] = row_data
+            result[rid] = self._serialize_row_payload(collection, dict(row))
         return result
+
+    def _serialize_row_payload(
+        self,
+        collection: Any,
+        row: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        row_data: Dict[str, Any] = {}
+        for field_def in collection.fields:
+            fname = field_def["name"]
+            ftype = field_def["data_type"]
+            val = row.get(fname)
+            if val is None:
+                continue
+            if ftype == "file":
+                continue
+            row_data[fname] = self._serialize_scalar(val)
+        return row_data
+
+    @staticmethod
+    def _serialize_scalar(value: Any) -> Any:
+        if isinstance(value, uuid.UUID):
+            return str(value)
+        if isinstance(value, Decimal):
+            return float(value)
+        if isinstance(value, (datetime, date)):
+            return value.isoformat()
+        if isinstance(value, str) and len(value) > 500:
+            return value[:497] + "..."
+        if isinstance(value, list):
+            return [CollectionTextSearchTool._serialize_scalar(item) for item in value]
+        if isinstance(value, tuple):
+            return [CollectionTextSearchTool._serialize_scalar(item) for item in value]
+        if isinstance(value, dict):
+            return {
+                str(key): CollectionTextSearchTool._serialize_scalar(item)
+                for key, item in value.items()
+            }
+        if isinstance(value, (int, float, bool)) or value is None:
+            return value
+        return str(value)

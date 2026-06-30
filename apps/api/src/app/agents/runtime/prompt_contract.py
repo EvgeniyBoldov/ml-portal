@@ -93,6 +93,9 @@ def build_prompt_operation_description(
     if result_kind:
         parts.append(f"result: {result_kind}")
 
+    argument_summary = _build_argument_summary(op)
+    if argument_summary:
+        parts.append(argument_summary)
     usage_notes = _build_usage_notes(op)
     parts.extend(usage_notes)
 
@@ -118,15 +121,56 @@ def _build_usage_notes(op: "ResolvedOperation") -> List[str]:
         notes.append("if filter names or values are unknown, call collection.info first")
         notes.append("do not invent filter values")
 
+    if canonical == "collection.document.search":
+        notes.append("use this first when the task asks for document contents or evidence from documents")
+        notes.append("take document_id only from search/list results")
+    elif canonical == "collection.document.list":
+        notes.append("use this to enumerate available documents when semantic search is not needed")
     if canonical == "collection.document.get":
         notes.append("document_id must come from collection.document.search or collection.document.list")
+        notes.append("use the returned file/storage reference with file.read if the document body is needed")
     elif canonical == "collection.template.list":
         notes.append("use this first to discover row_id and storage_uri")
-    elif canonical in {"collection.template.get_schema", "collection.template.fill"}:
+    elif canonical == "collection.template.search":
+        notes.append("use this to find the right template row by meaning before get_schema/fill")
+    elif canonical == "collection.template.get_schema":
         notes.append("row_id must come from collection.template.list")
+        notes.append("use this immediately before fill to get exact values keys and placeholders")
         notes.append("do not invent row_id")
+    elif canonical == "collection.template.fill":
+        notes.append("row_id must come from collection.template.list")
+        notes.append("call collection.template.get_schema first and use the exact field keys it returns")
+        notes.append("this operation already creates the final downloadable file")
+        notes.append("after success, return download_url/file_id to the user and do not call file.generate")
+        notes.append("do not invent row_id")
+    elif canonical == "collection.sql.search_objects":
+        notes.append("use this before sql execution to discover real tables, views, and columns")
+    elif canonical == "collection.sql.execute":
+        notes.append("run read-only SQL only after discovering the target objects")
 
     return notes
+
+
+def _build_argument_summary(op: "ResolvedOperation") -> str:
+    schema = build_prompt_input_schema(op)
+    summary = summarize_prompt_input_schema(schema, max_items=6)
+    if not summary:
+        return "arguments: none"
+
+    required: List[str] = []
+    optional: List[str] = []
+    for item in summary:
+        if item.endswith("(required)"):
+            required.append(item[: -len(" (required)")])
+        else:
+            optional.append(item)
+
+    parts: List[str] = []
+    if required:
+        parts.append(f"required args: {', '.join(required)}")
+    if optional:
+        parts.append(f"optional args: {', '.join(optional)}")
+    return " | ".join(parts)
 
 
 def _text(value: Any) -> str:

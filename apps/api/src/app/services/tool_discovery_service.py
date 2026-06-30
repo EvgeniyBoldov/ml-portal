@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 from uuid import UUID
 
-from sqlalchemy import func, or_, select, text as sa_text, update
+from sqlalchemy import delete, func, or_, select, text as sa_text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import selectinload
@@ -117,6 +117,7 @@ class ToolDiscoveryService:
             full_mcp_scan=provider_instance_id is None,
             scanned_provider_ids=scanned_provider_ids,
         )
+        deleted_inactive = await self._delete_inactive_tools()
 
         await self.session.flush()
         return {
@@ -128,6 +129,7 @@ class ToolDiscoveryService:
             "mcp_scanned_providers": [str(pid) for pid in scanned_provider_ids],
             "mcp_failed_providers": list(self._last_mcp_scan_failures),
             "marked_inactive": stale,
+            "deleted_inactive": deleted_inactive,
         }
 
     async def list_all(
@@ -591,12 +593,11 @@ class ToolDiscoveryService:
         """Mark tools not seen in current scan scope as inactive."""
         predicates = []
         if include_local:
-            # Only mark collection-local tools as stale; system tools (provider_instance_id=NULL)
-            # are managed by _scan_system_tools and should not be deactivated here.
-            predicates.append(
-                (DiscoveredTool.source == "local")
-                & (DiscoveredTool.provider_instance_id.isnot(None))
-            )
+            # Local scan covers both provider-bound local collection tools and
+            # global system tools. Stale provider_instance_id=NULL rows must be
+            # deactivated too, otherwise legacy global entries survive forever
+            # and leak into runtime prompts as fake system tools.
+            predicates.append(DiscoveredTool.source == "local")
         if full_mcp_scan:
             predicates.append(DiscoveredTool.source == "mcp")
         elif scanned_provider_ids:
@@ -618,6 +619,12 @@ class ToolDiscoveryService:
         )
         result = await self.session.execute(stmt)
         return result.rowcount
+
+    async def _delete_inactive_tools(self) -> int:
+        """Hard-delete inactive discovered tool snapshots after each rescan."""
+        stmt = delete(DiscoveredTool).where(DiscoveredTool.is_active == False)  # noqa: E712
+        result = await self.session.execute(stmt)
+        return int(result.rowcount or 0)
 
     async def _count_provider_tools(self, provider_instance_id: UUID) -> Tuple[int, int]:
         base_filter = (

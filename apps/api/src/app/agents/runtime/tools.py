@@ -28,6 +28,7 @@ from app.agents.runtime.confirmation import (
     build_operation_fingerprint,
     get_confirmation_service,
 )
+from app.agents.runtime.prompt_contract import build_prompt_input_schema
 from app.agents.runtime.tool_reuse_policy import ToolCallReusePolicy
 from app.core.logging import get_logger
 from app.runtime.operation_errors import (
@@ -100,6 +101,14 @@ class OperationExecutionFacade:
                 id=operation_call.id,
                 operation_slug=operation.operation_slug,
                 arguments=operation_call.arguments,
+            )
+
+        normalized_arguments = self._normalize_args(operation, operation_call.arguments)
+        if normalized_arguments is not operation_call.arguments:
+            operation_call = OperationCall(
+                id=operation_call.id,
+                operation_slug=operation_call.operation_slug,
+                arguments=normalized_arguments,
             )
 
         validation_error = self._validate_args(operation, operation_call.arguments)
@@ -266,6 +275,21 @@ class OperationExecutionFacade:
         for operation in operations:
             if operation.operation_slug == operation_slug:
                 return operation, None
+        shorthand_matches = [
+            operation
+            for operation in operations
+            if operation.operation == operation_slug
+        ]
+        if len(shorthand_matches) == 1:
+            return shorthand_matches[0], None
+        if len(shorthand_matches) > 1:
+            candidates = ", ".join(
+                operation.operation_slug for operation in shorthand_matches[:10]
+            )
+            return None, (
+                f"Operation '{operation_slug}' is ambiguous. "
+                f"Use exact invoke name. Matching operations: {candidates}"
+            )
         candidates = ", ".join(
             operation.operation_slug for operation in operations[:10]
         )
@@ -321,7 +345,7 @@ class OperationExecutionFacade:
         operation: ResolvedOperation,
         arguments: Dict[str, Any],
     ) -> Optional[OperationValidationError]:
-        schema = operation.input_schema or {}
+        schema = build_prompt_input_schema(operation)
         if not schema:
             return None
 
@@ -331,6 +355,46 @@ class OperationExecutionFacade:
         if _JSONSCHEMA_AVAILABLE and _jsonschema is not None:
             return OperationExecutionFacade._validate_args_jsonschema(coerced_args, schema)
         return OperationExecutionFacade._validate_args_builtin(coerced_args, schema)
+
+    @staticmethod
+    def _normalize_args(
+        operation: ResolvedOperation,
+        arguments: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        schema = build_prompt_input_schema(operation)
+        if not schema or not isinstance(arguments, dict):
+            return arguments
+        return OperationExecutionFacade._strip_optional_nulls(arguments, schema)
+
+    @staticmethod
+    def _strip_optional_nulls(
+        arguments: Dict[str, Any],
+        schema: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        if not isinstance(arguments, dict):
+            return arguments
+        properties = schema.get("properties")
+        if not isinstance(properties, dict):
+            return arguments
+        required = {
+            str(item).strip()
+            for item in (schema.get("required") or [])
+            if str(item).strip()
+        }
+        normalized = dict(arguments)
+        changed = False
+        for key, value in list(normalized.items()):
+            child_schema = properties.get(key)
+            if value is None and key not in required:
+                normalized.pop(key, None)
+                changed = True
+                continue
+            if isinstance(value, dict) and isinstance(child_schema, dict):
+                nested = OperationExecutionFacade._strip_optional_nulls(value, child_schema)
+                if nested is not value:
+                    normalized[key] = nested
+                    changed = True
+        return normalized if changed else arguments
 
     @staticmethod
     def _validate_args_jsonschema(
@@ -467,8 +531,13 @@ class OperationExecutionFacade:
             tool_name = out.get("operation") or out.get("tool") or "unknown"
             if out.get("success") and out.get("data"):
                 data = out["data"]
-                # Pretty-print file.generate results as markdown links
-                if tool_name in ("file.generate", "file_generate"):
+                # Pretty-print downloadable file results as markdown links
+                if tool_name in (
+                    "file.generate",
+                    "file_generate",
+                    "collection.template.fill",
+                    "instance.local-template-tools.collection.template.fill",
+                ):
                     file_name = data.get("file_name") or data.get("filename") or "file"
                     file_id = data.get("file_id") or ""
                     download_url = data.get("download_url") or ""

@@ -193,6 +193,7 @@ class AgentExecutor:
         deps = ctx.get_runtime_deps()
         deps.operation_executor = deps.operation_executor or self._operation_executor
         deps.execution_graph = sub_request.execution_graph
+        deps.resolved_operations = list(sub_request.resolved_operations or [])
         ctx.set_runtime_deps(deps)
         ctx.extra["runtime_tool_ledger"] = state.tool_ledger
         ctx.extra["runtime_tool_reuse_enabled"] = bool(
@@ -271,9 +272,14 @@ class AgentExecutor:
                         if isinstance(src, dict):
                             sub_sources.append(dict(src))
 
-                    # Collect file.generate attachments for downstream synthesis
+                    # Collect downloadable attachments for downstream synthesis
                     operation_name = str(legacy.data.get("operation") or "")
-                    if operation_name in ("file.generate", "file_generate") and bool(legacy.data.get("success")):
+                    if operation_name in (
+                        "file.generate",
+                        "file_generate",
+                        "collection.template.fill",
+                        "instance.local-template-tools.collection.template.fill",
+                    ) and bool(legacy.data.get("success")):
                         if isinstance(result_payload, dict):
                             file_id = result_payload.get("file_id")
                             if file_id:

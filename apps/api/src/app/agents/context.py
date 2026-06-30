@@ -115,6 +115,7 @@ class RuntimeDependencies:
     session_factory: Any = None
     operation_executor: Any = None
     execution_graph: Any = None
+    resolved_operations: List[Any] = field(default_factory=list)
     sandbox_overrides: Dict[str, Any] = field(default_factory=dict)
     helper_summary: Optional[Dict[str, Any]] = None
     execution_outline: Optional[Dict[str, Any]] = None
@@ -183,6 +184,10 @@ class ToolContext:
         deps.session_factory = deps.session_factory or self.extra.get("session_factory")
         deps.operation_executor = deps.operation_executor or self.extra.get("operation_executor")
         deps.execution_graph = deps.execution_graph or self.extra.get("execution_graph")
+        if not deps.resolved_operations:
+            resolved_operations = self.extra.get("resolved_operations")
+            if isinstance(resolved_operations, list):
+                deps.resolved_operations = resolved_operations
         deps.sandbox_overrides = deps.sandbox_overrides or dict(self.extra.get("sandbox_overrides") or {})
         if deps.helper_summary is None:
             helper_summary = self.extra.get("helper_summary")
@@ -200,6 +205,7 @@ class ToolContext:
         self.extra["session_factory"] = deps.session_factory
         self.extra["operation_executor"] = deps.operation_executor
         self.extra["execution_graph"] = deps.execution_graph
+        self.extra["resolved_operations"] = list(deps.resolved_operations or [])
         self.extra["sandbox_overrides"] = deps.sandbox_overrides
         if deps.helper_summary is not None:
             self.extra["helper_summary"] = deps.helper_summary

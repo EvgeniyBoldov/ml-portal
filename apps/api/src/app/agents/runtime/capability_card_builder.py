@@ -1,7 +1,6 @@
-"""Runtime capability card builder for planner/executor prompts."""
+"""Runtime prompt sections for collection-centered and system operations surfaces."""
 from __future__ import annotations
 
-from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, List, Optional, Sequence, TYPE_CHECKING
 
@@ -12,7 +11,6 @@ from app.agents.runtime.published_capabilities import (
 
 if TYPE_CHECKING:
     from app.agents.contracts import ResolvedDataInstance, ResolvedOperation
-    from app.agents.execution_preflight import ExecutionRequest
 
 
 MAX_COLLECTIONS_IN_CARD = 20
@@ -21,25 +19,22 @@ MAX_OPERATIONS_IN_CARD = 12
 
 @dataclass(slots=True)
 class CapabilityCardBundle:
-    agent_card: str = ""
     collections_card: str = ""
-    operations_card: str = ""
+    system_operations_card: str = ""
 
     @property
     def combined(self) -> str:
-        sections = [s for s in (self.agent_card, self.collections_card, self.operations_card) if s]
-        if not sections:
-            return ""
-        return "## Карточка возможностей\n\n" + "\n\n".join(sections)
+        sections = [s for s in (self.collections_card, self.system_operations_card) if s]
+        return "\n\n".join(sections)
 
 
 class CapabilityCardBuilder:
-    """Build concise, structured runtime cards for agent + collections + operations."""
+    """Build concise LLM-facing sections for collections and system operations."""
 
     def build(
         self,
         *,
-        exec_request: "ExecutionRequest",
+        resolved_data_instances: Sequence["ResolvedDataInstance"],
         resolved_operations: Sequence["ResolvedOperation"],
         prompt_labels: Optional[dict] = None,
         prompt_budgets: Optional[dict] = None,
@@ -47,44 +42,18 @@ class CapabilityCardBuilder:
         labels = prompt_labels if isinstance(prompt_labels, dict) else {}
         budgets = prompt_budgets if isinstance(prompt_budgets, dict) else {}
         return CapabilityCardBundle(
-            agent_card=self._build_agent_card(exec_request, labels=labels),
             collections_card=self._build_collections_card(
-                exec_request.resolved_data_instances,
+                resolved_data_instances,
                 resolved_operations,
                 labels=labels,
                 budgets=budgets,
             ),
-            operations_card=self._build_operations_card(resolved_operations, labels=labels, budgets=budgets),
+            system_operations_card=self._build_system_operations_card(
+                resolved_operations,
+                labels=labels,
+                budgets=budgets,
+            ),
         )
-
-    def _build_agent_card(self, exec_request: "ExecutionRequest", *, labels: Optional[dict] = None) -> str:
-        agent = exec_request.agent
-        if agent is None:
-            return ""
-        labels = labels if isinstance(labels, dict) else {}
-
-        lines: List[str] = [f"### {self._label(labels, 'agent_title', 'Агент')}", f"- {self._label(labels, 'slug_label', 'Slug')}: `{self._text(getattr(agent, 'slug', ''))}`"]
-
-        title = self._text(getattr(agent, "name", ""))
-        if title:
-            lines.append(f"- {self._label(labels, 'name_label', 'Название')}: {title}")
-
-        description = self._text(getattr(agent, "description", ""))
-        if description:
-            lines.append(f"- {self._label(labels, 'description_label', 'Описание')}: {description}")
-
-        tags = [self._text(tag) for tag in (getattr(agent, "tags", None) or [])]
-        tags = [tag for tag in tags if tag]
-        if tags:
-            lines.append(f"- {self._label(labels, 'tags_label', 'Теги')}: {', '.join(tags)}")
-
-        agent_version = exec_request.agent_version
-        if agent_version is not None:
-            risk_level = self._text(getattr(agent_version, "risk_level", ""))
-            if risk_level:
-                lines.append(f"- {self._label(labels, 'risk_label', 'Уровень риска')}: {risk_level}")
-
-        return "\n".join(lines)
 
     def _build_collections_card(
         self,
@@ -99,92 +68,59 @@ class CapabilityCardBuilder:
         labels = labels if isinstance(labels, dict) else {}
         budgets = budgets if isinstance(budgets, dict) else {}
 
-        lines: List[str] = [f"### {self._label(labels, 'collections_title', 'Коллекции')}"]
-        collection_summaries = build_published_collection_summaries(items, operations)
-        ops_by_collection: dict[str, list["ResolvedOperation"]] = defaultdict(list)
-        for operation in operations:
-            if operation.scope != "collection":
-                continue
-            collection_slug = self._text(getattr(operation, "collection_slug", None))
-            if collection_slug:
-                ops_by_collection[collection_slug].append(operation)
+        summaries = {
+            summary.collection_slug: summary
+            for summary in build_published_collection_summaries(items, operations)
+        }
+        lines: List[str] = [f"## {self._label(labels, 'collections_title', 'Доступные коллекции')}"]
+        lines.append(
+            f"- {self._label(labels, 'collections_info_rule', 'Перед работой с любой коллекцией сначала вызови `collection.info` для этой коллекции.')}"
+        )
         shown = 0
         max_items = self._budget(budgets, "max_collections_in_card", MAX_COLLECTIONS_IN_CARD)
-        for item, summary in zip(items, collection_summaries):
+        for item in items:
+            slug = self._text(item.collection_slug or item.slug)
+            summary = summaries.get(slug)
+            if summary is None or not summary.available_operations:
+                continue
             if shown >= max_items:
                 break
             shown += 1
-            slug = self._text(item.collection_slug or item.slug)
-            collection_type = self._text(item.collection_type or item.domain)
-            readiness = getattr(item, "readiness", None)
 
-            lines.append(f"- `{slug}`")
-            if collection_type:
-                lines.append(f"  - {self._label(labels, 'type_label', 'тип')}: {collection_type}")
-            if readiness is not None:
-                readiness_status = self._normalize_readiness(summary.readiness_status)
-                if readiness_status:
-                    lines.append(f"  - {self._label(labels, 'status_label', 'готовность')}: {readiness_status}")
-                schema_freshness = self._text(summary.schema_freshness)
-                if schema_freshness:
-                    lines.append(f"  - {self._label(labels, 'schema_label', 'схема')}: {schema_freshness}")
+            collection_type = self._text(summary.collection_type or item.collection_type or item.domain)
+            title = self._text(summary.title or getattr(item, "name", None))
             purpose = self._text(summary.purpose)
-            if purpose:
-                lines.append(f"  - {self._label(labels, 'purpose_label', 'назначение')}: {purpose}")
             data_description = self._text(summary.data_description)
-            if data_description:
-                lines.append(f"  - {self._label(labels, 'data_label', 'данные')}: {data_description}")
-            usage_rules = self._text(getattr(summary, "usage_rules", None))
-            if usage_rules:
-                lines.append(f"  - {self._label(labels, 'usage_rules_label', 'правила работы')}: {usage_rules}")
             remote_tables = [self._text(v) for v in (item.remote_tables or []) if self._text(v)]
+
+            lines.append(f"### `{slug}`")
+            if title:
+                lines.append(f"- {self._label(labels, 'name_label', 'название')}: {title}")
+            if collection_type:
+                lines.append(f"- {self._label(labels, 'type_label', 'тип')}: {collection_type}")
+            if purpose:
+                lines.append(f"- {self._label(labels, 'purpose_label', 'назначение')}: {purpose}")
+            if data_description:
+                lines.append(f"- {self._label(labels, 'data_label', 'данные')}: {data_description}")
             if remote_tables:
                 preview = ", ".join(f"`{name}`" for name in remote_tables[:5])
                 if len(remote_tables) > 5:
                     preview += f", +{len(remote_tables) - 5} ещё"
-                lines.append(f"  - {self._label(labels, 'tables_label', 'таблицы')}: {preview}")
-            missing = list(getattr(readiness, "missing_requirements", []) or []) if readiness is not None else []
-            if missing:
-                lines.append(
-                    f"  - {self._label(labels, 'missing_label', 'отсутствует')}: "
-                    f"{', '.join(self._text(v) for v in missing if self._text(v))}"
-                )
+                lines.append(f"- {self._label(labels, 'tables_label', 'таблицы')}: {preview}")
 
-            collection_operations = ops_by_collection.get(slug, [])
-            if collection_operations:
-                lines.append("  - доступные действия:")
-                for operation in collection_operations[:max_items]:
-                    summary_op = operation.published or build_published_operation_summary(operation, collection=item)
-                    descriptor = self._text(summary_op.description)
-                    result_kind = self._text(summary_op.result_kind)
-                    details = []
-                    invoke_as = self._text(getattr(operation, "operation_slug", None)) or self._text(operation.operation)
-                    canonical_name = self._text(getattr(summary_op, "canonical_name", None)) or self._text(operation.operation)
-                    if canonical_name and canonical_name != invoke_as:
-                        details.append(f"каноническое имя: {canonical_name}")
-                    if descriptor:
-                        details.append(descriptor)
-                    if result_kind:
-                        details.append(f"результат: {result_kind}")
-                    suffix = f" — {'; '.join(details)}" if details else ""
-                    lines.append(
-                        f"    - `{invoke_as}` ({self._text(summary_op.title) or operation.name}){suffix}"
-                    )
-                if collection_type == "template":
-                    lines.append(
-                        "  - правило для template: `row_id` для `collection.template.get_schema` и "
-                        "`collection.template.fill` берётся только из `collection.template.list`; "
-                        "не придумывай промежуточные метки или поиск-результаты."
-                    )
-            else:
-                lines.append("  - доступные действия: нет")
-
-        total = len(items)
-        if total > shown:
-            lines.append(f"- ... и ещё {total - shown} коллекций")
+        if shown == 0:
+            return ""
+        total_with_ops = sum(
+            1
+            for item in items
+            if (summary := summaries.get(self._text(item.collection_slug or item.slug)))
+            and summary.available_operations
+        )
+        if total_with_ops > shown:
+            lines.append(f"- ... и ещё {total_with_ops - shown} коллекций")
         return "\n".join(lines)
 
-    def _build_operations_card(
+    def _build_system_operations_card(
         self,
         operations: Sequence["ResolvedOperation"],
         *,
@@ -196,8 +132,8 @@ class CapabilityCardBuilder:
         labels = labels if isinstance(labels, dict) else {}
         budgets = budgets if isinstance(budgets, dict) else {}
 
-        title = self._label(labels, 'operations_title', 'Доступные операции')
-        lines: List[str] = [f"### {title} ({len(operations)})"]
+        title = self._label(labels, "system_operations_title", "Системные операции")
+        lines: List[str] = [f"## {title}"]
         shown = 0
         max_items = self._budget(budgets, "max_operations_in_card", MAX_OPERATIONS_IN_CARD)
         for op in operations:
@@ -207,17 +143,24 @@ class CapabilityCardBuilder:
                 break
             shown += 1
             summary = op.published or build_published_operation_summary(op)
+            invoke_as = (
+                self._text(getattr(op, "operation_slug", None))
+                or self._text(getattr(summary, "canonical_name", None))
+                or self._text(op.operation)
+            )
+            display_name = (
+                self._text(getattr(summary, "canonical_name", None))
+                or self._text(op.operation)
+                or invoke_as
+            )
+            title_text = self._text(getattr(summary, "title", None)) or self._text(op.name)
             details: List[str] = []
-            canonical_name = self._text(getattr(summary, "canonical_name", None)) or self._text(op.operation)
-            invoke_as = self._text(getattr(op, "operation_slug", None)) or canonical_name
-            if canonical_name and canonical_name != invoke_as:
-                details.append(f"каноническое имя: {canonical_name}")
-            if self._text(summary.description):
-                details.append(self._text(summary.description))
-            if self._text(summary.result_kind):
-                details.append(f"результат: {self._text(summary.result_kind)}")
+            if self._text(getattr(summary, "description", None)):
+                details.append(self._text(getattr(summary, "description", None)))
+            if self._text(getattr(summary, "result_kind", None)):
+                details.append(f"результат: {self._text(getattr(summary, 'result_kind', None))}")
             suffix = f" - {'; '.join(details)}" if details else ""
-            lines.append(f"- `{invoke_as}` ({self._text(summary.title) or op.name}){suffix}")
+            lines.append(f"- `{display_name}` ({title_text}){suffix}")
 
         total = len([item for item in operations if item.scope == "system"])
         if total == 0:
@@ -254,11 +197,3 @@ class CapabilityCardBuilder:
     @staticmethod
     def _text(value: Optional[Any]) -> str:
         return str(value or "").strip()
-
-    @staticmethod
-    def _normalize_readiness(value: Optional[Any]) -> str:
-        text = str(value or "").strip()
-        if text.startswith("CollectionRuntimeStatus."):
-            _, _, tail = text.rpartition(".")
-            return tail.lower()
-        return text

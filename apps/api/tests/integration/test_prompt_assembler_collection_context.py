@@ -96,15 +96,21 @@ async def test_prompt_assembler_renders_collection_semantics_from_current_versio
 
     result = await router.resolve(user_id=uuid4(), tenant_id=tenant_id)
 
-    prompt = PromptAssembler().assemble_collection_prompt(result.resolved_data_instances)
+    prompt = PromptAssembler().assemble_collection_prompt(
+        result.resolved_data_instances,
+        resolved_operations=result.resolved_operations,
+    )
 
-    assert "- Description: Netbox devices inventory" in prompt
-    assert "- Purpose: Поиск устройств и атрибутов инвентаря" in prompt
-    assert "- Usage rules: Сначала проверь доступные поля, потом используй поиск." in prompt
-    assert "- Entity type: device" in prompt
+    assert "## Доступные коллекции" in prompt
+    assert "сначала вызови `collection.info`" in prompt.lower()
+    assert "### `netbox_devices`" in prompt
+    assert "- название: Netbox devices" in prompt
+    assert "- данные: Netbox devices inventory" in prompt
+    assert "- назначение: Поиск устройств и атрибутов инвентаря" in prompt
+    assert "instance.netbox-devices-instance.collection.api.search" not in prompt
+    assert "collection.api.search" not in prompt
     assert "legacy collection description" not in prompt
     assert "fallback instance description" not in prompt
-    assert "summary" not in prompt.lower()
-    assert "use_cases" not in prompt.lower()
-    assert "limitations" not in prompt.lower()
-    assert "policy_hints" not in prompt.lower()
+    assert "готовность" not in prompt.lower()
+    assert "схема:" not in prompt.lower()
+    assert "отсутствует:" not in prompt.lower()

@@ -13,6 +13,7 @@ from app.agents.context import ToolContext, ToolResult
 from app.agents.handlers.versioned_tool import VersionedTool, register_tool, tool_version
 from app.core.logging import get_logger
 from app.models.collection import FieldType
+from app.services.collection_info_service import build_default_collection_info_response_builder
 
 logger = get_logger(__name__)
 
@@ -24,18 +25,6 @@ _INPUT_SCHEMA_V1 = {
         "collection_slug": {
             "type": "string",
             "description": "The collection to inspect",
-        },
-        "dimensions": {
-            "type": "array",
-            "description": "Optional list of field names to return top distinct values for",
-            "items": {"type": "string"},
-        },
-        "limit_per_dimension": {
-            "type": "integer",
-            "description": "Maximum number of values per dimension (default: 10, max: 50)",
-            "default": 10,
-            "minimum": 1,
-            "maximum": 50,
         },
     },
     "required": ["collection_slug"],
@@ -93,12 +82,8 @@ class CollectionInfoTool(VersionedTool):
         if not collection_slug:
             return ToolResult.fail("collection_slug is required", logs=log.entries_dict())
 
-        raw_dimensions = args.get("dimensions") or []
-        dimensions = [str(item).strip() for item in raw_dimensions if str(item).strip()]
-        try:
-            limit_per_dimension = max(1, min(int(args.get("limit_per_dimension", 10)), 50))
-        except (TypeError, ValueError):
-            limit_per_dimension = 10
+        dimensions: List[str] = []
+        limit_per_dimension = 10
 
         log.info(
             "Starting collection catalog inspection",
@@ -202,22 +187,29 @@ class CollectionInfoTool(VersionedTool):
                     "last_sync_at": collection.last_sync_at.isoformat() if collection.last_sync_at else None,
                 }
 
+                legacy_payload = {
+                    "schema": schema_payload,
+                    "filter_hints": filter_hints_payload,
+                    "stats": stats_payload,
+                    "dimensions": dimensions_payload,
+                    "remote_catalog": remote_catalog,
+                }
+                info_builder = build_default_collection_info_response_builder()
+                runtime_deps = ctx.get_runtime_deps()
+                resolved_operations = info_builder.operation_resolver.resolve_for_collection(
+                    runtime_deps=runtime_deps,
+                    collection_slug=collection.slug,
+                    collection=collection,
+                )
+                response_payload = await info_builder.build(
+                    session=session,
+                    collection=collection,
+                    operations=resolved_operations,
+                    legacy_payload=legacy_payload,
+                )
+
                 return ToolResult.ok(
-                    data={
-                        "collection": {
-                            "id": str(collection.id),
-                            "slug": collection.slug,
-                            "name": collection.name,
-                            "type": collection.collection_type,
-                            "status": collection.status,
-                            "table_name": collection.table_name,
-                        },
-                        "schema": schema_payload,
-                        "filter_hints": filter_hints_payload,
-                        "stats": stats_payload,
-                        "dimensions": dimensions_payload,
-                        "remote_catalog": remote_catalog,
-                    },
+                    data=response_payload,
                     logs=log.entries_dict(),
                 )
         except Exception as exc:

@@ -60,7 +60,7 @@ class TemplateFillEngine:
         """Fill template with validated values."""
         normalized_values = self.contract.normalize_values(values)
         # Validate values against contract
-        report = self.contract.validate_values(values, enforce_required=False)
+        report = self.contract.validate_values(values, enforce_required=True)
         if not report.ok:
             return FillResult(success=False, error=f"Validation failed: {report.errors}")
 
@@ -127,6 +127,15 @@ class TemplateFillEngine:
             else:
                 # No markers - simple column substitution won't work for multiple rows
                 missing_tables.append(table_key)
+
+        total_filled = len(filled_scalars) + len(filled_tables)
+        if total_filled == 0:
+            return FillResult(
+                success=False,
+                error="No placeholders were filled. Verify values keys against template schema before calling fill.",
+                missing_scalars=missing_scalars,
+                missing_tables=missing_tables,
+            )
 
         return FillResult(
             success=True,
@@ -205,6 +214,15 @@ class TemplateFillEngine:
 
         output = io.BytesIO()
         wb.save(output)
+        total_filled = len(filled_scalars) + len(filled_tables)
+        if total_filled == 0:
+            return FillResult(
+                success=False,
+                error="No placeholders were filled. Verify values keys against template schema before calling fill.",
+                missing_scalars=missing_scalars,
+                missing_tables=missing_tables,
+            )
+
         return FillResult(
             success=True,
             content=output.getvalue(),
@@ -443,6 +461,15 @@ class TemplateFillEngine:
 
         output = io.BytesIO()
         doc.save(output)
+        total_filled = len(filled_scalars) + len(filled_tables)
+        if total_filled == 0:
+            return FillResult(
+                success=False,
+                error="No placeholders were filled. Verify values keys against template schema before calling fill.",
+                missing_scalars=missing_scalars,
+                missing_tables=missing_tables,
+            )
+
         return FillResult(
             success=True,
             content=output.getvalue(),

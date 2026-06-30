@@ -314,7 +314,7 @@ class OperationRouter:
         return ResolvedDataInstance(
             instance_id=str(instance.id),
             slug=instance.slug,
-            name=instance.name,
+            name=(getattr(collection, "name", None) or instance.name),
             domain=runtime_domain,
             collection_id=collection_id,
             collection_slug=collection_slug,

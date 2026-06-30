@@ -37,6 +37,19 @@ class CollectionToolResolutionContext:
     is_service_instance: bool
 
 
+@dataclass(frozen=True)
+class VirtualDiscoveredTool:
+    slug: str
+    name: str
+    description: str
+    source: str
+    domains: List[str]
+    input_schema: dict
+    output_schema: Optional[dict]
+    is_active: bool = True
+    provider_instance_id: Optional[str] = None
+
+
 class CollectionToolResolver:
     def __init__(self, session: AsyncSession):
         self.session = session
@@ -46,11 +59,12 @@ class CollectionToolResolver:
         *,
         instance: ToolInstance,
         provider: ToolInstance,
-    ) -> List[DiscoveredTool]:
+    ) -> List[DiscoveredTool | VirtualDiscoveredTool]:
         context = await self._build_context(instance=instance, provider=provider)
         tools = await self._load_tools_for_context(
             context=context,
         )
+        tools.extend(self._load_builtin_collection_tools(context=context))
         deduped = self._dedupe_tools(tools)
         if context.is_service_instance:
             return deduped
@@ -89,7 +103,7 @@ class CollectionToolResolver:
         self,
         *,
         context: CollectionToolResolutionContext,
-    ) -> List[DiscoveredTool]:
+    ) -> List[DiscoveredTool | VirtualDiscoveredTool]:
         tools: List[DiscoveredTool] = []
         if context.provider_kind == "mcp":
             tools.extend(
@@ -162,9 +176,11 @@ class CollectionToolResolver:
         ]
 
     @staticmethod
-    def _dedupe_tools(tools: List[DiscoveredTool]) -> List[DiscoveredTool]:
+    def _dedupe_tools(
+        tools: List[DiscoveredTool | VirtualDiscoveredTool],
+    ) -> List[DiscoveredTool | VirtualDiscoveredTool]:
         seen: set[tuple[str, str]] = set()
-        deduped: List[DiscoveredTool] = []
+        deduped: List[DiscoveredTool | VirtualDiscoveredTool] = []
         for tool in tools:
             key = (str(tool.source or ""), str(tool.slug or ""))
             if key in seen:
@@ -199,17 +215,70 @@ class CollectionToolResolver:
         return domains
 
     async def _resolve_bound_collection(self, instance: ToolInstance) -> Optional[Collection]:
-        if not getattr(instance, "is_data", False):
-            return None
         return await resolve_bound_collection_by_instance_id(
             self.session,
             data_instance_id=instance.id,
         )
 
     @staticmethod
+    def _load_builtin_collection_tools(
+        *,
+        context: CollectionToolResolutionContext,
+    ) -> List[VirtualDiscoveredTool]:
+        collection = context.bound_collection
+        if collection is None:
+            return []
+
+        collection_type = str(getattr(collection, "collection_type", "") or "").strip().lower()
+        context_domains = [context.runtime_domain] if context.runtime_domain else None
+        tools: List[VirtualDiscoveredTool] = []
+        for handler in ToolRegistry.list_all():
+            domains = list(getattr(handler, "domains", None) or [])
+            if context.runtime_domain and context.runtime_domain not in domains:
+                continue
+            publication = resolve_publication(
+                raw_slug=str(getattr(handler, "slug", "") or "").strip(),
+                discovered_domains=domains,
+                context_domains=context_domains,
+            )
+            if publication is None or publication.scope_kind != "collection":
+                continue
+            if not is_operation_allowed_for_collection_type(
+                publication,
+                collection_type=collection_type,
+            ):
+                continue
+            if publication.spec.requires_vector_search and not bool(
+                getattr(collection, "has_vector_search", False)
+            ):
+                continue
+            descriptor = handler.to_mcp_descriptor()
+            tools.append(
+                VirtualDiscoveredTool(
+                    slug=str(getattr(handler, "slug", "") or "").strip(),
+                    name=str(getattr(handler, "name", "") or "").strip(),
+                    description=str(
+                        descriptor.get("description") or getattr(handler, "description", "") or ""
+                    ).strip(),
+                    source="local",
+                    domains=domains,
+                    input_schema=dict(descriptor.get("inputSchema") or {}),
+                    output_schema=(
+                        dict(descriptor.get("outputSchema") or {})
+                        if isinstance(descriptor.get("outputSchema"), dict)
+                        else None
+                    ),
+                    provider_instance_id=(
+                        str(getattr(context.provider, "id", "") or "").strip() or None
+                    ),
+                )
+            )
+        return tools
+
+    @staticmethod
     def _is_tool_supported_for_context(
         *,
-        tool: DiscoveredTool,
+        tool: DiscoveredTool | VirtualDiscoveredTool,
         context: CollectionToolResolutionContext,
     ) -> bool:
         if tool.source != "local":

@@ -213,6 +213,8 @@ class PublishedCollectionSummary(BaseModel):
     schema_freshness: Optional[str] = None
     missing_requirements: List[str] = Field(default_factory=list)
     available_operation_slugs: List[str] = Field(default_factory=list)
+    available_operations: List[PublishedOperationSummary] = Field(default_factory=list)
+    recommended_flow: List[str] = Field(default_factory=list)
 
 
 class ResolvedDataInstance(BaseModel):

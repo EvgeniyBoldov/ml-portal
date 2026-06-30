@@ -160,7 +160,9 @@ class TemplateFillTool(VersionedTool):
     description: ClassVar[str] = (
         "Fill a template (Excel, Word, or text) with provided values. "
         "Placeholders like {{field_name}} are replaced. "
-        "Returns a generated file storage_uri that can be passed to file.read or file.analyze, plus download info."
+        "This operation creates the final downloadable file and returns file_id, storage_uri, and download_url. "
+        "Call collection.template.get_schema before fill and use the exact field keys from that schema. "
+        "Do not call file.generate after a successful fill."
     )
 
     @tool_version(
@@ -314,8 +316,9 @@ class TemplateFillTool(VersionedTool):
                         "missing_placeholders": missing,
                     },
                     message=(
-                        f"Filled template '{filename}' ({fmt}, {len(filled_keys)} placeholders). "
-                        f"Generated file_id: {file_id}."
+                        f"Final downloadable file created from template '{filename}' "
+                        f"({fmt}, {len(filled_keys)} placeholders). "
+                        f"Return download_url or file_id to the user; do not call file.generate."
                     ),
                     logs=log.entries_dict(),
                 )

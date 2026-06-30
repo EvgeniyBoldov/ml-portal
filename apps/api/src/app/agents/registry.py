@@ -34,6 +34,15 @@ class _VersionedToolWrapper(ToolHandler):
     def validate_args(self, args):
         return self._vt.validate_args(args, version=self._version)
 
+    def get_version(self, version: str):
+        return self._vt.get_version(version)
+
+    def get_versions(self):
+        return self._vt.get_versions()
+
+    def get_latest_version(self):
+        return self._vt.get_latest_version()
+
 
 class ToolRegistry:
     """

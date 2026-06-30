@@ -18,15 +18,31 @@ def test_collections_card_includes_remote_tables_preview():
         remote_tables=["tenwork_tickets", "services"],
     )
 
-    card = builder._build_collections_card([item], [])  # noqa: SLF001
+    operation = SimpleNamespace(
+        scope="collection",
+        collection_slug="ticket_network",
+        operation="collection.sql.search_objects",
+        operation_slug="instance.ticket_network.collection.sql.search_objects",
+        name="Search SQL Objects",
+        published=SimpleNamespace(
+            title="Search SQL Objects",
+            description="Search SQL catalog objects in the bound collection",
+            result_kind="rows",
+        ),
+    )
+
+    card = builder._build_collections_card([item], [operation])  # noqa: SLF001
 
     assert "таблицы:" in card
-    assert "правила работы: Сначала inspect, потом search" in card
+    assert "Перед работой с любой коллекцией сначала вызови `collection.info`" in card
+    assert "правила работы:" not in card
+    assert "рекомендуемый порядок" not in card
+    assert "`collection.sql.search_objects`" not in card
     assert "`tenwork_tickets`" in card
     assert "`services`" in card
 
 
-def test_collections_card_includes_readiness_status_and_missing_requirements():
+def test_collections_card_skips_collections_without_operations():
     builder = CapabilityCardBuilder()
     item = SimpleNamespace(
         collection_slug="ticket_network",
@@ -47,9 +63,7 @@ def test_collections_card_includes_readiness_status_and_missing_requirements():
 
     card = builder._build_collections_card([item], [])  # noqa: SLF001
 
-    assert "готовность: schema_stale" in card
-    assert "схема: stale" in card
-    assert "отсутствует: schema_stale" in card
+    assert card == ""
 
 
 def test_collections_card_groups_collection_operations_with_descriptions():
@@ -85,8 +99,30 @@ def test_collections_card_groups_collection_operations_with_descriptions():
 
     card = builder._build_collections_card([item], [operation])  # noqa: SLF001
 
-    assert "доступные действия:" in card
-    assert "`instance.template.collection.template.fill`" in card
-    assert "каноническое имя: collection.template.fill" in card
-    assert "Fill a template with values and return a generated file" in card
-    assert "результат: file" in card
+    assert "доступные операции:" not in card
+    assert "рекомендуемый порядок" not in card
+    assert "`collection.template.fill`" not in card
+    assert "готовность" not in card.lower()
+    assert "схема:" not in card.lower()
+
+
+def test_system_operations_card_is_rendered_separately():
+    builder = CapabilityCardBuilder()
+    operation = SimpleNamespace(
+        scope="system",
+        operation="file.read",
+        operation_slug="file.read",
+        name="Read File",
+        published=SimpleNamespace(
+            canonical_name="file.read",
+            title="Read File",
+            description="Read a file by its canonical storage_uri",
+            result_kind="generic",
+        ),
+    )
+
+    card = builder._build_system_operations_card([operation])  # noqa: SLF001
+
+    assert "## Системные операции" in card
+    assert "`file.read`" in card
+    assert "Read a file by its canonical storage_uri" in card

@@ -21,45 +21,14 @@ class PromptAssembly:
     base_prompt: str
     capability_prompt: str = ""
     collection_prompt: str = ""
+    system_operations_prompt: str = ""
     operations_prompt: str = ""
     system_prompt: str = ""
     sections: List[str] = field(default_factory=list)
 
 
-class CollectionPromptRenderer:
-    @staticmethod
-    def render(payload: Dict[str, Any]) -> str:
-        name = _text(payload.get("name")) or _text(payload.get("slug")) or "collection"
-        slug = _text(payload.get("slug"))
-        collection_type = (
-            _text(payload.get("collection_type"))
-            or _text(payload.get("domain"))
-            or _text(payload.get("instance_kind"))
-            or "data"
-        )
-        description = _text(payload.get("data_description")) or _text(payload.get("description"))
-        purpose = _text(payload.get("usage_purpose"))
-        entity_type = _text(payload.get("entity_type"))
-        usage_rules = _text(payload.get("usage_rules"))
-
-        lines: List[str] = [f"### {name}"]
-        if slug:
-            lines.append(f"- Slug: `{slug}`")
-        if collection_type:
-            lines.append(f"- Type: {collection_type}")
-        if entity_type:
-            lines.append(f"- Entity type: {entity_type}")
-        if description:
-            lines.append(f"- Description: {description}")
-        if purpose:
-            lines.append(f"- Purpose: {purpose}")
-        if usage_rules:
-            lines.append(f"- Usage rules: {usage_rules}")
-        return "\n".join(lines)
-
-
 class OperationPromptRenderer:
-    MAX_DESCRIPTION_CHARS = 240
+    MAX_DESCRIPTION_CHARS = 320
 
     @staticmethod
     def render_schema(op: "ResolvedOperation") -> Dict[str, Any]:
@@ -101,12 +70,10 @@ class PromptAssembler:
     def __init__(
         self,
         agent_renderer: Optional[AgentPromptRenderer] = None,
-        collection_renderer: Optional[CollectionPromptRenderer] = None,
         operation_renderer: Optional[OperationPromptRenderer] = None,
         capability_card_builder: Optional[CapabilityCardBuilder] = None,
     ) -> None:
         self.agent_renderer = agent_renderer or AgentPromptRenderer()
-        self.collection_renderer = collection_renderer or CollectionPromptRenderer()
         self.operation_renderer = operation_renderer or OperationPromptRenderer()
         self.capability_card_builder = capability_card_builder or CapabilityCardBuilder()
 
@@ -133,14 +100,17 @@ class PromptAssembler:
             sandbox_overrides=sandbox_overrides,
         )
         capability_prompt = ""
-        if resolved_operations is not None:
-            capability_prompt = self.capability_card_builder.build(
-                exec_request=exec_request,
-                resolved_operations=resolved_operations,
-                prompt_labels=prompt_labels,
-                prompt_budgets=prompt_budgets,
-            ).combined
-        collection_prompt = self.assemble_collection_prompt(exec_request.resolved_data_instances)
+        collection_prompt = self.assemble_collection_prompt(
+            exec_request.resolved_data_instances,
+            resolved_operations=resolved_operations,
+            prompt_labels=prompt_labels,
+            prompt_budgets=prompt_budgets,
+        )
+        system_operations_prompt = self.assemble_system_operations_prompt(
+            resolved_operations=resolved_operations,
+            prompt_labels=prompt_labels,
+            prompt_budgets=prompt_budgets,
+        )
         constraints_prompt = self.assemble_constraints_prompt(
             exec_request=exec_request,
             policy_limits=resolved_policy_limits,
@@ -169,8 +139,8 @@ class PromptAssembler:
             section
             for section in [
                 base_prompt,
-                capability_prompt,
-                collection_prompt if not capability_prompt else "",
+                collection_prompt,
+                system_operations_prompt,
                 constraints_prompt,
                 operations_prompt,
             ]
@@ -180,6 +150,7 @@ class PromptAssembler:
             base_prompt=base_prompt,
             capability_prompt=capability_prompt,
             collection_prompt=collection_prompt,
+            system_operations_prompt=system_operations_prompt,
             operations_prompt=operations_prompt,
             system_prompt="\n\n".join(sections),
             sections=sections,
@@ -188,17 +159,37 @@ class PromptAssembler:
     def assemble_collection_prompt(
         self,
         resolved_data_instances: Sequence["ResolvedDataInstance"],
+        *,
+        resolved_operations: Optional[Sequence["ResolvedOperation"]] = None,
+        prompt_labels: Optional[Dict[str, Any]] = None,
+        prompt_budgets: Optional[Dict[str, Any]] = None,
     ) -> str:
-        if not resolved_data_instances:
+        if not resolved_data_instances or resolved_operations is None:
             return ""
-        blocks = [
-            self.collection_renderer.render(item.model_dump())
-            for item in resolved_data_instances
-        ]
-        blocks = [block for block in blocks if block]
-        if not blocks:
+        bundle = self.capability_card_builder.build(
+            resolved_data_instances=resolved_data_instances,
+            resolved_operations=resolved_operations,
+            prompt_labels=prompt_labels,
+            prompt_budgets=prompt_budgets,
+        )
+        return bundle.collections_card
+
+    def assemble_system_operations_prompt(
+        self,
+        *,
+        resolved_operations: Optional[Sequence["ResolvedOperation"]] = None,
+        prompt_labels: Optional[Dict[str, Any]] = None,
+        prompt_budgets: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        if not resolved_operations:
             return ""
-        return "## Доступные коллекции\n\n" + "\n\n".join(blocks)
+        bundle = self.capability_card_builder.build(
+            resolved_data_instances=[],
+            resolved_operations=resolved_operations,
+            prompt_labels=prompt_labels,
+            prompt_budgets=prompt_budgets,
+        )
+        return bundle.system_operations_card
 
     def assemble_constraints_prompt(
         self,
@@ -213,32 +204,24 @@ class PromptAssembler:
         labels = prompt_labels if isinstance(prompt_labels, dict) else {}
         budgets = prompt_budgets if isinstance(prompt_budgets, dict) else {}
         blocks: List[str] = []
-        blocks.append(
-            f"### {self._label(labels, 'runtime_limits_title', 'Ограничения')}\n"
-            + "\n".join([
-                f"- {self._label(labels, 'max_steps_label', 'Макс. шагов')}: {policy_limits.max_steps}",
-                f"- {self._label(labels, 'max_tool_calls_label', 'Макс. вызовов операций')}: {policy_limits.max_tool_calls_total}",
-                f"- {self._label(labels, 'max_wall_time_label', 'Макс. время выполнения (ms)')}: {policy_limits.max_wall_time_ms}",
-                f"- {self._label(labels, 'tool_timeout_label', 'Таймаут операции (ms)')}: {policy_limits.tool_timeout_ms}",
-                f"- {self._label(labels, 'max_retries_label', 'Макс. повторов')}: {policy_limits.max_retries}",
-                f"- {self._label(labels, 'streaming_label', 'Стриминг')}: {policy_limits.streaming_enabled}",
-                f"- {self._label(labels, 'citations_label', 'Требуются цитаты')}: {policy_limits.citations_required}",
-                f"- {self._label(labels, 'parallel_calls_label', 'Параллельные вызовы')}: {policy_limits.allow_parallel_tool_calls}",
-            ])
-        )
-        if exec_request.policy_data:
-            blocks.append(f"### {self._label(labels, 'policy_version_title', 'Версия политики')}\n{_compact_json(exec_request.policy_data)}")
-        if exec_request.limit_data:
-            blocks.append(f"### {self._label(labels, 'limit_version_title', 'Версия лимитов')}\n{_compact_json(exec_request.limit_data)}")
+        runtime_lines = [
+            f"- {self._label(labels, 'max_steps_label', 'Макс. шагов')}: {policy_limits.max_steps}",
+            f"- {self._label(labels, 'max_tool_calls_label', 'Макс. вызовов операций')}: {policy_limits.max_tool_calls_total}",
+            f"- {self._label(labels, 'max_wall_time_label', 'Макс. время выполнения (ms)')}: {policy_limits.max_wall_time_ms}",
+            f"- {self._label(labels, 'tool_timeout_label', 'Таймаут операции (ms)')}: {policy_limits.tool_timeout_ms}",
+            f"- {self._label(labels, 'max_retries_label', 'Макс. повторов')}: {policy_limits.max_retries}",
+        ]
+        blocks.append("\n".join(runtime_lines))
 
         platform_lines: List[str] = []
         if isinstance(platform_config, dict):
             policies_text = _text(platform_config.get("policies_text"))
-            if policies_text:
+            normalized = policies_text.strip()
+            if normalized and normalized not in {"# Политики платформы", "Политики платформы"}:
                 max_policy_chars = self._budget(budgets, "policies_text_max_chars", 1200)
-                if len(policies_text) > max_policy_chars:
-                    policies_text = policies_text[:max_policy_chars].rstrip()
-                platform_lines.append(f"- {self._label(labels, 'policies_label', 'Политики')}: {policies_text}")
+                if len(normalized) > max_policy_chars:
+                    normalized = normalized[:max_policy_chars].rstrip()
+                platform_lines.append(f"- {self._label(labels, 'policies_label', 'Политики')}: {normalized}")
         if platform_lines:
             blocks.append(f"{self._label(labels, 'platform_constraints_title', 'Ограничения платформы')}\n" + "\n".join(platform_lines))
 
@@ -250,9 +233,7 @@ class PromptAssembler:
         if sandbox_lines:
             blocks.append(f"{self._label(labels, 'sandbox_notes_title', 'Заметки sandbox')}\n" + "\n".join(f"- {line}" for line in sandbox_lines))
 
-        if len(blocks) == 1 and not platform_lines and not sandbox_lines and not exec_request.policy_data and not exec_request.limit_data:
-            return ""
-        return f"## {self._label(labels, 'runtime_constraints_title', 'Ограничения рантайма')}\n\n" + "\n\n".join(blocks)
+        return f"## {self._label(labels, 'runtime_constraints_title', 'Ограничения выполнения')}\n\n" + "\n\n".join(blocks)
 
     def assemble_operation_schemas(
         self,
@@ -260,7 +241,10 @@ class PromptAssembler:
     ) -> List[Dict[str, Any]]:
         if not resolved_operations:
             return []
-        return [self.operation_renderer.render_schema(op) for op in resolved_operations]
+        return [
+            self.operation_renderer.render_schema(op)
+            for op in filter_prompt_visible_operations(resolved_operations)
+        ]
 
     @staticmethod
     def _extract_sandbox_notes(sandbox_overrides: Optional[Dict[str, Any]]) -> List[str]:
@@ -351,6 +335,20 @@ class PromptAssembler:
 
 def _text(value: Any) -> str:
     return str(value or "").strip()
+
+
+def filter_prompt_visible_operations(
+    resolved_operations: Sequence["ResolvedOperation"],
+) -> List["ResolvedOperation"]:
+    visible_operations: List["ResolvedOperation"] = []
+    for op in resolved_operations:
+        canonical_name = (
+            _text(getattr(getattr(op, "published", None), "canonical_name", None))
+            or _text(getattr(op, "operation", None))
+        )
+        if op.scope == "system" or canonical_name == "collection.info":
+            visible_operations.append(op)
+    return visible_operations
 
 
 def _compact_json(value: Any) -> str:

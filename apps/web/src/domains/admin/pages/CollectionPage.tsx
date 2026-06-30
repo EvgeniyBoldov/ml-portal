@@ -153,59 +153,6 @@ function buildSchemaOps(
   return ops;
 }
 
-function fallbackOperationsByCollectionType(collectionType: CollectionType): RuntimeOperationRow[] {
-  const base = (operation_slug: string, operation: string, source = 'local'): RuntimeOperationRow => ({
-    operation_slug,
-    operation,
-    source,
-    discovered_tool_slug: operation,
-    provider_instance_slug: null,
-    risk_level: 'low',
-    side_effects: 'none',
-    idempotent: true,
-    requires_confirmation: false,
-  });
-
-  if (collectionType === 'document') {
-    return [
-      base('collection.info', 'collection.info'),
-      base('collection.document.search', 'collection.document.search'),
-      base('collection.document.list', 'collection.document.list'),
-      base('collection.document.get', 'collection.document.get'),
-    ];
-  }
-  if (collectionType === 'table') {
-    return [
-      base('collection.info', 'collection.info'),
-      base('collection.table.search', 'collection.table.search'),
-      base('collection.table.aggregate', 'collection.table.aggregate'),
-      base('collection.table.get', 'collection.table.get'),
-    ];
-  }
-  if (collectionType === 'sql') {
-    return [
-      base('collection.info', 'collection.info'),
-      base('collection.sql.search_objects', 'collection.sql.search_objects'),
-      base('collection.sql.execute', 'collection.sql.execute'),
-    ];
-  }
-  if (collectionType === 'api') {
-    return [
-      base('collection.info', 'collection.info'),
-    ];
-  }
-  if (collectionType === 'template') {
-    return [
-      base('collection.info', 'collection.info'),
-      base('collection.template.list', 'collection.template.list'),
-      base('collection.template.search', 'collection.template.search'),
-      base('collection.template.get_schema', 'collection.template.get_schema'),
-      base('collection.template.fill', 'collection.template.fill'),
-    ];
-  }
-  return [];
-}
-
 const ACTIVE_VERSION_CONTENT_FIELDS: FieldConfig[] = [
   {
     key: 'data_description',
@@ -530,16 +477,13 @@ export function CollectionPage() {
   });
 
   const runtimeOperations = useMemo(() => {
-    const fromConnector = dataConnector?.runtime_operations ?? [];
-    const fallback = fallbackOperationsByCollectionType(activeCollectionType);
-    const merged = [...fromConnector, ...fallback];
     const bySlug = new Map<string, RuntimeOperationRow>();
-    for (const op of merged) {
+    for (const op of dataConnector?.runtime_operations ?? []) {
       if (!op?.operation_slug) continue;
       if (!bySlug.has(op.operation_slug)) bySlug.set(op.operation_slug, op);
     }
     return Array.from(bySlug.values()).sort((a, b) => a.operation_slug.localeCompare(b.operation_slug));
-  }, [activeCollectionType, dataConnector?.runtime_operations]);
+  }, [dataConnector?.runtime_operations]);
   const activeVersion =
     collection?.current_version
     ?? versions.find((v) => v.status === 'published')

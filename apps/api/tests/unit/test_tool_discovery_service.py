@@ -19,6 +19,7 @@ async def test_rescan_scoped_provider_skips_local_and_marks_scoped_stale():
     service._scan_local_tools = AsyncMock(return_value=9)
     service._scan_mcp_providers = AsyncMock(return_value=(3, [provider_id]))
     service._mark_stale = AsyncMock(return_value=2)
+    service._delete_inactive_tools = AsyncMock(return_value=5)
     service.session.flush = AsyncMock()
 
     stats = await service.rescan(include_local=False, provider_instance_id=provider_id)
@@ -27,6 +28,7 @@ async def test_rescan_scoped_provider_skips_local_and_marks_scoped_stale():
     service._scan_mcp_providers.assert_called_once()
     assert service._scan_mcp_providers.call_args.kwargs["provider_instance_id"] == provider_id
     service._mark_stale.assert_called_once()
+    service._delete_inactive_tools.assert_called_once()
     assert service._mark_stale.call_args.kwargs["include_local"] is False
     assert service._mark_stale.call_args.kwargs["full_mcp_scan"] is False
     assert service._mark_stale.call_args.kwargs["scanned_provider_ids"] == [provider_id]
@@ -36,6 +38,7 @@ async def test_rescan_scoped_provider_skips_local_and_marks_scoped_stale():
     assert stats["local_upserted"] == 0
     assert stats["mcp_upserted"] == 3
     assert stats["marked_inactive"] == 2
+    assert stats["deleted_inactive"] == 5
 
 
 @pytest.mark.asyncio
@@ -46,6 +49,7 @@ async def test_rescan_all_marks_full_mcp_scope():
     service._scan_local_tools = AsyncMock(return_value=4)
     service._scan_mcp_providers = AsyncMock(return_value=(7, [uuid4()]))
     service._mark_stale = AsyncMock(return_value=1)
+    service._delete_inactive_tools = AsyncMock(return_value=3)
     service.session.flush = AsyncMock()
 
     stats = await service.rescan(include_local=True, provider_instance_id=None)
@@ -54,6 +58,7 @@ async def test_rescan_all_marks_full_mcp_scope():
     service._scan_mcp_providers.assert_called_once()
     assert service._scan_mcp_providers.call_args.kwargs["provider_instance_id"] is None
     service._mark_stale.assert_called_once()
+    service._delete_inactive_tools.assert_called_once()
     assert service._mark_stale.call_args.kwargs["include_local"] is True
     assert service._mark_stale.call_args.kwargs["full_mcp_scan"] is True
     assert stats["scope"] == "all"
@@ -61,6 +66,7 @@ async def test_rescan_all_marks_full_mcp_scope():
     assert stats["local_upserted"] == 4
     assert stats["mcp_upserted"] == 7
     assert stats["marked_inactive"] == 1
+    assert stats["deleted_inactive"] == 3
 
 
 @pytest.mark.asyncio
