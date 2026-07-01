@@ -183,26 +183,33 @@ function ExpandableSteps({
           {isRunning ? '◎' : '✓'}
         </span>
         <span className={styles['steps-summary-text']}>
-          {visibleSteps.length} шагов
+          Трейс
         </span>
-        {totalDuration && (
-          <span className={styles['steps-summary-duration']}>{totalDuration}</span>
-        )}
-        {summary.toolCalls > 0 && (
-          <span className={styles['steps-summary-tag']}>
-            операции ×{formatCount(summary.toolCalls)}
-          </span>
-        )}
-        {summary.retries > 0 && (
-          <span className={styles['steps-summary-tag']}>
-            ретраи ×{formatCount(summary.retries)}
-          </span>
-        )}
-        {summary.tokensTotal !== undefined && summary.tokensTotal > 0 && (
-          <span className={styles['steps-summary-tag']}>
-            токены ×{formatCount(summary.tokensTotal)}
-          </span>
-        )}
+        <span className={styles['steps-summary-metrics']}>
+          <Badge tone="neutral" size="sm">
+            Шаги {formatCount(visibleSteps.length)}
+          </Badge>
+          {totalDuration && (
+            <Badge tone="neutral" size="sm">
+              Время {totalDuration}
+            </Badge>
+          )}
+          {summary.toolCalls > 0 && (
+            <Badge tone="info" size="sm">
+              Операции {formatCount(summary.toolCalls)}
+            </Badge>
+          )}
+          {summary.retries > 0 && (
+            <Badge tone="warn" size="sm">
+              Ретраи {formatCount(summary.retries)}
+            </Badge>
+          )}
+          {summary.tokensTotal !== undefined && summary.tokensTotal > 0 && (
+            <Badge tone="danger" size="sm">
+              Токены {formatCount(summary.tokensTotal)}
+            </Badge>
+          )}
+        </span>
         {isRunning && (
           <span className={styles['steps-summary-running']}>выполняется...</span>
         )}
