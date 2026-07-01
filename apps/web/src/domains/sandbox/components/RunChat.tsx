@@ -100,15 +100,48 @@ function apiStepsToRunSteps(
   }));
 }
 
-function buildToolSummary(steps: RunStep[]): Map<string, number> {
-  const tools = new Map<string, number>();
+function toNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function formatCount(value: number): string {
+  return new Intl.NumberFormat('ru-RU').format(value);
+}
+
+function buildRunSummary(steps: RunStep[]): { toolCalls: number; retries: number; tokensTotal?: number } {
+  let toolCalls = 0;
+  let retries = 0;
+  let tokensTotal = 0;
+  let hasTokens = false;
+
   for (const s of steps) {
-    if (s.type === 'tool_call' || s.type === 'tool_result' || s.type === 'operation_result') {
-      const tool = (s.data.tool as string) ?? (s.data.operation_slug as string) ?? '?';
-      tools.set(tool, (tools.get(tool) ?? 0) + 1);
+    if (s.type === 'tool_call' || s.type === 'operation_call') {
+      toolCalls += 1;
+    }
+    if (s.type === 'protocol_retry') {
+      retries += 1;
+    }
+    if (s.type === 'llm_response' || s.type === 'llm_turn') {
+      const tokensTotalRaw = toNumber(s.data.tokens_total);
+      const tokensInRaw = toNumber(s.data.tokens_in);
+      const tokensOutRaw = toNumber(s.data.tokens_out);
+      const stepTokens = tokensTotalRaw ?? (
+        tokensInRaw !== undefined || tokensOutRaw !== undefined
+          ? Number(tokensInRaw ?? 0) + Number(tokensOutRaw ?? 0)
+          : undefined
+      );
+      if (stepTokens !== undefined) {
+        tokensTotal += stepTokens;
+        hasTokens = true;
+      }
     }
   }
-  return tools;
+
+  return {
+    toolCalls,
+    retries,
+    tokensTotal: hasTokens ? tokensTotal : undefined,
+  };
 }
 
 // ── ExpandableSteps — inline step list in chat ────────────────────────────
@@ -125,7 +158,7 @@ function ExpandableSteps({
   onSelectStep: (displayStepId: string, rawStepId: string, inspectorSteps: RunStep[], entity?: TraceEntity) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const toolCalls = useMemo(() => buildToolSummary(steps), [steps]);
+  const summary = useMemo(() => buildRunSummary(steps), [steps]);
   const totalDuration = useMemo(() => {
     if (steps.length < 2) return null;
     const diff = steps[steps.length - 1].timestamp - steps[0].timestamp;
@@ -155,11 +188,21 @@ function ExpandableSteps({
         {totalDuration && (
           <span className={styles['steps-summary-duration']}>{totalDuration}</span>
         )}
-        {Array.from(toolCalls.entries()).map(([tool, count]) => (
-          <span key={tool} className={styles['steps-summary-tag']}>
-            {tool} ×{count}
+        {summary.toolCalls > 0 && (
+          <span className={styles['steps-summary-tag']}>
+            операции ×{formatCount(summary.toolCalls)}
           </span>
-        ))}
+        )}
+        {summary.retries > 0 && (
+          <span className={styles['steps-summary-tag']}>
+            ретраи ×{formatCount(summary.retries)}
+          </span>
+        )}
+        {summary.tokensTotal !== undefined && summary.tokensTotal > 0 && (
+          <span className={styles['steps-summary-tag']}>
+            токены ×{formatCount(summary.tokensTotal)}
+          </span>
+        )}
         {isRunning && (
           <span className={styles['steps-summary-running']}>выполняется...</span>
         )}
