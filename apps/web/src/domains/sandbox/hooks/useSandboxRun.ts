@@ -28,6 +28,7 @@ export type RunStepType =
   | 'final_content'
   | 'error'
   | 'routing'
+  | 'protocol_retry'
   | 'planner_step'
   | 'planner_action'
   | 'planner_decision'
